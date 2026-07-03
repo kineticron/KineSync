@@ -1,0 +1,14 @@
+{
+  "name": "windows-media-session-native",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "gypfile": true,
+  "dependencies": {
+    "desktopbridge": "file:../..",
+    "node-addon-api": "^8.3.1"
+  },
+  "scripts": {
+    "rebuild:electron": "node ../../node_modules/@electron/node-gyp/bin/node-gyp.js rebuild --target=40.6.0 --arch=x64 --dist-url=https://electronjs.org/headers"
+  }
+}

@@ -1,0 +1,2073 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lyric Sync Bridge</title>
+    <link rel="icon" type="image/png" href="assets/R.png" />
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="screen-backdrop" aria-hidden="true">
+      <div class="artwork-backdrop is-hidden" id="artwork-backdrop">
+        <img id="artwork-bg-sharp" class="artwork-bg-layer artwork-bg-sharp" alt="" />
+        <img id="artwork-bg-blur" class="artwork-bg-layer artwork-bg-blur" alt="" />
+      </div>
+      <div class="ambient-fallback" id="ambient-fallback">
+        <div class="ambient-blob ambient-blob-a"></div>
+        <div class="ambient-blob ambient-blob-b"></div>
+      </div>
+      <div class="backdrop-tint" id="backdrop-tint"></div>
+    </div>
+
+    <canvas id="accent-sampler" width="32" height="32" hidden></canvas>
+
+    <div class="app-layout">
+      <nav class="side-nav" aria-label="Sections">
+        <div class="nav-brand">
+          <p class="nav-brand-title">Lyric Sync</p>
+          <p class="nav-brand-sub">Desktop bridge</p>
+        </div>
+        <ul class="nav-list">
+          <li class="nav-item">
+            <button
+              type="button"
+              class="nav-link is-active"
+              data-section="section-playback"
+            >
+              <span class="nav-icon" aria-hidden="true">♪</span>
+              Playback
+            </button>
+          </li>
+          <li class="nav-item">
+            <button type="button" class="nav-link" data-section="section-server">
+              <span class="nav-icon" aria-hidden="true">◉</span>
+              Server
+            </button>
+          </li>
+          <li class="nav-item">
+            <button type="button" class="nav-link" data-section="section-relay">
+              <span class="nav-icon" aria-hidden="true">⇄</span>
+              Relay
+            </button>
+          </li>
+          <li class="nav-item">
+            <button type="button" class="nav-link" data-section="section-spotify">
+              <span class="nav-icon" aria-hidden="true">♫</span>
+              Spotify
+            </button>
+          </li>
+          <li class="nav-item">
+            <button type="button" class="nav-link" data-section="section-sources">
+              <span class="nav-icon" aria-hidden="true">☰</span>
+              Sources
+            </button>
+          </li>
+        </ul>
+        <div class="nav-footer">
+          <div class="status-pill" id="connection-pill">No clients</div>
+          <p class="nav-status-line" id="nav-lyrics-status">Waiting for track...</p>
+          <div class="nav-alert nav-alert--error" id="nav-error-alert" hidden></div>
+          <div class="nav-alert nav-alert--warning" id="nav-cooldown-alert" hidden></div>
+        </div>
+      </nav>
+
+      <div class="main-column">
+        <header class="page-header">
+          <div>
+            <h1 id="page-title">Playback</h1>
+            <p id="page-subtitle">Track, position, and detector source</p>
+          </div>
+        </header>
+
+        <main class="content-scroll" id="content-scroll">
+          <section id="section-playback" class="tile tile-hero" data-page-title="Playback" data-page-subtitle="Track, position, and detector source">
+            <div class="tile-header">
+              <div class="tile-icon" aria-hidden="true">♪</div>
+              <div class="tile-heading">
+                <h2>Now Playing</h2>
+                <p>Live playback from Spotify</p>
+              </div>
+            </div>
+            <div class="tile-body">
+              <div class="hero-layout">
+                <div class="hero-cover-wrap" id="hero-cover-wrap">
+                  <img id="hero-cover" class="hero-cover" alt="" />
+                  <div class="hero-cover-placeholder" aria-hidden="true">♪</div>
+                </div>
+                <div class="hero-main">
+                  <p class="track-title" id="track">Waiting for Spotify...</p>
+                  <div class="metric-grid">
+                    <div class="metric-tile">
+                      <span>Position</span>
+                      <strong id="position">0:00</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>State</span>
+                      <strong id="state">Idle</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Source</span>
+                      <strong id="source">none</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Position (ms)</span>
+                      <strong id="position-ms">0</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Pipeline (ms)</span>
+                      <strong id="timing-pipeline-ms">0</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Forward bias (ms)</span>
+                      <strong id="timing-forward-bias-ms">0</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Native extrap.</span>
+                      <strong id="timing-native-extrap">no</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Raw GSMTC (ms)</span>
+                      <strong id="timing-raw-gsmtc-ms">0</strong>
+                    </div>
+                    <div class="metric-tile">
+                      <span>Phone comp. hint (ms)</span>
+                      <strong id="timing-phone-comp-ms">0</strong>
+                    </div>
+                  </div>
+                  <div class="button-row playback-actions">
+                    <button
+                      type="button"
+                      id="save-lyrics-vault"
+                      class="button secondary"
+                      disabled
+                    >
+                      Save to lyrics vault
+                    </button>
+                    <button
+                      type="button"
+                      id="import-lyrics-ttml"
+                      class="button secondary"
+                    >
+                      Import JSON or TTML
+                    </button>
+                    <button
+                      type="button"
+                      id="open-lyrics-vault"
+                      class="button secondary"
+                    >
+                      Open vault
+                    </button>
+                    <button
+                      type="button"
+                      id="export-lyrics-ttml"
+                      class="button secondary"
+                      disabled
+                    >
+                      Export lyrics (TTML)
+                    </button>
+                  </div>
+                  <label class="checkbox-row" for="vault-include-translations">
+                    <input
+                      type="checkbox"
+                      id="vault-include-translations"
+                    />
+                    <span>Include Gemini translations when saving to vault</span>
+                  </label>
+                  <p class="hint" id="vault-lyrics-status" hidden></p>
+                  <p class="hint" id="export-lyrics-ttml-status" hidden></p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="section-server" class="tile" data-page-title="Server" data-page-subtitle="WebSocket endpoint and client connections">
+            <div class="tile-header">
+              <div class="tile-icon" aria-hidden="true">◉</div>
+              <div class="tile-heading">
+                <h2>Server</h2>
+                <p>Local bridge endpoint for the mobile app</p>
+              </div>
+            </div>
+            <div class="tile-body">
+              <div class="copyable-row">
+                <div class="info-banner mono" id="server-url">Starting...</div>
+                <button
+                  type="button"
+                  class="copy-btn"
+                  data-copy-from="server-url"
+                  aria-label="Copy server URL"
+                  title="Copy"
+                >
+                  <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect>
+                    <path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="metric-list">
+                <div class="metric-row">
+                  <span>Connected clients</span><strong id="clients">0</strong>
+                </div>
+                <div class="metric-row">
+                  <span>Handshake key</span><strong id="handshake">Disabled</strong>
+                </div>
+                <div class="metric-row">
+                  <span>Relay</span><strong id="relay-state">Disabled</strong>
+                </div>
+                <div class="metric-row">
+                  <span>Remote clients</span><strong id="relay-clients">0</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="section-relay" class="tile" data-page-title="Remote Relay" data-page-subtitle="Expose this bridge over a relay WebSocket">
+            <div class="tile-header">
+              <div class="tile-icon" aria-hidden="true">⇄</div>
+              <div class="tile-heading">
+                <h2>Remote Relay</h2>
+                <p>Connect through an external relay server</p>
+              </div>
+            </div>
+            <div class="tile-body">
+        <label class="field-label" for="bridge-key">Bridge Key</label>
+        <div class="field-row copyable-row">
+          <input
+            id="bridge-key"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="password123"
+          />
+          <button type="button" class="copy-btn" data-copy-from="bridge-key" aria-label="Copy bridge key" title="Copy">
+            <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+          </button>
+        </div>
+        <input id="relay-url" type="hidden" />
+        <input id="relay-bridge-id" type="hidden" />
+        <label class="field-label" for="ngrok-domain">Ngrok Domain</label>
+        <div class="field-row copyable-row">
+          <input
+            id="ngrok-domain"
+            class="input"
+            type="text"
+            autocomplete="off"
+            placeholder="your-domain.ngrok-free.app"
+          />
+          <button type="button" class="copy-btn" data-copy-from="ngrok-domain" aria-label="Copy ngrok domain" title="Copy">
+            <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+          </button>
+        </div>
+        <p class="hint">
+          Your permanent ngrok domain.
+          <a href="https://dashboard.ngrok.com/domains" target="_blank" rel="noreferrer">Get one on the ngrok dashboard ↗</a>
+        </p>
+        <label class="field-label" for="ngrok-auth-token">Ngrok Auth Token</label>
+        <div class="field-row copyable-row">
+          <input
+            id="ngrok-auth-token"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="Paste your ngrok authtoken"
+          />
+          <button type="button" class="copy-btn" data-copy-from="ngrok-auth-token" aria-label="Copy ngrok auth token" title="Copy">
+            <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+          </button>
+        </div>
+        <p class="hint">
+          Find your auth token at
+          <a href="https://dashboard.ngrok.com/get-started/your-authtoken" target="_blank" rel="noreferrer">dashboard.ngrok.com ↗</a>
+        </p>
+        <div class="button-row">
+          <button id="save-relay-settings" class="button" type="button">
+            Save relay
+          </button>
+          <button id="clear-relay-settings" class="button secondary" type="button">
+            Disable relay
+          </button>
+        </div>
+              <p class="hint" id="relay-settings-status">
+                Remote relay: not configured
+              </p>
+                            <div class="copyable-row">
+                <p class="hint" id="relay-mobile-url">Mobile URL: none</p>
+                <button type="button" class="copy-btn" data-copy-from="relay-mobile-url" data-copy-strip-prefix="Mobile URL: " aria-label="Copy mobile URL" title="Copy">
+                  <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+                </button>
+              </div>
+              <div id="relay-qr-section" hidden>
+                <button type="button" id="toggle-qr-code" class="button secondary" style="margin-top: 10px;">
+                  Show QR code
+                </button>
+                <div id="relay-qr-container" class="qr-container" hidden>
+                  <div id="relay-qr-canvas" class="qr-canvas"></div>
+                  <p class="qr-hint">Scan with KineSync app to connect</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="section-spotify" class="tile" data-page-title="Spotify" data-page-subtitle="Account sign-in for playback and lyrics APIs">
+            <div class="tile-header">
+              <div class="tile-icon" aria-hidden="true">♫</div>
+              <div class="tile-heading">
+                <h2>Spotify Account</h2>
+                <p>OAuth for detection, controls, and Spicy Lyrics</p>
+              </div>
+            </div>
+            <div class="tile-body">
+              <p class="hint" id="spotify-auth-status">Spotify: not signed in</p>
+              <div class="button-row">
+                <button id="spotify-login" class="button spotify" type="button">
+                  Sign in with Spotify
+                </button>
+                <button id="spotify-logout" class="button secondary" type="button">
+                  Sign out
+                </button>
+              </div>
+              <p class="hint" id="spotify-auth-help">
+                Sign in to enable Spotify playback detection, controls, and Spicy Lyrics.
+              </p>
+            </div>
+          </section>
+
+          <section id="section-sources" class="tile" data-page-title="Lyrics Sources" data-page-subtitle="API tokens and provider configuration">
+            <div class="tile-header">
+              <div class="tile-icon" aria-hidden="true">☰</div>
+              <div class="tile-heading">
+                <h2>Lyrics Sources</h2>
+                <p>Tokens for Musixmatch and Gemini</p>
+              </div>
+            </div>
+            <div class="tile-body">
+              <div class="sub-tile">
+                <p class="sub-tile-title">Musixmatch</p>
+        <label class="field-label" for="musixmatch-token"
+          >User token</label
+        >
+        <div class="field-row copyable-row">
+          <input
+            id="musixmatch-token"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="Paste your Musixmatch user token"
+          />
+          <button type="button" class="copy-btn" data-copy-from="musixmatch-token" aria-label="Copy Musixmatch token" title="Copy">
+            <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+          </button>
+        </div>
+        <div class="button-row">
+          <button id="save-musixmatch-token" class="button" type="button">
+            Save token
+          </button>
+          <button
+            id="clear-musixmatch-token"
+            class="button secondary"
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
+        <p class="hint" id="musixmatch-token-status">
+          Musixmatch token: not configured
+        </p>
+              </div>
+
+              <div class="sub-tile">
+                <p class="sub-tile-title">Gemini translation</p>
+        <label class="field-label" for="gemini-api-key">API key</label>
+        <div class="field-row copyable-row">
+          <input
+            id="gemini-api-key"
+            class="input"
+            type="password"
+            autocomplete="off"
+            placeholder="Paste your Gemini API key"
+          />
+          <button type="button" class="copy-btn" data-copy-from="gemini-api-key" aria-label="Copy Gemini API key" title="Copy">
+            <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+          </button>
+        </div>
+        <div class="button-row">
+          <button id="save-gemini-api-key" class="button" type="button">
+            Save key
+          </button>
+          <button
+            id="clear-gemini-api-key"
+            class="button secondary"
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
+        <p class="hint" id="gemini-api-key-status">
+          Gemini key: not configured
+        </p>
+        <p class="hint" id="gemini-api-key-help">
+          Used for AI lyric translation via Google Gemini.
+        </p>
+              </div>
+            </div>
+          </section>
+
+        </main>
+      </div>
+    </div>
+
+    <div
+      id="vault-panel-overlay"
+      class="vault-panel-overlay"
+      hidden
+      aria-hidden="true"
+    >
+      <div
+        class="vault-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vault-panel-title"
+      >
+        <div class="vault-panel-header">
+          <div class="vault-panel-brand">
+            <div class="vault-panel-icon" aria-hidden="true">⌂</div>
+            <div class="vault-panel-heading">
+              <div class="vault-panel-title-row">
+                <h2 id="vault-panel-title">Lyrics Vault</h2>
+                <span class="vault-entry-count" id="vault-entry-count" hidden></span>
+              </div>
+              <p
+                class="vault-panel-subtitle mono"
+                id="vault-folder-path"
+                title=""
+              ></p>
+            </div>
+          </div>
+          <button
+            type="button"
+            id="vault-panel-close"
+            class="vault-panel-close"
+            aria-label="Close vault"
+          >
+            ×
+          </button>
+        </div>
+        <div class="vault-panel-toolbar">
+          <div class="vault-search-wrap">
+            <span class="vault-search-icon" aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              id="vault-search-input"
+              class="vault-search-input"
+              placeholder="Search title, artist, album, or source..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <div class="button-row vault-panel-actions">
+            <button
+              type="button"
+              id="vault-refresh-list"
+              class="button secondary vault-toolbar-btn"
+              title="Refresh vault list"
+            >
+              <span class="vault-toolbar-btn-icon" aria-hidden="true">↻</span>
+              Refresh
+            </button>
+            <button
+              type="button"
+              id="vault-browser-import"
+              class="button secondary vault-toolbar-btn"
+              title="Import JSON or TTML file"
+            >
+              <span class="vault-toolbar-btn-icon" aria-hidden="true">↓</span>
+              Import
+            </button>
+            <button
+              type="button"
+              id="vault-browser-open-folder"
+              class="button secondary vault-toolbar-btn"
+              title="Open vault folder in File Explorer"
+            >
+              <span class="vault-toolbar-btn-icon" aria-hidden="true">▣</span>
+              Folder
+            </button>
+          </div>
+        </div>
+        <div
+          class="vault-panel-status"
+          id="vault-browser-status"
+          role="status"
+          hidden
+        ></div>
+        <div class="vault-panel-scroll">
+          <div id="vault-entry-list" class="vault-entry-list"></div>
+          <div class="vault-empty-state" id="vault-empty-state" hidden>
+            <div class="vault-empty-icon" aria-hidden="true">♪</div>
+            <p class="vault-empty-title">No saved lyrics yet</p>
+            <p class="vault-empty-hint">
+              Save the current track from Playback, or import a JSON/TTML file.
+            </p>
+          </div>
+          <div class="vault-empty-state vault-empty-state--search" id="vault-search-empty" hidden>
+            <div class="vault-empty-icon" aria-hidden="true">⌕</div>
+            <p class="vault-empty-title">No matches</p>
+            <p class="vault-empty-hint">
+              Try a different title, artist, album, or source label.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <script>
+      const fmtTime = (ms) => {
+        const totalSec = Math.floor((ms || 0) / 1000);
+        const min = Math.floor(totalSec / 60);
+        const sec = String(totalSec % 60).padStart(2, "0");
+        return `${min}:${sec}`;
+      };
+
+      const fmtDuration = (ms) => {
+        const totalSec = Math.max(0, Math.ceil((Number(ms) || 0) / 1000));
+        const min = Math.floor(totalSec / 60);
+        const sec = String(totalSec % 60).padStart(2, "0");
+        return `${min}:${sec}`;
+      };
+
+      const monotonicNow = () =>
+        typeof performance !== "undefined" &&
+        typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+
+      const clampPosition = (positionMs, durationMs) => {
+        const safePosition = Math.max(0, Number(positionMs) || 0);
+        const safeDuration = Number(durationMs) || 0;
+        if (safeDuration > 0) {
+          return Math.min(safePosition, safeDuration);
+        }
+        return safePosition;
+      };
+
+      const setText = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+      };
+
+      const getCopyValue = (sourceId, stripPrefix = "") => {
+        const node = document.getElementById(sourceId);
+        if (!node) return "";
+        const raw =
+          typeof node.value === "string"
+            ? node.value
+            : String(node.textContent || "");
+        let text = raw.trim();
+        if (stripPrefix && text.toLowerCase().startsWith(stripPrefix.toLowerCase())) {
+          text = text.slice(stripPrefix.length).trim();
+        }
+        if (text === "none" || text === "Starting..." || text === "Unavailable") {
+          return "";
+        }
+        return text;
+      };
+
+      const copyToClipboard = async (text) => {
+        const value = String(text || "").trim();
+        if (!value) return false;
+        try {
+          await navigator.clipboard.writeText(value);
+          return true;
+        } catch {
+          const area = document.createElement("textarea");
+          area.value = value;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.left = "-9999px";
+          document.body.appendChild(area);
+          area.select();
+          let copied = false;
+          try {
+            copied = document.execCommand("copy");
+          } catch {
+            copied = false;
+          }
+          document.body.removeChild(area);
+          return copied;
+        }
+      };
+
+      const flashCopyButton = (button) => {
+        button.classList.add("copy-btn--copied");
+        const previousLabel = button.getAttribute("aria-label") || "Copy";
+        button.setAttribute("aria-label", "Copied");
+        window.setTimeout(() => {
+          button.classList.remove("copy-btn--copied");
+          button.setAttribute("aria-label", previousLabel);
+        }, 1200);
+      };
+
+      document.querySelectorAll(".copy-btn[data-copy-from]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const sourceId = button.dataset.copyFrom || "";
+          const stripPrefix = button.dataset.copyStripPrefix || "";
+          const value = getCopyValue(sourceId, stripPrefix);
+          void copyToClipboard(value).then((copied) => {
+            if (copied) flashCopyButton(button);
+          });
+        });
+      });
+
+      const artworkBackdrop = document.getElementById("artwork-backdrop");
+      const artworkBgSharp = document.getElementById("artwork-bg-sharp");
+      const artworkBgBlur = document.getElementById("artwork-bg-blur");
+      const accentSampler = document.getElementById("accent-sampler");
+      const heroCover = document.getElementById("hero-cover");
+      const heroCoverWrap = document.getElementById("hero-cover-wrap");
+      const contentScroll = document.getElementById("content-scroll");
+      const pageTitle = document.getElementById("page-title");
+      const pageSubtitle = document.getElementById("page-subtitle");
+      const navLinks = Array.from(document.querySelectorAll(".nav-link"));
+      const accentSamplerCtx = accentSampler?.getContext("2d", { willReadFrequently: true });
+      let cachedArtworkBackdropUrl = "";
+      let accentSampleToken = 0;
+      const DEFAULT_ACCENT = { r: 122, g: 132, b: 153 };
+
+      const clampByte = (value) => Math.max(0, Math.min(255, Math.round(value)));
+
+      const rgbToHex = (r, g, b) =>
+        `#${[r, g, b].map((channel) => clampByte(channel).toString(16).padStart(2, "0")).join("")}`;
+
+      const mixRgb = (a, b, amount) => ({
+        r: clampByte(a.r + (b.r - a.r) * amount),
+        g: clampByte(a.g + (b.g - a.g) * amount),
+        b: clampByte(a.b + (b.b - a.b) * amount),
+      });
+
+      const boostAccentRgb = (rgb) => {
+        const max = Math.max(rgb.r, rgb.g, rgb.b);
+        const min = Math.min(rgb.r, rgb.g, rgb.b);
+        const delta = max - min;
+        const saturation = max === 0 ? 0 : delta / max;
+        const boost = saturation < 0.22 ? 1.55 : saturation < 0.42 ? 1.32 : 1.18;
+        const lifted = {
+          r: clampByte(96 + (rgb.r - 96) * boost),
+          g: clampByte(96 + (rgb.g - 96) * boost),
+          b: clampByte(96 + (rgb.b - 96) * boost),
+        };
+        return mixRgb(lifted, { r: 255, g: 255, b: 255 }, 0.08);
+      };
+
+      const applyAccentTheme = (rgb) => {
+        const accent = boostAccentRgb(rgb);
+        const root = document.documentElement;
+        root.style.setProperty("--accent", rgbToHex(accent.r, accent.g, accent.b));
+        root.style.setProperty("--accent-rgb", `${accent.r}, ${accent.g}, ${accent.b}`);
+        root.style.setProperty("--accent-soft", `rgba(${accent.r}, ${accent.g}, ${accent.b}, 0.16)`);
+        root.style.setProperty("--accent-muted", `rgba(${accent.r}, ${accent.g}, ${accent.b}, 0.28)`);
+        root.style.setProperty("--accent-border", `rgba(${accent.r}, ${accent.g}, ${accent.b}, 0.4)`);
+        root.style.setProperty("--accent-glow", `rgba(${accent.r}, ${accent.g}, ${accent.b}, 0.24)`);
+      };
+
+      const sampleAccentFromImage = (img) => {
+        if (!accentSamplerCtx || !accentSampler) {
+          applyAccentTheme(DEFAULT_ACCENT);
+          return;
+        }
+        const size = accentSampler.width || 32;
+        accentSamplerCtx.clearRect(0, 0, size, size);
+        try {
+          accentSamplerCtx.drawImage(img, 0, 0, size, size);
+        } catch {
+          applyAccentTheme(DEFAULT_ACCENT);
+          return;
+        }
+        let pixels;
+        try {
+          pixels = accentSamplerCtx.getImageData(0, 0, size, size).data;
+        } catch {
+          applyAccentTheme(DEFAULT_ACCENT);
+          return;
+        }
+        let rSum = 0;
+        let gSum = 0;
+        let bSum = 0;
+        let weightSum = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const alpha = pixels[i + 3];
+          if (alpha < 120) continue;
+          const r = pixels[i];
+          const g = pixels[i + 1];
+          const b = pixels[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const lightness = (max + min) / 510;
+          if (lightness < 0.07 || lightness > 0.93) continue;
+          const saturation = max === min ? 0 : (max - min) / max;
+          const weight = saturation * saturation + 0.12;
+          rSum += r * weight;
+          gSum += g * weight;
+          bSum += b * weight;
+          weightSum += weight;
+        }
+        if (weightSum <= 0) {
+          applyAccentTheme(DEFAULT_ACCENT);
+          return;
+        }
+        applyAccentTheme({
+          r: rSum / weightSum,
+          g: gSum / weightSum,
+          b: bSum / weightSum,
+        });
+      };
+
+      const updateHeroCover = (resolved) => {
+        if (!heroCover || !heroCoverWrap) return;
+        if (!resolved) {
+          heroCover.removeAttribute("src");
+          heroCover.classList.remove("is-visible");
+          heroCoverWrap.classList.remove("has-artwork");
+          return;
+        }
+        heroCover.onload = () => {
+          heroCover.classList.add("is-visible");
+          heroCoverWrap.classList.add("has-artwork");
+        };
+        heroCover.onerror = () => {
+          heroCover.classList.remove("is-visible");
+          heroCoverWrap.classList.remove("has-artwork");
+        };
+        heroCover.src = resolved;
+        if (heroCover.complete) {
+          heroCover.classList.add("is-visible");
+          heroCoverWrap.classList.add("has-artwork");
+        }
+      };
+
+      const queueAccentSample = (resolved) => {
+        if (!resolved) {
+          applyAccentTheme(DEFAULT_ACCENT);
+          return;
+        }
+        const token = ++accentSampleToken;
+        const probe = new Image();
+        probe.decoding = "async";
+        probe.onload = () => {
+          if (token !== accentSampleToken) return;
+          sampleAccentFromImage(probe);
+        };
+        probe.onerror = () => {
+          if (token !== accentSampleToken) return;
+          applyAccentTheme(DEFAULT_ACCENT);
+        };
+        if (/^https?:\/\//i.test(resolved)) {
+          probe.crossOrigin = "anonymous";
+        }
+        probe.src = resolved;
+      };
+
+      const setActiveNav = (sectionId) => {
+        navLinks.forEach((link) => {
+          link.classList.toggle(
+            "is-active",
+            link.dataset.section === sectionId,
+          );
+        });
+        const section = document.getElementById(sectionId);
+        if (section && pageTitle) {
+          pageTitle.textContent = section.dataset.pageTitle || "Bridge";
+        }
+        if (section && pageSubtitle) {
+          pageSubtitle.textContent =
+            section.dataset.pageSubtitle || "Desktop companion";
+        }
+      };
+
+      navLinks.forEach((link) => {
+        link.addEventListener("click", () => {
+          const sectionId = link.dataset.section;
+          const section = sectionId ? document.getElementById(sectionId) : null;
+          if (!section) return;
+          setActiveNav(sectionId);
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+
+      if (contentScroll && navLinks.length) {
+        const sectionObserver = new IntersectionObserver(
+          (entries) => {
+            const visible = entries
+              .filter((entry) => entry.isIntersecting)
+              .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+            if (!visible.length) return;
+            setActiveNav(visible[0].target.id);
+          },
+          {
+            root: contentScroll,
+            threshold: [0.2, 0.35, 0.5, 0.65],
+            rootMargin: "-12% 0px -52% 0px",
+          },
+        );
+        navLinks.forEach((link) => {
+          const sectionId = link.dataset.section;
+          const section = sectionId ? document.getElementById(sectionId) : null;
+          if (section) sectionObserver.observe(section);
+        });
+      }
+
+      applyAccentTheme(DEFAULT_ACCENT);
+
+      const isBridgeArtworkUri = (value) => {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) return false;
+        if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
+          return true;
+        }
+        if (/^[a-z]:\\/i.test(trimmed) || /^\\\\/.test(trimmed)) {
+          return false;
+        }
+        return false;
+      };
+
+      const looksLikeBase64Artwork = (value) => {
+        const compact = String(value || "").replace(/\s+/g, "");
+        if (!compact || compact.length < 256) return false;
+        return /^[A-Za-z0-9+/=]+$/.test(compact);
+      };
+
+      const inferDataUriMime = (base64Payload) => {
+        if (base64Payload.startsWith("/9j/")) return "image/jpeg";
+        if (base64Payload.startsWith("iVBORw0KGgo")) return "image/png";
+        if (base64Payload.startsWith("UklGR")) return "image/webp";
+        return "image/jpeg";
+      };
+
+      const normalizeBridgeArtworkUri = (value) => {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) return "";
+        if (isBridgeArtworkUri(trimmed)) return trimmed;
+        if (looksLikeBase64Artwork(trimmed)) {
+          const compact = trimmed.replace(/\s+/g, "");
+          return `data:${inferDataUriMime(compact)};base64,${compact}`;
+        }
+        return "";
+      };
+
+      const renderArtworkBackdrop = (rawArtworkUrl) => {
+        const resolved = normalizeBridgeArtworkUri(rawArtworkUrl);
+        if (resolved === cachedArtworkBackdropUrl) return;
+        cachedArtworkBackdropUrl = resolved;
+
+        if (!resolved) {
+          document.body.classList.remove("has-artwork-backdrop");
+          if (artworkBackdrop) artworkBackdrop.classList.add("is-hidden");
+          if (artworkBgSharp) artworkBgSharp.removeAttribute("src");
+          if (artworkBgBlur) artworkBgBlur.removeAttribute("src");
+          updateHeroCover("");
+          queueAccentSample("");
+          return;
+        }
+
+        updateHeroCover(resolved);
+
+        const applySrc = () => {
+          document.body.classList.add("has-artwork-backdrop");
+          if (artworkBackdrop) artworkBackdrop.classList.remove("is-hidden");
+        };
+
+        const finalizeBackdrop = () => {
+          applySrc();
+          if (
+            artworkBgSharp &&
+            artworkBgSharp.complete &&
+            artworkBgSharp.naturalWidth > 0
+          ) {
+            sampleAccentFromImage(artworkBgSharp);
+          } else {
+            queueAccentSample(resolved);
+          }
+        };
+
+        if (!artworkBgSharp || !artworkBgBlur) {
+          finalizeBackdrop();
+          return;
+        }
+
+        let pendingLayers = 2;
+        const onLayerReady = () => {
+          pendingLayers -= 1;
+          if (pendingLayers <= 0) finalizeBackdrop();
+        };
+
+        artworkBgSharp.onload = onLayerReady;
+        artworkBgBlur.onload = onLayerReady;
+        artworkBgSharp.onerror = onLayerReady;
+        artworkBgBlur.onerror = onLayerReady;
+        if (/^https?:\/\//i.test(resolved)) {
+          artworkBgSharp.crossOrigin = "anonymous";
+          artworkBgBlur.crossOrigin = "anonymous";
+        }
+        artworkBgSharp.src = resolved;
+        artworkBgBlur.src = resolved;
+      };
+
+      const renderConnectionPill = ({
+        localClients = 0,
+        remoteClients = 0,
+      } = {}) => {
+        const pill = document.getElementById("connection-pill");
+        if (!pill) return;
+        const local = Math.max(0, Number(localClients) || 0);
+        const remote = Math.max(0, Number(remoteClients) || 0);
+        const total = local + remote;
+        pill.className =
+          total > 0 ? "status-pill status-pill--connected" : "status-pill";
+        if (total === 0) {
+          pill.textContent = "No clients";
+          pill.title = "";
+          return;
+        }
+        if (local > 0 && remote > 0) {
+          pill.textContent = `${local} local · ${remote} remote`;
+          pill.title = `${total} connected client${total === 1 ? "" : "s"} (${local} local, ${remote} remote)`;
+          return;
+        }
+        if (remote > 0) {
+          pill.textContent = `${remote} remote client${remote === 1 ? "" : "s"}`;
+          pill.title = `${remote} remote client${remote === 1 ? "" : "s"} via relay`;
+          return;
+        }
+        pill.textContent = `${local} client${local === 1 ? "" : "s"}`;
+        pill.title = `${local} local client${local === 1 ? "" : "s"}`;
+      };
+
+      const exportLyricsTtmlButton = document.getElementById("export-lyrics-ttml");
+      const saveLyricsVaultButton = document.getElementById("save-lyrics-vault");
+      const importLyricsTtmlButton = document.getElementById("import-lyrics-ttml");
+      const openLyricsVaultButton = document.getElementById("open-lyrics-vault");
+      const vaultPanelOverlay = document.getElementById("vault-panel-overlay");
+      const vaultPanelCloseButton = document.getElementById("vault-panel-close");
+      const vaultSearchInput = document.getElementById("vault-search-input");
+      const vaultSearchEmpty = document.getElementById("vault-search-empty");
+      const vaultEntryList = document.getElementById("vault-entry-list");
+      const vaultBrowserStatus = document.getElementById("vault-browser-status");
+      const vaultFolderPath = document.getElementById("vault-folder-path");
+      const vaultEmptyState = document.getElementById("vault-empty-state");
+      const vaultEntryCount = document.getElementById("vault-entry-count");
+      const vaultRefreshListButton = document.getElementById("vault-refresh-list");
+      const vaultBrowserImportButton = document.getElementById("vault-browser-import");
+      const vaultBrowserOpenFolderButton = document.getElementById(
+        "vault-browser-open-folder",
+      );
+      const vaultIncludeTranslationsInput = document.getElementById(
+        "vault-include-translations",
+      );
+      const exportLyricsTtmlStatus = document.getElementById(
+        "export-lyrics-ttml-status",
+      );
+      const vaultLyricsStatus = document.getElementById("vault-lyrics-status");
+      let latestLyricsLineCount = 0;
+      let cachedVaultEntries = [];
+
+      const normalizeVaultSearchText = (value) =>
+        String(value || "")
+          .trim()
+          .toLowerCase();
+
+      const filterVaultEntries = (entries, query) => {
+        const safeEntries = Array.isArray(entries) ? entries : [];
+        const needle = normalizeVaultSearchText(query);
+        if (!needle) {
+          return safeEntries;
+        }
+        return safeEntries.filter((entry) => {
+          const haystack = [
+            entry?.title,
+            entry?.artist,
+            entry?.album,
+            entry?.sourceLabel,
+            entry?.vaultId,
+          ]
+            .map(normalizeVaultSearchText)
+            .join(" ");
+          return haystack.includes(needle);
+        });
+      };
+
+      const applyVaultSearch = () => {
+        const query = vaultSearchInput?.value || "";
+        const filtered = filterVaultEntries(cachedVaultEntries, query);
+        renderVaultEntries(filtered, {
+          totalCount: cachedVaultEntries.length,
+          query,
+        });
+      };
+
+      const openVaultPanel = () => {
+        if (!vaultPanelOverlay) {
+          return;
+        }
+        vaultPanelOverlay.hidden = false;
+        vaultPanelOverlay.classList.add("is-open");
+        vaultPanelOverlay.setAttribute("aria-hidden", "false");
+        document.body.classList.add("vault-panel-open");
+        if (vaultSearchInput) {
+          vaultSearchInput.value = "";
+        }
+        void refreshVaultBrowser({ quiet: true }).then(() => {
+          vaultSearchInput?.focus();
+        });
+      };
+
+      const closeVaultPanel = () => {
+        if (!vaultPanelOverlay) {
+          return;
+        }
+        vaultPanelOverlay.classList.remove("is-open");
+        vaultPanelOverlay.hidden = true;
+        vaultPanelOverlay.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("vault-panel-open");
+      };
+
+      const setVaultLyricsStatus = (message = "", tone = "") => {
+        if (!vaultLyricsStatus) return;
+        const text = String(message || "").trim();
+        vaultLyricsStatus.hidden = !text;
+        vaultLyricsStatus.textContent = text;
+        vaultLyricsStatus.classList.remove("hint--ok", "hint--fail");
+        if (tone === "ok") vaultLyricsStatus.classList.add("hint--ok");
+        if (tone === "fail") vaultLyricsStatus.classList.add("hint--fail");
+      };
+
+      const setVaultBrowserStatus = (message = "", tone = "") => {
+        if (!vaultBrowserStatus) return;
+        const text = String(message || "").trim();
+        vaultBrowserStatus.hidden = !text;
+        vaultBrowserStatus.textContent = text;
+        vaultBrowserStatus.classList.remove("is-ok", "is-fail");
+        if (tone === "ok") vaultBrowserStatus.classList.add("is-ok");
+        if (tone === "fail") vaultBrowserStatus.classList.add("is-fail");
+      };
+
+      const truncateVaultPath = (value, maxLength = 56) => {
+        const text = String(value || "").trim();
+        if (!text || text.length <= maxLength) {
+          return text;
+        }
+        return `…${text.slice(-(maxLength - 1))}`;
+      };
+
+      const updateVaultEntryCount = (visibleCount, totalCount, query = "") => {
+        if (!vaultEntryCount) return;
+        const visible = Number(visibleCount) || 0;
+        const total = Number(totalCount) || 0;
+        const hasQuery = Boolean(normalizeVaultSearchText(query));
+        if (!total) {
+          vaultEntryCount.hidden = true;
+          vaultEntryCount.textContent = "";
+          return;
+        }
+        vaultEntryCount.hidden = false;
+        if (hasQuery && visible !== total) {
+          vaultEntryCount.textContent = `${visible} of ${total}`;
+          return;
+        }
+        vaultEntryCount.textContent = `${total} song${total === 1 ? "" : "s"}`;
+      };
+
+      const resolveVaultSourceBadge = (sourceLabel = "") => {
+        const label = String(sourceLabel || "").trim().toLowerCase();
+        if (label.includes("karaoke")) {
+          return { text: "Karaoke", className: "vault-entry-badge--karaoke" };
+        }
+        if (label.includes("line")) {
+          return { text: "Line sync", className: "vault-entry-badge--line" };
+        }
+        const readable = String(sourceLabel || "Vault")
+          .replace(/^local-vault-?/i, "")
+          .replace(/[-_]+/g, " ")
+          .trim();
+        return {
+          text: readable ? readable : "Vault",
+          className: "vault-entry-badge--default",
+        };
+      };
+
+      const formatVaultSavedAt = (savedAt) => {
+        const ms = Number(savedAt || 0);
+        if (!ms) return "Saved date unknown";
+        try {
+          return `Saved ${new Date(ms).toLocaleString()}`;
+        } catch {
+          return "Saved date unknown";
+        }
+      };
+
+      const renderVaultEntries = (entries = [], { totalCount = 0, query = "" } = {}) => {
+        if (!vaultEntryList) return;
+        vaultEntryList.innerHTML = "";
+        const safeEntries = Array.isArray(entries) ? entries : [];
+        const hasVaultItems = Number(totalCount) > 0;
+        const hasQuery = Boolean(normalizeVaultSearchText(query));
+
+        updateVaultEntryCount(safeEntries.length, totalCount, query);
+
+        if (vaultEmptyState) {
+          vaultEmptyState.hidden = hasVaultItems || hasQuery;
+        }
+        if (vaultSearchEmpty) {
+          vaultSearchEmpty.hidden = !hasVaultItems || safeEntries.length > 0 || !hasQuery;
+        }
+
+        for (const entry of safeEntries) {
+          const row = document.createElement("div");
+          row.className = "vault-entry";
+          row.dataset.vaultId = String(entry.vaultId || "");
+
+          const main = document.createElement("div");
+          main.className = "vault-entry-main";
+
+          const titleRow = document.createElement("div");
+          titleRow.className = "vault-entry-title-row";
+
+          const title = document.createElement("strong");
+          title.className = "vault-entry-title";
+          title.textContent = String(entry.title || "Unknown title");
+          title.title = String(entry.title || "Unknown title");
+
+          const badge = resolveVaultSourceBadge(entry.sourceLabel);
+          const badgeEl = document.createElement("span");
+          badgeEl.className = `vault-entry-badge ${badge.className}`;
+          badgeEl.textContent = badge.text;
+
+          titleRow.append(title, badgeEl);
+
+          const subtitle = document.createElement("span");
+          subtitle.className = "vault-entry-subtitle";
+          const lineCount = Number(entry.lineCount || 0);
+          const translatedCount = Number(entry.translatedLineCount || 0);
+          const translationSuffix =
+            translatedCount > 0 ? ` · ${translatedCount} translated` : "";
+          const durationMs = Number(entry.durationMs || 0);
+          const durationSuffix = durationMs > 0 ? ` · ${fmtDuration(durationMs)}` : "";
+          const album = String(entry.album || "").trim();
+          const albumPrefix = album ? `${album} · ` : "";
+          subtitle.textContent = `${albumPrefix}${String(entry.artist || "Unknown artist")} · ${lineCount} lines${durationSuffix}${translationSuffix}`;
+
+          const meta = document.createElement("span");
+          meta.className = "vault-entry-meta";
+          meta.textContent = formatVaultSavedAt(entry.savedAt);
+
+          main.append(titleRow, subtitle, meta);
+
+          const actions = document.createElement("div");
+          actions.className = "vault-entry-actions";
+
+          const ttmlButton = document.createElement("button");
+          ttmlButton.type = "button";
+          ttmlButton.className = "button secondary";
+          ttmlButton.dataset.exportFormat = "ttml";
+          ttmlButton.title = "Export as TTML";
+          ttmlButton.textContent = "TTML";
+
+          const jsonButton = document.createElement("button");
+          jsonButton.type = "button";
+          jsonButton.className = "button secondary";
+          jsonButton.dataset.exportFormat = "json";
+          jsonButton.title = "Export as JSON";
+          jsonButton.textContent = "JSON";
+
+          actions.append(ttmlButton, jsonButton);
+          row.append(main, actions);
+          vaultEntryList.append(row);
+        }
+      };
+
+      const refreshVaultBrowser = async ({ quiet = false } = {}) => {
+        if (!quiet) {
+          setVaultBrowserStatus("Loading vault entries...");
+        }
+        try {
+          const result = await window.bridgeLyrics.listVaultEntries();
+          if (!result?.ok) {
+            setVaultBrowserStatus(
+              `Could not load vault: ${result?.error || "Unknown error"}`,
+              "fail",
+            );
+            cachedVaultEntries = [];
+            applyVaultSearch();
+            return;
+          }
+          if (vaultFolderPath) {
+            const folderPath = String(result.folderPath || "").trim();
+            vaultFolderPath.textContent = folderPath
+              ? truncateVaultPath(folderPath)
+              : "";
+            vaultFolderPath.title = folderPath;
+          }
+          cachedVaultEntries = Array.isArray(result.entries) ? result.entries : [];
+          applyVaultSearch();
+          const count = Number(result.entryCount || cachedVaultEntries.length || 0);
+          setVaultBrowserStatus(
+            count
+              ? `${count} saved song${count === 1 ? "" : "s"} in local vault.`
+              : "Vault is empty.",
+            count ? "ok" : "",
+          );
+        } catch (error) {
+          setVaultBrowserStatus(
+            `Could not load vault: ${error instanceof Error ? error.message : String(error)}`,
+            "fail",
+          );
+          cachedVaultEntries = [];
+          applyVaultSearch();
+        }
+      };
+
+      const exportVaultEntryFromRow = async (vaultId, format) => {
+        if (!vaultId) return;
+        setVaultBrowserStatus(
+          format === "json" ? "Preparing JSON download..." : "Preparing TTML download...",
+        );
+        try {
+          const result = await window.bridgeLyrics.exportVaultEntry(vaultId, format);
+          if (result?.canceled) {
+            setVaultBrowserStatus("");
+            return;
+          }
+          if (result?.ok) {
+            const filePath = String(result.filePath || "").trim();
+            setVaultBrowserStatus(
+              filePath
+                ? `Downloaded ${result.lineCount || 0} lines to ${filePath}`
+                : `Downloaded ${result.lineCount || 0} lines.`,
+              "ok",
+            );
+            return;
+          }
+          setVaultBrowserStatus(
+            `Download failed: ${result?.error || "Unknown error"}`,
+            "fail",
+          );
+        } catch (error) {
+          setVaultBrowserStatus(
+            `Download failed: ${error instanceof Error ? error.message : String(error)}`,
+            "fail",
+          );
+        }
+      };
+
+      const importVaultFromDialog = async ({ includeTranslations = false } = {}) => {
+        setVaultBrowserStatus(
+          includeTranslations
+            ? "Importing and translating if needed..."
+            : "Importing lyrics file...",
+        );
+        try {
+          const result = await window.bridgeLyrics.importToVault({
+            includeTranslations,
+          });
+          if (result?.canceled) {
+            setVaultBrowserStatus("");
+            return;
+          }
+          if (result?.ok) {
+            setVaultBrowserStatus(
+              `Imported ${result.lineCount || 0} lines into vault.`,
+              "ok",
+            );
+            await refreshVaultBrowser({ quiet: true });
+            return;
+          }
+          setVaultBrowserStatus(
+            `Import failed: ${result?.error || "Unknown error"}`,
+            "fail",
+          );
+        } catch (error) {
+          setVaultBrowserStatus(
+            `Import failed: ${error instanceof Error ? error.message : String(error)}`,
+            "fail",
+          );
+        }
+      };
+
+      if (vaultSearchInput) {
+        vaultSearchInput.addEventListener("input", () => {
+          applyVaultSearch();
+        });
+      }
+
+      if (vaultPanelCloseButton) {
+        vaultPanelCloseButton.addEventListener("click", () => {
+          closeVaultPanel();
+        });
+      }
+
+      if (vaultPanelOverlay) {
+        const vaultPanel = vaultPanelOverlay.querySelector(".vault-panel");
+        vaultPanelOverlay.addEventListener("click", (event) => {
+          if (event.target === vaultPanelOverlay) {
+            closeVaultPanel();
+          }
+        });
+        vaultPanel?.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (
+          event.key === "Escape" &&
+          vaultPanelOverlay?.classList.contains("is-open")
+        ) {
+          closeVaultPanel();
+        }
+      });
+
+      if (openLyricsVaultButton) {
+        openLyricsVaultButton.addEventListener("click", () => {
+          openVaultPanel();
+        });
+      }
+
+      if (vaultEntryList) {
+        vaultEntryList.addEventListener("click", (event) => {
+          const button = event.target.closest("button[data-export-format]");
+          if (!button) return;
+          const row = button.closest(".vault-entry");
+          const vaultId = row?.dataset?.vaultId || "";
+          const format = button.dataset.exportFormat || "ttml";
+          void exportVaultEntryFromRow(vaultId, format);
+        });
+      }
+
+      if (vaultRefreshListButton) {
+        vaultRefreshListButton.addEventListener("click", () => {
+          void refreshVaultBrowser();
+        });
+      }
+
+      if (vaultBrowserImportButton) {
+        vaultBrowserImportButton.addEventListener("click", () => {
+          const includeTranslations = Boolean(
+            vaultIncludeTranslationsInput?.checked,
+          );
+          void importVaultFromDialog({ includeTranslations });
+        });
+      }
+
+      if (vaultBrowserOpenFolderButton) {
+        vaultBrowserOpenFolderButton.addEventListener("click", () => {
+          void window.bridgeLyrics.openVaultFolder().then((result) => {
+            if (result?.ok) {
+              setVaultBrowserStatus("Opened vault folder in File Explorer.", "ok");
+              return;
+            }
+            setVaultBrowserStatus(
+              `Could not open vault folder: ${result?.error || "Unknown error"}`,
+              "fail",
+            );
+          });
+        });
+      }
+
+      const setExportLyricsTtmlStatus = (message = "", tone = "") => {
+        if (!exportLyricsTtmlStatus) return;
+        const text = String(message || "").trim();
+        exportLyricsTtmlStatus.hidden = !text;
+        exportLyricsTtmlStatus.textContent = text;
+        exportLyricsTtmlStatus.classList.remove("hint--ok", "hint--fail");
+        if (tone === "ok") exportLyricsTtmlStatus.classList.add("hint--ok");
+        if (tone === "fail") exportLyricsTtmlStatus.classList.add("hint--fail");
+      };
+
+      const updateExportLyricsTtmlButton = (status = {}) => {
+        if (!exportLyricsTtmlButton) return;
+        const lines = Number(status.lyricsLines ?? latestLyricsLineCount ?? 0);
+        latestLyricsLineCount = lines;
+        const enabled = lines > 0;
+        exportLyricsTtmlButton.disabled = !enabled;
+        exportLyricsTtmlButton.title = enabled
+          ? "Save synced lyrics for the current track as a TTML file"
+          : "Load synced lyrics for the current track before exporting";
+        if (saveLyricsVaultButton) {
+          saveLyricsVaultButton.disabled = !enabled;
+          saveLyricsVaultButton.title = enabled
+            ? "Store the current synced lyrics in the local vault"
+            : "Load synced lyrics for the current track before saving";
+        }
+      };
+
+      const renderNavStatus = (status = {}) => {
+        const lyricsNode = document.getElementById("nav-lyrics-status");
+        if (lyricsNode) {
+          const lines = Number(status.lyricsLines || 0);
+          const message =
+            String(status.lyricsStatus || "").trim() || "Waiting for track...";
+          lyricsNode.textContent =
+            lines > 0 ? `${message} · ${lines} lines` : message;
+        }
+        updateExportLyricsTtmlButton(status);
+
+        const errorNode = document.getElementById("nav-error-alert");
+        const errorText = String(status.detectorError || "").trim();
+        if (errorNode) {
+          errorNode.hidden = !errorText;
+          errorNode.textContent = errorText;
+        }
+
+        const cooldownNode = document.getElementById("nav-cooldown-alert");
+        const cooldownActive = Boolean(status.musixmatchCooldownActive);
+        if (cooldownNode) {
+          cooldownNode.hidden = !cooldownActive;
+          if (cooldownActive) {
+            const remainingMs = Number(
+              status.musixmatchCooldownRemainingMs || 0,
+            );
+            const reason = String(status.musixmatchCooldownReason || "").trim();
+            const reasonSuffix = reason ? ` (${reason})` : "";
+            cooldownNode.textContent = `Musixmatch cooldown${reasonSuffix} · retry in ${fmtDuration(remainingMs)}`;
+          }
+        }
+      };
+
+      const spotifyLoginButton = document.getElementById("spotify-login");
+      const spotifyLogoutButton = document.getElementById("spotify-logout");
+
+      const renderSpotifyAuthStatus = (payload = {}) => {
+        const authenticated = Boolean(payload.spotifyAuthenticated);
+        const tokenValid = Boolean(payload.spotifyAccessTokenValid);
+        const authError = String(payload.spotifyAuthError || "").trim();
+        let label = "Spotify: not signed in";
+        if (authenticated && tokenValid) {
+          label = "Spotify: signed in (token active)";
+        } else if (authenticated && authError) {
+          label = `Spotify: signed in (error: ${authError})`;
+        } else if (authenticated) {
+          label = "Spotify: signed in (token refreshing...)";
+        }
+        setText("spotify-auth-status", label);
+      };
+
+      if (spotifyLoginButton) {
+        spotifyLoginButton.addEventListener("click", () => {
+          setText("spotify-auth-status", "Opening Spotify login...");
+          void window.spotifyAuth.login().then((result) => {
+            if (result?.ok) {
+              setText("spotify-auth-status", "Spotify: signed in successfully!");
+            } else {
+              setText(
+                "spotify-auth-status",
+                `Sign-in failed: ${result?.error || "Unknown error"}`,
+              );
+            }
+          }).catch((error) => {
+            setText(
+              "spotify-auth-status",
+              `Sign-in error: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      }
+
+      if (spotifyLogoutButton) {
+        spotifyLogoutButton.addEventListener("click", () => {
+          void window.spotifyAuth.logout().then(() => {
+            setText("spotify-auth-status", "Spotify: signed out");
+          });
+        });
+      }
+
+      if (exportLyricsTtmlButton) {
+        exportLyricsTtmlButton.addEventListener("click", () => {
+          setExportLyricsTtmlStatus("Preparing TTML export...");
+          exportLyricsTtmlButton.disabled = true;
+          void window.bridgeLyrics
+            .exportTtml()
+            .then((result) => {
+              if (result?.canceled) {
+                setExportLyricsTtmlStatus("");
+                return;
+              }
+              if (result?.ok) {
+                const filePath = String(result.filePath || "").trim();
+                const lineCount = Number(result.lineCount || 0);
+                const suffix = filePath
+                  ? `Saved to ${filePath}`
+                  : `Exported ${lineCount} lines`;
+                setExportLyricsTtmlStatus(suffix, "ok");
+                return;
+              }
+              setExportLyricsTtmlStatus(
+                `Export failed: ${result?.error || "Unknown error"}`,
+                "fail",
+              );
+            })
+            .catch((error) => {
+              setExportLyricsTtmlStatus(
+                `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+                "fail",
+              );
+            })
+            .finally(() => {
+              updateExportLyricsTtmlButton({ lyricsLines: latestLyricsLineCount });
+            });
+        });
+      }
+
+      if (saveLyricsVaultButton) {
+        saveLyricsVaultButton.addEventListener("click", () => {
+          const includeTranslations = Boolean(
+            vaultIncludeTranslationsInput?.checked,
+          );
+          setVaultLyricsStatus(
+            includeTranslations
+              ? "Saving to vault and translating if needed..."
+              : "Saving to lyrics vault...",
+          );
+          saveLyricsVaultButton.disabled = true;
+          void window.bridgeLyrics
+            .saveToVault({ includeTranslations })
+            .then((result) => {
+              if (result?.ok) {
+                setVaultLyricsStatus(
+                  `Saved ${result.lineCount || 0} lines to vault (${result.sourceLabel || "local-vault"}).`,
+                  "ok",
+                );
+                void refreshVaultBrowser({ quiet: true });
+                return;
+              }
+              setVaultLyricsStatus(
+                `Vault save failed: ${result?.error || "Unknown error"}`,
+                "fail",
+              );
+            })
+            .catch((error) => {
+              setVaultLyricsStatus(
+                `Vault save failed: ${error instanceof Error ? error.message : String(error)}`,
+                "fail",
+              );
+            })
+            .finally(() => {
+              updateExportLyricsTtmlButton({ lyricsLines: latestLyricsLineCount });
+            });
+        });
+      }
+
+      if (importLyricsTtmlButton) {
+        importLyricsTtmlButton.addEventListener("click", () => {
+          const includeTranslations = Boolean(
+            vaultIncludeTranslationsInput?.checked,
+          );
+          setVaultLyricsStatus("Importing TTML into lyrics vault...");
+          importLyricsTtmlButton.disabled = true;
+          void window.bridgeLyrics
+            .importToVault({ includeTranslations })
+            .then((result) => {
+              if (result?.canceled) {
+                setVaultLyricsStatus("");
+                return;
+              }
+              if (result?.ok) {
+                const filePath = String(result.filePath || "").trim();
+                const suffix = filePath
+                  ? `Imported ${result.lineCount || 0} lines from ${filePath}`
+                  : `Imported ${result.lineCount || 0} lines into vault`;
+                setVaultLyricsStatus(suffix, "ok");
+                void refreshVaultBrowser({ quiet: true });
+                return;
+              }
+              setVaultLyricsStatus(
+                `Import failed: ${result?.error || "Unknown error"}`,
+                "fail",
+              );
+            })
+            .catch((error) => {
+              setVaultLyricsStatus(
+                `Import failed: ${error instanceof Error ? error.message : String(error)}`,
+                "fail",
+              );
+            })
+            .finally(() => {
+              importLyricsTtmlButton.disabled = false;
+            });
+        });
+      }
+
+      const musixmatchTokenInput = document.getElementById("musixmatch-token");
+      const saveMusixmatchTokenButton = document.getElementById(
+        "save-musixmatch-token",
+      );
+      const clearMusixmatchTokenButton = document.getElementById(
+        "clear-musixmatch-token",
+      );
+      const geminiApiKeyInput = document.getElementById("gemini-api-key");
+      const saveGeminiApiKeyButton = document.getElementById(
+        "save-gemini-api-key",
+      );
+      const clearGeminiApiKeyButton = document.getElementById(
+        "clear-gemini-api-key",
+      );
+      const bridgeKeyInput = document.getElementById("bridge-key");
+      const relayUrlInput = document.getElementById("relay-url");
+      const relayBridgeIdInput = document.getElementById("relay-bridge-id");
+      const saveRelaySettingsButton = document.getElementById(
+        "save-relay-settings",
+      );
+      const clearRelaySettingsButton = document.getElementById(
+        "clear-relay-settings",
+      );
+
+      const renderMusixmatchTokenStatus = (payload = {}) => {
+        const configured = Boolean(payload.musixmatchTokenConfigured);
+        const preview = String(payload.musixmatchTokenPreview || "").trim();
+        setText(
+          "musixmatch-token-status",
+          configured
+            ? `Musixmatch token: configured${preview ? ` (${preview})` : ""}`
+            : "Musixmatch token: not configured",
+        );
+      };
+
+      const renderGeminiApiKeyStatus = (payload = {}) => {
+        const configured = Boolean(payload.geminiApiKeyConfigured);
+        const preview = String(payload.geminiApiKeyPreview || "").trim();
+        const provider = String(
+          payload.translationProvider || "google/gemini-3.1-flash-lite",
+        ).trim();
+        setText(
+          "gemini-api-key-status",
+          configured
+            ? `Gemini key: configured${preview ? ` (${preview})` : ""}`
+            : "Gemini key: not configured",
+        );
+        setText(
+          "gemini-api-key-help",
+          configured
+            ? `Translations provider: ${provider}`
+            : "Used for AI lyric translation via Google Gemini.",
+        );
+      };
+
+      const renderRelaySettingsStatus = (payload = {}) => {
+        const configured = Boolean(payload.relayUrl && payload.relayBridgeId);
+        const connected = Boolean(payload.relayConnected);
+        const clients = Number(payload.relayConnectedClients || 0);
+        const error = String(payload.relayError || "").trim();
+        setText(
+          "relay-settings-status",
+          configured
+            ? `Remote relay: ${connected ? "connected" : "configured"} (${clients} remote client${clients === 1 ? "" : "s"})${error ? ` - ${error}` : ""}`
+            : "Remote relay: not configured",
+        );
+        setText(
+          "relay-mobile-url",
+          `Mobile URL: ${payload.relayMobileUrl || "none"}`,
+        );
+      };
+
+      const persistMusixmatchToken = async (tokenValue) => {
+        setText("musixmatch-token-status", "Musixmatch token: saving...");
+        const response = await window.bridgeSettings.set({
+          musixmatchUserToken: String(tokenValue || ""),
+        });
+        if (!response?.ok) {
+          throw new Error(response?.error || "Failed to save token");
+        }
+        renderMusixmatchTokenStatus(response);
+      };
+
+      const persistGeminiApiKey = async (tokenValue) => {
+        setText("gemini-api-key-status", "Gemini key: saving...");
+        const response = await window.bridgeSettings.set({
+          geminiApiKey: String(tokenValue || ""),
+        });
+        if (!response?.ok) {
+          throw new Error(response?.error || "Failed to save Gemini key");
+        }
+        renderGeminiApiKeyStatus(response);
+      };
+
+      let ngrokRelayRunning = false;
+      let qrCodeVisible = false;
+
+      const toggleQrButton = document.getElementById('toggle-qr-code');
+      const qrSection = document.getElementById('relay-qr-section');
+      const qrContainer = document.getElementById('relay-qr-container');
+
+      if (toggleQrButton) {
+        toggleQrButton.addEventListener('click', () => {
+          qrCodeVisible = !qrCodeVisible;
+          if (qrContainer) qrContainer.hidden = !qrCodeVisible;
+          toggleQrButton.textContent = qrCodeVisible ? 'Hide QR code' : 'Show QR code';
+        });
+      }
+
+      const updateNgrokRelayUI = (data) => {
+        if (data && data.ok && data.mobileUrl) {
+          ngrokRelayRunning = true;
+          if (qrSection) qrSection.hidden = false;
+          const qrData = JSON.stringify({ u: data.mobileUrl, k: data.bridgeKey || '' });
+          const canvas = document.getElementById('relay-qr-canvas');
+          if (canvas && typeof QRCode !== 'undefined') {
+            canvas.innerHTML = '';
+            new QRCode(canvas, {
+              text: qrData,
+              width: 180,
+              height: 180,
+              colorDark: '#0A0B11',
+              colorLight: '#ffffff',
+              correctLevel: QRCode.CorrectLevel.M,
+            });
+          }
+        } else {
+          ngrokRelayRunning = false;
+          if (qrSection) qrSection.hidden = true;
+          if (qrContainer) qrContainer.hidden = true;
+          qrCodeVisible = false;
+          if (toggleQrButton) toggleQrButton.textContent = 'Show QR code';
+        }
+      };
+
+      const persistRelaySettings = async ({ relayUrl, relayBridgeId, bridgeKey, ngrokDomain, ngrokAuthToken }) => {
+        setText("relay-settings-status", "Remote relay: saving...");
+        const patch = {
+          relayUrl: String(relayUrl || ""),
+          relayBridgeId: String(relayBridgeId || ""),
+          bridgeKey: String(bridgeKey || ""),
+        };
+        if (ngrokDomain !== undefined) {
+          patch.ngrokDomain = String(ngrokDomain || "");
+        }
+        if (ngrokAuthToken !== undefined) {
+          patch.ngrokAuthToken = String(ngrokAuthToken || "");
+        }
+        const response = await window.bridgeSettings.set(patch);
+        if (!response?.ok) {
+          throw new Error(response?.error || "Failed to save relay settings");
+        }
+
+        // Auto-start ngrok relay if domain and auth token are configured
+        if (ngrokDomain && ngrokAuthToken && window.bridgeAPI?.startNgrokRelay) {
+          setText("relay-settings-status", "Remote relay: starting ngrok tunnel...");
+          try {
+            const relayResult = await window.bridgeAPI.startNgrokRelay({
+              domain: ngrokDomain,
+              authToken: ngrokAuthToken,
+              bridgeKey: bridgeKey || 'password123',
+              bridgeId: relayBridgeId || "",
+            });
+            updateNgrokRelayUI(relayResult);
+            if (relayResult?.ok) {
+              setText("relay-settings-status", `Remote relay: connected via ngrok (${relayResult.publicUrl || 'tunnel active'})`);
+            } else {
+              setText("relay-settings-status", `Remote relay: saved but ngrok failed (${relayResult?.error || 'unknown'})`);
+            }
+          } catch (e) {
+            setText("relay-settings-status", `Remote relay: saved but ngrok error (${e.message})`);
+          }
+        }
+
+        renderRelaySettingsStatus(response);
+      };
+
+      const loadBridgeSettings = async () => {
+        try {
+          const settings = await window.bridgeSettings.get();
+          if (musixmatchTokenInput) {
+            musixmatchTokenInput.value = String(
+              settings?.musixmatchUserToken || "",
+            );
+          }
+          if (geminiApiKeyInput) {
+            geminiApiKeyInput.value = String(settings?.geminiApiKey || "");
+          }
+          if (bridgeKeyInput) {
+            bridgeKeyInput.value = String(settings?.bridgeKey || "password123");
+          }
+          if (relayUrlInput) {
+            relayUrlInput.value = String(settings?.relayUrl || "");
+          }
+          if (relayBridgeIdInput) {
+            relayBridgeIdInput.value = String(settings?.relayBridgeId || "");
+          }
+          const ngrokDomainInput = document.getElementById("ngrok-domain");
+          const ngrokAuthTokenInput = document.getElementById("ngrok-auth-token");
+          if (ngrokDomainInput) {
+            ngrokDomainInput.value = String(settings?.ngrokDomain || "");
+          }
+          if (ngrokAuthTokenInput) {
+            ngrokAuthTokenInput.value = String(settings?.ngrokAuthToken || "");
+          }
+          renderMusixmatchTokenStatus(settings || {});
+          renderGeminiApiKeyStatus(settings || {});
+          renderSpotifyAuthStatus(settings || {});
+          renderRelaySettingsStatus(settings || {});
+        } catch (error) {
+          setText(
+            "musixmatch-token-status",
+            `Musixmatch token load failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          setText(
+            "gemini-api-key-status",
+            `Gemini key load failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      };
+
+      if (saveMusixmatchTokenButton) {
+        saveMusixmatchTokenButton.addEventListener("click", () => {
+          void persistMusixmatchToken(musixmatchTokenInput?.value || "").catch(
+            (error) => {
+              setText(
+                "musixmatch-token-status",
+                `Musixmatch token save failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            },
+          );
+        });
+      }
+
+      if (clearMusixmatchTokenButton) {
+        clearMusixmatchTokenButton.addEventListener("click", () => {
+          if (musixmatchTokenInput) {
+            musixmatchTokenInput.value = "";
+          }
+          void persistMusixmatchToken("").catch((error) => {
+            setText(
+              "musixmatch-token-status",
+              `Musixmatch token clear failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      }
+
+      if (saveGeminiApiKeyButton) {
+        saveGeminiApiKeyButton.addEventListener("click", () => {
+          void persistGeminiApiKey(geminiApiKeyInput?.value || "").catch(
+            (error) => {
+              setText(
+                "gemini-api-key-status",
+                `Gemini key save failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            },
+          );
+        });
+      }
+
+      if (clearGeminiApiKeyButton) {
+        clearGeminiApiKeyButton.addEventListener("click", () => {
+          if (geminiApiKeyInput) {
+            geminiApiKeyInput.value = "";
+          }
+          void persistGeminiApiKey("").catch((error) => {
+            setText(
+              "gemini-api-key-status",
+              `Gemini key clear failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      }
+
+      if (saveRelaySettingsButton) {
+        saveRelaySettingsButton.addEventListener("click", () => {
+          const bridgeId = relayBridgeIdInput?.value || "";
+          if (relayBridgeIdInput) relayBridgeIdInput.value = bridgeId;
+          void persistRelaySettings({
+            relayUrl: relayUrlInput?.value || "",
+            relayBridgeId: bridgeId,
+            bridgeKey: bridgeKeyInput?.value || "password123",
+            ngrokDomain: document.getElementById("ngrok-domain")?.value || "",
+            ngrokAuthToken: document.getElementById("ngrok-auth-token")?.value || "",
+          }).catch((error) => {
+            setText(
+              "relay-settings-status",
+              `Remote relay save failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      }
+
+      if (clearRelaySettingsButton) {
+        clearRelaySettingsButton.addEventListener("click", () => {
+          if (relayUrlInput) relayUrlInput.value = "";
+          if (relayBridgeIdInput) relayBridgeIdInput.value = "";
+          void persistRelaySettings({
+            relayUrl: "",
+            relayBridgeId: "",
+            bridgeKey: bridgeKeyInput?.value || "password123",
+          }).catch((error) => {
+            setText(
+              "relay-settings-status",
+              `Remote relay disable failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        });
+      }
+
+      if (musixmatchTokenInput) {
+        musixmatchTokenInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            saveMusixmatchTokenButton?.click();
+          }
+        });
+      }
+
+      if (geminiApiKeyInput) {
+        geminiApiKeyInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            saveGeminiApiKeyButton?.click();
+          }
+        });
+      }
+
+      const playbackClock = {
+        anchorPositionMs: 0,
+        anchorMonotonicMs: monotonicNow(),
+        isPlaying: false,
+        durationMs: 0,
+        lastPacketAt: 0,
+      };
+
+      const computePlaybackPosition = () => {
+        const elapsedMs = playbackClock.isPlaying
+          ? monotonicNow() - playbackClock.anchorMonotonicMs
+          : 0;
+        return clampPosition(
+          playbackClock.anchorPositionMs + elapsedMs,
+          playbackClock.durationMs,
+        );
+      };
+
+      let lastRenderedPosition = "";
+      let lastRenderedPositionMs = "";
+      const renderPlaybackPosition = () => {
+        const positionMs = Math.floor(computePlaybackPosition());
+        const next = fmtTime(positionMs);
+        const nextMs = String(positionMs);
+        if (next !== lastRenderedPosition) {
+          lastRenderedPosition = next;
+          setText("position", next);
+        }
+        if (nextMs !== lastRenderedPositionMs) {
+          lastRenderedPositionMs = nextMs;
+          setText("position-ms", nextMs);
+        }
+      };
+      setInterval(renderPlaybackPosition, 50);
+
+      window.bridgeStatus.onStatus((status) => {
+        const nowMono = monotonicNow();
+        const nowWall = Date.now();
+        const packetWallTime = Number(status.lastPacketAt || 0);
+        const packetDelayMs =
+          packetWallTime > 0
+            ? Math.max(0, Math.min(1000, nowWall - packetWallTime))
+            : 0;
+        const statusPositionMs = Number(status.positionMs || 0);
+        const isPlaying = Boolean(status.isPlaying);
+        const hasFreshPacket =
+          packetWallTime > 0 && packetWallTime !== playbackClock.lastPacketAt;
+        const stateChanged = isPlaying !== playbackClock.isPlaying;
+
+        if (hasFreshPacket) {
+          playbackClock.anchorPositionMs = clampPosition(
+            statusPositionMs + (isPlaying ? packetDelayMs : 0),
+            Number(status.durationMs || 0),
+          );
+          playbackClock.anchorMonotonicMs = nowMono;
+          playbackClock.lastPacketAt = packetWallTime;
+        } else if (stateChanged) {
+          // Preserve continuity when transport state changes without a new packet.
+          playbackClock.anchorPositionMs = computePlaybackPosition();
+          playbackClock.anchorMonotonicMs = nowMono;
+        }
+        playbackClock.isPlaying = isPlaying;
+        playbackClock.durationMs = Number(status.durationMs || 0);
+
+        setText("server-url", status.wsUrl || "Unavailable");
+        const localClientCount = Number(status.connectedClients || 0);
+        const remoteClientCount = Number(status.relayConnectedClients || 0);
+        setText("clients", String(localClientCount));
+        renderConnectionPill({
+          localClients: localClientCount,
+          remoteClients: remoteClientCount,
+        });
+        setText("handshake", status.requiresHandshake ? "Enabled" : "Disabled");
+        setText(
+          "relay-state",
+          status.relayConfigured
+            ? status.relayConnected
+              ? "Connected"
+              : "Configured"
+            : "Disabled",
+        );
+        setText("relay-clients", String(status.relayConnectedClients || 0));
+        setText("track", status.currentTrack || "Waiting for Spotify...");
+        if (Object.prototype.hasOwnProperty.call(status, "artworkUrl")) {
+          renderArtworkBackdrop(status.artworkUrl);
+        }
+        setText("state", status.isPlaying ? "Playing" : "Paused/Idle");
+        setText("source", status.source || "none");
+        setText(
+          "timing-pipeline-ms",
+          String(Math.max(0, Number(status.measuredPipelineMs || 0))),
+        );
+        setText(
+          "timing-forward-bias-ms",
+          String(Math.max(0, Number(status.estimatedForwardBiasMs || 0))),
+        );
+        setText(
+          "timing-native-extrap",
+          status.nativeExtrapolationEnabled ? "yes" : "no",
+        );
+        setText(
+          "timing-raw-gsmtc-ms",
+          String(Math.max(0, Number(status.lastRawGsmtcPositionMs || 0))),
+        );
+        setText(
+          "timing-phone-comp-ms",
+          String(Math.max(0, Number(status.recommendedPhoneCompensationMs || 0))),
+        );
+        renderNavStatus(status);
+        renderMusixmatchTokenStatus(status);
+        renderGeminiApiKeyStatus(status);
+        renderSpotifyAuthStatus(status);
+        renderRelaySettingsStatus(status);
+      });
+
+      void (async () => {
+        await loadBridgeSettings();
+        // Auto-start ngrok relay if settings were previously saved
+        const savedDomain = document.getElementById("ngrok-domain")?.value || "";
+        const savedToken = document.getElementById("ngrok-auth-token")?.value || "";
+        const savedBridgeId = document.getElementById("relay-bridge-id")?.value || "";
+        const savedBridgeKey = document.getElementById("bridge-key")?.value || "password123";
+        if (savedDomain && savedToken && window.bridgeAPI?.startNgrokRelay) {
+          setText("relay-settings-status", "Remote relay: auto-starting ngrok from saved settings...");
+          try {
+            const result = await window.bridgeAPI.startNgrokRelay({
+              domain: savedDomain,
+              authToken: savedToken,
+              bridgeKey: savedBridgeKey,
+              bridgeId: savedBridgeId || "",
+            });
+            updateNgrokRelayUI(result);
+            if (result?.ok) {
+              setText("relay-settings-status", `Remote relay: auto-connected via ngrok (${result.publicUrl || 'tunnel active'})`);
+            } else {
+              setText("relay-settings-status", `Remote relay: auto-start failed (${result?.error || 'unknown'})`);
+            }
+          } catch (e) {
+            setText("relay-settings-status", `Remote relay: auto-start error (${e.message})`);
+          }
+        }
+      })();
+    </script>
+  
+</body>
+</html>

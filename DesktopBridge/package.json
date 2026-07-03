@@ -1,0 +1,50 @@
+{
+  "name": "desktopbridge",
+  "productName": "KineSync",
+  "version": "1.0.0",
+  "description": "Desktop bridge for KineSync — streams playback metadata and synced lyrics from Windows to your phone.",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"No linting configured\"",
+    "relay": "node scripts/start-relay.js",
+    "relay:ngrok": "node scripts/start-relay-ngrok.js",
+    "check:lyrics-sources": "node scripts/check-lyrics-source-health.js",
+    "build:native-media": "npm install --prefix native/windows-media-session && npm run rebuild:electron --prefix native/windows-media-session",
+    "build:seek-helper": "dotnet build native/spotify-seek-helper/spotify-seek-helper.csproj -c Release",
+    "diagnose:seek": "node scripts/diagnose-seek.js"
+  },
+  "keywords": [],
+  "author": {
+    "name": "Kineticron",
+    "email": "kineticrondev@gmail.com"
+  },
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kineticron/KineSync.git",
+    "directory": "DesktopBridge"
+  },
+  "homepage": "https://github.com/Kineticron/KineSync#readme",
+  "bugs": "https://github.com/Kineticron/KineSync/issues",
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1",
+    "electron-store": "^11.0.2",
+"ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "electron": "40.6.0"
+  }
+}

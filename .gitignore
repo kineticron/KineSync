@@ -1,0 +1,102 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Logs and diagnostic output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime and local process files
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# JavaScript/TypeScript caches
+*.tsbuildinfo
+.eslintcache
+.npm/
+.yarn/
+.pnpm-store/
+.cache/
+.parcel-cache/
+.turbo/
+
+# Expo / React Native
+.expo/
+.expo-shared/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+.kotlin/
+ios/
+android/
+app-example/
+
+# Electron / bundler output
+out/
+.webpack/
+.vite/
+build/
+release/
+
+# Native build outputs
+**/bin/
+**/obj/
+**/build/
+**/Release/
+**/Debug/
+*.ipdb
+*.iobj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.node
+*.exe
+*.dll
+*.recipe
+*.tlog
+*.lastbuildstate
+
+# Coverage and test artifacts
+coverage/
+*.lcov
+.nyc_output/
+
+# Local scratch files
+test_am.js
+.git-nested-backups/
+
+# IDE and agent files
+.cursor/
+.hermes/
+.claude/

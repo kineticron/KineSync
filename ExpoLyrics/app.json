@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "KineSync",
+    "slug": "KineSync",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/images/R.png",
+    "scheme": "expolyrics",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.kineticron.KineSync",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "CADisableMinimumFrameDurationOnPhone": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": true
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#6B21A8",
+        "foregroundImage": "./assets/images/R.png",
+        "monochromeImage": "./assets/images/R.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "dev.kineticron.KineSync"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/R.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/R.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      "expo-live-activity",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.2"
+          }
+        }
+      ],
+      "./plugins/with-lyrics-live-activity.js",
+      "expo-video"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "YOUR_EAS_PROJECT_ID"
+      }
+    }
+  }
+}
