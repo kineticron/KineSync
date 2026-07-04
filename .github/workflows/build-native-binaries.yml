@@ -51,8 +51,6 @@ jobs:
 
       - name: Build C++ media-session addon
         working-directory: DesktopBridge
-        env:
-          npm_config_msvs_version: "2022"
         run: npm run build:native-media
 
       - name: Build .NET seek helper
