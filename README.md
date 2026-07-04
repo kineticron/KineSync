@@ -7,16 +7,14 @@
   Built natively for lyrics from <a href="https://github.com/Spikerko/spicy-lyrics">Spicy Lyrics</a>, a Spicetify extension.
 </p>
 
-<p align="center">
-  ✅ 100% free &amp; open-source &nbsp;•&nbsp;
-  ✅ App on Expo, sideloadable for iOS &amp; Android &nbsp;•&nbsp;
-  ✅ Bridge on Electron &nbsp;•&nbsp;
-  ✅ No Spotify API or Premium required
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="Previews/KineSyncPortraits.png" alt="KineSync app screenshots" width="900">
-</p>
+| | |
+|:---:|:---:|
+| ✅ **100% free & open-source** | ✅ **App on Expo** — sideloadable for iOS & Android |
+| ✅ **Bridge on Electron** — native Windows media session | ✅ **No Spotify API or Premium** required |
+
+</div>
 
 ## Project Layout
 
@@ -58,6 +56,10 @@
 
 <p align="center">
   <img src="Previews/KineSyncLandscape.png" alt="KineSync landscape mode" width="800">
+</p>
+
+<p align="center">
+  <img src="Previews/KineSyncPortraits.png" alt="KineSync app screenshots" width="900">
 </p>
 
 ## Prerequisites
