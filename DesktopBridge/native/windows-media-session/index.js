@@ -5,7 +5,8 @@ function loadNativeBinding() {
   const candidates = [
     path.join(__dirname, "build", "Release", "windows_media_session.node"),
     path.join(__dirname, "build", "Debug", "windows_media_session.node"),
-    // Fallback when local rebuild is unavailable (Electron 40.6.0 ABI).
+    // Downloaded by postinstall from GitHub release.
+    path.join(__dirname, "windows_media_session.node"),
     path.join(__dirname, "windows_media_session.original.node"),
   ];
 
