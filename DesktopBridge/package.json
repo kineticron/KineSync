@@ -10,12 +10,14 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
+    "postinstall": "node scripts/postinstall.js",
     "lint": "echo \"No linting configured\"",
     "relay": "node scripts/start-relay.js",
     "relay:ngrok": "node scripts/start-relay-ngrok.js",
     "check:lyrics-sources": "node scripts/check-lyrics-source-health.js",
     "build:native-media": "npm install --prefix native/windows-media-session && npm run rebuild:electron --prefix native/windows-media-session",
     "build:seek-helper": "dotnet build native/spotify-seek-helper/spotify-seek-helper.csproj -c Release",
+    "build:native": "concurrently --raw \"npm run build:native-media\" \"npm run build:seek-helper\"",
     "diagnose:seek": "node scripts/diagnose-seek.js"
   },
   "keywords": [],
@@ -45,6 +47,7 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron/fuses": "^1.8.0",
+    "concurrently": "^9.1.2",
     "electron": "40.6.0"
   }
 }

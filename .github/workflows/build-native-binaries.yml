@@ -1,0 +1,75 @@
+# Builds Windows-only native binaries and attaches them to GitHub releases.
+# Triggered by a version tag push (e.g. v1.0.0).
+# Artifacts: windows_media_session.node, spotify-seek-helper.dll,
+#             spotify-seek-helper.runtimeconfig.json
+
+name: Build native binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: DesktopBridge/package-lock.json
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Install root DesktopBridge deps
+        working-directory: DesktopBridge
+        # SKIP_POSTINSTALL prevents the download script from running here —
+        # we're the ones producing those artifacts, not consuming them.
+        env:
+          SKIP_POSTINSTALL: "1"
+        run: npm ci
+
+      - name: Build C++ media-session addon
+        working-directory: DesktopBridge
+        run: npm run build:native-media
+
+      - name: Build .NET seek helper
+        working-directory: DesktopBridge
+        run: npm run build:seek-helper
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-native | Out-Null
+          Copy-Item DesktopBridge/native/windows-media-session/build/Release/windows_media_session.node dist-native/
+          $seekOut = "DesktopBridge/native/spotify-seek-helper/bin/Release/net9.0-windows10.0.19041.0"
+          Copy-Item "$seekOut/spotify-seek-helper.dll" dist-native/
+          Copy-Item "$seekOut/spotify-seek-helper.runtimeconfig.json" dist-native/
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-native/windows_media_session.node
+            dist-native/spotify-seek-helper.dll
+            dist-native/spotify-seek-helper.runtimeconfig.json
