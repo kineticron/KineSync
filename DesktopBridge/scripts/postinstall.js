@@ -35,6 +35,10 @@ const ASSETS = {
     "spotify-seek-helper.dll",
   [path.join(SEEK_HELPER_OUT, "spotify-seek-helper.runtimeconfig.json")]:
     "spotify-seek-helper.runtimeconfig.json",
+  [path.join(SEEK_HELPER_OUT, "Microsoft.Windows.SDK.NET.dll")]:
+    "Microsoft.Windows.SDK.NET.dll",
+  [path.join(SEEK_HELPER_OUT, "WinRT.Runtime.dll")]:
+    "WinRT.Runtime.dll",
 };
 
 function httpsGet(url) {
