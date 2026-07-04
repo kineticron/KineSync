@@ -1,10 +1,22 @@
-# KineSync
+<p align="center">
+  <img src="Previews/KineSyncBanner.png" alt="KineSync" width="800">
+</p>
 
-A modern, beautiful mobile app for rendering syllable-synced lyrics synced with your Spotify playback using your own self-hosted Desktop Bridge. Built natively for lyrics from [Spicy Lyrics](https://github.com/Spikerko/spicy-lyrics), a Spicetify extension.
-- ✅ 100% free & open-source
-- ✅ App on Expo, sideloadable and built for iOS and Android
-- ✅ Bridge on Electron, uses native windows media session markers
-- ✅ No Spotify API or Premium required
+<p align="center">
+  A modern, beautiful mobile app for rendering syllable-synced lyrics synced with your Spotify playback using your own self-hosted Desktop Bridge.<br>
+  Built natively for lyrics from <a href="https://github.com/Spikerko/spicy-lyrics">Spicy Lyrics</a>, a Spicetify extension.
+</p>
+
+<p align="center">
+  ✅ 100% free &amp; open-source &nbsp;•&nbsp;
+  ✅ App on Expo, sideloadable for iOS &amp; Android &nbsp;•&nbsp;
+  ✅ Bridge on Electron &nbsp;•&nbsp;
+  ✅ No Spotify API or Premium required
+</p>
+
+<p align="center">
+  <img src="Previews/KineSyncPortraits.png" alt="KineSync app screenshots" width="900">
+</p>
 
 ## Project Layout
 
@@ -43,6 +55,10 @@ A modern, beautiful mobile app for rendering syllable-synced lyrics synced with 
 - **Lyrics vault** — Export and archive lyrics locally (TTML format)
 - **Live Activities** — iOS Dynamic Island / Lock Screen lyrics display (currently broken)
 - **Animated reveals** — Smooth karaoke-style word highlighting with sustain effects
+
+<p align="center">
+  <img src="Previews/KineSyncLandscape.png" alt="KineSync landscape mode" width="800">
+</p>
 
 ## Prerequisites
 
