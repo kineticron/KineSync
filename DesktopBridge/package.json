@@ -1,7 +1,7 @@
 {
   "name": "desktopbridge",
   "productName": "KineSync",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Desktop bridge for KineSync — streams playback metadata and synced lyrics from Windows to your phone.",
   "main": "src/index.js",
   "private": true,
