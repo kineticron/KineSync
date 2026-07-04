@@ -104,26 +104,76 @@ No native build steps needed — Expo handles this automatically.
 
 ### ngrok Relay Mode (Remote Access)
 
+Use this when your phone is not on the same Wi-Fi network as your desktop (e.g. using mobile data, or connecting from elsewhere).
+
+#### 1. Get a free ngrok static domain
+
+1. Sign up at [ngrok.com](https://ngrok.com) (free tier is enough)
+2. In the ngrok dashboard, go to **Cloud Edge → Domains** and copy your static domain — it looks like `your-subdomain.ngrok-free.app`
+3. [Download and install the ngrok CLI](https://ngrok.com/download), then authenticate it:
+
+   ```powershell
+   ngrok config add-authtoken <your-auth-token>
+   ```
+
+   Your auth token is on the ngrok dashboard under **Your Authtoken**.
+
+#### 2. Configure the Desktop Bridge
+
+Copy `.env.example` to `.env` in the `DesktopBridge/` directory and fill in:
+
+```env
+NGROK_URL=your-subdomain.ngrok-free.app
+BRIDGE_RELAY_ID=my-pc          # anything lowercase, appears in the relay URL path
+BRIDGE_RELAY_PORT=8787          # leave as-is unless port 8787 is taken
+```
+
+#### 3. Start everything
+
 Open three terminals:
 
-| Terminal       | Command                                       |
-| -------------- | --------------------------------------------- |
-| Relay          | `cd DesktopBridge && npm run relay:ngrok`     |
-| Desktop Bridge | `cd DesktopBridge && npm run start`           |
-| Expo           | `cd ExpoLyrics && npx expo start -c --tunnel` |
+| Terminal | Directory | Command |
+| -------- | --------- | ------- |
+| 1 — Relay | `DesktopBridge/` | `npm run relay:ngrok` |
+| 2 — Desktop Bridge | `DesktopBridge/` | `npm run start` |
+| 3 — Expo | `ExpoLyrics/` | `npx expo start -c --tunnel` |
 
-The relay terminal prints the public URL. In the Expo app:
+Start terminal 1 first and wait until it prints something like:
 
 ```
-WebSocket URL: wss://<ngrok-url>/bridge/<bridge-id>
-Handshake Key: password123
+[bridge-relay] ngrok tunnel ready
+[bridge-relay] Desktop Relay WebSocket URL: ws://127.0.0.1:8787
+[bridge-relay] Public Relay WebSocket URL:  wss://your-subdomain.ngrok-free.app
+[bridge-relay] Expo WebSocket URL:          wss://your-subdomain.ngrok-free.app/bridge/my-pc
 ```
 
-In the desktop bridge UI, fill:
+#### 4. Connect the Desktop Bridge to the relay
 
-- **Bridge Key**: `<your-chosen-key>` (set the same key in both desktop and mobile)
-- **Relay WebSocket URL**: `ws://127.0.0.1:8787`
-- **Bridge ID**: any lowercase value (e.g., `my-pc`)
+In the Desktop Bridge UI, set:
+
+| Field | Value |
+| ----- | ----- |
+| **Bridge Key** | any password you choose (must match what you enter in the app) |
+| **Relay WebSocket URL** | `ws://127.0.0.1:8787` |
+| **Bridge ID** | the same value you set for `BRIDGE_RELAY_ID` (e.g. `my-pc`) |
+
+#### 5. Connect the Expo app
+
+In the app's **Bridge Settings**, set:
+
+| Field | Value |
+| ----- | ----- |
+| **WebSocket URL** | `wss://your-subdomain.ngrok-free.app/bridge/my-pc` |
+| **Handshake Key** | the same bridge key you set above |
+
+This is the **Expo WebSocket URL** printed by terminal 1.
+
+#### Troubleshooting
+
+- **`ERROR: Set NGROK_URL in your .env`** — `.env` is missing or `NGROK_URL` is empty
+- **ngrok exits immediately** — auth token not set; run `ngrok config add-authtoken <token>`
+- **App connects but no playback** — Desktop Bridge must also be running (terminal 2); check the bridge key matches on both sides
+- **Port 8787 already in use** — change `BRIDGE_RELAY_PORT` in `.env` and update the Desktop Bridge's Relay WebSocket URL to match
 
 ## Project Conventions
 

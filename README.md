@@ -64,19 +64,16 @@
 
 ## Prerequisites
 
-- **Windows** for the Desktop Bridge (media session, seek helper)
+- **Windows 10/11** for the Desktop Bridge
 - **Node.js 20+** and npm
-- **Visual Studio 2022** (or Build Tools) with Desktop Development with C++ workload and Windows 10/11 SDK
-- **Python 3.x** on PATH (for node-gyp)
-- **.NET SDK 9+** (for spotify-seek-helper)
 - **Expo Go** or a development build on your phone
-- **ngrok CLI** (optional, for remote relay)
 
-_Recommended Prerequisites:_
+_Optional (only needed to compile native binaries from source):_
+Visual Studio 2022 with C++ workload, .NET SDK 9+, Python 3.x
 
-- **Spicetify** for the Desktop Bridge + **Adblockify** + **Spicy Lyrics**
-- **EeveeSpotifyReincarnated**
-- **iOS & Android** latest version
+_Recommended:_
+- **Spicetify** + **Adblockify** + **Spicy Lyrics** for the best lyrics experience
+- **EeveeSpotifyReincarnated** on iOS
 
 ## Quick Start
 
@@ -84,9 +81,7 @@ _Recommended Prerequisites:_
 
 ```powershell
 cd DesktopBridge
-npm install
-npm run build:native-media
-npm run build:seek-helper
+npm install        # automatically downloads prebuilt native binaries
 
 cd ..\ExpoLyrics
 npm install
@@ -106,19 +101,11 @@ cd ExpoLyrics
 npx expo start -c --tunnel
 ```
 
-Scan the QR code with Expo Go on your phone. Enter your desktop's LAN IP in the app's bridge settings (e.g., `ws://192.168.1.100:3001`).
+Scan the QR code with Expo Go. In the app's **Bridge Settings**, enter your desktop's LAN IP (e.g. `ws://192.168.1.100:3001`) and the bridge key you set.
 
 ## Remote Access (ngrok)
 
-For listening outside your home network, use the relay:
-
-| Terminal       | Directory        | Command                      |
-| -------------- | ---------------- | ---------------------------- |
-| Relay          | `DesktopBridge/` | `npm run relay:ngrok`        |
-| Desktop Bridge | `DesktopBridge/` | `npm run start`              |
-| Expo           | `ExpoLyrics/`    | `npx expo start -c --tunnel` |
-
-The relay terminal prints the public WebSocket URL. Enter it in the Expo app's bridge settings.
+For connecting outside your home network, see the [ngrok relay setup in SETUP.md](SETUP.md#ngrok-relay-mode-remote-access).
 
 ## Lyrics Sources
 

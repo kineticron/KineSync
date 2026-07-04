@@ -131,17 +131,7 @@ function runDotnetCommand(args, timeoutMs = 12000) {
 
 function ensureSeekHelperBuilt({ force = false } = {}) {
   if (!force && fs.existsSync(SEEK_HELPER_DLL_PATH)) {
-    try {
-      const dllStat = fs.statSync(SEEK_HELPER_DLL_PATH);
-      const sourceStat = fs.statSync(
-        path.join(SEEK_HELPER_PROJECT_DIR, "Program.cs"),
-      );
-      if (dllStat.mtimeMs >= sourceStat.mtimeMs) {
-        return Promise.resolve();
-      }
-    } catch {
-      // Fall through to rebuild when stat checks fail.
-    }
+    return Promise.resolve();
   }
   if (!seekHelperBuildPromise) {
     seekHelperBuildPromise = runDotnetCommand(
