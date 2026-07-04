@@ -2,45 +2,63 @@
 
 ## System Requirements
 
-| Component     | Requirement                                                  |
-| ------------- | ------------------------------------------------------------ |
-| OS            | Windows 10/11 (desktop bridge); any for Expo app             |
-| Node.js       | 20.x or later                                                |
-| npm           | 10.x or later                                                |
-| Visual Studio | 2022 with Desktop Development with C++ and Windows 10/11 SDK |
-| .NET SDK      | 9.0 or later                                                 |
-| Python        | 3.x on PATH                                                  |
-| Expo          | Expo Go or a development build                               |
+| Component | Requirement                                      |
+| --------- | ------------------------------------------------ |
+| OS        | Windows 10/11 (desktop bridge); any for Expo app |
+| Node.js   | 20.x or later                                    |
+| npm       | 10.x or later                                    |
+| Expo      | Expo Go or a development build                   |
+
+> **Compiling from source only** (most contributors can skip this):
+>
+> | Component     | Requirement                                                  |
+> | ------------- | ------------------------------------------------------------ |
+> | Visual Studio | 2022 with Desktop Development with C++ and Windows 10/11 SDK |
+> | .NET SDK      | 9.0 or later                                                 |
+> | Python        | 3.x on PATH                                                  |
 
 ## Step-by-Step Installation
 
 ### Desktop Bridge
 
 ```powershell
-# 1. Install Node dependencies
 cd DesktopBridge
 npm install
-
-# 2. Build the Windows media session detector (C++ / node-gyp)
-npm run build:native-media
-
-# 3. Build the Spotify seek helper (.NET)
-npm run build:seek-helper
 ```
 
-#### Native build verification
+That's it. On Windows, `npm install` automatically downloads the prebuilt native binaries (`windows_media_session.node`, `spotify-seek-helper.dll`) from the GitHub release that matches the current version. No C++ or .NET toolchain required.
+
+#### If the automatic download fails
+
+The postinstall script logs a warning and exits cleanly — it never breaks `npm install`. This can happen if:
+
+- There is no published GitHub release for the current version yet
+- You are offline or behind a firewall
+
+In that case, build from source instead (requires Visual Studio 2022 with C++ workload, .NET SDK 9, and Python 3):
 
 ```powershell
-# Verify media detector
+npm run build:native
+```
+
+Or build each piece separately:
+
+```powershell
+npm run build:native-media   # C++ media session detector
+npm run build:seek-helper    # .NET Spotify seek helper
+```
+
+#### Verifying the binaries are in place
+
+```powershell
 Test-Path DesktopBridge\native\windows-media-session\build\Release\windows_media_session.node
 # Should return True
 
-# Verify seek helper
 Test-Path DesktopBridge\native\spotify-seek-helper\bin\Release\net9.0-windows10.0.19041.0\spotify-seek-helper.dll
 # Should return True
 ```
 
-#### Native build troubleshooting
+#### Build troubleshooting (source builds only)
 
 - **MSB8036 / Windows SDK not found**: Install or retarget the Windows SDK in Visual Studio Installer
 - **node-gyp / Python errors**: Install Python 3 and ensure `python` works from terminal
