@@ -1,8 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated as RNAnimated,
-  Easing,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -68,14 +66,17 @@ const PRIMARY_GLYPH_PAINT_WIDTH =
   BASE_FONT_SIZE + PRIMARY_REVEAL_HORIZONTAL_PAD;
 const BG_GLYPH_PAINT_WIDTH = BG_FONT_SIZE + BG_REVEAL_HORIZONTAL_PAD;
 const SUSTAIN_LINE_HEIGHT_LIFT_FACTOR = 0.58;
-const IS_WEB = Platform.OS === "web";
-const ACTIVE_LINE_SCALE = IS_WEB ? SCALE_INACTIVE : SCALE_ACTIVE;
+// ponytail: web support stripped — native only
+const IS_WEB = false;
+const ACTIVE_LINE_SCALE = SCALE_ACTIVE;
 
-function getInwardScaleTransform(
-  scale: RNAnimated.Value,
+// ponytail: worklet version — used inside useAnimatedStyle only
+function getInwardScaleTransformWorklet(
+  scale: number,
   laneWidthPx: number,
   alignRight: boolean,
 ) {
+  "worklet";
   if (laneWidthPx <= 0) {
     return [{ scale }];
   }
@@ -1094,9 +1095,10 @@ type LyricLineProps = {
   inactiveOpacityDistance: number;
   showTranslatedText: boolean;
   pauseTone?: "none" | "past" | "future";
-  pauseProgress?: number;
   showPauseDotsAfter?: boolean;
   showPauseDotsBefore?: boolean;
+  pauseStartMs?: number;
+  pauseVisualDurationMs?: number;
   playbackPositionOverrideMs?: number | null;
   onPress?: (line: LyricLineType) => void;
   onLongPress?: (line: LyricLineType) => void;
@@ -1155,9 +1157,10 @@ function areLyricLinePropsEqual(prev: LyricLineProps, next: LyricLineProps) {
       getInactiveOpacity(next.inactiveOpacityDistance) &&
     prev.showTranslatedText === next.showTranslatedText &&
     prev.pauseTone === next.pauseTone &&
-    Math.abs((prev.pauseProgress ?? 0) - (next.pauseProgress ?? 0)) < 0.004 &&
     prev.showPauseDotsAfter === next.showPauseDotsAfter &&
     prev.showPauseDotsBefore === next.showPauseDotsBefore &&
+    (prev.pauseStartMs ?? 0) === (next.pauseStartMs ?? 0) &&
+    (prev.pauseVisualDurationMs ?? 0) === (next.pauseVisualDurationMs ?? 0) &&
     prev.playbackPositionOverrideMs === next.playbackPositionOverrideMs &&
     prev.tapEnabled === next.tapEnabled &&
     prev.shouldDrivePlaybackUpdates === next.shouldDrivePlaybackUpdates &&
@@ -1175,9 +1178,10 @@ export const LyricLine = memo(function LyricLine({
   inactiveOpacityDistance,
   showTranslatedText,
   pauseTone = "none",
-  pauseProgress = 0,
   showPauseDotsAfter = false,
   showPauseDotsBefore = false,
+  pauseStartMs = 0,
+  pauseVisualDurationMs = 0,
   playbackPositionOverrideMs = null,
   onPress,
   onLongPress,
@@ -1277,31 +1281,23 @@ export const LyricLine = memo(function LyricLine({
   const [tokenWidths, setTokenWidths] = useState<Record<number, number>>({});
   const pendingTokenWidthsRef = useRef<Record<number, number>>({});
   const tokenWidthFlushFrameRef = useRef<number | null>(null);
-  const scaleAnim = useRef(
-    new RNAnimated.Value(visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE),
-  ).current;
-  const opacityAnim = useRef(
-    new RNAnimated.Value(
-      visuallyActive
-        ? OPACITY_ACTIVE
-        : getInactiveOpacity(inactiveOpacityDistance),
-    ),
-  ).current;
+  const scaleAnim = useSharedValue(visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE);
+  const opacityAnim = useSharedValue(
+    visuallyActive ? OPACITY_ACTIVE : getInactiveOpacity(inactiveOpacityDistance),
+  );
 
   useEffect(() => {
-    RNAnimated.timing(scaleAnim, {
-      toValue: visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE,
-      easing: Easing.bezier(0.61, 1, 0.88, 1),
-      useNativeDriver: true,
-    }).start();
+    scaleAnim.value = withTiming(
+      visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE,
+      { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
+    );
   }, [visuallyActive, scaleAnim]);
 
   useEffect(() => {
-    RNAnimated.timing(opacityAnim, {
-      toValue: visuallyActive ? OPACITY_ACTIVE : inactiveOpacity,
-      easing: Easing.bezier(0.61, 1, 0.88, 1),
-      useNativeDriver: true,
-    }).start();
+    opacityAnim.value = withTiming(
+      visuallyActive ? OPACITY_ACTIVE : inactiveOpacity,
+      { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
+    );
   }, [inactiveOpacity, visuallyActive, opacityAnim]);
 
   useEffect(() => {
@@ -1413,31 +1409,32 @@ export const LyricLine = memo(function LyricLine({
     const laneFraction = landscapeMode ? 0.9 : 0.88;
     return { width: Math.round(laneWidthPx * laneFraction) };
   }, [laneWidthPx, landscapeMode, textLaneWidth]);
-  const scaleTransform = useMemo(
-    () => getInwardScaleTransform(scaleAnim, laneWidthPx, alignRight),
-    [alignRight, laneWidthPx, scaleAnim],
-  );
+  const lineAnimStyle = useAnimatedStyle(() => ({
+    opacity: opacityAnim.value,
+    transform: getInwardScaleTransformWorklet(scaleAnim.value, laneWidthPx, alignRight),
+  }), [laneWidthPx, alignRight]);
   const containerStyle = useMemo(
     () => [
       styles.lineOuter as ViewStyle,
       landscapeMode && (styles.lineOuterLandscape as ViewStyle),
       fontScale !== 1 && ({ minHeight: 84 * fontScale } as ViewStyle),
-      { opacity: opacityAnim } as ViewStyle,
     ] as ViewStyle[],
-    [fontScale, landscapeMode, opacityAnim],
+    [fontScale, landscapeMode],
   );
   const toneOpacity =
     pauseTone === "future" ? 0.76 : pauseTone === "past" ? 0.94 : 1;
 
   return (
-    <RNAnimated.View style={containerStyle}>
-      <PauseDots
-        alignRight={alignRight}
-        progress={pauseProgress}
-        visible={showPauseDotsBefore}
-        fontSize={lineFontSize}
-        edgeInset={lineInnerPaddingHorizontal}
-      />
+    <Reanimated.View style={[...containerStyle, lineAnimStyle]}>
+      {showPauseDotsBefore && (
+        <PauseDots
+          alignRight={alignRight}
+          pauseStartMs={pauseStartMs}
+          pauseVisualDurationMs={pauseVisualDurationMs}
+          fontSize={lineFontSize}
+          edgeInset={lineInnerPaddingHorizontal}
+        />
+      )}
       <Pressable
         onLongPress={onLongPressLine}
         onPress={onPressLine}
@@ -1453,12 +1450,11 @@ export const LyricLine = memo(function LyricLine({
             } as ViewStyle,
           ] as ViewStyle[]}
         >
-          <RNAnimated.View
+          <View
             onLayout={handleLaneLayout}
             style={[
               styles.lineContentScaleWrap as ViewStyle,
               alignRight && (styles.lineContentScaleWrapRight as ViewStyle),
-              { transform: scaleTransform } as ViewStyle,
             ] as ViewStyle[]}
           >
           <View
@@ -1753,6 +1749,10 @@ export const LyricLine = memo(function LyricLine({
                           );
                         };
 
+                        const revealInnerStyle = {
+                          width: tokenWidth + PRIMARY_REVEAL_HORIZONTAL_PAD,
+                        };
+
                         if (progress <= 0) {
                           return (
                             <View
@@ -1796,63 +1796,29 @@ export const LyricLine = memo(function LyricLine({
                             {renderSustainText(COLOR_ACTIVE_PENDING)}
                             {tokenWidth > 0 && (
                               <>
+                                {/* ponytail: merged soft+mid into one layer — matches native Reanimated path */}
                                 {progress > 0 && progress < 1 && (
-                                  <>
-                                    <View
-                                      pointerEvents="none"
-                                      style={[
-                                        styles.tokenRevealClip,
-                                        styles.primaryTokenRevealClip,
-                                        {
-                                          width: getRevealClipWidth(
-                                            tokenWidth,
-                                            progress,
-                                            8,
-                                            PRIMARY_REVEAL_HORIZONTAL_PAD,
-                                          ),
-                                        },
-                                      ]}
-                                    >
-                                      <View
-                                        style={{
-                                          width:
-                                            tokenWidth +
-                                            PRIMARY_REVEAL_HORIZONTAL_PAD,
-                                        }}
-                                      >
-                                        {renderSustainText(
-                                          "rgba(255,255,255,0.15)",
-                                        )}
-                                      </View>
+                                  <View
+                                    pointerEvents="none"
+                                    style={[
+                                      styles.tokenRevealClip,
+                                      styles.primaryTokenRevealClip,
+                                      {
+                                        width: getRevealClipWidth(
+                                          tokenWidth,
+                                          progress,
+                                          4,
+                                          PRIMARY_REVEAL_HORIZONTAL_PAD,
+                                        ),
+                                      },
+                                    ]}
+                                  >
+                                    <View style={revealInnerStyle}>
+                                      {renderSustainText(
+                                        "rgba(255,255,255,0.25)",
+                                      )}
                                     </View>
-                                    <View
-                                      pointerEvents="none"
-                                      style={[
-                                        styles.tokenRevealClip,
-                                        styles.primaryTokenRevealClip,
-                                        {
-                                          width: getRevealClipWidth(
-                                            tokenWidth,
-                                            progress,
-                                            4,
-                                            PRIMARY_REVEAL_HORIZONTAL_PAD,
-                                          ),
-                                        },
-                                      ]}
-                                    >
-                                      <View
-                                        style={{
-                                          width:
-                                            tokenWidth +
-                                            PRIMARY_REVEAL_HORIZONTAL_PAD,
-                                        }}
-                                      >
-                                        {renderSustainText(
-                                          "rgba(255,255,255,0.35)",
-                                        )}
-                                      </View>
-                                    </View>
-                                  </>
+                                  </View>
                                 )}
                                 <View
                                   pointerEvents="none"
@@ -1869,12 +1835,7 @@ export const LyricLine = memo(function LyricLine({
                                     },
                                   ]}
                                 >
-                                  <View
-                                    style={{
-                                      width:
-                                        tokenWidth + PRIMARY_REVEAL_HORIZONTAL_PAD,
-                                    }}
-                                  >
+                                  <View style={revealInnerStyle}>
                                     {renderSustainText(COLOR_ACTIVE_PROGRESS)}
                                   </View>
                                 </View>
@@ -1922,17 +1883,19 @@ export const LyricLine = memo(function LyricLine({
               {translatedText}
             </Text>
           )}
-          </RNAnimated.View>
+          </View>
         </View>
       </Pressable>
-      <PauseDots
-        alignRight={alignRight}
-        progress={pauseProgress}
-        visible={showPauseDotsAfter}
-        fontSize={lineFontSize}
-        edgeInset={lineInnerPaddingHorizontal}
-      />
-    </RNAnimated.View>
+      {showPauseDotsAfter && (
+        <PauseDots
+          alignRight={alignRight}
+          pauseStartMs={pauseStartMs}
+          pauseVisualDurationMs={pauseVisualDurationMs}
+          fontSize={lineFontSize}
+          edgeInset={lineInnerPaddingHorizontal}
+        />
+      )}
+    </Reanimated.View>
   );
 }, areLyricLinePropsEqual);
 
@@ -2196,7 +2159,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
         style={[
           lineTextStyle,
           styles.sustainGlyphOverlay,
-          styles.primarySustainGlyphOverlay,
+          styles.primarySustainGlyphOverlay as any,
           { color, fontWeight: textWeight, width: glyphPaintWidth },
           animatedStyle,
         ]}
@@ -3667,54 +3630,44 @@ function getPauseDotStrength(progress: number, dotIndex: number) {
 
 const PauseDots = memo(function PauseDots({
   alignRight = false,
-  progress,
-  visible,
+  pauseStartMs,
+  pauseVisualDurationMs,
   fontSize = BASE_FONT_SIZE,
   edgeInset = LINE_INNER_PADDING_HORIZONTAL,
 }: {
   alignRight?: boolean;
-  progress: number;
-  visible: boolean;
+  pauseStartMs: number;
+  pauseVisualDurationMs: number;
   fontSize?: number;
   edgeInset?: number;
 }) {
-  const [shouldRender, setShouldRender] = useState(visible);
-  const fadeAnim = useRef(new RNAnimated.Value(visible ? 1 : 0)).current;
-  const exitScale = useRef(new RNAnimated.Value(visible ? 1 : 0)).current;
+  // ponytail: visible always true when mounted (caller uses conditional render); fade-in only
+  const fadeAnim = useRef(new RNAnimated.Value(0)).current;
+  const exitScale = useRef(new RNAnimated.Value(0)).current;
 
   useEffect(() => {
-    if (visible) {
-      setShouldRender(true);
-      RNAnimated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 240,
-        useNativeDriver: true,
-      }).start();
-      RNAnimated.spring(exitScale, {
-        toValue: 1,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      RNAnimated.parallel([
-        RNAnimated.timing(fadeAnim, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        RNAnimated.timing(exitScale, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-          easing: Easing.in(Easing.cubic),
-        }),
-      ]).start(({ finished }) => {
-        if (finished) setShouldRender(false);
-      });
-    }
-  }, [visible, fadeAnim, exitScale]);
+    RNAnimated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 240,
+      useNativeDriver: true,
+    }).start();
+    RNAnimated.spring(exitScale, {
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim, exitScale]);
 
-  if (!shouldRender) return null;
-  const safeProgress = clamp01(progress);
+  // Self-subscribe to playback store for live progress — avoids needing
+  // FlashList re-renders on every tick
+  const progress = usePlaybackStore(
+    useCallback(
+      (state) => {
+        if (pauseVisualDurationMs <= 0) return 0;
+        return clamp01((state.playbackPosition - pauseStartMs) / pauseVisualDurationMs);
+      },
+      [pauseStartMs, pauseVisualDurationMs],
+    ),
+  );
 
   return (
     <RNAnimated.View
@@ -3730,9 +3683,8 @@ const PauseDots = memo(function PauseDots({
       ]}
     >
       {[0, 1, 2].map((idx) => {
-        const dotProgress = getPauseDotStrength(safeProgress, idx);
+        const dotProgress = getPauseDotStrength(progress, idx);
 
-        // Spicy-lyrics dot animation mapping exactly
         const dp = dotProgress;
         const targetScale = interpolate(dp, [0, 0.7, 1], [0.75, 1.05, 1]);
         const targetYOffsetFloat = interpolate(dp, [0, 0.9, 1], [0, -0.12, 0]);

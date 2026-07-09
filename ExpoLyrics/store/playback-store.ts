@@ -14,7 +14,8 @@ import type {
 } from '@/types/bridge';
 
 const SEEK_RESET_THRESHOLD_MS = 1800;
-const PLAYBACK_POSITION_EPSILON_MS = 32;
+// ponytail: 64ms is plenty for line-transition detection; syllable anims are UI-thread withTiming
+const PLAYBACK_POSITION_EPSILON_MS = 64;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
 
@@ -29,6 +30,13 @@ export async function initPlaybackStoreDefaults(): Promise<{ serverUrl: string; 
   const settings = await getBridgeSettings();
   _cachedBridgeUrl = settings.serverUrl;
   _cachedHandshakeKey = settings.handshakeKey;
+  // Push persisted values into the store — the store initializes synchronously before AsyncStorage resolves
+  if (settings.serverUrl) {
+    usePlaybackStore.setState({ serverUrl: settings.serverUrl });
+  }
+  if (settings.handshakeKey) {
+    usePlaybackStore.setState({ handshakeKey: settings.handshakeKey });
+  }
   return { serverUrl: _cachedBridgeUrl, handshakeKey: _cachedHandshakeKey };
 }
 

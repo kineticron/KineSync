@@ -1,5 +1,6 @@
 import { BlurView } from "expo-blur";
 import { Image as ExpoImage } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
@@ -558,6 +559,30 @@ export default function HomeScreen() {
   const [scrubPreviewPositionMs, setScrubPreviewPositionMs] = useState<
     number | null
   >(null);
+  // ponytail: throttle scrub state updates to ~32ms so every gesture frame doesn't re-render the 2150-line HomeScreen
+  const scrubThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingScrubValueRef = useRef<number | null>(null);
+  const handleScrubPreview = useCallback((positionMs: number | null) => {
+    if (positionMs === null) {
+      if (scrubThrottleRef.current) {
+        clearTimeout(scrubThrottleRef.current);
+        scrubThrottleRef.current = null;
+      }
+      pendingScrubValueRef.current = null;
+      setScrubPreviewPositionMs(null);
+      return;
+    }
+    pendingScrubValueRef.current = positionMs;
+    if (!scrubThrottleRef.current) {
+      setScrubPreviewPositionMs(positionMs);
+      scrubThrottleRef.current = setTimeout(() => {
+        scrubThrottleRef.current = null;
+        if (pendingScrubValueRef.current !== null) {
+          setScrubPreviewPositionMs(pendingScrubValueRef.current);
+        }
+      }, 32);
+    }
+  }, []);
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(
     () => new Set(),
@@ -926,7 +951,8 @@ export default function HomeScreen() {
       );
     };
 
-    if (appStateRef.current === "active") {
+    // ponytail: skip blobs when covered by fullscreen album art or backgrounded — saves CPU on older devices
+    if (appStateRef.current === "active" && !fullscreenAlbumMode) {
       startAmbientAnimations();
     }
 
@@ -934,7 +960,7 @@ export default function HomeScreen() {
       appStateRef.current = nextState;
       if (nextState === "active") {
         setScrubPreviewPositionMs(null);
-        startAmbientAnimations();
+        if (!fullscreenAlbumMode) startAmbientAnimations();
         return;
       }
       setScrubPreviewPositionMs(null);
@@ -945,7 +971,7 @@ export default function HomeScreen() {
       subscription.remove();
       stopAmbientAnimations();
     };
-  }, [ambientPhaseA, ambientPhaseB]);
+  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode]);
 
   const handleLyricLinePress = useCallback((line: LyricLine) => {
     const nowWall = Date.now();
@@ -1401,21 +1427,14 @@ export default function HomeScreen() {
   return (
     <View style={styles.screen}>
       {hasResolvedArtwork ? (
-        <>
-          <BridgedArtworkImage
-            uri={resolvedArtworkUrl}
-            style={styles.backgroundImage}
-            contentFit="cover"
-            recyclingKey={`background-${resolvedArtworkUrl}`}
-          />
-          <BridgedArtworkImage
-            uri={resolvedArtworkUrl}
-            style={styles.backgroundBlur}
-            contentFit="cover"
-            blurRadius={118}
-            recyclingKey={`background-blur-${resolvedArtworkUrl}`}
-          />
-        </>
+        // ponytail: single blurred image; sharp layer was fully occluded by tint anyway
+        <BridgedArtworkImage
+          uri={resolvedArtworkUrl}
+          style={styles.backgroundBlur}
+          contentFit="cover"
+          blurRadius={40}
+          recyclingKey={`background-blur-${resolvedArtworkUrl}`}
+        />
       ) : null}
       {!hasResolvedArtwork && (
         <>
@@ -1462,7 +1481,7 @@ export default function HomeScreen() {
                     layout="overlay"
                     isPlaying={isPlaying}
                     durationMs={currentTrack?.durationMs ?? 0}
-                    onScrubPreview={setScrubPreviewPositionMs}
+                    onScrubPreview={handleScrubPreview}
                     onPlayPause={() => bridgeClient.togglePlayPause()}
                     onPlayPauseResync={() => bridgeClient.resyncPlayback()}
                     onPrevious={() => bridgeClient.skipPrevious()}
@@ -1478,7 +1497,7 @@ export default function HomeScreen() {
                     layout="landscape-utilities"
                     isPlaying={isPlaying}
                     durationMs={currentTrack?.durationMs ?? 0}
-                    onScrubPreview={setScrubPreviewPositionMs}
+                    onScrubPreview={handleScrubPreview}
                     showResumeAutoFollow={
                       !autoFollowEnabled && scrubPreviewPositionMs === null
                     }
@@ -1751,6 +1770,7 @@ export default function HomeScreen() {
               />
             </Reanimated.View>
           </Reanimated.View>
+          {/* ponytail: LinearGradient replaces BlurView — same fade, no GPU blur cost */}
           <Reanimated.View
             pointerEvents="none"
             style={[
@@ -1759,10 +1779,9 @@ export default function HomeScreen() {
               lyricsBottomBlurOpacityStyle,
             ]}
           >
-            <BlurView
+            <LinearGradient
               pointerEvents="none"
-              intensity={10}
-              tint="systemUltraThinMaterial"
+              colors={["transparent", "rgba(0,0,0,0.85)"]}
               style={styles.lyricsBottomBlur}
             />
           </Reanimated.View>
@@ -1799,7 +1818,7 @@ export default function HomeScreen() {
             shareSelectionCount={selectedLineKeys.size}
             shareSelectionMode={selectedLineKeys.size > 0}
             shareBusy={shareBusy}
-            onScrubPreview={setScrubPreviewPositionMs}
+            onScrubPreview={handleScrubPreview}
             showResumeAutoFollow={
               !autoFollowEnabled && scrubPreviewPositionMs === null
             }
@@ -1906,10 +1925,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     overflow: "visible",
-  },
-  backgroundImage: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.44,
   },
   backgroundBlur: {
     ...StyleSheet.absoluteFillObject,

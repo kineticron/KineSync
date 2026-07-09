@@ -14,8 +14,6 @@ import {
   type AppStateStatus,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  Platform,
-  ScrollView,
   StyleSheet,
   Text,
   type LayoutChangeEvent,
@@ -81,8 +79,11 @@ const AUTO_FOLLOW_DISABLE_GRACE_MS = 2000;
 const AUTO_FOLLOW_DISABLE_DISTANCE_PX = 120;
 const AUTO_FOLLOW_RESUME_DISTANCE_PX = 64;
 const USER_SCROLL_IDLE_RESET_MS = 700;
-const SHOULD_USE_UI_THREAD_SCROLL = Platform.OS !== "web";
-const LYRICS_JS_UPDATE_RADIUS = 3;
+// ponytail: always true on native (web support removed)
+const SHOULD_USE_UI_THREAD_SCROLL = true;
+// ponytail: only the active line ±1 needs JS-driven syllable updates;
+// farther cells use static colors and don't need per-frame re-render
+const LYRICS_JS_UPDATE_RADIUS = 1;
 const ReanimatedFlashList = Animated.createAnimatedComponent(FlashList<LyricLineType>);
 
 function getFlashListLeadingInset(
@@ -132,6 +133,8 @@ type PlaybackWindowState = {
   pauseBeforeIndex: number;
   isLongPause: boolean;
   pauseProgress: number;
+  pauseStartMs: number;
+  pauseVisualDurationMs: number;
 };
 
 type BackgroundActiveLine = {
@@ -159,6 +162,8 @@ const EMPTY_WINDOW_STATE: PlaybackWindowState = {
   pauseBeforeIndex: -1,
   isLongPause: false,
   pauseProgress: 0,
+  pauseStartMs: 0,
+  pauseVisualDurationMs: 0,
 };
 
 function arePlaybackWindowStatesEqual(
@@ -174,7 +179,9 @@ function arePlaybackWindowStatesEqual(
     a.pauseAfterIndex === b.pauseAfterIndex &&
     a.pauseBeforeIndex === b.pauseBeforeIndex &&
     a.isLongPause === b.isLongPause &&
-    Math.abs(a.pauseProgress - b.pauseProgress) < 0.004
+    Math.abs(a.pauseProgress - b.pauseProgress) < 0.004 &&
+    a.pauseStartMs === b.pauseStartMs &&
+    a.pauseVisualDurationMs === b.pauseVisualDurationMs
   );
 }
 
@@ -398,6 +405,8 @@ function getPlaybackWindowState(
         pauseBeforeIndex: -1,
         isLongPause: false,
         pauseProgress: 0,
+        pauseStartMs: 0,
+        pauseVisualDurationMs: 0,
       });
     }
   }
@@ -439,6 +448,8 @@ function getPlaybackWindowState(
         pauseBeforeIndex: -1,
         isLongPause: showLongPauseVisuals,
         pauseProgress,
+        pauseStartMs: previous.lineEndTime,
+        pauseVisualDurationMs: pauseVisualDuration,
       });
     }
   }
@@ -467,6 +478,8 @@ function getPlaybackWindowState(
         pauseBeforeIndex: showLongPauseVisuals ? nextLineIndex : -1,
         isLongPause: showLongPauseVisuals,
         pauseProgress,
+        pauseStartMs: 0,
+        pauseVisualDurationMs: pauseVisualDuration,
       });
     }
   }
@@ -481,6 +494,8 @@ function getPlaybackWindowState(
       pauseBeforeIndex: -1,
       isLongPause: false,
       pauseProgress: 0,
+      pauseStartMs: 0,
+      pauseVisualDurationMs: 0,
     });
   }
 
@@ -492,6 +507,8 @@ function getPlaybackWindowState(
     pauseBeforeIndex: -1,
     isLongPause: false,
     pauseProgress: 0,
+    pauseStartMs: 0,
+    pauseVisualDurationMs: 0,
   });
 }
 
@@ -1008,6 +1025,20 @@ export function LyricsView({
     useState(false);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [contentLayoutVersion, setContentLayoutVersion] = useState(0);
+  // ponytail: batch cell layout bumps — fast scroll fires onLayout per cell,
+  // debounce so we only re-render once per frame instead of per-cell
+  const layoutBumpPendingRef = useRef(false);
+  const layoutBumpFrameRef = useRef<number | null>(null);
+  const bumpContentLayoutVersion = useCallback(() => {
+    if (layoutBumpPendingRef.current) return;
+    layoutBumpPendingRef.current = true;
+    if (layoutBumpFrameRef.current !== null) return;
+    layoutBumpFrameRef.current = requestAnimationFrame(() => {
+      layoutBumpFrameRef.current = null;
+      layoutBumpPendingRef.current = false;
+      setContentLayoutVersion((v) => v + 1);
+    });
+  }, []);
   const creditsLayoutRef = useRef<CreditsLayout | null>(null);
 
   const autoFollowActive = autoFollowEnabled && !isSourceAutoScrollCooldown;
@@ -1100,6 +1131,22 @@ export function LyricsView({
       pauseBeforeIndex: focusIndex,
     };
   }, [displayWindowState, startupDotsWarmupActive]);
+  // ponytail: coarse fingerprint for extraData — only changes when cell rendering
+  // actually differs (index boundaries + pause on/off), NOT on every pauseProgress tick
+  const extraDataFingerprint = useMemo(
+    () =>
+      `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}`,
+    [
+      effectiveWindowState.activeLineStartIndex,
+      effectiveWindowState.activeLineEndIndex,
+      effectiveWindowState.visualActiveLineStartIndex,
+      effectiveWindowState.visualActiveLineEndIndex,
+      effectiveWindowState.focusLineIndex,
+      effectiveWindowState.pauseAfterIndex,
+      effectiveWindowState.pauseBeforeIndex,
+      effectiveWindowState.isLongPause,
+    ],
+  );
   const activeLineIndex = effectiveWindowState.activeLineStartIndex;
   const songwriters = lyricsMetadata.credits?.songwriters || [];
   const instrumental = Boolean(lyricsMetadata.instrumental);
@@ -1115,6 +1162,8 @@ export function LyricsView({
   );
   const effectiveWindowStateRef = useRef(effectiveWindowState);
   effectiveWindowStateRef.current = effectiveWindowState;
+  const scrollTargetRangeRef = useRef<LyricLineRange | null>(null);
+  const scheduleScrollToRangeRef = useRef<typeof scheduleScrollToRange>(null as any);
   const liveCreditsActive = usePlaybackStore(
     useCallback(
       (state) =>
@@ -1154,6 +1203,7 @@ export function LyricsView({
     previewPlaybackPosition,
     scrollPlannerTick,
   ]);
+  scrollTargetRangeRef.current = scrollTargetRange;
   useEffect(() => {
     let previousPosition = usePlaybackStore.getState().playbackPosition;
     playbackPositionRef.current = previousPosition;
@@ -1522,24 +1572,38 @@ export function LyricsView({
     [getScrollOffsetForRange],
   );
 
+  const autoFollowEnabledRef = useRef(autoFollowEnabled);
+  autoFollowEnabledRef.current = autoFollowEnabled;
+  const previewPlaybackPositionRef = useRef(previewPlaybackPosition);
+  previewPlaybackPositionRef.current = previewPlaybackPosition;
+  const startupDotsWarmupActiveRef = useRef(startupDotsWarmupActive);
+  startupDotsWarmupActiveRef.current = startupDotsWarmupActive;
+  const isSourceAutoScrollCooldownRef = useRef(isSourceAutoScrollCooldown);
+  isSourceAutoScrollCooldownRef.current = isSourceAutoScrollCooldown;
+  const getDistanceFromRangeAnchorRef = useRef(getDistanceFromRangeAnchor);
+  getDistanceFromRangeAnchorRef.current = getDistanceFromRangeAnchor;
+
+  // ponytail: stable identity — reads volatile deps from refs to avoid cascading
+  // callback invalidation that re-renders the entire FlashList on every line change
   const updateAutoFollowForUserScroll = useCallback(() => {
+    const currentScrollTarget = scrollTargetRangeRef.current;
     if (
-      !scrollTargetRange ||
-      previewPlaybackPosition !== null ||
-      startupDotsWarmupActive ||
-      isSourceAutoScrollCooldown ||
+      !currentScrollTarget ||
+      previewPlaybackPositionRef.current !== null ||
+      startupDotsWarmupActiveRef.current ||
+      isSourceAutoScrollCooldownRef.current ||
       programmaticScrollInProgressRef.current ||
       (!userScrollSessionRef.current && !userScrollInProgressRef.current)
     ) {
       return;
     }
 
-    const distanceFromAnchor = getDistanceFromRangeAnchor(scrollTargetRange);
+    const distanceFromAnchor = getDistanceFromRangeAnchorRef.current(currentScrollTarget);
     if (distanceFromAnchor === null) {
       return;
     }
 
-    if (autoFollowEnabled) {
+    if (autoFollowEnabledRef.current) {
       if (Date.now() < autoFollowDisableGraceUntilRef.current) {
         return;
       }
@@ -1554,14 +1618,7 @@ export function LyricsView({
       lastScrollRequestRef.current = "";
       onAutoFollowChangeRef.current?.(true);
     }
-  }, [
-    autoFollowEnabled,
-    getDistanceFromRangeAnchor,
-    isSourceAutoScrollCooldown,
-    previewPlaybackPosition,
-    scrollTargetRange,
-    startupDotsWarmupActive,
-  ]);
+  }, []);
 
   const scheduleScrollToRange = useCallback(
     (
@@ -1717,7 +1774,10 @@ export function LyricsView({
       scrollToOffset,
     ],
   );
+  scheduleScrollToRangeRef.current = scheduleScrollToRange;
 
+  // ponytail: track whether all cells are measured so we can skip onLayout entirely
+  const [allCellsMeasured, setAllCellsMeasured] = useState(false);
   const handleCellLayout = useCallback(
     (index: number, event: LayoutChangeEvent) => {
       const height = event.nativeEvent.layout.height;
@@ -1739,20 +1799,25 @@ export function LyricsView({
       } else {
         syncMeasuredRowLayoutsFromIndex(index);
       }
-      setContentLayoutVersion((value) => value + 1);
+      bumpContentLayoutVersion();
+      // Once every line has been measured, disable onLayout to stop bridge chatter
+      if (rowHeights.size >= lyrics.length && !allCellsMeasured) {
+        setAllCellsMeasured(true);
+      }
       const pendingRange = pendingAnchorRangeRef.current;
+      const currentScrollTarget = scrollTargetRangeRef.current;
       const rangeToRescroll =
         pendingRange ??
-        (scrollTargetRange &&
-        index >= scrollTargetRange.startIndex &&
-        index <= scrollTargetRange.endIndex
-          ? scrollTargetRange
+        (currentScrollTarget &&
+        index >= currentScrollTarget.startIndex &&
+        index <= currentScrollTarget.endIndex
+          ? currentScrollTarget
           : null);
       if (
         rangeToRescroll &&
         rowOffsetsRef.current.has(rangeToRescroll.startIndex)
       ) {
-        scheduleScrollToRange(rangeToRescroll, {
+        scheduleScrollToRangeRef.current(rangeToRescroll, {
           animated: pendingRange
             ? pendingAnchorAnimatedRef.current
             : true,
@@ -1763,9 +1828,10 @@ export function LyricsView({
     },
     [
       activeLineTopOffset,
+      allCellsMeasured,
+      bumpContentLayoutVersion,
       getAbsoluteLineTop,
-      scheduleScrollToRange,
-      scrollTargetRange,
+      lyrics.length,
       syncMeasuredRowLayoutsFromIndex,
     ],
   );
@@ -1801,12 +1867,19 @@ export function LyricsView({
       pendingAnchorRetryTimerRef.current = null;
     }
     onAutoFollowChangeRef.current?.(true);
+    setAllCellsMeasured(false);
     rowHeightsRef.current.clear();
     rowOffsetsRef.current.clear();
     lineScrollOffsetsRef.current.clear();
     creditsLayoutRef.current = null;
     setContentLayoutVersion(0);
   }, [lyrics]);
+
+  // Reset measurement state when layout-affecting props change
+  useEffect(() => {
+    setAllCellsMeasured(false);
+    rowHeightsRef.current.clear();
+  }, [fontScale, landscapeMode]);
 
   useEffect(
     () => () => {
@@ -1838,6 +1911,10 @@ export function LyricsView({
       if (pendingAnchorRetryTimerRef.current) {
         clearTimeout(pendingAnchorRetryTimerRef.current);
         pendingAnchorRetryTimerRef.current = null;
+      }
+      if (layoutBumpFrameRef.current !== null) {
+        cancelAnimationFrame(layoutBumpFrameRef.current);
+        layoutBumpFrameRef.current = null;
       }
       programmaticScrollInProgressRef.current = false;
     },
@@ -2015,37 +2092,37 @@ export function LyricsView({
     onActiveLineChange?.(activeLineIndex);
   }, [activeLineIndex, onActiveLineChange]);
 
+  // ponytail: read window state from ref so renderItem is stable across line transitions.
+  // FlashList still diffs via extraData, but the callback identity doesn't change,
+  // avoiding full invalidation of the internal render tree.
   const renderItem = useCallback(
     ({ item, index }: { item: LyricLineType; index: number }) => {
-      const hasActiveLines = effectiveWindowState.activeLineStartIndex >= 0;
+      const ws = effectiveWindowStateRef.current;
+      const hasActiveLines = ws.activeLineStartIndex >= 0;
       const isActive =
         hasActiveLines &&
         isIndexWithinRange(
           index,
-          effectiveWindowState.activeLineStartIndex,
-          effectiveWindowState.activeLineEndIndex,
+          ws.activeLineStartIndex,
+          ws.activeLineEndIndex,
         );
       const shouldDrivePlaybackUpdates = isIndexWithinUpdateWindow(
         index,
-        effectiveWindowState,
+        ws,
       );
       const isPast =
-        effectiveWindowState.focusLineIndex >= 0
+        ws.focusLineIndex >= 0
           ? hasActiveLines
-            ? index < effectiveWindowState.focusLineIndex
-            : index <= effectiveWindowState.focusLineIndex
+            ? index < ws.focusLineIndex
+            : index <= ws.focusLineIndex
           : false;
       const inactiveOpacityDistance = Math.abs(
-        effectiveWindowState.focusLineIndex - index,
+        ws.focusLineIndex - index,
       );
       const showPauseDotsAfter =
-        effectiveWindowState.isLongPause && index === effectiveWindowState.pauseAfterIndex;
+        ws.isLongPause && index === ws.pauseAfterIndex;
       const showPauseDotsBefore =
-        effectiveWindowState.isLongPause && index === effectiveWindowState.pauseBeforeIndex;
-      const pauseProgress =
-        showPauseDotsAfter || showPauseDotsBefore
-          ? effectiveWindowState.pauseProgress
-          : 0;
+        ws.isLongPause && index === ws.pauseBeforeIndex;
 
       return (
         <LyricLine
@@ -2055,11 +2132,12 @@ export function LyricsView({
           inactiveOpacityDistance={inactiveOpacityDistance}
           showPauseDotsAfter={showPauseDotsAfter}
           showPauseDotsBefore={showPauseDotsBefore}
-          pauseProgress={pauseProgress}
+          pauseStartMs={ws.pauseStartMs}
+          pauseVisualDurationMs={ws.pauseVisualDurationMs}
           playbackPositionOverrideMs={previewPlaybackPosition}
           pauseTone={
-            displayWindowState.isLongPause
-              ? index <= effectiveWindowState.pauseAfterIndex
+            ws.isLongPause
+              ? index <= ws.pauseAfterIndex
                 ? "past"
                 : "future"
               : "none"
@@ -2075,28 +2153,31 @@ export function LyricsView({
       );
     },
     [
-      displayWindowState.isLongPause,
       fontScale,
       landscapeMode,
       onLineLongPress,
       onLinePress,
       showTranslatedText,
       tapToSeekEnabled,
-      effectiveWindowState,
       previewPlaybackPosition,
     ],
   );
 
+  // ponytail: skip onLayout once all cells measured — eliminates JS bridge chatter during scroll
   const flashListRenderItem = useCallback(
     ({ item, index }: { item: LyricLineType; index: number }) => (
       <View
         style={landscapeMode ? styles.flashListCellLandscape : undefined}
-        onLayout={(event) => handleCellLayout(index, event)}
+        onLayout={
+          allCellsMeasured
+            ? undefined
+            : (event) => handleCellLayout(index, event)
+        }
       >
         {renderItem({ item, index })}
       </View>
     ),
-    [handleCellLayout, landscapeMode, renderItem],
+    [allCellsMeasured, handleCellLayout, landscapeMode, renderItem],
   );
 
   const keyExtractor = useCallback(
@@ -2162,7 +2243,7 @@ export function LyricsView({
         return;
       }
       creditsLayoutRef.current = nextLayout;
-      setContentLayoutVersion((value) => value + 1);
+      bumpContentLayoutVersion();
       const pendingRange = pendingAnchorRangeRef.current;
       if (pendingRange) {
         scheduleScrollToRange(pendingRange, {
@@ -2255,9 +2336,72 @@ export function LyricsView({
   }
 
   if (lyricsTimingMode === "static") {
+    // ponytail: FlashList instead of ScrollView+.map() — virtualizes long static lyrics
+    const staticRenderItem = ({ item: line }: { item: LyricLineType }) => {
+      const text = getPrimaryLineText(line);
+      if (!text) return null;
+      const translatedText = String(line.translatedText || "").trim();
+      const alignRight = landscapeMode ? !line.oppositeAligned : false;
+      return (
+        <View
+          style={[
+            styles.staticLyricLineWrap,
+            alignRight && styles.staticLyricLineWrapOpposite,
+          ]}
+        >
+          <Text
+            style={[
+              styles.staticLyricLineText,
+              alignRight && styles.staticLyricLineTextOpposite,
+              { fontSize: STATIC_LYRIC_FONT_SIZE * fontScale },
+            ]}
+          >
+            {text}
+          </Text>
+          {showTranslatedText && translatedText ? (
+            <Text
+              style={[
+                styles.staticTranslatedText,
+                alignRight && styles.staticLyricLineTextOpposite,
+                {
+                  fontSize: STATIC_TRANSLATED_FONT_SIZE * fontScale,
+                  lineHeight: STATIC_TRANSLATED_LINE_HEIGHT * fontScale,
+                },
+              ]}
+            >
+              {translatedText}
+            </Text>
+          ) : null}
+        </View>
+      );
+    };
+    const staticFooter = songwriters.length > 0 ? (
+      <View
+        style={[
+          styles.staticCreditsFooter,
+          landscapeMode && styles.staticCreditsFooterLandscape,
+        ]}
+      >
+        <CreditsFooter
+          songwriters={songwriters}
+          lastLyricEndTime={0}
+          onPress={onCreditsTimestampPress}
+          alignRight={landscapeMode}
+          style={[
+            styles.staticCreditsFooterPressable,
+            landscapeMode && styles.staticCreditsFooterPressableLandscape,
+          ]}
+        />
+      </View>
+    ) : null;
     return (
       <View style={[styles.container, landscapeMode && styles.containerLandscape]}>
-        <ScrollView
+        <FlashList
+          data={lyrics}
+          renderItem={staticRenderItem}
+          keyExtractor={keyExtractor}
+          drawDistance={400}
+          ListFooterComponent={staticFooter}
           contentContainerStyle={[
             styles.staticLyricsContent,
             landscapeMode && styles.staticLyricsContentLandscape,
@@ -2270,77 +2414,7 @@ export function LyricsView({
           showsVerticalScrollIndicator={false}
           onScrollBeginDrag={() => onUserInteraction?.()}
           onMomentumScrollBegin={() => onUserInteraction?.()}
-        >
-          <View
-            style={[
-              styles.staticLyricsColumn,
-              landscapeMode && styles.staticLyricsColumnLandscape,
-            ]}
-          >
-          {lyrics.map((line, index) => {
-            const text = getPrimaryLineText(line);
-            if (!text) {
-              return null;
-            }
-            const translatedText = String(line.translatedText || "").trim();
-            const alignRight = landscapeMode
-              ? !line.oppositeAligned
-              : false;
-            return (
-              <View
-                key={`static-${index}-${text.slice(0, 24)}`}
-                style={[
-                  styles.staticLyricLineWrap,
-                  alignRight && styles.staticLyricLineWrapOpposite,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.staticLyricLineText,
-                    alignRight && styles.staticLyricLineTextOpposite,
-                    { fontSize: STATIC_LYRIC_FONT_SIZE * fontScale },
-                  ]}
-                >
-                  {text}
-                </Text>
-                {showTranslatedText && translatedText ? (
-                  <Text
-                    style={[
-                      styles.staticTranslatedText,
-                      alignRight && styles.staticLyricLineTextOpposite,
-                      {
-                        fontSize: STATIC_TRANSLATED_FONT_SIZE * fontScale,
-                        lineHeight: STATIC_TRANSLATED_LINE_HEIGHT * fontScale,
-                      },
-                    ]}
-                  >
-                    {translatedText}
-                  </Text>
-                ) : null}
-              </View>
-            );
-          })}
-          {songwriters.length > 0 ? (
-            <View
-              style={[
-                styles.staticCreditsFooter,
-                landscapeMode && styles.staticCreditsFooterLandscape,
-              ]}
-            >
-              <CreditsFooter
-                songwriters={songwriters}
-                lastLyricEndTime={0}
-                onPress={onCreditsTimestampPress}
-                alignRight={landscapeMode}
-                style={[
-                  styles.staticCreditsFooterPressable,
-                  landscapeMode && styles.staticCreditsFooterPressableLandscape,
-                ]}
-              />
-            </View>
-          ) : null}
-          </View>
-        </ScrollView>
+        />
       </View>
     );
   }
@@ -2352,13 +2426,13 @@ export function LyricsView({
         data={lyrics}
         renderItem={flashListRenderItem}
         keyExtractor={keyExtractor}
-        extraData={effectiveWindowState}
+        extraData={extraDataFingerprint}
         drawDistance={320}
         ListFooterComponent={listFooter}
         onLoad={() => {
-          const pendingRange = pendingAnchorRangeRef.current ?? scrollTargetRange;
+          const pendingRange = pendingAnchorRangeRef.current ?? scrollTargetRangeRef.current;
           if (pendingRange) {
-            scheduleScrollToRange(pendingRange, {
+            scheduleScrollToRangeRef.current(pendingRange, {
               animated: true,
               animationStyle: "lyric",
               force: true,

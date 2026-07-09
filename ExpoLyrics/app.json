@@ -64,8 +64,22 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "7c2c72f0-39c9-42fd-9458-f0c846c23864",
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "targetName": "LiveActivity",
+                  "bundleIdentifier": "dev.kineticron.KineSync.LiveActivity",
+                  "entitlements": {}
+                }
+              ]
+            }
+          }
+        }
       }
-    }
+    },
+    "owner": "ravadhuta"
   }
 }
