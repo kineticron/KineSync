@@ -1255,6 +1255,15 @@ export function LyricsView({
       previousPosition = playbackPosition;
       if (!areLyricLineRangesEqual(prevRange, nextRange)) {
         bumpScrollPlanner();
+        // ponytail: fire scroll immediately from subscription instead of waiting
+        // for React render cycle → effect → rAF chain (saves 2-3 frames of latency)
+        if (nextRange && !userScrollInProgressRef.current) {
+          scrollTargetRangeRef.current = nextRange;
+          scheduleScrollToRangeRef.current?.(nextRange, {
+            animated: true,
+            animationStyle: "lyric",
+          });
+        }
       }
     });
   }, [lyrics, previewPlaybackPosition]);
@@ -1775,10 +1784,8 @@ export function LyricsView({
           markInitialAutoScrollSettled();
         }
       };
-      if (typeof requestAnimationFrame === "function") {
-        pendingScrollFrameRef.current = requestAnimationFrame(performScroll);
-        return;
-      }
+      // ponytail: execute immediately — rAF added a frame of latency for no benefit
+      // (requestKey dedup already prevents redundant scroll calls)
       performScroll();
     },
     [
