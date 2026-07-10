@@ -121,8 +121,14 @@ type LayoutToken = {
 
 // ─── Props ──────────────────────────────────────────────────────────────────
 
+export type WordGroup = {
+  syllableIndexes: number[];
+  needsTrailingGap: boolean;
+};
+
 export type SkiaRevealLineProps = {
   syllables: LyricSyllable[];
+  wordGroups?: WordGroup[];
   playbackPosition: number;
   isPlaying: boolean;
   anchorPositionMs: number;
@@ -136,6 +142,7 @@ export type SkiaRevealLineProps = {
 
 export const SkiaRevealLine = memo(function SkiaRevealLine({
   syllables,
+  wordGroups,
   playbackPosition,
   isPlaying,
   anchorPositionMs,
@@ -162,34 +169,63 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
     [fontSize],
   );
 
-  // Layout tokens using Skia font metrics
+  // Layout tokens respecting word groups and spaces
+  // ponytail: wrapping only happens at word boundaries (between groups with needsTrailingGap)
   const tokens = useMemo(() => {
     if (!font) return [];
     const maxWidth = containerWidth;
     const result: LayoutToken[] = [];
+    const spaceWidth = font.measureText(" ").width;
+
+    // If no word groups provided, build a naive one (each syllable is its own group)
+    const groups = wordGroups ?? syllables.map((_, i) => ({
+      syllableIndexes: [i],
+      needsTrailingGap: i < syllables.length - 1,
+    }));
+
     let x = 0;
     let y = 0;
 
-    for (const syl of syllables) {
-      const w = font.measureText(syl.text).width;
-      if (x + w > maxWidth && x > 0) {
+    for (let gIdx = 0; gIdx < groups.length; gIdx++) {
+      const group = groups[gIdx];
+
+      // Measure total word group width (all syllables in this group)
+      let groupWidth = 0;
+      for (const sylIdx of group.syllableIndexes) {
+        groupWidth += font.measureText(syllables[sylIdx].text).width;
+      }
+
+      // Wrap: if the whole word group doesn't fit, move to next line
+      // (only wrap if we've already placed something on this line)
+      if (x + groupWidth > maxWidth && x > 0) {
         x = 0;
         y += lineHeight;
       }
-      const durationMs = Math.max(1, syl.endTime - syl.startTime);
-      result.push({
-        text: syl.text,
-        x,
-        y,
-        width: w,
-        startTime: syl.startTime,
-        endTime: syl.endTime,
-        sustainMode: getSustainMode(syl.text, durationMs),
-      });
-      x += w;
+
+      // Place each syllable in the group
+      for (const sylIdx of group.syllableIndexes) {
+        const syl = syllables[sylIdx];
+        const w = font.measureText(syl.text).width;
+        const durationMs = Math.max(1, syl.endTime - syl.startTime);
+        result.push({
+          text: syl.text,
+          x,
+          y,
+          width: w,
+          startTime: syl.startTime,
+          endTime: syl.endTime,
+          sustainMode: getSustainMode(syl.text, durationMs),
+        });
+        x += w;
+      }
+
+      // Add space after group if it needs a trailing gap
+      if (group.needsTrailingGap) {
+        x += spaceWidth;
+      }
     }
     return result;
-  }, [font, syllables, containerWidth, lineHeight]);
+  }, [font, syllables, wordGroups, containerWidth, lineHeight]);
 
   // Compute canvas height from layout
   const canvasHeight = useMemo(() => {

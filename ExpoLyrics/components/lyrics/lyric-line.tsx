@@ -1466,10 +1466,11 @@ export const LyricLine = memo(function LyricLine({
                 alignRight && (styles.lineFlowOpposite as ViewStyle),
               ] as ViewStyle[]}
             >
-              {/* ponytail: Skia reveal for active lines — single Canvas replaces stacked Views */}
-              {shouldUseNativeRevealTree && isActive && laneWidthPx > 0 ? (
+              {/* ponytail: Skia reveal for active + prewarm lines — single Canvas replaces stacked Views */}
+              {shouldUseNativeRevealTree && laneWidthPx > 0 ? (
                 <SkiaRevealLine
                   syllables={line.syllables}
+                  wordGroups={syllableGroups}
                   playbackPosition={nativeRevealPlaybackPosition}
                   isPlaying={shouldAnimateRevealSweep}
                   anchorPositionMs={anchorPositionMs}
