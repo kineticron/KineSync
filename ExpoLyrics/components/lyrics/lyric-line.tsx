@@ -17,6 +17,7 @@ import Reanimated, {
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
+import { useShallow } from "zustand/react/shallow";
 
 import {
   LANDSCAPE_LINE_SCALE_BLEED,
@@ -26,8 +27,15 @@ import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 import type { LyricLine as LyricLineType, LyricSyllable } from "@/types/bridge";
 
+const IDLE_PLAYBACK_SLICE = {
+  bgStillActive: false,
+  playbackPosition: 0,
+  isPlaying: false,
+  anchorPositionMs: 0,
+  anchorMonotonicMs: 0,
+} as const;
+
 const SCALE_ACTIVE = 1.05;
-const SCALE_INACTIVE = 1;
 const OPACITY_ACTIVE = 1;
 const OPACITY_NEAR = 0.5;
 const OPACITY_MID = 0.5;
@@ -66,9 +74,9 @@ const PRIMARY_GLYPH_PAINT_WIDTH =
   BASE_FONT_SIZE + PRIMARY_REVEAL_HORIZONTAL_PAD;
 const BG_GLYPH_PAINT_WIDTH = BG_FONT_SIZE + BG_REVEAL_HORIZONTAL_PAD;
 const SUSTAIN_LINE_HEIGHT_LIFT_FACTOR = 0.58;
-// ponytail: web support stripped — native only
-const IS_WEB = false;
-const ACTIVE_LINE_SCALE = SCALE_ACTIVE;
+// ponytail: render oversized, scale down — text rasterizes at full size, no upscale pixelation
+const SCALE_TRANSFORM_INACTIVE = 1 / SCALE_ACTIVE; // ≈ 0.952
+const SCALE_TRANSFORM_ACTIVE = 1.0;
 
 // ponytail: worklet version — used inside useAnimatedStyle only
 function getInwardScaleTransformWorklet(
@@ -246,32 +254,7 @@ function getRevealClipWidth(
   return Math.min(swept, targetWidth);
 }
 
-function getWebRevealTextStyle(progress: number, pendingColor: string) {
-  const pct = clamp01(progress) * 100;
-  const softPct = Math.min(100, pct + 6);
-  return {
-    color: "transparent",
-    backgroundImage: `linear-gradient(90deg, ${COLOR_ACTIVE_PROGRESS} 0%, ${COLOR_ACTIVE_PROGRESS} ${pct}%, rgba(255,255,255,0.35) ${pct}%, rgba(255,255,255,0.15) ${softPct}%, ${pendingColor} ${softPct}%, ${pendingColor} 100%)`,
-    backgroundClip: "text",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
-  } as object;
-}
 
-function getWebBackgroundRevealTextStyle(
-  progress: number,
-  pendingColor: string,
-) {
-  const pct = clamp01(progress) * 100;
-  const softPct = Math.min(100, pct + 6);
-  return {
-    color: "transparent",
-    backgroundImage: `linear-gradient(90deg, ${COLOR_BG_PROGRESS} 0%, ${COLOR_BG_PROGRESS} ${pct}%, ${COLOR_BG_REVEAL_MID} ${pct}%, ${COLOR_BG_REVEAL_SOFT} ${softPct}%, ${pendingColor} ${softPct}%, ${pendingColor} 100%)`,
-    backgroundClip: "text",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
-  } as object;
-}
 
 type SustainMode = "none" | "solo" | "letter-sweep" | "word";
 
@@ -337,6 +320,8 @@ function getSustainActiveIntensity(
   const activeLetterFloat = progress * totalChars;
   const charCenter = charIdx + 0.5;
   const distance = Math.abs(charCenter - activeLetterFloat);
+  // exp(-(3.1²)*0.48) ≈ 0.01 — skip math for distant glyphs
+  if (distance > 3.1) return 0;
   const falloff = Math.exp(-(distance * distance) * 0.48);
   const fadeIn = smoothstep(progress / 0.12);
   const fadeOut = smoothstep((1 - progress) / 0.12);
@@ -352,6 +337,8 @@ function getSustainGlowIntensity(
   const activeLetterFloat = progress * totalChars;
   const charCenter = charIdx + 0.5;
   const distance = Math.abs(charCenter - activeLetterFloat);
+  // exp(-(5.5²)*0.16) ≈ 0.01 — glow falloff is wider (0.16 vs 0.48)
+  if (distance > 5.5) return 0;
   const falloff = Math.exp(-(distance * distance) * 0.16);
   const fadeIn = smoothstep(progress / 0.16);
   const fadeOut = smoothstep((1 - progress) / 0.16);
@@ -419,6 +406,7 @@ function computeSustainGlyphVisuals(
   isBackground = false,
   primaryLiftBase = BASE_FONT_SIZE,
   primaryLineHeight = BASE_LINE_HEIGHT,
+  forScaleTransform = false,
 ): SustainGlyphVisuals {
   "worklet";
   const activeIntensity = getSustainActiveIntensity(
@@ -439,12 +427,14 @@ function computeSustainGlyphVisuals(
   const fontSize = liftBase * scale;
   const lineHeight = baseLineHeight + (fontSize - liftBase) * 2;
   const lineHeightGrowth = lineHeight - baseLineHeight;
-  const translateX = -0.29 * liftBase * (scale - 1);
   const letterLevitation = -0.018 * liftBase * easedActiveIntensity;
-  const translateY =
-    letterLevitation -
-    lineHeightGrowth * SUSTAIN_LINE_HEIGHT_LIFT_FACTOR -
-    (scale - 1) * liftBase * (isBackground ? 0.18 : 0.22);
+  // ponytail: forScaleTransform uses center-pivot math; false path keeps fontSize-growth compensations for legacy callers
+  const translateX = forScaleTransform ? 0 : -0.29 * liftBase * (scale - 1);
+  const translateY = forScaleTransform
+    ? letterLevitation - (scale - 1) * primaryLineHeight / 2
+    : letterLevitation -
+      lineHeightGrowth * SUSTAIN_LINE_HEIGHT_LIFT_FACTOR -
+      (scale - 1) * liftBase * (isBackground ? 0.18 : 0.22);
   const opacity = interpolate(
     easedActiveIntensity,
     [0, 0.2, 1],
@@ -1190,10 +1180,9 @@ export const LyricLine = memo(function LyricLine({
   fontScale = 1,
   landscapeMode = false,
 }: LyricLineProps) {
-  const lineFontSize = BASE_FONT_SIZE * fontScale;
-  const lineLineHeight = BASE_LINE_HEIGHT * fontScale;
-  const bgFontSize = BG_FONT_SIZE * fontScale;
-  const bgLineHeight = BG_LINE_HEIGHT * fontScale;
+  // ponytail: oversized render — always at SCALE_ACTIVE size, scaled down when inactive
+  const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
+  const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
   const scaledLineTextStyle = useMemo(
     () => ({
       fontSize: lineFontSize,
@@ -1206,68 +1195,73 @@ export const LyricLine = memo(function LyricLine({
     : 0;
   const hasBgExtension = bgEnd > line.lineEndTime;
   const shouldPrewarmNativeReveal =
-    !IS_WEB &&
     shouldDrivePlaybackUpdates &&
     playbackPositionOverrideMs == null &&
     !isPast &&
     !isActive &&
     inactiveOpacityDistance <= 1;
   const shouldUseNativeRevealTree =
-    !IS_WEB &&
     playbackPositionOverrideMs == null &&
     !isPast &&
     (isActive || shouldPrewarmNativeReveal);
   const needsPrimaryJsPlayback =
-    isActive && (IS_WEB || playbackPositionOverrideMs != null);
+    isActive && playbackPositionOverrideMs != null;
+  // Single shallow selector — far/inactive rows stay cold on the 64ms clock.
+  const needsPlaybackSlice =
+    shouldDrivePlaybackUpdates ||
+    shouldUseNativeRevealTree ||
+    needsPrimaryJsPlayback ||
+    isActive ||
+    shouldPrewarmNativeReveal;
 
-  const bgStillActive = usePlaybackStore(
-    useCallback(
-      (state) => {
-        if (!hasBgExtension || !shouldDrivePlaybackUpdates) return false;
-        const position = playbackPositionOverrideMs ?? state.playbackPosition;
-        return position >= line.lineEndTime && position < bgEnd;
-      },
-      [
-        bgEnd,
-        hasBgExtension,
-        line.lineEndTime,
-        playbackPositionOverrideMs,
-        shouldDrivePlaybackUpdates,
-      ],
+  const {
+    bgStillActive,
+    playbackPosition,
+    isPlaying,
+    anchorPositionMs,
+    anchorMonotonicMs,
+  } = usePlaybackStore(
+    useShallow(
+      useCallback(
+        (state) => {
+          if (!needsPlaybackSlice) {
+            return IDLE_PLAYBACK_SLICE;
+          }
+          const position = playbackPositionOverrideMs ?? state.playbackPosition;
+          return {
+            bgStillActive:
+              hasBgExtension && shouldDrivePlaybackUpdates
+                ? position >= line.lineEndTime && position < bgEnd
+                : false,
+            playbackPosition: needsPrimaryJsPlayback ? position : 0,
+            isPlaying:
+              isActive || shouldPrewarmNativeReveal ? state.isPlaying : false,
+            anchorPositionMs: shouldUseNativeRevealTree
+              ? state.anchorPositionMs
+              : 0,
+            anchorMonotonicMs: shouldUseNativeRevealTree
+              ? state.anchorMonotonicMs
+              : 0,
+          };
+        },
+        [
+          bgEnd,
+          hasBgExtension,
+          isActive,
+          line.lineEndTime,
+          needsPlaybackSlice,
+          needsPrimaryJsPlayback,
+          playbackPositionOverrideMs,
+          shouldDrivePlaybackUpdates,
+          shouldPrewarmNativeReveal,
+          shouldUseNativeRevealTree,
+        ],
+      ),
     ),
   );
 
   const visuallyActive = isActive || bgStillActive;
   const inactiveOpacity = getInactiveOpacity(inactiveOpacityDistance);
-
-  const playbackPosition = usePlaybackStore(
-    useCallback(
-      (state) =>
-        needsPrimaryJsPlayback
-          ? (playbackPositionOverrideMs ?? state.playbackPosition)
-          : 0,
-      [needsPrimaryJsPlayback, playbackPositionOverrideMs],
-    ),
-  );
-  const isPlaying = usePlaybackStore(
-    useCallback(
-      (state) =>
-        isActive || shouldPrewarmNativeReveal ? state.isPlaying : false,
-      [isActive, shouldPrewarmNativeReveal],
-    ),
-  );
-  const anchorPositionMs = usePlaybackStore(
-    useCallback(
-      (state) => (shouldUseNativeRevealTree ? state.anchorPositionMs : 0),
-      [shouldUseNativeRevealTree],
-    ),
-  );
-  const anchorMonotonicMs = usePlaybackStore(
-    useCallback(
-      (state) => (shouldUseNativeRevealTree ? state.anchorMonotonicMs : 0),
-      [shouldUseNativeRevealTree],
-    ),
-  );
   const shouldAnimateRevealSweep = isPlaying && shouldUseNativeRevealTree;
   const nativeRevealPlaybackPosition = useMemo(
     () =>
@@ -1281,14 +1275,14 @@ export const LyricLine = memo(function LyricLine({
   const [tokenWidths, setTokenWidths] = useState<Record<number, number>>({});
   const pendingTokenWidthsRef = useRef<Record<number, number>>({});
   const tokenWidthFlushFrameRef = useRef<number | null>(null);
-  const scaleAnim = useSharedValue(visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE);
+  const scaleAnim = useSharedValue(visuallyActive ? SCALE_TRANSFORM_ACTIVE : SCALE_TRANSFORM_INACTIVE);
   const opacityAnim = useSharedValue(
     visuallyActive ? OPACITY_ACTIVE : getInactiveOpacity(inactiveOpacityDistance),
   );
 
   useEffect(() => {
     scaleAnim.value = withTiming(
-      visuallyActive ? ACTIVE_LINE_SCALE : SCALE_INACTIVE,
+      visuallyActive ? SCALE_TRANSFORM_ACTIVE : SCALE_TRANSFORM_INACTIVE,
       { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
     );
   }, [visuallyActive, scaleAnim]);
@@ -1507,7 +1501,7 @@ export const LyricLine = memo(function LyricLine({
                               key={`${line.lineStartTime}-${idx}`}
                               style={styles.tokenWrap as ViewStyle}
                             >
-                              <RNAnimated.Text
+                              <Text
                                 style={[
                                   styles.lineText,
                                   scaledLineTextStyle,
@@ -1515,7 +1509,7 @@ export const LyricLine = memo(function LyricLine({
                                 ]}
                               >
                                 {renderedText}
-                              </RNAnimated.Text>
+                              </Text>
                             </View>
                           );
                         }
@@ -1526,7 +1520,7 @@ export const LyricLine = memo(function LyricLine({
                               key={`${line.lineStartTime}-${idx}`}
                               style={styles.tokenWrap as ViewStyle}
                             >
-                              <RNAnimated.Text
+                              <Text
                                 style={[
                                   styles.lineText,
                                   scaledLineTextStyle,
@@ -1539,7 +1533,7 @@ export const LyricLine = memo(function LyricLine({
                                 ]}
                               >
                                 {renderedText}
-                              </RNAnimated.Text>
+                              </Text>
                             </View>
                           );
                         }
@@ -1571,35 +1565,6 @@ export const LyricLine = memo(function LyricLine({
                         );
 
                         if (!hasSustainEffect) {
-                          if (IS_WEB) {
-                            return (
-                              <View
-                                key={`${line.lineStartTime}-${idx}`}
-                                style={[
-                                  styles.tokenWrap,
-                                  { transform: [{ translateY: regularRiseY }] },
-                                ]}
-                              >
-                                <RNAnimated.Text
-                                  style={[
-                                    styles.lineText,
-                                    scaledLineTextStyle,
-                                    {
-                                      color: COLOR_ACTIVE_PENDING,
-                                      fontWeight: textWeight,
-                                    },
-                                    getWebRevealTextStyle(
-                                      progress,
-                                      COLOR_ACTIVE_PENDING,
-                                    ),
-                                  ]}
-                                >
-                                  {renderedText}
-                                </RNAnimated.Text>
-                              </View>
-                            );
-                          }
-
                           return (
                             <PrimaryRevealSweepToken
                               key={`${line.lineStartTime}-${idx}`}
@@ -1870,7 +1835,6 @@ export const LyricLine = memo(function LyricLine({
             <Text
               style={[
                 styles.translatedText,
-                IS_WEB && styles.translatedTextWeb,
                 {
                   color: translatedColor,
                   fontSize: 14 * fontScale,
@@ -1930,13 +1894,6 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   revealHorizontalPad?: number;
   onMeasure: (width: number) => void;
 }) {
-  const lineTextStyle = useMemo(
-    () => [
-      styles.lineText,
-      { fontSize: lineFontSize, lineHeight: lineLineHeight },
-    ],
-    [lineFontSize, lineLineHeight],
-  );
   const progress = useSharedValue(
     getSyllableProgress(playbackPosition, startTime, endTime),
   );
@@ -1957,24 +1914,15 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
     );
   }, [endTime, isPlaying, playbackPosition, progress, startTime]);
 
+  // Soft edge + solid progress only (mid layer dropped — same look, fewer UI nodes)
   const softRevealStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.value));
     const visible = p > 0 && p < 1;
     return {
-          opacity: visible ? 1 : 0,
-          width: visible
-            ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
-            : 0,
-    };
-  });
-  const midRevealStyle = useAnimatedStyle(() => {
-    const p = Math.max(0, Math.min(1, progress.value));
-    const visible = p > 0 && p < 1;
-    return {
-          opacity: visible ? 1 : 0,
-          width: visible
-            ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
-            : 0,
+      opacity: visible ? 1 : 0,
+      width: visible
+        ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
+        : 0,
     };
   });
   const progressRevealStyle = useAnimatedStyle(() => ({
@@ -1993,7 +1941,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
 
   const renderSustainText = (
     color: string,
-    layer: "pending" | "soft" | "mid" | "progress" = "pending",
+    layer: "pending" | "soft" | "progress" = "pending",
   ) => (
     <View style={styles.sustainRow}>
       {renderedChars.map((char, charIdx) => (
@@ -2040,20 +1988,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
             ]}
           >
             <View style={{ width: tokenWidth + revealHorizontalPad }}>
-              {renderSustainText("rgba(255,255,255,0.15)", "soft")}
-            </View>
-          </Reanimated.View>
-          <Reanimated.View
-            pointerEvents="none"
-            style={[
-              styles.tokenRevealClip,
-              styles.primaryTokenRevealClip,
-              revealClipStyle,
-              midRevealStyle,
-            ]}
-          >
-            <View style={{ width: tokenWidth + revealHorizontalPad }}>
-              {renderSustainText("rgba(255,255,255,0.35)", "mid")}
+              {renderSustainText("rgba(255,255,255,0.25)", "soft")}
             </View>
           </Reanimated.View>
           <Reanimated.View
@@ -2098,7 +2033,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   textWeight: "700";
   sustainMode: "solo" | "letter-sweep";
   progress: SharedValue<number>;
-  layer: "pending" | "soft" | "mid" | "progress";
+  layer: "pending" | "soft" | "progress";
   canHidePending: boolean;
   lineFontSize?: number;
   lineLineHeight?: number;
@@ -2113,6 +2048,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
     ],
     [lineFontSize, lineLineHeight],
   );
+  // Prefer transform scale over animated fontSize/lineHeight (layout thrash).
   const animatedStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.value));
     const visuals = computeSustainGlyphVisuals(
@@ -2124,22 +2060,23 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
       false,
       lineFontSize,
       lineLineHeight,
+      true,
     );
     const resolvedOpacity =
       layer === "pending" && canHidePending
         ? visuals.opacity * Math.max(0, Math.min(1, (1 - p) / 0.035))
         : getCompletedLayerOpacity(p, visuals.opacity);
+    const glow = visuals.glowRadius;
 
     return {
       opacity: resolvedOpacity,
-      fontSize: visuals.fontSize,
-      lineHeight: visuals.lineHeight,
-      textShadowColor: SUSTAIN_GLOW_COLOR,
+      textShadowColor: glow > 0.35 ? SUSTAIN_GLOW_COLOR : "transparent",
       textShadowOffset: { width: 0, height: 0 },
-      textShadowRadius: visuals.glowRadius,
+      textShadowRadius: glow > 0.35 ? glow : 0,
       transform: [
         { translateX: visuals.translateX },
         { translateY: visuals.translateY },
+        { scale: visuals.scale },
       ],
     };
   });
@@ -2274,20 +2211,10 @@ const PrimaryWordSustainRevealToken = memo(
       const p = Math.max(0, Math.min(1, progress.value));
       const visible = p > 0 && p < 1;
       return {
-            opacity: visible ? 1 : 0,
-            width: visible
-              ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
-              : 0,
-      };
-    });
-    const midRevealStyle = useAnimatedStyle(() => {
-      const p = Math.max(0, Math.min(1, progress.value));
-      const visible = p > 0 && p < 1;
-      return {
-            opacity: visible ? 1 : 0,
-            width: visible
-              ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
-              : 0,
+        opacity: visible ? 1 : 0,
+        width: visible
+          ? getRevealClipWidth(tokenWidth, p, 0, revealHorizontalPad)
+          : 0,
       };
     });
     const progressRevealStyle = useAnimatedStyle(() => ({
@@ -2339,20 +2266,7 @@ const PrimaryWordSustainRevealToken = memo(
               ]}
             >
               <View style={{ width: tokenWidth + revealHorizontalPad }}>
-                {renderWordText("rgba(255,255,255,0.15)")}
-              </View>
-            </Reanimated.View>
-            <Reanimated.View
-              pointerEvents="none"
-              style={[
-                styles.tokenRevealClip,
-                styles.primaryTokenRevealClip,
-                revealClipStyle,
-                midRevealStyle,
-              ]}
-            >
-              <View style={{ width: tokenWidth + revealHorizontalPad }}>
-                {renderWordText("rgba(255,255,255,0.35)")}
+                {renderWordText("rgba(255,255,255,0.25)")}
               </View>
             </Reanimated.View>
             <Reanimated.View
@@ -2444,16 +2358,6 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
             : 0,
     };
   });
-  const midRevealStyle = useAnimatedStyle(() => {
-    const p = Math.max(0, Math.min(1, progress.value));
-    const visible = p > 0 && p < 1;
-    return {
-          opacity: visible ? 1 : 0,
-          width: visible
-            ? getRevealClipWidth(displayWidth, p, 0, 0)
-            : 0,
-    };
-  });
   const progressRevealStyle = useAnimatedStyle(() => ({
     width: getRevealClipWidth(displayWidth, progress.value, 0, 0),
   }));
@@ -2484,26 +2388,6 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
               styles.primaryTokenRevealClip,
               revealClipStyle,
               softRevealStyle,
-            ]}
-          >
-            <View style={{ width: displayWidth }}>
-              <Text
-                style={[
-                  lineTextStyle,
-                  { color: "rgba(255,255,255,0.15)", fontWeight: textWeight },
-                ]}
-              >
-                {text}
-              </Text>
-            </View>
-          </Reanimated.View>
-          <Reanimated.View
-            pointerEvents="none"
-            style={[
-              styles.tokenRevealClip,
-              styles.primaryTokenRevealClip,
-              revealClipStyle,
-              midRevealStyle,
             ]}
           >
             <View style={{ width: displayWidth }}>
@@ -3059,6 +2943,7 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
       true,
       lineFontSize,
       lineLineHeight,
+      true,
     );
 
     return {
@@ -3123,8 +3008,8 @@ const BackgroundVocals = memo(function BackgroundVocals({
   playbackPositionOverrideMs?: number | null;
   fontScale?: number;
 }) {
-  const bgFontSize = BG_FONT_SIZE * fontScale;
-  const bgLineHeight = BG_LINE_HEIGHT * fontScale;
+  const bgFontSize = BG_FONT_SIZE * SCALE_ACTIVE * fontScale;
+  const bgLineHeight = BG_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
   const bgTextStyle = useMemo(
     () => ({
       fontSize: bgFontSize,
@@ -3142,11 +3027,10 @@ const BackgroundVocals = memo(function BackgroundVocals({
     [syllables],
   );
   const shouldUseNativeBackgroundReveal =
-    !IS_WEB &&
     playbackPositionOverrideMs == null &&
     (parentIsActive || parentBgStillActive || parentShouldPrewarmNativeReveal);
   const needsBackgroundJsPlayback =
-    (IS_WEB || playbackPositionOverrideMs != null) &&
+    playbackPositionOverrideMs != null &&
     (parentIsActive || parentBgStillActive || parentShouldPrewarmNativeReveal);
 
   const playbackPosition = usePlaybackStore(
@@ -3376,7 +3260,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
                 if (
                   !isBgActive &&
                   (!shouldUseNativeBackgroundReveal ||
-                    IS_WEB ||
                     playbackPositionOverrideMs != null ||
                     isBgPast)
                 ) {
@@ -3499,30 +3382,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
                 const bgRevealPad = hasSustainEffect
                   ? BG_REVEAL_HORIZONTAL_PAD
                   : 0;
-
-                if (IS_WEB) {
-                  return (
-                    <View
-                      key={`bg-${syl.startTime}-${idx}`}
-                      style={[
-                        styles.tokenWrap,
-                        { transform: [{ translateY: regularRiseY }] },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.bgVocalsText,
-                          getWebBackgroundRevealTextStyle(
-                            clampedProgress,
-                            COLOR_BG_PENDING,
-                          ),
-                        ]}
-                      >
-                        {text}
-                      </Text>
-                    </View>
-                  );
-                }
 
                 return (
                   <View
@@ -3795,12 +3654,12 @@ const styles = StyleSheet.create({
   } as ViewStyle,
   primaryTokenRevealClip: {
     top: -PRIMARY_REVEAL_VERTICAL_PAD,
-    height: BASE_LINE_HEIGHT + PRIMARY_REVEAL_VERTICAL_PAD * 2,
+    height: BASE_LINE_HEIGHT * SCALE_ACTIVE + PRIMARY_REVEAL_VERTICAL_PAD * 2,
     paddingTop: PRIMARY_REVEAL_VERTICAL_PAD,
   } as ViewStyle,
   bgTokenRevealClip: {
     top: -BG_REVEAL_VERTICAL_PAD,
-    height: BG_LINE_HEIGHT + BG_REVEAL_VERTICAL_PAD * 2,
+    height: BG_LINE_HEIGHT * SCALE_ACTIVE + BG_REVEAL_VERTICAL_PAD * 2,
     paddingTop: BG_REVEAL_VERTICAL_PAD,
   } as ViewStyle,
   sustainRow: {
@@ -3888,10 +3747,6 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.34)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
-  } as TextStyle,
-  translatedTextWeb: {
-    wordBreak: "break-word",
-    overflowWrap: "break-word",
   } as TextStyle,
   translatedTextOpposite: {
     alignSelf: "flex-end",

@@ -984,7 +984,6 @@ export function LyricsView({
   const scrollOffsetRef = useRef(0);
   const rowHeightsRef = useRef(new Map<number, number>());
   const rowOffsetsRef = useRef(new Map<number, number>());
-  const lineScrollOffsetsRef = useRef(new Map<number, number>());
   const pendingScrollFrameRef = useRef<number | null>(null);
   const programmaticScrollTimerRef = useRef<ReturnType<
     typeof setTimeout
@@ -1164,13 +1163,23 @@ export function LyricsView({
   effectiveWindowStateRef.current = effectiveWindowState;
   const scrollTargetRangeRef = useRef<LyricLineRange | null>(null);
   const scheduleScrollToRangeRef = useRef<typeof scheduleScrollToRange>(null as any);
-  const liveCreditsActive = usePlaybackStore(
-    useCallback(
-      (state) =>
-        lastLyricEndTime > 0 && state.playbackPosition >= lastLyricEndTime,
-      [lastLyricEndTime],
-    ),
+  // ponytail: subscribe instead of reactive selector — avoids LyricsView re-render on every 64ms tick
+  const [liveCreditsActive, setLiveCreditsActive] = useState(
+    () => lastLyricEndTime > 0 && usePlaybackStore.getState().playbackPosition >= lastLyricEndTime,
   );
+  useEffect(() => {
+    const check = (pos: number) => lastLyricEndTime > 0 && pos >= lastLyricEndTime;
+    setLiveCreditsActive(check(usePlaybackStore.getState().playbackPosition));
+    let prev = liveCreditsActive;
+    return usePlaybackStore.subscribe((state) => {
+      const next = check(state.playbackPosition);
+      if (next !== prev) {
+        prev = next;
+        setLiveCreditsActive(next);
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastLyricEndTime]);
   const creditsActive =
     previewPlaybackPosition !== null
       ? lastLyricEndTime > 0 && previewPlaybackPosition >= lastLyricEndTime
@@ -1318,9 +1327,7 @@ export function LyricsView({
       if (absoluteTop === null) {
         return null;
       }
-      const scrollOffset = Math.max(0, absoluteTop - activeLineTopOffset);
-      lineScrollOffsetsRef.current.set(index, scrollOffset);
-      return scrollOffset;
+      return Math.max(0, absoluteTop - activeLineTopOffset);
     },
     [activeLineTopOffset, getAbsoluteLineTop],
   );
@@ -1415,14 +1422,10 @@ export function LyricsView({
           break;
         }
         rowOffsets.set(index, offset);
-        lineScrollOffsetsRef.current.set(
-          index,
-          Math.max(0, offset - activeLineTopOffset),
-        );
         offset += height;
       }
     },
-    [activeLineTopOffset, lyrics.length],
+    [lyrics.length],
   );
 
   const getRangeMetrics = useCallback(
@@ -1790,16 +1793,14 @@ export function LyricsView({
         return;
       }
       rowHeights.set(index, height);
-      const absoluteTop = getAbsoluteLineTop(index);
-      if (absoluteTop !== null) {
-        lineScrollOffsetsRef.current.set(
-          index,
-          Math.max(0, absoluteTop - activeLineTopOffset),
-        );
-      } else {
+      if (getAbsoluteLineTop(index) === null) {
         syncMeasuredRowLayoutsFromIndex(index);
       }
-      bumpContentLayoutVersion();
+      // ponytail: only bump when the last line height changes — that's the only thing that
+      // affects listInsets.paddingBottom. Mid-song cell layouts during scroll don't change padding.
+      if (index === lyrics.length - 1) {
+        bumpContentLayoutVersion();
+      }
       // Once every line has been measured, disable onLayout to stop bridge chatter
       if (rowHeights.size >= lyrics.length && !allCellsMeasured) {
         setAllCellsMeasured(true);
@@ -1827,7 +1828,6 @@ export function LyricsView({
       }
     },
     [
-      activeLineTopOffset,
       allCellsMeasured,
       bumpContentLayoutVersion,
       getAbsoluteLineTop,
@@ -1870,7 +1870,6 @@ export function LyricsView({
     setAllCellsMeasured(false);
     rowHeightsRef.current.clear();
     rowOffsetsRef.current.clear();
-    lineScrollOffsetsRef.current.clear();
     creditsLayoutRef.current = null;
     setContentLayoutVersion(0);
   }, [lyrics]);
@@ -2077,7 +2076,6 @@ export function LyricsView({
     suspendViewportScrollAdjustments,
     viewportHeight,
     layoutSettleSignal,
-    contentLayoutVersion,
   ]);
 
   useEffect(() => {
@@ -2455,7 +2453,7 @@ export function LyricsView({
         decelerationRate="fast"
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
-        scrollEventThrottle={64}
+        scrollEventThrottle={10}
         onScrollBeginDrag={() => {
           if (programmaticScrollInProgressRef.current) {
             return;
