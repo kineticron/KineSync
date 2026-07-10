@@ -1,14 +1,14 @@
 /**
- * SkiaLyricsCanvas — full Skia replacement for FlashList lyrics rendering.
+ * SkiaRevealLine — Skia Canvas per active lyric line.
  *
- * One <Canvas> draws all visible lyrics. Scroll is a translateY on a Group.
- * Reveal sweeps use clipRect per token. Sustain glow uses Shadow ImageFilter.
+ * Replaces the 2-3 stacked overflow:hidden Reanimated.Views per syllable token
+ * with a single <Canvas> that draws clip-masked text. Only used on active lines.
  *
- * ponytail: single Canvas replaces 24+ animated Views per active line.
- * Upgrade path: if memory pressure on 500+ line lyrics, add tile-based culling.
+ * ponytail: one Canvas per active line replaces 24+ animated Views.
+ * FlashList still handles scroll/virtualization — this only handles the visual reveal.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { memo, useEffect, useMemo } from "react";
+import { StyleSheet, View } from "react-native";
 import {
   Canvas,
   Fill,
@@ -19,19 +19,17 @@ import {
   Shadow,
   type SkFont,
 } from "@shopify/react-native-skia";
-import Reanimated, {
+import {
   cancelAnimation,
   Easing as ReanimatedEasing,
   useDerivedValue,
   useSharedValue,
-  withDecay,
+  withDelay,
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
 
-import type { LyricLine, LyricSyllable } from "@/types/bridge";
-import { usePlaybackStore } from "@/store/playback-store";
+import type { LyricSyllable } from "@/types/bridge";
 import { getGraphemeCount } from "@/lib/graphemes";
 
 // ─── Constants (matching lyric-line.tsx) ────────────────────────────────────
@@ -40,19 +38,11 @@ const BASE_FONT_SIZE = 32;
 const BASE_LINE_HEIGHT = 42;
 const BG_FONT_SIZE = BASE_FONT_SIZE * 0.62;
 const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.62;
-const LINE_GAP = 18;
-const BG_LINE_GAP = 10;
-const HORIZONTAL_INSET = 24;
-const TOP_PADDING = 150;
-const BOTTOM_PADDING = 280;
 
-const SCALE_ACTIVE = 1.05;
-const OPACITY_ACTIVE = 1;
-const OPACITY_INACTIVE = 0.5;
-const COLOR_DONE = "rgba(255,255,255,0.5)";
 const COLOR_ACTIVE_PENDING = "rgba(255,255,255,0.5)";
 const COLOR_ACTIVE_PROGRESS = "#FFFFFF";
-const COLOR_INACTIVE = "rgba(255,255,255,0.5)";
+const COLOR_BG_PENDING = "rgba(255,255,255,0.32)";
+const COLOR_BG_PROGRESS = "rgba(255,255,255,0.47)";
 
 const SUSTAIN_MS_THRESHOLD = 680;
 const MIN_MS_PER_CHAR_FOR_LETTER_SWEEP = 220;
@@ -60,35 +50,11 @@ const MAX_LETTER_SWEEP_CHARS = 5;
 const WORD_SUSTAIN_MIN_MS = 920;
 const SUSTAIN_GLOW_RADIUS_MAX = 7;
 
-// Scroll easing — same as lyrics-view.tsx
-const LYRIC_SCROLL_ANIMATION_MS = 440;
-const LYRIC_SCROLL_EASING = ReanimatedEasing.bezier(0.22, 0.88, 0.34, 1);
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-type SustainMode = "none" | "solo" | "letter-sweep" | "word";
-
-type LayoutToken = {
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  startTime: number;
-  endTime: number;
-  sustainMode: SustainMode;
-};
-
-type LayoutLine = {
-  y: number;
-  height: number;
-  primaryTokens: LayoutToken[];
-  backgroundTokens?: LayoutToken[];
-  lineIndex: number;
-  lineStartTime: number;
-  lineEndTime: number;
-};
+const REVEAL_SWEEP_EASING = ReanimatedEasing.out(ReanimatedEasing.ease);
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+type SustainMode = "none" | "solo" | "letter-sweep" | "word";
 
 function getSustainMode(text: string, durationMs: number): SustainMode {
   const trimmed = String(text || "").trim();
@@ -110,15 +76,11 @@ function clamp01(v: number) {
 function getRevealClipWidth(
   baseWidth: number,
   progress: number,
-  leadWidth: number,
-  edgePad: number,
 ) {
   "worklet";
   const safeBase = Math.max(0, baseWidth);
   const p = clamp01(progress);
-  const targetWidth = safeBase + edgePad;
-  const swept = targetWidth * p + leadWidth * (1 - p);
-  return Math.min(swept, targetWidth);
+  return safeBase * p;
 }
 
 function getSyllableProgress(
@@ -131,500 +93,245 @@ function getSyllableProgress(
   return clamp01((positionMs - startTime) / duration);
 }
 
+function getMonotonicNow() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
 function getSustainBlur(progress: number): number {
   "worklet";
-  // Gaussian bell — peak glow at midpoint of syllable
   const d = (progress - 0.5) * 3;
   const intensity = Math.exp(-(d * d));
   return SUSTAIN_GLOW_RADIUS_MAX * intensity;
 }
 
-// ─── Layout computation ─────────────────────────────────────────────────────
+// ─── Layout types ───────────────────────────────────────────────────────────
 
-function computeLayout(
-  lyrics: LyricLine[],
-  font: SkFont,
-  bgFont: SkFont | null,
-  containerWidth: number,
-): LayoutLine[] {
-  const textWidth = containerWidth - HORIZONTAL_INSET * 2;
-  const lines: LayoutLine[] = [];
-  let y = TOP_PADDING;
+type LayoutToken = {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  startTime: number;
+  endTime: number;
+  sustainMode: SustainMode;
+};
 
-  for (let i = 0; i < lyrics.length; i++) {
-    const line = lyrics[i];
-    const syllables = line.syllables;
-    const bgSyllables = line.backgroundSyllables;
+// ─── Props ──────────────────────────────────────────────────────────────────
 
-    // Primary tokens
-    const primaryTokens: LayoutToken[] = [];
-    let tokenX = 0;
-    let tokenY = 0;
+export type SkiaRevealLineProps = {
+  syllables: LyricSyllable[];
+  playbackPosition: number;
+  isPlaying: boolean;
+  anchorPositionMs: number;
+  anchorMonotonicMs: number;
+  containerWidth: number;
+  isBackground?: boolean;
+  fontScale?: number;
+};
+
+// ─── Main component ─────────────────────────────────────────────────────────
+
+export const SkiaRevealLine = memo(function SkiaRevealLine({
+  syllables,
+  playbackPosition,
+  isPlaying,
+  anchorPositionMs,
+  anchorMonotonicMs,
+  containerWidth,
+  isBackground = false,
+  fontScale = 1,
+}: SkiaRevealLineProps) {
+  const fontSize = isBackground
+    ? BG_FONT_SIZE * fontScale
+    : BASE_FONT_SIZE * fontScale;
+  const lineHeight = isBackground
+    ? BG_LINE_HEIGHT * fontScale
+    : BASE_LINE_HEIGHT * fontScale;
+
+  const font = useMemo(
+    () =>
+      matchFont({
+        fontFamily: "System",
+        fontSize,
+        fontWeight: "bold",
+        fontStyle: "normal",
+      }),
+    [fontSize],
+  );
+
+  // Layout tokens using Skia font metrics
+  const tokens = useMemo(() => {
+    if (!font) return [];
+    const maxWidth = containerWidth;
+    const result: LayoutToken[] = [];
+    let x = 0;
+    let y = 0;
 
     for (const syl of syllables) {
       const w = font.measureText(syl.text).width;
-      if (tokenX + w > textWidth && tokenX > 0) {
-        tokenX = 0;
-        tokenY += BASE_LINE_HEIGHT;
+      if (x + w > maxWidth && x > 0) {
+        x = 0;
+        y += lineHeight;
       }
       const durationMs = Math.max(1, syl.endTime - syl.startTime);
-      primaryTokens.push({
+      result.push({
         text: syl.text,
-        x: tokenX,
-        y: tokenY,
+        x,
+        y,
         width: w,
         startTime: syl.startTime,
         endTime: syl.endTime,
         sustainMode: getSustainMode(syl.text, durationMs),
       });
-      tokenX += w;
+      x += w;
     }
+    return result;
+  }, [font, syllables, containerWidth, lineHeight]);
 
-    const primaryHeight = tokenY + BASE_LINE_HEIGHT;
+  // Compute canvas height from layout
+  const canvasHeight = useMemo(() => {
+    if (tokens.length === 0) return lineHeight;
+    const lastToken = tokens[tokens.length - 1];
+    return lastToken.y + lineHeight;
+  }, [tokens, lineHeight]);
 
-    // Background tokens
-    let backgroundTokens: LayoutToken[] | undefined;
-    let bgHeight = 0;
-    if (bgSyllables && bgSyllables.length > 0 && bgFont) {
-      backgroundTokens = [];
-      let bgX = 0;
-      let bgY = 0;
-      for (const syl of bgSyllables) {
-        const w = bgFont.measureText(syl.text).width;
-        if (bgX + w > textWidth && bgX > 0) {
-          bgX = 0;
-          bgY += BG_LINE_HEIGHT;
-        }
-        const durationMs = Math.max(1, syl.endTime - syl.startTime);
-        backgroundTokens.push({
-          text: syl.text,
-          x: bgX,
-          y: primaryHeight + BG_LINE_GAP + bgY,
-          width: w,
-          startTime: syl.startTime,
-          endTime: syl.endTime,
-          sustainMode: getSustainMode(syl.text, durationMs),
-        });
-        bgX += w;
-      }
-      bgHeight = bgY + BG_LINE_HEIGHT + BG_LINE_GAP;
-    }
-
-    const totalHeight = primaryHeight + bgHeight;
-    lines.push({
-      y,
-      height: totalHeight,
-      primaryTokens,
-      backgroundTokens,
-      lineIndex: i,
-      lineStartTime: line.lineStartTime,
-      lineEndTime: line.lineEndTime,
-    });
-    y += totalHeight + LINE_GAP;
-  }
-
-  return lines;
-}
-
-// ─── Props ──────────────────────────────────────────────────────────────────
-
-export type SkiaLyricsCanvasProps = {
-  autoFollowEnabled?: boolean;
-  onAutoFollowChange?: (enabled: boolean) => void;
-  onUserInteraction?: () => void;
-  onLinePress?: (line: LyricLine) => void;
-  onLineLongPress?: (line: LyricLine) => void;
-  fontScale?: number;
-  landscapeMode?: boolean;
-};
-
-// ─── Component ──────────────────────────────────────────────────────────────
-
-export const SkiaLyricsCanvas = memo(function SkiaLyricsCanvas({
-  autoFollowEnabled = true,
-  onAutoFollowChange,
-  onUserInteraction,
-  onLinePress,
-  fontScale = 1,
-  landscapeMode = false,
-}: SkiaLyricsCanvasProps) {
-  // ponytail: matchFont — "System" resolves to SF Pro on iOS, Roboto on Android
-  const primaryFont = useMemo(
-    () =>
-      matchFont({
-        fontFamily: "System",
-        fontSize: BASE_FONT_SIZE * fontScale,
-        fontWeight: "bold",
-        fontStyle: "normal",
-      }),
-    [fontScale],
-  );
-  const bgFont = useMemo(
-    () =>
-      matchFont({
-        fontFamily: "System",
-        fontSize: BG_FONT_SIZE * fontScale,
-        fontWeight: "bold",
-        fontStyle: "normal",
-      }),
-    [fontScale],
+  // Per-syllable progress shared values (driven by withTiming)
+  const progressValues = useMemo(
+    () => syllables.map(() => ({} as SharedValue<number>)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [syllables.length],
   );
 
-  const lyrics = usePlaybackStore((s) => s.lyrics);
-  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-
-  // Layout all lines when lyrics or canvas size changes
-  const layout = useMemo(() => {
-    if (!primaryFont || canvasSize.width === 0) return [];
-    return computeLayout(lyrics, primaryFont, bgFont, canvasSize.width);
-  }, [lyrics, primaryFont, bgFont, canvasSize.width]);
-
-  const totalContentHeight = useMemo(() => {
-    if (layout.length === 0) return 0;
-    const last = layout[layout.length - 1];
-    return last.y + last.height + BOTTOM_PADDING;
-  }, [layout]);
-
-  // ─── Playback position (shared value, updated via interval) ──────────────
-  // ponytail: ~60fps polling from JS thread. SharedValue change triggers Skia
-  // Canvas redraw. This is simpler than per-syllable withTiming and works for
-  // all tokens simultaneously from one source of truth.
-
-  const playbackPosition = useSharedValue(0);
-
-  useEffect(() => {
-    let anchorPos = usePlaybackStore.getState().anchorPositionMs;
-    let anchorMono = usePlaybackStore.getState().anchorMonotonicMs;
-    let playing = usePlaybackStore.getState().isPlaying;
-
-    const unsub = usePlaybackStore.subscribe((state) => {
-      anchorPos = state.anchorPositionMs;
-      anchorMono = state.anchorMonotonicMs;
-      playing = state.isPlaying;
-      if (!playing) {
-        playbackPosition.value = Math.max(0, anchorPos);
-      }
-    });
-
-    // ~60fps position update while playing
-    let rafId: number | null = null;
-    const tick = () => {
-      if (playing) {
-        const now =
-          typeof performance !== "undefined" ? performance.now() : Date.now();
-        playbackPosition.value = Math.max(0, anchorPos + now - anchorMono);
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-
-    return () => {
-      unsub();
-      if (rafId !== null) cancelAnimationFrame(rafId);
-    };
-  }, [playbackPosition]);
-
-  // ─── Scroll state ───────────────────────────────────────────────────────
-
-  const scrollOffset = useSharedValue(0);
-  const isUserScrolling = useSharedValue(false);
-  const autoFollowEnabledRef = useRef(autoFollowEnabled);
-  autoFollowEnabledRef.current = autoFollowEnabled;
-
-  const maxScroll = useMemo(
-    () => Math.max(0, totalContentHeight - canvasSize.height),
-    [totalContentHeight, canvasSize.height],
-  );
-
-  // ─── Gesture ──────────────────────────────────────────────────────────────
-
-  const scrollStart = useSharedValue(0);
-  const panGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .onBegin(() => {
-          "worklet";
-          cancelAnimation(scrollOffset);
-          scrollStart.value = scrollOffset.value;
-          isUserScrolling.value = true;
-        })
-        .onUpdate((e) => {
-          "worklet";
-          // translationY is cumulative from gesture start
-          const next = scrollStart.value - e.translationY;
-          scrollOffset.value = Math.max(0, Math.min(maxScroll, next));
-        })
-        .onEnd((e) => {
-          "worklet";
-          scrollOffset.value = withDecay({
-            velocity: -e.velocityY,
-            clamp: [0, maxScroll],
-            deceleration: 0.997,
-          });
-        })
-        .onFinalize(() => {
-          "worklet";
-          isUserScrolling.value = false;
-        }),
-    [maxScroll, scrollOffset, scrollStart, isUserScrolling],
-  );
-
-  // ─── Auto-follow ─────────────────────────────────────────────────────────
-
-  const activeLineIndexRef = useRef(-1);
-
-  useEffect(() => {
-    const unsub = usePlaybackStore.subscribe((state) => {
-      if (!autoFollowEnabledRef.current || isUserScrolling.value) return;
-      if (layout.length === 0) return;
-
-      const pos = state.playbackPosition;
-      let activeIdx = -1;
-
-      // Binary-ish search for active line
-      for (let i = 0; i < layout.length; i++) {
-        const l = layout[i];
-        if (pos >= l.lineStartTime && pos < l.lineEndTime) {
-          activeIdx = i;
-          break;
-        }
-        if (l.lineStartTime > pos) {
-          activeIdx = Math.max(0, i - 1);
-          break;
-        }
-      }
-      if (activeIdx < 0) activeIdx = layout.length - 1;
-      if (activeIdx === activeLineIndexRef.current) return;
-      activeLineIndexRef.current = activeIdx;
-
-      const layoutLine = layout[activeIdx];
-      if (!layoutLine) return;
-
-      const targetOffset = Math.max(
-        0,
-        Math.min(maxScroll, layoutLine.y - canvasSize.height * 0.33),
-      );
-
-      cancelAnimation(scrollOffset);
-      scrollOffset.value = withTiming(targetOffset, {
-        duration: LYRIC_SCROLL_ANIMATION_MS,
-        easing: LYRIC_SCROLL_EASING,
-      });
-    });
-    return unsub;
-  }, [layout, maxScroll, canvasSize.height, scrollOffset, isUserScrolling]);
-
-  // ─── Scroll transform (derived for Skia) ─────────────────────────────────
-
-  const scrollTransform = useDerivedValue(() => [
-    { translateY: -scrollOffset.value },
-  ]);
-
-  // ─── Layout handler ───────────────────────────────────────────────────────
-
-  const handleLayout = useCallback((e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    setCanvasSize((prev) =>
-      Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1
-        ? prev
-        : { width, height },
-    );
-  }, []);
-
-  // ─── Render ───────────────────────────────────────────────────────────────
-
+  // Actually create the shared values (can't do it in useMemo with hooks)
+  // ponytail: use a stable array of shared values matching syllable count
   return (
-    <GestureDetector gesture={panGesture}>
-      <Reanimated.View
-        style={styles.container}
-        onLayout={handleLayout}
-        collapsable={false}
-      >
-        <Canvas style={StyleSheet.absoluteFill}>
-          {/* Debug: red fill so canvas is obviously visible */}
-          <Fill color="rgba(255,0,0,0.3)" />
-          <SkiaText
-            x={24}
-            y={250}
-            text={`Skia: ${Math.round(canvasSize.width)}x${Math.round(canvasSize.height)}, ${layout.length} lines`}
-            font={primaryFont}
-            color="yellow"
+    <View style={{ width: containerWidth, height: canvasHeight }}>
+      <Canvas style={StyleSheet.absoluteFill}>
+        {tokens.map((token, idx) => (
+          <SkiaToken
+            key={`${token.startTime}-${idx}`}
+            token={token}
+            font={font}
+            fontSize={fontSize}
+            lineHeight={lineHeight}
+            playbackPosition={playbackPosition}
+            isPlaying={isPlaying}
+            anchorPositionMs={anchorPositionMs}
+            anchorMonotonicMs={anchorMonotonicMs}
+            isBackground={isBackground}
           />
-          {layout.length > 0 && (
-            <Group transform={scrollTransform}>
-              {layout.map((layoutLine) => (
-                <SkiaLyricLineGroup
-                  key={layoutLine.lineIndex}
-                  layoutLine={layoutLine}
-                  primaryFont={primaryFont}
-                  bgFont={bgFont}
-                  playbackPosition={playbackPosition}
-                  scrollOffset={scrollOffset}
-                  canvasHeight={canvasSize.height}
-                />
-              ))}
-            </Group>
-          )}
-        </Canvas>
-      </Reanimated.View>
-    </GestureDetector>
+        ))}
+      </Canvas>
+    </View>
   );
 });
 
-// ─── Per-line Skia group ────────────────────────────────────────────────────
+// ─── Per-token component with its own progress SharedValue ──────────────────
 
-const SkiaLyricLineGroup = memo(function SkiaLyricLineGroup({
-  layoutLine,
-  primaryFont,
-  bgFont,
-  playbackPosition,
-  scrollOffset,
-  canvasHeight,
-}: {
-  layoutLine: LayoutLine;
-  primaryFont: SkFont;
-  bgFont: SkFont;
-  playbackPosition: SharedValue<number>;
-  scrollOffset: SharedValue<number>;
-  canvasHeight: number;
-}) {
-  // Viewport culling — skip if line is off-screen
-  // ponytail: derived value recalculates each frame, but the conditional
-  // drawing below means Skia skips the draw calls for culled lines
-  const isVisible = useDerivedValue(() => {
-    const viewTop = scrollOffset.value;
-    const viewBottom = viewTop + canvasHeight;
-    const lineTop = layoutLine.y;
-    const lineBottom = lineTop + layoutLine.height;
-    // 100px buffer for smooth entry
-    return lineBottom > viewTop - 100 && lineTop < viewBottom + 100;
-  });
-
-  // Line state: active/past/inactive
-  const lineOpacity = useDerivedValue(() => {
-    if (!isVisible.value) return 0;
-    const pos = playbackPosition.value;
-    if (pos >= layoutLine.lineStartTime && pos < layoutLine.lineEndTime) {
-      return OPACITY_ACTIVE;
-    }
-    return OPACITY_INACTIVE;
-  });
-
-  const lineScale = useDerivedValue(() => {
-    if (!isVisible.value) return 1;
-    const pos = playbackPosition.value;
-    if (pos >= layoutLine.lineStartTime && pos < layoutLine.lineEndTime) {
-      return SCALE_ACTIVE;
-    }
-    return 1;
-  });
-
-  const lineTransform = useDerivedValue(() => [
-    { translateX: HORIZONTAL_INSET },
-    { translateY: layoutLine.y },
-    { scale: lineScale.value },
-  ]);
-
-  return (
-    <Group transform={lineTransform} opacity={lineOpacity}>
-      {/* Primary tokens */}
-      {layoutLine.primaryTokens.map((token, idx) => (
-        <SkiaRevealToken
-          key={idx}
-          token={token}
-          font={primaryFont}
-          playbackPosition={playbackPosition}
-          lineStartTime={layoutLine.lineStartTime}
-          lineEndTime={layoutLine.lineEndTime}
-          isBackground={false}
-        />
-      ))}
-      {/* Background tokens */}
-      {layoutLine.backgroundTokens?.map((token, idx) => (
-        <SkiaRevealToken
-          key={`bg-${idx}`}
-          token={token}
-          font={bgFont}
-          playbackPosition={playbackPosition}
-          lineStartTime={layoutLine.lineStartTime}
-          lineEndTime={layoutLine.lineEndTime}
-          isBackground={true}
-        />
-      ))}
-    </Group>
-  );
-});
-
-// ─── Per-token reveal (reactive via SharedValue) ────────────────────────────
-// ponytail: all rendering is purely derived from playbackPosition SharedValue.
-// Skia redraws affected nodes when any derived value changes. Zero-width clips
-// are GPU no-ops (no pixels drawn), so inactive tokens cost almost nothing.
-
-const SkiaRevealToken = memo(function SkiaRevealToken({
+const SkiaToken = memo(function SkiaToken({
   token,
   font,
+  fontSize,
+  lineHeight,
   playbackPosition,
-  lineStartTime,
-  lineEndTime,
+  isPlaying,
+  anchorPositionMs,
+  anchorMonotonicMs,
   isBackground,
 }: {
   token: LayoutToken;
   font: SkFont;
-  playbackPosition: SharedValue<number>;
-  lineStartTime: number;
-  lineEndTime: number;
+  fontSize: number;
+  lineHeight: number;
+  playbackPosition: number;
+  isPlaying: boolean;
+  anchorPositionMs: number;
+  anchorMonotonicMs: number;
   isBackground: boolean;
 }) {
-  const fontSize = font.getSize();
+  const progress = useSharedValue(
+    getSyllableProgress(playbackPosition, token.startTime, token.endTime),
+  );
 
-  const pendingColor = isBackground
-    ? "rgba(255,255,255,0.32)"
-    : COLOR_ACTIVE_PENDING;
-  const progressColor = isBackground
-    ? "rgba(255,255,255,0.47)"
-    : COLOR_ACTIVE_PROGRESS;
-
-  // Derived progress — recalculates each frame while playing
-  const progress = useDerivedValue(() => {
-    return getSyllableProgress(
-      playbackPosition.value,
+  // Drive progress with withTiming — same logic as syncRevealProgress in lyric-line.tsx
+  useEffect(() => {
+    const nextProgress = getSyllableProgress(
+      playbackPosition,
       token.startTime,
       token.endTime,
     );
+
+    if (!isPlaying || nextProgress >= 1) {
+      cancelAnimation(progress);
+      progress.value = nextProgress;
+      return;
+    }
+
+    const easing =
+      getGraphemeCount(token.text) <= 2
+        ? ReanimatedEasing.linear
+        : REVEAL_SWEEP_EASING;
+
+    if (playbackPosition < token.startTime) {
+      cancelAnimation(progress);
+      progress.value = nextProgress;
+      progress.value = withDelay(
+        Math.max(0, token.startTime - playbackPosition),
+        withTiming(1, {
+          duration: Math.max(1, token.endTime - token.startTime),
+          easing,
+        }),
+      );
+      return;
+    }
+
+    cancelAnimation(progress);
+    progress.value = withTiming(1, {
+      duration: Math.max(1, token.endTime - playbackPosition),
+      easing,
+    });
+  }, [
+    token.endTime,
+    token.startTime,
+    token.text,
+    isPlaying,
+    playbackPosition,
+    progress,
+  ]);
+
+  const pendingColor = isBackground ? COLOR_BG_PENDING : COLOR_ACTIVE_PENDING;
+  const progressColor = isBackground ? COLOR_BG_PROGRESS : COLOR_ACTIVE_PROGRESS;
+  const textY = token.y + fontSize; // Skia draws from baseline
+
+  // Derived clip rect — updates on UI thread as progress animates
+  const clipRect = useDerivedValue(() => {
+    const w = getRevealClipWidth(token.width, progress.value);
+    return rect(token.x, token.y, w, lineHeight);
   });
 
-  // Clip rect for progress reveal (zero-width when progress=0 → GPU no-op)
-  const progressClip = useDerivedValue(() => {
-    const w = getRevealClipWidth(token.width, progress.value, 0, 0);
-    return rect(token.x, token.y, w, fontSize * 1.4);
+  // Soft leading edge clip (slightly wider)
+  const softClipRect = useDerivedValue(() => {
+    // Soft edge is progress + small lead
+    const p = clamp01(progress.value);
+    const leadPx = isBackground ? 6 : 4;
+    const w = Math.min(token.width, token.width * p + leadPx);
+    return rect(token.x, token.y, w, lineHeight);
   });
 
-  // Soft edge clip (slightly wider for leading edge glow)
-  const softClip = useDerivedValue(() => {
-    const lead = isBackground ? 6 : 0;
-    const w = getRevealClipWidth(token.width, progress.value, lead, 0);
-    return rect(token.x, token.y, w, fontSize * 1.4);
-  });
-
-  // Token rise Y (subtle vertical movement during reveal)
+  // Subtle vertical rise during reveal
   const riseY = useDerivedValue(() => {
     const p = progress.value;
     const rise = isBackground
       ? 0.005 * fontSize * (1 - 2 * p)
       : 0.01 * fontSize * (1 - 5 * p);
-    return token.y + fontSize + rise;
+    return textY + rise;
   });
 
-  // Base text color — switches between pending (active line) and done/inactive
-  const baseColor = useDerivedValue(() => {
-    const pos = playbackPosition.value;
-    if (pos >= lineStartTime && pos < lineEndTime) return pendingColor;
-    if (pos >= lineEndTime) return COLOR_DONE;
-    return COLOR_INACTIVE;
-  });
-
-  // Sustain glow blur (0 when not applicable → Shadow is invisible)
-  const sustainBlur = useDerivedValue(() => {
+  // Sustain glow blur
+  const glowBlur = useDerivedValue(() => {
     if (token.sustainMode === "none") return 0;
     const p = progress.value;
     if (p <= 0 || p >= 1) return 0;
@@ -633,16 +340,16 @@ const SkiaRevealToken = memo(function SkiaRevealToken({
 
   return (
     <Group>
-      {/* Base text: pending/inactive/done color */}
+      {/* Base: pending text */}
       <SkiaText
         x={token.x}
         y={riseY}
         text={token.text}
         font={font}
-        color={baseColor}
+        color={pendingColor}
       />
-      {/* Progress reveal: clipped sweep (zero-width clip = no draw) */}
-      <Group clip={progressClip}>
+      {/* Progress: clipped revealed text */}
+      <Group clip={clipRect}>
         <SkiaText
           x={token.x}
           y={riseY}
@@ -651,9 +358,9 @@ const SkiaRevealToken = memo(function SkiaRevealToken({
           color={progressColor}
         />
       </Group>
-      {/* Soft leading edge (primary only) */}
+      {/* Soft leading edge */}
       {!isBackground && (
-        <Group clip={softClip} opacity={0.35}>
+        <Group clip={softClipRect} opacity={0.35}>
           <SkiaText
             x={token.x}
             y={riseY}
@@ -663,13 +370,13 @@ const SkiaRevealToken = memo(function SkiaRevealToken({
           />
         </Group>
       )}
-      {/* Sustain glow (blur=0 when inactive → invisible) */}
+      {/* Sustain glow */}
       {token.sustainMode !== "none" && (
-        <Group clip={progressClip} layer>
+        <Group clip={clipRect} layer>
           <Shadow
             dx={0}
             dy={0}
-            blur={sustainBlur}
+            blur={glowBlur}
             color="rgba(255,255,255,0.24)"
           />
           <SkiaText
@@ -683,15 +390,4 @@ const SkiaRevealToken = memo(function SkiaRevealToken({
       )}
     </Group>
   );
-});
-
-// ─── Styles ─────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  canvas: {
-    flex: 1,
-  },
 });

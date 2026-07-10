@@ -26,6 +26,7 @@ import {
 import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 import type { LyricLine as LyricLineType, LyricSyllable } from "@/types/bridge";
+import { SkiaRevealLine } from "./skia-lyrics-canvas";
 
 const IDLE_PLAYBACK_SLICE = {
   bgStillActive: false,
@@ -1465,7 +1466,18 @@ export const LyricLine = memo(function LyricLine({
                 alignRight && (styles.lineFlowOpposite as ViewStyle),
               ] as ViewStyle[]}
             >
-              {syllableGroups.map((group, groupIdx) => (
+              {/* ponytail: Skia reveal for active lines — single Canvas replaces stacked Views */}
+              {shouldUseNativeRevealTree && isActive && laneWidthPx > 0 ? (
+                <SkiaRevealLine
+                  syllables={line.syllables}
+                  playbackPosition={nativeRevealPlaybackPosition}
+                  isPlaying={shouldAnimateRevealSweep}
+                  anchorPositionMs={anchorPositionMs}
+                  anchorMonotonicMs={anchorMonotonicMs}
+                  containerWidth={laneWidthPx}
+                  fontScale={fontScale}
+                />
+              ) : syllableGroups.map((group, groupIdx) => (
                 <View
                   // Group syllables into a flex item, then wrap only at safe clusters.
                   key={`${line.lineStartTime}-word-${groupIdx}`}
