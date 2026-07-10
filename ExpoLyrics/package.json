@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "postinstall": "node ./scripts/apply-live-activity-native-patches.js"
+    "postinstall": "node ./scripts/apply-live-activity-native-patches.js && node ./scripts/patch-skia.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -19,6 +19,7 @@
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "@shopify/flash-list": "^2.3.1",
+    "@shopify/react-native-skia": "^2.6.9",
     "expo": "~54.0.33",
     "expo-blur": "^15.0.8",
     "expo-build-properties": "~1.0.10",

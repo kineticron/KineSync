@@ -51,6 +51,7 @@ import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine as LyricLineType } from "@/types/bridge";
 
 import { LyricLine } from "./lyric-line";
+import { SkiaLyricsCanvas } from "./skia-lyrics-canvas";
 
 const LONG_PAUSE_THRESHOLD_MS = 3000;
 const PAUSE_DOTS_EARLY_EXIT_MS = 500;
@@ -2293,6 +2294,21 @@ export function LyricsView({
     songwriters,
   ]);
 
+  // ponytail: Skia canvas for ALL states — renders debug when no lyrics, renders lyrics when available
+  return (
+    <View style={[styles.container, landscapeMode && styles.containerLandscape]}>
+      <SkiaLyricsCanvas
+        autoFollowEnabled={autoFollowEnabled}
+        onAutoFollowChange={onAutoFollowChange}
+        onUserInteraction={onUserInteraction}
+        onLinePress={onLinePress}
+        fontScale={fontScale}
+        landscapeMode={landscapeMode}
+      />
+    </View>
+  );
+
+  /* ponytail: legacy empty state — kept for reference
   if (!lyrics.length) {
     const title = instrumental ? "This song is an instrumental" : "No synced lyrics yet";
     const iconName = instrumental ? "musical-notes" : "document-text";
@@ -2332,6 +2348,7 @@ export function LyricsView({
       </View>
     );
   }
+  */
 
   if (lyricsTimingMode === "static") {
     // ponytail: FlashList instead of ScrollView+.map() — virtualizes long static lyrics
@@ -2417,6 +2434,24 @@ export function LyricsView({
     );
   }
 
+  // ponytail: Skia canvas replaces the FlashList for synced lyrics rendering.
+  // All reveal sweeps + scroll happen in one GPU draw call.
+  return (
+    <View style={[styles.container, landscapeMode && styles.containerLandscape]}>
+      <SkiaLyricsCanvas
+        autoFollowEnabled={autoFollowEnabled}
+        onAutoFollowChange={onAutoFollowChange}
+        onUserInteraction={onUserInteraction}
+        onLinePress={onLinePress}
+        fontScale={fontScale}
+        landscapeMode={landscapeMode}
+      />
+    </View>
+  );
+
+  // ponytail: legacy FlashList path kept below for reference / fallback.
+  // Delete once Skia canvas is validated.
+  /* eslint-disable no-unreachable */
   return (
     <View style={[styles.container, landscapeMode && styles.containerLandscape]}>
       <ReanimatedFlashList
