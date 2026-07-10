@@ -26,7 +26,7 @@ import {
 import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 import type { LyricLine as LyricLineType, LyricSyllable } from "@/types/bridge";
-import { SkiaRevealLine, canRenderWithSkia } from "./skia-lyrics-canvas";
+import { SkiaRevealLine } from "./skia-lyrics-canvas";
 
 const IDLE_PLAYBACK_SLICE = {
   bgStillActive: false,
@@ -1467,8 +1467,8 @@ export const LyricLine = memo(function LyricLine({
               ] as ViewStyle[]}
             >
               {/* ponytail: Skia reveal for active + prewarm lines — single Canvas replaces stacked Views.
-                  Falls back to View-based tokens for non-Latin scripts (CJK, Arabic, etc.) */}
-              {shouldUseNativeRevealTree && laneWidthPx > 0 && canRenderWithSkia(line.syllables) ? (
+                  Paragraph API handles all scripts via system font fallback. */}
+              {shouldUseNativeRevealTree && laneWidthPx > 0 ? (
                 <SkiaRevealLine
                   syllables={line.syllables}
                   wordGroups={syllableGroups}
