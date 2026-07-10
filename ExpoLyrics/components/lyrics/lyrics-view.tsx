@@ -744,6 +744,7 @@ function getAutoScrollTargetRange(
   const clampIndex = (index: number) =>
     Math.max(0, Math.min(index, lyrics.length - 1));
 
+  // ponytail: pause → keep prev line, dots, and next line all visible
   if (windowState.isLongPause) {
     const startIndex = clampIndex(
       windowState.pauseAfterIndex >= 0
@@ -752,10 +753,15 @@ function getAutoScrollTargetRange(
           ? windowState.pauseBeforeIndex - 1
           : 0,
     );
-    const endIndex =
-      windowState.pauseBeforeIndex >= 0
-        ? clampIndex(windowState.pauseBeforeIndex + 1)
-        : startIndex;
+    let endIndex: number;
+    if (windowState.pauseBeforeIndex >= 0) {
+      endIndex = clampIndex(windowState.pauseBeforeIndex);
+    } else if (windowState.pauseAfterIndex >= 0) {
+      // Mid-song pause: include the next line after the pause
+      endIndex = clampIndex(windowState.pauseAfterIndex + 1);
+    } else {
+      endIndex = startIndex;
+    }
     return { startIndex, endIndex };
   }
 
@@ -779,6 +785,8 @@ function getAutoScrollTargetRange(
   }
 
   // Single primary line: stay on it until it ends, then scroll to the next line.
+  // ponytail: proactively include the next line when it's about to start (within 300ms)
+  // so scroll fires before the Skia reveal begins drawing on it
   if (activeStart >= 0 && activeEnd === activeStart) {
     if (activeStart >= lyrics.length) {
       return null;
@@ -788,6 +796,14 @@ function getAutoScrollTargetRange(
       return null;
     }
     if (playbackPosition < line.lineEndTime) {
+      const nextIndex = activeStart + 1;
+      if (nextIndex < lyrics.length) {
+        const nextLine = lyrics[nextIndex];
+        const timeUntilNext = nextLine.lineStartTime - playbackPosition;
+        if (timeUntilNext <= 300 && timeUntilNext >= 0) {
+          return { startIndex: activeStart, endIndex: clampIndex(nextIndex) };
+        }
+      }
       return { startIndex: activeStart, endIndex: activeStart };
     }
     const nextIndex = activeStart + 1;

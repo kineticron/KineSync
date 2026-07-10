@@ -37,6 +37,8 @@ import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 
 const BASE_FONT_SIZE = 32;
 const BASE_LINE_HEIGHT = 42;
+// ponytail: match lyric-line.tsx oversized rendering (rendered at SCALE_ACTIVE, scaled down by container)
+const SCALE_ACTIVE = 1.05;
 const BG_FONT_SIZE = BASE_FONT_SIZE * 0.62;
 const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.62;
 
@@ -153,8 +155,8 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
   fontScale = 1,
 }: SkiaRevealLineProps) {
   const fontSize = isBackground
-    ? BG_FONT_SIZE * fontScale
-    : BASE_FONT_SIZE * fontScale;
+    ? BG_FONT_SIZE * SCALE_ACTIVE * fontScale
+    : BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
 
   const pendingColor = isBackground ? COLOR_BG_PENDING : COLOR_ACTIVE_PENDING;
   const progressColor = isBackground ? COLOR_BG_PROGRESS : COLOR_ACTIVE_PROGRESS;
@@ -197,12 +199,19 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
   // Build two paragraphs: one pending color, one progress color
   // System font manager handles all script fallback automatically
   const { pendingPara, progressPara, layouts, canvasHeight } = useMemo(() => {
+    // ponytail: heightMultiplier matches RN lineHeight/fontSize ratio
+    const lineHeight = isBackground
+      ? BG_LINE_HEIGHT * SCALE_ACTIVE * fontScale
+      : BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
+    const heightMultiplier = lineHeight / fontSize;
+
     const buildPara = (color: string) => {
       const textStyle = {
         fontSize,
         fontFamilies: ["System"],
         color: Skia.Color(color),
         fontStyle: { weight: 700 as const },
+        heightMultiplier,
       };
       const builder = Skia.ParagraphBuilder.Make({ textStyle });
       builder.addText(paragraphText);
@@ -339,9 +348,10 @@ const SkiaRevealToken = memo(function SkiaRevealToken({
     return rect(syllableRect.x, syllableRect.y, w, syllableRect.height);
   });
 
-  // Soft leading edge (slightly wider clip)
+  // Soft leading edge (slightly wider clip) — only visible once progress > 0
   const softClipRect = useDerivedValue(() => {
     const p = clamp01(progress.value);
+    if (p <= 0) return rect(0, 0, 0, 0);
     const leadPx = isBackground ? 6 : 4;
     const w = Math.min(syllableWidth, syllableWidth * p + leadPx);
     return rect(syllableRect.x, syllableRect.y, w, syllableRect.height);
