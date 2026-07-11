@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { StyleSheet, View } from "react-native";
 import {
   Canvas,
   Group,
@@ -7,6 +7,7 @@ import {
   Shadow,
   Skia,
   TextAlign,
+  usePathValue,
   rect,
   vec,
   type SkParagraph,
@@ -17,11 +18,11 @@ import {
   Easing as ReanimatedEasing,
   useDerivedValue,
   useSharedValue,
-  withDelay,
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
 
+import { LYRICS_FONT_FAMILY } from "@/constants/lyrics-typography";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 import type { LyricSyllable } from "@/types/bridge";
 
@@ -40,9 +41,6 @@ const SUSTAIN_LONG_MS = 1200;
 const SUSTAIN_GLOW_RADIUS_MAX = 7;
 const EFFECT_PADDING = 12;
 const WORD_JOINER = "\u2060";
-const ZERO_WIDTH_BREAK = "\u200b";
-const NO_BREAK_SPACE = "\u00a0";
-const REVEAL_SWEEP_EASING = ReanimatedEasing.out(ReanimatedEasing.ease);
 
 type SustainMode = "none" | "solo" | "letter-sweep";
 
@@ -51,6 +49,8 @@ type GlyphLayout = {
   revealStart: number;
   charIndex: number;
   totalChars: number;
+  paragraph: SkParagraph;
+  paragraphWidth: number;
 };
 
 type SyllableLayout = {
@@ -64,13 +64,14 @@ type SyllableLayout = {
   glyphs: GlyphLayout[];
 };
 
-type PendingSyllableLayout = Omit<
-  SyllableLayout,
-  "rects" | "rectRevealStarts" | "revealWidth" | "glyphs"
-> & {
+type PendingSyllableLayout = {
   textStart: number;
   textEnd: number;
   glyphRanges: { start: number; end: number }[];
+  startTime: number;
+  endTime: number;
+  durationMs: number;
+  sustainMode: SustainMode;
 };
 
 export type WordGroup = {
@@ -87,7 +88,7 @@ export type SkiaRevealLineProps = {
   containerWidth: number;
   fontScale?: number;
   alignRight?: boolean;
-  preventClusterWrapping?: boolean;
+  revealEnabled?: boolean;
 };
 
 function clamp01(value: number) {
@@ -121,8 +122,19 @@ function getSyllableProgress(
   endTime: number,
 ) {
   "worklet";
-  const duration = Math.max(1, endTime - startTime);
-  return clamp01((positionMs - startTime) / duration);
+  if (positionMs <= startTime) return 0;
+  if (positionMs >= endTime) return 1;
+  return (positionMs - startTime) / Math.max(1, endTime - startTime);
+}
+
+function getMonotonicNow() {
+  if (
+    typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+  ) {
+    return performance.now();
+  }
+  return Date.now();
 }
 
 function getSustainMode(text: string, durationMs: number): SustainMode {
@@ -170,36 +182,24 @@ function getSustainVisuals(
           smoothstep((1 - progress) / 0.16)
         );
       })();
-  const easedIntensity = smoothstep(activeIntensity);
+  const intensity = smoothstep(activeIntensity);
   const maxScaleBoost =
     durationMs >= SUSTAIN_LONG_MS
       ? SUSTAIN_LONG_SCALE_BOOST
       : SUSTAIN_SHORT_SCALE_BOOST;
-  const scale = 1 + maxScaleBoost * easedIntensity;
-  const opacity = interpolate(easedIntensity, [0, 0.2, 1], [0.82, 0.92, 1]);
+  const scale = 1 + maxScaleBoost * intensity;
 
   return {
+    intensity,
     scale,
-    opacity,
     translateY:
-      -0.018 * fontSize * easedIntensity - (scale - 1) * lineHeight * 0.5,
+      -0.018 * fontSize * intensity - (scale - 1) * lineHeight * 0.5,
     glowRadius: interpolate(
       smoothstep(glowIntensity),
       [0, 0.12, 1],
       [0, 0, SUSTAIN_GLOW_RADIUS_MAX],
     ),
   };
-}
-
-function getTokenRise(progress: number, fontSize: number) {
-  "worklet";
-  return interpolate(clamp01(progress), [0, 1], [0.01 * fontSize, -0.04 * fontSize]);
-}
-
-function getCompletedOpacity(progress: number, baseOpacity: number) {
-  "worklet";
-  const completionBlend = smoothstep((progress - 0.94) / 0.06);
-  return baseOpacity + (1 - baseOpacity) * completionBlend;
 }
 
 function offsetRect(source: SkRect) {
@@ -226,14 +226,16 @@ function shouldAddLeadingGap(
   const previous = groups[groupIndex - 1];
   if (previous.needsTrailingGap) return true;
   const previousIndex = previous.syllableIndexes.at(-1);
-  return previousIndex !== undefined && /\s$/u.test(syllables[previousIndex]?.text ?? "");
+  return (
+    previousIndex !== undefined &&
+    /\s$/u.test(syllables[previousIndex]?.text ?? "")
+  );
 }
 
 function buildParagraphText(
   syllables: LyricSyllable[],
   groups: WordGroup[],
   alignRight: boolean,
-  preventClusterWrapping: boolean,
 ) {
   let paragraphText = "";
   const layouts: PendingSyllableLayout[] = [];
@@ -253,10 +255,7 @@ function buildParagraphText(
         paragraphText += WORD_JOINER;
       }
       const start = paragraphText.length;
-      paragraphText +=
-        preventClusterWrapping && /\s/u.test(grapheme)
-          ? NO_BREAK_SPACE
-          : grapheme;
+      paragraphText += grapheme;
       glyphRanges.push({ start, end: paragraphText.length });
     });
 
@@ -276,16 +275,18 @@ function buildParagraphText(
     if (alignRight && shouldAddLeadingGap(groups, syllables, groupIndex)) {
       paragraphText += " ";
     }
+
     const clusters = getGroupClusters(group);
     clusters.forEach((cluster, clusterIndex) => {
       cluster.forEach((syllableIndex, syllableIndexInCluster) => {
         if (syllableIndexInCluster > 0) paragraphText += WORD_JOINER;
         appendSyllable(syllableIndex);
       });
-      if (clusterIndex < clusters.length - 1) {
-        paragraphText += preventClusterWrapping ? WORD_JOINER : ZERO_WIDTH_BREAK;
-      }
+      // A semantic word is indivisible. Syllable and punctuation clusters are
+      // joined explicitly so Paragraph can only wrap at real inter-word gaps.
+      if (clusterIndex < clusters.length - 1) paragraphText += WORD_JOINER;
     });
+
     if (!alignRight && group.needsTrailingGap) paragraphText += " ";
   });
 
@@ -300,7 +301,7 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
   containerWidth,
   fontScale = 1,
   alignRight = false,
-  preventClusterWrapping = false,
+  revealEnabled = true,
 }: SkiaRevealLineProps) {
   const fontSize = BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
   const lineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
@@ -315,51 +316,61 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
     [syllables, wordGroups],
   );
   const { paragraphText, layouts: pendingLayouts } = useMemo(
-    () =>
-      buildParagraphText(
-        syllables,
-        groups,
-        alignRight,
-        preventClusterWrapping,
-      ),
-    [alignRight, groups, preventClusterWrapping, syllables],
+    () => buildParagraphText(syllables, groups, alignRight),
+    [alignRight, groups, syllables],
   );
 
   const { pendingParagraph, progressParagraph, layouts, paragraphHeight } =
     useMemo(() => {
-      const buildParagraph = (color: string) => {
-        const fontFamilies = [
-          Platform.OS === "android" ? "sans-serif" : "System",
-        ];
-        const fontStyle = { weight: 700 as const };
-        const heightMultiplier = lineHeight / fontSize;
-        const textStyle = {
-          color: Skia.Color(color),
+      const fontFamilies = [LYRICS_FONT_FAMILY];
+      const fontStyle = { weight: 700 as const };
+      const heightMultiplier = lineHeight / fontSize;
+      const paragraphStyle = {
+        strutStyle: {
+          strutEnabled: true,
           fontFamilies,
-          fontSize,
           fontStyle,
+          fontSize,
           heightMultiplier,
-        };
+          forceStrutHeight: true,
+        },
+      };
+      const buildParagraph = (
+        text: string,
+        color: string,
+        width: number,
+        textAlign: TextAlign,
+      ) => {
         const builder = Skia.ParagraphBuilder.Make({
-          textAlign: alignRight ? TextAlign.Right : TextAlign.Left,
-          strutStyle: {
-            strutEnabled: true,
+          ...paragraphStyle,
+          textAlign,
+          textStyle: {
+            color: Skia.Color(color),
             fontFamilies,
-            fontStyle,
             fontSize,
+            fontStyle,
             heightMultiplier,
-            forceStrutHeight: true,
           },
-          textStyle,
         });
-        builder.addText(paragraphText);
+        builder.addText(text);
         const paragraph = builder.build();
-        paragraph.layout(containerWidth);
+        paragraph.layout(width);
         return paragraph;
       };
 
-      const pending = buildParagraph(COLOR_ACTIVE_PENDING);
-      const progress = buildParagraph(COLOR_ACTIVE_PROGRESS);
+      const textAlign = alignRight ? TextAlign.Right : TextAlign.Left;
+      const pending = buildParagraph(
+        paragraphText,
+        COLOR_ACTIVE_PENDING,
+        containerWidth,
+        textAlign,
+      );
+      const progress = buildParagraph(
+        paragraphText,
+        COLOR_ACTIVE_PROGRESS,
+        containerWidth,
+        textAlign,
+      );
       const resolvedLayouts = pendingLayouts.map((layout) => {
         const rects = pending.getRectsForRange(layout.textStart, layout.textEnd);
         const rectRevealStarts: number[] = [];
@@ -369,25 +380,43 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
           revealWidth += layoutRect.width;
         });
 
-        const glyphs = layout.glyphRanges.flatMap((range, charIndex) =>
-          pending.getRectsForRange(range.start, range.end).map((glyphRect) => {
-            const lineIndex = rects.findIndex(
-              (layoutRect) =>
-                glyphRect.y >= layoutRect.y - 0.5 &&
-                glyphRect.y < layoutRect.y + layoutRect.height + 0.5,
-            );
-            const safeLineIndex = Math.max(0, lineIndex);
-            const lineRect = rects[safeLineIndex] ?? glyphRect;
-            return {
-              rect: glyphRect,
-              revealStart:
-                (rectRevealStarts[safeLineIndex] ?? 0) +
-                Math.max(0, glyphRect.x - lineRect.x),
-              charIndex,
-              totalChars: layout.glyphRanges.length,
-            };
-          }),
-        );
+        const glyphs =
+          layout.sustainMode === "none"
+            ? []
+            : layout.glyphRanges.flatMap((range, charIndex) =>
+                pending
+                  .getRectsForRange(range.start, range.end)
+                  .map((glyphRect) => {
+                    const lineIndex = rects.findIndex(
+                      (layoutRect) =>
+                        glyphRect.y >= layoutRect.y - 0.5 &&
+                        glyphRect.y <
+                          layoutRect.y + layoutRect.height + 0.5,
+                    );
+                    const safeLineIndex = Math.max(0, lineIndex);
+                    const lineRect = rects[safeLineIndex] ?? glyphRect;
+                    const glyphText = paragraphText.slice(range.start, range.end);
+                    const paragraphWidth = Math.max(
+                      glyphRect.width + EFFECT_PADDING,
+                      fontSize * 1.5,
+                    );
+                    return {
+                      rect: glyphRect,
+                      revealStart:
+                        (rectRevealStarts[safeLineIndex] ?? 0) +
+                        Math.max(0, glyphRect.x - lineRect.x),
+                      charIndex,
+                      totalChars: layout.glyphRanges.length,
+                      paragraph: buildParagraph(
+                        glyphText,
+                        COLOR_ACTIVE_PROGRESS,
+                        paragraphWidth,
+                        TextAlign.Left,
+                      ),
+                      paragraphWidth,
+                    };
+                  }),
+              );
 
         return {
           startTime: layout.startTime,
@@ -407,7 +436,111 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
         layouts: resolvedLayouts,
         paragraphHeight: pending.getHeight(),
       };
-    }, [alignRight, containerWidth, fontSize, lineHeight, paragraphText, pendingLayouts]);
+    }, [
+      alignRight,
+      containerWidth,
+      fontSize,
+      lineHeight,
+      paragraphText,
+      pendingLayouts,
+    ]);
+
+  const revealGeometry = useMemo(
+    () =>
+      layouts.map((layout) => ({
+        startTime: layout.startTime,
+        endTime: layout.endTime,
+        revealWidth: layout.revealWidth,
+        rects: layout.rects.map((layoutRect, index) => ({
+          x: layoutRect.x,
+          y: layoutRect.y,
+          width: layoutRect.width,
+          height: layoutRect.height,
+          revealStart: layout.rectRevealStarts[index] ?? 0,
+        })),
+      })),
+    [layouts],
+  );
+  const linePosition = useSharedValue(playbackPosition);
+  const syncRef = useRef({
+    position: playbackPosition,
+    monotonicMs: getMonotonicNow(),
+  });
+  const timelineEnd = useMemo(
+    () =>
+      Math.max(
+        playbackPosition,
+        ...syllables.map((syllable) => Number(syllable.endTime) || 0),
+      ),
+    [playbackPosition, syllables],
+  );
+
+  useEffect(() => {
+    const now = getMonotonicNow();
+    const previous = syncRef.current;
+    const expectedPosition =
+      previous.position + (isPlaying ? now - previous.monotonicMs : 0);
+    const discontinuity = Math.abs(playbackPosition - expectedPosition);
+    syncRef.current = { position: playbackPosition, monotonicMs: now };
+
+    if (!revealEnabled || !isPlaying || timelineEnd <= playbackPosition) {
+      cancelAnimation(linePosition);
+      linePosition.value = playbackPosition;
+      return;
+    }
+
+    // Preserve the running presentation value for ordinary bridge clock
+    // corrections. Reset only for a real seek/discontinuity.
+    if (discontinuity >= 220) {
+      cancelAnimation(linePosition);
+      linePosition.value = playbackPosition;
+    }
+    linePosition.value = withTiming(timelineEnd, {
+      duration: Math.max(1, timelineEnd - playbackPosition),
+      easing: ReanimatedEasing.linear,
+    });
+  }, [
+    isPlaying,
+    linePosition,
+    playbackPosition,
+    revealEnabled,
+    timelineEnd,
+  ]);
+
+  const revealPath = usePathValue((path) => {
+    "worklet";
+    if (!revealEnabled) return;
+
+    for (const syllable of revealGeometry) {
+      const progress = getSyllableProgress(
+        linePosition.value,
+        syllable.startTime,
+        syllable.endTime,
+      );
+      const revealedWidth = syllable.revealWidth * progress;
+      for (const layoutRect of syllable.rects) {
+        const width = Math.max(
+          0,
+          Math.min(
+            layoutRect.width,
+            revealedWidth - layoutRect.revealStart,
+          ),
+        );
+        // Do not add zero-width geometry: antialiasing a degenerate rect can
+        // leave a one-pixel white hairline before the syllable starts.
+        if (width > 0.01) {
+          path.addRect(
+            rect(
+              layoutRect.x + EFFECT_PADDING,
+              layoutRect.y + EFFECT_PADDING,
+              width,
+              layoutRect.height,
+            ),
+          );
+        }
+      }
+    }
+  });
 
   return (
     <View style={{ width: containerWidth, height: paragraphHeight }}>
@@ -422,228 +555,58 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
           },
         ]}
       >
-        {layouts.map((layout, index) => (
-          <SkiaRevealToken
-            key={`${layout.startTime}-${index}`}
-            layout={layout}
-            pendingParagraph={pendingParagraph}
-            progressParagraph={progressParagraph}
-            paragraphWidth={containerWidth}
-            playbackPosition={playbackPosition}
-            isPlaying={isPlaying}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-          />
-        ))}
+        <SkiaParagraph
+          paragraph={pendingParagraph}
+          x={EFFECT_PADDING}
+          y={EFFECT_PADDING}
+          width={containerWidth}
+        />
+        {revealEnabled && (
+          <Group clip={revealPath}>
+            <SkiaParagraph
+              paragraph={progressParagraph}
+              x={EFFECT_PADDING}
+              y={EFFECT_PADDING}
+              width={containerWidth}
+            />
+          </Group>
+        )}
+        {revealEnabled &&
+          layouts.flatMap((layout, layoutIndex) =>
+            layout.sustainMode === "none"
+              ? []
+              : layout.glyphs.map((glyph, glyphIndex) => (
+                  <SkiaSustainGlyph
+                    key={`${layoutIndex}-${glyphIndex}-${glyph.rect.x}-${glyph.rect.y}`}
+                    glyph={glyph}
+                    revealWidth={layout.revealWidth}
+                    durationMs={layout.durationMs}
+                    sustainMode={
+                      layout.sustainMode as Exclude<SustainMode, "none">
+                    }
+                    linePosition={linePosition}
+                    startTime={layout.startTime}
+                    endTime={layout.endTime}
+                    fontSize={fontSize}
+                    lineHeight={lineHeight}
+                  />
+                )),
+          )}
       </Canvas>
     </View>
   );
 });
 
-const SkiaRevealToken = memo(function SkiaRevealToken({
-  layout,
-  pendingParagraph,
-  progressParagraph,
-  paragraphWidth,
-  playbackPosition,
-  isPlaying,
-  fontSize,
-  lineHeight,
-}: {
-  layout: SyllableLayout;
-  pendingParagraph: SkParagraph;
-  progressParagraph: SkParagraph;
-  paragraphWidth: number;
-  playbackPosition: number;
-  isPlaying: boolean;
-  fontSize: number;
-  lineHeight: number;
-}) {
-  const progress = useSharedValue(
-    getSyllableProgress(playbackPosition, layout.startTime, layout.endTime),
-  );
 
-  useEffect(() => {
-    const nextProgress = getSyllableProgress(
-      playbackPosition,
-      layout.startTime,
-      layout.endTime,
-    );
-    if (!isPlaying || nextProgress >= 1) {
-      cancelAnimation(progress);
-      progress.value = nextProgress;
-      return;
-    }
-    const easing =
-      layout.glyphs.length <= 2
-        ? ReanimatedEasing.linear
-        : REVEAL_SWEEP_EASING;
-    cancelAnimation(progress);
-    progress.value = nextProgress;
-    if (playbackPosition < layout.startTime) {
-      progress.value = withDelay(
-        Math.max(0, layout.startTime - playbackPosition),
-        withTiming(1, {
-          duration: layout.durationMs,
-          easing,
-        }),
-      );
-      return;
-    }
-    progress.value = withTiming(1, {
-      duration: Math.max(1, layout.endTime - playbackPosition),
-      easing,
-    });
-  }, [
-    isPlaying,
-    layout.durationMs,
-    layout.endTime,
-    layout.glyphs.length,
-    layout.startTime,
-    playbackPosition,
-    progress,
-  ]);
-
-  if (layout.rects.length === 0) return null;
-
-  if (layout.sustainMode !== "none" && layout.glyphs.length > 0) {
-    return (
-      <Group>
-        {layout.glyphs.map((glyph, index) => (
-          <SkiaSustainGlyph
-            key={`${glyph.rect.x}-${glyph.rect.y}-${index}`}
-            glyph={glyph}
-            revealWidth={layout.revealWidth}
-            durationMs={layout.durationMs}
-            sustainMode={layout.sustainMode as Exclude<SustainMode, "none">}
-            progress={progress}
-            pendingParagraph={pendingParagraph}
-            progressParagraph={progressParagraph}
-            paragraphWidth={paragraphWidth}
-            fontSize={fontSize}
-            lineHeight={lineHeight}
-          />
-        ))}
-      </Group>
-    );
-  }
-
-  return (
-    <Group>
-      {layout.rects.map((layoutRect, index) => (
-        <SkiaRevealFragment
-          key={`${layoutRect.x}-${layoutRect.y}-${index}`}
-          layoutRect={layoutRect}
-          revealStart={layout.rectRevealStarts[index] ?? 0}
-          revealWidth={layout.revealWidth}
-          progress={progress}
-          pendingParagraph={pendingParagraph}
-          progressParagraph={progressParagraph}
-          paragraphWidth={paragraphWidth}
-          fontSize={fontSize}
-        />
-      ))}
-    </Group>
-  );
-});
-
-function useRevealClip(
-  layoutRect: SkRect,
-  revealStart: number,
-  revealWidth: number,
-  progress: SharedValue<number>,
-  leadWidth = 0,
-) {
-  return useDerivedValue(() => {
-    const revealed = revealWidth * clamp01(progress.value) + leadWidth;
-    const width = Math.max(
-      0,
-      Math.min(layoutRect.width, revealed - revealStart),
-    );
-    return rect(
-      layoutRect.x + EFFECT_PADDING,
-      layoutRect.y + EFFECT_PADDING,
-      width,
-      layoutRect.height,
-    );
-  });
-}
-
-const SkiaRevealFragment = memo(function SkiaRevealFragment({
-  layoutRect,
-  revealStart,
-  revealWidth,
-  progress,
-  pendingParagraph,
-  progressParagraph,
-  paragraphWidth,
-  fontSize,
-}: {
-  layoutRect: SkRect;
-  revealStart: number;
-  revealWidth: number;
-  progress: SharedValue<number>;
-  pendingParagraph: SkParagraph;
-  progressParagraph: SkParagraph;
-  paragraphWidth: number;
-  fontSize: number;
-}) {
-  const progressClip = useRevealClip(
-    layoutRect,
-    revealStart,
-    revealWidth,
-    progress,
-  );
-  const softClip = useRevealClip(
-    layoutRect,
-    revealStart,
-    revealWidth,
-    progress,
-    3,
-  );
-  const transform = useDerivedValue(() => [
-    { translateY: getTokenRise(progress.value, fontSize) },
-  ]);
-
-  return (
-    <Group transform={transform}>
-      <Group clip={offsetRect(layoutRect)}>
-        <SkiaParagraph
-          paragraph={pendingParagraph}
-          x={EFFECT_PADDING}
-          y={EFFECT_PADDING}
-          width={paragraphWidth}
-        />
-      </Group>
-      <Group clip={softClip} opacity={0.35}>
-        <SkiaParagraph
-          paragraph={progressParagraph}
-          x={EFFECT_PADDING}
-          y={EFFECT_PADDING}
-          width={paragraphWidth}
-        />
-      </Group>
-      <Group clip={progressClip}>
-        <SkiaParagraph
-          paragraph={progressParagraph}
-          x={EFFECT_PADDING}
-          y={EFFECT_PADDING}
-          width={paragraphWidth}
-        />
-      </Group>
-    </Group>
-  );
-});
 
 const SkiaSustainGlyph = memo(function SkiaSustainGlyph({
   glyph,
   revealWidth,
   durationMs,
   sustainMode,
-  progress,
-  pendingParagraph,
-  progressParagraph,
-  paragraphWidth,
+  linePosition,
+  startTime,
+  endTime,
   fontSize,
   lineHeight,
 }: {
@@ -651,23 +614,19 @@ const SkiaSustainGlyph = memo(function SkiaSustainGlyph({
   revealWidth: number;
   durationMs: number;
   sustainMode: Exclude<SustainMode, "none">;
-  progress: SharedValue<number>;
-  pendingParagraph: SkParagraph;
-  progressParagraph: SkParagraph;
-  paragraphWidth: number;
+  linePosition: SharedValue<number>;
+  startTime: number;
+  endTime: number;
   fontSize: number;
   lineHeight: number;
 }) {
   const glyphRect = offsetRect(glyph.rect);
-  const progressClip = useRevealClip(
-    glyph.rect,
-    glyph.revealStart,
-    revealWidth,
-    progress,
+  const progress = useDerivedValue(() =>
+    getSyllableProgress(linePosition.value, startTime, endTime),
   );
   const transform = useDerivedValue(() => {
     const visuals = getSustainVisuals(
-      clamp01(progress.value),
+      progress.value,
       glyph.charIndex,
       glyph.totalChars,
       durationMs,
@@ -676,13 +635,13 @@ const SkiaSustainGlyph = memo(function SkiaSustainGlyph({
       lineHeight,
     );
     return [
-      { translateY: getTokenRise(progress.value, fontSize) + visuals.translateY },
+      { translateY: visuals.translateY },
       { scale: visuals.scale },
     ];
   });
   const opacity = useDerivedValue(() => {
     const visuals = getSustainVisuals(
-      clamp01(progress.value),
+      progress.value,
       glyph.charIndex,
       glyph.totalChars,
       durationMs,
@@ -690,24 +649,16 @@ const SkiaSustainGlyph = memo(function SkiaSustainGlyph({
       fontSize,
       lineHeight,
     );
-    return getCompletedOpacity(progress.value, visuals.opacity);
-  });
-  const pendingOpacity = useDerivedValue(() => {
-    const visuals = getSustainVisuals(
-      clamp01(progress.value),
-      glyph.charIndex,
-      glyph.totalChars,
-      durationMs,
-      sustainMode === "solo",
-      fontSize,
-      lineHeight,
+    const revealedWidth = revealWidth * clamp01(progress.value);
+    const glyphReveal = clamp01(
+      (revealedWidth - glyph.revealStart) / Math.max(1, glyph.rect.width),
     );
-    return visuals.opacity * clamp01((1 - progress.value) / 0.035);
+    return visuals.intensity * glyphReveal * 0.72;
   });
   const glowBlur = useDerivedValue(
     () =>
       getSustainVisuals(
-        clamp01(progress.value),
+        progress.value,
         glyph.charIndex,
         glyph.totalChars,
         durationMs,
@@ -718,29 +669,27 @@ const SkiaSustainGlyph = memo(function SkiaSustainGlyph({
   );
 
   return (
-    <Group origin={vec(glyphRect.x + glyphRect.width / 2, glyphRect.y + glyphRect.height / 2)} transform={transform}>
-      <Group opacity={pendingOpacity} layer>
-        <Shadow dx={0} dy={0} blur={glowBlur} color="rgba(255,255,255,0.24)" />
-        <Group clip={glyphRect}>
-          <SkiaParagraph
-            paragraph={pendingParagraph}
-            x={EFFECT_PADDING}
-            y={EFFECT_PADDING}
-            width={paragraphWidth}
-          />
-        </Group>
-      </Group>
-      <Group opacity={opacity} layer>
-        <Shadow dx={0} dy={0} blur={glowBlur} color="rgba(255,255,255,0.24)" />
-        <Group clip={progressClip}>
-          <SkiaParagraph
-            paragraph={progressParagraph}
-            x={EFFECT_PADDING}
-            y={EFFECT_PADDING}
-            width={paragraphWidth}
-          />
-        </Group>
-      </Group>
+    <Group
+      origin={vec(
+        glyphRect.x + glyphRect.width / 2,
+        glyphRect.y + glyphRect.height / 2,
+      )}
+      transform={transform}
+      opacity={opacity}
+      layer
+    >
+      <Shadow
+        dx={0}
+        dy={0}
+        blur={glowBlur}
+        color="rgba(255,255,255,0.24)"
+      />
+      <SkiaParagraph
+        paragraph={glyph.paragraph}
+        x={glyphRect.x}
+        y={glyphRect.y}
+        width={glyph.paragraphWidth}
+      />
     </Group>
   );
 });

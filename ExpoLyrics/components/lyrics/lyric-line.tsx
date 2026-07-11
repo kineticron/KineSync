@@ -23,6 +23,7 @@ import {
   LANDSCAPE_LINE_SCALE_BLEED,
   LANDSCAPE_LYRIC_TEXT_LANE_WIDTH,
 } from "@/constants/player-layout";
+import { LYRICS_FONT_FAMILY } from "@/constants/lyrics-typography";
 import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
 import type { LyricLine as LyricLineType, LyricSyllable } from "@/types/bridge";
@@ -1263,6 +1264,8 @@ export const LyricLine = memo(function LyricLine({
 
   const visuallyActive = isActive || bgStillActive;
   const inactiveOpacity = getInactiveOpacity(inactiveOpacityDistance);
+  const shouldRevealPrimary =
+    !isPast && (isActive || shouldPrewarmNativeReveal);
   const shouldAnimateRevealSweep = isPlaying && shouldUseNativeRevealTree;
   const nativeRevealPlaybackPosition = useMemo(
     () =>
@@ -1273,6 +1276,10 @@ export const LyricLine = memo(function LyricLine({
       ),
     [anchorMonotonicMs, anchorPositionMs, isPlaying],
   );
+  const skiaPlaybackPosition =
+    playbackPositionOverrideMs !== null
+      ? playbackPosition
+      : nativeRevealPlaybackPosition;
   const [tokenWidths, setTokenWidths] = useState<Record<number, number>>({});
   const pendingTokenWidthsRef = useRef<Record<number, number>>({});
   const tokenWidthFlushFrameRef = useRef<number | null>(null);
@@ -1396,7 +1403,7 @@ export const LyricLine = memo(function LyricLine({
   );
   useEffect(() => {
     setLaneWidthPx(0);
-  }, [line.lineStartTime, line.lineEndTime, textLaneWidth]);
+  }, [textLaneWidth]);
   const translatedTextWidthStyle = useMemo(() => {
     if (laneWidthPx <= 0) {
       return { width: textLaneWidth as number | `${number}%` };
@@ -1466,18 +1473,18 @@ export const LyricLine = memo(function LyricLine({
                 alignRight && (styles.lineFlowOpposite as ViewStyle),
               ] as ViewStyle[]}
             >
-              {/* ponytail: Skia reveal for active + prewarm lines — single Canvas replaces stacked Views.
-                  Paragraph API handles all scripts via system font fallback. */}
-              {shouldUseNativeRevealTree && laneWidthPx > 0 ? (
+              {/* Keep primary-line layout in Skia for every state so activation
+                  never swaps between different text engines or font metrics. */}
+              {laneWidthPx > 0 ? (
                 <SkiaRevealLine
                   syllables={line.syllables}
                   wordGroups={syllableGroups}
-                  playbackPosition={nativeRevealPlaybackPosition}
+                  playbackPosition={skiaPlaybackPosition}
                   isPlaying={shouldAnimateRevealSweep}
                   containerWidth={laneWidthPx}
                   fontScale={fontScale}
                   alignRight={alignRight}
-                  preventClusterWrapping={usesTimedSpacingLayout}
+                  revealEnabled={shouldRevealPrimary}
                 />
               ) : syllableGroups.map((group, groupIdx) => (
                 <View
@@ -3718,12 +3725,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   } as ViewStyle,
   lineText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     fontSize: BASE_FONT_SIZE,
     lineHeight: BASE_LINE_HEIGHT,
     textAlign: "left",
     letterSpacing: 0,
   } as TextStyle,
   gapText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     fontSize: BASE_FONT_SIZE,
     lineHeight: BASE_LINE_HEIGHT,
   } as TextStyle,
@@ -3740,6 +3749,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
   } as ViewStyle,
   bgVocalsText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     fontSize: BG_FONT_SIZE,
     lineHeight: BG_LINE_HEIGHT,
     fontWeight: "500",
@@ -3747,10 +3757,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
   } as TextStyle,
   bgVocalsGapText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     fontSize: BG_FONT_SIZE,
     lineHeight: BG_LINE_HEIGHT,
   } as TextStyle,
   translatedText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     alignSelf: "flex-start",
     marginTop: 4,
     marginLeft: 2,

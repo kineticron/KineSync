@@ -27,9 +27,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   cancelAnimation,
   Easing as ReanimatedEasing,
-  runOnJS,
   scrollTo,
-  useAnimatedReaction,
   useAnimatedRef,
   useAnimatedStyle,
   useDerivedValue,
@@ -45,6 +43,7 @@ import {
   LANDSCAPE_LYRICS_HORIZONTAL_INSET,
   LANDSCAPE_TOP_LIST_PADDING,
 } from "@/constants/player-layout";
+import { LYRICS_FONT_FAMILY } from "@/constants/lyrics-typography";
 import { getPrimaryLineText } from "@/lib/active-lyric-line";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { usePlaybackStore } from "@/store/playback-store";
@@ -66,7 +65,8 @@ const STATIC_TRANSLATED_LINE_HEIGHT = 26;
 const ACTIVE_LINE_TOP_OFFSET = 0;
 const ACTIVE_RANGE_BOTTOM_PADDING = 24;
 const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
-const LYRIC_SCROLL_ANIMATION_MS = 440;
+const LYRIC_SCROLL_ANIMATION_MS = 340;
+const LYRIC_SCROLL_LOOKAHEAD_MS = 180;
 const PROGRAMMATIC_SCROLL_GUARD_MS = LYRIC_SCROLL_ANIMATION_MS + 40;
 const SCROLL_OFFSET_EPSILON = 2;
 const SCROLL_SETTLE_VERIFY_MS = LYRIC_SCROLL_ANIMATION_MS + 100;
@@ -788,6 +788,15 @@ function getAutoScrollTargetRange(
       return null;
     }
     if (playbackPosition < line.lineEndTime) {
+      const nextIndex = activeStart + 1;
+      const nextLine = lyrics[nextIndex];
+      const canAnticipateNextLine =
+        nextLine &&
+        line.lineEndTime <= nextLine.lineStartTime + 50 &&
+        nextLine.lineStartTime - playbackPosition <= LYRIC_SCROLL_LOOKAHEAD_MS;
+      if (canAnticipateNextLine) {
+        return { startIndex: nextIndex, endIndex: nextIndex };
+      }
       return { startIndex: activeStart, endIndex: activeStart };
     }
     const nextIndex = activeStart + 1;
@@ -1057,28 +1066,7 @@ export function LyricsView({
     }
   });
 
-  const syncScrollOffsetFromAnimation = useCallback((offset: number) => {
-    scrollOffsetRef.current = Math.max(0, offset);
-  }, []);
 
-  useAnimatedReaction(
-    () => ({
-      offset: lyricScrollOffset.value,
-      active: lyricScrollActive.value,
-    }),
-    (current, previous) => {
-      if (!current.active) {
-        return;
-      }
-      if (
-        previous === null ||
-        Math.abs(current.offset - previous.offset) >= 0.5
-      ) {
-        runOnJS(syncScrollOffsetFromAnimation)(current.offset);
-      }
-    },
-    [syncScrollOffsetFromAnimation],
-  );
 
   const previewPlaybackPosition =
     Number.isFinite(previewPositionMs) && previewPositionMs !== null
@@ -1374,6 +1362,9 @@ export function LyricsView({
         animationStyle === "lyric" &&
         SHOULD_USE_UI_THREAD_SCROLL
       ) {
+        // Store the destination synchronously for deduplication and visibility
+        // checks; the native onScroll event remains the source of live offsets.
+        scrollOffsetRef.current = Math.max(0, offset);
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
@@ -1759,10 +1750,6 @@ export function LyricsView({
           markInitialAutoScrollSettled();
         }
       };
-      if (typeof requestAnimationFrame === "function") {
-        pendingScrollFrameRef.current = requestAnimationFrame(performScroll);
-        return;
-      }
       performScroll();
     },
     [
@@ -2032,7 +2019,7 @@ export function LyricsView({
     }
   }, [lyrics.length, listReady, markInitialAutoScrollSettled, scrollTargetRange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       !listReady ||
       !scrollTargetRange ||
@@ -2606,6 +2593,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
   },
   staticLyricLineText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     color: "#FFFFFF",
     fontSize: STATIC_LYRIC_FONT_SIZE,
     lineHeight: STATIC_LYRIC_LINE_HEIGHT,
@@ -2619,6 +2607,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
   },
   staticTranslatedText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     marginTop: 6,
     color: "rgba(255,255,255,0.68)",
     fontSize: STATIC_TRANSLATED_FONT_SIZE,
@@ -2652,6 +2641,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
   },
   creditsText: {
+    fontFamily: LYRICS_FONT_FAMILY,
     color: "rgba(255,255,255,0.5)",
     fontSize: 13,
     lineHeight: 18,
