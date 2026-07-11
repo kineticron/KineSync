@@ -1446,7 +1446,6 @@ export const LyricLine = memo(function LyricLine({
           ] as ViewStyle[]}
         >
           <View
-            onLayout={handleLaneLayout}
             style={[
               styles.lineContentScaleWrap as ViewStyle,
               alignRight && (styles.lineContentScaleWrapRight as ViewStyle),
@@ -1460,6 +1459,7 @@ export const LyricLine = memo(function LyricLine({
             ] as ViewStyle[]}
           >
             <View
+              onLayout={handleLaneLayout}
               style={[
                 styles.lineFlow as ViewStyle,
                 { width: textLaneWidth } as ViewStyle,
@@ -1474,10 +1474,10 @@ export const LyricLine = memo(function LyricLine({
                   wordGroups={syllableGroups}
                   playbackPosition={nativeRevealPlaybackPosition}
                   isPlaying={shouldAnimateRevealSweep}
-                  anchorPositionMs={anchorPositionMs}
-                  anchorMonotonicMs={anchorMonotonicMs}
                   containerWidth={laneWidthPx}
                   fontScale={fontScale}
+                  alignRight={alignRight}
+                  preventClusterWrapping={usesTimedSpacingLayout}
                 />
               ) : syllableGroups.map((group, groupIdx) => (
                 <View
