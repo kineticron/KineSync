@@ -7,7 +7,18 @@ name: iOS unsigned IPA
 
 on:
   workflow_dispatch:
-
+  workflow_call:
+    inputs:
+      configuration:
+        description: Xcode build configuration.
+        required: false
+        default: Release
+        type: string
+      artifact_name:
+        description: Name of the uploaded IPA artifact.
+        required: false
+        default: ExpoLyrics-unsigned-ipa
+        type: string
 permissions:
   contents: read
 
@@ -101,7 +112,7 @@ jobs:
             "-scheme",
             scheme,
             "-configuration",
-            "Release",
+            "${{ inputs.configuration || 'Release' }}",
             "-sdk",
             "iphoneos",
             "-destination",
@@ -232,6 +243,6 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExpoLyrics-unsigned-ipa
+          name: ${{ inputs.artifact_name || 'ExpoLyrics-unsigned-ipa' }}
           path: ExpoLyrics/ExpoLyrics-unsigned.ipa
           if-no-files-found: error

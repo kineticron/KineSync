@@ -1,0 +1,16 @@
+name: iOS development build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-development-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned iOS development client
+    uses: ./.github/workflows/ios-unsigned-ipa.yml
+    with:
+      configuration: Debug
+      artifact_name: ExpoLyrics-development-ipa

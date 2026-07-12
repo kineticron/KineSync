@@ -592,6 +592,9 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
           // paragraph is drawn twice inside the mask — once blurred + dimmed
           // for a subtle bloom, once crisp on top.
           <Mask
+            // Mask's default clip path records children twice. SkParagraphs are native
+            // handles, so render the mask content once and let srcIn do the clipping.
+            clip={false}
             mode="alpha"
             mask={
               <Path path={revealPath} color="white">
