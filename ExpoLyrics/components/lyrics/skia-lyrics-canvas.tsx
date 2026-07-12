@@ -1,9 +1,13 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import {
+  Blur,
+  BlurMask,
   Canvas,
   Group,
+  Mask,
   Paragraph as SkiaParagraph,
+  Path,
   Shadow,
   Skia,
   TextAlign,
@@ -24,6 +28,7 @@ import {
 
 import { LYRICS_FONT_FAMILY } from "@/constants/lyrics-typography";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
+import { useLyricsFontProvider } from "@/lib/lyrics-skia-fonts";
 import type { LyricSyllable } from "@/types/bridge";
 
 const BASE_FONT_SIZE = 32;
@@ -41,6 +46,16 @@ const SUSTAIN_LONG_MS = 1200;
 const SUSTAIN_GLOW_RADIUS_MAX = 7;
 const EFFECT_PADDING = 12;
 const WORD_JOINER = "\u2060";
+// Soft reveal edge (Apple Music look): the mask is blurred so the leading edge
+// glows in over ~2*REVEAL_BLUR px instead of hard-wiping. Reveal rects are
+// inflated vertically by REVEAL_FEATHER so the blur only feathers the moving
+// horizontal edge \u2014 glyph rows stay at full opacity (stable, no vertical clip).
+const REVEAL_FEATHER = 16;
+const REVEAL_BLUR = 14;
+// Subtle bloom: a blurred, low-opacity copy of the white text under the crisp
+// copy. Kept small so the active text blooms slightly without looking glowy.
+const BLOOM_BLUR = 3;
+const BLOOM_OPACITY = 0.35;
 
 type SustainMode = "none" | "solo" | "letter-sweep";
 
@@ -305,6 +320,9 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
 }: SkiaRevealLineProps) {
   const fontSize = BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
   const lineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
+  // null unless bundled SF Pro is enabled; null → Skia's system FontMgr
+  // resolves the native family (and keeps non-Latin fallback).
+  const fontMgr = useLyricsFontProvider();
   const groups = useMemo(
     () =>
       wordGroups ??
@@ -341,17 +359,20 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
         width: number,
         textAlign: TextAlign,
       ) => {
-        const builder = Skia.ParagraphBuilder.Make({
-          ...paragraphStyle,
-          textAlign,
-          textStyle: {
-            color: Skia.Color(color),
-            fontFamilies,
-            fontSize,
-            fontStyle,
-            heightMultiplier,
+        const builder = Skia.ParagraphBuilder.Make(
+          {
+            ...paragraphStyle,
+            textAlign,
+            textStyle: {
+              color: Skia.Color(color),
+              fontFamilies,
+              fontSize,
+              fontStyle,
+              heightMultiplier,
+            },
           },
-        });
+          fontMgr ?? undefined,
+        );
         builder.addText(text);
         const paragraph = builder.build();
         paragraph.layout(width);
@@ -439,6 +460,7 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
     }, [
       alignRight,
       containerWidth,
+      fontMgr,
       fontSize,
       lineHeight,
       paragraphText,
@@ -529,12 +551,14 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
         // Do not add zero-width geometry: antialiasing a degenerate rect can
         // leave a one-pixel white hairline before the syllable starts.
         if (width > 0.01) {
+          // Inflate vertically by REVEAL_FEATHER so the mask blur feathers only
+          // the horizontal (leading) edge; glyph rows keep full opacity.
           path.addRect(
             rect(
               layoutRect.x + EFFECT_PADDING,
-              layoutRect.y + EFFECT_PADDING,
+              layoutRect.y + EFFECT_PADDING - REVEAL_FEATHER,
               width,
-              layoutRect.height,
+              layoutRect.height + REVEAL_FEATHER * 2,
             ),
           );
         }
@@ -562,14 +586,35 @@ export const SkiaRevealLine = memo(function SkiaRevealLine({
           width={containerWidth}
         />
         {revealEnabled && (
-          <Group clip={revealPath}>
+          // The white (active) text is revealed through a soft-edged alpha
+          // mask. The mask is the reveal region blurred by BlurMask, so the
+          // leading edge glows in instead of hard-wiping. The same crisp
+          // paragraph is drawn twice inside the mask — once blurred + dimmed
+          // for a subtle bloom, once crisp on top.
+          <Mask
+            mode="alpha"
+            mask={
+              <Path path={revealPath} color="white">
+                <BlurMask blur={REVEAL_BLUR} style="normal" />
+              </Path>
+            }
+          >
+            <Group opacity={BLOOM_OPACITY}>
+              <Blur blur={BLOOM_BLUR} />
+              <SkiaParagraph
+                paragraph={progressParagraph}
+                x={EFFECT_PADDING}
+                y={EFFECT_PADDING}
+                width={containerWidth}
+              />
+            </Group>
             <SkiaParagraph
               paragraph={progressParagraph}
               x={EFFECT_PADDING}
               y={EFFECT_PADDING}
               width={containerWidth}
             />
-          </Group>
+          </Mask>
         )}
         {revealEnabled &&
           layouts.flatMap((layout, layoutIndex) =>

@@ -100,3 +100,4 @@ test_am.js
 .cursor/
 .hermes/
 .claude/
+.idea/
