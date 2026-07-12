@@ -1,0 +1,237 @@
+# Manual iOS development-client build without Apple Developer Portal signing.
+# Produces a Debug IPA with Expo development tools that you can re-sign locally (e.g. Sideloadly).
+# We disable signing entirely for CI so Pod/library targets are not asked to
+# sign with an empty identity.
+
+name: iOS development build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-development-build-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ios-development-build:
+    runs-on: macos-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ExpoLyrics/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: ExpoLyrics
+        run: npm ci
+
+      - name: Expo prebuild (iOS)
+        working-directory: ExpoLyrics
+        run: npx expo prebuild --clean --platform ios
+
+      - name: Verify custom Live Activity widget
+        working-directory: ExpoLyrics
+        run: node scripts/verify-live-activity-widget.js
+
+      - name: Build Debug development client and locate .app
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execSync, spawnSync } = require("child_process");
+          const fs = require("fs");
+          const path = require("path");
+
+          const iosDir = path.join(process.env.GITHUB_WORKSPACE, "ExpoLyrics", "ios");
+          const derived = path.join(iosDir, "build");
+          const marker = path.join(iosDir, ".ci_built_app");
+
+          const ws = fs
+            .readdirSync(iosDir)
+            .find((f) => f.endsWith(".xcworkspace"));
+          if (!ws) throw new Error("No .xcworkspace in ios/");
+
+          const listJson = execSync(
+            `xcodebuild -workspace "${path.join(iosDir, ws)}" -list -json`,
+            { encoding: "utf8", cwd: iosDir },
+          );
+          const j = JSON.parse(listJson);
+          const schemes = j.workspace.schemes || [];
+          const proj = fs
+            .readdirSync(iosDir)
+            .find((f) => f.endsWith(".xcodeproj"));
+          const projBase = proj ? path.basename(proj, ".xcodeproj") : null;
+          const scheme =
+            (projBase && schemes.find((s) => s === projBase)) ||
+            schemes.find((s) => !String(s).startsWith("Pods")) ||
+            schemes[0];
+          if (!scheme) throw new Error("No Xcode schemes found");
+
+          console.log("iosDir:", iosDir);
+          console.log("derivedDataPath:", derived);
+          console.log("Using workspace:", ws, "scheme:", scheme);
+
+          const signing = [
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "CODE_SIGN_STYLE=Manual",
+            "DEVELOPMENT_TEAM=",
+            "PROVISIONING_PROFILE_SPECIFIER=",
+            "PROVISIONING_PROFILE=",
+            "EXPANDED_CODE_SIGN_IDENTITY=",
+            "COMPILER_INDEX_STORE_ENABLE=NO",
+          ];
+
+          const common = [
+            "-workspace",
+            path.join(iosDir, ws),
+            "-scheme",
+            scheme,
+            "-configuration",
+            "Debug",
+            "-sdk",
+            "iphoneos",
+            "-destination",
+            "generic/platform=iOS",
+            "-derivedDataPath",
+            derived,
+            ...signing,
+          ];
+
+          function skipPath(p) {
+            return /\/Pods\//.test(p) || /\/XCFrameworkIntermediates\//.test(p);
+          }
+
+          function listAppsUnder(root) {
+            const apps = [];
+            function walk(dir) {
+              let entries;
+              try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+              } catch {
+                return;
+              }
+              for (const ent of entries) {
+                if (!ent.isDirectory()) continue;
+                const p = path.join(dir, ent.name);
+                if (skipPath(p)) continue;
+                if (p.endsWith(".app")) apps.push(p);
+                else walk(p);
+              }
+            }
+            walk(root);
+            return apps;
+          }
+
+          function pickApp(apps, scheme) {
+            if (apps.length === 0) return null;
+            const byScheme = apps.find((a) => a.endsWith(`/${scheme}.app`));
+            if (byScheme) return byScheme;
+            const inProducts = apps.filter((a) =>
+              /Build\/Products\/Debug-iphoneos\//.test(a),
+            );
+            const pool = inProducts.length ? inProducts : apps;
+            return pool.sort((a, b) => a.length - b.length)[0];
+          }
+
+          function runBuild(action, extra) {
+            const args = [...common, ...extra, action];
+            console.log("xcodebuild", args.join(" "));
+            const r = spawnSync("xcodebuild", args, {
+              stdio: "inherit",
+              cwd: iosDir,
+            });
+            if (r.status === null || r.status !== 0) {
+              process.exit(r.status === null ? 1 : r.status);
+            }
+          }
+
+          runBuild("build", []);
+
+          let apps = listAppsUnder(path.join(derived, "Build", "Products", "Debug-iphoneos"));
+          if (apps.length === 0) apps = listAppsUnder(derived);
+
+          let chosen = pickApp(apps, scheme);
+
+          if (!chosen) {
+            console.log("No .app after build; trying xcodebuild archive…");
+            const archivePath = path.join(iosDir, "ExpoLyricsDevelopment.xcarchive");
+            fs.rmSync(archivePath, { recursive: true, force: true });
+            runBuild("archive", ["-archivePath", archivePath]);
+            const archAppsDir = path.join(
+              archivePath,
+              "Products",
+              "Applications",
+            );
+            apps = listAppsUnder(archAppsDir);
+            chosen = pickApp(apps, scheme);
+          }
+
+          if (!chosen) {
+            console.error("Could not locate host .app after build/archive.");
+            console.error(
+              "Under Debug-iphoneos:",
+              listAppsUnder(
+                path.join(derived, "Build", "Products", "Debug-iphoneos"),
+              ),
+            );
+            process.exit(1);
+          }
+
+          console.log("Selected .app:", chosen);
+          fs.writeFileSync(marker, chosen, "utf8");
+          NODE
+
+      - name: Package IPA (Payload + zip)
+        run: |
+          set -euo pipefail
+          MARKER="${GITHUB_WORKSPACE}/ExpoLyrics/ios/.ci_built_app"
+          APP=$(head -1 "${MARKER}")
+          if [[ ! -d "${APP}" ]]; then
+            echo "Invalid path from ${MARKER}: ${APP}"
+            exit 1
+          fi
+          LIVE_ACTIVITY_APPEX="${APP}/PlugIns/LiveActivity.appex"
+          if [[ ! -d "${LIVE_ACTIVITY_APPEX}" ]]; then
+            echo "::error::LiveActivity.appex was not embedded in ${APP}"
+            exit 1
+          fi
+          if [[ ! -f "${LIVE_ACTIVITY_APPEX}/LiveActivity" ]]; then
+            echo "::error::LiveActivity.appex executable is missing"
+            exit 1
+          fi
+          EXTENSION_POINT=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
+          if [[ "${EXTENSION_POINT}" != "com.apple.widgetkit-extension" ]]; then
+            echo "::error::LiveActivity.appex is not registered as a WidgetKit extension"
+            plutil -p "${LIVE_ACTIVITY_APPEX}/Info.plist" || true
+            exit 1
+          fi
+          EXTENSION_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
+          echo "Live Activity extension bundle id: ${EXTENSION_BUNDLE_ID}"
+          echo "Verified embedded Live Activity extension: ${LIVE_ACTIVITY_APPEX}"
+          echo "Packaging: ${APP}"
+          STAGE="${RUNNER_TEMP}/ipa-payload"
+          rm -rf "${STAGE}"
+          mkdir -p "${STAGE}/Payload"
+          cp -R "${APP}" "${STAGE}/Payload/"
+          (cd "${STAGE}" && zip -r "${GITHUB_WORKSPACE}/ExpoLyrics/ExpoLyrics-development.ipa" Payload)
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExpoLyrics-development-ipa
+          path: ExpoLyrics/ExpoLyrics-development.ipa
+          if-no-files-found: error
