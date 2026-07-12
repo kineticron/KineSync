@@ -73,8 +73,6 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
 
       {tooltipVisible ? (
         <Reanimated.View
-          entering={FadeIn.duration(160)}
-          exiting={FadeOut.duration(180)}
           style={styles.tooltipAnchor}
           pointerEvents="none"
         >
@@ -146,3 +144,4 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
 });
+

@@ -83,7 +83,7 @@ const USER_SCROLL_IDLE_RESET_MS = 700;
 const SHOULD_USE_UI_THREAD_SCROLL = true;
 // ponytail: only the active line ±1 needs JS-driven syllable updates;
 // farther cells use static colors and don't need per-frame re-render
-const LYRICS_JS_UPDATE_RADIUS = 1;
+const LYRICS_JS_UPDATE_RADIUS = 2;
 const ReanimatedFlashList = Animated.createAnimatedComponent(FlashList<LyricLineType>);
 
 function getFlashListLeadingInset(
@@ -2412,7 +2412,7 @@ export function LyricsView({
         renderItem={flashListRenderItem}
         keyExtractor={keyExtractor}
         extraData={extraDataFingerprint}
-        drawDistance={320}
+        drawDistance={1000}
         ListFooterComponent={listFooter}
         onLoad={() => {
           const pendingRange = pendingAnchorRangeRef.current ?? scrollTargetRangeRef.current;
@@ -2656,3 +2656,4 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
 });
+

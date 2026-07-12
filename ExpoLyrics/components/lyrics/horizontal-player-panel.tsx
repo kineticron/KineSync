@@ -82,8 +82,6 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
 
         {controlsOverlayVisible ? (
           <Reanimated.View
-            entering={FadeIn.duration(220)}
-            exiting={FadeOut.duration(180)}
             style={styles.controlsOverlayBottom}
             pointerEvents="box-none"
           >
@@ -229,3 +227,4 @@ const styles = StyleSheet.create({
     opacity: 0.94,
   },
 });
+

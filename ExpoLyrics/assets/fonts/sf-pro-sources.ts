@@ -12,8 +12,9 @@ import type { DataModule } from "@shopify/react-native-skia";
 //   2. Uncomment the block below.
 //   3. Set SF_PRO_ENABLED = true in constants/lyrics-typography.ts.
 export const SF_PRO_SOURCES: Record<string, DataModule[]> = {
-  // "SF Pro Display": [
-  //   require("./SF-Pro-Display-Regular.otf"),
-  //   require("./SF-Pro-Display-Bold.otf"),
-  // ],
+  "SF Pro Display": [
+    require("./SF-Pro-Display-Regular.otf"),
+    require("./SF-Pro-Display-Bold.otf"),
+  ],
 };
+

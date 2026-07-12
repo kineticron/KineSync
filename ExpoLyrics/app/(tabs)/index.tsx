@@ -1571,10 +1571,6 @@ export default function HomeScreen() {
       {fullscreenAlbumMode && !albumArtworkMorphing ? (
         <Reanimated.View>
           <Reanimated.View
-            entering={FadeIn.duration(PLAYER_MODE_TRANSITION_MS).easing(
-              PLAYER_MODE_EASE,
-            )}
-            exiting={FadeOut.duration(220).easing(PLAYER_MODE_EASE)}
           >
             <SafeAreaView
               edges={["top", "left", "right"]}
@@ -1585,7 +1581,6 @@ export default function HomeScreen() {
       ) : topBarMounted ? (
         <Reanimated.View>
           <Reanimated.View
-            exiting={FadeOutUp.duration(260).easing(PLAYER_MODE_EASE)}
           >
             <SafeAreaView
               edges={["top", "left", "right"]}
@@ -1742,10 +1737,6 @@ export default function HomeScreen() {
           style={[styles.lyricsWrap, lyricsViewportStyle]}
         >
           <Reanimated.View
-            entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
-              PLAYER_MODE_EASE,
-            )}
-            exiting={FadeOut.duration(300).easing(PLAYER_MODE_EASE)}
             style={styles.lyricsContentWrap}
           >
             <Reanimated.View
@@ -2172,3 +2163,4 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 });
+

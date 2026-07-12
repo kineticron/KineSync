@@ -1469,7 +1469,7 @@ export const LyricLine = memo(function LyricLine({
               onLayout={handleLaneLayout}
               style={[
                 styles.lineFlow as ViewStyle,
-                { width: textLaneWidth } as ViewStyle,
+                { width: "100%" } as ViewStyle,
                 alignRight && (styles.lineFlowOpposite as ViewStyle),
               ] as ViewStyle[]}
             >
@@ -3612,7 +3612,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   } as ViewStyle,
   lineInner: {
-    alignItems: "flex-start",
+    alignItems: "stretch",
     justifyContent: "center",
     alignSelf: "stretch",
   } as ViewStyle,
@@ -3620,11 +3620,11 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
   } as ViewStyle,
   lineContentScaleWrap: {
-    alignSelf: "flex-start",
-    maxWidth: "100%",
+    alignSelf: "stretch",
+    width: "100%",
   } as ViewStyle,
   lineContentScaleWrapRight: {
-    alignSelf: "flex-end",
+    alignSelf: "stretch",
   } as ViewStyle,
   lineFlowScaleShell: {
     alignSelf: "flex-start",
@@ -3781,3 +3781,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   } as TextStyle,
 });
+
+
+
+

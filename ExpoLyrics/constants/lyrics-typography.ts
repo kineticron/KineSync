@@ -5,7 +5,7 @@ import { Platform } from "react-native";
 // Skia paragraphs render SF Pro on every platform, giving pixel-identical
 // lyrics on iOS and Android. When false, we fall back to each platform's native
 // San Francisco / Roboto.
-export const SF_PRO_ENABLED = false;
+export const SF_PRO_ENABLED = true;
 
 // Family name registered with expo-font (RN side) AND the Skia
 // TypefaceFontProvider (Skia side). Must match the family baked into the .otf.
@@ -20,3 +20,4 @@ export const SF_PRO_FAMILY = "SF Pro Display";
 export const LYRICS_FONT_FAMILY = SF_PRO_ENABLED
   ? SF_PRO_FAMILY
   : Platform.select({ android: "sans-serif", default: "System" }) ?? "System";
+
