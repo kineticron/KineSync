@@ -74,6 +74,34 @@ npm install
 
 No native build steps needed — Expo handles this automatically.
 
+#### Optional: bundle San Francisco Pro fonts
+
+The lyrics renderer works out of the box using each platform's native San
+Francisco / Roboto. Bundle SF Pro only if you want pixel-identical lyrics across
+iOS **and** Android.
+
+```powershell
+cd ExpoLyrics\assets\fonts
+$base = "https://raw.githubusercontent.com/sahibjotsaggu/San-Francisco-Pro-Fonts/master"
+curl.exe -fLO "$base/SF-Pro-Display-Regular.otf"
+curl.exe -fLO "$base/SF-Pro-Display-Bold.otf"
+```
+
+> If curl fails with `CRYPT_E_NO_REVOCATION_CHECK` (schannel can't reach the cert
+> revocation server behind a firewall/VPN), add `--ssl-no-revoke`, e.g.
+> `curl.exe --ssl-no-revoke -fLO "$base/SF-Pro-Display-Bold.otf"`. Or use
+> `Invoke-WebRequest "$base/SF-Pro-Display-Bold.otf" -OutFile SF-Pro-Display-Bold.otf`.
+
+Then enable it:
+
+1. Uncomment the `require(...)` block in `ExpoLyrics/assets/fonts/sf-pro-sources.ts`
+2. Set `SF_PRO_ENABLED = true` in `ExpoLyrics/constants/lyrics-typography.ts`
+3. Rebuild the native app (`npx expo run:ios` / `run:android`) — font assets are
+   not picked up by a JS-only reload.
+
+Lyrics use weight 700, so Regular + Bold is enough. See
+`ExpoLyrics/assets/fonts/README.md` for details.
+
 > **Contributors:** Before building, update `ExpoLyrics/app.json`:
 > - Replace `"projectId": "YOUR_EAS_PROJECT_ID"` with your own EAS project ID (`eas init`)
 > - Replace `dev.kineticron.KineSync` bundle identifiers with your own if needed

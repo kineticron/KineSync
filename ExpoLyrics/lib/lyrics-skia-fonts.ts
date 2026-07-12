@@ -14,10 +14,14 @@ import { SF_PRO_ENABLED } from "@/constants/lyrics-typography";
  * - SF Pro enabled → returns a TypefaceFontProvider carrying the bundled faces
  *   so every platform renders SF Pro identically.
  *
- * `useFonts` must be called unconditionally (hook rules); with an empty source
- * map it just yields an empty provider that we ignore.
+ * SF_PRO_ENABLED is a build-time setting. When it is off, no native provider
+ * is created; when it is on, the app reloads with the configured hook path.
  */
 export function useLyricsFontProvider(): SkTypefaceFontProvider | null {
-  const provider = useFonts(SF_PRO_SOURCES);
-  return SF_PRO_ENABLED ? provider : null;
+  // Do not instantiate a native typeface provider for every lyric line when
+  // custom fonts are off. The system FontMgr is the intended default path.
+  if (!SF_PRO_ENABLED) {
+    return null;
+  }
+  return useFonts(SF_PRO_SOURCES);
 }
