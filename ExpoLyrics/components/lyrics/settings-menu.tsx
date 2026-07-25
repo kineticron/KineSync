@@ -17,7 +17,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { saveCurrentTrackToVault } from "@/lib/lyrics-sync";
-import { usePlaybackStore } from "@/store/playback-store";
+import { usePlaybackStore, type LyricsRendererMode } from "@/store/playback-store";
 import type { ConnectionStatus } from "@/types/bridge";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
@@ -40,6 +40,7 @@ type SettingsMenuProps = {
   onReconnectBridge: () => void;
   onRefetchLyrics: () => void;
   onRefetchLyricsFromSource: (source: LyricsSourcePreference) => void;
+  onOpenSpotifyBrowser: () => void;
   onOpenBridgeSettings: () => void;
   onOpenButtonTutorial: () => void;
   playbackTapToSeek: boolean;
@@ -50,6 +51,8 @@ type SettingsMenuProps = {
   onToggleAutoHidePlaybackControls: (value: boolean) => void;
   showTranslatedText: boolean;
   onToggleShowTranslatedText: (value: boolean) => void;
+  lyricsRendererMode: LyricsRendererMode;
+  onChangeLyricsRendererMode: (mode: LyricsRendererMode) => void;
   connectionStatus: ConnectionStatus;
   latencyMs: number;
   errorMessage: string;
@@ -301,6 +304,7 @@ export const SettingsMenu = memo(function SettingsMenu({
   onReconnectBridge,
   onRefetchLyrics,
   onRefetchLyricsFromSource,
+  onOpenSpotifyBrowser,
   onOpenBridgeSettings,
   onOpenButtonTutorial,
   playbackTapToSeek,
@@ -311,6 +315,8 @@ export const SettingsMenu = memo(function SettingsMenu({
   onToggleAutoHidePlaybackControls,
   showTranslatedText,
   onToggleShowTranslatedText,
+  lyricsRendererMode,
+  onChangeLyricsRendererMode,
   connectionStatus,
   latencyMs,
   errorMessage,
@@ -472,6 +478,14 @@ export const SettingsMenu = memo(function SettingsMenu({
                 value={showTranslatedText}
                 onChange={onToggleShowTranslatedText}
               />
+              <ToggleRow
+                icon="globe-outline"
+                label="Use WebView lyrics"
+                value={lyricsRendererMode === "webview"}
+                onChange={(value) =>
+                  onChangeLyricsRendererMode(value ? "webview" : "native")
+                }
+              />
             </MenuSection>
 
             <MenuSection title="Lyrics">
@@ -539,6 +553,12 @@ export const SettingsMenu = memo(function SettingsMenu({
                 icon="sync"
                 label="Reconnect"
                 onPress={onReconnectBridge}
+              />
+              <MenuAction
+                icon="musical-notes"
+                label="Spotify browser fallback"
+                onPress={onOpenSpotifyBrowser}
+                showChevron
               />
               <MenuAction
                 icon="settings-outline"

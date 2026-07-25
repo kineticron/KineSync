@@ -101,3 +101,6 @@ test_am.js
 .hermes/
 .claude/
 .idea/
+
+# Experimental Projects
+SpotifyBrowserLab/

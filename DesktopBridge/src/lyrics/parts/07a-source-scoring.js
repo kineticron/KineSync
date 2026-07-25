@@ -8,7 +8,7 @@ const SOURCE_FETCHERS = {
   "local-vault": fetchFromLocalVault,
   kugou: fetchFromKugou,
   netease: fetchFromNetease,
-  "qq-direct": fetchFromQQDirect,
+  "qq-direct": fetchFromQQ,
   musixmatch: fetchFromMusixmatch,
   lrclib: fetchFromLrcLib,
   "spicy-lyrics": fetchFromSpicyLyrics,

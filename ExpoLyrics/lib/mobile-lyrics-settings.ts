@@ -1,0 +1,66 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+const MOBILE_LYRICS_SETTINGS_KEY = "kinesync_mobile_lyrics_settings";
+
+export type MobileLyricsSettings = {
+  spotifyWebToken: string;
+  musixmatchUserToken: string;
+  geminiApiKey: string;
+};
+
+const DEFAULT_SETTINGS: MobileLyricsSettings = {
+  spotifyWebToken: "",
+  musixmatchUserToken: "",
+  geminiApiKey: "",
+};
+
+let cachedSettings: MobileLyricsSettings = { ...DEFAULT_SETTINGS };
+let loaded = false;
+let storageAvailable = true;
+
+function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefined): MobileLyricsSettings {
+  return {
+    spotifyWebToken: String(value?.spotifyWebToken || "").trim(),
+    musixmatchUserToken: String(value?.musixmatchUserToken || "").trim(),
+    geminiApiKey: String(value?.geminiApiKey || "").trim(),
+  };
+}
+
+export function getCachedMobileLyricsSettings(): MobileLyricsSettings {
+  return cachedSettings;
+}
+
+export async function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
+  if (loaded) {
+    return cachedSettings;
+  }
+  try {
+    const raw = await AsyncStorage.getItem(MOBILE_LYRICS_SETTINGS_KEY);
+    cachedSettings = normalizeSettings(raw ? JSON.parse(raw) : null);
+  } catch {
+    storageAvailable = false;
+    cachedSettings = { ...DEFAULT_SETTINGS };
+  }
+  loaded = true;
+  return cachedSettings;
+}
+
+export async function saveMobileLyricsSettings(
+  settings: Partial<MobileLyricsSettings>,
+): Promise<MobileLyricsSettings> {
+  const current = await getMobileLyricsSettings();
+  cachedSettings = normalizeSettings({ ...current, ...settings });
+  loaded = true;
+  if (!storageAvailable) {
+    return cachedSettings;
+  }
+  try {
+    await AsyncStorage.setItem(
+      MOBILE_LYRICS_SETTINGS_KEY,
+      JSON.stringify(cachedSettings),
+    );
+  } catch {
+    storageAvailable = false;
+  }
+  return cachedSettings;
+}

@@ -57,7 +57,7 @@ async function fetchFromNetease(track) {
     })
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length || isAmbiguousTopMatch(ranked)) {
+  if (!ranked.length) {
     return null;
   }
 
@@ -784,7 +784,7 @@ async function fetchFromLrcLib(track) {
     }))
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length || isAmbiguousTopMatch(ranked)) {
+  if (!ranked.length) {
     return null;
   }
 

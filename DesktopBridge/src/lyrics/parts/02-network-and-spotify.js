@@ -40,7 +40,7 @@ const NETEASE_BASE_URLS = [
 ];
 const SPICY_LYRICS_API_URL = "https://api.spicylyrics.org";
 /** Keep in sync with spicy-lyrics `project/config.ts` ProjectVersion. */
-const SPICY_LYRICS_CLIENT_VERSION = "6.1.1";
+const SPICY_LYRICS_CLIENT_VERSION = "6.2.3";
 const SPICY_QUEUE_BASE_DELAY_MS = 2_000;
 const SPICY_QUEUE_MAX_DELAY_MS = 10_000;
 const SPICY_QUEUE_BACKOFF_FACTOR = 1.5;

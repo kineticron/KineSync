@@ -19,6 +19,8 @@ const PLAYBACK_POSITION_EPSILON_MS = 64;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
 
+export type LyricsRendererMode = 'native' | 'webview';
+
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
 let _cachedHandshakeKey: string | null = null;
@@ -110,6 +112,7 @@ type PlaybackState = {
   hidePlaybackStatusBar: boolean;
   autoHidePlaybackControls: boolean;
   showTranslatedText: boolean;
+  lyricsRendererMode: LyricsRendererMode;
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
@@ -123,6 +126,7 @@ type PlaybackState = {
   beginTranslationRequest: () => void;
   clearLyrics: () => void;
   setLyricsStatusMessage: (message: string) => void;
+  setCurrentTrackArtwork: (trackId: string, artworkUrl: string) => void;
   setSimulatedLatencyMs: (ms: number) => void;
   setPacketDropRate: (rate: number) => void;
   setPlaybackCompensationMs: (ms: number) => void;
@@ -130,6 +134,7 @@ type PlaybackState = {
   setHidePlaybackStatusBar: (value: boolean) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
   setShowTranslatedText: (value: boolean) => void;
+  setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
 let playbackClockTimer: ReturnType<typeof setInterval> | null = null;
@@ -206,6 +211,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   hidePlaybackStatusBar: true,
   autoHidePlaybackControls: true,
   showTranslatedText: true,
+  lyricsRendererMode: 'native',
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
@@ -241,6 +247,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       packet.positionMs + (packet.isPlaying ? latency : 0) + prev.playbackCompensationMs,
     );
     const previousArtwork = prev.currentTrack?.artworkUrl;
+    const hasArtworkField = Object.prototype.hasOwnProperty.call(packet, 'artworkUrl');
     const incomingArtwork =
       typeof packet.artworkUrl === 'string' && packet.artworkUrl.trim().length > 0
         ? packet.artworkUrl.trim()
@@ -252,7 +259,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       artist: packet.artist,
       album: packet.album,
       // Keep the last cover visible while the bridge resolves art for a new track.
-      artworkUrl: incomingArtwork ?? previousArtwork,
+      // Explicit empty artwork clears stale covers for mobile-only browser playback.
+      artworkUrl: incomingArtwork ?? (hasArtworkField ? undefined : previousArtwork),
       durationMs: packet.durationMs,
       spotifyTrackId: packet.spotifyTrackId,
     };
@@ -324,6 +332,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     })),
   clearLyrics: () => set({ lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '' }),
   setLyricsStatusMessage: (message) => set({ lyricsStatusMessage: message }),
+  setCurrentTrackArtwork: (trackId, artworkUrl) =>
+    set((state) => {
+      const currentTrack = state.currentTrack;
+      const nextArtworkUrl = String(artworkUrl || '').trim();
+      if (!currentTrack || currentTrack.id !== trackId || !nextArtworkUrl) {
+        return state;
+      }
+      if (currentTrack.artworkUrl === nextArtworkUrl) {
+        return state;
+      }
+      return { currentTrack: { ...currentTrack, artworkUrl: nextArtworkUrl } };
+    }),
   setSimulatedLatencyMs: (ms) => {
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ simulatedLatencyMs: Math.max(0, Math.min(3000, Math.floor(safe))) });
@@ -340,6 +360,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   setHidePlaybackStatusBar: (value) => set({ hidePlaybackStatusBar: Boolean(value) }),
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
   setShowTranslatedText: (value) => set({ showTranslatedText: Boolean(value) }),
+  setLyricsRendererMode: (mode) =>
+    set({ lyricsRendererMode: mode === 'webview' ? 'webview' : 'native' }),
 }));
 
 export function startPlaybackClock() {

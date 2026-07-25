@@ -729,7 +729,7 @@ async function fetchQQDirectCandidateLyricsParallel(
         return;
       }
       const probe = await probeQQDirectCandidate(track, candidate, accessors);
-      considerProbe(candidate, await probeQQDirectCandidate(track, candidate, accessors));
+      considerProbe(candidate, probe);
     },
   );
 
@@ -781,10 +781,6 @@ async function fetchFromQQDirect(track) {
   if (!ranked.length) {
     const seededKaraokeResult = await resolveQQLegacyDownloadFallback(track);
     return seededKaraokeResult?.lyrics?.length ? seededKaraokeResult : null;
-  }
-
-  if (isAmbiguousTopMatch(ranked)) {
-    return null;
   }
 
   const likelyDirectCandidates = filterLikelyQqRankedCandidates(
@@ -908,7 +904,7 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
     })
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length || isAmbiguousTopMatch(ranked)) {
+  if (!ranked.length) {
     return null;
   }
 
@@ -1004,7 +1000,7 @@ async function fetchFromQQMirror(track) {
     })
     .sort((a, b) => b.score - a.score);
 
-  if (!ranked.length || isAmbiguousTopMatch(ranked)) {
+  if (!ranked.length) {
     return null;
   }
 
@@ -1165,9 +1161,7 @@ async function fetchFromQQMeting(track) {
     }))
     .sort((a, b) => b.score - a.score);
 
-  if (isAmbiguousTopMatch(sorted)) {
-    return null;
-  }
+
 
   const likelyMetingCandidates = filterLikelySameTrackCandidates(track, sorted, {
     getTitle: (candidate) => candidate.item?.title || "",
@@ -1199,6 +1193,24 @@ async function fetchFromQQMeting(track) {
       }
     } catch {
       // Try next candidate.
+    }
+  }
+  return null;
+}
+
+// QQ's Musicu endpoint, public search endpoint, and public mirrors each have
+// intermittent catalog gaps. Keep the desktop-compatible direct flow first,
+// then try the existing compatible fallbacks before reporting no match.
+async function fetchFromQQ(track) {
+  const fetchers = [fetchFromQQDirect, fetchFromQQMirror, fetchFromQQMeting];
+  for (const fetcher of fetchers) {
+    try {
+      const result = await fetcher(track);
+      if (result?.lyrics?.length) {
+        return result;
+      }
+    } catch {
+      // A provider failure should not prevent the other QQ-compatible paths.
     }
   }
   return null;

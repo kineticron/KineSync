@@ -435,7 +435,7 @@ async function previewKugouSearchCandidates(track) {
 
 async function fetchFromKugou(track) {
   const ranked = await collectRankedKugouSearchCandidates(track);
-  if (!ranked.length || isAmbiguousTopMatch(ranked)) {
+  if (!ranked.length) {
     return null;
   }
 

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
@@ -18,6 +18,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LiveActivityDebugPanel } from '@/components/lyrics/live-activity-debug-panel';
 import { bridgeClient } from '@/lib/bridge-client';
 import { saveBridgeSettings } from '@/lib/bridge-settings';
+import {
+  getMobileLyricsSettings,
+  saveMobileLyricsSettings,
+} from '@/lib/mobile-lyrics-settings';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { ConnectionStatus } from '@/types/bridge';
 import { requestShowOnboarding } from '@/providers/bridge-provider';
@@ -30,6 +34,7 @@ type FieldRowProps = {
   placeholder?: string;
   keyboardType?: 'default' | 'numeric' | 'decimal-pad';
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  secureTextEntry?: boolean;
 };
 
 type SettingSectionProps = {
@@ -85,6 +90,7 @@ function FieldRow({
   placeholder,
   keyboardType = 'default',
   autoCapitalize = 'none',
+  secureTextEntry = false,
 }: FieldRowProps) {
   return (
     <View style={styles.fieldRow}>
@@ -99,6 +105,7 @@ function FieldRow({
         placeholder={placeholder}
         placeholderTextColor="rgba(255,255,255,0.36)"
         selectionColor="#FFFFFF"
+        secureTextEntry={secureTextEntry}
       />
     </View>
   );
@@ -134,6 +141,10 @@ export default function BridgeSettingsScreen() {
   const [compensationInput, setCompensationInput] = useState(String(playbackCompensationMs));
   const [latencyInput, setLatencyInput] = useState(String(simulatedLatencyMs));
   const [dropRateInput, setDropRateInput] = useState(String(packetDropRate));
+  const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
+  const [musixmatchTokenInput, setMusixmatchTokenInput] = useState('');
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
   const connectionTone = useMemo(
     () => getConnectionTone(connectionStatus),
     [connectionStatus],
@@ -147,6 +158,34 @@ export default function BridgeSettingsScreen() {
     saveBridgeSettings({ serverUrl: url, handshakeKey: key });
     bridgeClient.reconnectNow();
   }, [keyInput, setHandshakeKey, setServerUrl, urlInput]);
+  useEffect(() => {
+    let mounted = true;
+    void getMobileLyricsSettings().then((settings) => {
+      if (!mounted) {
+        return;
+      }
+      setSpotifyTokenInput(settings.spotifyWebToken);
+      setMusixmatchTokenInput(settings.musixmatchUserToken);
+      setGeminiKeyInput(settings.geminiApiKey);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const saveMobileLyricsApiSettings = useCallback(() => {
+    void saveMobileLyricsSettings({
+      spotifyWebToken: spotifyTokenInput,
+      musixmatchUserToken: musixmatchTokenInput,
+      geminiApiKey: geminiKeyInput,
+    }).then((settings) => {
+      setSpotifyTokenInput(settings.spotifyWebToken);
+      setMusixmatchTokenInput(settings.musixmatchUserToken);
+      setGeminiKeyInput(settings.geminiApiKey);
+      setMobileLyricsSaved(true);
+      setTimeout(() => setMobileLyricsSaved(false), 1800);
+    });
+  }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput]);
 
   const returnToLyrics = useCallback(() => {
     if (router.canGoBack()) {
@@ -261,6 +300,43 @@ export default function BridgeSettingsScreen() {
                   onPress={saveAndReconnect}>
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                   <Text style={styles.primaryButtonText}>Save and reconnect</Text>
+                </Pressable>
+              </SettingSection>
+
+              <View style={styles.divider} />
+
+              <SettingSection title="Mobile Lyrics APIs">
+                <FieldRow
+                  label="Spotify Bearer Token"
+                  value={spotifyTokenInput}
+                  onChangeText={setSpotifyTokenInput}
+                  placeholder="Auto-filled from Spotify browser"
+                  secureTextEntry
+                />
+                <FieldRow
+                  label="Musixmatch User Token"
+                  value={musixmatchTokenInput}
+                  onChangeText={setMusixmatchTokenInput}
+                  placeholder="Optional Musixmatch token"
+                  secureTextEntry
+                />
+                <FieldRow
+                  label="Gemini API Key"
+                  value={geminiKeyInput}
+                  onChangeText={setGeminiKeyInput}
+                  placeholder="Optional translation API key"
+                  secureTextEntry
+                />
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.secondaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={saveMobileLyricsApiSettings}>
+                  <Ionicons name="key" size={17} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>
+                    {mobileLyricsSaved ? 'Saved mobile API keys' : 'Save mobile API keys'}
+                  </Text>
                 </Pressable>
               </SettingSection>
 

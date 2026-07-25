@@ -1,4 +1,5 @@
 import type { Track } from '@/types/bridge';
+import { resolveMobileArtworkUrl } from '@/lib/mobile-artwork-resolver';
 
 function isBridgeArtworkUri(value: string | undefined) {
   if (!value) {
@@ -60,5 +61,9 @@ export async function resolveTrackArtworkUrl(track: Track | null): Promise<strin
   if (!track) {
     return '';
   }
-  return normalizeBridgeArtworkUri(track.artworkUrl);
+  const suppliedArtwork = normalizeBridgeArtworkUri(track.artworkUrl);
+  if (suppliedArtwork) {
+    return suppliedArtwork;
+  }
+  return resolveMobileArtworkUrl(track);
 }

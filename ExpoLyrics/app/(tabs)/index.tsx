@@ -67,13 +67,19 @@ import {
 import { AnimatedBridgedArtwork } from "@/components/lyrics/animated-bridged-artwork";
 import { BridgedArtworkImage } from "@/components/lyrics/bridged-artwork-image";
 import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
+import { resolveTrackArtworkUrl } from "@/lib/artwork";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
 import { LyricsView } from "@/components/lyrics/lyrics-view";
+import { WebLyricsView } from "@/components/lyrics/web-lyrics-view";
 import {
   PlaybackControls,
   type PlaybackControlsLayout,
 } from "@/components/lyrics/playback-controls";
 import { SettingsMenu } from "@/components/lyrics/settings-menu";
+import {
+  SpotifyBrowserFallback,
+  type SpotifyBrowserFallbackHandle,
+} from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
@@ -527,6 +533,7 @@ function ButtonTutorialModal({
 
 export default function HomeScreen() {
   const router = useRouter();
+  const spotifyBrowserRef = useRef<SpotifyBrowserFallbackHandle>(null);
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
   const currentTrack = usePlaybackStore((s) => s.currentTrack);
@@ -553,6 +560,8 @@ export default function HomeScreen() {
   const setAutoHidePlaybackControls = usePlaybackStore((s) => s.setAutoHidePlaybackControls);
   const showTranslatedText = usePlaybackStore((s) => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore((s) => s.setShowTranslatedText);
+  const lyricsRendererMode = usePlaybackStore((s) => s.lyricsRendererMode);
+  const setLyricsRendererMode = usePlaybackStore((s) => s.setLyricsRendererMode);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
   const [controlsDockHeight, setControlsDockHeight] = useState(0);
@@ -664,6 +673,39 @@ export default function HomeScreen() {
     currentTrack?.artist,
     currentTrack?.album,
     currentTrack?.title,
+  ]);
+
+  useEffect(() => {
+    if (
+      connectionStatus === "connected" ||
+      !currentTrack ||
+      isBridgeArtworkUri(currentTrack.artworkUrl)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const trackId = currentTrack.id;
+    void resolveTrackArtworkUrl(currentTrack).then((artworkUrl) => {
+      if (cancelled || !artworkUrl) {
+        return;
+      }
+      const state = usePlaybackStore.getState();
+      if (state.connectionStatus !== "connected") {
+        state.setCurrentTrackArtwork(trackId, artworkUrl);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentTrack,
+    connectionStatus,
+    currentTrack?.id,
+    currentTrack?.title,
+    currentTrack?.artist,
+    currentTrack?.album,
+    currentTrack?.durationMs,
+    currentTrack?.artworkUrl,
   ]);
 
   const fullscreenControlsReserve = Math.max(controlsDockHeight + 26, 210);
@@ -973,6 +1015,45 @@ export default function HomeScreen() {
     };
   }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode]);
 
+  const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.seekTo(positionMs);
+      return;
+    }
+    spotifyBrowserRef.current?.seekTo(positionMs);
+  }, []);
+
+  const handlePlaybackPlayPause = useCallback(() => {
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.togglePlayPause();
+      return;
+    }
+    spotifyBrowserRef.current?.togglePlayPause();
+  }, []);
+
+  const handlePlaybackResync = useCallback(() => {
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.resyncPlayback();
+      return;
+    }
+    spotifyBrowserRef.current?.resyncPlayback();
+  }, []);
+
+  const handlePlaybackPrevious = useCallback(() => {
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.skipPrevious();
+      return;
+    }
+    spotifyBrowserRef.current?.skipPrevious();
+  }, []);
+
+  const handlePlaybackNext = useCallback(() => {
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.skipNext();
+      return;
+    }
+    spotifyBrowserRef.current?.skipNext();
+  }, []);
   const handleLyricLinePress = useCallback((line: LyricLine) => {
     const nowWall = Date.now();
     const nowMono =
@@ -986,11 +1067,11 @@ export default function HomeScreen() {
       anchorMonotonicMs: nowMono,
       playbackPosition: line.lineStartTime,
     });
-    bridgeClient.seekTo(line.lineStartTime);
+    sendSeekToPlaybackSource(line.lineStartTime);
     setScrubPreviewPositionMs(null);
     setAutoFollowEnabled(true);
     setResumeAutoFollowSignal((value) => value + 1);
-  }, []);
+  }, [sendSeekToPlaybackSource]);
 
   const handleSeek = useCallback(
     (positionMs: number) => {
@@ -1013,12 +1094,12 @@ export default function HomeScreen() {
       if (isPlaying && autoFollowEnabled) {
         setAutoFollowEnabled(false);
       }
-      bridgeClient.seekTo(clamped);
+      sendSeekToPlaybackSource(clamped);
       setScrubPreviewPositionMs(null);
       setAutoFollowEnabled(true);
       setResumeAutoFollowSignal((value) => value + 1);
     },
-    [autoFollowEnabled, currentTrack?.durationMs, isPlaying],
+    [autoFollowEnabled, currentTrack?.durationMs, isPlaying, sendSeekToPlaybackSource],
   );
 
   const handleActiveLineChange = useCallback((nextActiveLine: number) => {
@@ -1482,10 +1563,10 @@ export default function HomeScreen() {
                     isPlaying={isPlaying}
                     durationMs={currentTrack?.durationMs ?? 0}
                     onScrubPreview={handleScrubPreview}
-                    onPlayPause={() => bridgeClient.togglePlayPause()}
-                    onPlayPauseResync={() => bridgeClient.resyncPlayback()}
-                    onPrevious={() => bridgeClient.skipPrevious()}
-                    onNext={() => bridgeClient.skipNext()}
+                    onPlayPause={handlePlaybackPlayPause}
+                    onPlayPauseResync={handlePlaybackResync}
+                    onPrevious={handlePlaybackPrevious}
+                    onNext={handlePlaybackNext}
                     onSeek={handleSeek}
                     hideStatusBar
                     onUserInteraction={handleControlsInteraction}
@@ -1502,10 +1583,10 @@ export default function HomeScreen() {
                       !autoFollowEnabled && scrubPreviewPositionMs === null
                     }
                     onResumeAutoFollow={handleResumeAutoFollow}
-                    onPlayPause={() => bridgeClient.togglePlayPause()}
-                    onPlayPauseResync={() => bridgeClient.resyncPlayback()}
-                    onPrevious={() => bridgeClient.skipPrevious()}
-                    onNext={() => bridgeClient.skipNext()}
+                    onPlayPause={handlePlaybackPlayPause}
+                    onPlayPauseResync={handlePlaybackResync}
+                    onPrevious={handlePlaybackPrevious}
+                    onNext={handlePlaybackNext}
                     onSeek={handleSeek}
                     onRequestTranslate={() =>
                       requestImmediateTranslationForCurrentSource()
@@ -1529,22 +1610,41 @@ export default function HomeScreen() {
                 { paddingLeft: LANDSCAPE_LYRICS_PADDING },
               ]}
             >
-              <LyricsView
-                tapToSeekEnabled={tapToSeekEnabled}
-                showTranslatedText={showTranslatedText}
-                selectedLineKeys={selectedLineKeys}
-                previewPositionMs={scrubPreviewPositionMs}
-                autoFollowEnabled={autoFollowEnabled}
-                resumeAutoFollowSignal={resumeAutoFollowSignal}
-                onLinePress={handleLyricLinePress}
-                onLineLongPress={handleLineLongPress}
-                onCreditsTimestampPress={handleSeek}
-                onActiveLineChange={handleActiveLineChange}
-                onAutoFollowChange={handleAutoFollowChange}
-                onUserInteraction={handleControlsInteraction}
-                fontScale={LANDSCAPE_FONT_SCALE}
-                landscapeMode
-              />
+              {lyricsRendererMode === "webview" ? (
+                <WebLyricsView
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
+                  onUserInteraction={handleControlsInteraction}
+                  fontScale={LANDSCAPE_FONT_SCALE}
+                  landscapeMode
+                />
+              ) : (
+                <LyricsView
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onCreditsTimestampPress={handleSeek}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onUserInteraction={handleControlsInteraction}
+                  fontScale={LANDSCAPE_FONT_SCALE}
+                  landscapeMode
+                />
+              )}
             </SafeAreaView>
           ) : null}
         </View>
@@ -1751,23 +1851,40 @@ export default function HomeScreen() {
             <Reanimated.View
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}
             >
-              <LyricsView
-                tapToSeekEnabled={tapToSeekEnabled}
-                showTranslatedText={showTranslatedText}
-                selectedLineKeys={selectedLineKeys}
-                previewPositionMs={scrubPreviewPositionMs}
-                autoFollowEnabled={autoFollowEnabled}
-                resumeAutoFollowSignal={resumeAutoFollowSignal}
-                onLinePress={handleLyricLinePress}
-                onLineLongPress={handleLineLongPress}
-                onCreditsTimestampPress={handleSeek}
-                onActiveLineChange={handleActiveLineChange}
-                onAutoFollowChange={handleAutoFollowChange}
-                onUserInteraction={handleControlsInteraction}
-                suppressInitialAutoScrollAnimation
-                suspendViewportScrollAdjustments={albumArtworkMorphing}
-                onInitialAutoScrollSettled={fadeLyricsBackIn}
-              />
+              {lyricsRendererMode === "webview" ? (
+                <WebLyricsView
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
+                  onUserInteraction={handleControlsInteraction}
+                />
+              ) : (
+                <LyricsView
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onCreditsTimestampPress={handleSeek}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onUserInteraction={handleControlsInteraction}
+                  suppressInitialAutoScrollAnimation
+                  suspendViewportScrollAdjustments={albumArtworkMorphing}
+                  onInitialAutoScrollSettled={fadeLyricsBackIn}
+                />
+              )}
             </Reanimated.View>
           </Reanimated.View>
           {/* ponytail: LinearGradient replaces BlurView — same fade, no GPU blur cost */}
@@ -1824,10 +1941,10 @@ export default function HomeScreen() {
             }
             onResumeAutoFollow={handleResumeAutoFollow}
             onOpenShareMenu={openShareMenu}
-            onPlayPause={() => bridgeClient.togglePlayPause()}
-            onPlayPauseResync={() => bridgeClient.resyncPlayback()}
-            onPrevious={() => bridgeClient.skipPrevious()}
-            onNext={() => bridgeClient.skipNext()}
+            onPlayPause={handlePlaybackPlayPause}
+            onPlayPauseResync={handlePlaybackResync}
+            onPrevious={handlePlaybackPrevious}
+            onNext={handlePlaybackNext}
             onSeek={handleSeek}
             onRequestTranslate={() =>
               requestImmediateTranslationForCurrentSource()
@@ -1857,6 +1974,8 @@ export default function HomeScreen() {
       </>
       ) : null}
 
+      <SpotifyBrowserFallback ref={spotifyBrowserRef} />
+
       <SettingsMenu
         open={menuOpen}
         landscapeAnchorWidth={isLandscape ? landscapeLeftPaneWidth : undefined}
@@ -1872,6 +1991,10 @@ export default function HomeScreen() {
         onRefetchLyricsFromSource={(source) => {
           setMenuOpen(false);
           void refreshLyricsForCurrentTrack(source);
+        }}
+        onOpenSpotifyBrowser={() => {
+          setMenuOpen(false);
+          setTimeout(() => spotifyBrowserRef.current?.openBrowser(), 250);
         }}
         onOpenBridgeSettings={() => {
           setMenuOpen(false);
@@ -1889,6 +2012,8 @@ export default function HomeScreen() {
         onToggleAutoHidePlaybackControls={handleAutoHidePlaybackControlsChange}
         showTranslatedText={showTranslatedText}
         onToggleShowTranslatedText={setShowTranslatedText}
+        lyricsRendererMode={lyricsRendererMode}
+        onChangeLyricsRendererMode={setLyricsRendererMode}
         connectionStatus={connectionStatus}
         latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
         errorMessage={errorMessage}
