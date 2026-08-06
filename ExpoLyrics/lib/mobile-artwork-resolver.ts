@@ -6,6 +6,14 @@ const USER_AGENT = 'KineSyncDesktopBridge/1.0 (+https://github.com/KineSync/Kine
 const TIMEOUT_MS = 8_000;
 const ITUNES_MIN_INTERVAL_MS = 3_200;
 const cache = new Map<string, string>();
+const MAX_ARTWORK_CACHE_ENTRIES = 96;
+function cacheArtwork(key: string, url: string) {
+  cache.set(key, url);
+  if (cache.size > MAX_ARTWORK_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey === 'string') cache.delete(oldestKey);
+  }
+}
 let lastItunesRequestAt = 0;
 
 type Candidate = { title: string; artist: string; durationMs: number; url: string };
@@ -94,12 +102,16 @@ async function itunes(track: Track, signal: AbortSignal) {
 export async function resolveMobileArtworkUrl(track: Track) {
   const key = String(track.id || '').trim();
   if (!key || !String(track.title || '').trim()) return '';
-  const cached = cache.get(key); if (cached) return cached;
+  const cached = cache.get(key);
+  if (cached) {
+    cache.delete(key); cache.set(key, cached);
+    return cached;
+  }
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     let url = ''; try { url = await deezer(track, controller.signal); } catch { /* iTunes fallback */ }
     if (!url) try { url = await itunes(track, controller.signal); } catch { /* no artwork */ }
-    if (url) cache.set(key, url);
+    if (url) cacheArtwork(key, url);
     return url;
   } finally { clearTimeout(timer); }
 }

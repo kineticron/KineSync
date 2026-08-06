@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@react-native-vector-icons/ionicons";
 import { memo, useCallback, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -65,6 +65,11 @@ export const LiveActivityDebugPanel = memo(function LiveActivityDebugPanel() {
       extensionPoint ? `Point: ${extensionPoint}` : null,
       hostAppId ? `Host app id: ${hostAppId}` : null,
       extensionAppId ? `Ext app id: ${extensionAppId}` : null,
+      info.payloadBytes
+        ? `Payload: ${info.payloadBytes}/${info.payloadLimitBytes} B${
+            info.payloadTrimmed ? " (trimmed)" : ""
+          }`
+        : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -94,7 +99,7 @@ export const LiveActivityDebugPanel = memo(function LiveActivityDebugPanel() {
       const started = await forceStartLyricsLiveActivity(snapshot);
       setStatusMessage(
         started
-          ? "Started — leave the app to view the island (kept alive for testing)"
+          ? "Started — lock the device or inspect the Dynamic Island"
           : getLyricsLiveActivityDebugInfo().lastStartError ??
               "Start failed (check track + dev build)",
       );
@@ -171,9 +176,9 @@ export const LiveActivityDebugPanel = memo(function LiveActivityDebugPanel() {
         </Pressable>
       </View>
       <Text style={styles.helperText}>
-        Start now keeps the Live Activity alive even while this app is open. Then
-        leave the app to confirm the island and lock screen. Delete the old app
-        before installing a new IPA so the widget extension updates.
+        Live Activity starts automatically when playback metadata arrives. Use Start
+        now to replace it for diagnostics, then lock the device or inspect the Dynamic
+        Island. Native widget changes require a fresh iOS development build.
       </Text>
     </View>
   );

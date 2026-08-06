@@ -17,6 +17,14 @@ export type MobileLyricsPacket = {
   statusMessage?: string;
 };
 
+export type SpotifyCatalogTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  durationMs: number;
+};
+
 export type MobileLyricsSourcePreference =
   | "auto"
   | "local-vault"
@@ -45,7 +53,32 @@ export function createLyricsService(options?: {
   ): Promise<MobileLyricsPacket>;
   getCachedLyrics(trackId: string): MobileLyricsPacket | null;
   clearCache(): void;
+  resolveSpotifyCatalogTrackById(
+    spotifyTrackId: string,
+    accessToken: string,
+  ): Promise<SpotifyCatalogTrack | null>;
+  resolveSpotifyCatalogTrackViaPartnerSearch(
+    track: {
+      title: string;
+      artist: string;
+      album?: string;
+      durationMs?: number;
+    },
+    accessToken: string,
+  ): Promise<SpotifyCatalogTrack | null>;
+  mergeNativePlaybackArtist(nativeArtist: string, catalogArtist: string): string;
 };
+
+export function isLikelySameTrack(
+  track: {
+    title: string;
+    artist: string;
+    durationMs?: number;
+  },
+  title: string,
+  artist: string,
+  durationMs?: number,
+): boolean;
 
 export function getAvailableLyricsSources(): string[];
 export function getTemporarilyDisabledLyricsSources(): string[];

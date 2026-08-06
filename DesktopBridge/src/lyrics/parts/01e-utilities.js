@@ -1350,10 +1350,41 @@ function parseSpicySyllableLyrics(content = []) {
   return parsed.filter((line) => line?.syllables?.length);
 }
 
+function hasSpicyTimedSyllables(block) {
+  const syllables = block?.Syllables;
+  if (!Array.isArray(syllables) || !syllables.length) {
+    return false;
+  }
+  return syllables.some((syllable) => {
+    if (!syllable || typeof syllable !== "object") {
+      return false;
+    }
+    const text = String(syllable?.Text ?? syllable?.text ?? "").trim();
+    return (
+      text &&
+      (Number.isFinite(Number(syllable?.StartTime)) ||
+        Number.isFinite(Number(syllable?.EndTime)))
+    );
+  });
+}
+
+function hasSpicySyllableTimingContent(payload = {}) {
+  const content = Array.isArray(payload?.Content) ? payload.Content : [];
+  return content.some((entry) => {
+    if (hasSpicyTimedSyllables(entry?.Lead)) {
+      return true;
+    }
+    const backgrounds = Array.isArray(entry?.Background) ? entry.Background : [];
+    return backgrounds.some((background) => hasSpicyTimedSyllables(background));
+  });
+}
 function resolveSpicyPayloadType(payload = {}) {
   const typeLabel = String(payload?.Type || "")
     .trim()
     .toLowerCase();
+  if (hasSpicySyllableTimingContent(payload)) {
+    return "syllable";
+  }
   if (typeLabel === "syllable") {
     return "syllable";
   }
@@ -2385,7 +2416,8 @@ async function fetchJson(
       query.set(key, String(value));
     }
   }
-  const finalUrl = query.size ? `${url}?${query.toString()}` : url;
+  const queryString = query.toString();
+  const finalUrl = queryString ? `${url}?${queryString}` : url;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

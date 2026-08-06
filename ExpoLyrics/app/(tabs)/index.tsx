@@ -4,7 +4,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@react-native-vector-icons/ionicons";
 import {
   memo,
   useCallback,
@@ -2052,7 +2052,7 @@ const styles = StyleSheet.create({
     overflow: "visible",
   },
   backgroundBlur: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.96,
   },
   ambientBlob: {
@@ -2072,7 +2072,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#B668F2",
   },
   backgroundTint: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(8, 9, 14, 0.68)",
   },
   backgroundTintWithArtwork: {
@@ -2106,7 +2106,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   fullscreenAlbumWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 4,
     alignItems: "center",
     justifyContent: "flex-start",
@@ -2190,7 +2190,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   lyricsBottomBlur: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   controlsRevealZone: {
     position: "absolute",

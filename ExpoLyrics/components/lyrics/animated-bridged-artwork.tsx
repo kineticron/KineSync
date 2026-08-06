@@ -32,7 +32,7 @@ export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
       {safeStaticUri ? (
         <ExpoImage
           source={{ uri: safeStaticUri }}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           cachePolicy="memory-disk"
           recyclingKey={recyclingKey ?? safeStaticUri}
           contentFit="cover"

@@ -10,7 +10,6 @@ import {
   isLyricsLiveActivitySupported,
   prefetchLiveActivityAccent,
   projectPlaybackPosition,
-  shouldKeepLyricsLiveActivityInForeground,
   setLyricsLiveActivityManualKeepAlive,
   startLyricsLiveActivity,
   stopLyricsLiveActivity,
@@ -35,7 +34,6 @@ function readSnapshot(): LyricsLiveActivitySnapshot {
 }
 
 const ANCHOR_SYNC_INTERVAL_MS = 2500;
-const BACKGROUND_START_RETRY_MS = [250, 900, 2000] as const;
 
 export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
@@ -46,7 +44,9 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
   const lastLyricsSourceRef = useRef("");
   const lastLyricsModeKeyRef = useRef("");
   const lastLyricLineKeyRef = useRef("");
-  const backgroundRetryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const lastIsPlayingRef = useRef<boolean | null>(null);
+  const lastConnectionStatusRef = useRef("");
+  const lastPrefetchedArtworkKeyRef = useRef("");
 
   useEffect(() => {
     if (!isLyricsLiveActivitySupported()) {
@@ -57,7 +57,16 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
       if (appStateRef.current !== "active") {
         return;
       }
-      void prefetchLiveActivityAccent(readSnapshot());
+      const snapshot = readSnapshot();
+      const artworkKey = [
+        snapshot.track?.id || "",
+        snapshot.track?.artworkUrl || "",
+      ].join("\u0000");
+      if (!snapshot.track || artworkKey === lastPrefetchedArtworkKeyRef.current) {
+        return;
+      }
+      lastPrefetchedArtworkKeyRef.current = artworkKey;
+      void prefetchLiveActivityAccent(snapshot);
     };
 
     prefetchAccent();
@@ -73,11 +82,11 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
       syncInFlightRef.current = true;
       try {
         const snapshot = readSnapshot();
-        const keepAliveInForeground = shouldKeepLyricsLiveActivityInForeground();
         const shouldBeActive =
-          (appStateRef.current !== "active" || keepAliveInForeground) &&
-          snapshot.connectionStatus === "connected" &&
-          Boolean(snapshot.track?.title?.trim());
+          Boolean(snapshot.track?.title?.trim()) &&
+          (snapshot.connectionStatus === "connected" ||
+            snapshot.isPlaying ||
+            hasActiveLyricsLiveActivity());
 
         if (!shouldBeActive) {
           if (hasActiveLyricsLiveActivity() || force) {
@@ -110,40 +119,20 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
       }
     };
 
-    const clearBackgroundRetries = () => {
-      for (const timer of backgroundRetryTimersRef.current) {
-        clearTimeout(timer);
-      }
-      backgroundRetryTimersRef.current = [];
-    };
-
-    const scheduleBackgroundRetries = () => {
-      clearBackgroundRetries();
-      for (const delayMs of BACKGROUND_START_RETRY_MS) {
-        const timer = setTimeout(() => {
-          void syncLiveActivity(true);
-        }, delayMs);
-        backgroundRetryTimersRef.current.push(timer);
-      }
-    };
-
     const handleAppStateChange = (nextState: AppStateStatus) => {
       appStateRef.current = nextState;
       if (nextState === "active") {
-        clearBackgroundRetries();
-      } else if (nextState === "background") {
-        scheduleBackgroundRetries();
+        prefetchAccent();
       }
+      // The activity is normally created by the foreground store subscription.
+      // This forced sync refreshes the final state during lifecycle transitions.
       void syncLiveActivity(true);
     };
 
     const unsubscribe = usePlaybackStore.subscribe((state) => {
       if (appStateRef.current === "active") {
         prefetchAccent();
-        return;
       }
-
-      const snapshot = readSnapshot();
       const trackId = state.currentTrack?.id ?? null;
       const lyricsMode = detectLyricsTimingMode(state.lyrics, state.lyricsSource);
       const lyricLineKey = getActiveLyricLineKey(
@@ -166,12 +155,17 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
         state.lyricsSource !== lastLyricsSourceRef.current ||
         lyricsMode !== lastLyricsModeKeyRef.current;
       const lineChanged = lyricLineKey !== lastLyricLineKeyRef.current;
+      const playbackStateChanged =
+        state.isPlaying !== lastIsPlayingRef.current ||
+        state.connectionStatus !== lastConnectionStatusRef.current;
 
-      if (metadataChanged || lineChanged) {
+      if (metadataChanged || lineChanged || playbackStateChanged) {
         lastTrackIdRef.current = trackId;
         lastLyricsSourceRef.current = state.lyricsSource;
         lastLyricsModeKeyRef.current = lyricsMode;
         lastLyricLineKeyRef.current = lyricLineKey;
+        lastIsPlayingRef.current = state.isPlaying;
+        lastConnectionStatusRef.current = state.connectionStatus;
         void syncLiveActivity(true);
         return;
       }
@@ -196,7 +190,6 @@ export function LyricsLiveActivityProvider({ children }: PropsWithChildren) {
     void syncLiveActivity(true);
 
     return () => {
-      clearBackgroundRetries();
       unsubscribe();
       appStateSubscription.remove();
       if (Platform.OS === "ios") {

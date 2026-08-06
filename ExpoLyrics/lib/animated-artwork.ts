@@ -28,6 +28,17 @@ type ItunesAlbumCandidate = {
 
 const resolvedCache = new Map<string, AnimatedArtworkUrls | null>();
 const inflight = new Map<string, Promise<AnimatedArtworkUrls | null>>();
+const MAX_RESOLVED_CACHE_ENTRIES = 96;
+
+function cacheResolvedArtwork(key: string, value: AnimatedArtworkUrls | null) {
+  resolvedCache.set(key, value);
+  if (resolvedCache.size > MAX_RESOLVED_CACHE_ENTRIES) {
+    const oldestKey = resolvedCache.keys().next().value;
+    if (typeof oldestKey === 'string') {
+      resolvedCache.delete(oldestKey);
+    }
+  }
+}
 
 function normalizeText(input: string) {
   return String(input || '')
@@ -511,7 +522,10 @@ export async function resolveAnimatedArtworkForTrack(
     return null;
   }
   if (resolvedCache.has(lookupKey)) {
-    return resolvedCache.get(lookupKey) ?? null;
+    const cached = resolvedCache.get(lookupKey) ?? null;
+    resolvedCache.delete(lookupKey);
+    resolvedCache.set(lookupKey, cached);
+    return cached;
   }
   const pending = inflight.get(lookupKey);
   if (pending) {
@@ -530,7 +544,7 @@ export async function resolveAnimatedArtworkForTrack(
       }
       const resolved = await fetchAnimatedArtworkForParams(track, params);
       if (resolved) {
-        resolvedCache.set(lookupKey, resolved);
+        cacheResolvedArtwork(lookupKey, resolved);
         return resolved;
       }
 
@@ -541,14 +555,14 @@ export async function resolveAnimatedArtworkForTrack(
           albumOnlyParams,
         );
         if (albumOnlyResolved) {
-          resolvedCache.set(lookupKey, albumOnlyResolved);
+          cacheResolvedArtwork(lookupKey, albumOnlyResolved);
           return albumOnlyResolved;
         }
       }
     }
 
     const viaItunes = await resolveViaItunesAlbumUrl(track);
-    resolvedCache.set(lookupKey, viaItunes);
+    cacheResolvedArtwork(lookupKey, viaItunes);
     return viaItunes;
   })();
 

@@ -43,6 +43,19 @@ const activityState: LyricsLiveActivityState = {
 
 let manualKeepAlive = false;
 let lastStartError: string | null = null;
+let lastPayloadBytes = 0;
+let lastPayloadTrimmed = false;
+
+// ActivityKit rejects the combined static attributes and dynamic content state
+// above 4 KB. Keep headroom for Swift Codable's representation.
+export const ACTIVITYKIT_PAYLOAD_LIMIT_BYTES = 4096;
+export const LIVE_ACTIVITY_SAFE_PAYLOAD_BYTES = 3500;
+const LIVE_ACTIVITY_STATE_BUDGET_BYTES = 2900;
+const MAX_TITLE_BYTES = 192;
+const MAX_SUBTITLE_BYTES = 192;
+const MAX_SOURCE_BYTES = 96;
+const MAX_LYRIC_BYTES = 768;
+const MAX_SYLLABLE_PAYLOAD_BYTES = 1400;
 
 const DEFAULT_ACCENT_HEX = "8B5CF6";
 
@@ -68,11 +81,12 @@ type NativeActivityDebugInfo = {
   hostProvisioning?: NativeProvisioningDebugInfo;
   extensionProvisioning?: NativeProvisioningDebugInfo;
   activityCount?: number;
-  activities?: Array<{
+  payloadLimitBytes?: number;
+  activities?: {
     id?: string;
     state?: string;
     title?: string;
-  }>;
+  }[];
   error?: string;
 };
 
@@ -106,8 +120,10 @@ function timingModeForLiveActivity(mode: LyricsTimingMode): LiveActivityLyricsMo
 function shouldShowLiveActivity(snapshot: LyricsLiveActivitySnapshot) {
   return (
     isLyricsLiveActivitySupported() &&
-    snapshot.connectionStatus === "connected" &&
-    Boolean(snapshot.track?.title?.trim())
+    Boolean(snapshot.track?.title?.trim()) &&
+    (snapshot.connectionStatus === "connected" ||
+      snapshot.isPlaying ||
+      hasActiveLyricsLiveActivity())
   );
 }
 
@@ -128,6 +144,78 @@ function sanitizeAccentHex(accent: string) {
     return stripped.toUpperCase();
   }
   return DEFAULT_ACCENT_HEX;
+}
+
+export function utf8ByteLength(value: string) {
+  let bytes = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x7f) bytes += 1;
+    else if (codePoint <= 0x7ff) bytes += 2;
+    else if (codePoint <= 0xffff) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+
+function truncateUtf8(value: string, maxBytes: number) {
+  if (utf8ByteLength(value) <= maxBytes) {
+    return value;
+  }
+
+  let result = "";
+  let usedBytes = 0;
+  for (const character of value) {
+    const characterBytes = utf8ByteLength(character);
+    if (usedBytes + characterBytes > maxBytes) {
+      break;
+    }
+    result += character;
+    usedBytes += characterBytes;
+  }
+  return result.trimEnd();
+}
+
+export function measureLiveActivityPayloadBytes(
+  state: object,
+  config?: object,
+) {
+  return utf8ByteLength(
+    JSON.stringify(
+      config === undefined
+        ? { contentState: state }
+        : { attributes: config, contentState: state },
+    ),
+  );
+}
+
+function fitLiveActivityStateToBudget<T extends {
+  subtitle?: string;
+  currentLineText?: string;
+  syllablePayload?: string;
+}>(state: T, config?: object): T {
+  const budget = config
+    ? LIVE_ACTIVITY_SAFE_PAYLOAD_BYTES
+    : LIVE_ACTIVITY_STATE_BUDGET_BYTES;
+  const next = { ...state };
+  const measure = () => measureLiveActivityPayloadBytes(next, config);
+
+  lastPayloadTrimmed = false;
+  if (measure() > budget && next.syllablePayload) {
+    next.syllablePayload = undefined;
+    lastPayloadTrimmed = true;
+  }
+  if (measure() > budget && next.currentLineText) {
+    next.currentLineText = truncateUtf8(next.currentLineText, 256);
+    lastPayloadTrimmed = true;
+  }
+  if (measure() > budget && next.subtitle) {
+    next.subtitle = truncateUtf8(next.subtitle, 96);
+    lastPayloadTrimmed = true;
+  }
+
+  lastPayloadBytes = measure();
+  return next;
 }
 
 export function projectPlaybackPosition(snapshot: LyricsLiveActivitySnapshot) {
@@ -166,7 +254,10 @@ function getTimerEndMs(
   return Date.now() + remainingMs;
 }
 
-export function buildLyricsLiveActivityState(snapshot: LyricsLiveActivitySnapshot) {
+export function buildLyricsLiveActivityState(
+  snapshot: LyricsLiveActivitySnapshot,
+  config?: object,
+) {
   const track = snapshot.track;
   const timingMode = detectLyricsTimingMode(snapshot.lyrics, snapshot.lyricsSource);
   const isStatic = timingMode === "static";
@@ -175,30 +266,51 @@ export function buildLyricsLiveActivityState(snapshot: LyricsLiveActivitySnapsho
   const activeLine = isStatic
     ? null
     : resolveActiveLyricLine(snapshot.lyrics, projectedPositionMs);
-  const title = track?.title?.trim() || "ExpoLyrics";
-  const subtitle = track?.artist?.trim() || "Unknown artist";
+  const title = truncateUtf8(
+    track?.title?.trim() || "KineSync",
+    MAX_TITLE_BYTES,
+  );
+  const subtitle = truncateUtf8(
+    track?.artist?.trim() || "Unknown artist",
+    MAX_SUBTITLE_BYTES,
+  );
 
   const timerEndMs = getTimerEndMs(snapshot, projectedPositionMs);
   const progress = getPlaybackProgress(snapshot, projectedPositionMs);
 
-  return {
-    title,
-    subtitle,
-    source: formatLyricsSourceLabel(snapshot.lyricsSource),
-    lyricsMode,
-    currentLineText: isStatic ? undefined : activeLine?.text,
-    lineStartMs: isStatic ? undefined : activeLine?.lineStartMs,
-    lineEndMs: isStatic ? undefined : activeLine?.lineEndMs,
-    playbackAnchorMs: isStatic ? undefined : projectedPositionMs,
-    playbackAnchorEpochMs: isStatic ? undefined : Date.now(),
-    isPlayingLive: snapshot.isPlaying,
-    syllablePayload:
-      lyricsMode === "karaoke" ? activeLine?.syllablePayload : undefined,
-    progressBar: {
-      progress,
-      ...(timerEndMs !== undefined ? { date: timerEndMs } : {}),
+  const syllablePayload =
+    lyricsMode === "karaoke" &&
+    activeLine?.syllablePayload &&
+    utf8ByteLength(activeLine.syllablePayload) <= MAX_SYLLABLE_PAYLOAD_BYTES
+      ? activeLine.syllablePayload
+      : undefined;
+
+  return fitLiveActivityStateToBudget(
+    {
+      title,
+      subtitle,
+      source: truncateUtf8(
+        formatLyricsSourceLabel(snapshot.lyricsSource),
+        MAX_SOURCE_BYTES,
+      ),
+      lyricsMode,
+      currentLineText:
+        isStatic || !activeLine?.text
+          ? undefined
+          : truncateUtf8(activeLine.text, MAX_LYRIC_BYTES),
+      lineStartMs: isStatic ? undefined : activeLine?.lineStartMs,
+      lineEndMs: isStatic ? undefined : activeLine?.lineEndMs,
+      playbackAnchorMs: isStatic ? undefined : projectedPositionMs,
+      playbackAnchorEpochMs: isStatic ? undefined : Date.now(),
+      isPlayingLive: snapshot.isPlaying,
+      syllablePayload,
+      progressBar: {
+        progress,
+        ...(timerEndMs !== undefined ? { date: timerEndMs } : {}),
+      },
     },
-  };
+    config,
+  );
 }
 
 function buildActivityConfig(snapshot: LyricsLiveActivitySnapshot) {
@@ -229,6 +341,13 @@ function safeStartActivity(
 ) {
   if (!liveActivityNative) {
     logLiveActivityWarning("Native module unavailable — rebuild with a dev client.");
+    return undefined;
+  }
+
+  const payloadBytes = measureLiveActivityPayloadBytes(state, config);
+  if (payloadBytes > LIVE_ACTIVITY_SAFE_PAYLOAD_BYTES) {
+    lastStartError = `Live Activity payload is ${payloadBytes} bytes; safe limit is ${LIVE_ACTIVITY_SAFE_PAYLOAD_BYTES}.`;
+    logLiveActivityWarning(lastStartError);
     return undefined;
   }
 
@@ -295,8 +414,31 @@ export function prefetchLiveActivityAccent(snapshot: LyricsLiveActivitySnapshot)
   });
 }
 
+function recoverNativeActivityId() {
+  if (activityState.activityId || !liveActivityNative) {
+    return activityState.activityId;
+  }
+
+  try {
+    const debugInfo =
+      liveActivityNative.getActivityDebugInfo?.() as NativeActivityDebugInfo | undefined;
+    const activity = debugInfo?.activities?.find(
+      (candidate) =>
+        candidate.id &&
+        candidate.state !== "ended" &&
+        candidate.state !== "dismissed",
+    );
+    if (activity?.id) {
+      activityState.activityId = activity.id;
+    }
+  } catch {
+    // Recovery is best-effort; startActivity will surface a useful native error.
+  }
+  return activityState.activityId;
+}
+
 export function hasActiveLyricsLiveActivity() {
-  return Boolean(activityState.activityId);
+  return Boolean(recoverNativeActivityId());
 }
 
 export function getLyricsLiveActivityDebugInfo() {
@@ -319,6 +461,9 @@ export function getLyricsLiveActivityDebugInfo() {
     activityId: activityState.activityId,
     manualKeepAlive,
     lastStartError,
+    payloadBytes: lastPayloadBytes,
+    payloadLimitBytes: ACTIVITYKIT_PAYLOAD_LIMIT_BYTES,
+    payloadTrimmed: lastPayloadTrimmed,
     nativeActivityDebug,
   };
 }
@@ -360,8 +505,8 @@ export async function startLyricsLiveActivity(
     return false;
   }
 
-  const state = buildLyricsLiveActivityState(snapshot);
   const config = buildActivityConfig(snapshot);
+  const state = buildLyricsLiveActivityState(snapshot, config);
   const activityId = safeStartActivity(state, config);
 
   if (!activityId) {

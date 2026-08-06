@@ -38,9 +38,17 @@ const NETEASE_BASE_URLS = [
   "https://netease-cloud-music-api.jinghuashang.cn",
   "https://neteasecloudmusicapi.vercel.app",
 ];
+const NETEASE_DIRECT_API_URL = "https://interface.music.163.com";
 const SPICY_LYRICS_API_URL = "https://api.spicylyrics.org";
-/** Keep in sync with spicy-lyrics `project/config.ts` ProjectVersion. */
-const SPICY_LYRICS_CLIENT_VERSION = "6.2.3";
+/** Fallback only; the official client fetches the active version from /version. */
+const SPICY_LYRICS_CLIENT_VERSION = "6.3.1";
+const SPICY_LYRICS_VERSION_CACHE_TTL_MS = 15 * 60 * 1000;
+const SPICY_LYRICS_VERSION_FAILURE_CACHE_TTL_MS = 2 * 60 * 1000;
+const spicyLyricsClientVersionCache = {
+  value: "",
+  expiresAt: 0,
+  promise: null,
+};
 const SPICY_QUEUE_BASE_DELAY_MS = 2_000;
 const SPICY_QUEUE_MAX_DELAY_MS = 10_000;
 const SPICY_QUEUE_BACKOFF_FACTOR = 1.5;
@@ -674,7 +682,8 @@ function buildUrlWithParams(url, params = {}) {
       query.set(key, String(value));
     }
   }
-  return query.size ? `${url}?${query.toString()}` : url;
+  const queryString = query.toString();
+  return queryString ? `${url}?${queryString}` : url;
 }
 
 function buildMusixmatchUrlWithParams(url, params = {}) {
@@ -797,6 +806,72 @@ async function fetchNeteaseJson(
   throw lastError || new Error("All Netease endpoints failed");
 }
 
+async function fetchNeteaseDirectApiJson(
+  path,
+  params,
+  { timeoutMs = 10_000 } = {},
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const body = new URLSearchParams();
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value !== undefined && value !== null) {
+        body.set(key, String(value));
+      }
+    }
+    const response = await fetch(`${NETEASE_DIRECT_API_URL}${path}`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Referer: "https://music.163.com/",
+        Origin: "https://music.163.com",
+        "User-Agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 KineSync/1.0",
+      },
+      body: body.toString(),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Netease direct API HTTP ${response.status}`);
+    }
+    return parseJsonLenient(await response.text());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchNeteaseSearchJson(query, { timeoutMs = 10_000 } = {}) {
+  try {
+    return await fetchNeteaseJson("/search", {
+      params: { keywords: query, type: 1, limit: 30 },
+      timeoutMs,
+    });
+  } catch {
+    return fetchNeteaseDirectApiJson(
+      "/api/search/get",
+      { s: query, type: 1, limit: 30, offset: 0 },
+      { timeoutMs },
+    );
+  }
+}
+
+async function fetchNeteaseLyricsJson(songId, { timeoutMs = 10_000 } = {}) {
+  try {
+    return await fetchNeteaseJson("/lyric/new", {
+      params: { id: songId },
+      timeoutMs,
+    });
+  } catch {
+    return fetchNeteaseDirectApiJson(
+      "/api/song/lyric/v1",
+      { id: songId, cp: false, tv: 0, lv: 0, rv: 0, kv: 0, yv: 0, ytv: 0, yrv: 0 },
+      { timeoutMs },
+    );
+  }
+}
+
 function parseSpotifyWebTokenInput(rawToken) {
   const trimmed = String(rawToken || "").trim();
   if (!trimmed) {
@@ -906,8 +981,64 @@ async function getSpotifyWebAccessToken(rawToken) {
   return accessToken;
 }
 
+async function resolveSpicyLyricsClientVersion() {
+  const now = Date.now();
+  if (
+    spicyLyricsClientVersionCache.value &&
+    spicyLyricsClientVersionCache.expiresAt > now
+  ) {
+    return spicyLyricsClientVersionCache.value;
+  }
+  if (spicyLyricsClientVersionCache.promise) {
+    return spicyLyricsClientVersionCache.promise;
+  }
+
+  const promise = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch(buildSpicyLyricsDirectUrl("/version"), {
+        method: "GET",
+        headers: {
+          Accept: "text/plain,*/*",
+          Origin: "https://xpui.app.spotify.com",
+          Referer: "https://xpui.app.spotify.com/",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.94.583 Safari/537.36",
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Spicy version HTTP ${response.status}.`);
+      }
+      const version = String(await response.text()).trim();
+      if (!/^\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$/.test(version)) {
+        throw new Error("Spicy version endpoint returned an invalid version.");
+      }
+      spicyLyricsClientVersionCache.value = version;
+      spicyLyricsClientVersionCache.expiresAt =
+        Date.now() + SPICY_LYRICS_VERSION_CACHE_TTL_MS;
+      return version;
+    } catch (error) {
+      spicyDebugLog("Spicy /version lookup failed; using fallback", {
+        fallbackVersion: SPICY_LYRICS_CLIENT_VERSION,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      spicyLyricsClientVersionCache.value = SPICY_LYRICS_CLIENT_VERSION;
+      spicyLyricsClientVersionCache.expiresAt =
+        Date.now() + SPICY_LYRICS_VERSION_FAILURE_CACHE_TTL_MS;
+      return SPICY_LYRICS_CLIENT_VERSION;
+    } finally {
+      clearTimeout(timer);
+      spicyLyricsClientVersionCache.promise = null;
+    }
+  })();
+
+  spicyLyricsClientVersionCache.promise = promise;
+  return promise;
+}
 async function fetchSpicyLyricsQuery(queries, headers = {}) {
-  const version = SPICY_LYRICS_CLIENT_VERSION;
+  const version = await resolveSpicyLyricsClientVersion();
   const body = JSON.stringify({
     queries,
     client: {
@@ -920,6 +1051,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     "Accept-Language": "en-Latn-US,en-US;q=0.9,en-Latn;q=0.8,en;q=0.7",
     "Content-Type": "application/json",
     "SpicyLyrics-Version": version,
+    "X-Mode": "2",
     Origin: "https://xpui.app.spotify.com",
     Referer: "https://xpui.app.spotify.com/",
     Priority: "u=1, i",
@@ -930,7 +1062,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "cross-site",
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.92.147 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.94.583 Safari/537.36",
     ...headers,
   };
 
@@ -1586,6 +1718,22 @@ function pickBestSpotifyPartnerCatalogMatch(track, matches) {
   return eligible[0];
 }
 
+const SPOTIFY_PARTNER_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const spotifyPartnerCatalogCache = new Map();
+const spotifyPartnerCatalogInFlight = new Map();
+
+function buildSpotifyPartnerCatalogCacheKey(track) {
+  const durationBucket =
+    Number(track?.durationMs || 0) > 0
+      ? Math.round(Number(track.durationMs) / 1000)
+      : 0;
+  return [
+    normalizeCoreTitle(track?.title || ""),
+    normalizeText(track?.artist || ""),
+    normalizeCoreTitle(track?.album || ""),
+    durationBucket,
+  ].join("|");
+}
 async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken) {
   const safeToken = String(accessToken || "").trim();
   if (!safeToken) {
@@ -1601,66 +1749,96 @@ async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken) {
     return null;
   }
 
-  const queryVariants = buildQueryVariants(safeTrack).slice(0, MAX_QUERY_VARIANTS);
-  const seenIds = new Set();
-  const matches = [];
-  let lastError = null;
-  const searchResults = await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchSpotifyPartnerSearch(query, safeToken);
-        return { payload, error: null };
-      } catch (error) {
-        return { payload: null, error };
-      }
-    }),
-  );
-  for (const result of searchResults) {
-    if (result.error) {
-      lastError = result.error;
-      continue;
-    }
-    collectSpotifyPartnerSearchMatches(
-      safeTrack,
-      result.payload,
-      seenIds,
-      matches,
+  const cacheKey = buildSpotifyPartnerCatalogCacheKey(safeTrack);
+  const cached = spotifyPartnerCatalogCache.get(cacheKey);
+  if (
+    cached &&
+    Date.now() - Number(cached.cachedAt || 0) < SPOTIFY_PARTNER_CATALOG_CACHE_TTL_MS
+  ) {
+    return cached.data ? { ...cached.data } : null;
+  }
+  const inFlight = spotifyPartnerCatalogInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const lookupPromise = (async () => {
+    const queryVariants = buildQueryVariants(safeTrack).slice(0, MAX_QUERY_VARIANTS);
+    const seenIds = new Set();
+    const matches = [];
+    let lastError = null;
+    const searchResults = await Promise.all(
+      queryVariants.map(async (query) => {
+        try {
+          const payload = await fetchSpotifyPartnerSearch(query, safeToken);
+          return { payload, error: null };
+        } catch (error) {
+          return { payload: null, error };
+        }
+      }),
     );
-  }
-  if (!matches.length && lastError) {
-    throw lastError;
-  }
-
-  const best = pickBestSpotifyPartnerCatalogMatch(safeTrack, matches);
-  if (!best?.id) {
-    return null;
-  }
-
-  let title = best.title;
-  let artist = best.artist;
-  let album = best.album || "";
-  let durationMs = best.durationMs;
-  const webTrack = await fetchSpotifyWebApiTrackById(best.id, safeToken);
-  if (webTrack) {
-    const webArtists = formatSpotifyWebApiTrackArtists(webTrack);
-    if (webArtists) {
-      artist = webArtists;
+    for (const result of searchResults) {
+      if (result.error) {
+        lastError = result.error;
+        continue;
+      }
+      collectSpotifyPartnerSearchMatches(
+        safeTrack,
+        result.payload,
+        seenIds,
+        matches,
+      );
     }
-    title = String(webTrack?.name || title).trim();
-    album = String(webTrack?.album?.name || album).trim();
-    durationMs = Number(webTrack?.duration_ms || durationMs || 0);
+    if (!matches.length && lastError) {
+      throw lastError;
+    }
+
+    const best = pickBestSpotifyPartnerCatalogMatch(safeTrack, matches);
+    if (!best?.id) {
+      spotifyPartnerCatalogCache.set(cacheKey, {
+        cachedAt: Date.now(),
+        data: null,
+      });
+      return null;
+    }
+
+    let title = best.title;
+    let artist = best.artist;
+    let album = best.album || "";
+    let durationMs = best.durationMs;
+    const webTrack = await fetchSpotifyWebApiTrackById(best.id, safeToken);
+    if (webTrack) {
+      const webArtists = formatSpotifyWebApiTrackArtists(webTrack);
+      if (webArtists) {
+        artist = webArtists;
+      }
+      title = String(webTrack?.name || title).trim();
+      album = String(webTrack?.album?.name || album).trim();
+      durationMs = Number(webTrack?.duration_ms || durationMs || 0);
+    }
+
+    const data = {
+      id: best.id,
+      title,
+      artist,
+      album,
+      durationMs,
+      score: best.score,
+    };
+    spotifyPartnerCatalogCache.set(cacheKey, {
+      cachedAt: Date.now(),
+      data,
+    });
+    return { ...data };
+  })();
+
+  spotifyPartnerCatalogInFlight.set(cacheKey, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    spotifyPartnerCatalogInFlight.delete(cacheKey);
   }
-
-  return {
-    id: best.id,
-    title,
-    artist,
-    album,
-    durationMs,
-    score: best.score,
-  };
 }
-
 async function searchSpotifyTrackCandidatesStrictForSpicy(track, accessToken) {
   const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const seenIds = new Set();

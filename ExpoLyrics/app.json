@@ -7,7 +7,6 @@
     "icon": "./assets/images/R.png",
     "scheme": "expolyrics",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "dev.kineticron.KineSync",
@@ -15,6 +14,9 @@
         "ITSAppUsesNonExemptEncryption": false,
         "CADisableMinimumFrameDurationOnPhone": true,
         "NSSupportsLiveActivitiesFrequentUpdates": true,
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSAppTransportSecurity": {
           "NSExceptionDomains": {
             "api.qq.jsososo.com": {
@@ -43,9 +45,7 @@
         "foregroundImage": "./assets/images/R.png",
         "monochromeImage": "./assets/images/R.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "usesCleartextTraffic": true,
       "package": "dev.kineticron.KineSync"
     },
     "web": {
@@ -71,16 +71,23 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "16.2"
+            "deploymentTarget": "16.4"
+          },
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ],
       "./plugins/with-lyrics-live-activity.js",
-      "expo-video"
+      "expo-video",
+      "expo-font",
+      "@react-native-vector-icons/ionicons",
+      "expo-image",
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     },
     "extra": {
       "router": {},

@@ -1,10 +1,10 @@
 import { Link } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, useColorScheme, View } from 'react-native';
 import { Colors } from '@/constants/theme';
-import { useColorScheme } from 'react-native';
 
 export default function ModalScreen() {
-  const theme = useColorScheme() ?? 'light';
+  const colorScheme = useColorScheme();
+  const theme = colorScheme === 'dark' ? 'dark' : 'light';
   return (
     <View style={[{ backgroundColor: Colors[theme].background }, styles.container]}>
       <Text style={[{ color: Colors[theme].text, fontSize: 32, fontWeight: 'bold', lineHeight: 32 }, styles.title]}>

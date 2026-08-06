@@ -83,6 +83,9 @@ let longPressTimer = 0;
 let touchStartSourceIndex = -1;
 let touchMoved = false;
 let lastLyricEndTime = 0;
+let frameRequestId: number | null = null;
+let animateUntilMs = 0;
+const IDLE_ANIMATION_GRACE_MS = 750;
 root.appendChild(playerElement);
 playerElement.classList.add("kinesync-amll-player");
 player.setAlignAnchor(LayoutAlignAnchor.Top);
@@ -256,6 +259,7 @@ function renderCredits(songwriters: string[] = [], endTime = 0) {
 async function relayout(force = false) {
   await player.calcLayout(true, force);
   updateSelectionClasses();
+  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
 }
 
 function setLyrics(message: IncomingMessage) {
@@ -315,6 +319,7 @@ function sync(message: IncomingMessage) {
   } else {
     player.pause();
   }
+  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
   if ((wasFar || message.force) && autoFollowEnabled) {
     player.resetScroll();
     void relayout(true);
@@ -367,6 +372,7 @@ function setAutoFollow(nextEnabled: boolean) {
   }
   autoFollowEnabled = nextEnabled;
   player.setIsSeeking(!autoFollowEnabled);
+  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
   post({ type: "autoFollowChange", enabled: autoFollowEnabled });
 }
 
@@ -446,7 +452,27 @@ player.getBottomLineElement().addEventListener("click", () => {
   }
 });
 
+function playbackNeedsFrames() {
+  return (
+    isPlaying &&
+    previewPositionMs === null &&
+    sourceLines.length > 0 &&
+    (durationMs <= 0 || getProjectedPosition() < durationMs)
+  );
+}
+
+function scheduleFrame(graceMs = 0) {
+  const now = performance.now();
+  animateUntilMs = Math.max(animateUntilMs, now + Math.max(0, graceMs));
+  if (document.visibilityState === "hidden" || frameRequestId !== null) {
+    return;
+  }
+  lastFrameMs = now;
+  frameRequestId = requestAnimationFrame(frame);
+}
+
 function frame() {
+  frameRequestId = null;
   const now = performance.now();
   const delta = Math.max(0, Math.min(80, now - lastFrameMs));
   lastFrameMs = now;
@@ -467,8 +493,21 @@ function frame() {
     post({ type: "activeLineChange", index: activeSourceIndex });
   }
 
-  requestAnimationFrame(frame);
+  if (playbackNeedsFrames() || now < animateUntilMs) {
+    frameRequestId = requestAnimationFrame(frame);
+  }
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    if (frameRequestId !== null) {
+      cancelAnimationFrame(frameRequestId);
+      frameRequestId = null;
+    }
+    return;
+  }
+  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
+});
 
 window.KineSyncLyrics = {
   receive(message: IncomingMessage) {
@@ -488,5 +527,5 @@ window.KineSyncLyrics = {
 };
 
 updatePlayerClass();
-requestAnimationFrame(frame);
+scheduleFrame(IDLE_ANIMATION_GRACE_MS);
 post({ type: "ready" });

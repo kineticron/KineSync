@@ -30,7 +30,7 @@ export const BridgedArtworkImage = memo(function BridgedArtworkImage({
       <ExpoImage
         {...rest}
         source={{ uri: safeUri }}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         cachePolicy="memory-disk"
         recyclingKey={recyclingKey ?? safeUri}
         transition={transitionMs > 0 ? transitionMs : undefined}

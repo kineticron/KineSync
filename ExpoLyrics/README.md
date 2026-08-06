@@ -29,6 +29,28 @@ npx expo start -c --tunnel
 
 Scan the QR code with Expo Go. Open settings to configure your bridge URL.
 
+## iOS Live Activity development
+
+Live Activities use custom native code and do not run in Expo Go. After changing
+Live Activity Swift files, the config plugin, or app configuration, regenerate and
+rebuild the iOS development client:
+
+```bash
+npx expo prebuild --clean --platform ios
+npx expo run:ios
+npm run verify:live-activity
+```
+
+The activity is created as playback metadata arrives, including in phone-only
+Spotify mode. Its content is kept below ActivityKit's 4 KB combined static/dynamic
+payload limit. KineSync currently uses only SF Symbols in the Live Activity; album
+artwork remains in the host app, so oversized or network-only images cannot prevent
+the system presentation from rendering.
+
+References: [Expo development builds](https://docs.expo.dev/develop/development-builds/introduction/),
+[Expo iOS app extensions](https://docs.expo.dev/build-reference/app-extensions/), and
+[Apple ActivityKit constraints](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities#Understand-constraints).
+
 ## Project Structure
 
 ```

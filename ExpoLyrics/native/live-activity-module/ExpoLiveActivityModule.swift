@@ -1,6 +1,14 @@
 import ActivityKit
 import ExpoModulesCore
 
+private let activityKitPayloadLimitBytes = 4096
+
+final class LiveActivityPayloadTooLargeException: GenericException<Int> {
+  override var reason: String {
+    "Live Activity attributes and content state use \(param) bytes; ActivityKit allows at most 4096 bytes"
+  }
+}
+
 public class ExpoLiveActivityModule: Module {
   struct LiveActivityState: Record {
     @Field
@@ -173,6 +181,18 @@ public class ExpoLiveActivityModule: Module {
     )
   }
 
+  private func validatePayloadSize(
+    attributes: LiveActivityAttributes,
+    state: LiveActivityAttributes.ContentState
+  ) throws -> Int {
+    let encoder = JSONEncoder()
+    let payloadBytes = try encoder.encode(attributes).count + encoder.encode(state).count
+    guard payloadBytes <= activityKitPayloadLimitBytes else {
+      throw LiveActivityPayloadTooLargeException(payloadBytes)
+    }
+    return payloadBytes
+  }
+
   private func updateImages(
     state: LiveActivityState, newState: inout LiveActivityAttributes.ContentState
   ) async throws {
@@ -330,6 +350,7 @@ public class ExpoLiveActivityModule: Module {
         )
 
         let initialState = makeContentState(from: state)
+        _ = try validatePayloadSize(attributes: attributes, state: initialState)
 
         let activity = try Activity.request(
           attributes: attributes,
@@ -341,6 +362,7 @@ public class ExpoLiveActivityModule: Module {
           var newState = activity.content.state
           do {
             try await updateImages(state: state, newState: &newState)
+            _ = try validatePayloadSize(attributes: activity.attributes, state: newState)
             await activity.update(ActivityContent(state: newState, staleDate: nil))
           } catch {
             print("[ExpoLiveActivity] Post-start image update failed: \(error)")
@@ -388,6 +410,7 @@ public class ExpoLiveActivityModule: Module {
         "hostProvisioning": provisioningSummary(for: Bundle.main),
         "extensionProvisioning": provisioningSummary(for: pluginInfo),
         "activityCount": activities.count,
+        "payloadLimitBytes": activityKitPayloadLimitBytes,
         "activities": activities.map { activity in
           [
             "id": activity.id,
@@ -412,6 +435,7 @@ public class ExpoLiveActivityModule: Module {
         var newState = makeContentState(from: state)
         do {
           try await updateImages(state: state, newState: &newState)
+          _ = try validatePayloadSize(attributes: activity.attributes, state: newState)
         } catch {
           print("[ExpoLiveActivity] Stop image update failed: \(error)")
         }
@@ -438,6 +462,7 @@ public class ExpoLiveActivityModule: Module {
         var newState = makeContentState(from: state)
         do {
           try await updateImages(state: state, newState: &newState)
+          _ = try validatePayloadSize(attributes: activity.attributes, state: newState)
           await activity.update(ActivityContent(state: newState, staleDate: nil))
         } catch {
           print("[ExpoLiveActivity] Update failed for \(activityId): \(error)")

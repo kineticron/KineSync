@@ -1,25 +1,44 @@
 // Generated mobile bundle from DesktopBridge/src/lyrics/parts.
 // Keep source behavior aligned with the Desktop Bridge parts.
 import { Buffer } from "buffer";
-import pako from "pako";
+import * as pako from "pako";
 import CryptoJS from "crypto-js";
 
 const process = { env: {} };
 const isBrowserRuntime =
   typeof window !== "undefined" && typeof document !== "undefined";
+const isReactNativeRuntime =
+  typeof navigator !== "undefined" && navigator.product === "ReactNative";
+const REACT_NATIVE_UNSAFE_REQUEST_HEADERS = new Set([
+  "accept-encoding",
+  "connection",
+  "content-length",
+  "host",
+  "priority",
+]);
 
 function makeMobileSafeHeaders(headers = {}) {
-  if (!isBrowserRuntime || !headers || typeof headers !== "object") {
-    return headers || {};
+  if (!headers || typeof headers !== "object") {
+    return {};
   }
   const safeHeaders = {};
   for (const [key, value] of Object.entries(headers)) {
-    // Browsers prohibit overriding their user agent. Native fetch accepts it,
-    // so preserve the Desktop Bridge header profile on iOS and Android.
-    if (/^user-agent$/i.test(key)) {
+    const headerName = String(key || "").trim();
+    const lowerName = headerName.toLowerCase();
+    if (!headerName) {
       continue;
     }
-    safeHeaders[key] = value;
+    if (isReactNativeRuntime) {
+      if (
+        REACT_NATIVE_UNSAFE_REQUEST_HEADERS.has(lowerName) ||
+        lowerName.startsWith("sec-")
+      ) {
+        continue;
+      }
+    } else if (isBrowserRuntime && lowerName === "user-agent") {
+      continue;
+    }
+    safeHeaders[headerName] = value;
   }
   return safeHeaders;
 }
@@ -4118,10 +4137,41 @@ function parseSpicySyllableLyrics(content = []) {
   return parsed.filter((line) => line?.syllables?.length);
 }
 
+function hasSpicyTimedSyllables(block) {
+  const syllables = block?.Syllables;
+  if (!Array.isArray(syllables) || !syllables.length) {
+    return false;
+  }
+  return syllables.some((syllable) => {
+    if (!syllable || typeof syllable !== "object") {
+      return false;
+    }
+    const text = String(syllable?.Text ?? syllable?.text ?? "").trim();
+    return (
+      text &&
+      (Number.isFinite(Number(syllable?.StartTime)) ||
+        Number.isFinite(Number(syllable?.EndTime)))
+    );
+  });
+}
+
+function hasSpicySyllableTimingContent(payload = {}) {
+  const content = Array.isArray(payload?.Content) ? payload.Content : [];
+  return content.some((entry) => {
+    if (hasSpicyTimedSyllables(entry?.Lead)) {
+      return true;
+    }
+    const backgrounds = Array.isArray(entry?.Background) ? entry.Background : [];
+    return backgrounds.some((background) => hasSpicyTimedSyllables(background));
+  });
+}
 function resolveSpicyPayloadType(payload = {}) {
   const typeLabel = String(payload?.Type || "")
     .trim()
     .toLowerCase();
+  if (hasSpicySyllableTimingContent(payload)) {
+    return "syllable";
+  }
   if (typeLabel === "syllable") {
     return "syllable";
   }
@@ -5153,7 +5203,8 @@ async function fetchJson(
       query.set(key, String(value));
     }
   }
-  const finalUrl = query.size ? `${url}?${query.toString()}` : url;
+  const queryString = query.toString();
+  const finalUrl = queryString ? `${url}?${queryString}` : url;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -5394,9 +5445,17 @@ const NETEASE_BASE_URLS = [
   "https://netease-cloud-music-api.jinghuashang.cn",
   "https://neteasecloudmusicapi.vercel.app",
 ];
+const NETEASE_DIRECT_API_URL = "https://interface.music.163.com";
 const SPICY_LYRICS_API_URL = "https://api.spicylyrics.org";
-/** Keep in sync with spicy-lyrics `project/config.ts` ProjectVersion. */
-const SPICY_LYRICS_CLIENT_VERSION = "6.2.3";
+/** Fallback only; the official client fetches the active version from /version. */
+const SPICY_LYRICS_CLIENT_VERSION = "6.3.1";
+const SPICY_LYRICS_VERSION_CACHE_TTL_MS = 15 * 60 * 1000;
+const SPICY_LYRICS_VERSION_FAILURE_CACHE_TTL_MS = 2 * 60 * 1000;
+const spicyLyricsClientVersionCache = {
+  value: "",
+  expiresAt: 0,
+  promise: null,
+};
 const SPICY_QUEUE_BASE_DELAY_MS = 2_000;
 const SPICY_QUEUE_MAX_DELAY_MS = 10_000;
 const SPICY_QUEUE_BACKOFF_FACTOR = 1.5;
@@ -6029,7 +6088,8 @@ function buildUrlWithParams(url, params = {}) {
       query.set(key, String(value));
     }
   }
-  return query.size ? `${url}?${query.toString()}` : url;
+  const queryString = query.toString();
+  return queryString ? `${url}?${queryString}` : url;
 }
 
 function buildMusixmatchUrlWithParams(url, params = {}) {
@@ -6152,6 +6212,70 @@ async function fetchNeteaseJson(
   throw lastError || new Error("All Netease endpoints failed");
 }
 
+async function fetchNeteaseDirectApiJson(
+  path,
+  params,
+  { timeoutMs = 10_000 } = {},
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const body = new URLSearchParams();
+    for (const [key, value] of Object.entries(params || {})) {
+      if (value !== undefined && value !== null) body.set(key, String(value));
+    }
+    const response = await fetch(`${NETEASE_DIRECT_API_URL}${path}`, {
+      method: "POST",
+      headers: makeMobileSafeHeaders({
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Referer: "https://music.163.com/",
+        Origin: "https://music.163.com",
+        "User-Agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 KineSync/1.0",
+      }),
+      body: body.toString(),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Netease direct API HTTP ${response.status}`);
+    }
+    return parseJsonLenient(await response.text());
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchNeteaseSearchJson(query, { timeoutMs = 10_000 } = {}) {
+  try {
+    return await fetchNeteaseJson("/search", {
+      params: { keywords: query, type: 1, limit: 30 },
+      timeoutMs,
+    });
+  } catch {
+    return fetchNeteaseDirectApiJson(
+      "/api/search/get",
+      { s: query, type: 1, limit: 30, offset: 0 },
+      { timeoutMs },
+    );
+  }
+}
+
+async function fetchNeteaseLyricsJson(songId, { timeoutMs = 10_000 } = {}) {
+  try {
+    return await fetchNeteaseJson("/lyric/new", {
+      params: { id: songId },
+      timeoutMs,
+    });
+  } catch {
+    return fetchNeteaseDirectApiJson(
+      "/api/song/lyric/v1",
+      { id: songId, cp: false, tv: 0, lv: 0, rv: 0, kv: 0, yv: 0, ytv: 0, yrv: 0 },
+      { timeoutMs },
+    );
+  }
+}
+
 function parseSpotifyWebTokenInput(rawToken) {
   const trimmed = String(rawToken || "").trim();
   if (!trimmed) {
@@ -6218,14 +6342,14 @@ async function getSpotifyWebAccessToken(rawToken) {
       }),
       {
         method: "GET",
-        headers: {
+        headers: makeMobileSafeHeaders({
           Accept: "application/json,text/plain,*/*",
           Cookie: parsed.cookieHeader,
           Referer: "https://open.spotify.com/",
           Origin: "https://open.spotify.com",
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/136.0.0.0 Safari/537.36",
-        },
+        }),
         signal: controller.signal,
       },
     );
@@ -6261,8 +6385,64 @@ async function getSpotifyWebAccessToken(rawToken) {
   return accessToken;
 }
 
+async function resolveSpicyLyricsClientVersion() {
+  const now = Date.now();
+  if (
+    spicyLyricsClientVersionCache.value &&
+    spicyLyricsClientVersionCache.expiresAt > now
+  ) {
+    return spicyLyricsClientVersionCache.value;
+  }
+  if (spicyLyricsClientVersionCache.promise) {
+    return spicyLyricsClientVersionCache.promise;
+  }
+
+  const promise = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch(buildSpicyLyricsDirectUrl("/version"), {
+        method: "GET",
+        headers: makeMobileSafeHeaders({
+          Accept: "text/plain,*/*",
+          Origin: "https://xpui.app.spotify.com",
+          Referer: "https://xpui.app.spotify.com/",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.94.583 Safari/537.36",
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Spicy version HTTP ${response.status}.`);
+      }
+      const version = String(await response.text()).trim();
+      if (!/^\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$/.test(version)) {
+        throw new Error("Spicy version endpoint returned an invalid version.");
+      }
+      spicyLyricsClientVersionCache.value = version;
+      spicyLyricsClientVersionCache.expiresAt =
+        Date.now() + SPICY_LYRICS_VERSION_CACHE_TTL_MS;
+      return version;
+    } catch (error) {
+      spicyDebugLog("Spicy /version lookup failed; using fallback", {
+        fallbackVersion: SPICY_LYRICS_CLIENT_VERSION,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      spicyLyricsClientVersionCache.value = SPICY_LYRICS_CLIENT_VERSION;
+      spicyLyricsClientVersionCache.expiresAt =
+        Date.now() + SPICY_LYRICS_VERSION_FAILURE_CACHE_TTL_MS;
+      return SPICY_LYRICS_CLIENT_VERSION;
+    } finally {
+      clearTimeout(timer);
+      spicyLyricsClientVersionCache.promise = null;
+    }
+  })();
+
+  spicyLyricsClientVersionCache.promise = promise;
+  return promise;
+}
 async function fetchSpicyLyricsQuery(queries, headers = {}) {
-  const version = SPICY_LYRICS_CLIENT_VERSION;
+  const version = await resolveSpicyLyricsClientVersion();
   const body = JSON.stringify({
     queries,
     client: {
@@ -6275,6 +6455,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     "Accept-Language": "en-Latn-US,en-US;q=0.9,en-Latn;q=0.8,en;q=0.7",
     "Content-Type": "application/json",
     "SpicyLyrics-Version": version,
+    "X-Mode": "2",
     Origin: "https://xpui.app.spotify.com",
     Referer: "https://xpui.app.spotify.com/",
     Priority: "u=1, i",
@@ -6285,7 +6466,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "cross-site",
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.92.147 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.94.583 Safari/537.36",
     ...headers,
   };
 
@@ -6575,7 +6756,7 @@ async function fetchSpotifyPartnerSearch(query, accessToken) {
       }),
       {
         method: "GET",
-        headers: {
+        headers: makeMobileSafeHeaders({
           Accept: "application/json,text/plain,*/*",
           Authorization: `Bearer ${accessToken}`,
           "app-platform": SPOTIFY_WEB_APP_PLATFORM,
@@ -6584,7 +6765,7 @@ async function fetchSpotifyPartnerSearch(query, accessToken) {
           Referer: "https://open.spotify.com/",
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/136.0.0.0 Safari/537.36",
-        },
+        }),
         signal: controller.signal,
       },
     );
@@ -6941,6 +7122,22 @@ function pickBestSpotifyPartnerCatalogMatch(track, matches) {
   return eligible[0];
 }
 
+const SPOTIFY_PARTNER_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const spotifyPartnerCatalogCache = new Map();
+const spotifyPartnerCatalogInFlight = new Map();
+
+function buildSpotifyPartnerCatalogCacheKey(track) {
+  const durationBucket =
+    Number(track?.durationMs || 0) > 0
+      ? Math.round(Number(track.durationMs) / 1000)
+      : 0;
+  return [
+    normalizeCoreTitle(track?.title || ""),
+    normalizeText(track?.artist || ""),
+    normalizeCoreTitle(track?.album || ""),
+    durationBucket,
+  ].join("|");
+}
 async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken) {
   const safeToken = String(accessToken || "").trim();
   if (!safeToken) {
@@ -6956,66 +7153,96 @@ async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken) {
     return null;
   }
 
-  const queryVariants = buildQueryVariants(safeTrack).slice(0, MAX_QUERY_VARIANTS);
-  const seenIds = new Set();
-  const matches = [];
-  let lastError = null;
-  const searchResults = await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchSpotifyPartnerSearch(query, safeToken);
-        return { payload, error: null };
-      } catch (error) {
-        return { payload: null, error };
-      }
-    }),
-  );
-  for (const result of searchResults) {
-    if (result.error) {
-      lastError = result.error;
-      continue;
-    }
-    collectSpotifyPartnerSearchMatches(
-      safeTrack,
-      result.payload,
-      seenIds,
-      matches,
+  const cacheKey = buildSpotifyPartnerCatalogCacheKey(safeTrack);
+  const cached = spotifyPartnerCatalogCache.get(cacheKey);
+  if (
+    cached &&
+    Date.now() - Number(cached.cachedAt || 0) < SPOTIFY_PARTNER_CATALOG_CACHE_TTL_MS
+  ) {
+    return cached.data ? { ...cached.data } : null;
+  }
+  const inFlight = spotifyPartnerCatalogInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const lookupPromise = (async () => {
+    const queryVariants = buildQueryVariants(safeTrack).slice(0, MAX_QUERY_VARIANTS);
+    const seenIds = new Set();
+    const matches = [];
+    let lastError = null;
+    const searchResults = await Promise.all(
+      queryVariants.map(async (query) => {
+        try {
+          const payload = await fetchSpotifyPartnerSearch(query, safeToken);
+          return { payload, error: null };
+        } catch (error) {
+          return { payload: null, error };
+        }
+      }),
     );
-  }
-  if (!matches.length && lastError) {
-    throw lastError;
-  }
-
-  const best = pickBestSpotifyPartnerCatalogMatch(safeTrack, matches);
-  if (!best?.id) {
-    return null;
-  }
-
-  let title = best.title;
-  let artist = best.artist;
-  let album = best.album || "";
-  let durationMs = best.durationMs;
-  const webTrack = await fetchSpotifyWebApiTrackById(best.id, safeToken);
-  if (webTrack) {
-    const webArtists = formatSpotifyWebApiTrackArtists(webTrack);
-    if (webArtists) {
-      artist = webArtists;
+    for (const result of searchResults) {
+      if (result.error) {
+        lastError = result.error;
+        continue;
+      }
+      collectSpotifyPartnerSearchMatches(
+        safeTrack,
+        result.payload,
+        seenIds,
+        matches,
+      );
     }
-    title = String(webTrack?.name || title).trim();
-    album = String(webTrack?.album?.name || album).trim();
-    durationMs = Number(webTrack?.duration_ms || durationMs || 0);
+    if (!matches.length && lastError) {
+      throw lastError;
+    }
+
+    const best = pickBestSpotifyPartnerCatalogMatch(safeTrack, matches);
+    if (!best?.id) {
+      spotifyPartnerCatalogCache.set(cacheKey, {
+        cachedAt: Date.now(),
+        data: null,
+      });
+      return null;
+    }
+
+    let title = best.title;
+    let artist = best.artist;
+    let album = best.album || "";
+    let durationMs = best.durationMs;
+    const webTrack = await fetchSpotifyWebApiTrackById(best.id, safeToken);
+    if (webTrack) {
+      const webArtists = formatSpotifyWebApiTrackArtists(webTrack);
+      if (webArtists) {
+        artist = webArtists;
+      }
+      title = String(webTrack?.name || title).trim();
+      album = String(webTrack?.album?.name || album).trim();
+      durationMs = Number(webTrack?.duration_ms || durationMs || 0);
+    }
+
+    const data = {
+      id: best.id,
+      title,
+      artist,
+      album,
+      durationMs,
+      score: best.score,
+    };
+    spotifyPartnerCatalogCache.set(cacheKey, {
+      cachedAt: Date.now(),
+      data,
+    });
+    return { ...data };
+  })();
+
+  spotifyPartnerCatalogInFlight.set(cacheKey, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    spotifyPartnerCatalogInFlight.delete(cacheKey);
   }
-
-  return {
-    id: best.id,
-    title,
-    artist,
-    album,
-    durationMs,
-    score: best.score,
-  };
 }
-
 async function searchSpotifyTrackCandidatesStrictForSpicy(track, accessToken) {
   const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const seenIds = new Set();
@@ -7094,6 +7321,96 @@ function decodeUriComponentSafe(value) {
   }
 }
 
+function decodeQQBase64Text(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  if (
+    !compact ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+  ) {
+    return "";
+  }
+  try {
+    const decoded = Buffer.from(compact, "base64").toString("utf8");
+    if (!decoded || decoded.includes("\u0000")) {
+      return "";
+    }
+    return decoded;
+  } catch {
+    return "";
+  }
+}
+
+
+function decodeQQBase64EncryptedText(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  if (!compact || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    return "";
+  }
+  try {
+    const encrypted = Buffer.from(compact, "base64");
+    if (!encrypted.length || encrypted.length % 8 !== 0) {
+      return "";
+    }
+    return qqKaraokeDecryptHex(encrypted.toString("hex"));
+  } catch {
+    return "";
+  }
+}
+function looksLikeQQKaraokeLyrics(value) {
+  const text = String(value || "");
+  return (
+    /<Lyric_\d+\b/i.test(text) ||
+    /LyricContent\s*=/i.test(text) ||
+    /^\s*\[(?:\d{2}:\d{2}|\d+,\d+)\]/m.test(text) ||
+    /\(\d+,\d+(?:,[^)]*)?\)/.test(text)
+  );
+}
+
+function decodeQQKaraokePayload(rawPayload) {
+  const raw = String(rawPayload || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (value) => {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) {
+      return;
+    }
+    seen.add(text);
+    candidates.push(text);
+  };
+
+  addCandidate(raw);
+  addCandidate(decodeQQBase64Text(raw));
+  addCandidate(decodeQQBase64EncryptedText(raw));
+
+  // QQ legacy lyric_download still returns encrypted hex, while musicu with
+  // crypt: 0 can return plaintext/base64 QRC. Try encrypted hex after the
+  // direct candidates so plaintext QRC is not mangled before parsing.
+  if (/^(?:[0-9a-f]{2})+$/i.test(raw)) {
+    const decrypted = qqKaraokeDecryptHex(raw);
+    addCandidate(decrypted);
+    addCandidate(decodeQQBase64Text(decrypted));
+  }
+
+  let fallbackBody = "";
+  for (const candidate of candidates) {
+    const body = extractKaraokeBody(candidate);
+    if (!body) {
+      continue;
+    }
+    if (!fallbackBody) {
+      fallbackBody = body;
+    }
+    if (looksLikeQQKaraokeLyrics(candidate) || looksLikeQQKaraokeLyrics(body)) {
+      return body;
+    }
+  }
+  return fallbackBody;
+}
 function getQqCandidateDurationMs(getSongInterval, song) {
   const interval = Number(getSongInterval(song) || 0);
   if (interval <= 0) {
@@ -7255,11 +7572,10 @@ async function fetchFromQQLegacyDownload(track) {
       });
       const fields = extractLegacyLyricFields(xml);
       for (const encryptedHex of fields) {
-        const decrypted = qqKaraokeDecryptHex(encryptedHex);
-        if (!decrypted) {
+        const karaokeBody = decodeQQKaraokePayload(encryptedHex);
+        if (!karaokeBody) {
           continue;
         }
-        const karaokeBody = extractKaraokeBody(decrypted);
         const lyrics = parseLrc(karaokeBody);
         if (!lyrics.length) {
           continue;
@@ -7678,9 +7994,9 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
         },
       },
     );
-    const encryptedLyricHex = musicuData?.req_1?.data?.lyric || "";
-    const decryptedKaraoke = qqKaraokeDecryptHex(encryptedLyricHex);
-    const karaokeBody = extractKaraokeBody(decryptedKaraoke);
+    const karaokeBody = decodeQQKaraokePayload(
+      musicuData?.req_1?.data?.lyric || "",
+    );
     const karaokeLyrics = stripLeadingMetadataLines(
       trimLeadingMetaLines(
         parseLrc(karaokeBody),
@@ -7715,7 +8031,9 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
         },
       });
       const rawTimedLyrics = lyricData?.qrc || lyricData?.lyric || "";
-      const lyrics = parseLrc(String(rawTimedLyrics));
+      const lyrics = parseLrc(
+        decodeQQKaraokePayload(rawTimedLyrics) || String(rawTimedLyrics),
+      );
       if (lyrics.length) {
         const coverage = scoreLyricsCoverage(lyrics, track.durationMs);
         const coverageRatio = getLyricsCoverageRatio(lyrics, track.durationMs);
@@ -7763,21 +8081,8 @@ async function fetchQQDirectCandidateLyricsParallel(
       };
       return;
     }
-    if (
-      probe.directResult &&
-      shouldEarlyExitQQDirectCandidate(
-        track,
-        candidate,
-        probe.selection,
-        probe.directResult.coverageRatio,
-        state.bestSelection,
-      )
-    ) {
-      shared.earlyExit = {
-        lyrics: probe.directResult.lyrics,
-        source: "qq-music-direct",
-      };
-    }
+    // Do not early-exit on the plain direct LRC result. Later candidates may
+    // still have QQ QRC karaoke lyrics, and QRC is the preferred QQ payload.
   };
 
   const topCandidate = candidatesToProbe[0];
@@ -7821,37 +8126,11 @@ async function fetchQQDirectCandidateLyricsParallel(
 }
 
 function resolveQQDirectAggregatedResults(track, state) {
-  const {
-    bestResult,
-    bestCoverageScore,
-    bestKaraokeResult,
-    bestKaraokeCoverageScore,
-  } = state;
+  const { bestResult, bestKaraokeResult } = state;
 
   if (bestKaraokeResult?.lyrics?.length) {
-    const karaokeRatio = getLyricsCoverageRatio(
-      bestKaraokeResult.lyrics,
-      track.durationMs,
-    );
-    const bestRatio = bestResult?.lyrics?.length
-      ? getLyricsCoverageRatio(bestResult.lyrics, track.durationMs)
-      : 0;
-    const coverageGap = bestCoverageScore - bestKaraokeCoverageScore;
-    const karaokeIsBestAlready =
-      !bestResult?.lyrics?.length ||
-      String(bestResult.source || "") === String(bestKaraokeResult.source || "");
-    if (!karaokeIsBestAlready) {
-      const karaokeLooksIncomplete =
-        karaokeRatio > 0 && karaokeRatio < 0.42 && bestRatio >= karaokeRatio + 0.08;
-      const lyricsClearlyMoreComplete =
-        coverageGap >= 30 && bestRatio >= karaokeRatio + 0.04;
-      if (karaokeLooksIncomplete || lyricsClearlyMoreComplete) {
-        return bestResult;
-      }
-    }
     return bestKaraokeResult;
   }
-
   return bestResult || null;
 }
 
@@ -8022,7 +8301,9 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
         },
       });
       const rawTimedLyrics = lyricData?.qrc || lyricData?.lyric || "";
-      const lyrics = parseLrc(String(rawTimedLyrics));
+      const lyrics = parseLrc(
+        decodeQQKaraokePayload(rawTimedLyrics) || String(rawTimedLyrics),
+      );
       if (lyrics.length) {
         return { lyrics, source: "qq-music-openapi-fallback" };
       }
@@ -8331,12 +8612,7 @@ async function fetchFromNetease(track) {
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await fetchNeteaseJson("/search", {
-          params: {
-            keywords: query,
-            type: 1,
-            limit: 30,
-          },
+        const payload = await fetchNeteaseSearchJson(query, {
           timeoutMs: 10_000,
         });
         const songs = Array.isArray(payload?.result?.songs)
@@ -8397,10 +8673,7 @@ async function fetchFromNetease(track) {
 
   for (const candidate of likelyNeteaseCandidates) {
     try {
-      const lyricPayload = await fetchNeteaseJson("/lyric/new", {
-        params: {
-          id: candidate.song.id,
-        },
+      const lyricPayload = await fetchNeteaseLyricsJson(candidate.song.id, {
         timeoutMs: 10_000,
       });
       const karaokeText =
@@ -8574,83 +8847,12 @@ async function fetchFromSpicyLyrics(
       candidateCount: spotifyTrackIds.length,
     });
   } else {
-    let strictSearchError = null;
-    const strictSearchStartedAt = Date.now();
-    let strictSearchIds = [];
-    try {
-      strictSearchIds = await searchSpotifyTrackCandidatesStrictForSpicy(
-        track,
-        accessToken,
-      );
-    } catch (error) {
-      strictSearchError = error;
-    }
-    profile.mark("2a-strict-spotify-search", {
-      candidateCount: strictSearchIds.length,
-      elapsedMs: Date.now() - strictSearchStartedAt,
-    });
-    if (strictSearchIds.length) {
-      spotifyTrackIds = strictSearchIds;
-      idResolvePath = "strict-search";
-    } else {
-      const partnerSearchStartedAt = Date.now();
-      let partnerCatalogMatch = null;
-      let partnerSearchError = null;
-      try {
-        partnerCatalogMatch = await resolveSpotifyCatalogTrackViaPartnerSearch(
-          track,
-          accessToken,
-        );
-      } catch (error) {
-        partnerSearchError = error;
-      }
-      profile.mark("2b-partner-catalog-search", {
-        foundId: Boolean(partnerCatalogMatch?.id),
-        elapsedMs: Date.now() - partnerSearchStartedAt,
-      });
-      if (partnerCatalogMatch?.id) {
-        spotifyTrackIds = [partnerCatalogMatch.id];
-        idResolvePath = "partner-catalog-search";
-      } else if (strictSearchError) {
-        profile.finish({
-          ok: false,
-          failedStep: "2a-strict-spotify-search",
-          idResolvePath,
-          error:
-            strictSearchError instanceof Error
-              ? strictSearchError.message
-              : String(strictSearchError),
-        });
-        throw createSourceStageError(
-          "spicy",
-          "spotify-track-lookup",
-          strictSearchError,
-        );
-      } else if (partnerSearchError) {
-        profile.finish({
-          ok: false,
-          failedStep: "2b-partner-catalog-search",
-          idResolvePath,
-          error:
-            partnerSearchError instanceof Error
-              ? partnerSearchError.message
-              : String(partnerSearchError),
-        });
-        throw createSourceStageError(
-          "spicy",
-          "spotify-track-lookup",
-          partnerSearchError,
-        );
-      }
-    }
     profile.mark("2-spotify-id-resolve", {
-      path: idResolvePath,
-      candidateCount: spotifyTrackIds.length,
+      path: "missing-spotify-track-id",
+      candidateCount: 0,
     });
-    if (!spotifyTrackIds.length) {
-      profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
-      throw createSourceStageNoMatchError("spicy", "spotify-track-lookup");
-    }
+    profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
+    throw createSourceStageNoMatchError("spicy", "spotify-track-lookup");
   }
 
   spicyDebugLog("Spicy source candidate Spotify IDs", {
@@ -9159,12 +9361,7 @@ async function previewNeteaseSearchCandidates(track) {
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await fetchNeteaseJson("/search", {
-          params: {
-            keywords: query,
-            type: 1,
-            limit: 30,
-          },
+        const payload = await fetchNeteaseSearchJson(query, {
           timeoutMs: 10_000,
         });
         const songs = Array.isArray(payload?.result?.songs)
@@ -9207,10 +9404,19 @@ async function previewNeteaseSearchCandidates(track) {
 // This file is evaluated by ../index.js in a shared compatibility context.
 
 const KUGOU_SEARCH_ENDPOINTS = [
+  "https://mobilecdn.kugou.com/api/v3/search/song",
+  "https://mobileservice.kugou.com/api/v3/search/song",
   "http://mobileservice.kugou.com/api/v3/search/song",
 ];
-const KUGOU_LYRIC_SEARCH_ENDPOINTS = ["http://krcs.kugou.com/search"];
-const KUGOU_LYRIC_DOWNLOAD_ENDPOINTS = ["http://lyrics.kugou.com/download"];
+const KUGOU_LYRIC_SEARCH_ENDPOINTS = [
+  "https://lyrics.kugou.com/search",
+  "https://krcs.kugou.com/search",
+  "http://krcs.kugou.com/search",
+];
+const KUGOU_LYRIC_DOWNLOAD_ENDPOINTS = [
+  "https://lyrics.kugou.com/download",
+  "http://lyrics.kugou.com/download",
+];
 const MAX_KUGOU_CANDIDATES = 8;
 const KUGOU_MAX_QUERY_VARIANTS = 6;
 const KUGOU_ARTIST_LISTING_SPLIT = /[、，/;&|]+/u;
@@ -14249,6 +14455,11 @@ function createLyricsService({
     rememberPublishedLyrics,
     getPublishedLyrics,
     getCachedSourceLyricsPacket,
+    resolveSpotifyCatalogTrackById,
+    resolveSpotifyCatalogTrackViaPartnerSearch,
+    buildLyricsMatchTrack,
+    mergeNativePlaybackArtist,
+    applySpotifyCatalogOverlay,
     async translatePublishedLyrics(track, { onSyncedLyrics = null } = {}) {
       if (!track?.trackId || !track?.title) {
         const empty = {

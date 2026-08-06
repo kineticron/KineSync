@@ -4,6 +4,7 @@ import { normalizeBridgeArtworkUri } from "./artwork";
 
 const DEFAULT_ACCENT = "#8B5CF6";
 const SAMPLE_SIZE = 56;
+const MAX_PALETTE_CACHE_ENTRIES = 48;
 
 export type AccentPalette = {
   accent: string;
@@ -14,6 +15,20 @@ export type AccentPalette = {
 };
 
 const paletteCache = new Map<string, AccentPalette>();
+const paletteRequests = new Map<string, Promise<AccentPalette>>();
+
+function cachePalette(key: string, palette: AccentPalette) {
+  paletteCache.delete(key);
+  paletteCache.set(key, palette);
+  while (paletteCache.size > MAX_PALETTE_CACHE_ENTRIES) {
+    const oldestKey = paletteCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    paletteCache.delete(oldestKey);
+  }
+  return palette;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -187,7 +202,14 @@ export function getCachedArtworkAccent(artworkUrl?: string) {
   if (!normalized) {
     return DEFAULT_ACCENT;
   }
-  return paletteCache.get(normalized)?.accent ?? DEFAULT_ACCENT;
+  const cached = paletteCache.get(normalized);
+  if (!cached) {
+    return DEFAULT_ACCENT;
+  }
+  // Refresh recency so a long listening session retains frequently reused art.
+  paletteCache.delete(normalized);
+  paletteCache.set(normalized, cached);
+  return cached.accent;
 }
 
 export async function prefetchArtworkAccent(artworkUrl?: string) {
@@ -205,17 +227,26 @@ export async function resolveArtworkAccentPalette(
 
   const cached = paletteCache.get(normalized);
   if (cached) {
+    paletteCache.delete(normalized);
+    paletteCache.set(normalized, cached);
     return cached;
   }
 
-  try {
-    const accent = await extractAccentFromArtworkUri(normalized);
-    const palette = buildAccentPalette(accent);
-    paletteCache.set(normalized, palette);
-    return palette;
-  } catch {
-    const fallback = buildAccentPalette(DEFAULT_ACCENT);
-    paletteCache.set(normalized, fallback);
-    return fallback;
+  const pending = paletteRequests.get(normalized);
+  if (pending) {
+    return pending;
   }
+
+  const request = (async () => {
+    try {
+      const accent = await extractAccentFromArtworkUri(normalized);
+      return cachePalette(normalized, buildAccentPalette(accent));
+    } catch {
+      return cachePalette(normalized, buildAccentPalette(DEFAULT_ACCENT));
+    } finally {
+      paletteRequests.delete(normalized);
+    }
+  })();
+  paletteRequests.set(normalized, request);
+  return request;
 }

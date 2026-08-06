@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import {
   memo,
   useCallback,
@@ -1031,7 +1031,7 @@ const styles = StyleSheet.create({
     height: 44,
   },
   transportButtonHalo: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.16)',
   },

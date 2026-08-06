@@ -95,10 +95,10 @@ const AnimatedArtworkVideoLayer = memo(function AnimatedArtworkVideoLayer({
   }
 
   return (
-    <Animated.View style={[StyleSheet.absoluteFillObject, videoAnimatedStyle]}>
+    <Animated.View style={[StyleSheet.absoluteFill, videoAnimatedStyle]}>
       <VideoView
         player={player}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         contentFit="cover"
         nativeControls={false}
         allowsPictureInPicture={false}

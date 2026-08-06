@@ -13,6 +13,96 @@ function decodeUriComponentSafe(value) {
   }
 }
 
+function decodeQQBase64Text(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  if (
+    !compact ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+  ) {
+    return "";
+  }
+  try {
+    const decoded = Buffer.from(compact, "base64").toString("utf8");
+    if (!decoded || decoded.includes("\u0000")) {
+      return "";
+    }
+    return decoded;
+  } catch {
+    return "";
+  }
+}
+
+function decodeQQBase64EncryptedText(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  if (!compact || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    return "";
+  }
+  try {
+    const encrypted = Buffer.from(compact, "base64");
+    if (!encrypted.length || encrypted.length % 8 !== 0) {
+      return "";
+    }
+    return qqKaraokeDecryptHex(encrypted.toString("hex"));
+  } catch {
+    return "";
+  }
+}
+
+function looksLikeQQKaraokeLyrics(value) {
+  const text = String(value || "");
+  return (
+    /<Lyric_\d+\b/i.test(text) ||
+    /LyricContent\s*=/i.test(text) ||
+    /^\s*\[(?:\d{2}:\d{2}|\d+,\d+)\]/m.test(text) ||
+    /\(\d+,\d+(?:,[^)]*)?\)/.test(text)
+  );
+}
+
+function decodeQQKaraokePayload(rawPayload) {
+  const raw = String(rawPayload || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (value) => {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) {
+      return;
+    }
+    seen.add(text);
+    candidates.push(text);
+  };
+
+  addCandidate(raw);
+  addCandidate(decodeQQBase64Text(raw));
+  addCandidate(decodeQQBase64EncryptedText(raw));
+
+  // QQ legacy lyric_download still returns encrypted hex, while musicu with
+  // crypt: 0 can return plaintext/base64 QRC. Try encrypted hex after the
+  // direct candidates so plaintext QRC is not mangled before parsing.
+  if (/^(?:[0-9a-f]{2})+$/i.test(raw)) {
+    const decrypted = qqKaraokeDecryptHex(raw);
+    addCandidate(decrypted);
+    addCandidate(decodeQQBase64Text(decrypted));
+  }
+
+  let fallbackBody = "";
+  for (const candidate of candidates) {
+    const body = extractKaraokeBody(candidate);
+    if (!body) {
+      continue;
+    }
+    if (!fallbackBody) {
+      fallbackBody = body;
+    }
+    if (looksLikeQQKaraokeLyrics(candidate) || looksLikeQQKaraokeLyrics(body)) {
+      return body;
+    }
+  }
+  return fallbackBody;
+}
 function getQqCandidateDurationMs(getSongInterval, song) {
   const interval = Number(getSongInterval(song) || 0);
   if (interval <= 0) {
@@ -174,11 +264,10 @@ async function fetchFromQQLegacyDownload(track) {
       });
       const fields = extractLegacyLyricFields(xml);
       for (const encryptedHex of fields) {
-        const decrypted = qqKaraokeDecryptHex(encryptedHex);
-        if (!decrypted) {
+        const karaokeBody = decodeQQKaraokePayload(encryptedHex);
+        if (!karaokeBody) {
           continue;
         }
-        const karaokeBody = extractKaraokeBody(decrypted);
         const lyrics = parseLrc(karaokeBody);
         if (!lyrics.length) {
           continue;
@@ -597,9 +686,9 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
         },
       },
     );
-    const encryptedLyricHex = musicuData?.req_1?.data?.lyric || "";
-    const decryptedKaraoke = qqKaraokeDecryptHex(encryptedLyricHex);
-    const karaokeBody = extractKaraokeBody(decryptedKaraoke);
+    const karaokeBody = decodeQQKaraokePayload(
+      musicuData?.req_1?.data?.lyric || "",
+    );
     const karaokeLyrics = stripLeadingMetadataLines(
       trimLeadingMetaLines(
         parseLrc(karaokeBody),
@@ -634,7 +723,9 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
         },
       });
       const rawTimedLyrics = lyricData?.qrc || lyricData?.lyric || "";
-      const lyrics = parseLrc(String(rawTimedLyrics));
+      const lyrics = parseLrc(
+        decodeQQKaraokePayload(rawTimedLyrics) || String(rawTimedLyrics),
+      );
       if (lyrics.length) {
         const coverage = scoreLyricsCoverage(lyrics, track.durationMs);
         const coverageRatio = getLyricsCoverageRatio(lyrics, track.durationMs);
@@ -682,21 +773,8 @@ async function fetchQQDirectCandidateLyricsParallel(
       };
       return;
     }
-    if (
-      probe.directResult &&
-      shouldEarlyExitQQDirectCandidate(
-        track,
-        candidate,
-        probe.selection,
-        probe.directResult.coverageRatio,
-        state.bestSelection,
-      )
-    ) {
-      shared.earlyExit = {
-        lyrics: probe.directResult.lyrics,
-        source: "qq-music-direct",
-      };
-    }
+    // Do not early-exit on the plain direct LRC result. Later candidates may
+    // still have QQ QRC karaoke lyrics, and QRC is the preferred QQ payload.
   };
 
   const topCandidate = candidatesToProbe[0];
@@ -740,37 +818,11 @@ async function fetchQQDirectCandidateLyricsParallel(
 }
 
 function resolveQQDirectAggregatedResults(track, state) {
-  const {
-    bestResult,
-    bestCoverageScore,
-    bestKaraokeResult,
-    bestKaraokeCoverageScore,
-  } = state;
+  const { bestResult, bestKaraokeResult } = state;
 
   if (bestKaraokeResult?.lyrics?.length) {
-    const karaokeRatio = getLyricsCoverageRatio(
-      bestKaraokeResult.lyrics,
-      track.durationMs,
-    );
-    const bestRatio = bestResult?.lyrics?.length
-      ? getLyricsCoverageRatio(bestResult.lyrics, track.durationMs)
-      : 0;
-    const coverageGap = bestCoverageScore - bestKaraokeCoverageScore;
-    const karaokeIsBestAlready =
-      !bestResult?.lyrics?.length ||
-      String(bestResult.source || "") === String(bestKaraokeResult.source || "");
-    if (!karaokeIsBestAlready) {
-      const karaokeLooksIncomplete =
-        karaokeRatio > 0 && karaokeRatio < 0.42 && bestRatio >= karaokeRatio + 0.08;
-      const lyricsClearlyMoreComplete =
-        coverageGap >= 30 && bestRatio >= karaokeRatio + 0.04;
-      if (karaokeLooksIncomplete || lyricsClearlyMoreComplete) {
-        return bestResult;
-      }
-    }
     return bestKaraokeResult;
   }
-
   return bestResult || null;
 }
 
@@ -941,7 +993,9 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
         },
       });
       const rawTimedLyrics = lyricData?.qrc || lyricData?.lyric || "";
-      const lyrics = parseLrc(String(rawTimedLyrics));
+      const lyrics = parseLrc(
+        decodeQQKaraokePayload(rawTimedLyrics) || String(rawTimedLyrics),
+      );
       if (lyrics.length) {
         return { lyrics, source: "qq-music-openapi-fallback" };
       }

@@ -11,12 +11,7 @@ async function fetchFromNetease(track) {
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await fetchNeteaseJson("/search", {
-          params: {
-            keywords: query,
-            type: 1,
-            limit: 30,
-          },
+        const payload = await fetchNeteaseSearchJson(query, {
           timeoutMs: 10_000,
         });
         const songs = Array.isArray(payload?.result?.songs)
@@ -77,10 +72,7 @@ async function fetchFromNetease(track) {
 
   for (const candidate of likelyNeteaseCandidates) {
     try {
-      const lyricPayload = await fetchNeteaseJson("/lyric/new", {
-        params: {
-          id: candidate.song.id,
-        },
+      const lyricPayload = await fetchNeteaseLyricsJson(candidate.song.id, {
         timeoutMs: 10_000,
       });
       const karaokeText =
@@ -254,83 +246,12 @@ async function fetchFromSpicyLyrics(
       candidateCount: spotifyTrackIds.length,
     });
   } else {
-    let strictSearchError = null;
-    const strictSearchStartedAt = Date.now();
-    let strictSearchIds = [];
-    try {
-      strictSearchIds = await searchSpotifyTrackCandidatesStrictForSpicy(
-        track,
-        accessToken,
-      );
-    } catch (error) {
-      strictSearchError = error;
-    }
-    profile.mark("2a-strict-spotify-search", {
-      candidateCount: strictSearchIds.length,
-      elapsedMs: Date.now() - strictSearchStartedAt,
-    });
-    if (strictSearchIds.length) {
-      spotifyTrackIds = strictSearchIds;
-      idResolvePath = "strict-search";
-    } else {
-      const partnerSearchStartedAt = Date.now();
-      let partnerCatalogMatch = null;
-      let partnerSearchError = null;
-      try {
-        partnerCatalogMatch = await resolveSpotifyCatalogTrackViaPartnerSearch(
-          track,
-          accessToken,
-        );
-      } catch (error) {
-        partnerSearchError = error;
-      }
-      profile.mark("2b-partner-catalog-search", {
-        foundId: Boolean(partnerCatalogMatch?.id),
-        elapsedMs: Date.now() - partnerSearchStartedAt,
-      });
-      if (partnerCatalogMatch?.id) {
-        spotifyTrackIds = [partnerCatalogMatch.id];
-        idResolvePath = "partner-catalog-search";
-      } else if (strictSearchError) {
-        profile.finish({
-          ok: false,
-          failedStep: "2a-strict-spotify-search",
-          idResolvePath,
-          error:
-            strictSearchError instanceof Error
-              ? strictSearchError.message
-              : String(strictSearchError),
-        });
-        throw createSourceStageError(
-          "spicy",
-          "spotify-track-lookup",
-          strictSearchError,
-        );
-      } else if (partnerSearchError) {
-        profile.finish({
-          ok: false,
-          failedStep: "2b-partner-catalog-search",
-          idResolvePath,
-          error:
-            partnerSearchError instanceof Error
-              ? partnerSearchError.message
-              : String(partnerSearchError),
-        });
-        throw createSourceStageError(
-          "spicy",
-          "spotify-track-lookup",
-          partnerSearchError,
-        );
-      }
-    }
     profile.mark("2-spotify-id-resolve", {
-      path: idResolvePath,
-      candidateCount: spotifyTrackIds.length,
+      path: "missing-spotify-track-id",
+      candidateCount: 0,
     });
-    if (!spotifyTrackIds.length) {
-      profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
-      throw createSourceStageNoMatchError("spicy", "spotify-track-lookup");
-    }
+    profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
+    throw createSourceStageNoMatchError("spicy", "spotify-track-lookup");
   }
 
   spicyDebugLog("Spicy source candidate Spotify IDs", {
@@ -839,12 +760,7 @@ async function previewNeteaseSearchCandidates(track) {
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await fetchNeteaseJson("/search", {
-          params: {
-            keywords: query,
-            type: 1,
-            limit: 30,
-          },
+        const payload = await fetchNeteaseSearchJson(query, {
           timeoutMs: 10_000,
         });
         const songs = Array.isArray(payload?.result?.songs)

@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -873,7 +873,7 @@ const styles = StyleSheet.create({
       flex: 1,
     },
     scannerOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       alignItems: "center",
       justifyContent: "center",
       paddingHorizontal: 40,

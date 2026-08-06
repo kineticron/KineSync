@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus, Modal, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { bridgeClient } from '@/lib/bridge-client';
+import { getBridgeSettings, saveBridgeSettings } from '@/lib/bridge-settings';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import {
   startPlaybackClock,
@@ -112,7 +113,8 @@ export function BridgeProvider({ children }: PropsWithChildren) {
     const subscription = AppState.addEventListener('change', (nextState) => {
       appState = nextState;
       if (nextState === 'active') {
-        if (usePlaybackStore.getState().connectionStatus === 'connected') {
+        const playbackState = usePlaybackStore.getState();
+        if (playbackState.isPlaying) {
           startPlaybackClock();
         }
         return;
@@ -132,16 +134,30 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!initialized) return;
 
-    bridgeClient.connect();
-
-    // Check if onboarding was completed before
+    // Check if onboarding was completed before, then connect only when desktop mode is configured.
     (async () => {
       const completed = await getOnboardingCompleted();
-      const state = usePlaybackStore.getState();
+      const bridgeSettings = await getBridgeSettings();
+      let state = usePlaybackStore.getState();
+      const defaultBridgeUrl = inferDefaultBridgeUrl();
 
-      // Show onboarding only if never completed before AND using default bridge URL
-      if (!completed && (!state.serverUrl || state.serverUrl === inferDefaultBridgeUrl())) {
+      if (completed && !bridgeSettings.serverUrl && state.serverUrl === defaultBridgeUrl) {
+        state.setServerUrl("");
+        state.setHandshakeKey("");
+        await saveBridgeSettings({
+          serverUrl: "",
+          handshakeKey: "",
+          onboardingCompleted: true,
+        });
+        state = usePlaybackStore.getState();
+      }
+
+      if (!completed && (!state.serverUrl || state.serverUrl === defaultBridgeUrl)) {
         setShowOnboarding(true);
+      }
+
+      if (state.serverUrl) {
+        bridgeClient.connect();
       }
       setOnboardingChecked(true);
     })();

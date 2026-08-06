@@ -32,11 +32,12 @@ export async function initPlaybackStoreDefaults(): Promise<{ serverUrl: string; 
   const settings = await getBridgeSettings();
   _cachedBridgeUrl = settings.serverUrl;
   _cachedHandshakeKey = settings.handshakeKey;
-  // Push persisted values into the store — the store initializes synchronously before AsyncStorage resolves
-  if (settings.serverUrl) {
+  // Push persisted values into the store — the store initializes synchronously before AsyncStorage resolves.
+  // A completed setup with no server URL means phone-only mode, so do not infer the Expo host as a bridge.
+  if (settings.serverUrl || settings.onboardingCompleted) {
     usePlaybackStore.setState({ serverUrl: settings.serverUrl });
   }
-  if (settings.handshakeKey) {
+  if (settings.handshakeKey || settings.onboardingCompleted) {
     usePlaybackStore.setState({ handshakeKey: settings.handshakeKey });
   }
   return { serverUrl: _cachedBridgeUrl, handshakeKey: _cachedHandshakeKey };
@@ -211,7 +212,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   hidePlaybackStatusBar: true,
   autoHidePlaybackControls: true,
   showTranslatedText: true,
-  lyricsRendererMode: 'native',
+  lyricsRendererMode: 'webview',
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
@@ -309,6 +310,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
     });
     if (packet.isPlaying) {
+      playbackClockRunning = true;
       schedulePlaybackClockTick();
     } else {
       clearPlaybackClockHandle();

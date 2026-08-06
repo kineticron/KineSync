@@ -4,7 +4,8 @@ export type BrowserCommand =
   | { type: "next" }
   | { type: "seek"; positionMs: number }
   | { type: "readMetadata" }
-  | { type: "diagnostics" };
+  | { type: "diagnostics" }
+  | { type: "setMonitoring"; enabled: boolean };
 
 type PlaybackSource =
   | "media-element"
@@ -15,9 +16,16 @@ type PlaybackSource =
 
 export type BrowserEvent =
   | { type: "ready" }
-  | { type: "metadata"; title?: string; artist?: string; spotifyTrackId?: string }
-  | { type: "spotifyToken"; token?: string }
-  | { type: "spotifyTrackId"; spotifyTrackId?: string }
+  | {
+      type: "metadata";
+      title?: string;
+      artist?: string;
+      album?: string;
+      artworkUrl?: string;
+      spotifyTrackId?: string;
+    }
+  | { type: "spotifyToken"; token?: string; expiresAt?: number }
+  | { type: "signedIn"; signedIn: boolean }
   | {
       type: "playback";
       positionMs: number;
@@ -80,6 +88,68 @@ export type BrowserEvent =
     }
   | { type: "error"; message: string };
 
+// Runs on any open.spotify.com / accounts.spotify.com page. The web player's own
+// token endpoint is the only place that reports both the expiry and whether the
+// session is anonymous, so it doubles as the sign-in probe for onboarding.
+export const spotifyAuthProbeScript = String.raw`
+  (function () {
+    if (window.__kineSyncAuthProbeInstalled) return true;
+    window.__kineSyncAuthProbeInstalled = true;
+
+    var post = function (payload) {
+      try {
+        if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+          window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+        }
+      } catch (error) {}
+    };
+    var lastToken = '';
+    var lastSignedIn = null;
+    var reportSignedIn = function (signedIn) {
+      if (signedIn === null || signedIn === lastSignedIn) return;
+      lastSignedIn = signedIn;
+      post({ type: 'signedIn', signedIn: signedIn });
+    };
+    var pollToken = function () {
+      try {
+        fetch('/api/token?reason=init&productType=web_player', {
+          credentials: 'include',
+          headers: { Accept: 'application/json' }
+        })
+          .then(function (response) { return response.ok ? response.json() : null; })
+          .then(function (payload) {
+            if (!payload) return;
+            if (typeof payload.isAnonymous === 'boolean') reportSignedIn(!payload.isAnonymous);
+            var token = String(payload.accessToken || '').trim();
+            if (!token || token === lastToken) return;
+            lastToken = token;
+            post({
+              type: 'spotifyToken',
+              token: token,
+              expiresAt: Number(payload.accessTokenExpirationTimestampMs || 0)
+            });
+          })
+          .catch(function () {});
+      } catch (error) {}
+    };
+    var pollDom = function () {
+      try {
+        if (document.querySelector('[data-testid="user-widget-link"], [data-testid="user-widget-avatar"], button[data-testid="user-widget-link"]')) {
+          reportSignedIn(true);
+          return;
+        }
+        if (document.querySelector('[data-testid="login-button"], [data-testid="signup-button"]')) reportSignedIn(false);
+      } catch (error) {}
+    };
+    pollToken();
+    pollDom();
+    window.setInterval(pollDom, 1500);
+    window.setInterval(pollToken, 300000);
+    return true;
+  })();
+  true;
+`;
+
 export const installBrowserControlPreludeScript = String.raw`
   (function () {
     if (window.__spotifyBrowserLabPreludeInstalled) return true;
@@ -94,7 +164,6 @@ export const installBrowserControlPreludeScript = String.raw`
     window.__spotifyBrowserLabPositionState = window.__spotifyBrowserLabPositionState || null;
     window.__spotifyBrowserLabKnownMedia = window.__spotifyBrowserLabKnownMedia || [];
     window.__spotifyBrowserLabLastBearerToken = window.__spotifyBrowserLabLastBearerToken || '';
-    window.__spotifyBrowserLabLastTrackId = window.__spotifyBrowserLabLastTrackId || '';
 
     var postBridgeEvent = function (payload) {
       try {
@@ -111,28 +180,7 @@ export const installBrowserControlPreludeScript = String.raw`
       window.__spotifyBrowserLabLastBearerToken = token;
       postBridgeEvent({ type: 'spotifyToken', token: token });
     };
-    var rememberSpotifyTrackId = function (value) {
-      var text = String(value || '');
-      if (!text) return;
-      var patterns = [
-        /(?:spotify:track:|spotify%3Atrack%3A)([A-Za-z0-9]{22})/g,
-        /\/track\/([A-Za-z0-9]{22})(?:\b|[/?#])/g,
-        /["']trackId["']\s*:\s*["']([A-Za-z0-9]{22})["']/g,
-        /["']id["']\s*:\s*["']([A-Za-z0-9]{22})["']/g
-      ];
-      for (var patternIndex = 0; patternIndex < patterns.length; patternIndex += 1) {
-        var pattern = patterns[patternIndex];
-        pattern.lastIndex = 0;
-        var match;
-        while ((match = pattern.exec(text))) {
-          var trackId = match && match[1] ? String(match[1]).trim() : '';
-          if (!trackId || trackId === window.__spotifyBrowserLabLastTrackId) continue;
-          window.__spotifyBrowserLabLastTrackId = trackId;
-          postBridgeEvent({ type: 'spotifyTrackId', spotifyTrackId: trackId });
-          return;
-        }
-      }
-    };
+
     var readHeaderValue = function (headers, targetName) {
       if (!headers) return '';
       var lowerTarget = String(targetName || '').toLowerCase();
@@ -162,8 +210,6 @@ export const installBrowserControlPreludeScript = String.raw`
             try {
               rememberBearerToken(readHeaderValue(init && init.headers, 'Authorization'));
               rememberBearerToken(readHeaderValue(input && input.headers, 'Authorization'));
-              rememberSpotifyTrackId(typeof input === 'string' ? input : (input && input.url));
-              rememberSpotifyTrackId(init && init.body);
             } catch (error) {}
             return nativeFetch.apply(window, arguments);
           };
@@ -174,14 +220,12 @@ export const installBrowserControlPreludeScript = String.raw`
           var nativeOpen = window.XMLHttpRequest.prototype.open;
           var nativeSend = window.XMLHttpRequest.prototype.send;
           if (typeof nativeOpen === 'function') {
-            window.XMLHttpRequest.prototype.open = function (method, url) {
-              try { rememberSpotifyTrackId(url); } catch (error) {}
+            window.XMLHttpRequest.prototype.open = function () {
               return nativeOpen.apply(this, arguments);
             };
           }
           if (typeof nativeSend === 'function') {
-            window.XMLHttpRequest.prototype.send = function (body) {
-              try { rememberSpotifyTrackId(body); } catch (error) {}
+            window.XMLHttpRequest.prototype.send = function () {
               return nativeSend.apply(this, arguments);
             };
           }
@@ -301,8 +345,35 @@ export const installBrowserControlPreludeScript = String.raw`
 
     installMediaSessionProbe();
     installAllMediaProbes();
-    window.setInterval(installMediaSessionProbe, 250);
-    window.setInterval(installAllMediaProbes, 250);
+    var mediaObserver = new MutationObserver(function (mutations) {
+      if (document.visibilityState === 'hidden') return;
+      mutations.forEach(function (mutation) {
+        Array.prototype.slice.call(mutation.addedNodes || []).forEach(function (node) {
+          if (!node || node.nodeType !== 1) return;
+          if (node.matches && node.matches('audio, video')) installMediaElementProbe(node);
+          if (node.querySelectorAll) {
+            Array.prototype.slice.call(node.querySelectorAll('audio, video')).forEach(installMediaElementProbe);
+          }
+        });
+      });
+    });
+    if (document.documentElement) {
+      mediaObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    window.setInterval(function () {
+      if (document.visibilityState !== 'hidden') installMediaSessionProbe();
+    }, 5000);
+    window.setInterval(function () {
+      if (
+        document.visibilityState !== 'hidden' &&
+        (window.__spotifyBrowserLabKnownMedia || []).length === 0
+      ) installAllMediaProbes();
+    }, 10000);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') return;
+      installMediaSessionProbe();
+      if ((window.__spotifyBrowserLabKnownMedia || []).length === 0) installAllMediaProbes();
+    });
     return true;
   })();
   true;
@@ -410,7 +481,7 @@ export const installBrowserControlScript = String.raw`
       return values.join(' ');
     };
     var visibleClockCandidates = function () {
-      var roots = [progressRoot(), nowPlayingRoot(), document.body].filter(Boolean);
+      var roots = [progressRoot(), nowPlayingRoot()].filter(Boolean);
       var seenRoots = [];
       var candidates = [];
       var slider = progressSlider();
@@ -499,8 +570,19 @@ export const installBrowserControlScript = String.raw`
       } catch (error) {}
       return results;
     };
+    var scannedMedia = [];
+    var lastMediaScanAt = 0;
     var allKnownMedia = function () {
-      var media = collectMediaElements(document, []).concat(window.__spotifyBrowserLabKnownMedia || []);
+      var known = (window.__spotifyBrowserLabKnownMedia || []).filter(Boolean);
+      if (known.length) {
+        return known.filter(function (item, index) { return known.indexOf(item) === index; });
+      }
+      var currentTime = perfNow();
+      if (!scannedMedia.length || currentTime - lastMediaScanAt >= 5000) {
+        scannedMedia = collectMediaElements(document, []);
+        lastMediaScanAt = currentTime;
+      }
+      var media = scannedMedia;
       return media.filter(function (item, index) { return item && media.indexOf(item) === index; });
     };
     var isPlaying = function () {
@@ -657,18 +739,84 @@ export const installBrowserControlScript = String.raw`
       if (parts.length > 1 && parts.every(function (part) { return part.toLowerCase() === parts[0].toLowerCase(); })) return parts[0];
       return text;
     };
+    // Media Session is Spotify's own "what is playing right now" declaration —
+    // the browser equivalent of the GSMTC feed the desktop bridge trusts.
     var readMediaSessionMetadata = function () {
       try {
         var metadata = window.navigator && window.navigator.mediaSession && window.navigator.mediaSession.metadata;
         if (!metadata) return null;
         var title = cleanMetadataText(metadata.title);
         var artist = cleanMetadataText(metadata.artist);
-        if (title && artist) return { title: title, artist: artist };
+        if (!title || !artist) return null;
+        var artwork = Array.isArray(metadata.artwork) ? metadata.artwork : [];
+        var best = null;
+        artwork.forEach(function (image) {
+          var src = String((image && image.src) || '');
+          if (!src) return;
+          var size = Number(String((image && image.sizes) || '').split('x')[0] || 0);
+          if (!best || size > best.size) best = { size: size, src: src };
+        });
+        return {
+          title: title,
+          artist: artist,
+          album: cleanMetadataText(metadata.album),
+          artworkUrl: best ? best.src : ''
+        };
       } catch (error) {}
       return null;
     };
-    var readSpotifyTrackId = function (widget, titleElement) {
-      var roots = [widget, titleElement, nowPlayingRoot(), document.body].filter(Boolean);
+    var normalizeTitleKey = function (value) {
+      return String(value || '').toLowerCase()
+        .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+    };
+    var titlesAgree = function (left, right) {
+      var a = normalizeTitleKey(left);
+      var b = normalizeTitleKey(right);
+      if (!a || !b) return false;
+      return a === b || a.indexOf(b) >= 0 || b.indexOf(a) >= 0;
+    };
+    var resolveTrackLink = function (element) {
+      if (!element) return null;
+      var link = element;
+      try {
+        if (!link.matches || !link.matches('a[href*="/track/"]')) {
+          var child = link.querySelector && link.querySelector('a[href*="/track/"]');
+          link = child || (link.closest && link.closest('a[href*="/track/"]'));
+        }
+      } catch (error) { return null; }
+      return link || null;
+    };
+    var trackIdFromLink = function (element) {
+      var link = resolveTrackLink(element);
+      var href = String(link && (link.href || link.getAttribute('href')) || '');
+      var match = href.match(/\/track\/([A-Za-z0-9]{22})(?:\b|[/?#])/);
+      return match ? match[1] : '';
+    };
+    var titleFromTrackLink = function (element) {
+      var link = resolveTrackLink(element);
+      if (!link) return '';
+      return cleanMetadataText(
+        (link.getAttribute && link.getAttribute('aria-label')) ||
+        link.textContent ||
+        ''
+      );
+    };
+    var readSpotifyTrackId = function (widget, titleElement, expectedTitle) {
+      // Spotify preloads recommendations and search results, so only accept a
+      // link inside the persistent now-playing widget whose own label agrees
+      // with Media Session's currently playing title.
+      var acceptLink = function (link) {
+        var trackId = trackIdFromLink(link);
+        if (!trackId) return '';
+        var linkTitle = titleFromTrackLink(link);
+        if (expectedTitle && linkTitle && !titlesAgree(linkTitle, expectedTitle)) return '';
+        return trackId;
+      };
+      var titleId = acceptLink(titleElement);
+      if (titleId) return titleId;
+      var roots = [widget, nowPlayingRoot()].filter(Boolean);
       for (var rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
         var root = roots[rootIndex];
         var links = [];
@@ -677,31 +825,44 @@ export const installBrowserControlScript = String.raw`
           if (root && root.querySelectorAll) links = links.concat(Array.prototype.slice.call(root.querySelectorAll('a[href*="/track/"]')).slice(0, 12));
         } catch (error) {}
         for (var linkIndex = 0; linkIndex < links.length; linkIndex += 1) {
-          var href = String(links[linkIndex].href || links[linkIndex].getAttribute('href') || '');
-          var match = href.match(/\/track\/([A-Za-z0-9]{22})(?:\b|[/?#])/);
-          if (match) return match[1];
+          var trackId = acceptLink(links[linkIndex]);
+          if (trackId) return trackId;
         }
       }
       return '';
     };
     var readMetadata = function () {
-      var widget = document.querySelector('[data-testid="nowplaying-widget"]') || document.querySelector('[aria-label="Now playing bar"]');
-      var titleElement = (widget && widget.querySelector('[data-testid="context-item-info-title"], a[href*="/track/"]')) || document.querySelector('[data-testid="context-item-info-title"], a[href*="/track/"]');
-      var artistElement = (widget && widget.querySelector('[data-testid="context-item-info-artist"], a[href*="/artist/"]')) || document.querySelector('[data-testid="context-item-info-artist"], a[href*="/artist/"]');
+      var widget = nowPlayingRoot();
+      var titleElement = widget && widget.querySelector('[data-testid="context-item-info-title"], [data-testid="context-item-link"], a[href*="/track/"]');
+      var artistElement = widget && widget.querySelector('[data-testid="context-item-info-artist"], a[href*="/artist/"]');
+      var domTitle = titleElement ? cleanMetadataText(titleElement.getAttribute('aria-label') || titleElement.textContent || '') : '';
+      var domArtist = artistElement ? cleanMetadataText(artistElement.getAttribute('aria-label') || artistElement.textContent || '') : '';
       var mediaMetadata = readMediaSessionMetadata();
-      var title = mediaMetadata ? mediaMetadata.title : (titleElement ? cleanMetadataText(titleElement.getAttribute('aria-label') || titleElement.textContent || '') : '');
-      var artist = mediaMetadata ? mediaMetadata.artist : (artistElement ? cleanMetadataText(artistElement.getAttribute('aria-label') || artistElement.textContent || '') : '');
-      var spotifyTrackId = readSpotifyTrackId(widget, titleElement);
-      var key = title + '\\u0000' + artist + '\\u0000' + spotifyTrackId;
+      var title = mediaMetadata ? mediaMetadata.title : domTitle;
+      var artist = mediaMetadata ? mediaMetadata.artist : domArtist;
+      var album = mediaMetadata ? mediaMetadata.album : '';
+      var artworkUrl = mediaMetadata ? mediaMetadata.artworkUrl : '';
+      var spotifyTrackId = readSpotifyTrackId(widget, titleElement, title);
+      // The id comes from the now-playing bar's DOM, which can lag or point at a
+      // hovered row. Only trust it when its own title matches what is playing.
+      if (spotifyTrackId && mediaMetadata && !titlesAgree(domTitle, mediaMetadata.title)) spotifyTrackId = '';
+      var key = title + '\\u0000' + artist + '\\u0000' + album + '\\u0000' + artworkUrl + '\\u0000' + spotifyTrackId;
       if (title && artist && key !== lastMetadata) {
         lastMetadata = key;
-        send({ type: 'metadata', title: title, artist: artist, spotifyTrackId: spotifyTrackId });
+        send({
+          type: 'metadata',
+          title: title,
+          artist: artist,
+          album: album,
+          artworkUrl: artworkUrl,
+          spotifyTrackId: spotifyTrackId
+        });
       }
     };
     var lastPlaybackKey = '';
     var readPlayback = function (force) {
       var data = progressData();
-      if (!data) return;
+      if (!data) return null;
       var key = data.positionMs + ':' + data.durationMs + ':' + data.isPlaying + ':' + data.playbackRate + ':' + data.source;
       if (force || key !== lastPlaybackKey) {
         lastPlaybackKey = key;
@@ -716,6 +877,7 @@ export const installBrowserControlScript = String.raw`
           source: data.source
         });
       }
+      return data;
     };
     var setNativeRangeValue = function (input, value) {
       var step = Number(input.step || 0);
@@ -798,25 +960,75 @@ export const installBrowserControlScript = String.raw`
       });
     };
 
+    var monitoringEnabled = true;
+    var metadataPollTimer = 0;
+    var playbackPollTimer = 0;
+    var mutationReadTimer = 0;
+
+    var stopMonitoringTimers = function () {
+      window.clearTimeout(metadataPollTimer);
+      window.clearTimeout(playbackPollTimer);
+      window.clearTimeout(mutationReadTimer);
+      metadataPollTimer = 0;
+      playbackPollTimer = 0;
+      mutationReadTimer = 0;
+    };
+    var pollMetadata = function () {
+      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      readMetadata();
+      metadataPollTimer = window.setTimeout(pollMetadata, 5000);
+    };
+    var pollPlayback = function () {
+      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      var sample = readPlayback(false);
+      playbackPollTimer = window.setTimeout(pollPlayback, sample && sample.isPlaying ? 250 : 1000);
+    };
+    var startMonitoringTimers = function () {
+      stopMonitoringTimers();
+      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      readMetadata();
+      readPlayback(true);
+      metadataPollTimer = window.setTimeout(pollMetadata, 5000);
+      playbackPollTimer = window.setTimeout(pollPlayback, 250);
+    };
+
     window.__spotifyBrowserControl = function (command) {
       try {
+        if (command.type === 'setMonitoring') {
+          monitoringEnabled = Boolean(command.enabled);
+          startMonitoringTimers();
+        }
         if (command.type === 'toggle') clickPlayerButton('toggle', 'Play/pause');
         if (command.type === 'previous') clickPlayerButton('previous', 'Previous');
         if (command.type === 'next') clickPlayerButton('next', 'Next');
         if (command.type === 'seek') seek(command.positionMs);
         if (command.type === 'diagnostics') readDiagnostics();
-        readMetadata();
-        readPlayback(true);
+        if (command.type !== 'setMonitoring' || monitoringEnabled) {
+          readMetadata();
+          readPlayback(true);
+        }
       } catch (error) {
         send({ type: 'error', message: error instanceof Error ? error.message : String(error) });
       }
     };
-    var observer = new MutationObserver(function () { readMetadata(); readPlayback(true); });
-    if (document.body) observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
-    window.setInterval(readMetadata, 1000);
-    window.setInterval(function () { readPlayback(false); }, 50);
-    readMetadata();
-    readPlayback(true);
+    var observer = new MutationObserver(function () {
+      if (
+        !monitoringEnabled ||
+        document.visibilityState === 'hidden' ||
+        mutationReadTimer
+      ) return;
+      mutationReadTimer = window.setTimeout(function () {
+        mutationReadTimer = 0;
+        if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+        readMetadata();
+        readPlayback(true);
+      }, 200);
+    });
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    document.addEventListener('visibilitychange', startMonitoringTimers);
+    startMonitoringTimers();
     send({ type: 'ready' });
     return true;
   })();

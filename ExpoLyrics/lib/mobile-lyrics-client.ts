@@ -1,4 +1,7 @@
-import { createLyricsService } from "@/lib/mobile-lyrics-service";
+import {
+  createLyricsService,
+  isLikelySameTrack,
+} from "@/lib/mobile-lyrics-service";
 import { lookupMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
 import {
   getCachedMobileLyricsSettings,
@@ -21,15 +24,31 @@ function readEnv(...keys: string[]) {
 
 void getMobileLyricsSettings();
 
+// A Spotify web token only lives an hour. Treating an expired one as present
+// makes every id-based source fail silently instead of falling back.
+function storedSpotifyToken() {
+  const settings = getCachedMobileLyricsSettings();
+  if (!settings.spotifyWebToken) {
+    return "";
+  }
+  if (
+    settings.spotifyWebTokenExpiresAt &&
+    settings.spotifyWebTokenExpiresAt - 30_000 < Date.now()
+  ) {
+    return "";
+  }
+  return settings.spotifyWebToken;
+}
+
 const mobileLyricsService = createLyricsService({
   getMusixmatchUserToken: () =>
     getCachedMobileLyricsSettings().musixmatchUserToken ||
     readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
   getSpotifyWebToken: () =>
-    getCachedMobileLyricsSettings().spotifyWebToken ||
+    storedSpotifyToken() ||
     readEnv("EXPO_PUBLIC_SPOTIFY_WEB_TOKEN", "SPOTIFY_WEB_TOKEN"),
   getSpotifyAccessToken: () =>
-    getCachedMobileLyricsSettings().spotifyWebToken ||
+    storedSpotifyToken() ||
     readEnv("EXPO_PUBLIC_SPOTIFY_ACCESS_TOKEN", "SPOTIFY_ACCESS_TOKEN"),
   getGeminiApiKey: () =>
     getCachedMobileLyricsSettings().geminiApiKey ||
@@ -183,6 +202,77 @@ export async function fetchMobileLyricsForTrack(
     });
   }
   return toActiveLyricsPacket(track, result);
+}
+
+export type SpotifyCatalogMatch = {
+  spotifyTrackId: string;
+  artist: string;
+  album: string;
+  durationMs: number;
+};
+
+/**
+ * Same catalog enrichment the Desktop Bridge uses for id-less playback: resolve
+ * the canonical Spotify catalog row from clean title/artist/duration via the
+ * Partner API before any id-based lyrics source sees the track.
+ */
+export async function resolveSpotifyCatalogMatch(track: {
+  title: string;
+  artist: string;
+  album?: string;
+  durationMs?: number;
+  spotifyTrackId?: string;
+}): Promise<SpotifyCatalogMatch | null> {
+  const accessToken =
+    storedSpotifyToken() ||
+    readEnv("EXPO_PUBLIC_SPOTIFY_ACCESS_TOKEN", "SPOTIFY_ACCESS_TOKEN");
+  if (!accessToken) {
+    return null;
+  }
+
+  const durationMs = Number(track.durationMs || 0);
+  const searchTrack = {
+    title: cleanTrackMetadata(track.title),
+    artist: cleanTrackMetadata(track.artist),
+    album: cleanTrackMetadata(track.album),
+    durationMs,
+  };
+  const spotifyTrackId = String(track.spotifyTrackId || "").trim();
+  let match = spotifyTrackId
+    ? await mobileLyricsService.resolveSpotifyCatalogTrackById(
+        spotifyTrackId,
+        accessToken,
+      )
+    : null;
+
+  // A now-playing DOM link can lag by one render. Resolve it, but only keep it
+  // when the catalog row agrees with Media Session metadata; otherwise use the
+  // same partner-search path as id-less Windows native-media playback.
+  if (
+    match?.id &&
+    !isLikelySameTrack(searchTrack, match.title, match.artist, match.durationMs)
+  ) {
+    match = null;
+  }
+
+  if (!match?.id && searchTrack.title) {
+    match = await mobileLyricsService.resolveSpotifyCatalogTrackViaPartnerSearch(
+      searchTrack,
+      accessToken,
+    );
+  }
+  if (!match?.id) {
+    return null;
+  }
+  return {
+    spotifyTrackId: match.id,
+    artist: mobileLyricsService.mergeNativePlaybackArtist(
+      searchTrack.artist || track.artist,
+      match.artist,
+    ),
+    album: searchTrack.album || match.album || "",
+    durationMs: Number(match.durationMs || 0) > 0 ? Number(match.durationMs) : durationMs,
+  };
 }
 
 export function clearMobileLyricsCache() {

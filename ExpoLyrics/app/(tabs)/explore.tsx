@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@react-native-vector-icons/ionicons';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -176,6 +176,7 @@ export default function BridgeSettingsScreen() {
   const saveMobileLyricsApiSettings = useCallback(() => {
     void saveMobileLyricsSettings({
       spotifyWebToken: spotifyTokenInput,
+      spotifyWebTokenExpiresAt: 0,
       musixmatchUserToken: musixmatchTokenInput,
       geminiApiKey: geminiKeyInput,
     }).then((settings) => {
@@ -481,7 +482,7 @@ const styles = StyleSheet.create({
     opacity: 0.2,
   },
   backgroundTint: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(8, 9, 14, 0.76)',
   },
   safeArea: {

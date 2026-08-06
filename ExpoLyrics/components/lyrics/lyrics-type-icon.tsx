@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
     position: "absolute",
   },
   micWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
   },

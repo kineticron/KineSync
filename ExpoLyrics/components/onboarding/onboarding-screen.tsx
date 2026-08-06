@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
@@ -29,11 +29,22 @@ import Reanimated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { WebView } from "react-native-webview";
+
 import { bridgeClient } from "@/lib/bridge-client";
 import { extractHost, isPrivateIpv4 } from "@/lib/network";
 import { usePlaybackStore } from "@/store/playback-store";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
+import { saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
+import { parseBrowserEvent, spotifyAuthProbeScript } from "@/lib/spotify-browser";
+import {
+  requestOpenSpotifyBrowser,
+  requestReloadSpotifyBrowser,
+} from "@/components/lyrics/spotify-browser-fallback";
 import { CameraView, useCameraPermissions } from "expo-camera";
+
+const SPOTIFY_LOGIN_URL =
+  "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F";
 
 function inferDefaultBridgeUrl() {
   const configuredBridgeUrl =
@@ -107,9 +118,9 @@ const ONBOARDING_STEPS: {
   {
     icon: "scan-outline",
     eyebrow: "Connect",
-    title: "Link to your Desktop Bridge.",
+    title: "Pick where playback\ncomes from.",
     description:
-      "Open the Desktop Bridge on your PC, enable the relay, then scan the QR code it shows. One scan and you're connected.",
+      "Use a Desktop Bridge on your PC for the tightest sync, or run everything on this phone with the built-in Spotify player.",
   },
 ];
 
@@ -237,6 +248,41 @@ function ToggleRow({
   );
 }
 
+function ChoiceRow({
+  icon,
+  label,
+  hint,
+  onPress,
+}: {
+  icon: IoniconName;
+  label: string;
+  hint: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.choiceRow,
+        pressed && styles.buttonPressed,
+      ]}
+    >
+      <View style={styles.rowIconWrap}>
+        <Ionicons name={icon} size={18} color="rgba(248,248,254,0.9)" />
+      </View>
+      <View style={styles.choiceCopy}>
+        <Text style={styles.toggleLabel}>{label}</Text>
+        <Text style={styles.choiceHint}>{hint}</Text>
+      </View>
+      <Ionicons
+        name="chevron-forward"
+        size={16}
+        color="rgba(248,248,254,0.45)"
+      />
+    </Pressable>
+  );
+}
+
 function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
@@ -247,6 +293,9 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState("");
   const [scanCompleted, setScanCompleted] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState<"unset" | "desktop" | "phone">("unset");
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [spotifySignedIn, setSpotifySignedIn] = useState(false);
   const scrollRef = useRef<any>(null);
 
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
@@ -295,6 +344,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           saveBridgeSettings({
             serverUrl: parsed.u,
             handshakeKey: parsed.k,
+            onboardingCompleted: true,
           }).catch(() => {});
           bridgeClient.reconnectNow();
           setScanCompleted(true);
@@ -351,12 +401,25 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   );
 
   const persistBridgeSettings = useCallback(() => {
+    if (playbackMode === "phone") {
+      // Phone-only: nothing to connect to, just surface the built-in player.
+      bridgeClient.disconnect();
+      setServerUrlStore("");
+      setHandshakeKeyStore("");
+      void saveBridgeSettings({
+        serverUrl: "",
+        handshakeKey: "",
+        onboardingCompleted: true,
+      });
+      setTimeout(requestOpenSpotifyBrowser, 320);
+      return;
+    }
     const state = usePlaybackStore.getState();
     if (!state.serverUrl) {
       setServerUrlStore(inferDefaultBridgeUrl());
     }
     bridgeClient.reconnectNow();
-  }, [setServerUrlStore]);
+  }, [playbackMode, setHandshakeKeyStore, setServerUrlStore]);
 
   const handleNext = useCallback(() => {
     if (isLastStep) {
@@ -493,7 +556,78 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                 </BlurView>
               ) : null}
 
-              {index === 2 ? (
+              {index === 2 && playbackMode === "unset" ? (
+                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
+                  <ChoiceRow
+                    icon="desktop-outline"
+                    label="Use a Desktop Bridge"
+                    hint="Tightest sync. Needs the PC app running."
+                    onPress={() => setPlaybackMode("desktop")}
+                  />
+                  <ChoiceRow
+                    icon="phone-portrait-outline"
+                    label="Use this phone only"
+                    hint="Plays Spotify inside KineSync. No PC needed."
+                    onPress={() => setPlaybackMode("phone")}
+                  />
+                </BlurView>
+              ) : null}
+
+              {index === 2 && playbackMode === "phone" ? (
+                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
+                  {spotifySignedIn ? (
+                    <View style={styles.connectionStatusRow}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color="#8FF0C4"
+                      />
+                      <Text style={styles.connectionStatusText}>
+                        Signed in to Spotify on this phone
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.scanButton,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => setLoginOpen(true)}
+                      >
+                        <BlurView
+                          intensity={30}
+                          tint="light"
+                          style={styles.scanButtonBlur}
+                        >
+                          <Ionicons
+                            name="log-in-outline"
+                            size={20}
+                            color="#F8F8FE"
+                          />
+                          <Text style={styles.scanButtonText}>
+                            Sign in to Spotify
+                          </Text>
+                        </BlurView>
+                      </Pressable>
+                      <Text style={styles.inlinePanelHint}>
+                        Use your email and password — Google and Apple sign-in are
+                        blocked inside embedded browsers.
+                      </Text>
+                    </>
+                  )}
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => setPlaybackMode("unset")}
+                  >
+                    <Text style={styles.inlinePanelHint}>
+                      Use a Desktop Bridge instead
+                    </Text>
+                  </Pressable>
+                </BlurView>
+              ) : null}
+
+              {index === 2 && playbackMode === "desktop" ? (
                 <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
                   {scanCompleted ? (
                     <View style={styles.connectionStatusRow}>
@@ -559,6 +693,14 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                       </Text>
                     </>
                   )}
+                  <Pressable
+                    hitSlop={8}
+                    onPress={() => setPlaybackMode("unset")}
+                  >
+                    <Text style={styles.inlinePanelHint}>
+                      No PC? Use this phone instead
+                    </Text>
+                  </Pressable>
                 </BlurView>
               ) : null}
             </StepPage>
@@ -612,6 +754,49 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             </Pressable>
           </Reanimated.View>
         </View>
+
+        {/* Spotify sign-in — cookies are shared with the background player */}
+        <Modal
+          animationType="slide"
+          visible={loginOpen}
+          onRequestClose={() => setLoginOpen(false)}
+        >
+          <GestureHandlerRootView style={styles.loginModalRoot}>
+            <View style={[styles.loginHeader, { paddingTop: insets.top + 10 }]}>
+              <Text style={styles.loginTitle}>Sign in to Spotify</Text>
+              <Pressable
+                hitSlop={10}
+                onPress={() => setLoginOpen(false)}
+                style={styles.closeButton}
+              >
+                <Ionicons name="close" size={20} color="#F8F8FE" />
+              </Pressable>
+            </View>
+            <WebView
+              source={{ uri: SPOTIFY_LOGIN_URL }}
+              injectedJavaScript={spotifyAuthProbeScript}
+              sharedCookiesEnabled
+              thirdPartyCookiesEnabled
+              domStorageEnabled
+              javaScriptEnabled
+              style={styles.loginWebView}
+              onMessage={({ nativeEvent }) => {
+                const event = parseBrowserEvent(nativeEvent.data);
+                if (event?.type === "spotifyToken" && event.token) {
+                  void saveMobileLyricsSettings({
+                    spotifyWebToken: event.token,
+                    spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
+                  });
+                }
+                if (event?.type === "signedIn" && event.signedIn) {
+                  setSpotifySignedIn(true);
+                  setLoginOpen(false);
+                  requestReloadSpotifyBrowser();
+                }
+              }}
+            />
+          </GestureHandlerRootView>
+        </Modal>
 
         {/* QR Code Scanner Modal */}
         <Modal
@@ -672,7 +857,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   backdropWash: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.9,
   },
   ambientGlow: {
@@ -1068,6 +1253,45 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  choiceRow: {
+    minHeight: 56,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    gap: 10,
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  choiceCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  choiceHint: {
+    color: "rgba(248,248,254,0.5)",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  loginModalRoot: {
+    flex: 1,
+    backgroundColor: "#090A11",
+  },
+  loginHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 18,
+    paddingBottom: 12,
+  },
+  loginTitle: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "800",
+  },
+  loginWebView: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
   scannerModalRoot: {
     flex: 1,
     backgroundColor: "#000",
@@ -1079,7 +1303,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scannerOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 40,

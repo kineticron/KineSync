@@ -53,7 +53,38 @@ function hardenLiveActivityTarget(xcodeProject) {
   }
 }
 
+function normalizeLiveActivityConfig(config) {
+  config.ios = {
+    ...config.ios,
+    infoPlist: {
+      ...config.ios?.infoPlist,
+      NSSupportsLiveActivities: true,
+      NSSupportsLiveActivitiesFrequentUpdates: true,
+    },
+  };
+
+  const iosBuildConfig = config.extra?.eas?.build?.experimental?.ios;
+  const extensions = iosBuildConfig?.appExtensions;
+  if (Array.isArray(extensions)) {
+    const deduplicated = [];
+    const seenTargets = new Set();
+    for (const extension of extensions) {
+      const key = extension?.targetName || extension?.bundleIdentifier;
+      if (!key || seenTargets.has(key)) {
+        continue;
+      }
+      seenTargets.add(key);
+      deduplicated.push(extension);
+    }
+    iosBuildConfig.appExtensions = deduplicated;
+  }
+
+  return config;
+}
+
 function withLyricsLiveActivity(config) {
+  config = normalizeLiveActivityConfig(config);
+
   config = withXcodeProject(config, (config) => {
     hardenLiveActivityTarget(config.modResults);
     return config;

@@ -122,6 +122,33 @@ function patchModuleTarget() {
 }
 
 function applyLiveActivityNativePatches() {
+  const pluginBuildDir = path.join(
+    projectRoot,
+    "node_modules",
+    "expo-live-activity",
+    "plugin",
+    "build",
+  );
+  if (fs.existsSync(pluginBuildDir)) {
+    for (const fileName of fs.readdirSync(pluginBuildDir)) {
+      if (!fileName.endsWith(".js")) {
+        continue;
+      }
+      const filePath = path.join(pluginBuildDir, fileName);
+      const contents = readText(filePath);
+      const patchedContents = contents.replaceAll(
+        'require("@expo/config-plugins")',
+        'require("expo/config-plugins")',
+      );
+      if (patchedContents !== contents) {
+        fs.writeFileSync(filePath, patchedContents, "utf8");
+      }
+    }
+    console.log(
+      "[live-activity] Patched Expo config-plugin compatibility imports.",
+    );
+  }
+
   const packageWidgetPatched = patchPackageWidgetTemplates();
   const generatedWidgetPatched = patchGeneratedWidgetTarget();
   const modulePatched = patchModuleTarget();

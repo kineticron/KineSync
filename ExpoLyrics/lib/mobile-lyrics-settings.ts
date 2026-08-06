@@ -4,12 +4,15 @@ const MOBILE_LYRICS_SETTINGS_KEY = "kinesync_mobile_lyrics_settings";
 
 export type MobileLyricsSettings = {
   spotifyWebToken: string;
+  /** Epoch ms the captured Spotify token expires; 0 when unknown. */
+  spotifyWebTokenExpiresAt: number;
   musixmatchUserToken: string;
   geminiApiKey: string;
 };
 
 const DEFAULT_SETTINGS: MobileLyricsSettings = {
   spotifyWebToken: "",
+  spotifyWebTokenExpiresAt: 0,
   musixmatchUserToken: "",
   geminiApiKey: "",
 };
@@ -21,6 +24,7 @@ let storageAvailable = true;
 function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefined): MobileLyricsSettings {
   return {
     spotifyWebToken: String(value?.spotifyWebToken || "").trim(),
+    spotifyWebTokenExpiresAt: Math.max(0, Number(value?.spotifyWebTokenExpiresAt || 0)),
     musixmatchUserToken: String(value?.musixmatchUserToken || "").trim(),
     geminiApiKey: String(value?.geminiApiKey || "").trim(),
   };
