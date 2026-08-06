@@ -18,7 +18,7 @@ module.exports = defineConfig([
     },
   },
   {
-    files: ['scripts/apply-live-activity-native-patches.js', 'scripts/verify-spotify-browser-metadata.js'],
+    files: ['scripts/verify-live-activity-widget.js', 'scripts/verify-spotify-browser-metadata.js'],
     languageOptions: {
       globals: {
         __dirname: 'readonly',

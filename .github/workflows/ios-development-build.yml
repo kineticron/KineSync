@@ -43,7 +43,7 @@ jobs:
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
-      - name: Verify custom Live Activity widget
+      - name: Verify SDK 57 Live Activity widget
         working-directory: ExpoLyrics
         run: node scripts/verify-live-activity-widget.js
 
@@ -204,18 +204,18 @@ jobs:
             echo "Invalid path from ${MARKER}: ${APP}"
             exit 1
           fi
-          LIVE_ACTIVITY_APPEX="${APP}/PlugIns/LiveActivity.appex"
+          LIVE_ACTIVITY_APPEX="${APP}/PlugIns/ExpoWidgetsTarget.appex"
           if [[ ! -d "${LIVE_ACTIVITY_APPEX}" ]]; then
-            echo "::error::LiveActivity.appex was not embedded in ${APP}"
+            echo "::error::ExpoWidgetsTarget.appex was not embedded in ${APP}"
             exit 1
           fi
-          if [[ ! -f "${LIVE_ACTIVITY_APPEX}/LiveActivity" ]]; then
-            echo "::error::LiveActivity.appex executable is missing"
+          if [[ ! -f "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget" ]]; then
+            echo "::error::ExpoWidgetsTarget.appex executable is missing"
             exit 1
           fi
           EXTENSION_POINT=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
           if [[ "${EXTENSION_POINT}" != "com.apple.widgetkit-extension" ]]; then
-            echo "::error::LiveActivity.appex is not registered as a WidgetKit extension"
+            echo "::error::ExpoWidgetsTarget.appex is not registered as a WidgetKit extension"
             plutil -p "${LIVE_ACTIVITY_APPEX}/Info.plist" || true
             exit 1
           fi

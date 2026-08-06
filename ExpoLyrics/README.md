@@ -13,8 +13,8 @@ React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics st
 
 ## Tech Stack
 
-- [Expo SDK 54](https://docs.expo.dev/)
-- [React Native 0.81](https://reactnative.dev/)
+- [Expo SDK 57](https://docs.expo.dev/versions/v57.0.0/)
+- [React Native 0.86](https://reactnative.dev/)
 - [Expo Router](https://docs.expo.dev/router/introduction/) (file-based routing)
 - [React Native Reanimated 4](https://docs.reanimated.dev/)
 - [Zustand](https://zustand.docs.pmnd.rs/) (state management)
@@ -31,9 +31,9 @@ Scan the QR code with Expo Go. Open settings to configure your bridge URL.
 
 ## iOS Live Activity development
 
-Live Activities use custom native code and do not run in Expo Go. After changing
-Live Activity Swift files, the config plugin, or app configuration, regenerate and
-rebuild the iOS development client:
+Live Activities use the SDK 57 `expo-widgets` runtime and do not run in Expo Go.
+After changing the activity layout or app configuration, regenerate and rebuild the
+iOS development client:
 
 ```bash
 npx expo prebuild --clean --platform ios
@@ -42,13 +42,13 @@ npm run verify:live-activity
 ```
 
 The activity is created as playback metadata arrives, including in phone-only
-Spotify mode. Its content is kept below ActivityKit's 4 KB combined static/dynamic
-payload limit. KineSync currently uses only SF Symbols in the Live Activity; album
-artwork remains in the host app, so oversized or network-only images cannot prevent
-the system presentation from rendering.
+Spotify mode. It has explicit Lock Screen, compact, minimal, and expanded Dynamic
+Island layouts. Its content stays below ActivityKit's 4 KB payload limit, and it
+uses SF Symbols instead of album artwork so network images cannot prevent the
+system presentation from rendering.
 
-References: [Expo development builds](https://docs.expo.dev/develop/development-builds/introduction/),
-[Expo iOS app extensions](https://docs.expo.dev/build-reference/app-extensions/), and
+References: [Expo Widgets for SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/widgets/),
+[Expo development builds](https://docs.expo.dev/develop/development-builds/introduction/), and
 [Apple ActivityKit constraints](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities#Understand-constraints).
 
 ## Project Structure

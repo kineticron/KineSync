@@ -2,114 +2,88 @@
 const fs = require("fs");
 const path = require("path");
 
-const {
-  assertCustomWidget,
-  assertSharedAttributes,
-} = require("./apply-live-activity-native-patches");
-
 const projectRoot = path.join(__dirname, "..");
+const activitySourcePath = path.join(
+  projectRoot,
+  "widgets",
+  "lyrics-live-activity.tsx",
+);
 
-function verifyFile(label, filePath) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`${label} missing at ${filePath}`);
+function assertIncludes(contents, marker, label) {
+  if (!contents.includes(marker)) {
+    throw new Error(`${label} is missing ${JSON.stringify(marker)}.`);
   }
-  assertCustomWidget(filePath);
-  console.log(`[live-activity] Verified ${label}.`);
 }
 
-function verifyPayloadGuards() {
-  const javascriptSource = fs.readFileSync(
-    path.join(projectRoot, "lib", "lyrics-live-activity.ts"),
-    "utf8",
-  );
-  const swiftSource = fs.readFileSync(
-    path.join(
-      projectRoot,
-      "native",
-      "live-activity-module",
-      "ExpoLiveActivityModule.swift",
-    ),
-    "utf8",
-  );
-
-  if (!javascriptSource.includes("ACTIVITYKIT_PAYLOAD_LIMIT_BYTES = 4096")) {
-    throw new Error("JavaScript Live Activity payload guard is missing.");
+function verifyActivitySource() {
+  const source = fs.readFileSync(activitySourcePath, "utf8");
+  for (const marker of [
+    '"widget"',
+    'createLiveActivity<LyricsLiveActivityProps>',
+    '"KineSyncLyrics"',
+    "banner:",
+    "compactLeading:",
+    "compactTrailing:",
+    "minimal:",
+    "expandedLeading:",
+    "expandedTrailing:",
+    "expandedBottom:",
+  ]) {
+    assertIncludes(source, marker, "Live Activity layout");
   }
-  if (!swiftSource.includes("activityKitPayloadLimitBytes = 4096")) {
-    throw new Error("Native Live Activity payload guard is missing.");
-  }
-  console.log("[live-activity] Verified 4 KB payload guards in JS and Swift.");
+  console.log("[live-activity] Verified all Lock Screen and Dynamic Island regions.");
 }
 
-function inspectLiveActivityImages() {
-  const assetsDir = path.join(projectRoot, "assets", "liveActivity");
-  if (!fs.existsSync(assetsDir)) {
+function verifySdk57Configuration() {
+  const packageJson = require(path.join(projectRoot, "package.json"));
+  const appJson = require(path.join(projectRoot, "app.json"));
+  const widgetDependency = packageJson.dependencies?.["expo-widgets"];
+  if (!widgetDependency?.startsWith("~57.")) {
+    throw new Error("expo-widgets must use the Expo SDK 57 release line.");
+  }
+  if (packageJson.dependencies?.["expo-live-activity"]) {
+    throw new Error("The legacy expo-live-activity package must not be installed.");
+  }
+
+  const widgetPlugin = appJson.expo?.plugins?.find(
+    (plugin) => Array.isArray(plugin) && plugin[0] === "expo-widgets",
+  );
+  if (!widgetPlugin) {
+    throw new Error("The expo-widgets config plugin is not configured.");
+  }
+  if (widgetPlugin[1]?.frequentUpdates !== true) {
+    throw new Error("Live Activity frequent updates must be enabled.");
+  }
+  console.log(`[live-activity] Verified SDK 57 expo-widgets ${widgetDependency}.`);
+}
+
+function verifyGeneratedTargetIfPresent() {
+  const targetDirectory = path.join(projectRoot, "ios", "ExpoWidgetsTarget");
+  if (!fs.existsSync(targetDirectory)) {
     console.log(
-      "[live-activity] No custom Live Activity images are bundled; presentation image limits do not apply.",
+      "[live-activity] Generated iOS target not present; source/config checks completed.",
     );
     return;
   }
 
-  const imageFiles = fs
-    .readdirSync(assetsDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /\.(png|jpe?g)$/i.test(entry.name));
-  if (imageFiles.length === 0) {
-    console.log(
-      "[live-activity] No custom Live Activity images are bundled; presentation image limits do not apply.",
-    );
-    return;
-  }
-
-  for (const entry of imageFiles) {
-    const filePath = path.join(assetsDir, entry.name);
-    const size = fs.statSync(filePath).size;
-    console.warn(
-      `[live-activity] Review ${entry.name} (${size} bytes): Apple requires its pixel resolution to fit every presentation where it is used.`,
-    );
-  }
+  const indexPath = path.join(targetDirectory, "index.swift");
+  const infoPlistPath = path.join(targetDirectory, "Info.plist");
+  const indexSource = fs.readFileSync(indexPath, "utf8");
+  const infoPlist = fs.readFileSync(infoPlistPath, "utf8");
+  assertIncludes(indexSource, "WidgetLiveActivity()", "Generated widget target");
+  assertIncludes(
+    infoPlist,
+    "com.apple.widgetkit-extension",
+    "Generated widget Info.plist",
+  );
+  assertIncludes(
+    infoPlist,
+    "group.dev.kineticron.KineSync",
+    "Generated widget Info.plist",
+  );
+  console.log("[live-activity] Verified generated ExpoWidgetsTarget extension.");
 }
 
-function main() {
-  const packageWidgetDir = path.join(
-    projectRoot,
-    "node_modules",
-    "expo-live-activity",
-    "ios-files",
-  );
-
-  verifyFile(
-    "package widget template",
-    path.join(packageWidgetDir, "LiveActivityWidget.swift"),
-  );
-  assertSharedAttributes(
-    path.join(packageWidgetDir, "LiveActivityAttributes.swift"),
-  );
-  console.log("[live-activity] Verified shared attributes in ios-files.");
-
-  const generatedDir = path.join(projectRoot, "ios", "LiveActivity");
-  const generatedWidget = path.join(generatedDir, "LiveActivityWidget.swift");
-
-  if (fs.existsSync(generatedWidget)) {
-    verifyFile("generated widget target", generatedWidget);
-    assertSharedAttributes(path.join(generatedDir, "LiveActivityAttributes.swift"));
-    console.log("[live-activity] Verified shared attributes in ios/LiveActivity.");
-  }
-
-  const moduleAttributes = path.join(
-    projectRoot,
-    "node_modules",
-    "expo-live-activity",
-    "ios",
-    "LiveActivityAttributes.swift",
-  );
-  if (!fs.existsSync(moduleAttributes)) {
-    throw new Error(`Patched module attributes missing at ${moduleAttributes}`);
-  }
-  assertSharedAttributes(moduleAttributes);
-  console.log("[live-activity] Verified patched native module attributes.");
-
-  verifyPayloadGuards();
-  inspectLiveActivityImages();
-}
-
-main();
+verifyActivitySource();
+verifySdk57Configuration();
+verifyGeneratedTargetIfPresent();

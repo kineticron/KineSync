@@ -66,7 +66,14 @@
           }
         }
       ],
-      "expo-live-activity",
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "dev.kineticron.KineSync.ExpoWidgetsTarget",
+          "groupIdentifier": "group.dev.kineticron.KineSync",
+          "frequentUpdates": true
+        }
+      ],
       [
         "expo-build-properties",
         {
@@ -78,7 +85,6 @@
           }
         }
       ],
-      "./plugins/with-lyrics-live-activity.js",
       "expo-video",
       "expo-font",
       "@react-native-vector-icons/ionicons",
@@ -92,20 +98,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7c2c72f0-39c9-42fd-9458-f0c846c23864",
-        "build": {
-          "experimental": {
-            "ios": {
-              "appExtensions": [
-                {
-                  "targetName": "LiveActivity",
-                  "bundleIdentifier": "dev.kineticron.KineSync.LiveActivity",
-                  "entitlements": {}
-                }
-              ]
-            }
-          }
-        }
+        "projectId": "7c2c72f0-39c9-42fd-9458-f0c846c23864"
       }
     },
     "owner": "ravadhuta"

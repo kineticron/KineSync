@@ -33,43 +33,18 @@ export const LiveActivityDebugPanel = memo(function LiveActivityDebugPanel() {
 
   const refreshStatus = useCallback(() => {
     const info = getLyricsLiveActivityDebugInfo();
-    const nativeCount = info.nativeActivityDebug?.activityCount;
-    const nativeState = info.nativeActivityDebug?.activities?.[0]?.state;
-    const activitiesEnabled = info.nativeActivityDebug?.activitiesEnabled;
-    const hostBundleId = info.nativeActivityDebug?.hostBundleIdentifier;
-    const extensionBundleId = info.nativeActivityDebug?.extensionBundleIdentifier;
-    const extensionMatchesHost = info.nativeActivityDebug?.extensionMatchesHost;
-    const expectedExtensionBundleId =
-      info.nativeActivityDebug?.expectedExtensionBundleIdentifier;
-    const extensionPoint = info.nativeActivityDebug?.extensionPointIdentifier;
-    const hostAppId =
-      info.nativeActivityDebug?.hostProvisioning?.applicationIdentifier;
-    const extensionAppId =
-      info.nativeActivityDebug?.extensionProvisioning?.applicationIdentifier;
-    const nativeStatus =
-      nativeCount === undefined
-        ? ""
-        : ` · Native: ${nativeCount}${nativeState ? ` (${nativeState})` : ""}`;
+    const nativeCount = info.nativeActivityDebug.activityCount;
+    const implementation = info.nativeActivityDebug.implementation;
+    const nativeError = info.nativeActivityDebug.error;
     const details = [
-      activitiesEnabled === undefined
-        ? null
-        : `Enabled: ${activitiesEnabled ? "yes" : "no"}`,
-      hostBundleId ? `Host: ${hostBundleId}` : null,
-      extensionBundleId ? `Ext: ${extensionBundleId}` : "Ext: missing",
-      extensionMatchesHost === undefined
-        ? null
-        : `Ext match: ${extensionMatchesHost ? "yes" : "no"}`,
-      extensionMatchesHost === false && expectedExtensionBundleId
-        ? `Expected: ${expectedExtensionBundleId}`
-        : null,
-      extensionPoint ? `Point: ${extensionPoint}` : null,
-      hostAppId ? `Host app id: ${hostAppId}` : null,
-      extensionAppId ? `Ext app id: ${extensionAppId}` : null,
+      `Runtime: ${implementation}`,
+      `Native: ${nativeCount}`,
       info.payloadBytes
         ? `Payload: ${info.payloadBytes}/${info.payloadLimitBytes} B${
             info.payloadTrimmed ? " (trimmed)" : ""
           }`
         : null,
+      nativeError ? `Error: ${nativeError}` : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -77,14 +52,12 @@ export const LiveActivityDebugPanel = memo(function LiveActivityDebugPanel() {
       `${
         info.supported
           ? info.active
-            ? `Active (${info.activityId?.slice(0, 8) ?? "?"})${
-              info.manualKeepAlive ? ", keep-alive" : ""
-            }`
+            ? `Active${info.manualKeepAlive ? ", keep-alive" : ""}`
             : info.lastStartError
               ? `Idle — ${info.lastStartError}`
               : "Idle"
-          : "Native module missing — rebuild required"
-      }${nativeStatus}${details ? ` · ${details}` : ""}`,
+          : "iOS only"
+      }${details ? ` · ${details}` : ""}`,
     );
   }, []);
 
