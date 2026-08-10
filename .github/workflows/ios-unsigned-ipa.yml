@@ -213,6 +213,15 @@ jobs:
             echo "::error::ExpoWidgetsTarget.appex executable is missing"
             exit 1
           fi
+          if ! grep -a -q "KineSyncDirectLiveActivityRenderer" "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget"; then
+            echo "::error::Sideloadly-safe KineSync Live Activity renderer is missing from the extension executable"
+            exit 1
+          fi
+          EXTENSION_EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
+          if [[ "${EXTENSION_EXECUTABLE}" != "ExpoWidgetsTarget" ]]; then
+            echo "::error::Unexpected widget extension executable: ${EXTENSION_EXECUTABLE}"
+            exit 1
+          fi
           EXTENSION_POINT=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
           if [[ "${EXTENSION_POINT}" != "com.apple.widgetkit-extension" ]]; then
             echo "::error::ExpoWidgetsTarget.appex is not registered as a WidgetKit extension"
@@ -220,14 +229,67 @@ jobs:
             exit 1
           fi
           EXTENSION_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
+          if [[ "${EXTENSION_BUNDLE_ID}" != "dev.kineticron.KineSync.ExpoWidgetsTarget" ]]; then
+            echo "::error::Unexpected Live Activity extension bundle id: ${EXTENSION_BUNDLE_ID}"
+            exit 1
+          fi
+          EXTENSION_ARCHS=$(lipo -archs "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget")
+          if [[ " ${EXTENSION_ARCHS} " != *" arm64 "* ]]; then
+            echo "::error::ExpoWidgetsTarget does not contain the arm64 device architecture: ${EXTENSION_ARCHS}"
+            exit 1
+          fi
+          LIVE_ACTIVITIES_ENABLED=$(/usr/libexec/PlistBuddy -c "Print :NSSupportsLiveActivities" "${APP}/Info.plist" 2>/dev/null || true)
+          if [[ "${LIVE_ACTIVITIES_ENABLED}" != "true" ]]; then
+            echo "::error::Host app is missing NSSupportsLiveActivities=true"
+            exit 1
+          fi
+          FREQUENT_UPDATES_ENABLED=$(/usr/libexec/PlistBuddy -c "Print :NSSupportsLiveActivitiesFrequentUpdates" "${APP}/Info.plist" 2>/dev/null || true)
+          if [[ "${FREQUENT_UPDATES_ENABLED}" != "true" ]]; then
+            echo "::error::Host app is missing NSSupportsLiveActivitiesFrequentUpdates=true"
+            exit 1
+          fi
           echo "Live Activity extension bundle id: ${EXTENSION_BUNDLE_ID}"
+          echo "Live Activity extension architectures: ${EXTENSION_ARCHS}"
           echo "Verified embedded Live Activity extension: ${LIVE_ACTIVITY_APPEX}"
           echo "Packaging: ${APP}"
           STAGE="${RUNNER_TEMP}/ipa-payload"
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}/Payload"
-          cp -R "${APP}" "${STAGE}/Payload/"
-          (cd "${STAGE}" && zip -r "${GITHUB_WORKSPACE}/ExpoLyrics/ExpoLyrics-unsigned.ipa" Payload)
+          APP_BASENAME=$(basename "${APP}")
+          ditto "${APP}" "${STAGE}/Payload/${APP_BASENAME}"
+
+          IPA="${GITHUB_WORKSPACE}/ExpoLyrics/ExpoLyrics-unsigned.ipa"
+          rm -f "${IPA}"
+          ditto -c -k --sequesterRsrc --keepParent "${STAGE}/Payload" "${IPA}"
+
+          # Validate the completed archive, not only the pre-packaging build product.
+          VERIFY_DIR="${RUNNER_TEMP}/ipa-verification"
+          rm -rf "${VERIFY_DIR}"
+          mkdir -p "${VERIFY_DIR}"
+          ditto -x -k "${IPA}" "${VERIFY_DIR}"
+          PACKAGED_APPEX="${VERIFY_DIR}/Payload/${APP_BASENAME}/PlugIns/ExpoWidgetsTarget.appex"
+          PACKAGED_EXECUTABLE="${PACKAGED_APPEX}/ExpoWidgetsTarget"
+          if [[ ! -f "${PACKAGED_EXECUTABLE}" ]]; then
+            echo "::error::Finished IPA does not contain ExpoWidgetsTarget.appex"
+            exit 1
+          fi
+          if ! cmp -s "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget" "${PACKAGED_EXECUTABLE}"; then
+            echo "::error::Live Activity executable changed while packaging the IPA"
+            exit 1
+          fi
+          if ! cmp -s "${LIVE_ACTIVITY_APPEX}/Info.plist" "${PACKAGED_APPEX}/Info.plist"; then
+            echo "::error::Live Activity extension metadata changed while packaging the IPA"
+            exit 1
+          fi
+          if ! cmp -s "${APP}/Info.plist" "${VERIFY_DIR}/Payload/${APP_BASENAME}/Info.plist"; then
+            echo "::error::Host Live Activity metadata changed while packaging the IPA"
+            exit 1
+          fi
+          if ! grep -a -q "KineSyncDirectLiveActivityRenderer" "${PACKAGED_EXECUTABLE}"; then
+            echo "::error::Finished IPA lost the KineSync native Live Activity renderer"
+            exit 1
+          fi
+          echo "Verified native Live Activity renderer inside finished IPA."
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4

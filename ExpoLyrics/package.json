@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
-    "verify:live-activity": "node ./scripts/verify-live-activity-widget.js"
+    "verify:live-activity": "node ./scripts/verify-live-activity-widget.js",
+    "postinstall": "node ./scripts/apply-kinesync-live-activity-patch.js"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.5.2",

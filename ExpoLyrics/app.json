@@ -74,6 +74,7 @@
           "frequentUpdates": true
         }
       ],
+      "./plugins/with-kinesync-live-activity.js",
       [
         "expo-build-properties",
         {

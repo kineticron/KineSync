@@ -31,7 +31,11 @@ Scan the QR code with Expo Go. Open settings to configure your bridge URL.
 
 ## iOS Live Activity development
 
-Live Activities use the SDK 57 `expo-widgets` runtime and do not run in Expo Go.
+Live Activities use the SDK 57 `expo-widgets` ActivityKit lifecycle and do not run in Expo Go.
+KineSync patches its presentation with a direct native Swift renderer during
+`npm install` and iOS prebuild. This lets the extension render from ActivityKit
+state even when a sideloading signer does not preserve the Expo App Group or
+bundled widget JavaScript runtime.
 After changing the activity layout or app configuration, regenerate and rebuild the
 iOS development client:
 
@@ -40,6 +44,10 @@ npx expo prebuild --clean --platform ios
 npx expo run:ios
 npm run verify:live-activity
 ```
+
+The verifier also confirms that the direct renderer was applied to the installed
+`expo-widgets` package. CI inspects the compiled app extension before packaging
+the IPA, so a build cannot ship if the renderer is absent.
 
 The activity is created as playback metadata arrives, including in phone-only
 Spotify mode. It has explicit Lock Screen, compact, minimal, and expanded Dynamic

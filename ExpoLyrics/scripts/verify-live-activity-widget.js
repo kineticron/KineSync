@@ -3,6 +3,9 @@ const fs = require("fs");
 const path = require("path");
 
 const projectRoot = path.join(__dirname, "..");
+const { assertDirectRenderer, marker: directRendererMarker } = require(
+  "./apply-kinesync-live-activity-patch",
+);
 const activitySourcePath = path.join(
   projectRoot,
   "widgets",
@@ -13,6 +16,40 @@ function assertIncludes(contents, marker, label) {
   if (!contents.includes(marker)) {
     throw new Error(`${label} is missing ${JSON.stringify(marker)}.`);
   }
+}
+
+function verifyDirectNativeRenderer() {
+  const sourcePath = path.join(
+    projectRoot,
+    "native",
+    "expo-widgets",
+    "WidgetLiveActivity.swift",
+  );
+  const packagePath = path.join(
+    projectRoot,
+    "node_modules",
+    "expo-widgets",
+    "ios",
+    "Widgets",
+    "WidgetLiveActivity.swift",
+  );
+  assertDirectRenderer(sourcePath);
+  assertDirectRenderer(packagePath);
+  const source = fs.readFileSync(sourcePath, "utf8");
+  for (const marker of [
+    directRendererMarker,
+    "decodeKineSyncState",
+    "compactLeading:",
+    "compactTrailing:",
+    "minimal:",
+    "DynamicIslandExpandedRegion(.bottom)",
+    "KineSyncLiveActivityBanner",
+  ]) {
+    assertIncludes(source, marker, "Direct native Live Activity renderer");
+  }
+  console.log(
+    "[live-activity] Verified direct native renderer (no App Group/runtime dependency).",
+  );
 }
 
 function verifyActivitySource() {
@@ -84,6 +121,7 @@ function verifyGeneratedTargetIfPresent() {
   console.log("[live-activity] Verified generated ExpoWidgetsTarget extension.");
 }
 
+verifyDirectNativeRenderer();
 verifyActivitySource();
 verifySdk57Configuration();
 verifyGeneratedTargetIfPresent();

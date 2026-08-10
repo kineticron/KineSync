@@ -213,6 +213,10 @@ jobs:
             echo "::error::ExpoWidgetsTarget.appex executable is missing"
             exit 1
           fi
+          if ! grep -a -q "KineSyncDirectLiveActivityRenderer" "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget"; then
+            echo "::error::Sideloadly-safe KineSync Live Activity renderer is missing from the extension executable"
+            exit 1
+          fi
           EXTENSION_POINT=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
           if [[ "${EXTENSION_POINT}" != "com.apple.widgetkit-extension" ]]; then
             echo "::error::ExpoWidgetsTarget.appex is not registered as a WidgetKit extension"
