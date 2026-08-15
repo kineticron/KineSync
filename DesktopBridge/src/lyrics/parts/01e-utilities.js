@@ -398,6 +398,41 @@ function decodeKugouKrc(encodedContent) {
     .replace(/\0/g, "");
 }
 
+function preserveKugouKrcSpacing(syllables) {
+  if (!Array.isArray(syllables) || syllables.length === 0) {
+    return syllables;
+  }
+
+  const preserved = [];
+  let leadingWhitespace = "";
+  for (const syllable of syllables) {
+    const text = String(syllable?.text || "");
+    // KRC commonly times Korean one syllable at a time and represents word
+    // boundaries as standalone space segments, which normalization drops.
+    if (/^\s+$/u.test(text)) {
+      const previous = preserved[preserved.length - 1];
+      if (previous) {
+        previous.text += text;
+        previous.endTime = Math.max(previous.endTime, syllable.endTime);
+      } else {
+        leadingWhitespace += text;
+      }
+      continue;
+    }
+
+    preserved.push({
+      ...syllable,
+      text: `${leadingWhitespace}${text}`,
+    });
+    leadingWhitespace = "";
+  }
+
+  if (leadingWhitespace && preserved.length > 0) {
+    preserved[preserved.length - 1].text += leadingWhitespace;
+  }
+  return preserved;
+}
+
 function parseKugouKrc(krc) {
   const lines = String(krc || "")
     .split("\n")
@@ -458,7 +493,9 @@ function parseKugouKrc(krc) {
 
     const normalized = normalizeSyllables(
       mergeConsecutiveCensorSyllables(
-        ensureNeteaseCensorshipSpacing(syllables),
+        ensureNeteaseCensorshipSpacing(
+          preserveKugouKrcSpacing(syllables),
+        ),
       ),
       lineStartTime,
       Math.max(lineEndTime, syllables[syllables.length - 1].endTime),

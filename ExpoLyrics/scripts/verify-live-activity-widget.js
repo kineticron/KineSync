@@ -38,6 +38,8 @@ function verifyDirectNativeRenderer() {
   const source = fs.readFileSync(sourcePath, "utf8");
   for (const marker of [
     directRendererMarker,
+    '@_cdecl("KineSyncDirectLiveActivityRenderer")',
+    "kineSyncDirectLiveActivityRendererMarker(nameMatches)",
     "decodeKineSyncState",
     "compactLeading:",
     "compactTrailing:",

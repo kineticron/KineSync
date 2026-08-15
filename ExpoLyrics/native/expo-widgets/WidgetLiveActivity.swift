@@ -86,10 +86,19 @@ private extension Color {
   }
 }
 
+// Export a stable native symbol so release builds can prove this renderer was
+// linked without relying on Swift string-literal storage or framework layout.
+@_cdecl("KineSyncDirectLiveActivityRenderer")
+@inline(never)
+public func kineSyncDirectLiveActivityRendererMarker(_ value: Int32) -> Int32 {
+  return value
+}
+
 private func decodeKineSyncState(_ contextState: LiveActivityAttributes.ContentState)
   -> KineSyncLyricsActivityState
 {
-  guard contextState.name == "KineSyncLyrics",
+  let nameMatches: Int32 = contextState.name == "KineSyncLyrics" ? 1 : 0
+  guard kineSyncDirectLiveActivityRendererMarker(nameMatches) == 1,
         let data = contextState.props.data(using: .utf8),
         let state = try? JSONDecoder().decode(KineSyncLyricsActivityState.self, from: data)
   else {

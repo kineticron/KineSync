@@ -213,10 +213,26 @@ jobs:
             echo "::error::ExpoWidgetsTarget.appex executable is missing"
             exit 1
           fi
-          if ! grep -a -q "KineSyncDirectLiveActivityRenderer" "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget"; then
-            echo "::error::Sideloadly-safe KineSync Live Activity renderer is missing from the extension executable"
+          find_renderer_binary() {
+            local root="$1"
+            local candidate
+            local symbols
+            while IFS= read -r -d '' candidate; do
+              symbols=$(nm -gjU "${candidate}" 2>/dev/null || true)
+              if [[ "${symbols}" == *"KineSyncDirectLiveActivityRenderer"* ]]; then
+                printf '%s\n' "${candidate}"
+                return 0
+              fi
+            done < <(find "${root}" -type f -print0)
+            return 1
+          }
+          if ! RENDERER_BINARY=$(find_renderer_binary "${LIVE_ACTIVITY_APPEX}"); then
+            echo "::error::Sideloadly-safe KineSync Live Activity renderer symbol is missing from the extension bundle"
+            find "${LIVE_ACTIVITY_APPEX}" -maxdepth 4 -type f -print
             exit 1
           fi
+          RENDERER_RELATIVE_PATH="${RENDERER_BINARY:${#LIVE_ACTIVITY_APPEX}+1}"
+          echo "Native Live Activity renderer binary: ${RENDERER_RELATIVE_PATH}"
           EXTENSION_EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
           if [[ "${EXTENSION_EXECUTABLE}" != "ExpoWidgetsTarget" ]]; then
             echo "::error::Unexpected widget extension executable: ${EXTENSION_EXECUTABLE}"
@@ -285,8 +301,17 @@ jobs:
             echo "::error::Host Live Activity metadata changed while packaging the IPA"
             exit 1
           fi
-          if ! grep -a -q "KineSyncDirectLiveActivityRenderer" "${PACKAGED_EXECUTABLE}"; then
-            echo "::error::Finished IPA lost the KineSync native Live Activity renderer"
+          PACKAGED_RENDERER_BINARY="${PACKAGED_APPEX}/${RENDERER_RELATIVE_PATH}"
+          if [[ ! -f "${PACKAGED_RENDERER_BINARY}" ]]; then
+            echo "::error::Finished IPA lost the native renderer binary: ${RENDERER_RELATIVE_PATH}"
+            exit 1
+          fi
+          if ! cmp -s "${RENDERER_BINARY}" "${PACKAGED_RENDERER_BINARY}"; then
+            echo "::error::Native Live Activity renderer changed while packaging the IPA"
+            exit 1
+          fi
+          if ! find_renderer_binary "${PACKAGED_APPEX}" >/dev/null; then
+            echo "::error::Finished IPA lost the KineSync native Live Activity renderer symbol"
             exit 1
           fi
           echo "Verified native Live Activity renderer inside finished IPA."
