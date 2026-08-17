@@ -6,6 +6,7 @@ import {
   AMLL_WEBVIEW_CSS,
   AMLL_WEBVIEW_JS,
 } from "@/components/lyrics/amll-webview-bundle";
+import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine as LyricLineType } from "@/types/bridge";
 
@@ -77,6 +78,58 @@ body {
   position: absolute;
   inset: 0;
   background: transparent;
+}
+.static-lyrics-root {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 150px 28px 280px;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+.static-lyrics-root::-webkit-scrollbar {
+  display: none;
+}
+.static-lyrics-root[hidden] {
+  display: none;
+}
+.static-lyrics-line {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 0 14px;
+  color: #fff;
+  font-size: calc(26px * var(--ks-font-scale, 1));
+  line-height: 1.46;
+  font-weight: 600;
+  letter-spacing: 0.15px;
+  white-space: pre-wrap;
+}
+.static-lyrics-translation {
+  margin-top: 6px;
+  color: rgba(255,255,255,0.68);
+  font-size: calc(18px * var(--ks-font-scale, 1));
+  line-height: 1.44;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+}
+.static-lyrics-root.landscape .static-lyrics-line {
+  margin-left: auto;
+  text-align: right;
+}
+.static-lyrics-root .kinesync-credits-footer {
+  max-width: 300px;
+  margin-top: 18px;
+  padding-left: 0;
+  padding-right: 0;
+}
+.static-lyrics-root.landscape .kinesync-credits-footer {
+  margin-left: auto;
+  text-align: right;
 }
 .kinesync-amll-player {
   background: transparent;
@@ -179,6 +232,7 @@ body {
 <body>
 <div id="app">
   <div id="amll-root"></div>
+  <div id="staticLyricsRoot" class="static-lyrics-root" hidden></div>
   <div id="empty" class="empty" hidden>
     <div id="emptyTitle" class="empty-title"></div>
     <div id="emptySub" class="empty-sub"></div>
@@ -258,6 +312,10 @@ export const WebLyricsView = memo(function WebLyricsView({
   const lastLyricEndTime = lyrics.length
     ? Number(lyrics[lyrics.length - 1]?.lineEndTime || 0)
     : 0;
+  const lyricsTimingMode = useMemo(
+    () => detectLyricsTimingMode(lyrics, lyricsSource),
+    [lyrics, lyricsSource],
+  );
   const anchorPositionMs = usePlaybackStore((state) => state.anchorPositionMs);
   const isPlaying = usePlaybackStore((state) => state.isPlaying);
 
@@ -285,6 +343,7 @@ export const WebLyricsView = memo(function WebLyricsView({
     inject({
       type: "setLyrics",
       lines: lyrics.map(toWebLine),
+      timingMode: lyricsTimingMode,
       emptyTitle: lyricsMetadata.instrumental
         ? "This song is an instrumental"
         : "No synced lyrics yet",
@@ -299,6 +358,7 @@ export const WebLyricsView = memo(function WebLyricsView({
     lyricsMetadata.instrumental,
     lyricsSource,
     lyricsStatusMessage,
+    lyricsTimingMode,
     ready,
     songwriters,
   ]);

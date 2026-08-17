@@ -39,6 +39,7 @@ type IncomingMessage = {
   emptySub?: string;
   songwriters?: string[];
   lastLyricEndTime?: number;
+  timingMode?: "karaoke" | "interpolated" | "static" | "unknown";
   autoFollowEnabled?: boolean;
   resumeAutoFollowSignal?: number;
 };
@@ -57,6 +58,7 @@ const root = document.getElementById("amll-root") || document.body;
 const empty = document.getElementById("empty") as HTMLElement | null;
 const emptyTitle = document.getElementById("emptyTitle") as HTMLElement | null;
 const emptySub = document.getElementById("emptySub") as HTMLElement | null;
+const staticLyricsRoot = document.getElementById("staticLyricsRoot") as HTMLElement | null;
 
 const player = new LyricPlayer();
 const playerElement = player.getElement();
@@ -83,6 +85,8 @@ let longPressTimer = 0;
 let touchStartSourceIndex = -1;
 let touchMoved = false;
 let lastLyricEndTime = 0;
+let staticLyricsMode = false;
+let staticSongwriters: string[] = [];
 let frameRequestId: number | null = null;
 let animateUntilMs = 0;
 const IDLE_ANIMATION_GRACE_MS = 750;
@@ -221,6 +225,52 @@ function getProjectedPosition() {
 function updatePlayerClass() {
   playerElement.classList.toggle("landscape", landscapeMode);
   playerElement.style.setProperty("--ks-font-scale", String(Math.max(0.82, Math.min(1.35, fontScale))));
+  staticLyricsRoot?.classList.toggle("landscape", landscapeMode);
+  staticLyricsRoot?.style.setProperty(
+    "--ks-font-scale",
+    String(Math.max(0.82, Math.min(1.35, fontScale))),
+  );
+}
+
+function getStaticLineText(line: KineSyncLine) {
+  return (Array.isArray(line.syllables) ? line.syllables : [])
+    .map((syllable) => String(syllable?.text || ""))
+    .join("")
+    .trim();
+}
+
+function renderStaticLyrics(songwriters: string[] = staticSongwriters) {
+  if (!staticLyricsRoot) return;
+  staticLyricsRoot.replaceChildren();
+
+  sourceLines.forEach((line) => {
+    const text = getStaticLineText(line);
+    if (!text) return;
+    const lineElement = document.createElement("div");
+    lineElement.className = "static-lyrics-line";
+    lineElement.textContent = text;
+
+    const translation = String(line.translatedText || "").trim();
+    if (showTranslatedText && translation) {
+      const translationElement = document.createElement("div");
+      translationElement.className = "static-lyrics-translation";
+      translationElement.textContent = translation;
+      lineElement.appendChild(translationElement);
+    }
+    staticLyricsRoot.appendChild(lineElement);
+  });
+
+  if (songwriters.length) {
+    const credits = document.createElement("div");
+    credits.className = "kinesync-credits-footer";
+    const label = document.createElement("span");
+    label.className = "kinesync-credits-strong";
+    label.textContent = "Written By: ";
+    const names = document.createElement("span");
+    names.textContent = songwriters.join(", ");
+    credits.append(label, names);
+    staticLyricsRoot.appendChild(credits);
+  }
 }
 
 function updateSelectionClasses() {
@@ -265,6 +315,22 @@ async function relayout(force = false) {
 function setLyrics(message: IncomingMessage) {
   sourceLines = Array.isArray(message.lines) ? message.lines : [];
   activeSourceIndex = -1;
+  staticLyricsMode = message.timingMode === "static";
+  staticSongwriters = Array.isArray(message.songwriters) ? message.songwriters : [];
+  playerElement.hidden = staticLyricsMode;
+  if (staticLyricsRoot) {
+    staticLyricsRoot.hidden = !staticLyricsMode;
+  }
+  if (staticLyricsMode) {
+    player.setLyricLines([], 0);
+    renderCredits([], 0);
+    renderStaticLyrics();
+    staticLyricsRoot?.scrollTo({ top: 0, behavior: "auto" });
+    showEmpty(message.emptyTitle || "No lyrics yet", message.emptySub || "");
+    post({ type: "activeLineChange", index: -1 });
+    return;
+  }
+  staticLyricsRoot?.replaceChildren();
   const converted = convertLines(sourceLines);
   player.setLyricLines(converted, getProjectedPosition());
   renderCredits(message.songwriters || [], toFiniteMs(message.lastLyricEndTime));
@@ -295,7 +361,9 @@ function applyOptions(message: IncomingMessage) {
   }
   player.setIsSeeking(!autoFollowEnabled);
   updatePlayerClass();
-  if ((translationsChanged || landscapeChanged) && sourceLines.length) {
+  if (staticLyricsMode && (translationsChanged || landscapeChanged)) {
+    renderStaticLyrics();
+  } else if ((translationsChanged || landscapeChanged) && sourceLines.length) {
     player.setLyricLines(convertLines(sourceLines), getProjectedPosition());
     void relayout(true);
   } else {
@@ -313,6 +381,9 @@ function sync(message: IncomingMessage) {
   previewPositionMs = message.previewPositionMs === null || message.previewPositionMs === undefined
     ? null
     : toFiniteMs(message.previewPositionMs);
+  if (staticLyricsMode) {
+    return;
+  }
   player.setCurrentTime(getProjectedPosition(), wasFar || Boolean(message.force));
   if (isPlaying && previewPositionMs === null) {
     player.resume();
@@ -454,6 +525,7 @@ player.getBottomLineElement().addEventListener("click", () => {
 
 function playbackNeedsFrames() {
   return (
+    !staticLyricsMode &&
     isPlaying &&
     previewPositionMs === null &&
     sourceLines.length > 0 &&
@@ -476,6 +548,9 @@ function frame() {
   const now = performance.now();
   const delta = Math.max(0, Math.min(80, now - lastFrameMs));
   lastFrameMs = now;
+  if (staticLyricsMode) {
+    return;
+  }
   const position = getProjectedPosition();
   player.setCurrentTime(position);
   player.update(delta);

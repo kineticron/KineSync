@@ -2351,7 +2351,10 @@ export function LyricsView({
             style={[
               styles.staticLyricLineText,
               alignRight && styles.staticLyricLineTextOpposite,
-              { fontSize: STATIC_LYRIC_FONT_SIZE * fontScale },
+              {
+                fontSize: STATIC_LYRIC_FONT_SIZE * fontScale,
+                lineHeight: STATIC_LYRIC_LINE_HEIGHT * fontScale,
+              },
             ]}
           >
             {text}
@@ -2402,7 +2405,6 @@ export function LyricsView({
           ListFooterComponent={staticFooter}
           contentContainerStyle={[
             styles.staticLyricsContent,
-            landscapeMode && styles.staticLyricsContentLandscape,
             landscapeMode && styles.listContentLandscape,
             {
               paddingTop: topListPadding,
@@ -2582,10 +2584,6 @@ const styles = StyleSheet.create({
   },
   staticLyricsContent: {
     paddingHorizontal: STATIC_LYRIC_HORIZONTAL_INSET,
-    alignItems: "flex-start",
-  },
-  staticLyricsContentLandscape: {
-    alignItems: "flex-end",
   },
   staticLyricsColumn: {
     width: "100%",
@@ -2599,6 +2597,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     alignSelf: "flex-start",
     width: "100%",
+    maxWidth: STATIC_LYRIC_MAX_WIDTH,
     paddingVertical: 1,
   },
   staticLyricLineWrapOpposite: {

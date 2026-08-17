@@ -36,7 +36,12 @@ import { extractHost, isPrivateIpv4 } from "@/lib/network";
 import { usePlaybackStore } from "@/store/playback-store";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
-import { parseBrowserEvent, spotifyAuthProbeScript } from "@/lib/spotify-browser";
+import {
+  isSpotifyNativeAppRedirect,
+  parseBrowserEvent,
+  spotifyAuthProbeScript,
+  SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
+} from "@/lib/spotify-browser";
 import {
   requestOpenSpotifyBrowser,
   requestReloadSpotifyBrowser,
@@ -271,7 +276,7 @@ function ChoiceRow({
         <Ionicons name={icon} size={18} color="rgba(248,248,254,0.9)" />
       </View>
       <View style={styles.choiceCopy}>
-        <Text style={styles.toggleLabel}>{label}</Text>
+        <Text style={styles.choiceLabel}>{label}</Text>
         <Text style={styles.choiceHint}>{hint}</Text>
       </View>
       <Ionicons
@@ -296,6 +301,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const [playbackMode, setPlaybackMode] = useState<"unset" | "desktop" | "phone">("unset");
   const [loginOpen, setLoginOpen] = useState(false);
   const [spotifySignedIn, setSpotifySignedIn] = useState(false);
+  const spotifyLoginCompletedRef = useRef(false);
   const scrollRef = useRef<any>(null);
 
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
@@ -321,6 +327,19 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   );
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+
+  const completeSpotifySignIn = useCallback(() => {
+    if (spotifyLoginCompletedRef.current) return;
+    spotifyLoginCompletedRef.current = true;
+    setSpotifySignedIn(true);
+    setLoginOpen(false);
+    requestReloadSpotifyBrowser();
+  }, []);
+
+  const openSpotifyLogin = useCallback(() => {
+    spotifyLoginCompletedRef.current = false;
+    setLoginOpen(true);
+  }, []);
 
   const isLastStep = step === ONBOARDING_STEPS.length - 1;
 
@@ -593,7 +612,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                           styles.scanButton,
                           pressed && styles.buttonPressed,
                         ]}
-                        onPress={() => setLoginOpen(true)}
+                        onPress={openSpotifyLogin}
                       >
                         <BlurView
                           intensity={30}
@@ -774,11 +793,22 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             </View>
             <WebView
               source={{ uri: SPOTIFY_LOGIN_URL }}
+              originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
               injectedJavaScript={spotifyAuthProbeScript}
+              onShouldStartLoadWithRequest={({ url }) => {
+                if (!isSpotifyNativeAppRedirect(url)) return true;
+
+                // Spotify has already established the authenticated cookies by
+                // the time it attempts this native-app handoff. Cancel it so
+                // the installed app cannot steal focus, then finish onboarding.
+                completeSpotifySignIn();
+                return false;
+              }}
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
               domStorageEnabled
               javaScriptEnabled
+              setSupportMultipleWindows={false}
               style={styles.loginWebView}
               onMessage={({ nativeEvent }) => {
                 const event = parseBrowserEvent(nativeEvent.data);
@@ -789,9 +819,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   });
                 }
                 if (event?.type === "signedIn" && event.signedIn) {
-                  setSpotifySignedIn(true);
-                  setLoginOpen(false);
-                  requestReloadSpotifyBrowser();
+                  completeSpotifySignIn();
                 }
               }}
             />
@@ -1267,9 +1295,16 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: 2,
   },
+  choiceLabel: {
+    color: "#F8F8FE",
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
   choiceHint: {
     color: "rgba(248,248,254,0.5)",
     fontSize: 12,
+    lineHeight: 16,
     fontWeight: "500",
   },
   loginModalRoot: {

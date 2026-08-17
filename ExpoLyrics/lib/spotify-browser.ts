@@ -88,6 +88,61 @@ export type BrowserEvent =
     }
   | { type: "error"; message: string };
 
+const SPOTIFY_NATIVE_SCHEMES = /^(?:spotify|spotify-action):/i;
+const SPOTIFY_ANDROID_INTENT = /^intent:.*(?:scheme=spotify|package=com\.spotify\.music)/i;
+const SPOTIFY_STORE_LINK = /^(?:market|itms-apps):.*spotify/i;
+const SPOTIFY_APP_LINK_HOSTS = new Set([
+  "spotify.link",
+  "spotify.app.link",
+  "spotify-alternate.app.link",
+]);
+
+// react-native-webview opens non-whitelisted schemes through Linking before it
+// calls onShouldStartLoadWithRequest. Admit these schemes to the WebView's
+// policy layer so KineSync gets the chance to reject them synchronously.
+export const SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: string[] = [
+  "http://*",
+  "https://*",
+  "spotify:*",
+  "spotify-action:*",
+  "intent:*",
+  "market:*",
+  "itms-apps:*",
+];
+
+/**
+ * Returns true only for links whose purpose is to hand the current flow to the
+ * native Spotify app (or its store listing). Normal open.spotify.com web-player
+ * navigation must remain in the WebView.
+ */
+export function isSpotifyNativeAppRedirect(rawUrl: string): boolean {
+  const url = String(rawUrl || "").trim();
+  if (!url) return false;
+
+  const comparable = (() => {
+    try {
+      return decodeURIComponent(url);
+    } catch {
+      return url;
+    }
+  })();
+
+  if (
+    SPOTIFY_NATIVE_SCHEMES.test(comparable) ||
+    SPOTIFY_ANDROID_INTENT.test(comparable) ||
+    SPOTIFY_STORE_LINK.test(comparable)
+  ) {
+    return true;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return SPOTIFY_APP_LINK_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 // Runs on any open.spotify.com / accounts.spotify.com page. The web player's own
 // token endpoint is the only place that reports both the expiry and whether the
 // session is anonymous, so it doubles as the sign-in probe for onboarding.
@@ -1047,7 +1102,4 @@ export function parseBrowserEvent(payload: string): BrowserEvent | null {
     return null;
   }
 }
-
-
-
 

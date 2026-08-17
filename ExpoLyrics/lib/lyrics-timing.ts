@@ -2,12 +2,43 @@ import type { LyricLine } from "@/types/bridge";
 
 export type LyricsTimingMode = "karaoke" | "interpolated" | "static" | "unknown";
 
+function hasMeaningfulTiming(lyrics: LyricLine[]) {
+  return lyrics.some((line) => {
+    const lineStart = Number(line.lineStartTime);
+    const lineEnd = Number(line.lineEndTime);
+    if (
+      (Number.isFinite(lineStart) && lineStart > 0) ||
+      (Number.isFinite(lineEnd) && lineEnd > Math.max(0, lineStart || 0))
+    ) {
+      return true;
+    }
+
+    return [...(line.syllables || []), ...(line.backgroundSyllables || [])].some(
+      (syllable) => {
+        const start = Number(syllable.startTime);
+        const end = Number(syllable.endTime);
+        return (
+          (Number.isFinite(start) && start > 0) ||
+          (Number.isFinite(end) && end > Math.max(0, start || 0))
+        );
+      },
+    );
+  });
+}
+
 export function detectLyricsTimingMode(
   lyrics: LyricLine[],
   lyricsSource: string,
 ): LyricsTimingMode {
   if (!lyrics.length) {
     return "unknown";
+  }
+
+  // Plain/static payloads use zero for every timestamp. Detect the data shape
+  // as well as the source label so static lyrics saved to the vault (or sent by
+  // a future provider) do not fall through to the synced renderer.
+  if (!hasMeaningfulTiming(lyrics)) {
+    return "static";
   }
 
   const source = String(lyricsSource || "").toLowerCase();
