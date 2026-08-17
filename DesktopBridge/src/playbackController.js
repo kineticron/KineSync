@@ -421,6 +421,22 @@ async function spotifyApiRequest(method, endpoint, accessToken, body = null) {
 
 function createPlaybackController() {
   let getSpotifyAccessToken = null;
+  const requestedProvider = String(
+    process.env.MEDIA_SESSION_PROVIDER || process.platform,
+  )
+    .trim()
+    .toLowerCase();
+  const useMpris = requestedProvider === "linux" || requestedProvider === "mpris";
+  let mprisClient = null;
+
+  const getMprisClient = () => {
+    if (!mprisClient) {
+      // eslint-disable-next-line global-require
+      const { MprisSpotifyClient } = require("./linuxMpris");
+      mprisClient = new MprisSpotifyClient();
+    }
+    return mprisClient;
+  };
 
   const getToken = async () => {
     if (typeof getSpotifyAccessToken !== "function") {
@@ -438,6 +454,9 @@ function createPlaybackController() {
       getSpotifyAccessToken = typeof getter === "function" ? getter : null;
     },
     async togglePlayPause() {
+      if (useMpris) {
+        return getMprisClient().call("PlayPause");
+      }
       const token = await getToken();
       if (token) {
         try {
@@ -458,6 +477,11 @@ function createPlaybackController() {
       return runPowerShell(buildMediaKeyScript("toggle"), 2500);
     },
     async resyncPlayback() {
+      if (useMpris) {
+        await getMprisClient().call("PlayPause");
+        await delay(RESYNC_PAUSE_MS);
+        return getMprisClient().call("PlayPause");
+      }
       const token = await getToken();
       if (token) {
         try {
@@ -480,6 +504,9 @@ function createPlaybackController() {
       return runPowerShell(buildResyncScript(), 4000);
     },
     async next() {
+      if (useMpris) {
+        return getMprisClient().call("Next");
+      }
       const token = await getToken();
       if (token) {
         try {
@@ -491,6 +518,9 @@ function createPlaybackController() {
       return runPowerShell(buildMediaKeyScript("next"), 2500);
     },
     async previous() {
+      if (useMpris) {
+        return getMprisClient().call("Previous");
+      }
       const token = await getToken();
       if (token) {
         try {
@@ -505,6 +535,9 @@ function createPlaybackController() {
       const safeTarget = Number.isFinite(targetPositionMs)
         ? Math.max(0, Math.floor(targetPositionMs))
         : 0;
+      if (useMpris) {
+        return getMprisClient().seekTo(safeTarget);
+      }
       let nativeError = null;
       try {
         return await runNativeSeek(safeTarget);

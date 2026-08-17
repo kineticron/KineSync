@@ -1,0 +1,9 @@
+**/node_modules
+out
+build
+coverage
+*.log
+.env
+native/windows-media-session/build
+native/spotify-seek-helper/bin
+native/spotify-seek-helper/obj

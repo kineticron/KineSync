@@ -1,0 +1,26 @@
+name: kinesync
+
+services:
+  kinesync:
+    build:
+      context: ./DesktopBridge
+      dockerfile: Dockerfile
+    image: kinesync/desktop-bridge-spotify:local
+    container_name: kinesync
+    restart: unless-stopped
+    shm_size: "1gb"
+    environment:
+      PUID: ${PUID:-568}
+      PGID: ${PGID:-568}
+      TZ: ${TZ:-America/New_York}
+      CUSTOM_USER: ${KINESYNC_WEB_USER:-kinesync}
+      PASSWORD: ${KINESYNC_WEB_PASSWORD:?Set KINESYNC_WEB_PASSWORD in .env}
+      BRIDGE_KEY: ${BRIDGE_KEY:?Set BRIDGE_KEY in .env}
+      MEDIA_SESSION_PROVIDER: mpris
+      START_DOCKER: "false"
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "3443:3443"
+    volumes:
+      - ${KINESYNC_CONFIG_PATH:-./.kinesync-config}:/config

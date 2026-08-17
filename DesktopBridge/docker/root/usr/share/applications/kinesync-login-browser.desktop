@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=KineSync Login Browser
+Comment=Browser window for containerized Spotify authentication
+Exec=/usr/local/bin/kinesync-open-url %u
+Terminal=false
+NoDisplay=true
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+Categories=Network;WebBrowser;

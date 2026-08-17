@@ -12,7 +12,7 @@
     "publish": "electron-forge publish",
     "postinstall": "node scripts/postinstall.js",
     "lint": "echo \"No linting configured\"",
-    "test": "node --test --test-isolation=none test/musixmatchTokenManager.test.js",
+    "test": "node --test --test-isolation=none test/*.test.js",
     "relay": "node scripts/start-relay.js",
     "relay:ngrok": "node scripts/start-relay-ngrok.js",
     "check:lyrics-sources": "node scripts/check-lyrics-source-health.js",
@@ -35,9 +35,11 @@
   "homepage": "https://github.com/Kineticron/KineSync#readme",
   "bugs": "https://github.com/Kineticron/KineSync/issues",
   "dependencies": {
+    "@homebridge/dbus-native": "^0.7.9",
+    "@ngrok/ngrok": "1.7.0",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
-"ws": "^8.19.0"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",

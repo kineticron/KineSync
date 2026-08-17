@@ -214,7 +214,19 @@ async function fetchArtworkFallbackDataUri() {
   return firstLine;
 }
 
-function loadNativeWatcherClass() {
+function loadMediaSessionWatcherClass() {
+  const requestedProvider = String(
+    process.env.MEDIA_SESSION_PROVIDER || process.platform,
+  )
+    .trim()
+    .toLowerCase();
+  if (requestedProvider === "linux" || requestedProvider === "mpris") {
+    // eslint-disable-next-line global-require
+    return require("./linuxMpris").LinuxMediaSessionWatcher;
+  }
+  if (requestedProvider !== "win32" && requestedProvider !== "windows") {
+    throw new Error(`Unsupported media session provider: ${requestedProvider}`);
+  }
   const nativeModulePath = path.join(
     __dirname,
     "..",
@@ -1251,7 +1263,7 @@ function createSpotifyDetector() {
       clearTrack();
 
       try {
-        const WatcherClass = loadNativeWatcherClass();
+        const WatcherClass = loadMediaSessionWatcherClass();
         nativeWatcher = new WatcherClass(onNativeSnapshot, onNativeError);
         nativeWatcher.start();
       } catch (error) {

@@ -1665,10 +1665,22 @@
       };
 
       const renderRelaySettingsStatus = (payload = {}) => {
-        const configured = Boolean(payload.relayUrl && payload.relayBridgeId);
-        const connected = Boolean(payload.relayConnected);
+        const ngrokConfigured = Boolean(
+          payload.ngrokConfigured ||
+            (payload.ngrokDomain && payload.ngrokAuthToken),
+        );
+        const configured = Boolean(
+          payload.relayConfigured ||
+            (payload.relayUrl && payload.relayBridgeId) ||
+            ngrokConfigured,
+        );
+        const connected = Boolean(
+          payload.relayConnected || payload.ngrokConnected,
+        );
         const clients = Number(payload.relayConnectedClients || 0);
-        const error = String(payload.relayError || "").trim();
+        const error = String(
+          payload.ngrokError || payload.relayError || "",
+        ).trim();
         setText(
           "relay-settings-status",
           configured
@@ -1677,7 +1689,7 @@
         );
         setText(
           "relay-mobile-url",
-          `Mobile URL: ${payload.relayMobileUrl || "none"}`,
+          `Mobile URL: ${payload.ngrokMobileUrl || payload.relayMobileUrl || "none"}`,
         );
       };
 
@@ -1747,6 +1759,41 @@
         }
       };
 
+      const startConfiguredNgrokRelay = async ({
+        domain,
+        authToken,
+        bridgeKey,
+        bridgeId,
+      }) => {
+        if (!domain || !authToken || !window.bridgeAPI?.startNgrokRelay) {
+          return null;
+        }
+        setText("relay-settings-status", "Remote relay: starting ngrok tunnel...");
+        try {
+          const relayResult = await window.bridgeAPI.startNgrokRelay({
+            domain,
+            authToken,
+            bridgeKey: bridgeKey || "password123",
+            bridgeId: bridgeId || "",
+          });
+          updateNgrokRelayUI(relayResult);
+          setText(
+            "relay-settings-status",
+            relayResult?.ok
+              ? `Remote relay: connected via ngrok (${relayResult.publicUrl || "tunnel active"})`
+              : `Remote relay: configured but ngrok failed (${relayResult?.error || "unknown error"})`,
+          );
+          return relayResult;
+        } catch (error) {
+          updateNgrokRelayUI(null);
+          setText(
+            "relay-settings-status",
+            `Remote relay: configured but ngrok error (${error instanceof Error ? error.message : String(error)})`,
+          );
+          return null;
+        }
+      };
+
       const persistRelaySettings = async ({ relayUrl, relayBridgeId, bridgeKey, ngrokDomain, ngrokAuthToken }) => {
         setText("relay-settings-status", "Remote relay: saving...");
         const patch = {
@@ -1765,28 +1812,21 @@
           throw new Error(response?.error || "Failed to save relay settings");
         }
 
-        // Auto-start ngrok relay if domain and auth token are configured
-        if (ngrokDomain && ngrokAuthToken && window.bridgeAPI?.startNgrokRelay) {
-          setText("relay-settings-status", "Remote relay: starting ngrok tunnel...");
-          try {
-            const relayResult = await window.bridgeAPI.startNgrokRelay({
-              domain: ngrokDomain,
-              authToken: ngrokAuthToken,
-              bridgeKey: bridgeKey || 'password123',
-              bridgeId: relayBridgeId || "",
-            });
-            updateNgrokRelayUI(relayResult);
-            if (relayResult?.ok) {
-              setText("relay-settings-status", `Remote relay: connected via ngrok (${relayResult.publicUrl || 'tunnel active'})`);
-            } else {
-              setText("relay-settings-status", `Remote relay: saved but ngrok failed (${relayResult?.error || 'unknown'})`);
-            }
-          } catch (e) {
-            setText("relay-settings-status", `Remote relay: saved but ngrok error (${e.message})`);
-          }
-        }
+        renderRelaySettingsStatus({
+          ...response,
+          ngrokDomain,
+          ngrokAuthToken,
+        });
 
-        renderRelaySettingsStatus(response);
+        // Auto-start ngrok relay if domain and auth token are configured
+        if (ngrokDomain && ngrokAuthToken) {
+          await startConfiguredNgrokRelay({
+            domain: ngrokDomain,
+            authToken: ngrokAuthToken,
+            bridgeKey,
+            bridgeId: relayBridgeId,
+          });
+        }
       };
 
       const loadBridgeSettings = async () => {
@@ -1821,6 +1861,14 @@
           renderGeminiApiKeyStatus(settings || {});
           renderSpotifyAuthStatus(settings || {});
           renderRelaySettingsStatus(settings || {});
+          if (settings?.ngrokDomain && settings?.ngrokAuthToken) {
+            await startConfiguredNgrokRelay({
+              domain: settings.ngrokDomain,
+              authToken: settings.ngrokAuthToken,
+              bridgeKey: settings.bridgeKey,
+              bridgeId: settings.relayBridgeId,
+            });
+          }
         } catch (error) {
           setText(
             "musixmatch-token-status",
@@ -1907,13 +1955,20 @@
       }
 
       if (clearRelaySettingsButton) {
-        clearRelaySettingsButton.addEventListener("click", () => {
+        clearRelaySettingsButton.addEventListener("click", async () => {
           if (relayUrlInput) relayUrlInput.value = "";
           if (relayBridgeIdInput) relayBridgeIdInput.value = "";
+          const ngrokDomainInput = document.getElementById("ngrok-domain");
+          const ngrokAuthTokenInput = document.getElementById("ngrok-auth-token");
+          if (ngrokDomainInput) ngrokDomainInput.value = "";
+          if (ngrokAuthTokenInput) ngrokAuthTokenInput.value = "";
+          await window.bridgeAPI?.stopNgrokRelay?.();
           void persistRelaySettings({
             relayUrl: "",
             relayBridgeId: "",
             bridgeKey: bridgeKeyInput?.value || "password123",
+            ngrokDomain: "",
+            ngrokAuthToken: "",
           }).catch((error) => {
             setText(
               "relay-settings-status",
@@ -2056,33 +2111,7 @@
         renderRelaySettingsStatus(status);
       });
 
-      void (async () => {
-        await loadBridgeSettings();
-        // Auto-start ngrok relay if settings were previously saved
-        const savedDomain = document.getElementById("ngrok-domain")?.value || "";
-        const savedToken = document.getElementById("ngrok-auth-token")?.value || "";
-        const savedBridgeId = document.getElementById("relay-bridge-id")?.value || "";
-        const savedBridgeKey = document.getElementById("bridge-key")?.value || "password123";
-        if (savedDomain && savedToken && window.bridgeAPI?.startNgrokRelay) {
-          setText("relay-settings-status", "Remote relay: auto-starting ngrok from saved settings...");
-          try {
-            const result = await window.bridgeAPI.startNgrokRelay({
-              domain: savedDomain,
-              authToken: savedToken,
-              bridgeKey: savedBridgeKey,
-              bridgeId: savedBridgeId || "",
-            });
-            updateNgrokRelayUI(result);
-            if (result?.ok) {
-              setText("relay-settings-status", `Remote relay: auto-connected via ngrok (${result.publicUrl || 'tunnel active'})`);
-            } else {
-              setText("relay-settings-status", `Remote relay: auto-start failed (${result?.error || 'unknown'})`);
-            }
-          } catch (e) {
-            setText("relay-settings-status", `Remote relay: auto-start error (${e.message})`);
-          }
-        }
-      })();
+      void loadBridgeSettings();
     </script>
   
 </body>

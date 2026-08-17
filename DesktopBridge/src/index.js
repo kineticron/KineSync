@@ -165,6 +165,9 @@ app.whenReady().then(() => {
     lyricsLines: 0,
   };
   let latestCommandStatus = "No playback commands yet.";
+  let ngrokListener = null;
+  let ngrokPublicUrl = "";
+  let ngrokLastError = "";
   let activeTrackId = "";
   let latestSnapshot = null;
   let lyricsRequestVersion = 0;
@@ -326,8 +329,19 @@ app.whenReady().then(() => {
         ...getMusixmatchTokenStatus(),
         ...getSpotifyWebTokenStatus(),
         ...getGeminiApiKeyStatus(),
-        ...getSpotifyAuthStatus(),
-        ...relayBridge.getStatus(),
+      ...getSpotifyAuthStatus(),
+      ngrokConfigured: Boolean(
+        bridgeSettingsStore.getNgrokDomain() &&
+          bridgeSettingsStore.getNgrokAuthToken(),
+      ),
+      ngrokConnected: Boolean(ngrokListener && ngrokPublicUrl),
+      ngrokPublicUrl,
+      ngrokMobileUrl:
+        ngrokPublicUrl && bridgeSettingsStore.getRelayBridgeId()
+          ? `${ngrokPublicUrl.replace(/\/+$/, "")}/bridge/${encodeURIComponent(bridgeSettingsStore.getRelayBridgeId())}`
+          : "",
+      ngrokError: ngrokLastError,
+      ...relayBridge.getStatus(),
       };
     });
 
@@ -342,6 +356,8 @@ app.whenReady().then(() => {
         !Object.prototype.hasOwnProperty.call(patch, "bridgeKey") &&
         !Object.prototype.hasOwnProperty.call(patch, "relayUrl") &&
         !Object.prototype.hasOwnProperty.call(patch, "relayBridgeId") &&
+        !Object.prototype.hasOwnProperty.call(patch, "ngrokDomain") &&
+        !Object.prototype.hasOwnProperty.call(patch, "ngrokAuthToken") &&
         !Object.prototype.hasOwnProperty.call(patch, "spicyLyricsUseCorsProxy"))
     ) {
       return {
@@ -399,6 +415,8 @@ app.whenReady().then(() => {
       bridgeKey: bridgeSettingsStore.getBridgeKey(),
       relayUrl: bridgeSettingsStore.getRelayUrl(),
       relayBridgeId: bridgeSettingsStore.getRelayBridgeId(),
+      ngrokDomain: bridgeSettingsStore.getNgrokDomain(),
+      ngrokAuthToken: bridgeSettingsStore.getNgrokAuthToken(),
       spicyLyricsUseCorsProxy: bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
       ...getMusixmatchTokenStatus(),
       ...getSpotifyWebTokenStatus(),
@@ -445,45 +463,18 @@ app.whenReady().then(() => {
     });
 
     // Ngrok Relay Control
-    let ngrokProcess = null;
-    let ngrokShuttingDown = false;
     let hostedRelayServer = null;
 
-    function killProcessTree(proc) {
-      if (!proc || proc.killed) return;
-      if (process.platform === "win32") {
-        try {
-          execSync(`taskkill /T /F /PID ${proc.pid}`, { stdio: "ignore" });
-        } catch {
-          try { proc.kill(); } catch {}
-        }
-      } else {
-        proc.kill();
-      }
-    }
-
-    async function killStaleNgrok() {
-      // If a previous ngrok is still running (e.g., orphaned from a crash), kill it
+    function normalizeNgrokDomain(rawDomain) {
+      const value = String(rawDomain || "").trim();
+      if (!value) return "";
       try {
-        const tunnels = await fetchNgrokApi("http://127.0.0.1:4040/api/tunnels");
-        if (tunnels) {
-          if (process.platform === "win32") {
-            execSync("taskkill /F /IM ngrok.exe", { stdio: "ignore" });
-          } else {
-            execSync("pkill -f ngrok", { stdio: "ignore" });
-          }
-          await new Promise((r) => setTimeout(r, 500));
-        }
+        return new URL(
+          /^https?:\/\//i.test(value) ? value : `https://${value}`,
+        ).hostname;
       } catch {
-        // No stale ngrok running — expected case
+        return value.replace(/^https?:\/\//i, "").split("/")[0];
       }
-    }
-
-    function normalizeNgrokUrl(rawUrl) {
-      const url = String(rawUrl || "").trim();
-      if (!url) return "";
-      if (/^https?:\/\//i.test(url)) return url;
-      return `https://${url}`;
     }
 
     function toWebSocketUrl(publicUrl) {
@@ -493,53 +484,9 @@ app.whenReady().then(() => {
         .replace(/\/+$/, "");
     }
 
-    async function fetchNgrokApi(url) {
-      return new Promise((resolve, reject) => {
-        const http = require("node:http");
-        const req = http.get(url, (res) => {
-          let body = "";
-          res.setEncoding("utf8");
-          res.on("data", (chunk) => { body += chunk; });
-          res.on("end", () => {
-            try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
-          });
-        });
-        req.on("error", reject);
-        req.setTimeout(1000, () => req.destroy(new Error("ngrok API timeout")));
-      });
-    }
-
-    async function waitForNgrokTunnel(apiUrl) {
-      for (let i = 0; i < 40; i++) {
-        try {
-          const payload = await fetchNgrokApi(apiUrl);
-          const tunnels = Array.isArray(payload?.tunnels) ? payload.tunnels : [];
-          const publicUrl = tunnels.find(t => String(t?.public_url || "").startsWith("https://"))?.public_url ||
-                           tunnels.find(t => String(t?.public_url || "").startsWith("http://"))?.public_url || "";
-          if (publicUrl) return publicUrl;
-        } catch {}
-        await new Promise(r => setTimeout(r, 500));
-      }
-      return "";
-    }
-
-    async function authenticateNgrok(token) {
-      return new Promise((resolve) => {
-        const proc = spawn("ngrok", ["config", "add-authtoken", token], { windowsHide: true });
-        let output = "";
-        proc.stdout.on("data", d => output += d);
-        proc.stderr.on("data", d => output += d);
-        proc.on("close", (code) => {
-          if (code === 0) resolve({ ok: true });
-          else resolve({ ok: false, error: output || `ngrok auth failed (code ${code})` });
-        });
-        proc.on("error", (e) => resolve({ ok: false, error: e.message }));
-      });
-    }
-
     ipcMain.handle("ngrok:authenticate", async (_event, token) => {
       if (!token || !token.trim()) return { ok: false, error: "Empty auth token" };
-      return authenticateNgrok(token.trim());
+      return { ok: true };
     });
 
     ipcMain.handle("ngrok:relay:start", async (_event, options = {}) => {
@@ -549,26 +496,19 @@ app.whenReady().then(() => {
       if (!bridgeKey) return { ok: false, error: "bridge key required" };
       if (!bridgeId) return { ok: false, error: "bridge ID required" };
 
-      // Stop any existing relay (in-process or orphaned from a prior session)
-      if (ngrokProcess && !ngrokProcess.killed) {
-        ngrokShuttingDown = true;
-        killProcessTree(ngrokProcess);
-        ngrokProcess = null;
+      if (ngrokListener) {
+        try {
+          await ngrokListener.close();
+        } catch {}
+        ngrokListener = null;
       }
+      ngrokPublicUrl = "";
+      ngrokLastError = "";
       if (hostedRelayServer) {
         hostedRelayServer.stop(() => {});
         hostedRelayServer = null;
       }
-      ngrokShuttingDown = false;
-      await killStaleNgrok();
-
-      // Configure ngrok auth token
-      const authResult = await authenticateNgrok(authToken);
-      if (!authResult.ok) return { ok: false, error: `Auth failed: ${authResult.error}` };
-
       const relayPort = 8787;
-      const ngrokApiUrl = "http://127.0.0.1:4040/api/tunnels";
-      const ngrokBin = "ngrok";
 
       // Start local relay server
       const { createHostedRelayServer } = require("./relayServer");
@@ -577,42 +517,43 @@ app.whenReady().then(() => {
       await new Promise((resolve) => relay.start(resolve));
       console.log(`[bridge-relay] listening on ws://127.0.0.1:${relayPort}`);
 
-      // Start ngrok tunnel
-      const ngrokUrl = normalizeNgrokUrl(domain);
-      const ngrokArgs = ["http", `--url=${ngrokUrl}`, String(relayPort), "--log=stdout"];
-      console.log(`[ngrok] starting tunnel at ${ngrokUrl}`);
-
-      ngrokProcess = spawn(ngrokBin, ngrokArgs, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-
-      ngrokProcess.on("error", (error) => {
-        console.error(`[ngrok] failed to start: ${error.message}`);
-        if (!ngrokShuttingDown) relay.stop(() => {});
-      });
-
-      ngrokProcess.stdout.on("data", (chunk) => {
-        const text = String(chunk || "").trim();
-        if (text) console.log(`[ngrok] ${text}`);
-      });
-      ngrokProcess.stderr.on("data", (chunk) => {
-        const text = String(chunk || "").trim();
-        if (text) console.error(`[ngrok] ${text}`);
-      });
-      ngrokProcess.on("exit", (code) => {
-        if (!ngrokShuttingDown) {
-          console.error(`[ngrok] exited with code ${code ?? "unknown"}`);
-          relay.stop(() => {});
-        }
-      });
-
-      const publicUrl = await waitForNgrokTunnel(ngrokApiUrl);
-      if (!publicUrl) {
-        if (ngrokProcess) ngrokProcess.kill();
+      const ngrokDomain = normalizeNgrokDomain(domain);
+      console.log(`[ngrok] starting tunnel at https://${ngrokDomain}`);
+      let publicUrl = "";
+      try {
+        // eslint-disable-next-line global-require
+        const ngrok = require("@ngrok/ngrok");
+        ngrokListener = await ngrok.forward({
+          addr: `127.0.0.1:${relayPort}`,
+          authtoken: String(authToken).trim(),
+          domain: ngrokDomain,
+        });
+        publicUrl = String(ngrokListener.url() || "");
+      } catch (error) {
+        ngrokLastError =
+          error instanceof Error ? error.message : String(error);
+        console.error(`[ngrok] failed to start: ${ngrokLastError}`);
         relay.stop(() => {});
-        return { ok: false, error: "ngrok started but no public URL reported" };
+        hostedRelayServer = null;
+        ngrokListener = null;
+        pushStatus();
+        return {
+          ok: false,
+          error: ngrokLastError,
+        };
+      }
+      if (!publicUrl) {
+        await ngrokListener.close();
+        ngrokListener = null;
+        relay.stop(() => {});
+        hostedRelayServer = null;
+        return { ok: false, error: "ngrok did not report a public URL" };
       }
 
       const relayWsUrl = toWebSocketUrl(publicUrl);
       const mobileUrl = `${relayWsUrl}/bridge/${encodeURIComponent(bridgeId)}`;
+      ngrokPublicUrl = relayWsUrl;
+      ngrokLastError = "";
 
       console.log("[bridge-relay] ngrok tunnel ready");
       console.log(`[bridge-relay] Public Relay WebSocket URL: ${relayWsUrl}`);
@@ -644,9 +585,14 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("ngrok:relay:stop", async () => {
-      ngrokShuttingDown = true;
-      killProcessTree(ngrokProcess);
-      ngrokProcess = null;
+      if (ngrokListener) {
+        try {
+          await ngrokListener.close();
+        } catch {}
+        ngrokListener = null;
+      }
+      ngrokPublicUrl = "";
+      ngrokLastError = "";
       if (hostedRelayServer) {
         hostedRelayServer.stop(() => {});
         hostedRelayServer = null;
@@ -1540,9 +1486,10 @@ app.whenReady().then(() => {
       ipcMain.removeHandler("ngrok:relay:start");
       ipcMain.removeHandler("ngrok:relay:stop");
       clearInterval(statusTimer);
-      // Kill ngrok process tree + hosted relay server to free port 8787
-      killProcessTree(ngrokProcess);
-      ngrokProcess = null;
+      if (ngrokListener) {
+        void ngrokListener.close().catch(() => {});
+        ngrokListener = null;
+      }
       if (hostedRelayServer) {
         hostedRelayServer.stop(() => {});
         hostedRelayServer = null;

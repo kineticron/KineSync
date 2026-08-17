@@ -106,6 +106,11 @@ No native build steps needed — Expo handles this automatically.
 
 Use this when your phone is not on the same Wi-Fi network as your desktop (e.g. using mobile data, or connecting from elsewhere).
 
+> **Docker users:** follow the embedded-ngrok instructions in
+> [DOCKER.md](DOCKER.md#optional-remote-access-with-ngrok). The Docker image
+> does not require a separate ngrok CLI or three terminals. The instructions
+> below apply only to the Windows from-source development workflow.
+
 #### 1. Get a free ngrok static domain
 
 1. Sign up at [ngrok.com](https://ngrok.com) (free tier is enough)

@@ -220,7 +220,10 @@ function createBridgeSettingsStore({ app }) {
       return normalize(store.store).geminiApiKey;
     },
     getBridgeKey() {
-      return normalize(store.store).bridgeKey;
+      return (
+        normalize(store.store).bridgeKey ||
+        sanitizeBridgeKey(process.env.BRIDGE_KEY || "")
+      );
     },
     getRelayUrl() {
       return normalize(store.store).relayUrl;

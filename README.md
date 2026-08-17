@@ -12,7 +12,7 @@
 | | |
 |:---:|:---:|
 | ✅ **100% free & open-source** | ✅ **App on Expo** — sideloadable for iOS & Android |
-| ✅ **Bridge on Electron** — native Windows media session | ✅ **No Spotify API or Premium** required |
+| ✅ **Bridge on Windows or Docker** | ✅ **No Spotify API or Premium** required |
 
 </div>
 
@@ -64,7 +64,7 @@
 
 ## Prerequisites
 
-- **Windows 10/11** for the Desktop Bridge
+- **Windows 10/11**, or an `amd64` Docker host, for DesktopBridge
 - **Node.js 20+** and npm
 - **Expo Go** or a development build on your phone
 
@@ -72,10 +72,15 @@ _Optional (only needed to compile native binaries from source):_
 Visual Studio 2022 with C++ workload, .NET SDK 9+, Python 3.x
 
 _Recommended:_
-- **Spicetify** + **Adblockify** + **Spicy Lyrics** for the best lyrics experience
+- **Spicetify Marketplace** + **Adblockify** + **Spicy Lyrics** for the best lyrics experience
 - **EeveeSpotifyReincarnated** on iOS
 
 ## Quick Start
+
+For the quickest self-contained setup, follow the [instant Docker setup](DOCKER.md).
+It covers configuration, Spotify login, ExpoLyrics pairing, optional ngrok
+access, validation, updates, and troubleshooting. The steps below run the apps
+from source on Windows.
 
 ### 1. Install dependencies
 
@@ -106,6 +111,16 @@ Scan the QR code with Expo Go. In the app's **Bridge Settings**, enter your desk
 ## Remote Access (ngrok)
 
 For connecting outside your home network, see the [ngrok relay setup in SETUP.md](SETUP.md#ngrok-relay-mode-remote-access).
+
+## Instant Docker setup
+
+The self-contained `amd64` image runs Spotify for Linux, DesktopBridge, and
+automatically configured Spicetify Marketplace with Adblockify in a shared
+browser-accessible desktop. On Linux, playback detection and controls use MPRIS
+over their shared D-Bus session; Windows builds continue using GSMTC.
+
+See [DOCKER.md](DOCKER.md) for the start-to-finish setup, first-time Spotify
+login, ExpoLyrics pairing, optional ngrok access, diagnostics, and verification.
 
 ## Lyrics Sources
 

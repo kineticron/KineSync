@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="KineSync">
+    <item label="Spotify">
+      <action name="Execute"><command>spotify --no-sandbox</command></action>
+    </item>
+    <item label="KineSync Desktop Bridge">
+      <action name="Execute"><command>/usr/local/bin/start-kinesync-bridge</command></action>
+    </item>
+  </menu>
+</openbox_menu>

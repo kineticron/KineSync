@@ -22,6 +22,7 @@ pids/
 .env
 .env.*
 !.env.example
+!.env.docker.example
 *.pem
 *.jks
 *.p8
@@ -101,6 +102,8 @@ test_am.js
 .hermes/
 .claude/
 .idea/
+.kinesync-config/
+.docker-build-ca.crt
 
 # Experimental Projects
 SpotifyBrowserLab/
