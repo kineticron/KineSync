@@ -871,13 +871,14 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    refreshMusixmatchUserToken = null,
     spotifyWebToken = "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
   } = {},
 ) {
   const failures = [];
-  const safeMusixmatchUserToken = String(musixmatchUserToken || "").trim();
+  let safeMusixmatchUserToken = String(musixmatchUserToken || "").trim();
   const safeSpotifyWebToken = String(spotifyWebToken || "").trim();
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
@@ -944,6 +945,34 @@ async function fetchBestSyncedLyrics(
     }
   };
 
+  const invokeSourceFetcher = async (source, fetcher) => {
+    const fetchWithCurrentToken = () =>
+      fetcher(track, {
+        musixmatchUserToken: safeMusixmatchUserToken,
+        spotifyWebToken: safeSpotifyWebToken,
+        spotifyAccessToken: safeSpotifyAccessToken,
+      });
+    try {
+      return await fetchWithCurrentToken();
+    } catch (error) {
+      if (
+        source !== "musixmatch" ||
+        describeSourceError(error) !== "unauthorized" ||
+        typeof refreshMusixmatchUserToken !== "function"
+      ) {
+        throw error;
+      }
+      const refreshedToken = String(
+        (await refreshMusixmatchUserToken()) || "",
+      ).trim();
+      if (!refreshedToken || refreshedToken === safeMusixmatchUserToken) {
+        throw error;
+      }
+      safeMusixmatchUserToken = refreshedToken;
+      return fetchWithCurrentToken();
+    }
+  };
+
   if (sanitizePreferredSource(preferredSource) === "auto") {
     const failureBySource = new Map();
 
@@ -972,11 +1001,7 @@ async function fetchBestSyncedLyrics(
         };
       }
       try {
-        const result = await fetcher(track, {
-          musixmatchUserToken: safeMusixmatchUserToken,
-          spotifyWebToken: safeSpotifyWebToken,
-          spotifyAccessToken: safeSpotifyAccessToken,
-        });
+        const result = await invokeSourceFetcher(source, fetcher);
         if (!result) {
           const reason = classifySourceFailure(
             source,
@@ -1174,11 +1199,7 @@ async function fetchBestSyncedLyrics(
       return cachedResult;
     }
     try {
-      const result = await fetcher(track, {
-        musixmatchUserToken: safeMusixmatchUserToken,
-        spotifyWebToken: safeSpotifyWebToken,
-        spotifyAccessToken: safeSpotifyAccessToken,
-      });
+      const result = await invokeSourceFetcher(source, fetcher);
       if (result) {
         if (result?.metadata?.instrumental && !result?.lyrics?.length) {
           return {

@@ -36,7 +36,8 @@ export type MobileLyricsSourcePreference =
   | "spicy-lyrics";
 
 export function createLyricsService(options?: {
-  getMusixmatchUserToken?: () => string;
+  getMusixmatchUserToken?: () => string | Promise<string>;
+  refreshMusixmatchUserToken?: (() => string | Promise<string>) | null;
   getSpotifyWebToken?: () => string;
   getGeminiApiKey?: () => string;
   getSpotifyAccessToken?: () => string | Promise<string>;

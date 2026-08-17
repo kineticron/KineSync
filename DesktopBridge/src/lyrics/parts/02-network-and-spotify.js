@@ -281,8 +281,8 @@ const MUSIXMATCH_CLIENT_PROFILES = [
     userLanguage: "en",
     cookieHeader: "AWSELB=0; AWSELBCORS=0",
     baseUrls: [
-      "https://apic.musixmatch.com/ws/1.1",
       "https://apic-desktop.musixmatch.com/ws/1.1",
+      "https://apic.musixmatch.com/ws/1.1",
     ],
   },
   {

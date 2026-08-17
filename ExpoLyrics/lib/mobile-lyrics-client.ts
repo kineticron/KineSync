@@ -9,6 +9,10 @@ import {
 } from "@/lib/mobile-lyrics-settings";
 import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
+import {
+  refreshMobileMusixmatchToken,
+  resolveMobileMusixmatchToken,
+} from "@/lib/mobile-musixmatch-token";
 
 const env = (typeof process !== "undefined" ? process.env : {}) as Record<string, string | undefined>;
 
@@ -42,8 +46,13 @@ function storedSpotifyToken() {
 
 const mobileLyricsService = createLyricsService({
   getMusixmatchUserToken: () =>
-    getCachedMobileLyricsSettings().musixmatchUserToken ||
-    readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
+    resolveMobileMusixmatchToken(
+      readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
+    ),
+  refreshMusixmatchUserToken: () =>
+    refreshMobileMusixmatchToken(
+      readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
+    ),
   getSpotifyWebToken: () =>
     storedSpotifyToken() ||
     readEnv("EXPO_PUBLIC_SPOTIFY_WEB_TOKEN", "SPOTIFY_WEB_TOKEN"),

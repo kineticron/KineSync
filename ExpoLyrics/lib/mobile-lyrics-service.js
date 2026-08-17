@@ -5724,8 +5724,8 @@ const MUSIXMATCH_CLIENT_PROFILES = [
     userLanguage: "en",
     cookieHeader: "AWSELB=0; AWSELBCORS=0",
     baseUrls: [
-      "https://apic.musixmatch.com/ws/1.1",
       "https://apic-desktop.musixmatch.com/ws/1.1",
+      "https://apic.musixmatch.com/ws/1.1",
     ],
   },
   {
@@ -11812,9 +11812,7 @@ async function fetchMusixmatchSubtitleForCandidate(
 async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
   const rawToken = String(musixmatchUserToken || "").trim();
   if (!rawToken) {
-    throw new Error(
-      "Missing Musixmatch user token. Set one in desktop bridge settings.",
-    );
+    throw new Error("No Musixmatch user token is currently available.");
   }
   const clientCandidates = prioritizeMusixmatchClientCandidates(
     resolveMusixmatchClientCandidates(rawToken),
@@ -13864,13 +13862,14 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    refreshMusixmatchUserToken = null,
     spotifyWebToken = "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
   } = {},
 ) {
   const failures = [];
-  const safeMusixmatchUserToken = String(musixmatchUserToken || "").trim();
+  let safeMusixmatchUserToken = String(musixmatchUserToken || "").trim();
   const safeSpotifyWebToken = String(spotifyWebToken || "").trim();
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
@@ -13937,6 +13936,34 @@ async function fetchBestSyncedLyrics(
     }
   };
 
+  const invokeSourceFetcher = async (source, fetcher) => {
+    const fetchWithCurrentToken = () =>
+      fetcher(track, {
+        musixmatchUserToken: safeMusixmatchUserToken,
+        spotifyWebToken: safeSpotifyWebToken,
+        spotifyAccessToken: safeSpotifyAccessToken,
+      });
+    try {
+      return await fetchWithCurrentToken();
+    } catch (error) {
+      if (
+        source !== "musixmatch" ||
+        describeSourceError(error) !== "unauthorized" ||
+        typeof refreshMusixmatchUserToken !== "function"
+      ) {
+        throw error;
+      }
+      const refreshedToken = String(
+        (await refreshMusixmatchUserToken()) || "",
+      ).trim();
+      if (!refreshedToken || refreshedToken === safeMusixmatchUserToken) {
+        throw error;
+      }
+      safeMusixmatchUserToken = refreshedToken;
+      return fetchWithCurrentToken();
+    }
+  };
+
   if (sanitizePreferredSource(preferredSource) === "auto") {
     const failureBySource = new Map();
 
@@ -13965,11 +13992,7 @@ async function fetchBestSyncedLyrics(
         };
       }
       try {
-        const result = await fetcher(track, {
-          musixmatchUserToken: safeMusixmatchUserToken,
-          spotifyWebToken: safeSpotifyWebToken,
-          spotifyAccessToken: safeSpotifyAccessToken,
-        });
+        const result = await invokeSourceFetcher(source, fetcher);
         if (!result) {
           const reason = classifySourceFailure(
             source,
@@ -14167,11 +14190,7 @@ async function fetchBestSyncedLyrics(
       return cachedResult;
     }
     try {
-      const result = await fetcher(track, {
-        musixmatchUserToken: safeMusixmatchUserToken,
-        spotifyWebToken: safeSpotifyWebToken,
-        spotifyAccessToken: safeSpotifyAccessToken,
-      });
+      const result = await invokeSourceFetcher(source, fetcher);
       if (result) {
         if (result?.metadata?.instrumental && !result?.lyrics?.length) {
           return {
@@ -14228,6 +14247,7 @@ async function enrichTrackForVaultMatch(track, spotifyAccessToken = "") {
 // ---- DesktopBridge/src/lyrics/parts/07b-service-orchestration.js ----
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
+  refreshMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
@@ -14959,6 +14979,17 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
+      let resolvedMusixmatchUserToken = "";
+      try {
+        resolvedMusixmatchUserToken = String(
+          (typeof getMusixmatchUserToken === "function"
+            ? await getMusixmatchUserToken()
+            : "") || "",
+        ).trim();
+      } catch {
+        // Automatic Musixmatch token provisioning failed; other sources remain available.
+      }
+
       const base = await fetchBestSyncedLyrics(matchTrack, {
         preferredSource,
         onProgress: handleProgressPacket,
@@ -14970,7 +15001,8 @@ function createLyricsService({
           );
         },
         sourceCache,
-        musixmatchUserToken: String(getMusixmatchUserToken() || "").trim(),
+        musixmatchUserToken: resolvedMusixmatchUserToken,
+        refreshMusixmatchUserToken,
         spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
         spotifyAccessToken: resolvedSpotifyAccessToken,
         waitForAutoCompletion: false,

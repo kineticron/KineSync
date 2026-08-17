@@ -22,6 +22,7 @@ import {
   getMobileLyricsSettings,
   saveMobileLyricsSettings,
 } from '@/lib/mobile-lyrics-settings';
+import { getMobileMusixmatchTokenStatus } from '@/lib/mobile-musixmatch-token';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { ConnectionStatus } from '@/types/bridge';
 import { requestShowOnboarding } from '@/providers/bridge-provider';
@@ -143,6 +144,9 @@ export default function BridgeSettingsScreen() {
   const [dropRateInput, setDropRateInput] = useState(String(packetDropRate));
   const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
   const [musixmatchTokenInput, setMusixmatchTokenInput] = useState('');
+  const [musixmatchTokenStatus, setMusixmatchTokenStatus] = useState(
+    'Anonymous token will be created automatically when first needed.',
+  );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
   const connectionTone = useMemo(
@@ -166,6 +170,14 @@ export default function BridgeSettingsScreen() {
       }
       setSpotifyTokenInput(settings.spotifyWebToken);
       setMusixmatchTokenInput(settings.musixmatchUserToken);
+      const status = getMobileMusixmatchTokenStatus();
+      setMusixmatchTokenStatus(
+        status.manualOverrideConfigured
+          ? 'Using the saved manual override.'
+          : status.automaticConfigured
+            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
+            : 'Anonymous token will be created automatically when first needed.',
+      );
       setGeminiKeyInput(settings.geminiApiKey);
     });
     return () => {
@@ -182,6 +194,14 @@ export default function BridgeSettingsScreen() {
     }).then((settings) => {
       setSpotifyTokenInput(settings.spotifyWebToken);
       setMusixmatchTokenInput(settings.musixmatchUserToken);
+      const status = getMobileMusixmatchTokenStatus();
+      setMusixmatchTokenStatus(
+        status.manualOverrideConfigured
+          ? 'Using the saved manual override.'
+          : status.automaticConfigured
+            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
+            : 'Anonymous token will be created automatically when first needed.',
+      );
       setGeminiKeyInput(settings.geminiApiKey);
       setMobileLyricsSaved(true);
       setTimeout(() => setMobileLyricsSaved(false), 1800);
@@ -315,12 +335,17 @@ export default function BridgeSettingsScreen() {
                   secureTextEntry
                 />
                 <FieldRow
-                  label="Musixmatch User Token"
+                  label="Musixmatch User API Token (Manual Override)"
                   value={musixmatchTokenInput}
                   onChangeText={setMusixmatchTokenInput}
-                  placeholder="Optional Musixmatch token"
+                  placeholder="Optional; anonymous access is automatic"
                   secureTextEntry
                 />
+                <Text style={styles.onboardingHint}>
+                  KineSync creates and reuses an anonymous Musixmatch token automatically.
+                  A token entered here takes precedence as a manual override.
+                </Text>
+                <Text style={styles.onboardingHint}>{musixmatchTokenStatus}</Text>
                 <FieldRow
                   label="Gemini API Key"
                   value={geminiKeyInput}
@@ -336,7 +361,7 @@ export default function BridgeSettingsScreen() {
                   onPress={saveMobileLyricsApiSettings}>
                   <Ionicons name="key" size={17} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>
-                    {mobileLyricsSaved ? 'Saved mobile API keys' : 'Save mobile API keys'}
+                    {mobileLyricsSaved ? 'Saved mobile API settings' : 'Save mobile API settings'}
                   </Text>
                 </Pressable>
               </SettingSection>

@@ -6,7 +6,13 @@ export type MobileLyricsSettings = {
   spotifyWebToken: string;
   /** Epoch ms the captured Spotify token expires; 0 when unknown. */
   spotifyWebTokenExpiresAt: number;
+  /** Optional user-supplied token that overrides automatic anonymous access. */
   musixmatchUserToken: string;
+  musixmatchAnonymousUserToken: string;
+  musixmatchAnonymousAppId: string;
+  musixmatchAnonymousDeviceId: string;
+  musixmatchAnonymousFetchedAt: number;
+  musixmatchAnonymousLastAttemptAt: number;
   geminiApiKey: string;
 };
 
@@ -14,6 +20,11 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
   spotifyWebToken: "",
   spotifyWebTokenExpiresAt: 0,
   musixmatchUserToken: "",
+  musixmatchAnonymousUserToken: "",
+  musixmatchAnonymousAppId: "",
+  musixmatchAnonymousDeviceId: "",
+  musixmatchAnonymousFetchedAt: 0,
+  musixmatchAnonymousLastAttemptAt: 0,
   geminiApiKey: "",
 };
 
@@ -26,6 +37,23 @@ function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefin
     spotifyWebToken: String(value?.spotifyWebToken || "").trim(),
     spotifyWebTokenExpiresAt: Math.max(0, Number(value?.spotifyWebTokenExpiresAt || 0)),
     musixmatchUserToken: String(value?.musixmatchUserToken || "").trim(),
+    musixmatchAnonymousUserToken: String(
+      value?.musixmatchAnonymousUserToken || "",
+    ).trim(),
+    musixmatchAnonymousAppId: String(
+      value?.musixmatchAnonymousAppId || "",
+    ).trim(),
+    musixmatchAnonymousDeviceId: String(
+      value?.musixmatchAnonymousDeviceId || "",
+    ).trim(),
+    musixmatchAnonymousFetchedAt: Math.max(
+      0,
+      Number(value?.musixmatchAnonymousFetchedAt || 0),
+    ),
+    musixmatchAnonymousLastAttemptAt: Math.max(
+      0,
+      Number(value?.musixmatchAnonymousLastAttemptAt || 0),
+    ),
     geminiApiKey: String(value?.geminiApiKey || "").trim(),
   };
 }

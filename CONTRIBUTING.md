@@ -54,7 +54,7 @@ All karaoke sources are preferred over any line source.
 5. Netease YRC (netease-yrc)
    > Can have certain niche tracks that qq-musicu-qrc doesn't. Very hard format to parse as censorship markers and punctuation interfere with spacing. Can sometimes be more inaccurate, but lyrics themselves are typically higher quality (have punctuation and proper adlib support). Can return syllable, but mostly returns word-synced. Lyrics return in 3-4s.
 6. Musixmatch RichSync (musixmatch-richsync)
-   > Contains user-generated lyrics and an extremely broad catalogue that covers mostly niche western and popular artists. Requires an user token. Desktop keys tend to be more reliable than mobile user keys for this service. Often gets rate-limited under regular use (despite protections and caching), so client will disable the source for 20 minutes if the client is rate-limited. Because lyrics are user-generated, word durations and sync is often the most inaccurate. Lyrics return near-instant.
+   > Contains user-generated lyrics and an extremely broad catalogue that covers mostly niche western and popular artists. Both the Desktop Bridge and mobile-only mode automatically provision and persist an anonymous user token; each also accepts a manual override. Desktop keys tend to be more reliable than mobile user keys for this service. Often gets rate-limited under regular use (despite protections and caching), so client will disable the source for 20 minutes if the client is rate-limited. Because lyrics are user-generated, word durations and sync is often the most inaccurate. Lyrics return near-instant.
 
 **Line**
 

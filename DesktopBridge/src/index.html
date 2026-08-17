@@ -337,14 +337,14 @@
               <div class="tile-icon" aria-hidden="true">☰</div>
               <div class="tile-heading">
                 <h2>Lyrics Sources</h2>
-                <p>Tokens for Musixmatch and Gemini</p>
+                <p>Automatic access and optional API credentials</p>
               </div>
             </div>
             <div class="tile-body">
               <div class="sub-tile">
                 <p class="sub-tile-title">Musixmatch</p>
         <label class="field-label" for="musixmatch-token"
-          >User token</label
+          >User API token (manual override)</label
         >
         <div class="field-row copyable-row">
           <input
@@ -352,7 +352,7 @@
             class="input"
             type="password"
             autocomplete="off"
-            placeholder="Paste your Musixmatch user token"
+            placeholder="Optional: paste a Musixmatch user token"
           />
           <button type="button" class="copy-btn" data-copy-from="musixmatch-token" aria-label="Copy Musixmatch token" title="Copy">
             <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
@@ -360,18 +360,22 @@
         </div>
         <div class="button-row">
           <button id="save-musixmatch-token" class="button" type="button">
-            Save token
+            Save manual override
           </button>
           <button
             id="clear-musixmatch-token"
             class="button secondary"
             type="button"
           >
-            Clear
+            Clear override
           </button>
         </div>
         <p class="hint" id="musixmatch-token-status">
-          Musixmatch token: not configured
+          Musixmatch token: managed automatically
+        </p>
+        <p class="hint">
+          KineSync creates and reuses an anonymous token automatically. A token
+          entered here takes precedence and is intended only as a manual override.
         </p>
               </div>
 
@@ -1621,13 +1625,22 @@
       );
 
       const renderMusixmatchTokenStatus = (payload = {}) => {
-        const configured = Boolean(payload.musixmatchTokenConfigured);
-        const preview = String(payload.musixmatchTokenPreview || "").trim();
+        const manualOverride = Boolean(
+          payload.musixmatchManualOverrideConfigured,
+        );
+        const automaticConfigured = Boolean(
+          payload.musixmatchAutomaticTokenConfigured,
+        );
+        const automaticAppId = String(
+          payload.musixmatchAutomaticTokenAppId || "",
+        ).trim();
         setText(
           "musixmatch-token-status",
-          configured
-            ? `Musixmatch token: configured${preview ? ` (${preview})` : ""}`
-            : "Musixmatch token: not configured",
+          manualOverride
+            ? "Musixmatch token: using manual override"
+            : automaticConfigured
+              ? `Musixmatch token: managed automatically${automaticAppId ? ` (${automaticAppId})` : ""}`
+              : "Musixmatch token: will be created automatically when first needed",
         );
       };
 
@@ -1669,7 +1682,10 @@
       };
 
       const persistMusixmatchToken = async (tokenValue) => {
-        setText("musixmatch-token-status", "Musixmatch token: saving...");
+        setText(
+          "musixmatch-token-status",
+          "Musixmatch manual override: saving...",
+        );
         const response = await window.bridgeSettings.set({
           musixmatchUserToken: String(tokenValue || ""),
         });

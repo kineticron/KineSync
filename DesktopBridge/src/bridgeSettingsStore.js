@@ -5,6 +5,11 @@ const path = require("node:path");
 
 const SETTINGS_DEFAULTS = {
   musixmatchUserToken: "",
+  musixmatchAnonymousUserToken: "",
+  musixmatchAnonymousAppId: "",
+  musixmatchAnonymousDeviceId: "",
+  musixmatchAnonymousFetchedAt: 0,
+  musixmatchAnonymousLastAttemptAt: 0,
   spotifyWebToken: "",
   geminiApiKey: "",
   spotifySpDcCookie: "",
@@ -22,6 +27,13 @@ const LEGACY_APP_NAME = "desktopbridge";
 
 function sanitizeMusixmatchUserToken(token) {
   return String(token || "").trim();
+}
+
+function sanitizeTimestamp(value) {
+  const timestamp = Number(value || 0);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? Math.floor(timestamp)
+    : 0;
 }
 
 function sanitizeSpotifyWebToken(token) {
@@ -150,6 +162,21 @@ function createBridgeSettingsStore({ app }) {
 
   const normalize = (raw) => ({
     musixmatchUserToken: sanitizeMusixmatchUserToken(raw?.musixmatchUserToken || ""),
+    musixmatchAnonymousUserToken: sanitizeMusixmatchUserToken(
+      raw?.musixmatchAnonymousUserToken || "",
+    ),
+    musixmatchAnonymousAppId: String(
+      raw?.musixmatchAnonymousAppId || "",
+    ).trim(),
+    musixmatchAnonymousDeviceId: String(
+      raw?.musixmatchAnonymousDeviceId || "",
+    ).trim(),
+    musixmatchAnonymousFetchedAt: sanitizeTimestamp(
+      raw?.musixmatchAnonymousFetchedAt,
+    ),
+    musixmatchAnonymousLastAttemptAt: sanitizeTimestamp(
+      raw?.musixmatchAnonymousLastAttemptAt,
+    ),
     spotifyWebToken: sanitizeSpotifyWebToken(raw?.spotifyWebToken || ""),
     geminiApiKey: sanitizeGeminiApiKey(raw?.geminiApiKey || raw?.openRouterApiKey || ""),
     spotifySpDcCookie: String(raw?.spotifySpDcCookie || "").trim(),
@@ -163,10 +190,28 @@ function createBridgeSettingsStore({ app }) {
 
   return {
     getSettings() {
-      return { ...normalize(store.store) };
+      const {
+        musixmatchAnonymousUserToken: _anonymousUserToken,
+        musixmatchAnonymousAppId: _anonymousAppId,
+        musixmatchAnonymousDeviceId: _anonymousDeviceId,
+        musixmatchAnonymousFetchedAt: _anonymousFetchedAt,
+        musixmatchAnonymousLastAttemptAt: _anonymousLastAttemptAt,
+        ...publicSettings
+      } = normalize(store.store);
+      return publicSettings;
     },
     getMusixmatchUserToken() {
       return normalize(store.store).musixmatchUserToken;
+    },
+    getMusixmatchAnonymousTokenState() {
+      const settings = normalize(store.store);
+      return {
+        userToken: settings.musixmatchAnonymousUserToken,
+        appId: settings.musixmatchAnonymousAppId,
+        deviceId: settings.musixmatchAnonymousDeviceId,
+        fetchedAt: settings.musixmatchAnonymousFetchedAt,
+        lastAttemptAt: settings.musixmatchAnonymousLastAttemptAt,
+      };
     },
     getSpotifyWebToken() {
       return normalize(store.store).spotifyWebToken;
@@ -190,6 +235,36 @@ function createBridgeSettingsStore({ app }) {
     setMusixmatchUserToken(token) {
       store.set("musixmatchUserToken", sanitizeMusixmatchUserToken(token));
       return normalize(store.store).musixmatchUserToken;
+    },
+    setMusixmatchAnonymousTokenState(state = {}) {
+      if (Object.prototype.hasOwnProperty.call(state, "userToken")) {
+        store.set(
+          "musixmatchAnonymousUserToken",
+          sanitizeMusixmatchUserToken(state.userToken),
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "appId")) {
+        store.set("musixmatchAnonymousAppId", String(state.appId || "").trim());
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "deviceId")) {
+        store.set(
+          "musixmatchAnonymousDeviceId",
+          String(state.deviceId || "").trim(),
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "fetchedAt")) {
+        store.set(
+          "musixmatchAnonymousFetchedAt",
+          sanitizeTimestamp(state.fetchedAt),
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "lastAttemptAt")) {
+        store.set(
+          "musixmatchAnonymousLastAttemptAt",
+          sanitizeTimestamp(state.lastAttemptAt),
+        );
+      }
+      return this.getMusixmatchAnonymousTokenState();
     },
     setSpotifyWebToken(token) {
       store.set("spotifyWebToken", sanitizeSpotifyWebToken(token));

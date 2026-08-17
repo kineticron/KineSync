@@ -1,6 +1,7 @@
 "use strict";
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
+  refreshMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
@@ -727,6 +728,17 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
+      let resolvedMusixmatchUserToken = "";
+      try {
+        resolvedMusixmatchUserToken = String(
+          (typeof getMusixmatchUserToken === "function"
+            ? await getMusixmatchUserToken()
+            : "") || "",
+        ).trim();
+      } catch {
+        // Automatic Musixmatch token provisioning failed; other sources remain available.
+      }
+
       const base = await fetchBestSyncedLyrics(matchTrack, {
         preferredSource,
         onProgress: handleProgressPacket,
@@ -738,7 +750,8 @@ function createLyricsService({
           );
         },
         sourceCache,
-        musixmatchUserToken: String(getMusixmatchUserToken() || "").trim(),
+        musixmatchUserToken: resolvedMusixmatchUserToken,
+        refreshMusixmatchUserToken,
         spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
         spotifyAccessToken: resolvedSpotifyAccessToken,
         waitForAutoCompletion: false,

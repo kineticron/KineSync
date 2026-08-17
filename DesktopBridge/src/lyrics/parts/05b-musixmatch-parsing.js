@@ -1217,9 +1217,7 @@ async function fetchMusixmatchSubtitleForCandidate(
 async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
   const rawToken = String(musixmatchUserToken || "").trim();
   if (!rawToken) {
-    throw new Error(
-      "Missing Musixmatch user token. Set one in desktop bridge settings.",
-    );
+    throw new Error("No Musixmatch user token is currently available.");
   }
   const clientCandidates = prioritizeMusixmatchClientCandidates(
     resolveMusixmatchClientCandidates(rawToken),

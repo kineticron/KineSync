@@ -3,6 +3,9 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { spawn, execSync } = require("node:child_process");
 const { createBridgeSettingsStore } = require("./bridgeSettingsStore");
+const {
+  createMusixmatchTokenManager,
+} = require("./musixmatchTokenManager");
 const { createBridgeServer } = require("./bridgeServer");
 const { createBridgeRelayClient } = require("./bridgeRelayClient");
 const { createLyricsService } = require("./lyrics");
@@ -117,6 +120,9 @@ app.whenReady().then(() => {
   const mainWindow = createWindow();
   applyMaxFpsRendering(mainWindow);
   const bridgeSettingsStore = createBridgeSettingsStore({ app });
+  const musixmatchTokenManager = createMusixmatchTokenManager({
+    settingsStore: bridgeSettingsStore,
+  });
   initLyricsVaultStore({ userDataPath: app.getPath("userData") });
   const bridge = createBridgeServer({
     port: 3001,
@@ -141,7 +147,8 @@ app.whenReady().then(() => {
     spotifyAuth.getAccessToken(options);
   detector.setSpotifyAccessTokenGetter(spotifyAccessTokenGetter);
   const lyricsService = createLyricsService({
-    getMusixmatchUserToken: () => bridgeSettingsStore.getMusixmatchUserToken(),
+    getMusixmatchUserToken: () => musixmatchTokenManager.getToken(),
+    refreshMusixmatchUserToken: () => musixmatchTokenManager.refreshToken(),
     getSpotifyWebToken: () => bridgeSettingsStore.getSpotifyWebToken(),
     getGeminiApiKey: () => bridgeSettingsStore.getGeminiApiKey(),
     getSpotifyAccessToken: spotifyAccessTokenGetter,
@@ -165,16 +172,14 @@ app.whenReady().then(() => {
   let latestLyricsPacket = null;
 
   const getMusixmatchTokenStatus = () => {
-    const token = bridgeSettingsStore.getMusixmatchUserToken();
-    const configured = Boolean(token);
-    const preview = configured
-      ? token.length <= 8
-        ? `${token.slice(0, 1)}***${token.slice(-1)}`
-        : `${token.slice(0, 4)}...${token.slice(-4)}`
-      : "";
+    const status = musixmatchTokenManager.getStatus();
     return {
-      musixmatchTokenConfigured: configured,
-      musixmatchTokenPreview: preview,
+      musixmatchTokenConfigured:
+        status.manualOverrideConfigured || status.automaticConfigured,
+      musixmatchTokenMode: status.mode,
+      musixmatchManualOverrideConfigured: status.manualOverrideConfigured,
+      musixmatchAutomaticTokenConfigured: status.automaticConfigured,
+      musixmatchAutomaticTokenAppId: status.automaticAppId,
     };
   };
 

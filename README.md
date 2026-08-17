@@ -109,10 +109,10 @@ For connecting outside your home network, see the [ngrok relay setup in SETUP.md
 
 ## Lyrics Sources
 
-The desktop bridge fetches lyrics from multiple sources. Configure in the bridge UI:
+The desktop bridge fetches lyrics from multiple sources. Relevant bridge UI settings:
 
 - **Spotify sign-in** — Required for Spicy Lyrics compatibility
-- **Musixmatch user token** — For synced/rich lyrics (extract from browser dev tools)
+- **Musixmatch** — Anonymous access is configured automatically in both Desktop Bridge and mobile-only modes. An optional user token can be entered as a manual override for synced/rich lyrics.
 - **Gemini API key** — For AI translation (get from [Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key))
 
 More configured sources = better coverage. Sources gracefully fall back when unavailable.
