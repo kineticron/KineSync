@@ -5,12 +5,15 @@ const BRIDGE_SETTINGS_KEY = 'kinesync_bridge_settings';
 export interface BridgeSettings {
   serverUrl: string;
   handshakeKey: string;
+  /** Which playback source the user selected in onboarding/settings. */
+  playbackMode: 'desktop' | 'mobile';
   onboardingCompleted: boolean;
 }
 
 const DEFAULT_SETTINGS: BridgeSettings = {
   serverUrl: '',
   handshakeKey: '',
+  playbackMode: 'desktop',
   onboardingCompleted: false,
 };
 
@@ -22,6 +25,15 @@ export async function getBridgeSettings(): Promise<BridgeSettings> {
     return {
       serverUrl: String(parsed?.serverUrl || '').trim(),
       handshakeKey: String(parsed?.handshakeKey || '').trim() || DEFAULT_SETTINGS.handshakeKey,
+      playbackMode: parsed?.playbackMode === 'mobile'
+        ? 'mobile'
+        : parsed?.playbackMode === 'desktop'
+          ? 'desktop'
+          : parsed?.onboardingCompleted && !parsed?.serverUrl
+            ? 'mobile'
+            : parsed?.serverUrl
+              ? 'desktop'
+              : DEFAULT_SETTINGS.playbackMode,
       onboardingCompleted: Boolean(parsed?.onboardingCompleted),
     };
   } catch {

@@ -363,6 +363,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           saveBridgeSettings({
             serverUrl: parsed.u,
             handshakeKey: parsed.k,
+            playbackMode: "desktop",
             onboardingCompleted: true,
           }).catch(() => {});
           bridgeClient.reconnectNow();
@@ -428,6 +429,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       void saveBridgeSettings({
         serverUrl: "",
         handshakeKey: "",
+        playbackMode: "mobile",
         onboardingCompleted: true,
       });
       setTimeout(requestOpenSpotifyBrowser, 320);
@@ -438,6 +440,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       setServerUrlStore(inferDefaultBridgeUrl());
     }
     bridgeClient.reconnectNow();
+    void saveBridgeSettings({ playbackMode: "desktop", onboardingCompleted: true });
   }, [playbackMode, setHandshakeKeyStore, setServerUrlStore]);
 
   const handleNext = useCallback(() => {

@@ -141,7 +141,12 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       let state = usePlaybackStore.getState();
       const defaultBridgeUrl = inferDefaultBridgeUrl();
 
-      if (completed && !bridgeSettings.serverUrl && state.serverUrl === defaultBridgeUrl) {
+      if (
+        completed &&
+        bridgeSettings.playbackMode === 'desktop' &&
+        !bridgeSettings.serverUrl &&
+        state.serverUrl === defaultBridgeUrl
+      ) {
         state.setServerUrl("");
         state.setHandshakeKey("");
         await saveBridgeSettings({
@@ -156,7 +161,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
         setShowOnboarding(true);
       }
 
-      if (state.serverUrl) {
+      if (bridgeSettings.playbackMode === 'desktop' && state.serverUrl) {
         bridgeClient.connect();
       }
       setOnboardingChecked(true);

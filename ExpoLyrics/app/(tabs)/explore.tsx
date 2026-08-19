@@ -1,10 +1,11 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,7 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { LiveActivityDebugPanel } from '@/components/lyrics/live-activity-debug-panel';
 import { bridgeClient } from '@/lib/bridge-client';
-import { saveBridgeSettings } from '@/lib/bridge-settings';
+import { getBridgeSettings, saveBridgeSettings } from '@/lib/bridge-settings';
 import {
   getMobileLyricsSettings,
   saveMobileLyricsSettings,
@@ -27,6 +28,21 @@ import { usePlaybackStore } from '@/store/playback-store';
 import type { ConnectionStatus } from '@/types/bridge';
 import { requestShowOnboarding } from '@/providers/bridge-provider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { WebView } from 'react-native-webview';
+
+import {
+  isSpotifyNativeAppRedirect,
+  parseBrowserEvent,
+  spotifyAuthProbeScript,
+  SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
+} from '@/lib/spotify-browser';
+import { requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+
+const SPOTIFY_LOGIN_URL =
+  'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
+
+type PlaybackMode = 'desktop' | 'mobile';
 
 type FieldRowProps = {
   label: string;
@@ -149,9 +165,56 @@ export default function BridgeSettingsScreen() {
   );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>(
+    serverUrl ? 'desktop' : 'mobile',
+  );
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [spotifySignedIn, setSpotifySignedIn] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const scanHandledRef = useRef(false);
   const connectionTone = useMemo(
-    () => getConnectionTone(connectionStatus),
-    [connectionStatus],
+    () => playbackMode === 'mobile'
+      ? {
+          icon: 'phone-portrait' as const,
+          label: 'Mobile-Only',
+          color: '#8FF0C4',
+          tint: 'rgba(111,232,179,0.12)',
+        }
+      : getConnectionTone(connectionStatus),
+    [connectionStatus, playbackMode],
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    void getBridgeSettings().then((settings) => {
+      if (mounted) {
+        setPlaybackMode(settings.playbackMode);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const selectPlaybackMode = useCallback(
+    (mode: PlaybackMode) => {
+      setPlaybackMode(mode);
+      if (mode === 'mobile') {
+        bridgeClient.disconnect();
+        // Keep the bridge credentials so switching modes is reversible.
+        void saveBridgeSettings({ playbackMode: 'mobile' });
+        return;
+      }
+      void saveBridgeSettings({ playbackMode: 'desktop' });
+      if (urlInput.trim()) {
+        setServerUrl(urlInput.trim());
+        setHandshakeKey(keyInput.trim());
+        bridgeClient.reconnectNow();
+      }
+    },
+    [keyInput, setHandshakeKey, setServerUrl, urlInput],
   );
 
   const saveAndReconnect = useCallback(() => {
@@ -159,7 +222,8 @@ export default function BridgeSettingsScreen() {
     const key = keyInput.trim();
     setServerUrl(url);
     setHandshakeKey(key);
-    saveBridgeSettings({ serverUrl: url, handshakeKey: key });
+    saveBridgeSettings({ serverUrl: url, handshakeKey: key, playbackMode: 'desktop' });
+    setPlaybackMode('desktop');
     bridgeClient.reconnectNow();
   }, [keyInput, setHandshakeKey, setServerUrl, urlInput]);
   useEffect(() => {
@@ -207,6 +271,55 @@ export default function BridgeSettingsScreen() {
       setTimeout(() => setMobileLyricsSaved(false), 1800);
     });
   }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput]);
+
+  const handleBarcodeScanned = useCallback(
+    ({ data }: { data: string }) => {
+      if (scanHandledRef.current) return;
+      try {
+        const parsed = JSON.parse(data) as { u?: string; k?: string };
+        if (parsed.u && parsed.k) {
+          scanHandledRef.current = true;
+          setScanError('');
+          setServerUrl(parsed.u);
+          setHandshakeKey(parsed.k);
+          setPlaybackMode('desktop');
+          void saveBridgeSettings({
+            serverUrl: parsed.u,
+            handshakeKey: parsed.k,
+            playbackMode: 'desktop',
+          });
+          bridgeClient.reconnectNow();
+          setScannerOpen(false);
+          return;
+        }
+      } catch {
+        // Keep scanning until a valid bridge payload is found.
+      }
+      setScanError('No valid KineSync QR code found');
+    },
+    [setHandshakeKey, setServerUrl],
+  );
+
+  const openScanner = useCallback(async () => {
+    scanHandledRef.current = false;
+    setScanError('');
+    if (cameraPermission?.granted === true) {
+      setScannerOpen(true);
+      return;
+    }
+    const { status } = await requestCameraPermission();
+    if (status === 'granted') {
+      setScannerOpen(true);
+    } else {
+      setScanError('Camera permission required to scan QR codes');
+    }
+  }, [cameraPermission?.granted, requestCameraPermission]);
+
+  const completeSpotifySignIn = useCallback(() => {
+    setSpotifySignedIn(true);
+    setLoginOpen(false);
+    requestReloadSpotifyBrowser();
+  }, []);
 
   const returnToLyrics = useCallback(() => {
     if (router.canGoBack()) {
@@ -281,7 +394,7 @@ export default function BridgeSettingsScreen() {
               </Pressable>
               <View style={styles.headerCopy}>
                 <Text style={styles.eyebrow}>Sync</Text>
-                <Text style={styles.title}>Bridge Settings</Text>
+                <Text style={styles.title}>Settings</Text>
               </View>
               <View
                 style={[
@@ -300,7 +413,43 @@ export default function BridgeSettingsScreen() {
             </View>
 
             <BlurView intensity={36} tint="dark" style={styles.card}>
-              <SettingSection title="Desktop Bridge">
+              <SettingSection title="Playback source">
+                <Text style={styles.onboardingHint}>
+                  Choose how KineSync gets Spotify playback. Only settings for the selected mode are shown below.
+                </Text>
+                <View style={styles.modeChoices}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.modeChoice,
+                      playbackMode === 'desktop' && styles.modeChoiceActive,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() => selectPlaybackMode('desktop')}>
+                    <Ionicons name="desktop-outline" size={20} color="#FFFFFF" />
+                    <View style={styles.modeChoiceCopy}>
+                      <Text style={styles.modeChoiceTitle}>Desktop Bridge</Text>
+                      <Text style={styles.modeChoiceHint}>Best sync; requires the bridge app.</Text>
+                    </View>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.modeChoice,
+                      playbackMode === 'mobile' && styles.modeChoiceActive,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() => selectPlaybackMode('mobile')}>
+                    <Ionicons name="phone-portrait-outline" size={20} color="#FFFFFF" />
+                    <View style={styles.modeChoiceCopy}>
+                      <Text style={styles.modeChoiceTitle}>Mobile-Only</Text>
+                      <Text style={styles.modeChoiceHint}>Play Spotify inside KineSync.</Text>
+                    </View>
+                  </Pressable>
+                </View>
+              </SettingSection>
+
+              <View style={styles.divider} />
+
+              {playbackMode === 'desktop' ? <SettingSection title="Desktop Bridge">
                 <FieldRow
                   label="WebSocket URL"
                   value={urlInput}
@@ -322,11 +471,33 @@ export default function BridgeSettingsScreen() {
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                   <Text style={styles.primaryButtonText}>Save and reconnect</Text>
                 </Pressable>
-              </SettingSection>
+                <Pressable
+                  style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                  onPress={openScanner}>
+                  <Ionicons name="qr-code-outline" size={17} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>Scan QR code from Desktop Bridge</Text>
+                </Pressable>
+              </SettingSection> : null}
 
-              <View style={styles.divider} />
+              {playbackMode === 'desktop' ? <View style={styles.divider} /> : null}
 
-              <SettingSection title="Mobile Lyrics APIs">
+              {playbackMode === 'mobile' ? <SettingSection title="Mobile-Only">
+                <Text style={styles.onboardingHint}>
+                  Spotify runs in KineSync on this phone. Sign in to refresh your Spotify session.
+                </Text>
+                <Pressable
+                  style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                  onPress={() => setLoginOpen(true)}>
+                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.primaryButtonText}>
+                    {spotifySignedIn ? 'Spotify signed in' : 'Log in to Spotify'}
+                  </Text>
+                </Pressable>
+              </SettingSection> : null}
+
+              {playbackMode === 'mobile' ? <View style={styles.divider} /> : null}
+
+              {playbackMode === 'mobile' ? <SettingSection title="Mobile Lyrics APIs">
                 <FieldRow
                   label="Spotify Bearer Token"
                   value={spotifyTokenInput}
@@ -364,11 +535,11 @@ export default function BridgeSettingsScreen() {
                     {mobileLyricsSaved ? 'Saved mobile API settings' : 'Save mobile API settings'}
                   </Text>
                 </Pressable>
-              </SettingSection>
+              </SettingSection> : null}
 
               <View style={styles.divider} />
 
-              <SettingSection title="Timing">
+              {playbackMode === 'desktop' ? <SettingSection title="Timing">
                 <View style={styles.timingDiagnostics}>
                   <Text style={styles.timingDiagnosticsTitle}>Bridge timing (live)</Text>
                   <Text style={styles.timingDiagnosticsLine}>
@@ -439,7 +610,7 @@ export default function BridgeSettingsScreen() {
                   <Ionicons name="speedometer" size={17} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>Apply timing</Text>
                 </Pressable>
-              </SettingSection>
+              </SettingSection> : null}
             </BlurView>
 
             <BlurView intensity={36} tint="dark" style={styles.card}>
@@ -476,6 +647,73 @@ export default function BridgeSettingsScreen() {
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+
+      <Modal
+        animationType="slide"
+        visible={scannerOpen}
+        onRequestClose={() => setScannerOpen(false)}>
+        <View style={styles.scannerModal}>
+          <CameraView style={styles.scannerCamera} onBarcodeScanned={handleBarcodeScanned} />
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame} />
+            <Text style={styles.scannerInstruction}>
+              Point the camera at the QR code on your Desktop Bridge app
+            </Text>
+            {!!scanError && <Text style={styles.scannerError}>{scanError}</Text>}
+            <Pressable
+              style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+              onPress={() => setScannerOpen(false)}>
+              <Ionicons name="close" size={18} color="#FFFFFF" />
+              <Text style={styles.secondaryButtonText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        visible={loginOpen}
+        onRequestClose={() => setLoginOpen(false)}>
+        <View style={styles.loginModal}>
+          <SafeAreaView style={styles.loginHeader}>
+            <Text style={styles.loginTitle}>Log in to Spotify</Text>
+            <Pressable
+              hitSlop={10}
+              onPress={() => setLoginOpen(false)}
+              style={styles.loginCloseButton}>
+              <Ionicons name="close" size={21} color="#FFFFFF" />
+            </Pressable>
+          </SafeAreaView>
+          <WebView
+            source={{ uri: SPOTIFY_LOGIN_URL }}
+            originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
+            injectedJavaScript={spotifyAuthProbeScript}
+            onShouldStartLoadWithRequest={({ url }) => {
+              if (!isSpotifyNativeAppRedirect(url)) return true;
+              completeSpotifySignIn();
+              return false;
+            }}
+            sharedCookiesEnabled
+            thirdPartyCookiesEnabled
+            domStorageEnabled
+            javaScriptEnabled
+            setSupportMultipleWindows={false}
+            style={styles.loginWebView}
+            onMessage={({ nativeEvent }) => {
+              const event = parseBrowserEvent(nativeEvent.data);
+              if (event?.type === 'spotifyToken' && event.token) {
+                void saveMobileLyricsSettings({
+                  spotifyWebToken: event.token,
+                  spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
+                });
+              }
+              if (event?.type === 'signedIn' && event.signedIn) {
+                completeSpotifySignIn();
+              }
+            }}
+          />
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -585,6 +823,38 @@ const styles = StyleSheet.create({
   },
   sectionBody: {
     gap: 12,
+  },
+  modeChoices: {
+    gap: 10,
+  },
+  modeChoice: {
+    minHeight: 64,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  modeChoiceActive: {
+    backgroundColor: 'rgba(143,240,196,0.13)',
+    borderColor: 'rgba(143,240,196,0.5)',
+  },
+  modeChoiceCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  modeChoiceTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modeChoiceHint: {
+    color: 'rgba(255,255,255,0.52)',
+    fontSize: 11,
   },
   fieldRow: {
     gap: 7,
@@ -702,5 +972,66 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginTop: 8,
     marginLeft: 4,
+  },
+  scannerModal: {
+    flex: 1,
+    backgroundColor: '#090A11',
+  },
+  scannerCamera: {
+    ...StyleSheet.absoluteFill,
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+    paddingHorizontal: 28,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+  },
+  scannerFrame: {
+    width: 248,
+    height: 248,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  scannerInstruction: {
+    color: '#FFFFFF',
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  scannerError: {
+    color: '#FF93A4',
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  loginModal: {
+    flex: 1,
+    backgroundColor: '#090A11',
+  },
+  loginHeader: {
+    minHeight: 58,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#11131C',
+  },
+  loginTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  loginCloseButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loginWebView: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
   },
 });

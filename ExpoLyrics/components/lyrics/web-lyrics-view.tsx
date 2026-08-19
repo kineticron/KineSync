@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { AppState, Platform, StyleSheet, View } from "react-native";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
 import {
@@ -298,7 +298,11 @@ export const WebLyricsView = memo(function WebLyricsView({
   fontScale = 1,
   landscapeMode = false,
 }: WebLyricsViewProps) {
-  const webViewRef = useRef<{ injectJavaScript: (script: string) => void } | null>(null);
+  const webViewRef = useRef<{
+    injectJavaScript: (script: string) => void;
+    reload: () => void;
+  } | null>(null);
+  const appStateRef = useRef(AppState.currentState);
   const [ready, setReady] = useState(false);
   const lyrics = usePlaybackStore((state) => state.lyrics);
   const lyricsMetadata = usePlaybackStore((state) => state.lyricsMetadata);
@@ -335,6 +339,23 @@ export const WebLyricsView = memo(function WebLyricsView({
       `window.KineSyncLyrics && window.KineSyncLyrics.receive(${serializeForInjection(payload)}); true;`,
     );
   }, [ready]);
+
+  // iOS suspends the WebView process while the app is backgrounded. Its
+  // animation loop can resume with a stale/blank layer, even though React
+  // still considers the component mounted. Recreate the small lyrics page on
+  // every real background -> active transition; the ready transition below
+  // then replays lyrics, options, and the current playback anchor.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const previousState = appStateRef.current;
+      appStateRef.current = nextState;
+      if (nextState === "active" && previousState !== "active") {
+        setReady(false);
+        webViewRef.current?.reload();
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (!ready) {

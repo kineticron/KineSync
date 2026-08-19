@@ -43,6 +43,39 @@ function makeMobileSafeHeaders(headers = {}) {
   return safeHeaders;
 }
 
+// Spicy Lyrics uses the same request profile as the DesktopBridge client. The
+// native fetch implementation can carry the browser-style Sec-* hints, but
+// still rejects transport-controlled headers such as Host and Content-Length.
+// Keep those hints intact so community-uploaded lyrics are served through the
+// same API path (including the syllable payload) on mobile.
+function makeSpicyLyricsHeaders(headers = {}) {
+  if (!headers || typeof headers !== "object") {
+    return {};
+  }
+  const safeHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const headerName = String(key || "").trim();
+    const lowerName = headerName.toLowerCase();
+    if (!headerName) {
+      continue;
+    }
+    if (isReactNativeRuntime) {
+      if (
+        lowerName === "accept-encoding" ||
+        lowerName === "connection" ||
+        lowerName === "content-length" ||
+        lowerName === "host"
+      ) {
+        continue;
+      }
+    } else if (isBrowserRuntime && lowerName === "user-agent") {
+      continue;
+    }
+    safeHeaders[headerName] = value;
+  }
+  return safeHeaders;
+}
+
 function wordArrayToBase64(wordArray) {
   return CryptoJS.enc.Base64.stringify(wordArray);
 }
@@ -6440,7 +6473,7 @@ async function resolveSpicyLyricsClientVersion() {
     try {
       const response = await fetch(buildSpicyLyricsDirectUrl("/version"), {
         method: "GET",
-        headers: makeMobileSafeHeaders({
+        headers: makeSpicyLyricsHeaders({
           Accept: "text/plain,*/*",
           Origin: "https://xpui.app.spotify.com",
           Referer: "https://xpui.app.spotify.com/",
@@ -6513,7 +6546,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     try {
       return await fetch(url, {
         method: "POST",
-        headers: makeMobileSafeHeaders(baseHeaders),
+        headers: makeSpicyLyricsHeaders(baseHeaders),
         body,
         signal: controller.signal,
       });

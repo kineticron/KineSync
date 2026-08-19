@@ -355,7 +355,11 @@ export const SettingsMenu = memo(function SettingsMenu({
         setScanError('');
         usePlaybackStore.getState().setServerUrl(parsed.u);
         usePlaybackStore.getState().setHandshakeKey(parsed.k);
-        saveBridgeSettings({ serverUrl: parsed.u, handshakeKey: parsed.k }).catch(() => {});
+        saveBridgeSettings({
+          serverUrl: parsed.u,
+          handshakeKey: parsed.k,
+          playbackMode: "desktop",
+        }).catch(() => {});
         bridgeClient.reconnectNow();
         setScannerOpen(false);
         return;
@@ -562,7 +566,7 @@ export const SettingsMenu = memo(function SettingsMenu({
               />
               <MenuAction
                 icon="settings-outline"
-                label="Bridge settings"
+                label="Settings"
                 onPress={onOpenBridgeSettings}
                 showChevron
               />

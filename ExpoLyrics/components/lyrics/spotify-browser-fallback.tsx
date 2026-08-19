@@ -47,22 +47,11 @@ const DESKTOP_WEB_USER_AGENT =
 const BROWSER_HEARTBEAT_MS = 5_000;
 const BROWSER_STALE_MS = 18_000;
 const BROWSER_RELOAD_COOLDOWN_MS = 30_000;
-const WARM_HANDOFF_TIMEOUT_MS = 15_000;
 
 const BROWSER_URL = "https://open.spotify.com/";
 
 type PlaybackSample = Extract<BrowserEvent, { type: "playback" }>;
 type DiagnosticEvent = Extract<BrowserEvent, { type: "diagnostics" }>;
-type MetadataEvent = Extract<BrowserEvent, { type: "metadata" }>;
-type BrowserSlot = "primary" | "replacement";
-
-type WarmBrowserSnapshot = {
-  slot: BrowserSlot;
-  generation: number;
-  ready: boolean;
-  metadata: MetadataEvent | null;
-  playback: PlaybackSample | null;
-};
 
 type BrowserTrackMetadata = {
   title: string;
@@ -126,22 +115,9 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
 
 export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
   function SpotifyBrowserFallback(_props, ref) {
-    const webViewRefs = useRef<Record<BrowserSlot, WebView<object> | null>>({
+    const webViewRefs = useRef<Record<"primary", WebView<object> | null>>({
       primary: null,
-      replacement: null,
     });
-    const activeSlotRef = useRef<BrowserSlot>("primary");
-    const slotGenerationRef = useRef<Record<BrowserSlot, number>>({
-      primary: 0,
-      replacement: 0,
-    });
-    const warmSnapshotRef = useRef<WarmBrowserSnapshot | null>(null);
-    const startWarmHandoffRef = useRef<() => void>(() => {});
-    const [activeSlot, setActiveSlot] = useState<BrowserSlot>("primary");
-    const [warmingSlot, setWarmingSlot] = useState<BrowserSlot | null>(null);
-    const [slotGenerations, setSlotGenerations] = useState<
-      Record<BrowserSlot, number>
-    >({ primary: 0, replacement: 0 });
     const metadataRef = useRef<BrowserTrackMetadata | null>(null);
     const playbackRef = useRef<PlaybackSample | null>(null);
     const lyricsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -157,7 +133,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     const lastBrowserEventAtRef = useRef(Date.now());
     const lastBrowserReloadAtRef = useRef(0);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-    const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const browserReadyRef = useRef(false);
     const [browserReady, setBrowserReady] = useState(false);
     const [browserLoading, setBrowserLoading] = useState(true);
@@ -169,9 +144,28 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     );
 
     const getActiveWebView = useCallback(
-      () => webViewRefs.current[activeSlotRef.current],
+      () => webViewRefs.current.primary,
       [],
     );
+
+    // iOS suspends WebViews while the app is backgrounded. Reload the single
+    // player on resume so Spotify's Connect session is recreated deterministically
+    // instead of racing a second, hidden WebView into a warm handoff.
+    const refreshBrowser = useCallback((force = false) => {
+      if (appStateRef.current !== "active" || connectionStatusRef.current === "connected") {
+        return;
+      }
+      const now = Date.now();
+      if (!force && now - lastBrowserReloadAtRef.current < BROWSER_RELOAD_COOLDOWN_MS) {
+        return;
+      }
+      lastBrowserReloadAtRef.current = now;
+      browserReadyRef.current = false;
+      setBrowserReady(false);
+      setBrowserLoading(true);
+      setStatus("Refreshing Spotify player…");
+      getActiveWebView()?.reload();
+    }, [getActiveWebView]);
 
     const syncBrowserMonitoring = useCallback(() => {
       if (!browserReadyRef.current) return;
@@ -191,14 +185,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         connectionStatusRef.current = state.connectionStatus;
         if (changed) {
           syncBrowserMonitoring();
-          if (state.connectionStatus === "connected" && warmSnapshotRef.current) {
-            warmSnapshotRef.current = null;
-            setWarmingSlot(null);
-            if (recoveryTimerRef.current) {
-              clearTimeout(recoveryTimerRef.current);
-              recoveryTimerRef.current = null;
-            }
-          }
         }
       }), [syncBrowserMonitoring]);
 
@@ -215,8 +201,8 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     }, [getActiveWebView]);
 
     // A locally advancing WebView clock does not prove that Spotify Connect is
-    // still authoritative after suspension. On resume, warm a freshly mounted
-    // player while the current one continues feeding the visible lyrics UI.
+    // still authoritative after suspension. On resume, refresh the same player
+    // and let its ready/playback events repopulate the store.
     useEffect(() => {
       const requestSnapshot = () => {
         if (!browserReadyRef.current) return;
@@ -233,24 +219,13 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           const playbackState = usePlaybackStore.getState();
           if (playbackState.isPlaying) startPlaybackClock();
           if (previousState !== "active") {
-            if (connectionStatusRef.current !== "connected") {
-              startWarmHandoffRef.current();
-            }
-          } else {
-            requestSnapshot();
+            refreshBrowser(true);
           }
+          requestSnapshot();
           return;
         }
         // Capture one final anchor before native and WebView timers suspend.
         requestSnapshot();
-        if (warmSnapshotRef.current) {
-          warmSnapshotRef.current = null;
-          setWarmingSlot(null);
-          if (recoveryTimerRef.current) {
-            clearTimeout(recoveryTimerRef.current);
-            recoveryTimerRef.current = null;
-          }
-        }
       });
 
       const heartbeat = setInterval(() => {
@@ -266,16 +241,15 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           now - lastBrowserEventAtRef.current > BROWSER_STALE_MS &&
           now - lastBrowserReloadAtRef.current >= BROWSER_RELOAD_COOLDOWN_MS
         ) {
-          startWarmHandoffRef.current();
+          refreshBrowser();
         }
       }, BROWSER_HEARTBEAT_MS);
 
       return () => {
         subscription.remove();
         clearInterval(heartbeat);
-        if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
       };
-    }, [getActiveWebView, syncBrowserMonitoring]);
+    }, [getActiveWebView, refreshBrowser, syncBrowserMonitoring]);
 
     // Mirrors DesktopBridge spotifyDetector.requestCatalogEnrichment(): native
     // metadata gets a stable track id first, then a single catalog enrichment
@@ -516,112 +490,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       [commitMetadata, ingestBrowserPlayback, requestCatalogEnrichment],
     );
 
-    const promoteWarmBrowser = useCallback(
-      (snapshot: WarmBrowserSnapshot, requireCompleteSnapshot = true) => {
-        if (
-          warmSnapshotRef.current?.slot !== snapshot.slot ||
-          warmSnapshotRef.current.generation !== snapshot.generation ||
-          !snapshot.ready
-        ) {
-          return;
-        }
-        if (requireCompleteSnapshot && (!snapshot.metadata || !snapshot.playback)) {
-          return;
-        }
-
-        if (recoveryTimerRef.current) {
-          clearTimeout(recoveryTimerRef.current);
-          recoveryTimerRef.current = null;
-        }
-
-        activeSlotRef.current = snapshot.slot;
-        browserReadyRef.current = true;
-        setBrowserReady(true);
-        setBrowserLoading(false);
-        setActiveSlot(snapshot.slot);
-        setWarmingSlot(null);
-        warmSnapshotRef.current = null;
-        lastBrowserEventAtRef.current = Date.now();
-
-        if (snapshot.metadata && snapshot.playback) {
-          commitMetadata(snapshot.metadata);
-          playbackRef.current = snapshot.playback;
-          ingestBrowserPlayback(snapshot.playback);
-          setStatus("Spotify player reconnected without interrupting lyrics.");
-        } else {
-          // Keep the visible store intact, but do not combine future samples
-          // from the replacement with metadata captured by the retired slot.
-          metadataRef.current = null;
-          playbackRef.current = null;
-          setStatus("Spotify player refreshed. Waiting for its current track...");
-        }
-        syncBrowserMonitoring();
-      },
-      [commitMetadata, ingestBrowserPlayback, syncBrowserMonitoring],
-    );
-
-    const tryPromoteWarmBrowser = useCallback(
-      (slot: BrowserSlot, generation: number) => {
-        const snapshot = warmSnapshotRef.current;
-        if (
-          !snapshot ||
-          snapshot.slot !== slot ||
-          snapshot.generation !== generation ||
-          !snapshot.ready ||
-          !snapshot.metadata ||
-          !snapshot.playback
-        ) {
-          return;
-        }
-        promoteWarmBrowser(snapshot);
-      },
-      [promoteWarmBrowser],
-    );
-
-    const startWarmHandoff = useCallback(() => {
-      if (
-        appStateRef.current !== "active" ||
-        connectionStatusRef.current === "connected"
-      ) {
-        return;
-      }
-      const slot: BrowserSlot =
-        activeSlotRef.current === "primary" ? "replacement" : "primary";
-      const generation = slotGenerationRef.current[slot] + 1;
-      slotGenerationRef.current[slot] = generation;
-      warmSnapshotRef.current = {
-        slot,
-        generation,
-        ready: false,
-        metadata: null,
-        playback: null,
-      };
-      lastBrowserReloadAtRef.current = Date.now();
-      setStatus("App resumed. Warming a fresh Spotify player...");
-      setSlotGenerations((current) => ({
-        ...current,
-        [slot]: generation,
-      }));
-      setWarmingSlot(slot);
-
-      if (recoveryTimerRef.current) clearTimeout(recoveryTimerRef.current);
-      recoveryTimerRef.current = setTimeout(() => {
-        const snapshot = warmSnapshotRef.current;
-        if (!snapshot || snapshot.slot !== slot || snapshot.generation !== generation) {
-          return;
-        }
-        if (snapshot.ready) {
-          promoteWarmBrowser(snapshot, false);
-          return;
-        }
-        warmSnapshotRef.current = null;
-        setWarmingSlot(null);
-        setStatus("Fresh Spotify player did not finish loading; keeping the current player.");
-      }, WARM_HANDOFF_TIMEOUT_MS);
-    }, [promoteWarmBrowser]);
-
-    startWarmHandoffRef.current = startWarmHandoff;
-
     const sendCommand = useCallback((command: BrowserCommand) => {
       if (!browserReady) {
         setBrowserOpen(true);
@@ -713,30 +581,16 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         ) : null}
 
         <View style={styles.webViewStage}>
-          {(["primary", "replacement"] as const).map((slot) => {
-            if (slot !== activeSlot && slot !== warmingSlot) return null;
-            const generation = slotGenerations[slot];
-            const isActive = slot === activeSlot;
-            return (
-              <View
-                key={`${slot}:${generation}`}
-                pointerEvents={isActive ? "auto" : "none"}
-                style={[
-                  styles.webViewSlot,
-                  isActive ? styles.webViewSlotActive : styles.webViewSlotWarming,
-                ]}
-              >
+          <View style={styles.webViewSlot}>
                 <WebView<object>
                   ref={(instance) => {
-                    webViewRefs.current[slot] = instance;
+                    webViewRefs.current.primary = instance;
                   }}
                   source={{ uri: BROWSER_URL }}
                   originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
                   onShouldStartLoadWithRequest={({ url }) => {
                     if (!isSpotifyNativeAppRedirect(url)) return true;
-                    if (activeSlotRef.current === slot) {
-                      setStatus("Kept Spotify open inside KineSync.");
-                    }
+                    setStatus("Kept Spotify open inside KineSync.");
                     return false;
                   }}
                   injectedJavaScriptBeforeContentLoaded={installBrowserControlPreludeScript}
@@ -749,7 +603,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     <BrowserMessage message={description} />
                   )}
                   onLoadStart={() => {
-                    if (activeSlotRef.current !== slot) return;
                     setBrowserLoading(true);
                     setBrowserReady(false);
                     browserReadyRef.current = false;
@@ -757,34 +610,22 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     setStatus("Loading Spotify in desktop mode...");
                   }}
                   onLoad={() => {
-                    if (activeSlotRef.current !== slot) return;
                     setBrowserLoading(false);
                     setStatus("Spotify page loaded. Sign in and start a track.");
                   }}
                   onHttpError={({ nativeEvent }) => {
-                    if (activeSlotRef.current !== slot) return;
                     setBrowserLoading(false);
                     setStatus(
                       `Spotify returned HTTP ${nativeEvent.statusCode}: ${nativeEvent.description}`,
                     );
                   }}
                   onError={({ nativeEvent }) => {
-                    const warm = warmSnapshotRef.current;
-                    if (warm?.slot === slot && warm.generation === generation) {
-                      setStatus(`Fresh Spotify player error: ${nativeEvent.description}`);
-                      return;
-                    }
-                    if (activeSlotRef.current !== slot) return;
                     setBrowserLoading(false);
                     setStatus(`Spotify browser error: ${nativeEvent.description}`);
                   }}
                   onMessage={({ nativeEvent }: WebViewMessageEvent) => {
                     const event = parseBrowserEvent(nativeEvent.data);
                     if (!event) return;
-                    const warm = warmSnapshotRef.current;
-                    const isWarm =
-                      warm?.slot === slot && warm.generation === generation;
-                    const isCurrentActive = activeSlotRef.current === slot;
 
                     if (event.type === "spotifyToken" && event.token) {
                       void saveMobileLyricsSettings({
@@ -792,18 +633,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                         spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
                       });
                     }
-
-                    if (isWarm && warm) {
-                      if (event.type === "ready") warm.ready = true;
-                      if (event.type === "metadata" && event.title && event.artist) {
-                        warm.metadata = event;
-                      }
-                      if (event.type === "playback") warm.playback = event;
-                      if (event.type === "error") setStatus(event.message);
-                      tryPromoteWarmBrowser(slot, generation);
-                      return;
-                    }
-                    if (!isCurrentActive) return;
 
                     lastBrowserEventAtRef.current = Date.now();
                     if (event.type === "ready") {
@@ -852,9 +681,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   userAgent={DESKTOP_WEB_USER_AGENT}
                   style={styles.webView}
                 />
-              </View>
-            );
-          })}
+          </View>
         </View>
       </View>
     );
@@ -959,14 +786,6 @@ const styles = StyleSheet.create({
   },
   webViewSlot: {
     ...StyleSheet.absoluteFill,
-  },
-  webViewSlotActive: {
-    opacity: 1,
-    zIndex: 1,
-  },
-  webViewSlotWarming: {
-    opacity: 0,
-    zIndex: 0,
   },
   webView: {
     flex: 1,
