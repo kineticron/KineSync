@@ -14,10 +14,12 @@ function normalizeNgrokDomain(rawDomain) {
 }
 
 function toWebSocketUrl(publicUrl) {
-  return String(publicUrl || "")
-    .replace(/^https:\/\//i, "wss://")
-    .replace(/^http:\/\//i, "ws://")
-    .replace(/\/+$/, "");
+  const parsed = new URL(String(publicUrl || ""));
+  if (parsed.protocol !== "https:") {
+    throw new Error("ngrok must report a secure HTTPS endpoint");
+  }
+  parsed.protocol = "wss:";
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function isEndpointAlreadyOnlineError(error) {
@@ -137,7 +139,10 @@ function createNgrokRelayManager({
     state = "starting";
     emitStatus();
 
-    relayServer = createRelayServer({ port: relayPort });
+    relayServer = createRelayServer({
+      port: relayPort,
+      getRegistrationKey: () => safeBridgeKey,
+    });
     try {
       await new Promise((resolve, reject) =>
         relayServer.start((error) => (error ? reject(error) : resolve())),
@@ -181,7 +186,16 @@ function createNgrokRelayManager({
       return failStart(new Error("ngrok did not report a public URL"));
     }
 
-    const relayWsUrl = toWebSocketUrl(reportedUrl);
+    let relayWsUrl;
+    try {
+      const reported = new URL(reportedUrl);
+      if (reported.hostname.toLowerCase() !== ngrokDomain.toLowerCase()) {
+        throw new Error("ngrok reported an unexpected public domain");
+      }
+      relayWsUrl = toWebSocketUrl(reportedUrl);
+    } catch (error) {
+      return failStart(error);
+    }
     const mobileUrl = `${relayWsUrl}/bridge/${encodeURIComponent(safeBridgeId)}`;
     publicUrl = relayWsUrl;
     lastError = "";

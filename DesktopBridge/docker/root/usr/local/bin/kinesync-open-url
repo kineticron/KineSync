@@ -1,5 +1,14 @@
 #!/bin/bash
-set -u
+set -euo pipefail
+
+requested_url="${1:-https://accounts.spotify.com/}"
+case "$requested_url" in
+  https://*|http://*) ;;
+  *) exit 2 ;;
+esac
+
+export HOME="${FM_HOME:-/config}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
 app_root=/opt/kinesync
 electron="$app_root/node_modules/.bin/electron"
@@ -10,4 +19,4 @@ if [ ! -x "$electron" ]; then
 fi
 
 cd "$app_root"
-exec "$electron" --no-sandbox scripts/container-login-browser.js "$@"
+exec "$electron" --no-sandbox scripts/container-login-browser.js "$requested_url"

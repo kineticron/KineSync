@@ -2,6 +2,7 @@ const Store = require("electron-store").default;
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const SETTINGS_DEFAULTS = {
   musixmatchUserToken: "",
@@ -57,9 +58,28 @@ function sanitizeSpicyLyricsUseCorsProxy(value) {
   return false;
 }
 
+const WEAK_BRIDGE_KEYS = new Set([
+  "password123", "password", "changeme", "change-me", "bridge-key",
+  "default", "kinesync", "secret", "test", "",
+]);
+
+function generateBridgeKey() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function isStrongBridgeKey(value) {
+  const safe = String(value || "").trim();
+  const lower = safe.toLowerCase();
+  return (
+    safe.length >= 16 &&
+    !WEAK_BRIDGE_KEYS.has(lower) &&
+    !/^(.)(\1){15,}$/.test(safe)
+  );
+}
+
 function sanitizeBridgeKey(value) {
   const safe = String(value || "").trim();
-  return safe || SETTINGS_DEFAULTS.bridgeKey;
+  return isStrongBridgeKey(safe) ? safe : "";
 }
 
 function sanitizeRelayUrl(value) {
@@ -90,6 +110,39 @@ function sanitizeNgrokDomain(value) {
 
 function sanitizeNgrokAuthToken(value) {
   return String(value || "").trim();
+}
+
+function resolveSafeStorage() {
+  try {
+    // Lazy require keeps the settings module usable in headless tests.
+    const { safeStorage } = require("electron");
+    return safeStorage?.isEncryptionAvailable?.() ? safeStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function encodeSecret(value) {
+  const safe = String(value || "");
+  const storage = resolveSafeStorage();
+  if (!safe || !storage) return safe;
+  try {
+    return `safe:v1:${storage.encryptString(safe).toString("base64")}`;
+  } catch {
+    return safe;
+  }
+}
+
+function decodeSecret(value) {
+  const safe = String(value || "");
+  if (!safe.startsWith("safe:v1:")) return safe;
+  const storage = resolveSafeStorage();
+  if (!storage) return "";
+  try {
+    return storage.decryptString(Buffer.from(safe.slice("safe:v1:".length), "base64"));
+  } catch {
+    return "";
+  }
 }
 
 function migrateLegacySettings(app, store) {
@@ -161,15 +214,17 @@ function createBridgeSettingsStore({ app }) {
   migrateLegacySettings(app, store);
 
   const normalize = (raw) => ({
-    musixmatchUserToken: sanitizeMusixmatchUserToken(raw?.musixmatchUserToken || ""),
+    musixmatchUserToken: sanitizeMusixmatchUserToken(
+      decodeSecret(raw?.musixmatchUserToken || ""),
+    ),
     musixmatchAnonymousUserToken: sanitizeMusixmatchUserToken(
-      raw?.musixmatchAnonymousUserToken || "",
+      decodeSecret(raw?.musixmatchAnonymousUserToken || ""),
     ),
     musixmatchAnonymousAppId: String(
-      raw?.musixmatchAnonymousAppId || "",
+      decodeSecret(raw?.musixmatchAnonymousAppId || ""),
     ).trim(),
     musixmatchAnonymousDeviceId: String(
-      raw?.musixmatchAnonymousDeviceId || "",
+      decodeSecret(raw?.musixmatchAnonymousDeviceId || ""),
     ).trim(),
     musixmatchAnonymousFetchedAt: sanitizeTimestamp(
       raw?.musixmatchAnonymousFetchedAt,
@@ -177,28 +232,53 @@ function createBridgeSettingsStore({ app }) {
     musixmatchAnonymousLastAttemptAt: sanitizeTimestamp(
       raw?.musixmatchAnonymousLastAttemptAt,
     ),
-    spotifyWebToken: sanitizeSpotifyWebToken(raw?.spotifyWebToken || ""),
-    geminiApiKey: sanitizeGeminiApiKey(raw?.geminiApiKey || raw?.openRouterApiKey || ""),
-    spotifySpDcCookie: String(raw?.spotifySpDcCookie || "").trim(),
-    bridgeKey: sanitizeBridgeKey(raw?.bridgeKey || ""),
+    spotifyWebToken: sanitizeSpotifyWebToken(decodeSecret(raw?.spotifyWebToken || "")),
+    geminiApiKey: sanitizeGeminiApiKey(decodeSecret(raw?.geminiApiKey || raw?.openRouterApiKey || "")),
+    spotifySpDcCookie: decodeSecret(raw?.spotifySpDcCookie || "").trim(),
+    bridgeKey: sanitizeBridgeKey(decodeSecret(raw?.bridgeKey || "")),
     relayUrl: sanitizeRelayUrl(raw?.relayUrl || ""),
     relayBridgeId: sanitizeRelayBridgeId(raw?.relayBridgeId || ""),
     ngrokDomain: sanitizeNgrokDomain(raw?.ngrokDomain || ""),
-    ngrokAuthToken: sanitizeNgrokAuthToken(raw?.ngrokAuthToken || ""),
+    ngrokAuthToken: sanitizeNgrokAuthToken(decodeSecret(raw?.ngrokAuthToken || "")),
     spicyLyricsUseCorsProxy: sanitizeSpicyLyricsUseCorsProxy(raw?.spicyLyricsUseCorsProxy),
   });
 
+  // Upgrade plaintext secrets written by older releases when OS protection is
+  // available. Reads remain backwards compatible if it is unavailable.
+  const migratePlaintextSecrets = () => {
+    if (!resolveSafeStorage()) return;
+    for (const key of [
+      "musixmatchUserToken",
+      "musixmatchAnonymousUserToken",
+      "musixmatchAnonymousAppId",
+      "musixmatchAnonymousDeviceId",
+      "spotifyWebToken",
+      "geminiApiKey",
+      "spotifySpDcCookie",
+      "bridgeKey",
+      "ngrokAuthToken",
+    ]) {
+      const raw = String(store.store?.[key] || "");
+      if (raw && !raw.startsWith("safe:v1:")) store.set(key, encodeSecret(raw));
+    }
+  };
+  migratePlaintextSecrets();
+
   return {
     getSettings() {
-      const {
-        musixmatchAnonymousUserToken: _anonymousUserToken,
-        musixmatchAnonymousAppId: _anonymousAppId,
-        musixmatchAnonymousDeviceId: _anonymousDeviceId,
-        musixmatchAnonymousFetchedAt: _anonymousFetchedAt,
-        musixmatchAnonymousLastAttemptAt: _anonymousLastAttemptAt,
-        ...publicSettings
-      } = normalize(store.store);
-      return publicSettings;
+      const normalized = normalize(store.store);
+      const bridgeKey = normalized.bridgeKey || this.getBridgeKey();
+      return {
+        bridgeKey,
+        relayUrl: normalized.relayUrl,
+        relayBridgeId: normalized.relayBridgeId,
+        ngrokDomain: normalized.ngrokDomain,
+        spicyLyricsUseCorsProxy: normalized.spicyLyricsUseCorsProxy,
+        musixmatchTokenConfigured: Boolean(normalized.musixmatchUserToken),
+        spotifyWebTokenConfigured: Boolean(normalized.spotifyWebToken),
+        geminiApiKeyConfigured: Boolean(normalized.geminiApiKey),
+        ngrokConfigured: Boolean(normalized.ngrokDomain && normalized.ngrokAuthToken),
+      };
     },
     getMusixmatchUserToken() {
       return normalize(store.store).musixmatchUserToken;
@@ -220,10 +300,16 @@ function createBridgeSettingsStore({ app }) {
       return normalize(store.store).geminiApiKey;
     },
     getBridgeKey() {
-      return (
-        normalize(store.store).bridgeKey ||
-        sanitizeBridgeKey(process.env.BRIDGE_KEY || "")
-      );
+      const stored = normalize(store.store).bridgeKey;
+      const envKey = sanitizeBridgeKey(process.env.BRIDGE_KEY || "");
+      if (stored) return stored;
+      if (envKey) {
+        store.set("bridgeKey", encodeSecret(envKey));
+        return envKey;
+      }
+      const generated = generateBridgeKey();
+      store.set("bridgeKey", encodeSecret(generated));
+      return generated;
     },
     getRelayUrl() {
       return normalize(store.store).relayUrl;
@@ -236,23 +322,29 @@ function createBridgeSettingsStore({ app }) {
       return generated;
     },
     setMusixmatchUserToken(token) {
-      store.set("musixmatchUserToken", sanitizeMusixmatchUserToken(token));
+      store.set(
+        "musixmatchUserToken",
+        encodeSecret(sanitizeMusixmatchUserToken(token)),
+      );
       return normalize(store.store).musixmatchUserToken;
     },
     setMusixmatchAnonymousTokenState(state = {}) {
       if (Object.prototype.hasOwnProperty.call(state, "userToken")) {
         store.set(
           "musixmatchAnonymousUserToken",
-          sanitizeMusixmatchUserToken(state.userToken),
+          encodeSecret(sanitizeMusixmatchUserToken(state.userToken)),
         );
       }
       if (Object.prototype.hasOwnProperty.call(state, "appId")) {
-        store.set("musixmatchAnonymousAppId", String(state.appId || "").trim());
+        store.set(
+          "musixmatchAnonymousAppId",
+          encodeSecret(String(state.appId || "").trim()),
+        );
       }
       if (Object.prototype.hasOwnProperty.call(state, "deviceId")) {
         store.set(
           "musixmatchAnonymousDeviceId",
-          String(state.deviceId || "").trim(),
+          encodeSecret(String(state.deviceId || "").trim()),
         );
       }
       if (Object.prototype.hasOwnProperty.call(state, "fetchedAt")) {
@@ -270,15 +362,17 @@ function createBridgeSettingsStore({ app }) {
       return this.getMusixmatchAnonymousTokenState();
     },
     setSpotifyWebToken(token) {
-      store.set("spotifyWebToken", sanitizeSpotifyWebToken(token));
+      store.set("spotifyWebToken", encodeSecret(sanitizeSpotifyWebToken(token)));
       return normalize(store.store).spotifyWebToken;
     },
     setGeminiApiKey(token) {
-      store.set("geminiApiKey", sanitizeGeminiApiKey(token));
+      store.set("geminiApiKey", encodeSecret(sanitizeGeminiApiKey(token)));
       return normalize(store.store).geminiApiKey;
     },
     setBridgeKey(value) {
-      store.set("bridgeKey", sanitizeBridgeKey(value));
+      // Empty/legacy weak values are treated as a request for a safe new key.
+      const safe = sanitizeBridgeKey(value) || generateBridgeKey();
+      store.set("bridgeKey", encodeSecret(safe));
       return normalize(store.store).bridgeKey;
     },
     setRelayUrl(value) {
@@ -300,7 +394,7 @@ function createBridgeSettingsStore({ app }) {
       return normalize(store.store).ngrokAuthToken;
     },
     setNgrokAuthToken(value) {
-      store.set("ngrokAuthToken", sanitizeNgrokAuthToken(value));
+      store.set("ngrokAuthToken", encodeSecret(sanitizeNgrokAuthToken(value)));
       return normalize(store.store).ngrokAuthToken;
     },
     getSpotifySpDcCookie() {
@@ -314,7 +408,7 @@ function createBridgeSettingsStore({ app }) {
       return normalize(store.store).spicyLyricsUseCorsProxy;
     },
     setSpotifySpDcCookie(value) {
-      store.set("spotifySpDcCookie", String(value || "").trim());
+      store.set("spotifySpDcCookie", encodeSecret(String(value || "").trim()));
       return normalize(store.store).spotifySpDcCookie;
     },
   };
@@ -327,5 +421,9 @@ module.exports = {
   sanitizeGeminiApiKey,
   sanitizeNgrokDomain,
   sanitizeNgrokAuthToken,
-  DEFAULT_BRIDGE_KEY: SETTINGS_DEFAULTS.bridgeKey,
+  // Compatibility export for callers that need a one-process fallback.
+  DEFAULT_BRIDGE_KEY: generateBridgeKey(),
+  generateBridgeKey,
+  isStrongBridgeKey,
+  sanitizeBridgeKey,
 };

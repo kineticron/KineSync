@@ -5,8 +5,6 @@
 // Keep behavior changes deliberate; most code here was moved verbatim from src/lyricsService.js.
 
 const JSOSOSO_BASE_URLS = [
-  "https://api.qq.jsososo.com",
-  "http://api.qq.jsososo.com",
   "https://qq-api-soso.vercel.app",
 ];
 const QQ_MUSICU_ENDPOINTS = [
@@ -253,6 +251,15 @@ function buildSpicyLyricsFetchUrl(path) {
     return direct;
   }
   return `${SPICY_LYRICS_CORSPROXY_PREFIX}${encodeURIComponent(direct)}`;
+}
+
+function removeForwardedCredentials(headers = {}) {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([key]) => {
+      const lower = String(key).toLowerCase();
+      return lower !== "authorization" && lower !== "cookie" && !lower.includes("token");
+    }),
+  );
 }
 const SPOTIFY_PARTNER_API_URL =
   "https://api-partner.spotify.com/pathfinder/v1/query";
@@ -1066,13 +1073,14 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
     ...headers,
   };
 
-  const doPost = async (url) => {
+  const doPost = async (url, proxied = false) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 12_000);
     try {
       return await fetch(url, {
         method: "POST",
-        headers: baseHeaders,
+        // Never send bearer/cookie credentials through a public CORS proxy.
+        headers: proxied ? removeForwardedCredentials(baseHeaders) : baseHeaders,
         body,
         signal: controller.signal,
       });
@@ -1108,7 +1116,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
       : [],
   });
 
-  let response = await doPost(primaryUrl);
+  let response = await doPost(primaryUrl, primaryWasProxied);
   spicyDebugLog("Spicy /query response received", {
     url: primaryUrl,
     status: response.status,
@@ -1125,7 +1133,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
       proxiedStatus: response.status,
       directUrl,
     });
-    response = await doPost(directUrl);
+    response = await doPost(directUrl, false);
     spicyDebugLog("Spicy /query direct retry response received", {
       url: directUrl,
       status: response.status,
@@ -1157,7 +1165,7 @@ async function fetchSpicyLyricsQuery(queries, headers = {}) {
       directUrl,
     });
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    response = await doPost(directUrl);
+    response = await doPost(directUrl, false);
     spicyDebugLog("Spicy /query retry response received", {
       attempt: attempt + 1,
       status: response.status,

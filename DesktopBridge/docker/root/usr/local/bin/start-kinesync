@@ -1,15 +1,46 @@
 #!/bin/bash
-set -u
+set -euo pipefail
 
-log_dir=/config/log
-mkdir -p "$log_dir"
+export HOME="${FM_HOME:-/config}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export MEDIA_SESSION_PROVIDER=mpris
+export ELECTRON_DISABLE_SECURITY_WARNINGS=true
+
+log_dir="$HOME/log"
+spotify_cache="$HOME/.cache/spotify"
+mkdir -p "$log_dir" "$XDG_CONFIG_HOME" "$HOME/.pki/nssdb"
+
+# Import administrator-provided private CAs without disabling TLS validation.
+if compgen -G "$HOME/certs/*.crt" >/dev/null; then
+  nss_password_file="$HOME/.pki/nssdb/.kinesync-password"
+  printf '\n' > "$nss_password_file"
+  chmod 600 "$nss_password_file"
+  if [[ ! -f "$HOME/.pki/nssdb/cert9.db" ]]; then
+    certutil -N --empty-password -d "sql:$HOME/.pki/nssdb"
+  fi
+  for certificate in "$HOME"/certs/*.crt; do
+    certificate_id="$(sha256sum "$certificate" | cut -c1-16)"
+    certutil -D -f "$nss_password_file" -d "sql:$HOME/.pki/nssdb" \
+      -n "KineSync-$certificate_id" 2>/dev/null || true
+    certutil -A -d "sql:$HOME/.pki/nssdb" -f "$nss_password_file" \
+      -n "KineSync-$certificate_id" -t "C,," -i "$certificate" || \
+      echo "Could not import CA certificate: $certificate" >> "$log_dir/spotify.log"
+  done
+  cat /etc/ssl/certs/ca-certificates.crt "$HOME"/certs/*.crt > "$HOME/kinesync-ca-bundle.crt"
+  export NODE_EXTRA_CA_CERTS="$HOME/kinesync-ca-bundle.crt"
+  export SSL_CERT_FILE="$HOME/kinesync-ca-bundle.crt"
+  export CURL_CA_BUNDLE="$HOME/kinesync-ca-bundle.crt"
+fi
+
+xdg-mime default kinesync-login-browser.desktop x-scheme-handler/http || true
+xdg-mime default kinesync-login-browser.desktop x-scheme-handler/https || true
 
 # Spotify and the bridge must share one session bus for MPRIS playback data.
 exec dbus-run-session -- bash -lc '
-  set -u
+  set -euo pipefail
   app_root="/opt/kinesync"
-  log_dir="/config/log"
-  spotify_cache="/config/.cache/spotify"
+  log_dir="${HOME}/log"
+  spotify_cache="${HOME}/.cache/spotify"
 
   spotify_pid=""
   bridge_pid=""
@@ -35,7 +66,22 @@ exec dbus-run-session -- bash -lc '
     spotify_pid=""
   }
 
+  existing_spotify_pid() {
+    pgrep -u "$(id -u)" -x spotify | head -n1 || true
+  }
+
+  existing_bridge_pid() {
+    pgrep -u "$(id -u)" -f 'electron.*src/index\.js' | head -n1 || true
+  }
+
   start_spotify() {
+    local existing_pid
+    existing_pid="$(existing_spotify_pid)"
+    if [ -n "$existing_pid" ]; then
+      spotify_pid="$existing_pid"
+      spotify_started_at=$(date +%s)
+      return
+    fi
     clear_spotify_locks
     echo "[supervisor] starting Spotify" >>"$log_dir/spotify.log"
     spotify --no-sandbox >>"$log_dir/spotify.log" 2>&1 &
@@ -44,6 +90,12 @@ exec dbus-run-session -- bash -lc '
   }
 
   start_bridge() {
+    local existing_pid
+    existing_pid="$(existing_bridge_pid)"
+    if [ -n "$existing_pid" ]; then
+      bridge_pid="$existing_pid"
+      return
+    fi
     echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
     "$app_root/docker/root/usr/local/bin/start-kinesync-bridge" >>"$log_dir/desktop-bridge.log" 2>&1 &
     bridge_pid=$!

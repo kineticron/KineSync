@@ -15,6 +15,8 @@ const LEGACY_TTML_FILENAME = "lyrics.ttml";
 const VAULT_DIR_NAME = "lyrics-vault";
 const INDEX_FILENAME = "index.json";
 const MANIFEST_FILENAME = "manifest.json";
+const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
+const MAX_GZIP_BYTES = 32 * 1024 * 1024;
 
 let vaultStoreInstance = null;
 
@@ -264,7 +266,10 @@ function gzipJsonPayload(value) {
 }
 
 function gunzipJsonPayload(buffer) {
-  const json = zlib.gunzipSync(buffer).toString("utf8");
+  if (!Buffer.isBuffer(buffer) || buffer.length > MAX_IMPORT_BYTES) {
+    throw new Error("Vault lyrics file is too large.");
+  }
+  const json = zlib.gunzipSync(buffer, { maxOutputLength: MAX_GZIP_BYTES }).toString("utf8");
   return JSON.parse(json);
 }
 
@@ -293,10 +298,16 @@ function readLyricsFromEntryDir(entryDir, fsModule = fs, pathModule = path) {
   const legacyPath = pathModule.join(entryDir, LEGACY_LYRICS_FILENAME);
 
   if (fsModule.existsSync(gzipPath)) {
+    if (fsModule.statSync(gzipPath).size > MAX_IMPORT_BYTES) {
+      throw new Error("Vault lyrics file is too large.");
+    }
     const payload = gunzipJsonPayload(fsModule.readFileSync(gzipPath));
     return expandLyricsFromStorage(payload);
   }
   if (fsModule.existsSync(legacyPath)) {
+    if (fsModule.statSync(legacyPath).size > MAX_IMPORT_BYTES) {
+      throw new Error("Vault lyrics file is too large.");
+    }
     const payload = JSON.parse(fsModule.readFileSync(legacyPath, "utf8"));
     return expandLyricsFromStorage(payload);
   }
@@ -413,6 +424,9 @@ function parseTtmlLyricsImport(content) {
 }
 
 function parseLyricsImportFile(content, filePath = "") {
+  if (Buffer.byteLength(String(content || ""), "utf8") > MAX_IMPORT_BYTES) {
+    throw new Error("Lyrics import is too large (8 MiB maximum).");
+  }
   const format = detectImportFormat(content, filePath);
   if (format === "ttml") {
     return { format, ...parseTtmlLyricsImport(content) };
@@ -487,7 +501,18 @@ function createLyricsVaultStore({ userDataPath }) {
     );
   };
 
-  const entryDirForId = (vaultId) => path.join(vaultRoot, vaultId);
+  const entryDirForId = (vaultId) => {
+    const safeId = String(vaultId || "").trim();
+    if (!/^(?:spotify_[A-Za-z0-9._-]{1,128}|fp_[a-f0-9]{20,64})$/.test(safeId)) {
+      throw new Error("Invalid vault entry ID.");
+    }
+    const resolvedRoot = path.resolve(vaultRoot);
+    const resolved = path.resolve(resolvedRoot, safeId);
+    if (resolved === resolvedRoot || !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+      throw new Error("Vault path is outside the vault directory.");
+    }
+    return resolved;
+  };
 
   const readEntryFromDir = (vaultId) => {
     const entryDir = entryDirForId(vaultId);

@@ -67,7 +67,8 @@ import {
 import { AnimatedBridgedArtwork } from "@/components/lyrics/animated-bridged-artwork";
 import { BridgedArtworkImage } from "@/components/lyrics/bridged-artwork-image";
 import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
-import { resolveTrackArtworkUrl } from "@/lib/artwork";
+import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
+import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
 import { LyricsView } from "@/components/lyrics/lyrics-view";
 import { WebLyricsView } from "@/components/lyrics/web-lyrics-view";
@@ -95,62 +96,6 @@ import {
 } from "@/lib/icon-button-press-animation";
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
-
-function isBridgeArtworkUri(value: string | undefined) {
-  if (!value) {
-    return false;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  // Accept remote and inline artwork payloads shipped by the desktop bridge.
-  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
-    return true;
-  }
-  // Reject Windows-only filesystem paths that cannot be resolved from mobile.
-  if (/^[a-z]:\\/i.test(trimmed) || /^\\\\/.test(trimmed)) {
-    return false;
-  }
-  return false;
-}
-
-function looksLikeBase64Artwork(value: string) {
-  const compact = value.replace(/\s+/g, "");
-  if (!compact || compact.length < 256) {
-    return false;
-  }
-  // Lightweight heuristic: base64 payloads are large and use this restricted charset.
-  return /^[A-Za-z0-9+/=]+$/.test(compact);
-}
-
-function inferDataUriMime(base64Payload: string) {
-  if (base64Payload.startsWith("/9j/")) {
-    return "image/jpeg";
-  }
-  if (base64Payload.startsWith("iVBORw0KGgo")) {
-    return "image/png";
-  }
-  if (base64Payload.startsWith("UklGR")) {
-    return "image/webp";
-  }
-  return "image/jpeg";
-}
-
-function normalizeBridgeArtworkUri(value: string | undefined) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (isBridgeArtworkUri(trimmed)) {
-    return trimmed;
-  }
-  if (looksLikeBase64Artwork(trimmed)) {
-    const compact = trimmed.replace(/\s+/g, "");
-    return `data:${inferDataUriMime(compact)};base64,${compact}`;
-  }
-  return "";
-}
 
 type TutorialIconName = ComponentProps<typeof Ionicons>["name"];
 const CONTROLS_IDLE_TIMEOUT_MS = 2500;
@@ -315,6 +260,21 @@ function base64ToUint8Array(base64: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+function safeGifPayload(base64: unknown) {
+  const value = typeof base64 === 'string' ? base64 : '';
+  if (!value || value.length % 4 === 1 || value.length > Math.ceil(MAX_GIF_BYTES * 4 / 3) + 16 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
+  const bytes = Math.floor(value.replace(/=+$/, '').length * 3 / 4);
+  return bytes > 0 && bytes <= MAX_GIF_BYTES ? value : null;
+}
+
+function makeSafeGifFileName() {
+  const bytes = new Uint8Array(12);
+  const cryptoApi = globalThis.crypto as { getRandomValues?: (array: Uint8Array) => Uint8Array } | undefined;
+  if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes);
+  else bytes.set(Array.from({ length: bytes.length }, () => Math.floor(Math.random() * 256)));
+  return `kinesync-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}.gif`;
 }
 
 async function shareGifOnWeb({
@@ -679,7 +639,7 @@ export default function HomeScreen() {
     if (
       connectionStatus === "connected" ||
       !currentTrack ||
-      isBridgeArtworkUri(currentTrack.artworkUrl)
+      Boolean(normalizeBridgeArtworkUri(currentTrack.artworkUrl))
     ) {
       return;
     }
@@ -1177,22 +1137,17 @@ export default function HomeScreen() {
           .filter((line): line is NonNullable<typeof line> => Boolean(line)),
       });
 
-      if (!response.ok || !response.base64) {
+      const safeBase64 = safeGifPayload(response.base64);
+      if (!response.ok || !safeBase64 || response.mimeType && response.mimeType !== 'image/gif') {
         throw new Error(
           response.error || "Desktop bridge did not return GIF data.",
         );
       }
 
-      const safeTitle = String(currentTrack.title || "lyrics")
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        .slice(0, 40);
-      const fileName =
-        response.fileName || `${safeTitle || "lyrics"}-share.gif`;
+      const fileName = makeSafeGifFileName();
       if (Platform.OS === "web") {
         await shareGifOnWeb({
-          base64: response.base64,
+          base64: safeBase64,
           fileName,
           mimeType: response.mimeType || "image/gif",
           title: currentTrack.title,
@@ -1202,7 +1157,7 @@ export default function HomeScreen() {
       }
 
       const uri = `${FileSystem.cacheDirectory || ""}${fileName}`;
-      await FileSystem.writeAsStringAsync(uri, response.base64, {
+      await FileSystem.writeAsStringAsync(uri, safeBase64, {
         encoding: FileSystem.EncodingType.Base64,
       });
 

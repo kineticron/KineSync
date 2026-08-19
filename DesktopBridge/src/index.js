@@ -84,7 +84,16 @@ const createWindow = () => {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       backgroundThrottling: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
     },
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!String(url || "").startsWith("file://")) event.preventDefault();
   });
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
@@ -122,6 +131,13 @@ app.whenReady().then(() => {
   const mainWindow = createWindow();
   applyMaxFpsRendering(mainWindow);
   const bridgeSettingsStore = createBridgeSettingsStore({ app });
+  ipcMain.handle("bridge:qr:render", async (_event, text) => {
+    const value = String(text || "");
+    if (!value || value.length > 2048) throw new Error("QR payload is invalid.");
+    // qrcode is bundled with the desktop bridge; no remote renderer is loaded.
+    const QRCode = require("qrcode");
+    return QRCode.toString(value, { type: "svg", errorCorrectionLevel: "M", margin: 2 });
+  });
   const musixmatchTokenManager = createMusixmatchTokenManager({
     settingsStore: bridgeSettingsStore,
   });
@@ -326,14 +342,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle("bridge:settings:get", () => {
       return {
-        musixmatchUserToken: bridgeSettingsStore.getMusixmatchUserToken(),
-        spotifyWebToken: bridgeSettingsStore.getSpotifyWebToken(),
-        geminiApiKey: bridgeSettingsStore.getGeminiApiKey(),
         bridgeKey: bridgeSettingsStore.getBridgeKey(),
         relayUrl: bridgeSettingsStore.getRelayUrl(),
         relayBridgeId: bridgeSettingsStore.getRelayBridgeId(),
         ngrokDomain: bridgeSettingsStore.getNgrokDomain(),
-        ngrokAuthToken: bridgeSettingsStore.getNgrokAuthToken(),
         spicyLyricsUseCorsProxy: bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
         ...getMusixmatchTokenStatus(),
         ...getSpotifyWebTokenStatus(),
@@ -430,7 +442,10 @@ app.whenReady().then(() => {
       relayUrl: bridgeSettingsStore.getRelayUrl(),
       relayBridgeId: bridgeSettingsStore.getRelayBridgeId(),
       ngrokDomain: bridgeSettingsStore.getNgrokDomain(),
-      ngrokAuthToken: bridgeSettingsStore.getNgrokAuthToken(),
+      ngrokConfigured: Boolean(
+        bridgeSettingsStore.getNgrokDomain() &&
+          bridgeSettingsStore.getNgrokAuthToken(),
+      ),
       spicyLyricsUseCorsProxy: bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
       ...getMusixmatchTokenStatus(),
       ...getSpotifyWebTokenStatus(),
@@ -499,7 +514,14 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle("ngrok:relay:start", async (_event, options = {}) => {
-      return ngrokRelayManager.start(options);
+      return ngrokRelayManager.start({
+        domain: options.domain || bridgeSettingsStore.getNgrokDomain(),
+        authToken:
+          options.authToken || bridgeSettingsStore.getNgrokAuthToken(),
+        bridgeKey: options.bridgeKey || bridgeSettingsStore.getBridgeKey(),
+        bridgeId:
+          options.bridgeId || bridgeSettingsStore.getRelayBridgeId(),
+      });
     });
 
     ipcMain.handle("ngrok:relay:stop", async () => {
@@ -658,6 +680,10 @@ app.whenReady().then(() => {
 
     const filePath = openResult.filePaths[0];
     try {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile() || stat.size > 8 * 1024 * 1024) {
+        return { ok: false, error: "Import file is too large (8 MiB maximum)." };
+      }
       const fileContent = await fs.promises.readFile(filePath, "utf8");
       if (typeof lyricsService.importLyricsFileToVault !== "function") {
         return { ok: false, error: "Vault import is unavailable." };

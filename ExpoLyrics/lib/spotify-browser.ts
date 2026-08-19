@@ -96,13 +96,17 @@ const SPOTIFY_APP_LINK_HOSTS = new Set([
   "spotify.app.link",
   "spotify-alternate.app.link",
 ]);
+const SPOTIFY_WEB_ORIGINS = new Set([
+  "https://accounts.spotify.com",
+  "https://open.spotify.com",
+]);
 
 // react-native-webview opens non-whitelisted schemes through Linking before it
 // calls onShouldStartLoadWithRequest. Admit these schemes to the WebView's
 // policy layer so KineSync gets the chance to reject them synchronously.
 export const SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: string[] = [
-  "http://*",
-  "https://*",
+  "https://accounts.spotify.com/*",
+  "https://open.spotify.com/*",
   "spotify:*",
   "spotify-action:*",
   "intent:*",
@@ -138,6 +142,16 @@ export function isSpotifyNativeAppRedirect(rawUrl: string): boolean {
   try {
     const parsed = new URL(url);
     return SPOTIFY_APP_LINK_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedSpotifyWebViewNavigation(rawUrl: string): boolean {
+  if (isSpotifyNativeAppRedirect(rawUrl)) return false;
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    return SPOTIFY_WEB_ORIGINS.has(parsed.origin) && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
@@ -1096,8 +1110,27 @@ export function makeBrowserCommandScript(command: BrowserCommand): string {
 
 export function parseBrowserEvent(payload: string): BrowserEvent | null {
   try {
-    const event = JSON.parse(payload) as BrowserEvent;
-    return event && typeof event.type === "string" ? event : null;
+    if (typeof payload !== 'string' || payload.length > 64 * 1024) return null;
+    const event = JSON.parse(payload) as Record<string, unknown>;
+    if (!event || typeof event.type !== "string") return null;
+    if (event.type === 'spotifyToken') {
+      if (event.token !== undefined && (typeof event.token !== 'string' || event.token.length > 4096)) return null;
+      if (event.expiresAt !== undefined && (!Number.isFinite(Number(event.expiresAt)) || Number(event.expiresAt) < 0)) return null;
+    } else if (event.type === 'signedIn') {
+      if (typeof event.signedIn !== 'boolean') return null;
+    } else if (event.type === 'metadata') {
+      for (const key of ['title', 'artist', 'album', 'artworkUrl', 'spotifyTrackId']) {
+        if (event[key] !== undefined && (typeof event[key] !== 'string' || String(event[key]).length > 4096)) return null;
+      }
+    } else if (event.type === 'playback') {
+      for (const key of ['positionMs', 'durationMs', 'sampledAtMs', 'playbackRate', 'precisionMs']) {
+        if (!Number.isFinite(Number(event[key]))) return null;
+      }
+      if (typeof event.isPlaying !== 'boolean' || typeof event.source !== 'string') return null;
+    } else if (!['ready', 'diagnostics', 'error'].includes(event.type)) {
+      return null;
+    }
+    return event as BrowserEvent;
   } catch {
     return null;
   }

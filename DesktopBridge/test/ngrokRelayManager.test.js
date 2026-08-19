@@ -11,14 +11,12 @@ const {
 
 function createHarness({ forwardResults = [], serverStartError = null } = {}) {
   const events = [];
-  let listenerNumber = 0;
   const ngrok = {
     async forward(options) {
       events.push(["forward", options.domain]);
       const result = forwardResults.shift();
       if (result instanceof Error) throw result;
-      listenerNumber += 1;
-      const url = result || `https://relay-${listenerNumber}.example.test`;
+      const url = result || `https://${options.domain}`;
       return {
         url: () => url,
         async close() {
@@ -34,9 +32,10 @@ function createHarness({ forwardResults = [], serverStartError = null } = {}) {
     },
   };
   let serverNumber = 0;
-  const createRelayServer = () => {
+  const createRelayServer = (serverOptions) => {
     serverNumber += 1;
     const id = serverNumber;
+    events.push(["server.key", serverOptions.getRegistrationKey()]);
     return {
       start(callback) {
         events.push(["server.start", id]);
@@ -69,6 +68,10 @@ function createHarness({ forwardResults = [], serverStartError = null } = {}) {
 test("normalizes domains and public URLs", () => {
   assert.equal(normalizeNgrokDomain("https://Relay.Example.test/path"), "relay.example.test");
   assert.equal(toWebSocketUrl("https://relay.example.test/"), "wss://relay.example.test");
+  assert.throws(
+    () => toWebSocketUrl("http://relay.example.test/"),
+    /secure HTTPS endpoint/,
+  );
   assert.equal(isEndpointAlreadyOnlineError(new Error("error_code: ERR_NGROK_334")), true);
 });
 
@@ -84,9 +87,13 @@ test("start always tears down the previous relay before opening a new one", asyn
   const oldServerStopIndex = events.findIndex((event) => event[0] === "server.stop");
   assert.ok(closeIndex >= 0 && closeIndex < secondServerIndex);
   assert.ok(oldServerStopIndex >= 0 && oldServerStopIndex < secondServerIndex);
+  assert.deepEqual(
+    events.filter((event) => event[0] === "server.key").map((event) => event[1]),
+    ["key", "key"],
+  );
   assert.deepEqual(manager.getStatus(), {
     ngrokConnected: true,
-    ngrokPublicUrl: "wss://relay-2.example.test",
+    ngrokPublicUrl: "wss://relay.example.test",
     ngrokError: "",
     ngrokState: "running",
   });
@@ -123,6 +130,19 @@ test("failed starts leave no stale connected URL or local relay server", async (
     ngrokError: result.error,
     ngrokState: "error",
   });
+});
+
+test("rejects insecure or unexpected public tunnel URLs", async () => {
+  for (const publicUrl of [
+    "http://relay.example.test",
+    "https://unexpected.example.test",
+  ]) {
+    const { manager, options } = createHarness({ forwardResults: [publicUrl] });
+    const result = await manager.start(options);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /secure HTTPS endpoint|unexpected public domain/);
+    assert.equal(manager.getStatus().ngrokConnected, false);
+  }
 });
 
 test("local relay port errors are returned without attempting ngrok", async () => {

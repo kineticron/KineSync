@@ -9,6 +9,13 @@ services:
     container_name: kinesync
     restart: unless-stopped
     shm_size: "1gb"
+    # Keep the browser desktop local by default. The WebSocket bridge remains
+    # reachable on the LAN for the phone, while the UI can be exposed
+    # intentionally with KINESYNC_WEB_BIND_ADDRESS if needed.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
     environment:
       PUID: ${PUID:-568}
       PGID: ${PGID:-568}
@@ -19,8 +26,8 @@ services:
       MEDIA_SESSION_PROVIDER: mpris
       START_DOCKER: "false"
     ports:
-      - "3000:3000"
-      - "3001:3001"
-      - "3443:3443"
+      - "${KINESYNC_WEB_BIND_ADDRESS:-127.0.0.1}:3000:3000"
+      - "${KINESYNC_BRIDGE_BIND_ADDRESS:-0.0.0.0}:3001:3001"
+      - "${KINESYNC_WEB_BIND_ADDRESS:-127.0.0.1}:3443:3443"
     volumes:
       - ${KINESYNC_CONFIG_PATH:-./.kinesync-config}:/config

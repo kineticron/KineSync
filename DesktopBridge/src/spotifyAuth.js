@@ -6,7 +6,18 @@ const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const CDP_CAPTURE_TIMEOUT_MS = 45_000;
 const PAGE_EXTRACT_DELAY_MS = 8_000;
 const DESKTOP_CHROME_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+
+function isAllowedSpotifyUrl(rawUrl, { allowAccounts = true } = {}) {
+  try {
+    const parsed = new URL(String(rawUrl || ""));
+    const allowed = new Set(["https://open.spotify.com"]);
+    if (allowAccounts) allowed.add("https://accounts.spotify.com");
+    return allowed.has(parsed.origin);
+  } catch {
+    return false;
+  }
+}
 
 const TOKEN_EXTRACT_SCRIPT = `
 (function() {
@@ -470,12 +481,12 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
         // Intercept that and navigate in the same auth window so we can capture the token.
         authWindow.webContents.setWindowOpenHandler(({ url }) => {
           const nextUrl = String(url || "");
-          if (nextUrl.startsWith(SPOTIFY_OPEN_URL)) {
+          if (isAllowedSpotifyUrl(nextUrl, { allowAccounts: false })) {
             webPlayerNavigationTriggered = true;
             void authWindow.loadURL(nextUrl).catch(() => {});
             return { action: "deny" };
           }
-          if (nextUrl.startsWith("https://accounts.spotify.com")) {
+          if (isAllowedSpotifyUrl(nextUrl, { allowAccounts: true })) {
             void authWindow.loadURL(nextUrl).catch(() => {});
             return { action: "deny" };
           }
@@ -483,13 +494,17 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
         });
 
         authWindow.webContents.on("did-navigate", (_event, navUrl) => {
-          if (navUrl.startsWith("https://open.spotify.com")) {
+          if (isAllowedSpotifyUrl(navUrl, { allowAccounts: false })) {
             startCapture();
             return;
           }
           // If login completes but Spotify doesn't auto-redirect, we still want to
           // move to open.spotify.com once the session cookie exists.
-          void tryNavigateToWebPlayer();
+          if (isAllowedSpotifyUrl(navUrl, { allowAccounts: true })) void tryNavigateToWebPlayer();
+        });
+
+        authWindow.webContents.on("will-navigate", (event, navUrl) => {
+          if (!isAllowedSpotifyUrl(navUrl, { allowAccounts: true })) event.preventDefault();
         });
 
         authWindow.webContents.on("did-finish-load", () => {
@@ -560,4 +575,4 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
   };
 }
 
-module.exports = { createSpotifyAuth };
+module.exports = { createSpotifyAuth, isAllowedSpotifyUrl };

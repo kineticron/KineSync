@@ -2,6 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ws: wss: https:; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
     <title>Lyric Sync Bridge</title>
     <link rel="icon" type="image/png" href="assets/R.png" />
     <link rel="stylesheet" href="index.css" />
@@ -218,6 +219,13 @@
                   <span>Remote clients</span><strong id="relay-clients">0</strong>
                 </div>
               </div>
+              <div id="local-qr-section" class="qr-section" hidden>
+                <button type="button" id="toggle-local-qr" class="button secondary">Show pairing QR code</button>
+                <div id="local-qr-container" class="qr-container" hidden>
+                  <div id="local-qr-canvas" class="qr-canvas"></div>
+                  <p class="qr-hint">Scan with KineSync app to connect on this network</p>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -237,7 +245,7 @@
             class="input"
             type="password"
             autocomplete="off"
-            placeholder="password123"
+            placeholder="Generated automatically"
           />
           <button type="button" class="copy-btn" data-copy-from="bridge-key" aria-label="Copy bridge key" title="Copy">
             <svg class="copy-btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
@@ -523,8 +531,6 @@
         </div>
       </div>
     </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
     <script>
       const fmtTime = (ms) => {
@@ -1720,10 +1726,35 @@
 
       let ngrokRelayRunning = false;
       let qrCodeVisible = false;
+      let localQrVisible = false;
+      let localPairingKey = '';
 
       const toggleQrButton = document.getElementById('toggle-qr-code');
       const qrSection = document.getElementById('relay-qr-section');
       const qrContainer = document.getElementById('relay-qr-container');
+      const localQrSection = document.getElementById('local-qr-section');
+      const localQrContainer = document.getElementById('local-qr-container');
+      const localQrCanvas = document.getElementById('local-qr-canvas');
+      const localQrButton = document.getElementById('toggle-local-qr');
+
+      localQrButton?.addEventListener('click', () => {
+        localQrVisible = !localQrVisible;
+        if (localQrContainer) localQrContainer.hidden = !localQrVisible;
+        localQrButton.textContent = localQrVisible ? 'Hide pairing QR code' : 'Show pairing QR code';
+      });
+
+      const updateLocalPairingQr = (status) => {
+        const url = String(status?.wsUrl || '').trim();
+        const key = localPairingKey;
+        if (!url || !key || !window.bridgeAPI?.renderQrCode) {
+          if (localQrSection) localQrSection.hidden = true;
+          return;
+        }
+        if (localQrSection) localQrSection.hidden = false;
+        window.bridgeAPI.renderQrCode(JSON.stringify({ u: url, k: key })).then((svg) => {
+          if (localQrCanvas) localQrCanvas.innerHTML = svg;
+        }).catch(() => {});
+      };
 
       if (toggleQrButton) {
         toggleQrButton.addEventListener('click', () => {
@@ -1739,15 +1770,12 @@
           if (qrSection) qrSection.hidden = false;
           const qrData = JSON.stringify({ u: data.mobileUrl, k: data.bridgeKey || '' });
           const canvas = document.getElementById('relay-qr-canvas');
-          if (canvas && typeof QRCode !== 'undefined') {
-            canvas.innerHTML = '';
-            new QRCode(canvas, {
-              text: qrData,
-              width: 180,
-              height: 180,
-              colorDark: '#0A0B11',
-              colorLight: '#ffffff',
-              correctLevel: QRCode.CorrectLevel.M,
+          if (canvas && window.bridgeAPI?.renderQrCode) {
+            canvas.innerHTML = '<span class="hint">Generating QR code...</span>';
+            window.bridgeAPI.renderQrCode(qrData).then((svg) => {
+              if (canvas) canvas.innerHTML = svg;
+            }).catch(() => {
+              if (canvas) canvas.innerHTML = '<span class="hint">QR code unavailable</span>';
             });
           }
         } else {
@@ -1765,7 +1793,7 @@
         bridgeKey,
         bridgeId,
       }) => {
-        if (!domain || !authToken || !window.bridgeAPI?.startNgrokRelay) {
+        if (!domain || !window.bridgeAPI?.startNgrokRelay) {
           return null;
         }
         setText("relay-settings-status", "Remote relay: starting ngrok tunnel...");
@@ -1786,7 +1814,7 @@
           const relayResult = await window.bridgeAPI.startNgrokRelay({
             domain,
             authToken,
-            bridgeKey: bridgeKey || "password123",
+            bridgeKey: bridgeKey || localPairingKey,
             bridgeId: bridgeId || "",
           });
           updateNgrokRelayUI(relayResult);
@@ -1834,9 +1862,11 @@
           ngrokDomain,
           ngrokAuthToken,
         });
+        if (response.bridgeKey) localPairingKey = String(response.bridgeKey);
 
-        // startNgrokRelay performs one serialized stop-then-start transition.
-        if (ngrokDomain && ngrokAuthToken) {
+        // Existing tokens stay in the main process; a blank field means reuse
+        // the securely stored token rather than exposing it to the renderer.
+        if (ngrokDomain && (ngrokAuthToken || response.ngrokConfigured)) {
           await startConfiguredNgrokRelay({
             domain: ngrokDomain,
             authToken: ngrokAuthToken,
@@ -1854,15 +1884,14 @@
         try {
           const settings = await window.bridgeSettings.get();
           if (musixmatchTokenInput) {
-            musixmatchTokenInput.value = String(
-              settings?.musixmatchUserToken || "",
-            );
+            musixmatchTokenInput.value = "";
           }
           if (geminiApiKeyInput) {
-            geminiApiKeyInput.value = String(settings?.geminiApiKey || "");
+            geminiApiKeyInput.value = "";
           }
           if (bridgeKeyInput) {
-            bridgeKeyInput.value = String(settings?.bridgeKey || "password123");
+            localPairingKey = String(settings?.bridgeKey || "").trim();
+            bridgeKeyInput.value = localPairingKey;
           }
           if (relayUrlInput) {
             relayUrlInput.value = String(settings?.relayUrl || "");
@@ -1876,16 +1905,16 @@
             ngrokDomainInput.value = String(settings?.ngrokDomain || "");
           }
           if (ngrokAuthTokenInput) {
-            ngrokAuthTokenInput.value = String(settings?.ngrokAuthToken || "");
+            ngrokAuthTokenInput.value = "";
           }
           renderMusixmatchTokenStatus(settings || {});
           renderGeminiApiKeyStatus(settings || {});
           renderSpotifyAuthStatus(settings || {});
           renderRelaySettingsStatus(settings || {});
-          if (settings?.ngrokDomain && settings?.ngrokAuthToken) {
+          if (settings?.ngrokDomain && settings?.ngrokConfigured) {
             await startConfiguredNgrokRelay({
               domain: settings.ngrokDomain,
-              authToken: settings.ngrokAuthToken,
+              authToken: "",
               bridgeKey: settings.bridgeKey,
               bridgeId: settings.relayBridgeId,
             });
@@ -1963,9 +1992,9 @@
           void persistRelaySettings({
             relayUrl: relayUrlInput?.value || "",
             relayBridgeId: bridgeId,
-            bridgeKey: bridgeKeyInput?.value || "password123",
+            bridgeKey: bridgeKeyInput?.value || localPairingKey,
             ngrokDomain: document.getElementById("ngrok-domain")?.value || "",
-            ngrokAuthToken: document.getElementById("ngrok-auth-token")?.value || "",
+            ngrokAuthToken: document.getElementById("ngrok-auth-token")?.value || undefined,
           }).catch((error) => {
             setText(
               "relay-settings-status",
@@ -1987,7 +2016,7 @@
           void persistRelaySettings({
             relayUrl: "",
             relayBridgeId: "",
-            bridgeKey: bridgeKeyInput?.value || "password123",
+            bridgeKey: bridgeKeyInput?.value || localPairingKey,
             ngrokDomain: "",
             ngrokAuthToken: "",
           }).catch((error) => {
@@ -2053,6 +2082,7 @@
       setInterval(renderPlaybackPosition, 50);
 
       window.bridgeStatus.onStatus((status) => {
+        updateLocalPairingQr(status);
         const nowMono = monotonicNow();
         const nowWall = Date.now();
         const packetWallTime = Number(status.lastPacketAt || 0);

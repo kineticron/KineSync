@@ -1,6 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 
 const MOBILE_LYRICS_SETTINGS_KEY = "kinesync_mobile_lyrics_settings";
+const MOBILE_LYRICS_SECURE_KEY = "kinesync_mobile_lyrics_secure_v1";
 
 export type MobileLyricsSettings = {
   spotifyWebToken: string;
@@ -68,7 +71,25 @@ export async function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
   }
   try {
     const raw = await AsyncStorage.getItem(MOBILE_LYRICS_SETTINGS_KEY);
-    cachedSettings = normalizeSettings(raw ? JSON.parse(raw) : null);
+    let secureRaw = "";
+    if (Platform.OS !== "web") {
+      try {
+        secureRaw = (await SecureStore.getItemAsync(MOBILE_LYRICS_SECURE_KEY)) || "";
+      } catch {
+        secureRaw = "";
+      }
+    }
+    const legacy = raw ? JSON.parse(raw) : null;
+    cachedSettings = normalizeSettings(secureRaw ? JSON.parse(secureRaw) : legacy);
+    // Migrate legacy plaintext settings only after the secure write succeeds.
+    if (!secureRaw && legacy && Platform.OS !== "web") {
+      try {
+        await SecureStore.setItemAsync(MOBILE_LYRICS_SECURE_KEY, JSON.stringify(cachedSettings));
+        await AsyncStorage.removeItem(MOBILE_LYRICS_SETTINGS_KEY);
+      } catch {
+        // Preserve legacy data if secure storage is unavailable.
+      }
+    }
   } catch {
     storageAvailable = false;
     cachedSettings = { ...DEFAULT_SETTINGS };
@@ -85,6 +106,16 @@ export async function saveMobileLyricsSettings(
   loaded = true;
   if (!storageAvailable) {
     return cachedSettings;
+  }
+  if (Platform.OS !== "web") {
+    try {
+      await SecureStore.setItemAsync(MOBILE_LYRICS_SECURE_KEY, JSON.stringify(cachedSettings));
+      await AsyncStorage.removeItem(MOBILE_LYRICS_SETTINGS_KEY);
+      return cachedSettings;
+    } catch {
+      // Never write secrets back to plaintext storage when secure storage fails.
+      return cachedSettings;
+    }
   }
   try {
     await AsyncStorage.setItem(

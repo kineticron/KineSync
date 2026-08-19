@@ -5449,8 +5449,6 @@ function createSourceStageNoMatchError(source, stage) {
 // Keep behavior changes deliberate; most code here was moved verbatim from src/lyricsService.js.
 
 const JSOSOSO_BASE_URLS = [
-  "https://api.qq.jsososo.com",
-  "http://api.qq.jsososo.com",
   "https://qq-api-soso.vercel.app",
 ];
 const QQ_MUSICU_ENDPOINTS = [
@@ -9441,18 +9439,14 @@ async function previewNeteaseSearchCandidates(track) {
 // This file is evaluated by ../index.js in a shared compatibility context.
 
 const KUGOU_SEARCH_ENDPOINTS = [
-  "https://mobilecdn.kugou.com/api/v3/search/song",
   "https://mobileservice.kugou.com/api/v3/search/song",
-  "http://mobileservice.kugou.com/api/v3/search/song",
 ];
 const KUGOU_LYRIC_SEARCH_ENDPOINTS = [
   "https://lyrics.kugou.com/search",
   "https://krcs.kugou.com/search",
-  "http://krcs.kugou.com/search",
 ];
 const KUGOU_LYRIC_DOWNLOAD_ENDPOINTS = [
   "https://lyrics.kugou.com/download",
-  "http://lyrics.kugou.com/download",
 ];
 const MAX_KUGOU_CANDIDATES = 8;
 const KUGOU_MAX_QUERY_VARIANTS = 6;

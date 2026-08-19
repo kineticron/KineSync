@@ -16,30 +16,16 @@
         "NSSupportsLiveActivitiesFrequentUpdates": true,
         "UIBackgroundModes": [
           "audio"
-        ],
-        "NSAppTransportSecurity": {
-          "NSExceptionDomains": {
-            "api.qq.jsososo.com": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSIncludesSubdomains": true
-            },
-            "mobileservice.kugou.com": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSIncludesSubdomains": true
-            },
-            "krcs.kugou.com": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSIncludesSubdomains": true
-            },
-            "lyrics.kugou.com": {
-              "NSExceptionAllowsInsecureHTTPLoads": true,
-              "NSIncludesSubdomains": true
-            }
-          }
-        }
+        ]
       }
     },
     "android": {
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#6B21A8",
         "foregroundImage": "./assets/images/R.png",
@@ -75,6 +61,8 @@
         }
       ],
       "./plugins/with-kinesync-live-activity.js",
+      "./plugins/with-network-security-config.js",
+      "./plugins/with-release-signing.js",
       [
         "expo-build-properties",
         {

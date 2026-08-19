@@ -12,6 +12,37 @@ const {
 
 const DEFAULT_RELAY_PORT = Number(process.env.BRIDGE_RELAY_PORT || 8787);
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+const MAX_ROOMS = 256;
+const MAX_CONNECTIONS = 512;
+const MAX_CLIENTS_PER_ROOM = 32;
+const PREAUTH_MAX_MESSAGE_BYTES = 64 * 1024;
+const AUTH_TIMEOUT_MS = 10_000;
+const HEARTBEAT_MS = 15_000;
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    const parts = parsed.hostname.split(".").map((part) => Number(part));
+    const privateIpv4 =
+      parts.length === 4 &&
+      parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) &&
+      (parts[0] === 10 ||
+        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+        (parts[0] === 192 && parts[1] === 168));
+    return (
+      parsed.protocol === "https:" ||
+      ((parsed.protocol === "http:") &&
+        (parsed.hostname === "localhost" ||
+          parsed.hostname === "127.0.0.1" ||
+          parsed.hostname === "[::1]" ||
+          parsed.hostname.endsWith(".local") ||
+          privateIpv4))
+    );
+  } catch {
+    return false;
+  }
+}
 
 function safeEqual(a, b) {
   const left = Buffer.from(String(a || ""));
@@ -43,7 +74,10 @@ function getBridgeIdFromRequest(req) {
   }
 }
 
-function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
+function createHostedRelayServer({
+  port = DEFAULT_RELAY_PORT,
+  getRegistrationKey = () => process.env.BRIDGE_RELAY_REGISTRATION_KEY || process.env.BRIDGE_KEY || "",
+} = {}) {
   const rooms = new Map();
   const server = http.createServer((req, res) => {
     if (req.url === "/health") {
@@ -114,10 +148,23 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
   };
 
   wss.on("connection", (socket, req) => {
+    if (wss.clients.size >= MAX_CONNECTIONS) {
+      socket.close(1013, "Relay is busy.");
+      return;
+    }
+    if (!isAllowedOrigin(String(req.headers.origin || ""))) {
+      socket.close(1008, "Origin is not allowed.");
+      return;
+    }
     socket.isAuthorized = false;
     socket.role = "";
     socket.bridgeId = getBridgeIdFromRequest(req);
     socket.rateLimiter = createRateLimiter();
+    socket.isAlive = true;
+    socket.authTimer = setTimeout(() => {
+      if (!socket.isAuthorized) socket.close(1008, "Authentication timeout.");
+    }, AUTH_TIMEOUT_MS);
+    socket.on("pong", () => { socket.isAlive = true; });
 
     socket.on("message", (message) => {
       if (!socket.rateLimiter.consume()) {
@@ -125,9 +172,15 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
         return;
       }
       const maxBytes =
-        socket.role === "desktop"
+        !socket.isAuthorized
+          ? PREAUTH_MAX_MESSAGE_BYTES
+          : socket.role === "desktop"
           ? DESKTOP_MAX_MESSAGE_BYTES
           : CLIENT_MAX_MESSAGE_BYTES;
+      if (!socket.isAuthorized && Buffer.byteLength(String(message || "")) > PREAUTH_MAX_MESSAGE_BYTES) {
+        socket.close(1009, "Pre-authentication message is too large.");
+        return;
+      }
       const parsed = parseJsonMessage(message, maxBytes);
       if (!parsed.ok) {
         return;
@@ -141,16 +194,31 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
           socket.close(1008, "Invalid relay registration.");
           return;
         }
+        if (!rooms.has(bridgeId) && rooms.size >= MAX_ROOMS) {
+          socket.close(1013, "Relay room limit reached.");
+          return;
+        }
+        const expectedRegistrationKey = String(
+          typeof getRegistrationKey === "function"
+            ? getRegistrationKey(bridgeId)
+            : "",
+        ).trim();
+        if (!expectedRegistrationKey || !safeEqual(key, expectedRegistrationKey)) {
+          socket.close(1008, "Invalid desktop registration credential.");
+          return;
+        }
         const room = getRoom(bridgeId);
         if (room.desktop && room.desktop !== socket) {
-          room.desktop.close(1012, "Desktop bridge replaced.");
+          socket.close(1008, "A desktop bridge is already registered for this ID.");
+          return;
         }
         room.desktop = socket;
         room.key = key;
         socket.bridgeId = bridgeId;
         socket.role = "desktop";
         socket.isAuthorized = true;
-        send(socket, { type: "relay:registered", ok: true });
+        clearTimeout(socket.authTimer);
+        send(socket, { type: "relay:registered", ok: true, authenticated: true, role: "desktop", bridgeId });
         sendRoomStatus(room);
         return;
       }
@@ -162,11 +230,16 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
           socket.close(1008, "Invalid bridge key.");
           return;
         }
+        if (room.clients.size >= MAX_CLIENTS_PER_ROOM) {
+          socket.close(1013, "Room client limit reached.");
+          return;
+        }
         socket.bridgeId = bridgeId;
         socket.role = "client";
         socket.isAuthorized = true;
+        clearTimeout(socket.authTimer);
         room.clients.add(socket);
-        send(socket, { type: "hello:ack", ok: true });
+        send(socket, { type: "hello:ack", ok: true, authenticated: true, role: "client", bridgeId });
         sendRoomStatus(room);
         return;
       }
@@ -197,9 +270,17 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
       }
     });
 
-    socket.on("close", () => detach(socket));
-    socket.on("error", () => detach(socket));
+    socket.on("close", () => { clearTimeout(socket.authTimer); detach(socket); });
+    socket.on("error", () => { clearTimeout(socket.authTimer); detach(socket); });
   });
+
+  const heartbeatTimer = setInterval(() => {
+    for (const socket of wss.clients) {
+      if (!socket.isAlive) { socket.terminate(); continue; }
+      socket.isAlive = false;
+      socket.ping();
+    }
+  }, HEARTBEAT_MS);
 
   return {
     start(callback) {
@@ -210,7 +291,11 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
         callback?.();
       });
     },
+    address() {
+      return server.address();
+    },
     stop(callback) {
+      clearInterval(heartbeatTimer);
       for (const socket of wss.clients) {
         socket.terminate();
       }
