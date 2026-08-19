@@ -1,0 +1,13 @@
+#!/bin/bash
+set -u
+
+app_root=/opt/kinesync
+electron="$app_root/node_modules/.bin/electron"
+
+if [ ! -x "$electron" ]; then
+  echo "KineSync runtime is missing: $electron" >&2
+  exit 1
+fi
+
+cd "$app_root"
+exec "$electron" --no-sandbox scripts/container-login-browser.js "$@"

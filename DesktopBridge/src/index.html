@@ -276,7 +276,7 @@
           </button>
         </div>
         <p class="hint">
-          Find your auth token at
+          Use the Agent Authtoken, not an ngrok API key. Find it at
           <a href="https://dashboard.ngrok.com/get-started/your-authtoken" target="_blank" rel="noreferrer">dashboard.ngrok.com ↗</a>
         </p>
         <div class="button-row">
@@ -1769,6 +1769,19 @@
           return null;
         }
         setText("relay-settings-status", "Remote relay: starting ngrok tunnel...");
+        const describeNgrokError = (value) => {
+          const message = String(value || "unknown error");
+          if (message.includes("ERR_NGROK_105")) {
+            return "invalid authtoken — paste the Agent Authtoken from the ngrok dashboard, not an API key";
+          }
+          if (message.includes("ERR_NGROK_108")) {
+            return "agent session limit reached — stop stale agents in the ngrok dashboard, then save again";
+          }
+          if (message.includes("ERR_NGROK_334")) {
+            return "domain is still online on another agent — stop that endpoint, then save again";
+          }
+          return message;
+        };
         try {
           const relayResult = await window.bridgeAPI.startNgrokRelay({
             domain,
@@ -1781,14 +1794,14 @@
             "relay-settings-status",
             relayResult?.ok
               ? `Remote relay: connected via ngrok (${relayResult.publicUrl || "tunnel active"})`
-              : `Remote relay: configured but ngrok failed (${relayResult?.error || "unknown error"})`,
+              : `Remote relay: configured but ngrok failed (${describeNgrokError(relayResult?.error)})`,
           );
           return relayResult;
         } catch (error) {
           updateNgrokRelayUI(null);
           setText(
             "relay-settings-status",
-            `Remote relay: configured but ngrok error (${error instanceof Error ? error.message : String(error)})`,
+            `Remote relay: configured but ngrok error (${describeNgrokError(error instanceof Error ? error.message : error)})`,
           );
           return null;
         }
@@ -1796,8 +1809,12 @@
 
       const persistRelaySettings = async ({ relayUrl, relayBridgeId, bridgeKey, ngrokDomain, ngrokAuthToken }) => {
         setText("relay-settings-status", "Remote relay: saving...");
+        const managesNgrok =
+          ngrokDomain !== undefined || ngrokAuthToken !== undefined;
         const patch = {
-          relayUrl: String(relayUrl || ""),
+          // A managed ngrok tunnel supplies this URL only after it starts.
+          // Clearing it here prevents stale URLs from appearing connected.
+          relayUrl: managesNgrok ? "" : String(relayUrl || ""),
           relayBridgeId: String(relayBridgeId || ""),
           bridgeKey: String(bridgeKey || ""),
         };
@@ -1818,7 +1835,7 @@
           ngrokAuthToken,
         });
 
-        // Auto-start ngrok relay if domain and auth token are configured
+        // startNgrokRelay performs one serialized stop-then-start transition.
         if (ngrokDomain && ngrokAuthToken) {
           await startConfiguredNgrokRelay({
             domain: ngrokDomain,
@@ -1826,6 +1843,10 @@
             bridgeKey,
             bridgeId: relayBridgeId,
           });
+        } else if (managesNgrok) {
+          await window.bridgeAPI?.stopNgrokRelay?.();
+          updateNgrokRelayUI(null);
+          setText("relay-settings-status", "Remote relay: not configured");
         }
       };
 

@@ -1,0 +1,76 @@
+#!/bin/bash
+set -u
+
+log_dir=/config/log
+mkdir -p "$log_dir"
+
+# Spotify and the bridge must share one session bus for MPRIS playback data.
+exec dbus-run-session -- bash -lc '
+  set -u
+  app_root="/opt/kinesync"
+  log_dir="/config/log"
+  spotify_cache="/config/.cache/spotify"
+
+  spotify_pid=""
+  bridge_pid=""
+  spotify_started_at=0
+
+  clear_spotify_locks() {
+    # Spotify can leave these behind after an unclean container shutdown and
+    # then remain alive without creating a window on the next launch.
+    rm -f "$spotify_cache/SingletonCookie" \
+      "$spotify_cache/SingletonLock" \
+      "$spotify_cache/SingletonSocket" \
+      "$spotify_cache/Browser/LOCK"
+  }
+
+  spotify_window_visible() {
+    xwininfo -root -tree 2>/dev/null | grep -q '"Spotify"'
+  }
+
+  stop_spotify() {
+    pkill -TERM -x spotify 2>/dev/null || true
+    sleep 2
+    pkill -KILL -x spotify 2>/dev/null || true
+    spotify_pid=""
+  }
+
+  start_spotify() {
+    clear_spotify_locks
+    echo "[supervisor] starting Spotify" >>"$log_dir/spotify.log"
+    spotify --no-sandbox >>"$log_dir/spotify.log" 2>&1 &
+    spotify_pid=$!
+    spotify_started_at=$(date +%s)
+  }
+
+  start_bridge() {
+    echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
+    "$app_root/docker/root/usr/local/bin/start-kinesync-bridge" >>"$log_dir/desktop-bridge.log" 2>&1 &
+    bridge_pid=$!
+  }
+
+  stop_children() {
+    [ -z "$spotify_pid" ] || kill "$spotify_pid" 2>/dev/null || true
+    [ -z "$bridge_pid" ] || kill "$bridge_pid" 2>/dev/null || true
+  }
+  trap stop_children EXIT INT TERM
+
+  start_spotify
+  start_bridge
+
+  # Keep both applications available for the lifetime of the container.
+  # They share this dbus-run-session so MPRIS remains connected after a restart.
+  while true; do
+    if ! kill -0 "$spotify_pid" 2>/dev/null; then
+      start_spotify
+    elif [ "$(( $(date +%s) - spotify_started_at ))" -ge 45 ] && ! spotify_window_visible; then
+      echo "[supervisor] Spotify has no visible window; restarting it" >>"$log_dir/spotify.log"
+      stop_spotify
+      start_spotify
+    fi
+    if ! kill -0 "$bridge_pid" 2>/dev/null; then
+      start_bridge
+    fi
+    sleep 5
+  done
+'

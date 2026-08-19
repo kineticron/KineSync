@@ -66,27 +66,12 @@ app-example/
 out/
 .webpack/
 .vite/
-build/
-release/
+/build/
+/release/
 
 # Native build outputs
-**/bin/
-**/obj/
-**/build/
-**/Release/
-**/Debug/
-*.ipdb
-*.iobj
-*.pdb
-*.ilk
-*.exp
-*.lib
-*.node
-*.exe
-*.dll
-*.recipe
-*.tlog
-*.lastbuildstate
+/DesktopBridge/native/spotify-seek-helper/bin/
+/DesktopBridge/native/spotify-seek-helper/obj/
 
 # Coverage and test artifacts
 coverage/

@@ -158,6 +158,9 @@ DesktopBridge; Docker users do not install a CLI or run extra terminals.
    - the ngrok domain, with or without `https://`;
    - the ngrok authtoken.
 5. Click **Save relay**.
+   KineSync stops its existing listener and agent session before starting the
+   saved endpoint. If ngrok is still releasing the domain, KineSync retries it
+   automatically.
 6. Wait for **Remote relay: connected via ngrok**.
 7. Copy the displayed Mobile URL or scan its QR code.
 8. Use that `wss://.../bridge/<bridge-id>` URL and the same handshake key in
@@ -165,6 +168,10 @@ DesktopBridge; Docker users do not install a CLI or run extra terminals.
 
 Only one running endpoint can own a reserved free domain. Stop any older
 KineSync/ngrok instance if ngrok reports `ERR_NGROK_334`.
+Use the **Agent Authtoken** from ngrok's authtoken page, not an API key;
+`ERR_NGROK_105` means the saved value is not a valid authtoken.
+`ERR_NGROK_108` means the account has too many active agent sessions; stop
+stale agents at <https://dashboard.ngrok.com/agents> and save again.
 
 ## Routine operations
 

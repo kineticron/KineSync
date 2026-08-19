@@ -203,10 +203,24 @@ function createHostedRelayServer({ port = DEFAULT_RELAY_PORT } = {}) {
 
   return {
     start(callback) {
-      server.listen(port, callback);
+      const onError = (error) => callback?.(error);
+      server.once("error", onError);
+      server.listen(port, () => {
+        server.off("error", onError);
+        callback?.();
+      });
     },
     stop(callback) {
-      wss.close(() => server.close(callback));
+      for (const socket of wss.clients) {
+        socket.terminate();
+      }
+      if (!server.listening) {
+        callback?.();
+        return;
+      }
+      wss.close(() => {
+        server.close(callback);
+      });
     },
   };
 }
