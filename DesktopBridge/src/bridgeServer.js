@@ -1,5 +1,6 @@
 const { EventEmitter } = require("node:events");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const { WebSocket, WebSocketServer } = require("ws");
 const {
   CLIENT_MAX_MESSAGE_BYTES,
@@ -7,10 +8,42 @@ const {
   dispatchClientPacket,
   parseJsonMessage,
 } = require("./bridgeProtocol");
-const { DEFAULT_BRIDGE_KEY } = require("./bridgeSettingsStore");
+const { generateBridgeKey, isStrongBridgeKey } = require("./bridgeSettingsStore");
 
 const LOCAL_IP_CACHE_TTL_MS = 5_000;
 const MAX_CLIENT_BUFFERED_BYTES = 256 * 1024;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // Native WebSocket clients do not send Origin.
+  try {
+    const parsed = new URL(origin);
+    const parts = parsed.hostname.split(".").map((part) => Number(part));
+    const privateIpv4 =
+      parts.length === 4 &&
+      parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) &&
+      (parts[0] === 10 ||
+        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+        (parts[0] === 192 && parts[1] === 168));
+    return (
+      parsed.protocol === "https:" ||
+      (parsed.protocol === "http:" &&
+       (parsed.hostname === "localhost" ||
+        parsed.hostname === "127.0.0.1" ||
+        parsed.hostname === "[::1]" ||
+        parsed.hostname.endsWith(".local") ||
+        privateIpv4))
+    );
+  } catch {
+    return false;
+  }
+}
 
 function getLocalIp() {
   const interfaces = os.networkInterfaces();
@@ -66,10 +99,13 @@ function isAllowedClientAddress(address) {
 
 function createBridgeServer({
   port = 3001,
-  handshakeKey = process.env.BRIDGE_KEY || DEFAULT_BRIDGE_KEY,
+  handshakeKey = process.env.BRIDGE_KEY || generateBridgeKey(),
   getHandshakeKey,
 } = {}) {
   const emitter = new EventEmitter();
+  const fallbackHandshakeKey = isStrongBridgeKey(handshakeKey)
+    ? String(handshakeKey).trim()
+    : generateBridgeKey();
   const wss = new WebSocketServer({
     host: "0.0.0.0",
     maxPayload: CLIENT_MAX_MESSAGE_BYTES,
@@ -77,6 +113,7 @@ function createBridgeServer({
     perMessageDeflate: false,
   });
   let isStarted = false;
+  wss.on("listening", () => emitter.emit("listening"));
   let localIpCache = "127.0.0.1";
   let localIpCacheAt = 0;
 
@@ -92,7 +129,8 @@ function createBridgeServer({
   const getCurrentHandshakeKey = () => {
     const value =
       typeof getHandshakeKey === "function" ? getHandshakeKey() : handshakeKey;
-    return String(value || "").trim() || DEFAULT_BRIDGE_KEY;
+    const safe = String(value || "").trim();
+    return isStrongBridgeKey(safe) ? safe : fallbackHandshakeKey;
   };
 
   const broadcast = (payload) => {
@@ -119,6 +157,10 @@ function createBridgeServer({
   };
 
   wss.on("connection", (socket, req) => {
+    if (!isAllowedOrigin(String(req.headers.origin || ""))) {
+      socket.close(1008, "Origin is not allowed.");
+      return;
+    }
     const remoteAddress = normalizeRemoteAddress(req.socket.remoteAddress);
     if (!isAllowedClientAddress(remoteAddress)) {
       socket.close(
@@ -131,6 +173,9 @@ function createBridgeServer({
     req.socket.setNoDelay(true);
     socket.isAlive = true;
     socket.isAuthorized = false;
+    socket.authTimer = setTimeout(() => {
+      if (!socket.isAuthorized) socket.close(1008, "Bridge key required.");
+    }, HANDSHAKE_TIMEOUT_MS);
     socket.rateLimiter = createRateLimiter();
     socket.on("pong", () => {
       socket.isAlive = true;
@@ -146,8 +191,9 @@ function createBridgeServer({
       }
       const { packet } = parsed;
       if (packet.type === "hello") {
-        if (packet.key === getCurrentHandshakeKey()) {
+        if (safeEqual(packet.key, getCurrentHandshakeKey())) {
           socket.isAuthorized = true;
+          clearTimeout(socket.authTimer);
           socket.send(JSON.stringify({ type: "hello:ack", ok: true }));
           updateClientCount();
         } else {
@@ -169,7 +215,10 @@ function createBridgeServer({
         }
       });
     });
-    socket.on("close", updateClientCount);
+    socket.on("close", () => {
+      clearTimeout(socket.authTimer);
+      updateClientCount();
+    });
     updateClientCount();
   });
 
@@ -192,6 +241,9 @@ function createBridgeServer({
       clearInterval(heartbeatTimer);
       wss.close();
       isStarted = false;
+    },
+    address() {
+      return wss.address();
     },
     broadcastPlayback(packet, _options = {}) {
       broadcast({ type: "playback", ...packet });

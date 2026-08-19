@@ -32,12 +32,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
 import { bridgeClient } from "@/lib/bridge-client";
-import { extractHost, isPrivateIpv4 } from "@/lib/network";
+import { extractHost, isPrivateIpv4, isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
 import { usePlaybackStore } from "@/store/playback-store";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
 import {
   isSpotifyNativeAppRedirect,
+  isAllowedSpotifyWebViewNavigation,
+  isTrustedSpotifyWebViewMessageUrl,
   parseBrowserEvent,
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
@@ -351,18 +353,20 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       if (scanHandled.current) return;
       try {
         const parsed = JSON.parse(data);
-        if (parsed.u && parsed.k) {
+        const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
+        const bridgeKey = String(parsed?.k || '').trim();
+        if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
           scanHandled.current = true;
           if (scanFailTimer.current) {
             clearTimeout(scanFailTimer.current);
             scanFailTimer.current = null;
           }
           setScanError("");
-          setServerUrlStore(parsed.u);
-          setHandshakeKeyStore(parsed.k);
+          setServerUrlStore(bridgeUrl);
+          setHandshakeKeyStore(bridgeKey);
           saveBridgeSettings({
-            serverUrl: parsed.u,
-            handshakeKey: parsed.k,
+            serverUrl: bridgeUrl,
+            handshakeKey: bridgeKey,
             playbackMode: "desktop",
             onboardingCompleted: true,
           }).catch(() => {});
@@ -799,7 +803,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
               injectedJavaScript={spotifyAuthProbeScript}
               onShouldStartLoadWithRequest={({ url }) => {
-                if (!isSpotifyNativeAppRedirect(url)) return true;
+                if (!isSpotifyNativeAppRedirect(url)) return isAllowedSpotifyWebViewNavigation(url);
 
                 // Spotify has already established the authenticated cookies by
                 // the time it attempts this native-app handoff. Cancel it so
@@ -814,6 +818,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               setSupportMultipleWindows={false}
               style={styles.loginWebView}
               onMessage={({ nativeEvent }) => {
+                if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || '')) return;
                 const event = parseBrowserEvent(nativeEvent.data);
                 if (event?.type === "spotifyToken" && event.token) {
                   void saveMobileLyricsSettings({

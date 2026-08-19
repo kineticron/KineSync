@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+export HOME="${FM_HOME:-/config}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export MEDIA_SESSION_PROVIDER=mpris
+
+app_root=/opt/kinesync
+electron="$app_root/node_modules/electron/dist/electron"
+
+mkdir -p "$HOME/log"
+
+if pgrep -u "$(id -u)" -f 'electron.*src/index\.js' >/dev/null 2>&1; then
+  exit 0
+fi
+
+if [ ! -x "$electron" ]; then
+  echo "KineSync runtime is missing: $electron" >&2
+  exit 1
+fi
+
+cd "$app_root"
+exec "$electron" --no-sandbox src/index.js

@@ -1,0 +1,128 @@
+#!/bin/bash
+set -euo pipefail
+
+export HOME="${FM_HOME:-/config}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export MEDIA_SESSION_PROVIDER=mpris
+export ELECTRON_DISABLE_SECURITY_WARNINGS=true
+
+log_dir="$HOME/log"
+spotify_cache="$HOME/.cache/spotify"
+mkdir -p "$log_dir" "$XDG_CONFIG_HOME" "$HOME/.pki/nssdb"
+
+# Import administrator-provided private CAs without disabling TLS validation.
+if compgen -G "$HOME/certs/*.crt" >/dev/null; then
+  nss_password_file="$HOME/.pki/nssdb/.kinesync-password"
+  printf '\n' > "$nss_password_file"
+  chmod 600 "$nss_password_file"
+  if [[ ! -f "$HOME/.pki/nssdb/cert9.db" ]]; then
+    certutil -N --empty-password -d "sql:$HOME/.pki/nssdb"
+  fi
+  for certificate in "$HOME"/certs/*.crt; do
+    certificate_id="$(sha256sum "$certificate" | cut -c1-16)"
+    certutil -D -f "$nss_password_file" -d "sql:$HOME/.pki/nssdb" \
+      -n "KineSync-$certificate_id" 2>/dev/null || true
+    certutil -A -d "sql:$HOME/.pki/nssdb" -f "$nss_password_file" \
+      -n "KineSync-$certificate_id" -t "C,," -i "$certificate" || \
+      echo "Could not import CA certificate: $certificate" >> "$log_dir/spotify.log"
+  done
+  cat /etc/ssl/certs/ca-certificates.crt "$HOME"/certs/*.crt > "$HOME/kinesync-ca-bundle.crt"
+  export NODE_EXTRA_CA_CERTS="$HOME/kinesync-ca-bundle.crt"
+  export SSL_CERT_FILE="$HOME/kinesync-ca-bundle.crt"
+  export CURL_CA_BUNDLE="$HOME/kinesync-ca-bundle.crt"
+fi
+
+xdg-mime default kinesync-login-browser.desktop x-scheme-handler/http || true
+xdg-mime default kinesync-login-browser.desktop x-scheme-handler/https || true
+
+# Spotify and the bridge must share one session bus for MPRIS playback data.
+exec dbus-run-session -- bash -lc '
+  set -euo pipefail
+  app_root="/opt/kinesync"
+  log_dir="${HOME}/log"
+  spotify_cache="${HOME}/.cache/spotify"
+
+  spotify_pid=""
+  bridge_pid=""
+  spotify_started_at=0
+
+  clear_spotify_locks() {
+    # Spotify can leave these behind after an unclean container shutdown and
+    # then remain alive without creating a window on the next launch.
+    rm -f "$spotify_cache/SingletonCookie" \
+      "$spotify_cache/SingletonLock" \
+      "$spotify_cache/SingletonSocket" \
+      "$spotify_cache/Browser/LOCK"
+  }
+
+  spotify_window_visible() {
+    xwininfo -root -tree 2>/dev/null | grep -q '"Spotify"'
+  }
+
+  stop_spotify() {
+    pkill -TERM -x spotify 2>/dev/null || true
+    sleep 2
+    pkill -KILL -x spotify 2>/dev/null || true
+    spotify_pid=""
+  }
+
+  existing_spotify_pid() {
+    pgrep -u "$(id -u)" -x spotify | head -n1 || true
+  }
+
+  existing_bridge_pid() {
+    pgrep -u "$(id -u)" -f 'electron.*src/index\.js' | head -n1 || true
+  }
+
+  start_spotify() {
+    local existing_pid
+    existing_pid="$(existing_spotify_pid)"
+    if [ -n "$existing_pid" ]; then
+      spotify_pid="$existing_pid"
+      spotify_started_at=$(date +%s)
+      return
+    fi
+    clear_spotify_locks
+    echo "[supervisor] starting Spotify" >>"$log_dir/spotify.log"
+    spotify --no-sandbox >>"$log_dir/spotify.log" 2>&1 &
+    spotify_pid=$!
+    spotify_started_at=$(date +%s)
+  }
+
+  start_bridge() {
+    local existing_pid
+    existing_pid="$(existing_bridge_pid)"
+    if [ -n "$existing_pid" ]; then
+      bridge_pid="$existing_pid"
+      return
+    fi
+    echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
+    "$app_root/docker/root/usr/local/bin/start-kinesync-bridge" >>"$log_dir/desktop-bridge.log" 2>&1 &
+    bridge_pid=$!
+  }
+
+  stop_children() {
+    [ -z "$spotify_pid" ] || kill "$spotify_pid" 2>/dev/null || true
+    [ -z "$bridge_pid" ] || kill "$bridge_pid" 2>/dev/null || true
+  }
+  trap stop_children EXIT INT TERM
+
+  start_spotify
+  start_bridge
+
+  # Keep both applications available for the lifetime of the container.
+  # They share this dbus-run-session so MPRIS remains connected after a restart.
+  while true; do
+    if ! kill -0 "$spotify_pid" 2>/dev/null; then
+      start_spotify
+    elif [ "$(( $(date +%s) - spotify_started_at ))" -ge 45 ] && ! spotify_window_visible; then
+      echo "[supervisor] Spotify has no visible window; restarting it" >>"$log_dir/spotify.log"
+      stop_spotify
+      start_spotify
+    fi
+    if ! kill -0 "$bridge_pid" 2>/dev/null; then
+      start_bridge
+    fi
+    sleep 5
+  done
+'

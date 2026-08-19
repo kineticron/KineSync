@@ -22,6 +22,7 @@ import type { ConnectionStatus } from "@/types/bridge";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { bridgeClient } from "@/lib/bridge-client";
+import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -349,15 +350,17 @@ export const SettingsMenu = memo(function SettingsMenu({
     if (scanHandled.current) return;
     try {
       const parsed = JSON.parse(data);
-      if (parsed.u && parsed.k) {
+      const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
+      const bridgeKey = String(parsed?.k || '').trim();
+      if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
         scanHandled.current = true;
         if (scanFailTimer.current) { clearTimeout(scanFailTimer.current); scanFailTimer.current = null; }
         setScanError('');
-        usePlaybackStore.getState().setServerUrl(parsed.u);
-        usePlaybackStore.getState().setHandshakeKey(parsed.k);
+        usePlaybackStore.getState().setServerUrl(bridgeUrl);
+        usePlaybackStore.getState().setHandshakeKey(bridgeKey);
         saveBridgeSettings({
-          serverUrl: parsed.u,
-          handshakeKey: parsed.k,
+          serverUrl: bridgeUrl,
+          handshakeKey: bridgeKey,
           playbackMode: "desktop",
         }).catch(() => {});
         bridgeClient.reconnectNow();

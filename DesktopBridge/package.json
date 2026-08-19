@@ -16,10 +16,11 @@
     "relay": "node scripts/start-relay.js",
     "relay:ngrok": "node scripts/start-relay-ngrok.js",
     "check:lyrics-sources": "node scripts/check-lyrics-source-health.js",
-    "build:native-media": "npm install --prefix native/windows-media-session && npm run rebuild:electron --prefix native/windows-media-session",
+    "build:native-media": "npm ci --ignore-scripts --prefix native/windows-media-session && npm run rebuild:electron --prefix native/windows-media-session",
     "build:seek-helper": "dotnet build native/spotify-seek-helper/spotify-seek-helper.csproj -c Release",
     "build:native": "concurrently --raw \"npm run build:native-media\" \"npm run build:seek-helper\"",
-    "diagnose:seek": "node scripts/diagnose-seek.js"
+    "diagnose:seek": "node scripts/diagnose-seek.js",
+    "create:native-manifest": "node scripts/create-native-manifest.js"
   },
   "keywords": [],
   "author": {
@@ -39,6 +40,7 @@
     "@ngrok/ngrok": "1.7.0",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
+    "qrcode": "^1.5.4",
     "ws": "^8.19.0"
   },
   "devDependencies": {

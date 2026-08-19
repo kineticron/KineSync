@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:1.7
-FROM node:22-bookworm-slim AS node-runtime
+FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS node-runtime
 
 WORKDIR /opt/kinesync
 COPY docker/runtime/package.json docker/runtime/package-lock.json ./
@@ -9,7 +8,7 @@ RUN --mount=type=secret,id=build_ca \
     fi && \
     npm ci && npm cache clean --force
 
-FROM ghcr.io/linuxserver/baseimage-kasmvnc:ubuntunoble
+FROM ghcr.io/linuxserver/baseimage-kasmvnc:ubuntunoble@sha256:c6d902c207d6e4a66ca41ce36dda549cd58a5bc8d353468b24b0cf780eb528c8
 
 ARG TARGETARCH
 ARG SPOTIFY_VERSION=1.2.95.453.g0eeebbed
@@ -87,6 +86,7 @@ RUN chmod +x \
       /defaults/autostart \
       /usr/local/bin/start-kinesync \
       /usr/local/bin/start-kinesync-bridge \
+      /usr/local/bin/kinesync-open-url \
       /usr/local/bin/kinesync-open-url && \
     chown -R abc:abc /opt/kinesync
 

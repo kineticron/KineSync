@@ -17,51 +17,82 @@ through Linux MPRIS without Spotify Premium.
 The image does not need privileged mode, host D-Bus access, a Docker socket
 mount, Spotify Web API playback access, or a Premium subscription.
 
+## Image provenance and sandboxing
+
+The Compose service enables `no-new-privileges`, keeps Docker's default seccomp
+profile, drops the unnecessary `NET_RAW` capability, and runs Spotify and
+Electron as the unprivileged `abc` user. Chromium's own namespace/setuid
+sandbox is not compatible with that Docker boundary, so only the container
+launchers use `--no-sandbox`; native desktop builds keep Chromium sandboxing.
+Do not grant the container `SYS_ADMIN` or use an unconfined seccomp profile to
+force Chromium's inner sandbox on—the broader container escape surface is a
+worse tradeoff for this local image.
+The two base images are pinned to their registry-provided immutable digests. If
+a base image is changed, inspect the exact multi-architecture digest from a
+trusted registry before updating `DesktopBridge/Dockerfile`:
+
+```bash
+docker buildx imagetools inspect node:22-bookworm-slim
+docker buildx imagetools inspect ghcr.io/linuxserver/baseimage-kasmvnc:ubuntunoble
+```
+
+Record the selected platform digest in the Dockerfile (`image:tag@sha256:...`)
+and review it with the image release notes; never invent a digest.
+
 ## Ports and persistent data
 
 | Port/path | Purpose |
 | --- | --- |
-| `3000` | Browser desktop over HTTP; open this during initial setup |
-| `3443` | Browser desktop over HTTPS with a generated certificate |
-| `3001` | ExpoLyrics WebSocket bridge; this is not a webpage |
+| `3000` | Browser desktop over HTTP; local host binding by default |
+| `3443` | Browser desktop over HTTPS; local host binding by default |
+| `3001` | ExpoLyrics WebSocket bridge; LAN binding by default; not a webpage |
 | `/config` | Spotify login, DesktopBridge settings, certificates, and logs |
 
-Do not expose ports `3000` or `3443` directly to the public internet. The web
-password protects the desktop on a trusted LAN; it is not a public deployment
-security boundary.
+The Compose file binds the browser desktop to `127.0.0.1` by default while
+leaving only the WebSocket bridge (`3001`) reachable from the LAN. To open the
+desktop from another trusted machine, set `KINESYNC_WEB_BIND_ADDRESS` (for
+example, to the Docker host's LAN address) in `.env`; do not expose it directly
+to the public internet. The web password is not a public deployment security
+boundary.
 
 ## Quick start
 
 Run these commands from the repository root.
 
-### 1. Create your configuration
+### 1. Create your secure configuration
 
 PowerShell:
 
 ```powershell
-Copy-Item .env.docker.example .env
-notepad .env
+./scripts/setup-docker.ps1
 ```
 
 Linux/macOS shell:
 
 ```bash
-cp .env.docker.example .env
+sh ./scripts/setup-docker.sh
 ```
 
-Replace both placeholder secrets in `.env`:
+The setup helper creates `.env` once with separate cryptographically random
+bridge and web passwords; it never overwrites an existing file. Most users can
+start the container immediately. Open `.env` only if you want to change the
+timezone, bind addresses, username, or config path:
 
 ```dotenv
-BRIDGE_KEY=use-a-long-random-key-for-the-phone-connection
+BRIDGE_KEY=<generated automatically>
 KINESYNC_WEB_USER=kinesync
-KINESYNC_WEB_PASSWORD=use-a-different-strong-password-for-the-web-desktop
+KINESYNC_WEB_PASSWORD=<generated automatically>
 KINESYNC_CONFIG_PATH=./.kinesync-config
+KINESYNC_WEB_BIND_ADDRESS=127.0.0.1
+# Keep 0.0.0.0 for simple phone-to-host LAN bridging, or use a host LAN IP.
+KINESYNC_BRIDGE_BIND_ADDRESS=0.0.0.0
 PUID=568
 PGID=568
 TZ=America/New_York
 ```
 
-- `BRIDGE_KEY` must exactly match the handshake key entered in ExpoLyrics.
+- `BRIDGE_KEY` must exactly match the handshake key entered in ExpoLyrics; the
+  desktop pairing QR fills it in automatically.
 - `KINESYNC_WEB_PASSWORD` opens the browser desktop.
 - Keep `.env` private. It is ignored by Git.
 - Change `TZ` to your IANA timezone if necessary.
@@ -81,9 +112,10 @@ minutes because it downloads a pinned Spotify package and installs the runtime.
 
 ### 3. Open the container desktop
 
-Open <http://localhost:3000> on the Docker host, or
-`http://<docker-host-LAN-IP>:3000` from another computer. Sign in with
-`KINESYNC_WEB_USER` and `KINESYNC_WEB_PASSWORD` from `.env`.
+Open <http://localhost:3000> on the Docker host. If you configured
+`KINESYNC_WEB_BIND_ADDRESS` for LAN access, use the corresponding host address
+instead. Sign in with `KINESYNC_WEB_USER` and `KINESYNC_WEB_PASSWORD` from
+`.env`.
 
 Opening `http://localhost:3001` displays **Upgrade Required**. That is expected:
 port `3001` accepts WebSocket upgrades and does not host a webpage.
@@ -158,6 +190,9 @@ DesktopBridge; Docker users do not install a CLI or run extra terminals.
    - the ngrok domain, with or without `https://`;
    - the ngrok authtoken.
 5. Click **Save relay**.
+   KineSync stops its existing listener and agent session before starting the
+   saved endpoint. If ngrok is still releasing the domain, KineSync retries it
+   automatically.
 6. Wait for **Remote relay: connected via ngrok**.
 7. Copy the displayed Mobile URL or scan its QR code.
 8. Use that `wss://.../bridge/<bridge-id>` URL and the same handshake key in
@@ -165,6 +200,10 @@ DesktopBridge; Docker users do not install a CLI or run extra terminals.
 
 Only one running endpoint can own a reserved free domain. Stop any older
 KineSync/ngrok instance if ngrok reports `ERR_NGROK_334`.
+Use the **Agent Authtoken** from ngrok's authtoken page, not an API key;
+`ERR_NGROK_105` means the saved value is not a valid authtoken.
+`ERR_NGROK_108` means the account has too many active agent sessions; stop
+stale agents at <https://dashboard.ngrok.com/agents> and save again.
 
 ## Routine operations
 
@@ -222,7 +261,7 @@ Run:
 
 ```bash
 docker exec --user abc kinesync bash -lc '
-  bridge_pid=$(pgrep -f "electron --no-sandbox src/index.js" | head -1)
+  bridge_pid=$(pgrep -f "electron.*src/index.js" | head -1)
   export DBUS_SESSION_BUS_ADDRESS=$(tr "\0" "\n" < "/proc/$bridge_pid/environ" | sed -n "s/^DBUS_SESSION_BUS_ADDRESS=//p")
   playerctl -l
   playerctl --player=spotify status

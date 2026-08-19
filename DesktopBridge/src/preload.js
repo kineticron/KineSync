@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('bridgeAPI', {
   authenticateNgrok(token) {
     return ipcRenderer.invoke('ngrok:authenticate', token);
   },
+  renderQrCode(text) {
+    return ipcRenderer.invoke('bridge:qr:render', String(text || ''));
+  },
 });
 
 contextBridge.exposeInMainWorld('bridgeSettings', {

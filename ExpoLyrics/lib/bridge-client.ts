@@ -10,6 +10,8 @@ import type {
   ShareGifResultPacket,
   VaultSaveResultPacket,
 } from "@/types/bridge";
+import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
+import { validateInboundBridgePacket } from "@/lib/bridge-validation";
 
 type BridgeClientOptions = {
   onTrackChange?: (packet: PlaybackPacket) => void;
@@ -45,15 +47,18 @@ const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_JITTER_RATIO = 0.2;
 const TRACK_CHANGE_REFETCH_DELAY_MS = 1_000;
+const AUTH_TIMEOUT_MS = 10_000;
 
 class BridgeClient {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private authTimer: ReturnType<typeof setTimeout> | null = null;
   private trackChangeRefetchTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private options: BridgeClientOptions;
   private pendingLyricsRefetch = false;
   private pendingArtworkRefetch = false;
+  private authenticated = false;
   private gifRequests = new Map<
     string,
     {
@@ -79,44 +84,60 @@ class BridgeClient {
   }
 
   connect() {
-    const { serverUrl } = usePlaybackStore.getState();
-    if (!serverUrl) {
+    const { serverUrl, handshakeKey } = usePlaybackStore.getState();
+    const safeServerUrl = parseBridgeWebSocketUrl(serverUrl);
+    if (!safeServerUrl) {
       usePlaybackStore.getState().setErrorMessage("Set bridge URL first.");
+      return;
+    }
+    if (!isValidBridgeKey(handshakeKey)) {
+      usePlaybackStore
+        .getState()
+        .setErrorMessage("Scan the desktop pairing QR or enter its bridge key.");
       return;
     }
     this.cleanupSocket();
     usePlaybackStore.getState().setConnectionStatus("connecting");
 
-    this.ws = new WebSocket(serverUrl);
+    this.authenticated = false;
+    this.ws = new WebSocket(safeServerUrl);
 
     this.ws.onopen = () => {
-      const { handshakeKey, setConnectionStatus } = usePlaybackStore.getState();
-      setConnectionStatus("connected");
       this.reconnectAttempt = 0;
-      startPlaybackClock();
       this.pendingLyricsRefetch = true;
       this.pendingArtworkRefetch = true;
-      if (handshakeKey) {
-        this.ws?.send(JSON.stringify({ type: "hello", key: handshakeKey }));
-      } else {
-        this.requestLyricsRefetch();
-        this.requestArtworkRefetch();
-      }
+      // The bridge requires authentication even on a private LAN. Do not
+      // accept or send app packets until the explicit positive ack arrives.
+      this.ws?.send(JSON.stringify({ type: "hello", key: handshakeKey }));
+      this.clearAuthTimer();
+      this.authTimer = setTimeout(() => {
+        this.authenticated = false;
+        usePlaybackStore
+          .getState()
+          .setErrorMessage("Bridge authentication timed out. Scan the pairing QR again.");
+        this.ws?.close(1008, "Bridge authentication timed out.");
+      }, AUTH_TIMEOUT_MS);
     };
 
     this.ws.onmessage = (event) => {
       try {
-        const packet = JSON.parse(String(event.data)) as
-          | { type: "hello:ack"; ok?: boolean }
-          | PlaybackPacket
-          | LyricsPacket
-          | ShareGifResultPacket
-          | VaultSaveResultPacket;
+        const packet = validateInboundBridgePacket(event.data);
+        if (!packet) return;
         if (packet.type === "hello:ack") {
+          this.clearAuthTimer();
+          if (packet.ok !== true) {
+            this.authenticated = false;
+            this.ws?.close(1008, "Bridge authentication failed.");
+            return;
+          }
+          this.authenticated = true;
+          usePlaybackStore.getState().setConnectionStatus("connected");
+          startPlaybackClock();
           this.requestLyricsRefetch();
           this.requestArtworkRefetch();
           return;
         }
+        if (!this.authenticated) return;
         if (packet.type === "vault:save:result") {
           this.applyVaultSaveResult(packet);
           return;
@@ -162,12 +183,16 @@ class BridgeClient {
     };
 
     this.ws.onclose = () => {
+      this.clearAuthTimer();
+      this.authenticated = false;
       usePlaybackStore.getState().setConnectionStatus("disconnected");
       stopPlaybackClock();
       this.scheduleReconnect();
     };
 
     this.ws.onerror = () => {
+      this.clearAuthTimer();
+      this.authenticated = false;
       usePlaybackStore.getState().setErrorMessage("Bridge connection failed.");
       usePlaybackStore.getState().setConnectionStatus("disconnected");
       stopPlaybackClock();
@@ -198,8 +223,9 @@ class BridgeClient {
     preferredSource: string = "auto",
     { immediateTranslation = false }: { immediateTranslation?: boolean } = {},
   ) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(
         JSON.stringify({
           type: "lyrics:refresh",
           preferredSource,
@@ -210,50 +236,57 @@ class BridgeClient {
   }
 
   requestLyricsRefetch() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
       this.pendingLyricsRefetch = false;
-      this.ws.send(JSON.stringify({ type: "lyrics:refetch" }));
+      ws.send(JSON.stringify({ type: "lyrics:refetch" }));
       return;
     }
     this.pendingLyricsRefetch = true;
   }
 
   requestArtworkRefetch() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
       this.pendingArtworkRefetch = false;
-      this.ws.send(JSON.stringify({ type: "artwork:refetch" }));
+      ws.send(JSON.stringify({ type: "artwork:refetch" }));
       return;
     }
     this.pendingArtworkRefetch = true;
   }
 
   togglePlayPause() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "playback:playPause" }));
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(JSON.stringify({ type: "playback:playPause" }));
     }
   }
 
   resyncPlayback() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "playback:resync" }));
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(JSON.stringify({ type: "playback:resync" }));
     }
   }
 
   skipNext() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "playback:next" }));
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(JSON.stringify({ type: "playback:next" }));
     }
   }
 
   skipPrevious() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "playback:previous" }));
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(JSON.stringify({ type: "playback:previous" }));
     }
   }
 
   seekTo(positionMs: number, _currentPositionMs = 0) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
+    const ws = this.getAuthenticatedSocket();
+    if (ws) {
+      ws.send(
         JSON.stringify({
           type: "playback:seek",
           positionMs: Math.max(0, Math.floor(Number(positionMs) || 0)),
@@ -267,7 +300,7 @@ class BridgeClient {
     timeoutMs = 30_000,
   ) {
     return new Promise<ShareGifResultPacket>((resolve, reject) => {
-      if (this.ws?.readyState !== WebSocket.OPEN) {
+      if (!this.isAuthenticated()) {
         reject(new Error("Desktop bridge is not connected."));
         return;
       }
@@ -279,7 +312,14 @@ class BridgeClient {
       }, Math.max(5_000, timeoutMs));
 
       this.gifRequests.set(requestId, { resolve, reject, timer });
-      this.ws.send(
+      const ws = this.getAuthenticatedSocket();
+      if (!ws) {
+        clearTimeout(timer);
+        this.gifRequests.delete(requestId);
+        reject(new Error("Desktop bridge is not connected."));
+        return;
+      }
+      ws.send(
         JSON.stringify({
           type: "share:gif:request",
           requestId,
@@ -294,7 +334,7 @@ class BridgeClient {
     timeoutMs = 120_000,
   ) {
     return new Promise<VaultSaveResultPacket>((resolve, reject) => {
-      if (this.ws?.readyState !== WebSocket.OPEN) {
+      if (!this.isAuthenticated()) {
         reject(new Error("Desktop bridge is not connected."));
         return;
       }
@@ -309,7 +349,14 @@ class BridgeClient {
       }, Math.max(10_000, timeoutMs));
 
       this.pendingVaultSave = { resolve, reject, timer };
-      this.ws.send(
+      const ws = this.getAuthenticatedSocket();
+      if (!ws) {
+        clearTimeout(timer);
+        this.pendingVaultSave = null;
+        reject(new Error("Desktop bridge is not connected."));
+        return;
+      }
+      ws.send(
         JSON.stringify({
           type: "vault:save",
           includeTranslations: Boolean(includeTranslations),
@@ -341,6 +388,8 @@ class BridgeClient {
   }
 
   private cleanupSocket() {
+    this.authenticated = false;
+    this.clearAuthTimer();
     this.clearTrackChangeRefetchTimer();
     if (this.ws) {
       this.ws.onopen = null;
@@ -350,6 +399,14 @@ class BridgeClient {
       this.ws.close();
       this.ws = null;
     }
+  }
+
+  private isAuthenticated() {
+    return this.authenticated && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  private getAuthenticatedSocket(): WebSocket | null {
+    return this.isAuthenticated() ? this.ws : null;
   }
 
   private applyVaultSaveResult(packet: VaultSaveResultPacket) {
@@ -403,6 +460,12 @@ class BridgeClient {
     }
     clearTimeout(this.trackChangeRefetchTimer);
     this.trackChangeRefetchTimer = null;
+  }
+
+  private clearAuthTimer() {
+    if (!this.authTimer) return;
+    clearTimeout(this.authTimer);
+    this.authTimer = null;
   }
 
   private scheduleTrackChangeCachedRefetch() {

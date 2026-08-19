@@ -3,6 +3,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { LyricLine, LyricsMetadata, Track } from "@/types/bridge";
 
 const MOBILE_LYRICS_VAULT_KEY = "kinesync_mobile_lyrics_vault_v1";
+const MAX_VAULT_ENTRIES = 100;
+const MAX_VAULT_JSON_CHARS = 8 * 1024 * 1024;
 
 type MobileVaultEntry = {
   vaultId: string;
@@ -31,6 +33,7 @@ function cloneLyrics(lyrics: LyricLine[]) {
 async function readVaultEntries(): Promise<MobileVaultEntry[]> {
   try {
     const raw = await AsyncStorage.getItem(MOBILE_LYRICS_VAULT_KEY);
+    if (raw && raw.length > MAX_VAULT_JSON_CHARS) return [];
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -39,7 +42,11 @@ async function readVaultEntries(): Promise<MobileVaultEntry[]> {
 }
 
 async function writeVaultEntries(entries: MobileVaultEntry[]) {
-  await AsyncStorage.setItem(MOBILE_LYRICS_VAULT_KEY, JSON.stringify(entries));
+  const serialized = JSON.stringify(entries);
+  if (serialized.length > MAX_VAULT_JSON_CHARS) {
+    throw new Error("Lyrics vault is full. Remove older saved lyrics and try again.");
+  }
+  await AsyncStorage.setItem(MOBILE_LYRICS_VAULT_KEY, serialized);
 }
 
 function entryMatchesTrack(entry: MobileVaultEntry, track: Track) {
@@ -107,7 +114,7 @@ export async function saveMobileVaultLyrics({
     originalSource,
     metadata,
   };
-  const nextEntries = [entry, ...entries.filter((item) => !entryMatchesTrack(item, track))].slice(0, 100);
+  const nextEntries = [entry, ...entries.filter((item) => !entryMatchesTrack(item, track))].slice(0, MAX_VAULT_ENTRIES);
   await writeVaultEntries(nextEntries);
   return {
     ok: true,
