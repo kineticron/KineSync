@@ -66,11 +66,15 @@ app-example/
 out/
 .webpack/
 .vite/
-build/
-release/
+/build/
+/release/
 
 # Native build outputs
 **/bin/
+!DesktopBridge/docker/root/usr/local/bin/
+!DesktopBridge/docker/root/usr/local/bin/start-kinesync
+!DesktopBridge/docker/root/usr/local/bin/start-kinesync-bridge
+!DesktopBridge/docker/root/usr/local/bin/kinesync-open-url
 **/obj/
 **/build/
 **/Release/

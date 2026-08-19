@@ -25,6 +25,7 @@ import {
   installBrowserControlPreludeScript,
   installBrowserControlScript,
   isSpotifyNativeAppRedirect,
+  isAllowedSpotifyWebViewNavigation,
   makeBrowserCommandScript,
   parseBrowserEvent,
   spotifyAuthProbeScript,
@@ -589,7 +590,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   source={{ uri: BROWSER_URL }}
                   originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
                   onShouldStartLoadWithRequest={({ url }) => {
-                    if (!isSpotifyNativeAppRedirect(url)) return true;
+                    if (!isSpotifyNativeAppRedirect(url)) return isAllowedSpotifyWebViewNavigation(url);
                     setStatus("Kept Spotify open inside KineSync.");
                     return false;
                   }}
@@ -624,6 +625,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     setStatus(`Spotify browser error: ${nativeEvent.description}`);
                   }}
                   onMessage={({ nativeEvent }: WebViewMessageEvent) => {
+                    if (!isAllowedSpotifyWebViewNavigation(nativeEvent.url || "")) return;
                     const event = parseBrowserEvent(nativeEvent.data);
                     if (!event) return;
 

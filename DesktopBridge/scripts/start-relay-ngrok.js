@@ -12,7 +12,17 @@ if (!rawNgrokUrl) {
 }
 const ngrokUrl = /^https?:\/\//i.test(rawNgrokUrl) ? rawNgrokUrl : `https://${rawNgrokUrl}`;
 const bridgeId = String(process.env.BRIDGE_RELAY_ID || "ra-windows").trim();
-const relay = createHostedRelayServer({ port: relayPort });
+const registrationKey = String(
+  process.env.BRIDGE_RELAY_REGISTRATION_KEY || process.env.BRIDGE_KEY || "",
+).trim();
+if (!registrationKey) {
+  console.error("ERROR: Set BRIDGE_RELAY_REGISTRATION_KEY (or BRIDGE_KEY) before exposing the relay.");
+  process.exit(1);
+}
+const relay = createHostedRelayServer({
+  port: relayPort,
+  getRegistrationKey: () => registrationKey,
+});
 
 let ngrokProcess = null;
 let shuttingDown = false;

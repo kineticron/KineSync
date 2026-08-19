@@ -1,21 +1,38 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-The latest version from GitHub is always the one with the most security updates and patches, so be sure to `git pull` when there are new commits.
+Security fixes are released against the latest version on the default branch
+and the latest tagged release. Please upgrade before reporting a problem; old
+tags may contain known vulnerable dependencies or stale native binaries.
 
-We do not do formal versioning history yet (if someone reading this would like to set this up, go ahead).
+## Installation and provenance
 
-## Reporting a Vulnerability
+- Use the source repository or a tagged GitHub release. Do not download native
+  binaries from a third-party mirror.
+- Windows native release assets are checked against GitHub's SHA-256 metadata
+  and the versioned `native-assets-v<version>.json` manifest before an install.
+  A missing or mismatched digest intentionally falls back to the documented
+  source build instead of installing an unverified file.
+- Docker base images and downloaded build inputs must be reviewed and pinned by
+  digest before publishing an image. See [DOCKER.md](DOCKER.md).
+- Keep `BRIDGE_KEY`, web credentials, Spotify cookies, and `/config` private.
+  Do not paste them into issues, logs, or support requests.
 
-Please email kineticrondev@gmail.com with the subject line:
+## Reporting a vulnerability
 
-`SECURITY TICKET KineSync -- [insert quick issue desc. here]`
+Please email `kineticrondev@gmail.com` with the subject:
 
-Please do not spam the email.
+`SECURITY TICKET KineSync -- <short description>`
 
-It is requested that you do not make a GitHub Issue, especially if the bug is very sensitive.
+Do not create a public GitHub issue for an unpatched or credential-related
+vulnerability. Include the affected version/commit, deployment mode (desktop
+or Docker), operating system, and safe reproduction steps. Redact secrets and
+personal data; attach logs or media only after removing credentials, tokens,
+cookies, and private URLs.
 
-Please provide an images / videos / any other media that can be used to reproduce the issue, as you would with any other bug.
+You should receive an acknowledgement within 3 business days. We will
+coordinate a fix, release, and disclosure timeline with the reporter.
 
-You can expect a reply within 2-3 business days and then a fix can be issued as needed.
+For ordinary setup or support questions, use a normal GitHub issue and include
+the sanitized diagnostics requested in the issue template.

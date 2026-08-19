@@ -281,6 +281,10 @@ function createBridgeRelayClient({
         reconnectTimer = null;
       }
       cleanupSocket();
+      activeRelayUrl = "";
+      activeBridgeId = "";
+      lastError = "";
+      reconnectAttempt = 0;
     },
     broadcastPlayback(packet, options = {}) {
       if (registered) {

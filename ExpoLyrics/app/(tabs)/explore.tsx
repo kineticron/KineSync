@@ -27,6 +27,7 @@ import { getMobileMusixmatchTokenStatus } from '@/lib/mobile-musixmatch-token';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { ConnectionStatus } from '@/types/bridge';
 import { requestShowOnboarding } from '@/providers/bridge-provider';
+import { isValidBridgeKey, parseBridgeWebSocketUrl } from '@/lib/network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { WebView } from 'react-native-webview';
@@ -218,8 +219,13 @@ export default function BridgeSettingsScreen() {
   );
 
   const saveAndReconnect = useCallback(() => {
-    const url = urlInput.trim();
+    const url = parseBridgeWebSocketUrl(urlInput);
     const key = keyInput.trim();
+    if (!url || !isValidBridgeKey(key)) {
+      setServerUrl('');
+      bridgeClient.disconnect();
+      return;
+    }
     setServerUrl(url);
     setHandshakeKey(key);
     saveBridgeSettings({ serverUrl: url, handshakeKey: key, playbackMode: 'desktop' });
@@ -460,7 +466,7 @@ export default function BridgeSettingsScreen() {
                   label="Handshake Key"
                   value={keyInput}
                   onChangeText={setKeyInput}
-                  placeholder="password123"
+                  placeholder="Scan the desktop pairing QR"
                 />
                 <Pressable
                   style={({ pressed }) => [

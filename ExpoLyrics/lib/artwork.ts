@@ -1,5 +1,9 @@
 import type { Track } from '@/types/bridge';
 import { resolveMobileArtworkUrl } from '@/lib/mobile-artwork-resolver';
+import { isPrivateIpv4 } from '@/lib/network';
+
+const MAX_INLINE_ARTWORK_BYTES = 5 * 1024 * 1024;
+const MAX_INLINE_ARTWORK_CHARS = Math.ceil(MAX_INLINE_ARTWORK_BYTES * 4 / 3) + 64;
 
 function isBridgeArtworkUri(value: string | undefined) {
   if (!value) {
@@ -10,19 +14,28 @@ function isBridgeArtworkUri(value: string | undefined) {
     return false;
   }
   // Accept remote and inline artwork payloads shipped by the desktop bridge.
-  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
-    return true;
+  if (/^data:image\//i.test(trimmed)) {
+    if (trimmed.length > MAX_INLINE_ARTWORK_CHARS) return false;
+    const match = trimmed.match(
+      /^data:image\/(?:jpeg|jpg|png|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/i,
+    );
+    if (!match || match[1].length % 4 === 1) return false;
+    return Math.floor(match[1].replace(/=+$/, '').length * 3 / 4) <= MAX_INLINE_ARTWORK_BYTES;
   }
-  // Reject Windows-only filesystem paths that cannot be resolved from mobile.
-  if (/^[a-z]:\\/i.test(trimmed) || /^\\\\/.test(trimmed)) {
+  try {
+    const url = new URL(trimmed);
+    if (url.username || url.password || url.search.length > 2048 || url.hash) return false;
+    if (url.protocol === 'https:') return true;
+    return url.protocol === 'http:' &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || isPrivateIpv4(url.hostname));
+  } catch {
     return false;
   }
-  return false;
 }
 
 function looksLikeBase64Artwork(value: string) {
   const compact = value.replace(/\s+/g, '');
-  if (!compact || compact.length < 256) {
+  if (!compact || compact.length < 256 || compact.length > MAX_INLINE_ARTWORK_CHARS) {
     return false;
   }
   // Lightweight heuristic: base64 payloads are large and use this restricted charset.
@@ -52,6 +65,7 @@ export function normalizeBridgeArtworkUri(value: string | undefined) {
   }
   if (looksLikeBase64Artwork(trimmed)) {
     const compact = trimmed.replace(/\s+/g, '');
+    if (compact.length > MAX_INLINE_ARTWORK_CHARS || compact.length % 4 === 1) return '';
     return `data:${inferDataUriMime(compact)};base64,${compact}`;
   }
   return '';

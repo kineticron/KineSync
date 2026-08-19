@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "manifestVersion": "1",
+  "description": "Size policy for versioned native release manifests. Release manifests contain the SHA-256 and exact size for each asset.",
+  "assets": {
+    "windows_media_session.node": {
+      "maxBytes": 16777216
+    },
+    "spotify-seek-helper.dll": {
+      "maxBytes": 33554432
+    },
+    "spotify-seek-helper.runtimeconfig.json": {
+      "maxBytes": 1048576
+    },
+    "Microsoft.Windows.SDK.NET.dll": {
+      "maxBytes": 33554432
+    },
+    "WinRT.Runtime.dll": {
+      "maxBytes": 33554432
+    }
+  }
+}
