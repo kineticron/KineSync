@@ -300,10 +300,11 @@ export const WebLyricsView = memo(function WebLyricsView({
 }: WebLyricsViewProps) {
   const webViewRef = useRef<{
     injectJavaScript: (script: string) => void;
-    reload: () => void;
   } | null>(null);
   const appStateRef = useRef(AppState.currentState);
-  const [ready, setReady] = useState(false);
+  const [webViewGeneration, setWebViewGeneration] = useState(0);
+  const [readyGeneration, setReadyGeneration] = useState(-1);
+  const ready = readyGeneration === webViewGeneration;
   const lyrics = usePlaybackStore((state) => state.lyrics);
   const lyricsMetadata = usePlaybackStore((state) => state.lyricsMetadata);
   const lyricsSource = usePlaybackStore((state) => state.lyricsSource);
@@ -342,16 +343,15 @@ export const WebLyricsView = memo(function WebLyricsView({
 
   // iOS suspends the WebView process while the app is backgrounded. Its
   // animation loop can resume with a stale/blank layer, even though React
-  // still considers the component mounted. Recreate the small lyrics page on
-  // every real background -> active transition; the ready transition below
-  // then replays lyrics, options, and the current playback anchor.
+  // still considers the component mounted. Remount the native WebView on every
+  // real background -> active transition. A generation-bound ready state keeps
+  // late events from the suspended instance from affecting its replacement.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       const previousState = appStateRef.current;
       appStateRef.current = nextState;
       if (nextState === "active" && previousState !== "active") {
-        setReady(false);
-        webViewRef.current?.reload();
+        setWebViewGeneration((generation) => generation + 1);
       }
     });
     return () => subscription.remove();
@@ -433,7 +433,7 @@ export const WebLyricsView = memo(function WebLyricsView({
       return;
     }
     if (payload.type === "ready") {
-      setReady(true);
+      setReadyGeneration(webViewGeneration);
       return;
     }
     if (payload.type === "activeLineChange") {
@@ -473,11 +473,13 @@ export const WebLyricsView = memo(function WebLyricsView({
     onLineLongPress,
     onLinePress,
     onUserInteraction,
+    webViewGeneration,
   ]);
 
   return (
     <View style={styles.container}>
       <TransparentWebView
+        key={`web-lyrics-${webViewGeneration}`}
         ref={webViewRef}
         source={{ html: WEB_LYRICS_HTML }}
         originWhitelist={["*"]}
@@ -493,7 +495,7 @@ export const WebLyricsView = memo(function WebLyricsView({
         textInteractionEnabled={false}
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         onMessage={handleMessage}
-        onLoadEnd={() => setReady(true)}
+        onLoadEnd={() => setReadyGeneration(webViewGeneration)}
         style={styles.webView}
         containerStyle={styles.webViewContainer}
       />

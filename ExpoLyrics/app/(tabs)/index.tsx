@@ -1618,7 +1618,6 @@ export default function HomeScreen() {
             animatedUri={resolvedAnimatedSquareUrl}
             active={!albumArtworkMorphing}
             style={styles.animatedAlbumArtwork}
-            recyclingKey={`morph-artwork-${resolvedArtworkUrl}-${resolvedAnimatedSquareUrl}`}
           />
         ) : null}
       </Reanimated.View>

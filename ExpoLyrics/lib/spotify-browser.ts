@@ -101,15 +101,13 @@ const SPOTIFY_WEB_ORIGINS = new Set([
   "https://open.spotify.com",
 ]);
 
-// react-native-webview opens non-whitelisted schemes through Linking before it
-// calls onShouldStartLoadWithRequest. Admit these schemes to the WebView's
-// policy layer so KineSync gets the chance to reject them synchronously.
+// react-native-webview opens non-whitelisted URLs through Linking before it
+// calls onShouldStartLoadWithRequest. Admit HTTPS and the relevant native
+// schemes here, then make the stricter top-frame decision in
+// isAllowedSpotifyWebViewNavigation. This also keeps reCAPTCHA iframes inside
+// the WebView instead of repeatedly handing their URLs to Safari.
 export const SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: string[] = [
-  "https://accounts.spotify.com",
-  "https://open.spotify.com",
-  "https://spotify.link",
-  "https://spotify.app.link",
-  "https://spotify-alternate.app.link",
+  "https://*",
   "spotify:*",
   "spotify-action:*",
   "intent:*",
@@ -150,10 +148,15 @@ export function isSpotifyNativeAppRedirect(rawUrl: string): boolean {
   }
 }
 
-export function isAllowedSpotifyWebViewNavigation(rawUrl: string): boolean {
+export function isAllowedSpotifyWebViewNavigation(
+  rawUrl: string,
+  isTopFrame = true,
+): boolean {
   if (isSpotifyNativeAppRedirect(rawUrl)) return false;
   try {
     const parsed = new URL(String(rawUrl || '').trim());
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return false;
+    if (!isTopFrame) return true;
     return SPOTIFY_WEB_ORIGINS.has(parsed.origin) && !parsed.username && !parsed.password;
   } catch {
     return false;

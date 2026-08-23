@@ -5,6 +5,7 @@ import { isValidBridgeKey, parseBridgeWebSocketUrl } from '@/lib/network';
 
 const BRIDGE_SETTINGS_KEY = 'kinesync_bridge_settings';
 const BRIDGE_SECRET_KEY = 'kinesync_bridge_handshake_key_v1';
+let bridgeSettingsWriteQueue: Promise<void> = Promise.resolve();
 
 export interface BridgeSettings {
   serverUrl: string;
@@ -65,41 +66,45 @@ export async function getBridgeSettings(): Promise<BridgeSettings> {
   }
 }
 
-export async function saveBridgeSettings(settings: Partial<BridgeSettings>): Promise<BridgeSettings> {
-  const current = await getBridgeSettings();
-  const candidate = {
-    ...current,
-    ...settings,
-  };
-  const serverUrl = parseBridgeWebSocketUrl(candidate.serverUrl);
-  const key = String(candidate.handshakeKey || '').trim();
-  if (candidate.serverUrl && !serverUrl) throw new Error('Bridge URL must be a private ws:// URL or a public wss:// URL.');
-  if (key && !isValidBridgeKey(key)) throw new Error('Bridge key is invalid.');
-  let secureSaved = Platform.OS === 'web';
-  if (key && Platform.OS !== 'web') {
-    try {
-      await SecureStore.setItemAsync(BRIDGE_SECRET_KEY, key);
-      secureSaved = true;
-    } catch {
-      throw new Error('Could not save the bridge key securely on this device.');
+export function saveBridgeSettings(settings: Partial<BridgeSettings>): Promise<BridgeSettings> {
+  const operation = bridgeSettingsWriteQueue.then(async () => {
+    const current = await getBridgeSettings();
+    const candidate = {
+      ...current,
+      ...settings,
+    };
+    const serverUrl = parseBridgeWebSocketUrl(candidate.serverUrl);
+    const key = String(candidate.handshakeKey || '').trim();
+    if (candidate.serverUrl && !serverUrl) throw new Error('Bridge URL must be a private ws:// URL or a public wss:// URL.');
+    if (key && !isValidBridgeKey(key)) throw new Error('Bridge key is invalid.');
+    let secureSaved = Platform.OS === 'web';
+    if (key && Platform.OS !== 'web') {
+      try {
+        await SecureStore.setItemAsync(BRIDGE_SECRET_KEY, key);
+        secureSaved = true;
+      } catch {
+        throw new Error('Could not save the bridge key securely on this device.');
+      }
+    } else if (Object.prototype.hasOwnProperty.call(settings, 'handshakeKey') && Platform.OS !== 'web') {
+      try {
+        await SecureStore.deleteItemAsync(BRIDGE_SECRET_KEY);
+        secureSaved = true;
+      } catch {
+        throw new Error('Could not remove the bridge key from secure storage.');
+      }
     }
-  } else if (Object.prototype.hasOwnProperty.call(settings, 'handshakeKey') && Platform.OS !== 'web') {
-    try {
-      await SecureStore.deleteItemAsync(BRIDGE_SECRET_KEY);
-      secureSaved = true;
-    } catch {
-      throw new Error('Could not remove the bridge key from secure storage.');
-    }
-  }
-  const updated = { ...candidate, serverUrl: serverUrl || '', handshakeKey: secureSaved ? key : current.handshakeKey };
-  // The handshake key is intentionally omitted from AsyncStorage on native.
-  await AsyncStorage.setItem(BRIDGE_SETTINGS_KEY, JSON.stringify({
-    serverUrl: updated.serverUrl,
-    playbackMode: updated.playbackMode,
-    onboardingCompleted: updated.onboardingCompleted,
-    ...(Platform.OS === 'web' ? { handshakeKey: updated.handshakeKey } : {}),
-  }));
-  return updated;
+    const updated = { ...candidate, serverUrl: serverUrl || '', handshakeKey: secureSaved ? key : current.handshakeKey };
+    // The handshake key is intentionally omitted from AsyncStorage on native.
+    await AsyncStorage.setItem(BRIDGE_SETTINGS_KEY, JSON.stringify({
+      serverUrl: updated.serverUrl,
+      playbackMode: updated.playbackMode,
+      onboardingCompleted: updated.onboardingCompleted,
+      ...(Platform.OS === 'web' ? { handshakeKey: updated.handshakeKey } : {}),
+    }));
+    return updated;
+  });
+  bridgeSettingsWriteQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 export async function clearBridgeSettings(): Promise<void> {

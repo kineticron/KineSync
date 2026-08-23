@@ -589,8 +589,10 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   }}
                   source={{ uri: BROWSER_URL }}
                   originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
-                  onShouldStartLoadWithRequest={({ url }) => {
-                    if (!isSpotifyNativeAppRedirect(url)) return isAllowedSpotifyWebViewNavigation(url);
+                  onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+                    if (!isSpotifyNativeAppRedirect(url)) {
+                      return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
+                    }
                     setStatus("Kept Spotify open inside KineSync.");
                     return false;
                   }}

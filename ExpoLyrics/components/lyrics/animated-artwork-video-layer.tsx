@@ -48,10 +48,10 @@ const AnimatedArtworkVideoLayer = memo(function AnimatedArtworkVideoLayer({
   }, []);
 
   const videoOpacity = useSharedValue(0);
-  const wasReadyRef = useRef(false);
+  const hasRenderedFrameRef = useRef(false);
 
   useEffect(() => {
-    wasReadyRef.current = false;
+    hasRenderedFrameRef.current = false;
     videoOpacity.value = 0;
   }, [safeUri, videoOpacity]);
 
@@ -70,21 +70,24 @@ const AnimatedArtworkVideoLayer = memo(function AnimatedArtworkVideoLayer({
   }, [shouldPlay, player, safeUri]);
 
   useEffect(() => {
-    if (status === 'readyToPlay' && active) {
+    if (status === 'readyToPlay') {
       if (player.audioTrack !== null) {
         player.audioTrack = null;
       }
-      if (!wasReadyRef.current) {
-        wasReadyRef.current = true;
-        videoOpacity.value = withTiming(1, { duration: VIDEO_FADE_MS });
-      }
-      return;
     }
-    if (status === 'error' || !active) {
-      wasReadyRef.current = false;
+    if (status === 'error' || !active || !isAppActive) {
+      hasRenderedFrameRef.current = false;
       videoOpacity.value = withTiming(0, { duration: 180 });
     }
-  }, [active, player, status, videoOpacity]);
+  }, [active, isAppActive, player, status, videoOpacity]);
+
+  const handleFirstFrameRender = () => {
+    if (!active || !isAppActive || hasRenderedFrameRef.current) {
+      return;
+    }
+    hasRenderedFrameRef.current = true;
+    videoOpacity.value = withTiming(1, { duration: VIDEO_FADE_MS });
+  };
 
   const videoAnimatedStyle = useAnimatedStyle(() => ({
     opacity: videoOpacity.value,
@@ -102,6 +105,8 @@ const AnimatedArtworkVideoLayer = memo(function AnimatedArtworkVideoLayer({
         contentFit="cover"
         nativeControls={false}
         allowsPictureInPicture={false}
+        surfaceType="textureView"
+        onFirstFrameRender={handleFirstFrameRender}
       />
     </Animated.View>
   );

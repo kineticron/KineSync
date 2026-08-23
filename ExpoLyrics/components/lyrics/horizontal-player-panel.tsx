@@ -74,7 +74,6 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
             staticUri={artworkUrl}
             animatedUri={animatedArtworkUrl}
             style={styles.artwork}
-            recyclingKey={`landscape-artwork-${artworkUrl}-${animatedArtworkUrl || ""}`}
           />
         ) : (
           <View style={[styles.artwork, styles.artworkEmpty]} />

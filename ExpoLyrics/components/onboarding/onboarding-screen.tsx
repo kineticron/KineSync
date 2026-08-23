@@ -362,17 +362,21 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             scanFailTimer.current = null;
           }
           setScanError("");
-          setServerUrlStore(bridgeUrl);
-          setHandshakeKeyStore(bridgeKey);
-          saveBridgeSettings({
+          void saveBridgeSettings({
             serverUrl: bridgeUrl,
             handshakeKey: bridgeKey,
             playbackMode: "desktop",
             onboardingCompleted: true,
-          }).catch(() => {});
-          bridgeClient.reconnectNow();
-          setScanCompleted(true);
-          setScannerOpen(false);
+          }).then((saved) => {
+            setServerUrlStore(saved.serverUrl);
+            setHandshakeKeyStore(saved.handshakeKey);
+            setScanCompleted(true);
+            setScannerOpen(false);
+            bridgeClient.reconnectNow();
+          }).catch((error) => {
+            scanHandled.current = false;
+            setScanError(error instanceof Error ? error.message : "Could not save bridge settings.");
+          });
           return;
         }
       } catch {}
@@ -802,8 +806,10 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               source={{ uri: SPOTIFY_LOGIN_URL }}
               originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
               injectedJavaScript={spotifyAuthProbeScript}
-              onShouldStartLoadWithRequest={({ url }) => {
-                if (!isSpotifyNativeAppRedirect(url)) return isAllowedSpotifyWebViewNavigation(url);
+              onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+                if (!isSpotifyNativeAppRedirect(url)) {
+                  return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
+                }
 
                 // Spotify has already established the authenticated cookies by
                 // the time it attempts this native-app handoff. Cancel it so

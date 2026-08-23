@@ -356,15 +356,19 @@ export const SettingsMenu = memo(function SettingsMenu({
         scanHandled.current = true;
         if (scanFailTimer.current) { clearTimeout(scanFailTimer.current); scanFailTimer.current = null; }
         setScanError('');
-        usePlaybackStore.getState().setServerUrl(bridgeUrl);
-        usePlaybackStore.getState().setHandshakeKey(bridgeKey);
-        saveBridgeSettings({
+        void saveBridgeSettings({
           serverUrl: bridgeUrl,
           handshakeKey: bridgeKey,
           playbackMode: "desktop",
-        }).catch(() => {});
-        bridgeClient.reconnectNow();
-        setScannerOpen(false);
+        }).then((saved) => {
+          usePlaybackStore.getState().setServerUrl(saved.serverUrl);
+          usePlaybackStore.getState().setHandshakeKey(saved.handshakeKey);
+          setScannerOpen(false);
+          bridgeClient.reconnectNow();
+        }).catch((error) => {
+          scanHandled.current = false;
+          setScanError(error instanceof Error ? error.message : 'Could not save bridge settings.');
+        });
         return;
       }
     } catch {}

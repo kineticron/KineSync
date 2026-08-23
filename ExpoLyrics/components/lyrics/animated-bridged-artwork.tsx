@@ -9,7 +9,6 @@ type AnimatedBridgedArtworkProps = {
   animatedUri?: string;
   active?: boolean;
   style?: StyleProp<ViewStyle>;
-  recyclingKey?: string;
 };
 
 export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
@@ -17,7 +16,6 @@ export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
   animatedUri,
   active = true,
   style,
-  recyclingKey,
 }: AnimatedBridgedArtworkProps) {
   const safeStaticUri = String(staticUri || '').trim();
   const safeAnimatedUri = String(animatedUri || '').trim();
@@ -34,7 +32,7 @@ export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
           source={{ uri: safeStaticUri }}
           style={StyleSheet.absoluteFill}
           cachePolicy="memory-disk"
-          recyclingKey={recyclingKey ?? safeStaticUri}
+          recyclingKey={safeStaticUri}
           contentFit="cover"
         />
       ) : null}

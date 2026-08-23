@@ -173,6 +173,7 @@ export default function BridgeSettingsScreen() {
   );
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState('');
+  const [bridgeSaveError, setBridgeSaveError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
   const [spotifySignedIn, setSpotifySignedIn] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -194,6 +195,8 @@ export default function BridgeSettingsScreen() {
     void getBridgeSettings().then((settings) => {
       if (mounted) {
         setPlaybackMode(settings.playbackMode);
+        setUrlInput(settings.serverUrl);
+        setKeyInput(settings.handshakeKey);
       }
     });
     return () => {
@@ -211,28 +214,44 @@ export default function BridgeSettingsScreen() {
         return;
       }
       void saveBridgeSettings({ playbackMode: 'desktop' });
-      if (urlInput.trim()) {
-        setServerUrl(urlInput.trim());
-        setHandshakeKey(keyInput.trim());
+      const bridgeUrl = parseBridgeWebSocketUrl(urlInput);
+      const bridgeKey = keyInput.trim();
+      if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
+        setServerUrl(bridgeUrl);
+        setHandshakeKey(bridgeKey);
         bridgeClient.reconnectNow();
       }
     },
     [keyInput, setHandshakeKey, setServerUrl, urlInput],
   );
 
-  const saveAndReconnect = useCallback(() => {
+  const saveAndReconnect = useCallback(async () => {
     const url = parseBridgeWebSocketUrl(urlInput);
     const key = keyInput.trim();
     if (!url || !isValidBridgeKey(key)) {
-      setServerUrl('');
-      bridgeClient.disconnect();
+      setBridgeSaveError(
+        !url
+          ? 'Enter a valid private ws:// or public wss:// bridge URL.'
+          : 'Use the current pairing key from DesktopBridge (at least 16 characters).',
+      );
       return;
     }
-    setServerUrl(url);
-    setHandshakeKey(key);
-    saveBridgeSettings({ serverUrl: url, handshakeKey: key, playbackMode: 'desktop' });
-    setPlaybackMode('desktop');
-    bridgeClient.reconnectNow();
+    setBridgeSaveError('');
+    try {
+      const saved = await saveBridgeSettings({
+        serverUrl: url,
+        handshakeKey: key,
+        playbackMode: 'desktop',
+      });
+      setUrlInput(saved.serverUrl);
+      setKeyInput(saved.handshakeKey);
+      setServerUrl(saved.serverUrl);
+      setHandshakeKey(saved.handshakeKey);
+      setPlaybackMode('desktop');
+      bridgeClient.reconnectNow();
+    } catch (error) {
+      setBridgeSaveError(error instanceof Error ? error.message : 'Could not save bridge settings.');
+    }
   }, [keyInput, setHandshakeKey, setServerUrl, urlInput]);
   useEffect(() => {
     let mounted = true;
@@ -285,19 +304,28 @@ export default function BridgeSettingsScreen() {
       if (scanHandledRef.current) return;
       try {
         const parsed = JSON.parse(data) as { u?: string; k?: string };
-        if (parsed.u && parsed.k) {
+        const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
+        const bridgeKey = String(parsed?.k || '').trim();
+        if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
           scanHandledRef.current = true;
           setScanError('');
-          setServerUrl(parsed.u);
-          setHandshakeKey(parsed.k);
-          setPlaybackMode('desktop');
+          setBridgeSaveError('');
           void saveBridgeSettings({
-            serverUrl: parsed.u,
-            handshakeKey: parsed.k,
+            serverUrl: bridgeUrl,
+            handshakeKey: bridgeKey,
             playbackMode: 'desktop',
+          }).then((saved) => {
+            setUrlInput(saved.serverUrl);
+            setKeyInput(saved.handshakeKey);
+            setServerUrl(saved.serverUrl);
+            setHandshakeKey(saved.handshakeKey);
+            setPlaybackMode('desktop');
+            setScannerOpen(false);
+            bridgeClient.reconnectNow();
+          }).catch((error) => {
+            scanHandledRef.current = false;
+            setBridgeSaveError(error instanceof Error ? error.message : 'Could not save bridge settings.');
           });
-          bridgeClient.reconnectNow();
-          setScannerOpen(false);
           return;
         }
       } catch {
@@ -479,6 +507,9 @@ export default function BridgeSettingsScreen() {
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                   <Text style={styles.primaryButtonText}>Save and reconnect</Text>
                 </Pressable>
+                {bridgeSaveError ? (
+                  <Text style={styles.validationError}>{bridgeSaveError}</Text>
+                ) : null}
                 <Pressable
                   style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
                   onPress={openScanner}>
@@ -696,8 +727,10 @@ export default function BridgeSettingsScreen() {
             source={{ uri: SPOTIFY_LOGIN_URL }}
             originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
             injectedJavaScript={spotifyAuthProbeScript}
-            onShouldStartLoadWithRequest={({ url }) => {
-              if (!isSpotifyNativeAppRedirect(url)) return isAllowedSpotifyWebViewNavigation(url);
+            onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+              if (!isSpotifyNativeAppRedirect(url)) {
+                return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
+              }
               completeSpotifySignIn();
               return false;
             }}
@@ -981,6 +1014,12 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginTop: 8,
     marginLeft: 4,
+  },
+  validationError: {
+    color: '#FF93A4',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
   },
   scannerModal: {
     flex: 1,
