@@ -65,8 +65,21 @@ for (const webView of [fallback, explore, onboarding]) {
   );
 }
 assert(
-  !fallback.includes('refreshBrowser(true)'),
-  'Spotify WebView must not force-reload immediately after an app switch',
+  fallback.includes('resumedFromBackground &&') &&
+    fallback.includes('!recentBlockedNativeHandoff'),
+  'Spotify resume refreshes must require a real background transition and suppress native handoff loops',
+);
+assert(
+  fallback.includes('lastBlockedNativeNavigationAtRef.current = Date.now()'),
+  'blocked Spotify native redirects must arm resume-refresh suppression',
+);
+assert(
+  fallback.includes('key={`spotify-browser-${browserGeneration}`}'),
+  'Spotify resume recovery must remount the suspended WebView',
+);
+assert(
+  fallback.includes('browserGeneration !== browserGenerationRef.current'),
+  'Spotify WebView events must belong to the active generation',
 );
 assert(
   bridgeSettings.includes('bridgeSettingsWriteQueue.then'),

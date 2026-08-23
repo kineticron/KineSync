@@ -49,6 +49,7 @@ const DESKTOP_WEB_USER_AGENT =
 const BROWSER_HEARTBEAT_MS = 5_000;
 const BROWSER_STALE_MS = 18_000;
 const BROWSER_RELOAD_COOLDOWN_MS = 30_000;
+const NATIVE_HANDOFF_REFRESH_SUPPRESSION_MS = 4_000;
 
 const BROWSER_URL = "https://open.spotify.com/";
 
@@ -132,9 +133,16 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       usePlaybackStore.getState().connectionStatus,
     );
     const [browserOpen, setBrowserOpen] = useState(false);
+    const [browserGeneration, setBrowserGeneration] = useState(0);
+    const browserGenerationRef = useRef(0);
     const lastBrowserEventAtRef = useRef(Date.now());
     const lastBrowserReloadAtRef = useRef(0);
+    const lastBlockedNativeNavigationAtRef = useRef(0);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const wasBackgroundedRef = useRef(AppState.currentState === "background");
+    const resumeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const automaticRecoveryRef = useRef(false);
+    const pendingRecoveryCommandRef = useRef<BrowserCommand | null>(null);
     const browserReadyRef = useRef(false);
     const [browserReady, setBrowserReady] = useState(false);
     const [browserLoading, setBrowserLoading] = useState(true);
@@ -150,25 +158,35 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       [],
     );
 
-    // iOS suspends WebViews while the app is backgrounded. Reload a stale player
-    // after the normal heartbeat confirms it did not recover on its own. Reloading
-    // immediately on every resume can turn one attempted external handoff into an
-    // app-switch loop.
-    const refreshBrowser = useCallback(() => {
-      if (appStateRef.current !== "active" || connectionStatusRef.current === "connected") {
+    // Remount instead of calling reload(): iOS can retain a suspended WKWebView
+    // process and its stale Spotify Connect session across a normal reload.
+    // Forced refreshes are used for genuine app resumes and explicit user actions.
+    const refreshBrowser = useCallback((force = false, automatic = false) => {
+      if (
+        appStateRef.current !== "active" ||
+        (!force && connectionStatusRef.current === "connected")
+      ) {
         return;
       }
       const now = Date.now();
-      if (now - lastBrowserReloadAtRef.current < BROWSER_RELOAD_COOLDOWN_MS) {
+      if (
+        !force &&
+        now - lastBrowserReloadAtRef.current < BROWSER_RELOAD_COOLDOWN_MS
+      ) {
         return;
       }
       lastBrowserReloadAtRef.current = now;
+      lastBrowserEventAtRef.current = now;
+      automaticRecoveryRef.current = automatic;
+      pendingRecoveryCommandRef.current = null;
       browserReadyRef.current = false;
       setBrowserReady(false);
       setBrowserLoading(true);
       setStatus("Refreshing Spotify player…");
-      getActiveWebView()?.reload();
-    }, [getActiveWebView]);
+      const nextGeneration = browserGenerationRef.current + 1;
+      browserGenerationRef.current = nextGeneration;
+      setBrowserGeneration(nextGeneration);
+    }, []);
 
     const syncBrowserMonitoring = useCallback(() => {
       if (!browserReadyRef.current) return;
@@ -192,7 +210,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       }), [syncBrowserMonitoring]);
 
     useEffect(() => {
-      reloadBrowserCallback = () => getActiveWebView()?.reload();
+      reloadBrowserCallback = () => refreshBrowser(true, true);
       openBrowserCallback = () => setBrowserOpen(true);
       return () => {
         reloadBrowserCallback = null;
@@ -201,11 +219,11 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           clearTimeout(lyricsRefreshTimerRef.current);
         }
       };
-    }, [getActiveWebView]);
+    }, [refreshBrowser]);
 
     // A locally advancing WebView clock does not prove that Spotify Connect is
-    // still authoritative after suspension. On resume, refresh the same player
-    // and let its ready/playback events repopulate the store.
+    // still authoritative after suspension. Recreate the player after a genuine
+    // background transition and let its ready/playback events repopulate the store.
     useEffect(() => {
       const requestSnapshot = () => {
         if (!browserReadyRef.current) return;
@@ -215,14 +233,57 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       };
 
       const subscription = AppState.addEventListener("change", (nextState) => {
+        const previousState = appStateRef.current;
+        const now = Date.now();
         appStateRef.current = nextState;
+        if (nextState === "background") {
+          wasBackgroundedRef.current = true;
+        }
+        if (nextState !== "active" && resumeRefreshTimerRef.current) {
+          clearTimeout(resumeRefreshTimerRef.current);
+          resumeRefreshTimerRef.current = null;
+        }
         syncBrowserMonitoring();
         if (nextState === "active") {
           const playbackState = usePlaybackStore.getState();
           if (playbackState.isPlaying) startPlaybackClock();
-          // Give the suspended WebView a chance to recover and answer this probe.
-          // The heartbeat below reloads it only if it remains stale.
-          requestSnapshot();
+          const resumedFromBackground = wasBackgroundedRef.current;
+          wasBackgroundedRef.current = false;
+          const recentBlockedNativeHandoff =
+            now - lastBlockedNativeNavigationAtRef.current <
+            NATIVE_HANDOFF_REFRESH_SUPPRESSION_MS;
+
+          const shouldRefreshAfterResume =
+            previousState !== "active" &&
+            resumedFromBackground &&
+            connectionStatusRef.current !== "connected";
+
+          if (shouldRefreshAfterResume && !recentBlockedNativeHandoff) {
+            refreshBrowser(true, true);
+          } else {
+            // Transient inactive states should only probe. A blocked deep-link
+            // handoff gets a short delayed refresh after the app-switch settles.
+            requestSnapshot();
+            if (shouldRefreshAfterResume && recentBlockedNativeHandoff) {
+              const suppressionRemainingMs = Math.max(
+                0,
+                NATIVE_HANDOFF_REFRESH_SUPPRESSION_MS -
+                  (now - lastBlockedNativeNavigationAtRef.current),
+              );
+              if (resumeRefreshTimerRef.current) {
+                clearTimeout(resumeRefreshTimerRef.current);
+              }
+              resumeRefreshTimerRef.current = setTimeout(() => {
+                resumeRefreshTimerRef.current = null;
+                if (
+                  appStateRef.current === "active" &&
+                  connectionStatusRef.current !== "connected"
+                ) {
+                  refreshBrowser(true, true);
+                }
+              }, suppressionRemainingMs + 100);
+            }
+          }
           return;
         }
         // Capture one final anchor before native and WebView timers suspend.
@@ -242,13 +303,17 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           now - lastBrowserEventAtRef.current > BROWSER_STALE_MS &&
           now - lastBrowserReloadAtRef.current >= BROWSER_RELOAD_COOLDOWN_MS
         ) {
-          refreshBrowser();
+          refreshBrowser(false, true);
         }
       }, BROWSER_HEARTBEAT_MS);
 
       return () => {
         subscription.remove();
         clearInterval(heartbeat);
+        if (resumeRefreshTimerRef.current) {
+          clearTimeout(resumeRefreshTimerRef.current);
+          resumeRefreshTimerRef.current = null;
+        }
       };
     }, [getActiveWebView, refreshBrowser, syncBrowserMonitoring]);
 
@@ -493,6 +558,11 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
     const sendCommand = useCallback((command: BrowserCommand) => {
       if (!browserReady) {
+        if (automaticRecoveryRef.current) {
+          pendingRecoveryCommandRef.current = command;
+          setStatus("Reconnecting Spotify player…");
+          return;
+        }
         setBrowserOpen(true);
         setStatus("Open Spotify browser and wait for it to finish loading.");
         return;
@@ -504,7 +574,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       ref,
       () => ({
         openBrowser: () => setBrowserOpen(true),
-        reload: () => getActiveWebView()?.reload(),
+        reload: () => refreshBrowser(true),
         togglePlayPause: () => sendCommand({ type: "toggle" }),
         resyncPlayback: () => {
           sendCommand({ type: "toggle" });
@@ -518,7 +588,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           sendCommand({ type: "seek", positionMs: Math.max(0, positionMs) }),
         runDiagnostics: () => sendCommand({ type: "diagnostics" }),
       }),
-      [getActiveWebView, sendCommand],
+      [refreshBrowser, sendCommand],
     );
 
     return (
@@ -551,7 +621,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
             <Pressable
               accessibilityLabel="Reload Spotify browser"
               hitSlop={8}
-              onPress={() => getActiveWebView()?.reload()}
+              onPress={() => refreshBrowser(true)}
               style={({ pressed }) => [
                 styles.iconButton,
                 pressed && styles.iconButtonPressed,
@@ -584,15 +654,22 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         <View style={styles.webViewStage}>
           <View style={styles.webViewSlot}>
                 <WebView<object>
+                  key={`spotify-browser-${browserGeneration}`}
                   ref={(instance) => {
-                    webViewRefs.current.primary = instance;
+                    if (browserGeneration === browserGenerationRef.current) {
+                      webViewRefs.current.primary = instance;
+                    }
                   }}
                   source={{ uri: BROWSER_URL }}
                   originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
                   onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+                    if (browserGeneration !== browserGenerationRef.current) {
+                      return false;
+                    }
                     if (!isSpotifyNativeAppRedirect(url)) {
                       return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
                     }
+                    lastBlockedNativeNavigationAtRef.current = Date.now();
                     setStatus("Kept Spotify open inside KineSync.");
                     return false;
                   }}
@@ -606,6 +683,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     <BrowserMessage message={description} />
                   )}
                   onLoadStart={() => {
+                    if (browserGeneration !== browserGenerationRef.current) return;
                     setBrowserLoading(true);
                     setBrowserReady(false);
                     browserReadyRef.current = false;
@@ -613,20 +691,28 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     setStatus("Loading Spotify in desktop mode...");
                   }}
                   onLoad={() => {
+                    if (browserGeneration !== browserGenerationRef.current) return;
                     setBrowserLoading(false);
                     setStatus("Spotify page loaded. Sign in and start a track.");
                   }}
                   onHttpError={({ nativeEvent }) => {
+                    if (browserGeneration !== browserGenerationRef.current) return;
+                    automaticRecoveryRef.current = false;
+                    pendingRecoveryCommandRef.current = null;
                     setBrowserLoading(false);
                     setStatus(
                       `Spotify returned HTTP ${nativeEvent.statusCode}: ${nativeEvent.description}`,
                     );
                   }}
                   onError={({ nativeEvent }) => {
+                    if (browserGeneration !== browserGenerationRef.current) return;
+                    automaticRecoveryRef.current = false;
+                    pendingRecoveryCommandRef.current = null;
                     setBrowserLoading(false);
                     setStatus(`Spotify browser error: ${nativeEvent.description}`);
                   }}
                   onMessage={({ nativeEvent }: WebViewMessageEvent) => {
+                    if (browserGeneration !== browserGenerationRef.current) return;
                     if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || "")) return;
                     const event = parseBrowserEvent(nativeEvent.data);
                     if (!event) return;
@@ -642,7 +728,15 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     if (event.type === "ready") {
                       setBrowserReady(true);
                       browserReadyRef.current = true;
+                      automaticRecoveryRef.current = false;
                       syncBrowserMonitoring();
+                      const pendingCommand = pendingRecoveryCommandRef.current;
+                      pendingRecoveryCommandRef.current = null;
+                      if (pendingCommand) {
+                        getActiveWebView()?.injectJavaScript(
+                          makeBrowserCommandScript(pendingCommand),
+                        );
+                      }
                       setStatus("Spotify browser ready. Start playback in the web player.");
                       return;
                     }
