@@ -150,15 +150,16 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       [],
     );
 
-    // iOS suspends WebViews while the app is backgrounded. Reload the single
-    // player on resume so Spotify's Connect session is recreated deterministically
-    // instead of racing a second, hidden WebView into a warm handoff.
-    const refreshBrowser = useCallback((force = false) => {
+    // iOS suspends WebViews while the app is backgrounded. Reload a stale player
+    // after the normal heartbeat confirms it did not recover on its own. Reloading
+    // immediately on every resume can turn one attempted external handoff into an
+    // app-switch loop.
+    const refreshBrowser = useCallback(() => {
       if (appStateRef.current !== "active" || connectionStatusRef.current === "connected") {
         return;
       }
       const now = Date.now();
-      if (!force && now - lastBrowserReloadAtRef.current < BROWSER_RELOAD_COOLDOWN_MS) {
+      if (now - lastBrowserReloadAtRef.current < BROWSER_RELOAD_COOLDOWN_MS) {
         return;
       }
       lastBrowserReloadAtRef.current = now;
@@ -214,15 +215,13 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       };
 
       const subscription = AppState.addEventListener("change", (nextState) => {
-        const previousState = appStateRef.current;
         appStateRef.current = nextState;
         syncBrowserMonitoring();
         if (nextState === "active") {
           const playbackState = usePlaybackStore.getState();
           if (playbackState.isPlaying) startPlaybackClock();
-          if (previousState !== "active") {
-            refreshBrowser(true);
-          }
+          // Give the suspended WebView a chance to recover and answer this probe.
+          // The heartbeat below reloads it only if it remains stale.
           requestSnapshot();
           return;
         }

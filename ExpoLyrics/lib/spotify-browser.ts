@@ -105,8 +105,11 @@ const SPOTIFY_WEB_ORIGINS = new Set([
 // calls onShouldStartLoadWithRequest. Admit these schemes to the WebView's
 // policy layer so KineSync gets the chance to reject them synchronously.
 export const SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: string[] = [
-  "https://accounts.spotify.com/*",
-  "https://open.spotify.com/*",
+  "https://accounts.spotify.com",
+  "https://open.spotify.com",
+  "https://spotify.link",
+  "https://spotify.app.link",
+  "https://spotify-alternate.app.link",
   "spotify:*",
   "spotify-action:*",
   "intent:*",

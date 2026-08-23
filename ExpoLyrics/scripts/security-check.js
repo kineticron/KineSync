@@ -18,6 +18,42 @@ assert(network.includes("parsed.protocol === 'ws:' && !privateHost"), 'public ws
 assert(network.includes('key.length >= 16'), 'weak bridge keys must be rejected');
 assert(!spotify.includes("origin === '*'"), 'wildcard Spotify message origin found');
 assert(!fallback.includes("origin === '*'"), 'wildcard Spotify fallback origin found');
+
+const spotifyAppRedirectHosts = [
+  'spotify.link',
+  'spotify.app.link',
+  'spotify-alternate.app.link',
+];
+
+const whitelistSource = spotify.match(
+  /SPOTIFY_WEBVIEW_ORIGIN_WHITELIST:[^=]*=\s*\[([\s\S]*?)\];/,
+)?.[1];
+assert(whitelistSource, 'Spotify WebView origin whitelist not found');
+const spotifyOriginWhitelist = [...whitelistSource.matchAll(/["']([^"']+)["']/g)].map(
+  (match) => match[1],
+);
+const extractWebViewOrigin = (url) =>
+  /^[A-Za-z][A-Za-z0-9+\-.]+:(\/\/)?[^/]*/.exec(url)?.[0] || '';
+const passesWebViewOriginWhitelist = (url) => {
+  const origin = extractWebViewOrigin(url);
+  return spotifyOriginWhitelist.some((entry) => {
+    const pattern = entry
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\\\*/g, '.*');
+    return new RegExp(`^${pattern}`).test(origin);
+  });
+};
+
+for (const host of ['accounts.spotify.com', 'open.spotify.com', ...spotifyAppRedirectHosts]) {
+  assert(
+    passesWebViewOriginWhitelist(`https://${host}/redirect/path`),
+    `${host} must reach onShouldStartLoadWithRequest instead of Linking.openURL`,
+  );
+}
+assert(
+  !fallback.includes('refreshBrowser(true)'),
+  'Spotify WebView must not force-reload immediately after an app switch',
+);
 assert(app.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
 assert(app.plugins.includes('./plugins/with-release-signing.js'));
 assert(signingPlugin.includes('signingConfigs\\.debug'));
