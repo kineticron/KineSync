@@ -41,13 +41,24 @@ function validatePlayback(packet: Record<string, unknown>): PlaybackPacket | nul
   const position = finiteNumber(packet.positionMs, 0, 24 * 60 * 60 * 1000);
   const timestamp = finiteNumber(packet.timestamp, 0);
   if (duration === null || position === null || timestamp === null || typeof packet.isPlaying !== 'boolean') return null;
-  const artworkCandidate =
-    packet.artworkUrl === undefined || typeof packet.artworkUrl !== 'string' || packet.artworkUrl.length > 7 * 1024 * 1024
-      ? undefined
-      : packet.artworkUrl;
-  const artworkUrl = packet.artworkUrl === undefined ? undefined : normalizeBridgeArtworkUri(artworkCandidate);
-  if (packet.artworkUrl !== undefined && !artworkUrl) return null;
-  return { ...packet, durationMs: duration, positionMs: Math.min(position, duration || position), timestamp, artworkUrl } as PlaybackPacket;
+  const validated = {
+    ...packet,
+    durationMs: duration,
+    positionMs: Math.min(position, duration || position),
+    timestamp,
+  } as PlaybackPacket;
+  if (packet.artworkUrl !== undefined) {
+    const artworkCandidate =
+      typeof packet.artworkUrl === 'string' && packet.artworkUrl.length <= 7 * 1024 * 1024
+        ? packet.artworkUrl
+        : undefined;
+    const artworkUrl = normalizeBridgeArtworkUri(artworkCandidate);
+    if (!artworkUrl) return null;
+    validated.artworkUrl = artworkUrl;
+  }
+  // Do not add artworkUrl: undefined. The store distinguishes an omitted
+  // heartbeat field (preserve the current cover) from an explicit clear.
+  return validated;
 }
 
 function validateLyrics(packet: Record<string, unknown>): LyricsPacket | null {

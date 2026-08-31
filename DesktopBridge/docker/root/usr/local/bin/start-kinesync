@@ -56,7 +56,10 @@ exec dbus-run-session -- bash -lc '
   }
 
   spotify_window_visible() {
-    xwininfo -root -tree 2>/dev/null | grep -q '"Spotify"'
+    # Do not use grep -q here. With pipefail enabled, an early match closes the
+    # pipe and xwininfo exits on SIGPIPE (141), making a visible window look
+    # absent and causing the supervisor to restart a healthy Spotify process.
+    xwininfo -root -tree 2>/dev/null | grep '"Spotify"' >/dev/null
   }
 
   stop_spotify() {

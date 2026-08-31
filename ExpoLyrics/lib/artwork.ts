@@ -1,4 +1,4 @@
-import type { Track } from '@/types/bridge';
+import type { PlaybackPacket, Track } from '@/types/bridge';
 import { resolveMobileArtworkUrl } from '@/lib/mobile-artwork-resolver';
 import { isPrivateIpv4 } from '@/lib/network';
 
@@ -69,6 +69,21 @@ export function normalizeBridgeArtworkUri(value: string | undefined) {
     return `data:${inferDataUriMime(compact)};base64,${compact}`;
   }
   return '';
+}
+
+export function resolvePacketArtworkUrl(
+  previousArtworkUrl: string | undefined,
+  packet: Pick<PlaybackPacket, 'artworkUrl'>,
+) {
+  const hasArtworkField = Object.prototype.hasOwnProperty.call(
+    packet,
+    'artworkUrl',
+  );
+  const incomingArtwork =
+    typeof packet.artworkUrl === 'string' && packet.artworkUrl.trim().length > 0
+      ? packet.artworkUrl.trim()
+      : undefined;
+  return incomingArtwork ?? (hasArtworkField ? undefined : previousArtworkUrl);
 }
 
 export async function resolveTrackArtworkUrl(track: Track | null): Promise<string> {

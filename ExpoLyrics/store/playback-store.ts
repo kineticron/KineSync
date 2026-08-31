@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import { getBridgeSettings } from '@/lib/bridge-settings';
+import { resolvePacketArtworkUrl } from '@/lib/artwork';
 import type {
   BridgeTimingDiagnostics,
   ConnectionStatus,
@@ -248,11 +249,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       packet.positionMs + (packet.isPlaying ? latency : 0) + prev.playbackCompensationMs,
     );
     const previousArtwork = prev.currentTrack?.artworkUrl;
-    const hasArtworkField = Object.prototype.hasOwnProperty.call(packet, 'artworkUrl');
-    const incomingArtwork =
-      typeof packet.artworkUrl === 'string' && packet.artworkUrl.trim().length > 0
-        ? packet.artworkUrl.trim()
-        : undefined;
 
     const incomingTrack: Track = {
       id: packet.trackId,
@@ -261,7 +257,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       album: packet.album,
       // Keep the last cover visible while the bridge resolves art for a new track.
       // Explicit empty artwork clears stale covers for mobile-only browser playback.
-      artworkUrl: incomingArtwork ?? (hasArtworkField ? undefined : previousArtwork),
+      artworkUrl: resolvePacketArtworkUrl(previousArtwork, packet),
       durationMs: packet.durationMs,
       spotifyTrackId: packet.spotifyTrackId,
     };
