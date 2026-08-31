@@ -222,7 +222,7 @@ function loadMediaSessionWatcherClass() {
     .toLowerCase();
   if (requestedProvider === "linux" || requestedProvider === "mpris") {
     // eslint-disable-next-line global-require
-    return require("./linuxMpris").LinuxMediaSessionWatcher;
+    return require("./linuxMpris").LinuxMprisProcessWatcher;
   }
   if (requestedProvider !== "win32" && requestedProvider !== "windows") {
     throw new Error(`Unsupported media session provider: ${requestedProvider}`);

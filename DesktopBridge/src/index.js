@@ -136,7 +136,12 @@ app.whenReady().then(() => {
     if (!value || value.length > 2048) throw new Error("QR payload is invalid.");
     // qrcode is bundled with the desktop bridge; no remote renderer is loaded.
     const QRCode = require("qrcode");
-    return QRCode.toString(value, { type: "svg", errorCorrectionLevel: "M", margin: 2 });
+    return QRCode.toDataURL(value, {
+      type: "image/png",
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 320,
+    });
   });
   const musixmatchTokenManager = createMusixmatchTokenManager({
     settingsStore: bridgeSettingsStore,
@@ -1387,10 +1392,13 @@ app.whenReady().then(() => {
   }
   detector.on("error", (error) => pushStatus({ detectorError: error.message }));
 
+  bridge.once("listening", () => {
+    detector.start();
+    pushStatus({ startedAt: Date.now() });
+    console.log("[bridge-startup] Bridge ready");
+  });
   bridge.start();
   relayBridge.start();
-  detector.start();
-  pushStatus({ startedAt: Date.now() });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1434,6 +1442,9 @@ app.whenReady().then(() => {
 
   process.once("SIGINT", () => app.quit());
   process.once("SIGTERM", () => app.quit());
+}).catch((error) => {
+  console.error("[bridge-startup] Fatal startup error", error);
+  app.quit();
 });
 
 app.on("window-all-closed", () => {

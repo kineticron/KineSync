@@ -82,11 +82,15 @@ COPY --from=node-runtime /opt/kinesync/node_modules ./node_modules
 COPY . .
 COPY docker/root /
 
-RUN chmod +x \
+RUN sed -i 's/\r$//' \
       /defaults/autostart \
       /usr/local/bin/start-kinesync \
       /usr/local/bin/start-kinesync-bridge \
-      /usr/local/bin/kinesync-open-url \
+      /usr/local/bin/kinesync-open-url && \
+    chmod +x \
+      /defaults/autostart \
+      /usr/local/bin/start-kinesync \
+      /usr/local/bin/start-kinesync-bridge \
       /usr/local/bin/kinesync-open-url && \
     chown -R abc:abc /opt/kinesync
 

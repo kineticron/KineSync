@@ -1,10 +1,15 @@
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
+const { PassThrough } = require("node:stream");
 const test = require("node:test");
 
 const {
   LinuxMediaSessionWatcher,
+  LinuxMprisProcessWatcher,
   MprisSpotifyClient,
   buildMprisSnapshot,
+  detectArtworkMime,
+  makeMprisArtworkPortable,
   microsecondsToMilliseconds,
   unwrapVariant,
 } = require("../src/linuxMpris");
@@ -112,6 +117,55 @@ test("buildMprisSnapshot converts Spotify metadata to the native watcher contrac
   });
 });
 
+test("makeMprisArtworkPortable converts Docker Spotify file artwork to a data URI", async () => {
+  const png = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02,
+  ]);
+  let resolvedPath = "";
+  const portable = await makeMprisArtworkPortable(
+    "file:///config/.cache/spotify/cover%20art.png",
+    {
+      stat: async (artworkPath) => {
+        resolvedPath = artworkPath;
+        return { isFile: () => true, size: png.length };
+      },
+      readFile: async () => png,
+      urlToPath: (url) => decodeURIComponent(url.pathname),
+    },
+  );
+
+  assert.equal(resolvedPath, "/config/.cache/spotify/cover art.png");
+  assert.equal(portable, `data:image/png;base64,${png.toString("base64")}`);
+});
+
+test("makeMprisArtworkPortable rejects remote, oversized, and invalid image files", async () => {
+  const neverRead = async () => {
+    assert.fail("rejected artwork must not be read");
+  };
+  assert.equal(
+    await makeMprisArtworkPortable("file://remote-host/cover.jpg", {
+      stat: neverRead,
+      readFile: neverRead,
+    }),
+    "",
+  );
+  assert.equal(
+    await makeMprisArtworkPortable("file:///config/huge.jpg", {
+      stat: async () => ({ isFile: () => true, size: 5 * 1024 * 1024 + 1 }),
+      readFile: neverRead,
+    }),
+    "",
+  );
+  assert.equal(
+    await makeMprisArtworkPortable("file:///config/not-an-image.txt", {
+      stat: async () => ({ isFile: () => true, size: 4 }),
+      readFile: async () => Buffer.from("nope"),
+    }),
+    "",
+  );
+  assert.equal(detectArtworkMime(Buffer.from("nope")), "");
+});
+
 test("LinuxMediaSessionWatcher emits changed snapshots and deduplicates errors", async () => {
   const snapshots = [];
   const errors = [];
@@ -151,4 +205,79 @@ test("LinuxMediaSessionWatcher emits changed snapshots and deduplicates errors",
 
   assert.equal(snapshots.length, 2);
   assert.deepEqual(errors, ["Spotify unavailable"]);
+});
+
+test("LinuxMediaSessionWatcher emits artwork changes while playback is paused", async () => {
+  const snapshots = [];
+  let artworkUrl = "data:image/png;base64,first";
+  const client = {
+    async readSnapshot() {
+      return {
+        title: "Track",
+        artist: "Artist",
+        album: "Album",
+        artworkUrl,
+        durationMs: 100_000,
+        positionMs: 2_000,
+        isPlaying: false,
+      };
+    },
+    close() {},
+  };
+  const watcher = new LinuxMediaSessionWatcher(
+    (snapshot) => snapshots.push(snapshot),
+    undefined,
+    { client },
+  );
+  watcher.running = true;
+
+  await watcher.poll();
+  artworkUrl = "data:image/png;base64,second";
+  await watcher.poll();
+  watcher.stop();
+
+  assert.equal(snapshots.length, 2);
+  assert.equal(snapshots[1].artworkUrl, artworkUrl);
+});
+
+test("LinuxMprisProcessWatcher forwards framed worker snapshots and stops its child", async () => {
+  const snapshots = [];
+  const errors = [];
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+  };
+  let spawnCall = null;
+  const watcher = new LinuxMprisProcessWatcher(
+    (snapshot) => snapshots.push(snapshot),
+    (error) => errors.push(error),
+    {
+      nodeExecutable: "node-test",
+      workerPath: "/test/linuxMpris.js",
+      spawnImpl: (...args) => {
+        spawnCall = args;
+        return child;
+      },
+    },
+  );
+
+  watcher.start();
+  assert.equal(spawnCall[0], "node-test");
+  assert.deepEqual(spawnCall[1], ["/test/linuxMpris.js", "--snapshot-worker"]);
+
+  child.stdout.write('{"type":"snapshot","snapshot":{"title":"Tra');
+  child.stdout.write('ck","artworkUrl":"https://example.test/art.jpg"}}\n');
+  child.stdout.write('{"type":"error","message":"temporary failure"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(snapshots, [
+    { title: "Track", artworkUrl: "https://example.test/art.jpg" },
+  ]);
+  assert.deepEqual(errors, ["temporary failure"]);
+
+  watcher.stop();
+  assert.equal(child.killed, true);
 });

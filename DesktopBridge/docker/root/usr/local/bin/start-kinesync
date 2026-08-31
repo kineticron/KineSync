@@ -71,7 +71,7 @@ exec dbus-run-session -- bash -lc '
   }
 
   existing_bridge_pid() {
-    pgrep -u "$(id -u)" -f 'electron.*src/index\.js' | head -n1 || true
+    pgrep -u "$(id -u)" -x electron | head -n1 || true
   }
 
   start_spotify() {
@@ -97,7 +97,7 @@ exec dbus-run-session -- bash -lc '
       return
     fi
     echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
-    "$app_root/docker/root/usr/local/bin/start-kinesync-bridge" >>"$log_dir/desktop-bridge.log" 2>&1 &
+    /usr/local/bin/start-kinesync-bridge >>"$log_dir/desktop-bridge.log" 2>&1 &
     bridge_pid=$!
   }
 

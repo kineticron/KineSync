@@ -112,7 +112,8 @@ minutes because it downloads a pinned Spotify package and installs the runtime.
 
 ### 3. Open the container desktop
 
-Open <http://localhost:3000> on the Docker host. If you configured
+Open `http://localhost:<KINESYNC_WEB_PORT>` on the Docker host (port `3000`
+by default). If you configured
 `KINESYNC_WEB_BIND_ADDRESS` for LAN access, use the corresponding host address
 instead. Sign in with `KINESYNC_WEB_USER` and `KINESYNC_WEB_PASSWORD` from
 `.env`.

@@ -1737,6 +1737,22 @@
       const localQrCanvas = document.getElementById('local-qr-canvas');
       const localQrButton = document.getElementById('toggle-local-qr');
 
+      const renderPairingQr = async (canvas, payload, alt) => {
+        if (!canvas || !window.bridgeAPI?.renderQrCode) return;
+        canvas.textContent = 'Generating QR code...';
+        try {
+          const dataUrl = await window.bridgeAPI.renderQrCode(payload);
+          const image = document.createElement('img');
+          image.className = 'qr-image';
+          image.alt = alt;
+          image.src = dataUrl;
+          canvas.replaceChildren(image);
+        } catch (error) {
+          canvas.textContent = 'QR code unavailable';
+          console.error('Pairing QR render failed:', error);
+        }
+      };
+
       localQrButton?.addEventListener('click', () => {
         localQrVisible = !localQrVisible;
         if (localQrContainer) localQrContainer.hidden = !localQrVisible;
@@ -1751,9 +1767,11 @@
           return;
         }
         if (localQrSection) localQrSection.hidden = false;
-        window.bridgeAPI.renderQrCode(JSON.stringify({ u: url, k: key })).then((svg) => {
-          if (localQrCanvas) localQrCanvas.innerHTML = svg;
-        }).catch(() => {});
+        void renderPairingQr(
+          localQrCanvas,
+          JSON.stringify({ u: url, k: key }),
+          'Local bridge pairing QR code',
+        );
       };
 
       if (toggleQrButton) {
@@ -1770,14 +1788,7 @@
           if (qrSection) qrSection.hidden = false;
           const qrData = JSON.stringify({ u: data.mobileUrl, k: data.bridgeKey || '' });
           const canvas = document.getElementById('relay-qr-canvas');
-          if (canvas && window.bridgeAPI?.renderQrCode) {
-            canvas.innerHTML = '<span class="hint">Generating QR code...</span>';
-            window.bridgeAPI.renderQrCode(qrData).then((svg) => {
-              if (canvas) canvas.innerHTML = svg;
-            }).catch(() => {
-              if (canvas) canvas.innerHTML = '<span class="hint">QR code unavailable</span>';
-            });
-          }
+          void renderPairingQr(canvas, qrData, 'Ngrok relay pairing QR code');
         } else {
           ngrokRelayRunning = false;
           if (qrSection) qrSection.hidden = true;

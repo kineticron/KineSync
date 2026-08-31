@@ -54,8 +54,11 @@ test("Spotify navigation accepts only exact Spotify origins", () => {
 
 test("renderer does not load QR code code from a remote CDN", () => {
   const html = fs.readFileSync(path.join(__dirname, "../src/index.html"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "../src/index.js"), "utf8");
   assert.doesNotMatch(html, /cdnjs\.cloudflare\.com|jsdelivr\.net/);
   assert.match(html, /bridgeAPI\.renderQrCode/);
+  assert.match(html, /createElement\(['"]img['"]\)/);
+  assert.match(main, /QRCode\.toDataURL/);
 });
 
 test("hosted relay rejects registration takeover and authenticates a paired client", async () => {

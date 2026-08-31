@@ -10,7 +10,7 @@ electron="$app_root/node_modules/electron/dist/electron"
 
 mkdir -p "$HOME/log"
 
-if pgrep -u "$(id -u)" -f 'electron.*src/index\.js' >/dev/null 2>&1; then
+if pgrep -u "$(id -u)" -x electron >/dev/null 2>&1; then
   exit 0
 fi
 
