@@ -77,6 +77,21 @@ _Recommended:_
 
 ## Quick Start
 
+### Install on iPhone or iPad
+
+[**Download the latest unsigned IPA**](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa)
+for SideStore, Sideloadly, or another IPA signer. With SideStore already set
+up, you can
+[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2FKineSync-iOS-unsigned.ipa)
+or add the permanent
+[KineSync app source](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2Fsidestore-source.json)
+to install KineSync and receive update notices inside SideStore.
+
+See the [complete iOS installation guide](IOS_INSTALL.md) for SideStore,
+Sideloadly, refresh requirements, and troubleshooting.
+
+### Run from source
+
 For the quickest self-contained setup, follow the [instant Docker setup](DOCKER.md).
 It covers configuration, Spotify login, ExpoLyrics pairing, optional ngrok
 access, validation, updates, and troubleshooting. The steps below run the apps
@@ -154,6 +169,16 @@ npx tsc --noEmit                 # Type-check
 cd DesktopBridge
 node --check src\index.js
 ```
+
+## Release channels
+
+- **Windows native binaries:** Stable releases tagged `v*` continue to contain
+  the Desktop Bridge native artifacts used by the existing download system.
+- **Unsigned iOS app:** Every push to `main` creates an immutable prerelease
+  tagged `ios-main-<commit>`. The newest successful build also updates the
+  rolling `ios-latest` prerelease, its permanent IPA URL, SideStore metadata,
+  and checksum. Neither type is ever marked as the repository's latest stable
+  release.
 
 ## Architecture
 

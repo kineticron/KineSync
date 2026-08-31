@@ -22,6 +22,14 @@ React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics st
 
 ## Quick Start
 
+For a prebuilt iPhone/iPad app, use the repository's
+[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa)
+with SideStore or Sideloadly. See the
+[iOS installation guide](../IOS_INSTALL.md) for the one-tap SideStore source,
+refresh requirements, and troubleshooting.
+
+To run from source:
+
 ```bash
 npm install
 npx expo start -c --tunnel

@@ -14,6 +14,10 @@
         "ITSAppUsesNonExemptEncryption": false,
         "CADisableMinimumFrameDurationOnPhone": true,
         "NSSupportsLiveActivitiesFrequentUpdates": true,
+        "NSLocalNetworkUsageDescription": "KineSync connects to your Desktop Bridge to stream synchronized lyrics and playback updates.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
         "UIBackgroundModes": [
           "audio"
         ]
