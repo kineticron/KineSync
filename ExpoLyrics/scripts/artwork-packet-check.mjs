@@ -7,6 +7,7 @@ const bundled = await build({
     contents: [
       'export { validateInboundBridgePacket } from "./lib/bridge-validation";',
       'export { resolvePacketArtworkUrl } from "./lib/artwork";',
+      'export { shouldAcceptPlaybackPacket } from "./lib/playback-source";',
     ].join('\n'),
     resolveDir: process.cwd(),
     loader: 'ts',
@@ -20,7 +21,11 @@ const bundled = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   bundled.outputFiles[0].text,
 ).toString('base64')}`;
-const { resolvePacketArtworkUrl, validateInboundBridgePacket } = await import(
+const {
+  resolvePacketArtworkUrl,
+  shouldAcceptPlaybackPacket,
+  validateInboundBridgePacket,
+} = await import(
   moduleUrl
 );
 
@@ -50,6 +55,11 @@ assert.equal(
   false,
   'a heartbeat that omits artwork must not be normalized into an explicit clear',
 );
+
+assert.equal(shouldAcceptPlaybackPacket('desktop', 'desktop'), true);
+assert.equal(shouldAcceptPlaybackPacket('desktop', 'mobile'), false);
+assert.equal(shouldAcceptPlaybackPacket('mobile', 'mobile'), true);
+assert.equal(shouldAcceptPlaybackPacket('mobile', 'desktop'), false);
 
 assert.equal(resolvePacketArtworkUrl(initial.artworkUrl, heartbeat), artworkUrl);
 assert.equal(

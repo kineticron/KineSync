@@ -309,6 +309,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const setServerUrlStore = usePlaybackStore((s) => s.setServerUrl);
   const setHandshakeKeyStore = usePlaybackStore((s) => s.setHandshakeKey);
+  const setPlaybackModeStore = usePlaybackStore((s) => s.setPlaybackMode);
   const playbackTapToSeek = usePlaybackStore((s) => s.playbackTapToSeek);
   const setPlaybackTapToSeek = usePlaybackStore((s) => s.setPlaybackTapToSeek);
   const hidePlaybackStatusBar = usePlaybackStore(
@@ -370,6 +371,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           }).then((saved) => {
             setServerUrlStore(saved.serverUrl);
             setHandshakeKeyStore(saved.handshakeKey);
+            setPlaybackModeStore("desktop");
             setScanCompleted(true);
             setScannerOpen(false);
             bridgeClient.reconnectNow();
@@ -387,7 +389,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         }, 5000);
       }
     },
-    [setServerUrlStore, setHandshakeKeyStore],
+    [setServerUrlStore, setHandshakeKeyStore, setPlaybackModeStore],
   );
 
   const openScanner = async () => {
@@ -431,6 +433,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const persistBridgeSettings = useCallback(() => {
     if (playbackMode === "phone") {
       // Phone-only: nothing to connect to, just surface the built-in player.
+      setPlaybackModeStore("mobile");
       bridgeClient.disconnect();
       setServerUrlStore("");
       setHandshakeKeyStore("");
@@ -443,13 +446,14 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       setTimeout(requestOpenSpotifyBrowser, 320);
       return;
     }
+    setPlaybackModeStore("desktop");
     const state = usePlaybackStore.getState();
     if (!state.serverUrl) {
       setServerUrlStore(inferDefaultBridgeUrl());
     }
     bridgeClient.reconnectNow();
     void saveBridgeSettings({ playbackMode: "desktop", onboardingCompleted: true });
-  }, [playbackMode, setHandshakeKeyStore, setServerUrlStore]);
+  }, [playbackMode, setHandshakeKeyStore, setPlaybackModeStore, setServerUrlStore]);
 
   const handleNext = useCallback(() => {
     if (isLastStep) {

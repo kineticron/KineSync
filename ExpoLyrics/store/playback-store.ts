@@ -5,6 +5,10 @@ import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import { getBridgeSettings } from '@/lib/bridge-settings';
 import { resolvePacketArtworkUrl } from '@/lib/artwork';
+import {
+  shouldAcceptPlaybackPacket,
+  type PlaybackMode,
+} from '@/lib/playback-source';
 import type {
   BridgeTimingDiagnostics,
   ConnectionStatus,
@@ -33,6 +37,7 @@ export async function initPlaybackStoreDefaults(): Promise<{ serverUrl: string; 
   const settings = await getBridgeSettings();
   _cachedBridgeUrl = settings.serverUrl;
   _cachedHandshakeKey = settings.handshakeKey;
+  usePlaybackStore.setState({ playbackMode: settings.playbackMode });
   // Push persisted values into the store — the store initializes synchronously before AsyncStorage resolves.
   // A completed setup with no server URL means phone-only mode, so do not infer the Expo host as a bridge.
   if (settings.serverUrl || settings.onboardingCompleted) {
@@ -92,6 +97,7 @@ function inferDefaultBridgeUrl() {
 }
 
 type PlaybackState = {
+  playbackMode: PlaybackMode;
   connectionStatus: ConnectionStatus;
   serverUrl: string;
   handshakeKey: string;
@@ -119,10 +125,14 @@ type PlaybackState = {
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
   setConnectionStatus: (status: ConnectionStatus) => void;
+  setPlaybackMode: (mode: PlaybackMode) => void;
   setServerUrl: (url: string) => void;
   setHandshakeKey: (key: string) => void;
   setErrorMessage: (message: string) => void;
-  ingestPacket: (packet: PlaybackPacket) => { trackChanged: boolean; seekDetected: boolean };
+  ingestPacket: (
+    packet: PlaybackPacket,
+    source: PlaybackMode,
+  ) => { trackChanged: boolean; seekDetected: boolean };
   setLyrics: (lyrics: LyricLine[], source?: string) => void;
   setLyricsMetadata: (metadata: LyricsMetadata) => void;
   beginTranslationRequest: () => void;
@@ -191,6 +201,7 @@ function computePlaybackPosition(state: PlaybackState) {
 }
 
 export const usePlaybackStore = create<PlaybackState>((set, get) => ({
+  playbackMode: 'desktop',
   connectionStatus: 'disconnected',
   serverUrl: _cachedBridgeUrl || inferDefaultBridgeUrl(),
   handshakeKey: _cachedHandshakeKey || DEFAULT_HANDSHAKE_KEY,
@@ -223,6 +234,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         ? { connectionStatus: status }
         : { connectionStatus: status, clockSkewBaselineMs: Number.NaN, lastSourceClockMs: 0 },
     ),
+  setPlaybackMode: (playbackMode) =>
+    set({
+      playbackMode,
+      clockSkewBaselineMs: Number.NaN,
+      lastSourceClockMs: 0,
+    }),
   setServerUrl: (url) => {
     set({ serverUrl: url.trim() });
   },
@@ -230,10 +247,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ handshakeKey: key.trim() || DEFAULT_HANDSHAKE_KEY });
   },
   setErrorMessage: (message) => set({ errorMessage: message }),
-  ingestPacket: (packet) => {
+  ingestPacket: (packet, source) => {
     const nowWall = Date.now();
     const nowMono = getMonotonicNow();
     const prev = get();
+    if (!shouldAcceptPlaybackPacket(prev.playbackMode, source)) {
+      return { trackChanged: false, seekDetected: false };
+    }
     const sourceClockRaw = Number(packet.capturedAtMs ?? packet.timestamp ?? nowWall);
     const sourceClock = Number.isFinite(sourceClockRaw) ? sourceClockRaw : nowWall;
     if (sourceClock + 250 < prev.lastSourceClockMs) {

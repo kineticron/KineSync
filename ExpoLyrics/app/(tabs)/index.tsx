@@ -498,6 +498,7 @@ export default function HomeScreen() {
   const windowDimensions = useWindowDimensions();
   const currentTrack = usePlaybackStore((s) => s.currentTrack);
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
+  const playbackMode = usePlaybackStore((s) => s.playbackMode);
   const driftOffset = usePlaybackStore((s) => s.driftOffset);
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
@@ -637,6 +638,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (
+      playbackMode !== "mobile" ||
       connectionStatus === "connected" ||
       !currentTrack ||
       Boolean(normalizeBridgeArtworkUri(currentTrack.artworkUrl))
@@ -650,7 +652,10 @@ export default function HomeScreen() {
         return;
       }
       const state = usePlaybackStore.getState();
-      if (state.connectionStatus !== "connected") {
+      if (
+        state.playbackMode === "mobile" &&
+        state.connectionStatus !== "connected"
+      ) {
         state.setCurrentTrackArtwork(trackId, artworkUrl);
       }
     });
@@ -660,6 +665,7 @@ export default function HomeScreen() {
   }, [
     currentTrack,
     connectionStatus,
+    playbackMode,
     currentTrack?.id,
     currentTrack?.title,
     currentTrack?.artist,

@@ -147,6 +147,7 @@ export default function BridgeSettingsScreen() {
   const handshakeKey = usePlaybackStore((s) => s.handshakeKey);
   const setServerUrl = usePlaybackStore((s) => s.setServerUrl);
   const setHandshakeKey = usePlaybackStore((s) => s.setHandshakeKey);
+  const setPlaybackModeStore = usePlaybackStore((s) => s.setPlaybackMode);
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const simulatedLatencyMs = usePlaybackStore((s) => s.simulatedLatencyMs);
   const packetDropRate = usePlaybackStore((s) => s.packetDropRate);
@@ -195,6 +196,7 @@ export default function BridgeSettingsScreen() {
     void getBridgeSettings().then((settings) => {
       if (mounted) {
         setPlaybackMode(settings.playbackMode);
+        setPlaybackModeStore(settings.playbackMode);
         setUrlInput(settings.serverUrl);
         setKeyInput(settings.handshakeKey);
       }
@@ -202,11 +204,12 @@ export default function BridgeSettingsScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [setPlaybackModeStore]);
 
   const selectPlaybackMode = useCallback(
     (mode: PlaybackMode) => {
       setPlaybackMode(mode);
+      setPlaybackModeStore(mode);
       if (mode === 'mobile') {
         bridgeClient.disconnect();
         // Keep the bridge credentials so switching modes is reversible.
@@ -222,7 +225,7 @@ export default function BridgeSettingsScreen() {
         bridgeClient.reconnectNow();
       }
     },
-    [keyInput, setHandshakeKey, setServerUrl, urlInput],
+    [keyInput, setHandshakeKey, setPlaybackModeStore, setServerUrl, urlInput],
   );
 
   const saveAndReconnect = useCallback(async () => {
@@ -248,11 +251,12 @@ export default function BridgeSettingsScreen() {
       setServerUrl(saved.serverUrl);
       setHandshakeKey(saved.handshakeKey);
       setPlaybackMode('desktop');
+      setPlaybackModeStore('desktop');
       bridgeClient.reconnectNow();
     } catch (error) {
       setBridgeSaveError(error instanceof Error ? error.message : 'Could not save bridge settings.');
     }
-  }, [keyInput, setHandshakeKey, setServerUrl, urlInput]);
+  }, [keyInput, setHandshakeKey, setPlaybackModeStore, setServerUrl, urlInput]);
   useEffect(() => {
     let mounted = true;
     void getMobileLyricsSettings().then((settings) => {
@@ -320,6 +324,7 @@ export default function BridgeSettingsScreen() {
             setServerUrl(saved.serverUrl);
             setHandshakeKey(saved.handshakeKey);
             setPlaybackMode('desktop');
+            setPlaybackModeStore('desktop');
             setScannerOpen(false);
             bridgeClient.reconnectNow();
           }).catch((error) => {
@@ -333,7 +338,7 @@ export default function BridgeSettingsScreen() {
       }
       setScanError('No valid KineSync QR code found');
     },
-    [setHandshakeKey, setServerUrl],
+    [setHandshakeKey, setPlaybackModeStore, setServerUrl],
   );
 
   const openScanner = useCallback(async () => {

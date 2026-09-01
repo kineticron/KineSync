@@ -132,6 +132,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     const connectionStatusRef = useRef(
       usePlaybackStore.getState().connectionStatus,
     );
+    const playbackModeRef = useRef(usePlaybackStore.getState().playbackMode);
     const [browserOpen, setBrowserOpen] = useState(false);
     const [browserGeneration, setBrowserGeneration] = useState(0);
     const browserGenerationRef = useRef(0);
@@ -164,6 +165,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     const refreshBrowser = useCallback((force = false, automatic = false) => {
       if (
         appStateRef.current !== "active" ||
+        playbackModeRef.current !== "mobile" ||
         (!force && connectionStatusRef.current === "connected")
       ) {
         return;
@@ -195,6 +197,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           type: "setMonitoring",
           enabled:
             appStateRef.current === "active" &&
+            playbackModeRef.current === "mobile" &&
             connectionStatusRef.current !== "connected",
         }),
       );
@@ -202,8 +205,11 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
     useEffect(() =>
       usePlaybackStore.subscribe((state) => {
-        const changed = connectionStatusRef.current !== state.connectionStatus;
+        const changed =
+          connectionStatusRef.current !== state.connectionStatus ||
+          playbackModeRef.current !== state.playbackMode;
         connectionStatusRef.current = state.connectionStatus;
+        playbackModeRef.current = state.playbackMode;
         if (changed) {
           syncBrowserMonitoring();
         }
@@ -256,6 +262,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           const shouldRefreshAfterResume =
             previousState !== "active" &&
             resumedFromBackground &&
+            playbackModeRef.current === "mobile" &&
             connectionStatusRef.current !== "connected";
 
           if (shouldRefreshAfterResume && !recentBlockedNativeHandoff) {
@@ -277,6 +284,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                 resumeRefreshTimerRef.current = null;
                 if (
                   appStateRef.current === "active" &&
+                  playbackModeRef.current === "mobile" &&
                   connectionStatusRef.current !== "connected"
                 ) {
                   refreshBrowser(true, true);
@@ -293,6 +301,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       const heartbeat = setInterval(() => {
         if (
           appStateRef.current !== "active" ||
+          playbackModeRef.current !== "mobile" ||
           connectionStatusRef.current === "connected"
         ) return;
         requestSnapshot();
@@ -404,6 +413,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         lyricsRefreshTimerRef.current = setTimeout(() => {
           const activeStore = usePlaybackStore.getState();
           if (
+            activeStore.playbackMode !== "mobile" ||
             connectionStatusRef.current === "connected" ||
             activeStore.currentTrack?.id !== packetTrackId
           ) {
@@ -423,7 +433,10 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
     const ingestBrowserPlayback = useCallback((sample: PlaybackSample) => {
       playbackRef.current = sample;
-      if (connectionStatusRef.current === "connected") {
+      if (
+        playbackModeRef.current !== "mobile" ||
+        connectionStatusRef.current === "connected"
+      ) {
         return;
       }
 
@@ -473,7 +486,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       };
 
       const store = usePlaybackStore.getState();
-      const result = store.ingestPacket(packet);
+      const result = store.ingestPacket(packet, "mobile");
       const spotifyIdentityChanged = Boolean(
         previousTrack?.spotifyTrackId &&
           metadata.spotifyTrackId &&

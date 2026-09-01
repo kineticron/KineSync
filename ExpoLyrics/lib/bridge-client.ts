@@ -160,7 +160,7 @@ class BridgeClient {
         }
         const applyPacket = () => {
           const state = usePlaybackStore.getState();
-          const result = state.ingestPacket(packet);
+          const result = state.ingestPacket(packet, "desktop");
           if (result.trackChanged) {
             state.clearLyrics();
             state.setLyricsStatusMessage("Waiting for desktop lyrics...");
