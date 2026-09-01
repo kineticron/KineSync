@@ -163,7 +163,45 @@ function extractSpicyPayloadMetadata(payload) {
     seen.add(norm);
     deduped.push(title);
   }
-  return { titles: deduped };
+  const source = String(payload?.source || "")
+    .trim()
+    .toLowerCase();
+  const providerLabels = {
+    spt: "Spotify",
+    aml: "Apple Music",
+    spl: "Spicy Lyrics",
+    ldb: "Local DB",
+  };
+  const normalizeProfile = (profile) => {
+    if (!profile || typeof profile !== "object") {
+      return undefined;
+    }
+    const normalized = {
+      ...(String(profile.id || "").trim()
+        ? { id: String(profile.id).trim() }
+        : {}),
+      ...(String(profile.username || "").trim()
+        ? { username: String(profile.username).trim() }
+        : {}),
+      ...(String(profile.avatar || "").trim()
+        ? { avatar: String(profile.avatar).trim() }
+        : {}),
+    };
+    return Object.keys(normalized).length ? normalized : undefined;
+  };
+  const uploadMetadata = payload?.TTMLUploadMetadata;
+  const maker = normalizeProfile(uploadMetadata?.Maker);
+  const uploader = normalizeProfile(uploadMetadata?.Uploader);
+  const attribution = source
+    ? {
+        source,
+        provider: providerLabels[source] || "Unknown",
+        ...(source === "spl" ? { community: true } : {}),
+        ...(maker ? { maker } : {}),
+        ...(uploader ? { uploader } : {}),
+      }
+    : undefined;
+  return { titles: deduped, attribution };
 }
 
 function extractSpicyLeadVocalPlainText(lyrics) {

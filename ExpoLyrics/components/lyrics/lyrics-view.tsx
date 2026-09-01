@@ -12,6 +12,7 @@ import {
 import {
   AppState,
   type AppStateStatus,
+  Image,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   StyleSheet,
@@ -48,7 +49,11 @@ import {
 import { getPrimaryLineText } from "@/lib/active-lyric-line";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { usePlaybackStore } from "@/store/playback-store";
-import type { LyricLine as LyricLineType } from "@/types/bridge";
+import type {
+  LyricLine as LyricLineType,
+  LyricsAttributionMetadata,
+  LyricsAttributionProfile,
+} from "@/types/bridge";
 
 import { LyricLine } from "./lyric-line";
 
@@ -535,14 +540,57 @@ type LyricsViewProps = {
 
 type ScrollAnimationStyle = "native" | "lyric";
 
+const CreditsProfileLine = memo(function CreditsProfileLine({
+  label,
+  profile,
+  active,
+  alignRight,
+}: {
+  label: string;
+  profile: LyricsAttributionProfile;
+  active: boolean;
+  alignRight: boolean;
+}) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  return (
+    <View
+      style={[
+        styles.creditsProfileRow,
+        alignRight && styles.creditsProfileRowOpposite,
+      ]}
+    >
+      <Text
+        style={[
+          styles.creditsText,
+          alignRight && styles.creditsTextOpposite,
+          active && styles.creditsTextActive,
+        ]}
+      >
+        <Text style={styles.creditsTextStrong}>{label}</Text>@
+        {profile.username}
+      </Text>
+      {profile.avatar && !avatarFailed ? (
+        <Image
+          source={{ uri: profile.avatar }}
+          style={styles.creditsProfileAvatar}
+          accessibilityLabel={`${profile.username || "Community member"}'s avatar`}
+          onError={() => setAvatarFailed(true)}
+        />
+      ) : null}
+    </View>
+  );
+});
+
 const CreditsFooter = memo(function CreditsFooter({
   songwriters,
+  attribution,
   lastLyricEndTime,
   onPress,
   style,
   alignRight = false,
 }: {
   songwriters: string[];
+  attribution?: LyricsAttributionMetadata;
   lastLyricEndTime: number;
   onPress?: (positionMs: number) => void;
   style?: StyleProp<ViewStyle>;
@@ -575,16 +623,57 @@ const CreditsFooter = memo(function CreditsFooter({
         style={[styles.creditsFooter, style]}
         onPress={() => onPress?.(lastLyricEndTime)}
       >
-        <Text
-          style={[
-            styles.creditsText,
-            alignRight && styles.creditsTextOpposite,
-            isActive && styles.creditsTextActive,
-          ]}
-        >
-          <Text style={styles.creditsTextStrong}>Written By: </Text>
-          {songwriters.join(", ")}
-        </Text>
+        {songwriters.length ? (
+          <Text
+            style={[
+              styles.creditsText,
+              alignRight && styles.creditsTextOpposite,
+              isActive && styles.creditsTextActive,
+            ]}
+          >
+            <Text style={styles.creditsTextStrong}>Written By: </Text>
+            {songwriters.join(", ")}
+          </Text>
+        ) : null}
+        {attribution ? (
+          <Text
+            style={[
+              styles.creditsText,
+              alignRight && styles.creditsTextOpposite,
+              isActive && styles.creditsTextActive,
+            ]}
+          >
+            <Text style={styles.creditsTextStrong}>Provided By: </Text>
+            {attribution.provider}
+          </Text>
+        ) : null}
+        {attribution?.community ? (
+          <Text
+            style={[
+              styles.creditsText,
+              alignRight && styles.creditsTextOpposite,
+              isActive && styles.creditsTextActive,
+            ]}
+          >
+            These lyrics have been provided by the Spicy Lyrics community
+          </Text>
+        ) : null}
+        {attribution?.maker?.username ? (
+          <CreditsProfileLine
+            label="Made By: "
+            profile={attribution.maker}
+            active={isActive}
+            alignRight={alignRight}
+          />
+        ) : null}
+        {attribution?.uploader?.username ? (
+          <CreditsProfileLine
+            label={attribution.maker?.username ? "Uploaded By: " : "Made By: "}
+            profile={attribution.uploader}
+            active={isActive}
+            alignRight={alignRight}
+          />
+        ) : null}
       </Pressable>
     </Animated.View>
   );
@@ -1147,7 +1236,12 @@ export function LyricsView({
     ],
   );
   const activeLineIndex = effectiveWindowState.activeLineStartIndex;
-  const songwriters = lyricsMetadata.credits?.songwriters || [];
+  const songwriters = useMemo(
+    () => lyricsMetadata.credits?.songwriters || [],
+    [lyricsMetadata.credits?.songwriters],
+  );
+  const attribution = lyricsMetadata.attribution;
+  const hasCredits = songwriters.length > 0 || Boolean(attribution);
   const instrumental = Boolean(lyricsMetadata.instrumental);
   const lastLyricEndTime = lyrics.length
     ? Number(lyrics[lyrics.length - 1]?.lineEndTime || 0)
@@ -1455,7 +1549,7 @@ export function LyricsView({
       const isLastLineRange =
         range.endIndex >= lyrics.length - 1 &&
         range.startIndex >= lyrics.length - 1;
-      if (creditsActive && songwriters.length > 0 && isLastLineRange) {
+      if (creditsActive && hasCredits && isLastLineRange) {
         return getCreditsAwareScrollOffset({
           range,
           lyricsLength: lyrics.length,
@@ -1497,7 +1591,7 @@ export function LyricsView({
       getRangeMetrics,
       getScrollOffsetForLineIndex,
       lyrics.length,
-      songwriters.length,
+      hasCredits,
     ],
   );
 
@@ -1514,7 +1608,7 @@ export function LyricsView({
       const isLastLineRange =
         range.endIndex >= lyrics.length - 1 &&
         range.startIndex >= lyrics.length - 1;
-      if (creditsActive && songwriters.length > 0 && isLastLineRange) {
+      if (creditsActive && hasCredits && isLastLineRange) {
         const creditsLayout = creditsLayoutRef.current;
         const scrollOffset = scrollOffsetRef.current;
         if (
@@ -1560,7 +1654,7 @@ export function LyricsView({
       getRangeMetrics,
       getScrollOffsetForRange,
       lyrics.length,
-      songwriters.length,
+      hasCredits,
     ],
   );
 
@@ -2200,7 +2294,7 @@ export function LyricsView({
         lastLineTop,
         lastLineHeight,
         creditsLayout: creditsLayoutRef.current,
-        hasCredits: songwriters.length > 0,
+        hasCredits,
         activeLineTopOffset,
       }),
     };
@@ -2210,7 +2304,7 @@ export function LyricsView({
     getAbsoluteLineTop,
     getLineHeight,
     lyrics.length,
-    songwriters.length,
+    hasCredits,
     topListPadding,
     viewportHeight,
   ]);
@@ -2274,13 +2368,14 @@ export function LyricsView({
   );
 
   const listFooter = useMemo(() => {
-    if (!songwriters.length) {
+    if (!hasCredits) {
       return null;
     }
     return (
       <View onLayout={handleCreditsLayout}>
         <CreditsFooter
           songwriters={songwriters}
+          attribution={attribution}
           lastLyricEndTime={lastLyricEndTime}
           onPress={onCreditsTimestampPress}
         />
@@ -2290,6 +2385,8 @@ export function LyricsView({
     handleCreditsLayout,
     lastLyricEndTime,
     onCreditsTimestampPress,
+    attribution,
+    hasCredits,
     songwriters,
   ]);
 
@@ -2417,7 +2514,7 @@ export function LyricsView({
         </View>
       );
     };
-    const staticFooter = songwriters.length > 0 ? (
+    const staticFooter = hasCredits ? (
       <View
         style={[
           styles.staticCreditsFooter,
@@ -2426,6 +2523,7 @@ export function LyricsView({
       >
         <CreditsFooter
           songwriters={songwriters}
+          attribution={attribution}
           lastLyricEndTime={0}
           onPress={onCreditsTimestampPress}
           alignRight={landscapeMode}
@@ -2720,6 +2818,20 @@ const styles = StyleSheet.create({
   },
   creditsTextStrong: {
     fontWeight: "800",
+  },
+  creditsProfileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  creditsProfileRowOpposite: {
+    justifyContent: "flex-end",
+  },
+  creditsProfileAvatar: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,255,255,0.12)",
   },
   creditsTextActive: {
     color: "#FFFFFF",

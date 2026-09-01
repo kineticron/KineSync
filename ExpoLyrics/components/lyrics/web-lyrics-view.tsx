@@ -220,6 +220,24 @@ body {
 .kinesync-credits-strong {
   font-weight: 800;
 }
+.kinesync-credits-profile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kinesync-amll-player.landscape .kinesync-credits-profile,
+.static-lyrics-root.landscape .kinesync-credits-profile {
+  justify-content: flex-end;
+}
+.kinesync-credits-avatar {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(255,255,255,0.12);
+}
 .empty {
   position: absolute;
   left: 26px;
@@ -387,6 +405,7 @@ export const WebLyricsView = memo(function WebLyricsView({
         : "No synced lyrics yet",
       emptySub: lyricsStatusMessage || `Source: ${lyricsSource || "unavailable"}`,
       songwriters,
+      attribution: lyricsMetadata.attribution,
       lastLyricEndTime,
     });
   }, [
@@ -394,6 +413,7 @@ export const WebLyricsView = memo(function WebLyricsView({
     lastLyricEndTime,
     lyrics,
     lyricsMetadata.instrumental,
+    lyricsMetadata.attribution,
     lyricsSource,
     lyricsStatusMessage,
     lyricsTimingMode,

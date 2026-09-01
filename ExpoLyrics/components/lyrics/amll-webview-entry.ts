@@ -23,6 +23,14 @@ type KineSyncLine = {
   oppositeAligned?: boolean;
 };
 
+type LyricsAttribution = {
+  source?: string;
+  provider?: string;
+  community?: boolean;
+  maker?: { username?: string; avatar?: string };
+  uploader?: { username?: string; avatar?: string };
+};
+
 type IncomingMessage = {
   type?: string;
   lines?: KineSyncLine[];
@@ -39,6 +47,7 @@ type IncomingMessage = {
   emptyTitle?: string;
   emptySub?: string;
   songwriters?: string[];
+  attribution?: LyricsAttribution;
   lastLyricEndTime?: number;
   timingMode?: "karaoke" | "interpolated" | "static" | "unknown";
   autoFollowEnabled?: boolean;
@@ -88,6 +97,7 @@ let touchMoved = false;
 let lastLyricEndTime = 0;
 let staticLyricsMode = false;
 let staticSongwriters: string[] = [];
+let staticAttribution: LyricsAttribution | undefined;
 let frameRequestId: number | null = null;
 let animateUntilMs = 0;
 const IDLE_ANIMATION_GRACE_MS = 750;
@@ -249,7 +259,69 @@ function getStaticBackgroundText(line: KineSyncLine) {
     .trim();
 }
 
-function renderStaticLyrics(songwriters: string[] = staticSongwriters) {
+function appendCreditsContent(
+  container: HTMLElement,
+  songwriters: string[] = [],
+  attribution?: LyricsAttribution,
+) {
+  const appendLine = (label: string, value: string) => {
+    const line = document.createElement("div");
+    if (label) {
+      const strong = document.createElement("span");
+      strong.className = "kinesync-credits-strong";
+      strong.textContent = label;
+      line.appendChild(strong);
+    }
+    line.appendChild(document.createTextNode(value));
+    container.appendChild(line);
+  };
+  const appendProfileLine = (
+    label: string,
+    profile: { username?: string; avatar?: string },
+  ) => {
+    if (!profile.username) return;
+    const line = document.createElement("div");
+    line.className = "kinesync-credits-profile";
+    const text = document.createElement("span");
+    const strong = document.createElement("span");
+    strong.className = "kinesync-credits-strong";
+    strong.textContent = label;
+    text.append(strong, document.createTextNode(`@${profile.username}`));
+    line.appendChild(text);
+    if (profile.avatar) {
+      const avatar = document.createElement("img");
+      avatar.className = "kinesync-credits-avatar";
+      avatar.src = profile.avatar;
+      avatar.alt = `${profile.username}'s avatar`;
+      avatar.onerror = () => avatar.remove();
+      line.appendChild(avatar);
+    }
+    container.appendChild(line);
+  };
+  if (songwriters.length) {
+    appendLine("Written By: ", songwriters.join(", "));
+  }
+  if (attribution?.provider) {
+    appendLine("Provided By: ", attribution.provider);
+  }
+  if (attribution?.community) {
+    appendLine("", "These lyrics have been provided by the Spicy Lyrics community");
+  }
+  if (attribution?.maker?.username) {
+    appendProfileLine("Made By: ", attribution.maker);
+  }
+  if (attribution?.uploader?.username) {
+    appendProfileLine(
+      attribution.maker?.username ? "Uploaded By: " : "Made By: ",
+      attribution.uploader,
+    );
+  }
+}
+
+function renderStaticLyrics(
+  songwriters: string[] = staticSongwriters,
+  attribution: LyricsAttribution | undefined = staticAttribution,
+) {
   if (!staticLyricsRoot) return;
   staticLyricsRoot.replaceChildren();
 
@@ -287,15 +359,10 @@ function renderStaticLyrics(songwriters: string[] = staticSongwriters) {
     staticLyricsRoot.appendChild(lineElement);
   });
 
-  if (songwriters.length) {
+  if (songwriters.length || attribution) {
     const credits = document.createElement("div");
     credits.className = "kinesync-credits-footer";
-    const label = document.createElement("span");
-    label.className = "kinesync-credits-strong";
-    label.textContent = "Written By: ";
-    const names = document.createElement("span");
-    names.textContent = songwriters.join(", ");
-    credits.append(label, names);
+    appendCreditsContent(credits, songwriters, attribution);
     staticLyricsRoot.appendChild(credits);
   }
 }
@@ -316,21 +383,20 @@ function showEmpty(title: string, sub: string) {
   if (emptySub) emptySub.textContent = sub;
 }
 
-function renderCredits(songwriters: string[] = [], endTime = 0) {
+function renderCredits(
+  songwriters: string[] = [],
+  attribution?: LyricsAttribution,
+  endTime = 0,
+) {
   const bottomLine = player.getBottomLineElement();
   bottomLine.replaceChildren();
   lastLyricEndTime = toFiniteMs(endTime);
-  if (!songwriters.length) {
+  if (!songwriters.length && !attribution) {
     bottomLine.classList.remove("kinesync-credits-footer");
     return;
   }
   bottomLine.classList.add("kinesync-credits-footer");
-  const label = document.createElement("span");
-  label.className = "kinesync-credits-strong";
-  label.textContent = "Written By: ";
-  const names = document.createElement("span");
-  names.textContent = songwriters.join(", ");
-  bottomLine.append(label, names);
+  appendCreditsContent(bottomLine, songwriters, attribution);
 }
 
 async function relayout(force = false) {
@@ -344,13 +410,14 @@ function setLyrics(message: IncomingMessage) {
   activeSourceIndex = -1;
   staticLyricsMode = message.timingMode === "static";
   staticSongwriters = Array.isArray(message.songwriters) ? message.songwriters : [];
+  staticAttribution = message.attribution;
   playerElement.hidden = staticLyricsMode;
   if (staticLyricsRoot) {
     staticLyricsRoot.hidden = !staticLyricsMode;
   }
   if (staticLyricsMode) {
     player.setLyricLines([], 0);
-    renderCredits([], 0);
+    renderCredits([], undefined, 0);
     renderStaticLyrics();
     staticLyricsRoot?.scrollTo({ top: 0, behavior: "auto" });
     showEmpty(message.emptyTitle || "No lyrics yet", message.emptySub || "");
@@ -360,7 +427,11 @@ function setLyrics(message: IncomingMessage) {
   staticLyricsRoot?.replaceChildren();
   const converted = convertLines(sourceLines);
   player.setLyricLines(converted, getProjectedPosition());
-  renderCredits(message.songwriters || [], toFiniteMs(message.lastLyricEndTime));
+  renderCredits(
+    message.songwriters || [],
+    message.attribution,
+    toFiniteMs(message.lastLyricEndTime),
+  );
   showEmpty(message.emptyTitle || "No synced lyrics yet", message.emptySub || "");
   void relayout(true);
 }

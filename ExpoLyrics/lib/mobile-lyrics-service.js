@@ -2205,7 +2205,45 @@ function extractSpicyPayloadMetadata(payload) {
     seen.add(norm);
     deduped.push(title);
   }
-  return { titles: deduped };
+  const source = String(payload?.source || "")
+    .trim()
+    .toLowerCase();
+  const providerLabels = {
+    spt: "Spotify",
+    aml: "Apple Music",
+    spl: "Spicy Lyrics",
+    ldb: "Local DB",
+  };
+  const normalizeProfile = (profile) => {
+    if (!profile || typeof profile !== "object") {
+      return undefined;
+    }
+    const normalized = {
+      ...(String(profile.id || "").trim()
+        ? { id: String(profile.id).trim() }
+        : {}),
+      ...(String(profile.username || "").trim()
+        ? { username: String(profile.username).trim() }
+        : {}),
+      ...(String(profile.avatar || "").trim()
+        ? { avatar: String(profile.avatar).trim() }
+        : {}),
+    };
+    return Object.keys(normalized).length ? normalized : undefined;
+  };
+  const uploadMetadata = payload?.TTMLUploadMetadata;
+  const maker = normalizeProfile(uploadMetadata?.Maker);
+  const uploader = normalizeProfile(uploadMetadata?.Uploader);
+  const attribution = source
+    ? {
+        source,
+        provider: providerLabels[source] || "Unknown",
+        ...(source === "spl" ? { community: true } : {}),
+        ...(maker ? { maker } : {}),
+        ...(uploader ? { uploader } : {}),
+      }
+    : undefined;
+  return { titles: deduped, attribution };
 }
 
 function extractSpicyLeadVocalPlainText(lyrics) {
@@ -9127,6 +9165,9 @@ async function fetchFromSpicyLyrics(
       source: sourceLabel,
       metadata: {
         ...(songwriters.length ? { credits: { songwriters } } : {}),
+        ...(spicyMetadata.attribution
+          ? { attribution: spicyMetadata.attribution }
+          : {}),
         ...(spicyMetadata.titles.length
           ? { spicyVariantTitles: spicyMetadata.titles }
           : {}),
@@ -13063,6 +13104,12 @@ function mergeLyricsMetadata(...metadataList) {
       merged.translation = {
         ...(merged.translation || {}),
         ...metadata.translation,
+      };
+    }
+    if (metadata.attribution && typeof metadata.attribution === "object") {
+      merged.attribution = {
+        ...(merged.attribution || {}),
+        ...metadata.attribution,
       };
     }
   }

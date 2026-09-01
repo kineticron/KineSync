@@ -484,6 +484,9 @@ async function fetchFromSpicyLyrics(
       source: sourceLabel,
       metadata: {
         ...(songwriters.length ? { credits: { songwriters } } : {}),
+        ...(spicyMetadata.attribution
+          ? { attribution: spicyMetadata.attribution }
+          : {}),
         ...(spicyMetadata.titles.length
           ? { spicyVariantTitles: spicyMetadata.titles }
           : {}),

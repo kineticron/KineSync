@@ -107,9 +107,24 @@ export type LyricsCreditsMetadata = {
   songwriters?: string[];
 };
 
+export type LyricsAttributionProfile = {
+  id?: string;
+  username?: string;
+  avatar?: string;
+};
+
+export type LyricsAttributionMetadata = {
+  source: string;
+  provider: string;
+  community?: boolean;
+  maker?: LyricsAttributionProfile;
+  uploader?: LyricsAttributionProfile;
+};
+
 export type LyricsMetadata = {
   instrumental?: boolean;
   credits?: LyricsCreditsMetadata;
+  attribution?: LyricsAttributionMetadata;
   translation?: LyricsTranslationMetadata;
 };
 

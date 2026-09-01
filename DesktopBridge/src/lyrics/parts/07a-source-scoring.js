@@ -67,6 +67,12 @@ function mergeLyricsMetadata(...metadataList) {
         ...metadata.translation,
       };
     }
+    if (metadata.attribution && typeof metadata.attribution === "object") {
+      merged.attribution = {
+        ...(merged.attribution || {}),
+        ...metadata.attribution,
+      };
+    }
   }
   return merged;
 }
