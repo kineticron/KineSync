@@ -31,7 +31,7 @@ already installed, you can also
 With a free Apple Account, SideStore must refresh the app within seven days.
 Keep SideStore available in the background and periodically open it with
 LocalDevVPN connected. SideStore itself counts toward Apple's three-active-app
-limit, and KineSync's Live Activity extension may use an additional App ID.
+limit.
 
 ## Sideloadly
 
@@ -41,8 +41,7 @@ limit, and KineSync's Live Activity extension may use an additional App ID.
    to the computer.
 3. Connect and trust the iPhone or iPad, then drag the IPA into Sideloadly.
 4. Select the device, enter the Apple Account used for sideloading, and click
-   **Start**. Leave the Live Activity extension enabled if you want Lock Screen
-   and Dynamic Island lyrics.
+   **Start**.
 5. On iOS 16 or newer, enable **Settings > Privacy & Security > Developer Mode**
    if prompted. Trust the developer profile under
    **Settings > General > VPN & Device Management**.

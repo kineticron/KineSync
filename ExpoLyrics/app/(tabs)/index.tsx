@@ -1,8 +1,7 @@
 import { BlurView } from "expo-blur";
-import { Image as ExpoImage } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import {
@@ -40,10 +39,8 @@ import Reanimated, {
   interpolateColor,
   Extrapolation,
   FadeIn,
-  FadeInDown,
   FadeInUp,
   FadeOut,
-  FadeOutDown,
   FadeOutUp,
   runOnJS,
   type SharedValue,
@@ -493,6 +490,13 @@ function ButtonTutorialModal({
 
 export default function HomeScreen() {
   const router = useRouter();
+  const [isScreenFocused, setIsScreenFocused] = useState(true);
+  useFocusEffect(
+    useCallback(() => {
+      setIsScreenFocused(true);
+      return () => setIsScreenFocused(false);
+    }, []),
+  );
   const spotifyBrowserRef = useRef<SpotifyBrowserFallbackHandle>(null);
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
@@ -629,12 +633,7 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [
-    currentTrack?.id,
-    currentTrack?.artist,
-    currentTrack?.album,
-    currentTrack?.title,
-  ]);
+  }, [currentTrack]);
 
   useEffect(() => {
     if (
@@ -960,7 +959,7 @@ export default function HomeScreen() {
     };
 
     // ponytail: skip blobs when covered by fullscreen album art or backgrounded — saves CPU on older devices
-    if (appStateRef.current === "active" && !fullscreenAlbumMode) {
+    if (appStateRef.current === "active" && isScreenFocused && !fullscreenAlbumMode) {
       startAmbientAnimations();
     }
 
@@ -968,7 +967,7 @@ export default function HomeScreen() {
       appStateRef.current = nextState;
       if (nextState === "active") {
         setScrubPreviewPositionMs(null);
-        if (!fullscreenAlbumMode) startAmbientAnimations();
+        if (isScreenFocused && !fullscreenAlbumMode) startAmbientAnimations();
         return;
       }
       setScrubPreviewPositionMs(null);
@@ -979,7 +978,7 @@ export default function HomeScreen() {
       subscription.remove();
       stopAmbientAnimations();
     };
-  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode]);
+  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode, isScreenFocused]);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
     if (usePlaybackStore.getState().connectionStatus === "connected") {
@@ -1512,6 +1511,7 @@ export default function HomeScreen() {
                 }
                 artworkUrl={resolvedArtworkUrl}
                 animatedArtworkUrl={resolvedAnimatedSquareUrl}
+                artworkActive={isScreenFocused}
                 artworkSize={landscapeArtworkSize}
                 lyricsTimingMode={lyricsTimingMode}
                 lyricsSource={lyricsSource}
@@ -1573,6 +1573,7 @@ export default function HomeScreen() {
             >
               {lyricsRendererMode === "webview" ? (
                 <WebLyricsView
+                  active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
@@ -1622,7 +1623,7 @@ export default function HomeScreen() {
           <AnimatedBridgedArtwork
             staticUri={resolvedArtworkUrl}
             animatedUri={resolvedAnimatedSquareUrl}
-            active={!albumArtworkMorphing}
+            active={isScreenFocused && !albumArtworkMorphing}
             style={styles.animatedAlbumArtwork}
           />
         ) : null}
@@ -1813,6 +1814,7 @@ export default function HomeScreen() {
             >
               {lyricsRendererMode === "webview" ? (
                 <WebLyricsView
+                  active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}

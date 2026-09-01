@@ -43,10 +43,6 @@ jobs:
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
-      - name: Verify SDK 57 Live Activity widget
-        working-directory: ExpoLyrics
-        run: node scripts/verify-live-activity-widget.js
-
       - name: Build Debug development client and locate .app
         run: |
           set -euo pipefail
@@ -204,43 +200,6 @@ jobs:
             echo "Invalid path from ${MARKER}: ${APP}"
             exit 1
           fi
-          LIVE_ACTIVITY_APPEX="${APP}/PlugIns/ExpoWidgetsTarget.appex"
-          if [[ ! -d "${LIVE_ACTIVITY_APPEX}" ]]; then
-            echo "::error::ExpoWidgetsTarget.appex was not embedded in ${APP}"
-            exit 1
-          fi
-          if [[ ! -f "${LIVE_ACTIVITY_APPEX}/ExpoWidgetsTarget" ]]; then
-            echo "::error::ExpoWidgetsTarget.appex executable is missing"
-            exit 1
-          fi
-          find_renderer_binary() {
-            local root="$1"
-            local candidate
-            local symbols
-            while IFS= read -r -d '' candidate; do
-              symbols=$(nm -gjU "${candidate}" 2>/dev/null || true)
-              if [[ "${symbols}" == *"KineSyncDirectLiveActivityRenderer"* ]]; then
-                printf '%s\n' "${candidate}"
-                return 0
-              fi
-            done < <(find "${root}" -type f -print0)
-            return 1
-          }
-          if ! RENDERER_BINARY=$(find_renderer_binary "${LIVE_ACTIVITY_APPEX}"); then
-            echo "::error::KineSync Live Activity renderer symbol is missing from the extension bundle"
-            find "${LIVE_ACTIVITY_APPEX}" -maxdepth 4 -type f -print
-            exit 1
-          fi
-          echo "Native Live Activity renderer binary: ${RENDERER_BINARY}"
-          EXTENSION_POINT=$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
-          if [[ "${EXTENSION_POINT}" != "com.apple.widgetkit-extension" ]]; then
-            echo "::error::ExpoWidgetsTarget.appex is not registered as a WidgetKit extension"
-            plutil -p "${LIVE_ACTIVITY_APPEX}/Info.plist" || true
-            exit 1
-          fi
-          EXTENSION_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${LIVE_ACTIVITY_APPEX}/Info.plist" 2>/dev/null || true)
-          echo "Live Activity extension bundle id: ${EXTENSION_BUNDLE_ID}"
-          echo "Verified embedded Live Activity extension: ${LIVE_ACTIVITY_APPEX}"
           echo "Packaging: ${APP}"
           STAGE="${RUNNER_TEMP}/ipa-payload"
           rm -rf "${STAGE}"

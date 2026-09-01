@@ -6,7 +6,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { BridgeProvider } from '@/providers/bridge-provider';
-import { LyricsLiveActivityProvider } from '@/providers/lyrics-live-activity-provider';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -21,12 +20,10 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <BridgeProvider>
-            <LyricsLiveActivityProvider>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-              </Stack>
-            </LyricsLiveActivityProvider>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            </Stack>
           </BridgeProvider>
           <StatusBar style="light" />
         </ThemeProvider>

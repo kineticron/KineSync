@@ -51,7 +51,6 @@
 - **AI translation** — Optional Gemini translation of lyrics
 - **Remote relay** — ngrok-based public relay for listening outside your home network
 - **Lyrics vault** — Export and archive lyrics locally (TTML format)
-- **Live Activities** — iOS Dynamic Island / Lock Screen lyrics display
 - **Animated reveals** — Smooth karaoke-style word highlighting with sustain effects
 
 <p align="center">

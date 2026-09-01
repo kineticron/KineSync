@@ -43,6 +43,7 @@ type WebLyricsViewProps = {
   onUserInteraction?: () => void;
   fontScale?: number;
   landscapeMode?: boolean;
+  active?: boolean;
 };
 
 function escapeScript(value: string) {
@@ -332,6 +333,7 @@ export const WebLyricsView = memo(function WebLyricsView({
   onUserInteraction,
   fontScale = 1,
   landscapeMode = false,
+  active = true,
 }: WebLyricsViewProps) {
   const webViewRef = useRef<{
     injectJavaScript: (script: string) => void;
@@ -448,11 +450,11 @@ export const WebLyricsView = memo(function WebLyricsView({
       type: "sync",
       positionMs: previewPositionMs ?? anchorPositionMs,
       previewPositionMs,
-      isPlaying: previewPositionMs === null ? isPlaying : false,
+      isPlaying: active && previewPositionMs === null ? isPlaying : false,
       durationMs: currentTrack?.durationMs ?? 0,
       force: previewPositionMs !== null,
     });
-  }, [anchorPositionMs, currentTrack?.durationMs, inject, isPlaying, previewPositionMs]);
+  }, [active, anchorPositionMs, currentTrack?.durationMs, inject, isPlaying, previewPositionMs]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     let payload: {

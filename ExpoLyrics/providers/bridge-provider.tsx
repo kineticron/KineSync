@@ -1,5 +1,5 @@
 import { type PropsWithChildren, useEffect, useState } from 'react';
-import { AppState, type AppStateStatus, Modal, Platform } from 'react-native';
+import { AppState, Modal, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { bridgeClient } from '@/lib/bridge-client';
@@ -109,9 +109,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       setInitialized(true);
     })();
 
-    let appState: AppStateStatus = AppState.currentState;
     const subscription = AppState.addEventListener('change', (nextState) => {
-      appState = nextState;
       if (nextState === 'active') {
         const playbackState = usePlaybackStore.getState();
         if (playbackState.isPlaying) {
@@ -124,9 +122,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
 
     return () => {
       subscription.remove();
-      if (appState !== 'active') {
-        stopPlaybackClock();
-      }
+      stopPlaybackClock();
       bridgeClient.disconnect();
     };
   }, []);

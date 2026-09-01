@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
@@ -19,8 +19,10 @@ import type {
 } from '@/types/bridge';
 
 const SEEK_RESET_THRESHOLD_MS = 1800;
-// ponytail: 64ms is plenty for line-transition detection; syllable anims are UI-thread withTiming
-const PLAYBACK_POSITION_EPSILON_MS = 64;
+// Visual interpolation happens on the UI thread, so a 10 Hz JS clock keeps the
+// timeline and line boundaries responsive without waking the JS runtime every frame.
+const PLAYBACK_CLOCK_INTERVAL_MS = 100;
+const PLAYBACK_POSITION_UPDATE_EPSILON_MS = 32;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
 
@@ -150,7 +152,7 @@ type PlaybackState = {
 };
 
 let playbackClockTimer: ReturnType<typeof setInterval> | null = null;
-let playbackClockRunning = false;
+let playbackClockEnabled = AppState.currentState === 'active';
 
 function clearPlaybackClockHandle() {
   if (playbackClockTimer) {
@@ -160,7 +162,7 @@ function clearPlaybackClockHandle() {
 }
 
 function tickPlaybackClock() {
-  if (!playbackClockRunning) {
+  if (!playbackClockEnabled) {
     return;
   }
 
@@ -171,13 +173,20 @@ function tickPlaybackClock() {
   }
 
   const playbackPosition = computePlaybackPosition(state);
-  if (Math.abs(playbackPosition - state.playbackPosition) >= PLAYBACK_POSITION_EPSILON_MS) {
+  if (
+    Math.abs(playbackPosition - state.playbackPosition) >=
+    PLAYBACK_POSITION_UPDATE_EPSILON_MS
+  ) {
     usePlaybackStore.setState({ playbackPosition });
+  }
+  const durationMs = state.currentTrack?.durationMs ?? 0;
+  if (durationMs > 0 && playbackPosition >= durationMs) {
+    clearPlaybackClockHandle();
   }
 }
 
 function schedulePlaybackClockTick() {
-  if (!playbackClockRunning || playbackClockTimer) {
+  if (!playbackClockEnabled || playbackClockTimer) {
     return;
   }
   const state = usePlaybackStore.getState();
@@ -186,7 +195,7 @@ function schedulePlaybackClockTick() {
     return;
   }
   tickPlaybackClock();
-  playbackClockTimer = setInterval(tickPlaybackClock, PLAYBACK_POSITION_EPSILON_MS);
+  playbackClockTimer = setInterval(tickPlaybackClock, PLAYBACK_CLOCK_INTERVAL_MS);
 }
 
 function computePlaybackPosition(state: PlaybackState) {
@@ -326,7 +335,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
     });
     if (packet.isPlaying) {
-      playbackClockRunning = true;
       schedulePlaybackClockTick();
     } else {
       clearPlaybackClockHandle();
@@ -383,17 +391,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 }));
 
 export function startPlaybackClock() {
-  if (playbackClockRunning) {
+  if (playbackClockEnabled) {
+    schedulePlaybackClockTick();
     return;
   }
-  playbackClockRunning = true;
+  playbackClockEnabled = true;
   schedulePlaybackClockTick();
 }
 
 export function stopPlaybackClock() {
-  if (!playbackClockRunning) {
-    return;
-  }
-  playbackClockRunning = false;
+  playbackClockEnabled = false;
   clearPlaybackClockHandle();
 }

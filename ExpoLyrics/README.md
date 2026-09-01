@@ -6,7 +6,6 @@ React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics st
 
 - Real-time synced lyrics with word-by-word karaoke highlighting
 - Album artwork display with animated transitions
-- iOS Live Activities (Dynamic Island / Lock Screen)
 - Landscape mode with split-pane layout
 - Bridge connectivity over LAN, Tailscale, or ngrok relay
 - Settings panel for bridge URL, handshake key, and playback tuning
@@ -36,36 +35,6 @@ npx expo start -c --tunnel
 ```
 
 Scan the QR code with Expo Go. Open settings to configure your bridge URL.
-
-## iOS Live Activity development
-
-Live Activities use the SDK 57 `expo-widgets` ActivityKit lifecycle and do not run in Expo Go.
-KineSync patches its presentation with a direct native Swift renderer during
-`npm install` and iOS prebuild. This lets the extension render from ActivityKit
-state even when a sideloading signer does not preserve the Expo App Group or
-bundled widget JavaScript runtime.
-After changing the activity layout or app configuration, regenerate and rebuild the
-iOS development client:
-
-```bash
-npx expo prebuild --clean --platform ios
-npx expo run:ios
-npm run verify:live-activity
-```
-
-The verifier also confirms that the direct renderer was applied to the installed
-`expo-widgets` package. CI inspects the compiled app extension before packaging
-the IPA, so a build cannot ship if the renderer is absent.
-
-The activity is created as playback metadata arrives, including in phone-only
-Spotify mode. It has explicit Lock Screen, compact, minimal, and expanded Dynamic
-Island layouts. Its content stays below ActivityKit's 4 KB payload limit, and it
-uses SF Symbols instead of album artwork so network images cannot prevent the
-system presentation from rendering.
-
-References: [Expo Widgets for SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/widgets/),
-[Expo development builds](https://docs.expo.dev/develop/development-builds/introduction/), and
-[Apple ActivityKit constraints](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities#Understand-constraints).
 
 ## Project Structure
 

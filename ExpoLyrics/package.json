@@ -11,9 +11,7 @@
     "lint": "expo lint",
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:security": "node ./scripts/security-check.js",
-    "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
-    "verify:live-activity": "node ./scripts/verify-live-activity-widget.js",
-    "postinstall": "node ./scripts/apply-kinesync-live-activity-patch.js"
+    "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.5.2",
@@ -49,7 +47,6 @@
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.2",
     "expo-video": "~57.0.2",
-    "expo-widgets": "~57.0.8",
     "jpeg-js": "^0.4.4",
     "pako": "^3.0.1",
     "react": "19.2.3",

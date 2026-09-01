@@ -31,6 +31,7 @@ type HorizontalPlayerPanelProps = {
   onMenuPress: () => void;
   onArtworkPress: () => void;
   controlsOverlayVisible: boolean;
+  artworkActive?: boolean;
   controlsOverlay: ReactNode;
   utilityRow: ReactNode;
 };
@@ -46,6 +47,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
   onMenuPress,
   onArtworkPress,
   controlsOverlayVisible,
+  artworkActive = true,
   controlsOverlay,
   utilityRow,
 }: HorizontalPlayerPanelProps) {
@@ -73,6 +75,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
           <AnimatedBridgedArtwork
             staticUri={artworkUrl}
             animatedUri={animatedArtworkUrl}
+            active={artworkActive}
             style={styles.artwork}
           />
         ) : (

@@ -13,7 +13,6 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "CADisableMinimumFrameDurationOnPhone": true,
-        "NSSupportsLiveActivitiesFrequentUpdates": true,
         "NSLocalNetworkUsageDescription": "KineSync connects to your Desktop Bridge to stream synchronized lyrics and playback updates.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
@@ -56,15 +55,6 @@
           }
         }
       ],
-      [
-        "expo-widgets",
-        {
-          "bundleIdentifier": "dev.kineticron.KineSync.ExpoWidgetsTarget",
-          "groupIdentifier": "group.dev.kineticron.KineSync",
-          "frequentUpdates": true
-        }
-      ],
-      "./plugins/with-kinesync-live-activity.js",
       "./plugins/with-network-security-config.js",
       "./plugins/with-release-signing.js",
       [

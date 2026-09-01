@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { LiveActivityDebugPanel } from '@/components/lyrics/live-activity-debug-panel';
 import { bridgeClient } from '@/lib/bridge-client';
 import { getBridgeSettings, saveBridgeSettings } from '@/lib/bridge-settings';
 import {
@@ -655,12 +654,6 @@ export default function BridgeSettingsScreen() {
                   <Text style={styles.secondaryButtonText}>Apply timing</Text>
                 </Pressable>
               </SettingSection> : null}
-            </BlurView>
-
-            <BlurView intensity={36} tint="dark" style={styles.card}>
-              <SettingSection title="Live Activity (device)">
-                <LiveActivityDebugPanel />
-              </SettingSection>
             </BlurView>
 
             <BlurView intensity={36} tint="dark" style={styles.card}>
