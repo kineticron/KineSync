@@ -64,7 +64,11 @@ function createLyricsService({
 
   const hasTranslatedLinesInLyrics = (lyrics) =>
     Array.isArray(lyrics) &&
-    lyrics.some((line) => String(line?.translatedText || "").trim().length > 0);
+    lyrics.some(
+      (line) =>
+        String(line?.translatedText || "").trim().length > 0 ||
+        String(line?.backgroundTranslatedText || "").trim().length > 0,
+    );
 
   const packetLyricsSignature = (packet) => {
     const lyrics = Array.isArray(packet?.lyrics) ? packet.lyrics : [];
@@ -176,7 +180,12 @@ function createLyricsService({
       if (!line || typeof line !== "object") {
         return line;
       }
-      const { translatedText, translationMeta, ...rest } = line;
+      const {
+        translatedText,
+        backgroundTranslatedText,
+        translationMeta,
+        ...rest
+      } = line;
       return rest;
     });
   };
@@ -451,7 +460,11 @@ function createLyricsService({
         const translatedLineCount = Array.isArray(safeLyrics)
           ? safeLyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;
@@ -521,7 +534,11 @@ function createLyricsService({
         Array.isArray(lyrics)
           ? lyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;

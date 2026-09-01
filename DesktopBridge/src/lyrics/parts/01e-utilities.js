@@ -1693,32 +1693,9 @@ function getBackgroundLineText(line) {
   return getSyllableText(line?.backgroundSyllables || []);
 }
 
-function appendBackgroundTranslatedSegment(existingText, backgroundTranslated) {
-  const existing = String(existingText || "").trim();
-  const segment = String(backgroundTranslated || "").trim();
-  if (!segment) {
-    return existing;
-  }
-
-  const wrapped = `(${segment})`;
-  if (!existing) {
-    return wrapped;
-  }
-
-  const existingNorm = normalizeTranslationVisibilityText(existing);
-  const wrappedNorm = normalizeTranslationVisibilityText(wrapped);
-  const segmentNorm = normalizeTranslationVisibilityText(segment);
-  if (
-    (wrappedNorm && existingNorm.includes(wrappedNorm)) ||
-    (segmentNorm && existingNorm.includes(segmentNorm))
-  ) {
-    return existing;
-  }
-  return `${existing} ${wrapped}`.trim();
-}
-
-function buildTranslatedTextForLineFromLookup(line, translatedByText = {}) {
+function buildTranslationFieldsForLineFromLookup(line, translatedByText = {}) {
   let translatedText = "";
+  let backgroundTranslatedText = "";
   const leadText = String(getLineText(line) || "").trim();
   if (leadText) {
     const leadTranslated = String(translatedByText[leadText] || "").trim();
@@ -1736,14 +1713,11 @@ function buildTranslatedTextForLineFromLookup(line, translatedByText = {}) {
       backgroundTranslated &&
       !shouldHideTranslatedText(backgroundText, backgroundTranslated)
     ) {
-      translatedText = appendBackgroundTranslatedSegment(
-        translatedText,
-        backgroundTranslated,
-      );
+      backgroundTranslatedText = backgroundTranslated;
     }
   }
 
-  return translatedText;
+  return { translatedText, backgroundTranslatedText };
 }
 
 function isLikelyMetadataLineText(text, track) {

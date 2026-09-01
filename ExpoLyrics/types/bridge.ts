@@ -128,5 +128,6 @@ export type LyricLine = {
   syllables: LyricSyllable[];
   backgroundSyllables?: LyricSyllable[];
   translatedText?: string;
+  backgroundTranslatedText?: string;
   oppositeAligned?: boolean;
 };

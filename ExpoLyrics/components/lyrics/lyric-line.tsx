@@ -1128,7 +1128,9 @@ function areLyricLinesEqual(a: LyricLineType, b: LyricLineType) {
     a.lineStartTime !== b.lineStartTime ||
     a.lineEndTime !== b.lineEndTime ||
     Boolean(a.oppositeAligned) !== Boolean(b.oppositeAligned) ||
-    (a.translatedText ?? "") !== (b.translatedText ?? "")
+    (a.translatedText ?? "") !== (b.translatedText ?? "") ||
+    (a.backgroundTranslatedText ?? "") !==
+      (b.backgroundTranslatedText ?? "")
   ) {
     return false;
   }
@@ -1318,6 +1320,9 @@ export const LyricLine = memo(function LyricLine({
 
   const textWeight = "700" as const;
   const translatedText = String(line.translatedText || "").trim();
+  const backgroundTranslatedText = String(
+    line.backgroundTranslatedText || "",
+  ).trim();
   const isOppositeAligned = Boolean(line.oppositeAligned);
   const alignRight = landscapeMode ? !isOppositeAligned : isOppositeAligned;
   const textLaneWidth = landscapeMode
@@ -1821,6 +1826,9 @@ export const LyricLine = memo(function LyricLine({
           {!!line.backgroundSyllables?.length && (
             <BackgroundVocals
               syllables={line.backgroundSyllables}
+              translatedText={
+                showTranslatedText ? backgroundTranslatedText : ""
+              }
               parentIsActive={isActive}
               parentIsPast={isPast}
               parentBgStillActive={bgStillActive}
@@ -2989,6 +2997,7 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
 
 const BackgroundVocals = memo(function BackgroundVocals({
   syllables,
+  translatedText = "",
   alignRight = false,
   textLaneWidth = LYRIC_TEXT_LANE_WIDTH,
   parentIsActive,
@@ -2999,6 +3008,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
   fontScale = 1,
 }: {
   syllables: LyricSyllable[];
+  translatedText?: string;
   alignRight?: boolean;
   textLaneWidth?: number | string;
   parentIsActive: boolean;
@@ -3144,14 +3154,26 @@ const BackgroundVocals = memo(function BackgroundVocals({
     [flushPendingWidths],
   );
 
+  const translationColor = isBgPast
+    ? "rgba(255,255,255,0.64)"
+    : isBgActive
+      ? "rgba(255,255,255,0.58)"
+      : "rgba(255,255,255,0.38)";
+
   return (
     <View
       style={[
-        styles.bgVocalsFlow,
+        styles.bgVocalsGroup,
         { width: textLaneWidth as number },
-        alignRight && styles.bgVocalsFlowOpposite,
+        alignRight && styles.bgVocalsGroupOpposite,
       ]}
     >
+      <View
+        style={[
+          styles.bgVocalsFlow,
+          alignRight && styles.bgVocalsFlowOpposite,
+        ]}
+      >
       {syllableGroups.map((group, groupIdx) => (
         <View key={`bg-word-${groupIdx}`} style={styles.wordWrap}>
           {alignRight &&
@@ -3471,6 +3493,22 @@ const BackgroundVocals = memo(function BackgroundVocals({
           )}
         </View>
       ))}
+      </View>
+      {!!translatedText && (
+        <Text
+          style={[
+            styles.backgroundTranslatedText,
+            {
+              color: translationColor,
+              fontSize: 12 * fontScale,
+              lineHeight: 16 * fontScale,
+            },
+            alignRight && styles.translatedTextOpposite,
+          ]}
+        >
+          {translatedText}
+        </Text>
+      )}
     </View>
   );
 });
@@ -3718,8 +3756,14 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     alignItems: "flex-end",
     alignSelf: "flex-start",
-    width: LYRIC_TEXT_LANE_WIDTH,
+    width: "100%",
     marginTop: 3,
+  } as ViewStyle,
+  bgVocalsGroup: {
+    alignSelf: "flex-start",
+  } as ViewStyle,
+  bgVocalsGroupOpposite: {
+    alignSelf: "flex-end",
   } as ViewStyle,
   bgVocalsFlowOpposite: {
     justifyContent: "flex-end",
@@ -3735,6 +3779,16 @@ const styles = StyleSheet.create({
   bgVocalsGapText: {
     fontSize: BG_FONT_SIZE,
     lineHeight: BG_LINE_HEIGHT,
+  } as TextStyle,
+  backgroundTranslatedText: {
+    alignSelf: "flex-start",
+    marginTop: 2,
+    marginLeft: 2,
+    textAlign: "left",
+    letterSpacing: 0.05,
+    textShadowColor: "rgba(0,0,0,0.3)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   } as TextStyle,
   translatedText: {
     alignSelf: "flex-start",

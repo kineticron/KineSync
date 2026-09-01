@@ -4513,32 +4513,9 @@ function getBackgroundLineText(line) {
   return getSyllableText(line?.backgroundSyllables || []);
 }
 
-function appendBackgroundTranslatedSegment(existingText, backgroundTranslated) {
-  const existing = String(existingText || "").trim();
-  const segment = String(backgroundTranslated || "").trim();
-  if (!segment) {
-    return existing;
-  }
-
-  const wrapped = `(${segment})`;
-  if (!existing) {
-    return wrapped;
-  }
-
-  const existingNorm = normalizeTranslationVisibilityText(existing);
-  const wrappedNorm = normalizeTranslationVisibilityText(wrapped);
-  const segmentNorm = normalizeTranslationVisibilityText(segment);
-  if (
-    (wrappedNorm && existingNorm.includes(wrappedNorm)) ||
-    (segmentNorm && existingNorm.includes(segmentNorm))
-  ) {
-    return existing;
-  }
-  return `${existing} ${wrapped}`.trim();
-}
-
-function buildTranslatedTextForLineFromLookup(line, translatedByText = {}) {
+function buildTranslationFieldsForLineFromLookup(line, translatedByText = {}) {
   let translatedText = "";
+  let backgroundTranslatedText = "";
   const leadText = String(getLineText(line) || "").trim();
   if (leadText) {
     const leadTranslated = String(translatedByText[leadText] || "").trim();
@@ -4556,14 +4533,11 @@ function buildTranslatedTextForLineFromLookup(line, translatedByText = {}) {
       backgroundTranslated &&
       !shouldHideTranslatedText(backgroundText, backgroundTranslated)
     ) {
-      translatedText = appendBackgroundTranslatedSegment(
-        translatedText,
-        backgroundTranslated,
-      );
+      backgroundTranslatedText = backgroundTranslated;
     }
   }
 
-  return translatedText;
+  return { translatedText, backgroundTranslatedText };
 }
 
 function isLikelyMetadataLineText(text, track) {
@@ -12437,16 +12411,19 @@ async function enrichLyricsWithGeminiTranslations(
       `[lyrics-translate] cache hit for ${String(track?.title || "unknown title")} (${uniqueLineMap.size} unique lines)`,
     );
     const cachedLyrics = lyrics.map((line) => {
-      const translatedText = buildTranslatedTextForLineFromLookup(
+      const translationFields = buildTranslationFieldsForLineFromLookup(
         line,
         cached.translations,
       );
-      if (!translatedText) {
+      if (
+        !translationFields.translatedText &&
+        !translationFields.backgroundTranslatedText
+      ) {
         return line;
       }
       return {
         ...line,
-        translatedText,
+        ...translationFields,
       };
     });
     cachedLyrics.translationMeta = {
@@ -12974,16 +12951,19 @@ async function enrichLyricsWithGeminiTranslations(
   );
 
   const translatedLyrics = lyrics.map((line) => {
-    const translatedText = buildTranslatedTextForLineFromLookup(
+    const translationFields = buildTranslationFieldsForLineFromLookup(
       line,
       translatedByText,
     );
-    if (!translatedText) {
+    if (
+      !translationFields.translatedText &&
+      !translationFields.backgroundTranslatedText
+    ) {
       return line;
     }
     return {
       ...line,
-      translatedText,
+      ...translationFields,
     };
   });
 
@@ -13054,7 +13034,11 @@ function countTranslatedLyricsLines(lyrics) {
   return Array.isArray(lyrics)
     ? lyrics.reduce(
         (count, line) =>
-          count + (String(line?.translatedText || "").trim() ? 1 : 0),
+          count +
+          (String(line?.translatedText || "").trim() ||
+          String(line?.backgroundTranslatedText || "").trim()
+            ? 1
+            : 0),
         0,
       )
     : 0;
@@ -14337,7 +14321,11 @@ function createLyricsService({
 
   const hasTranslatedLinesInLyrics = (lyrics) =>
     Array.isArray(lyrics) &&
-    lyrics.some((line) => String(line?.translatedText || "").trim().length > 0);
+    lyrics.some(
+      (line) =>
+        String(line?.translatedText || "").trim().length > 0 ||
+        String(line?.backgroundTranslatedText || "").trim().length > 0,
+    );
 
   const packetLyricsSignature = (packet) => {
     const lyrics = Array.isArray(packet?.lyrics) ? packet.lyrics : [];
@@ -14449,7 +14437,12 @@ function createLyricsService({
       if (!line || typeof line !== "object") {
         return line;
       }
-      const { translatedText, translationMeta, ...rest } = line;
+      const {
+        translatedText,
+        backgroundTranslatedText,
+        translationMeta,
+        ...rest
+      } = line;
       return rest;
     });
   };
@@ -14729,7 +14722,11 @@ function createLyricsService({
         const translatedLineCount = Array.isArray(safeLyrics)
           ? safeLyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;
@@ -14799,7 +14796,11 @@ function createLyricsService({
         Array.isArray(lyrics)
           ? lyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;

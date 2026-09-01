@@ -19,6 +19,7 @@ type KineSyncLine = {
   backgroundSyllables?: KineSyncSyllable[];
   backgroundText?: string;
   translatedText?: string;
+  backgroundTranslatedText?: string;
   oppositeAligned?: boolean;
 };
 
@@ -199,7 +200,9 @@ function convertLines(lines: KineSyncLine[]) {
       );
       converted.push({
         words: syllablesToWords(backgroundSyllables, bgStart, bgEnd),
-        translatedLyric: "",
+        translatedLyric: showTranslatedText
+          ? String(line.backgroundTranslatedText || "").trim()
+          : "",
         romanLyric: "",
         startTime: bgStart,
         endTime: bgEnd,
@@ -239,6 +242,13 @@ function getStaticLineText(line: KineSyncLine) {
     .trim();
 }
 
+function getStaticBackgroundText(line: KineSyncLine) {
+  return getBackgroundSyllables(line)
+    .map((syllable) => String(syllable?.text || ""))
+    .join("")
+    .trim();
+}
+
 function renderStaticLyrics(songwriters: string[] = staticSongwriters) {
   if (!staticLyricsRoot) return;
   staticLyricsRoot.replaceChildren();
@@ -256,6 +266,23 @@ function renderStaticLyrics(songwriters: string[] = staticSongwriters) {
       translationElement.className = "static-lyrics-translation";
       translationElement.textContent = translation;
       lineElement.appendChild(translationElement);
+    }
+
+    const backgroundText = getStaticBackgroundText(line);
+    if (backgroundText) {
+      const backgroundElement = document.createElement("div");
+      backgroundElement.className = "static-lyrics-background";
+      backgroundElement.textContent = backgroundText;
+      const backgroundTranslation = String(
+        line.backgroundTranslatedText || "",
+      ).trim();
+      if (showTranslatedText && backgroundTranslation) {
+        const translationElement = document.createElement("div");
+        translationElement.className = "static-lyrics-background-translation";
+        translationElement.textContent = backgroundTranslation;
+        backgroundElement.appendChild(translationElement);
+      }
+      lineElement.appendChild(backgroundElement);
     }
     staticLyricsRoot.appendChild(lineElement);
   });

@@ -260,7 +260,11 @@ export async function saveCurrentTrackToVault({
   let metadataToSave = lyricsMetadata;
   if (
     includeTranslations &&
-    !lyricsToSave.some((line) => String(line.translatedText || "").trim())
+    !lyricsToSave.some(
+      (line) =>
+        String(line.translatedText || "").trim() ||
+        String(line.backgroundTranslatedText || "").trim(),
+    )
   ) {
     const translatedPacket = await fetchMobileLyricsForTrack(currentTrack, {
       preferredSource: inferCurrentSourcePreference(lyricsSource),

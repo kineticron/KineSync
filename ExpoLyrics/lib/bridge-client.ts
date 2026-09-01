@@ -25,7 +25,11 @@ function getLyricsPacketSignature(lyrics: LyricsPacket["lyrics"]) {
   const last = lyrics[lyrics.length - 1];
   const translatedLineCount = lyrics.reduce(
     (count, line) =>
-      count + (String(line?.translatedText || "").trim() ? 1 : 0),
+      count +
+      (String(line?.translatedText || "").trim() ||
+      String(line?.backgroundTranslatedText || "").trim()
+        ? 1
+        : 0),
     0,
   );
   const textSample = lyrics

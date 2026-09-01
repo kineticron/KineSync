@@ -961,7 +961,11 @@ app.whenReady().then(() => {
           const translatedCount = Array.isArray(lyricsPacket?.lyrics)
             ? lyricsPacket.lyrics.reduce(
                 (count, line) =>
-                  count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                  count +
+                  (String(line?.translatedText || "").trim() ||
+                  String(line?.backgroundTranslatedText || "").trim()
+                    ? 1
+                    : 0),
                 0,
               )
             : 0;
@@ -976,7 +980,11 @@ app.whenReady().then(() => {
         const translatedCount = Array.isArray(result?.lyrics)
           ? result.lyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;
@@ -1070,7 +1078,11 @@ app.whenReady().then(() => {
           const translatedCount = Array.isArray(lyricsPacket?.lyrics)
             ? lyricsPacket.lyrics.reduce(
                 (count, line) =>
-                  count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                  count +
+                  (String(line?.translatedText || "").trim() ||
+                  String(line?.backgroundTranslatedText || "").trim()
+                    ? 1
+                    : 0),
                 0,
               )
             : 0;
@@ -1085,7 +1097,11 @@ app.whenReady().then(() => {
         const translatedCount = Array.isArray(result?.lyrics)
           ? result.lyrics.reduce(
               (count, line) =>
-                count + (String(line?.translatedText || "").trim() ? 1 : 0),
+                count +
+                (String(line?.translatedText || "").trim() ||
+                String(line?.backgroundTranslatedText || "").trim()
+                  ? 1
+                  : 0),
               0,
             )
           : 0;

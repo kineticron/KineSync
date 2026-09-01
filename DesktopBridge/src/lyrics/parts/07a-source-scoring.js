@@ -36,7 +36,11 @@ function countTranslatedLyricsLines(lyrics) {
   return Array.isArray(lyrics)
     ? lyrics.reduce(
         (count, line) =>
-          count + (String(line?.translatedText || "").trim() ? 1 : 0),
+          count +
+          (String(line?.translatedText || "").trim() ||
+          String(line?.backgroundTranslatedText || "").trim()
+            ? 1
+            : 0),
         0,
       )
     : 0;

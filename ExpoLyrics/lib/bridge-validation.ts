@@ -32,6 +32,7 @@ function validLyricLine(value: unknown) {
     if (boundedString(s.text, 2_000) === null || finiteNumber(s.startTime, 0, 24 * 60 * 60 * 1000) === null || finiteNumber(s.endTime, 0, 24 * 60 * 60 * 1000) === null) return false;
   }
   if (line.translatedText !== undefined && boundedString(line.translatedText, 20_000) === null) return false;
+  if (line.backgroundTranslatedText !== undefined && boundedString(line.backgroundTranslatedText, 20_000) === null) return false;
   return true;
 }
 

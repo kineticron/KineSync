@@ -2339,6 +2339,12 @@ export function LyricsView({
       const text = getPrimaryLineText(line);
       if (!text) return null;
       const translatedText = String(line.translatedText || "").trim();
+      const backgroundText = line.backgroundSyllables?.length
+        ? getPrimaryLineText({ ...line, syllables: line.backgroundSyllables })
+        : "";
+      const backgroundTranslatedText = String(
+        line.backgroundTranslatedText || "",
+      ).trim();
       const alignRight = landscapeMode ? !line.oppositeAligned : false;
       return (
         <View
@@ -2372,6 +2378,41 @@ export function LyricsView({
             >
               {translatedText}
             </Text>
+          ) : null}
+          {backgroundText ? (
+            <View
+              style={[
+                styles.staticBackgroundGroup,
+                alignRight && styles.staticLyricLineWrapOpposite,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.staticBackgroundText,
+                  alignRight && styles.staticLyricLineTextOpposite,
+                  {
+                    fontSize: STATIC_TRANSLATED_FONT_SIZE * fontScale,
+                    lineHeight: STATIC_TRANSLATED_LINE_HEIGHT * fontScale,
+                  },
+                ]}
+              >
+                {backgroundText}
+              </Text>
+              {showTranslatedText && backgroundTranslatedText ? (
+                <Text
+                  style={[
+                    styles.staticBackgroundTranslatedText,
+                    alignRight && styles.staticLyricLineTextOpposite,
+                    {
+                      fontSize: 15 * fontScale,
+                      lineHeight: 21 * fontScale,
+                    },
+                  ]}
+                >
+                  {backgroundTranslatedText}
+                </Text>
+              ) : null}
+            </View>
           ) : null}
         </View>
       );
@@ -2624,6 +2665,25 @@ const styles = StyleSheet.create({
     lineHeight: STATIC_TRANSLATED_LINE_HEIGHT,
     fontWeight: "500",
     letterSpacing: 0.1,
+    textAlign: "left",
+    alignSelf: "flex-start",
+  },
+  staticBackgroundGroup: {
+    marginTop: 5,
+    alignSelf: "flex-start",
+  },
+  staticBackgroundText: {
+    color: "rgba(255,255,255,0.78)",
+    fontWeight: "500",
+    letterSpacing: 0.1,
+    textAlign: "left",
+    alignSelf: "flex-start",
+  },
+  staticBackgroundTranslatedText: {
+    marginTop: 2,
+    color: "rgba(255,255,255,0.58)",
+    fontWeight: "500",
+    letterSpacing: 0.08,
     textAlign: "left",
     alignSelf: "flex-start",
   },

@@ -330,6 +330,14 @@ function buildTranslationMarkup(line) {
   return `<span ttm:role="x-translation" xml:lang="en">${escapeXml(translated)}</span>`;
 }
 
+function buildBackgroundTranslationMarkup(line) {
+  const translated = String(line?.backgroundTranslatedText || "").trim();
+  if (!translated) {
+    return "";
+  }
+  return `<span ttm:role="x-bg-translation" xml:lang="en">${escapeXml(translated)}</span>`;
+}
+
 function buildKaraokeParagraphMarkup(
   line,
   index,
@@ -355,7 +363,8 @@ function buildKaraokeParagraphMarkup(
     lineEnd,
   );
   const translation = buildTranslationMarkup(line);
-  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="v1">${inner}${background}${translation}</p>`;
+  const backgroundTranslation = buildBackgroundTranslationMarkup(line);
+  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="v1">${inner}${background}${backgroundTranslation}${translation}</p>`;
   return { markup, endTime: lineEnd };
 }
 

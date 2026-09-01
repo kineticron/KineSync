@@ -407,16 +407,19 @@ async function enrichLyricsWithGeminiTranslations(
       `[lyrics-translate] cache hit for ${String(track?.title || "unknown title")} (${uniqueLineMap.size} unique lines)`,
     );
     const cachedLyrics = lyrics.map((line) => {
-      const translatedText = buildTranslatedTextForLineFromLookup(
+      const translationFields = buildTranslationFieldsForLineFromLookup(
         line,
         cached.translations,
       );
-      if (!translatedText) {
+      if (
+        !translationFields.translatedText &&
+        !translationFields.backgroundTranslatedText
+      ) {
         return line;
       }
       return {
         ...line,
-        translatedText,
+        ...translationFields,
       };
     });
     cachedLyrics.translationMeta = {
@@ -944,16 +947,19 @@ async function enrichLyricsWithGeminiTranslations(
   );
 
   const translatedLyrics = lyrics.map((line) => {
-    const translatedText = buildTranslatedTextForLineFromLookup(
+    const translationFields = buildTranslationFieldsForLineFromLookup(
       line,
       translatedByText,
     );
-    if (!translatedText) {
+    if (
+      !translationFields.translatedText &&
+      !translationFields.backgroundTranslatedText
+    ) {
       return line;
     }
     return {
       ...line,
-      translatedText,
+      ...translationFields,
     };
   });
 
@@ -980,4 +986,3 @@ async function enrichLyricsWithGeminiTranslations(
 
   return translatedLyrics;
 }
-

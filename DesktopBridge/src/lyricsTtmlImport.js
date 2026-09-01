@@ -384,7 +384,11 @@ function parseTimingSpans(content, lineStart, lineEnd) {
     const hadWhitespaceBefore =
       spans.length > 0 && /\s/.test(String(between || ""));
 
-    if (hasRole(attributes, "x-translation") || hasRole(attributes, "x-bg")) {
+    if (
+      hasRole(attributes, "x-translation") ||
+      hasRole(attributes, "x-bg-translation") ||
+      hasRole(attributes, "x-bg")
+    ) {
       cursor = matchStart + match[0].length;
       match = spanRe.exec(content);
       continue;
@@ -425,11 +429,11 @@ function parseTimingSpans(content, lineStart, lineEnd) {
   });
 }
 
-function parseTranslationText(content) {
+function parseTranslationText(content, role = "x-translation") {
   const spanRe = /<span\b([^>]*)>([\s\S]*?)<\/span>/gi;
   let match = spanRe.exec(content);
   while (match) {
-    if (hasRole(match[1], "x-translation")) {
+    if (hasRole(match[1], role)) {
       return stripXmlTags(match[2]);
     }
     match = spanRe.exec(content);
@@ -475,6 +479,10 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
     documentEndMs = Math.max(documentEndMs, lineEnd);
 
     const translatedText = parseTranslationText(inner);
+    const backgroundTranslatedText = parseTranslationText(
+      inner,
+      "x-bg-translation",
+    );
     const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd);
     let syllables = [];
 
@@ -484,7 +492,10 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
 
     if (!syllables.length) {
       const plainText = stripXmlTags(
-        inner.replace(/<span\b[^>]*ttm:role\s*=\s*"x-translation"[^>]*>[\s\S]*?<\/span>/gi, ""),
+        inner.replace(
+          /<span\b[^>]*ttm:role\s*=\s*"x-(?:bg-)?translation"[^>]*>[\s\S]*?<\/span>/gi,
+          "",
+        ),
       );
       if (plainText) {
         syllables = [
@@ -512,6 +523,9 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
     }
     if (translatedText) {
       line.translatedText = translatedText;
+    }
+    if (backgroundTranslatedText) {
+      line.backgroundTranslatedText = backgroundTranslatedText;
     }
     lyrics.push(line);
     match = paraRe.exec(ttmlContent);

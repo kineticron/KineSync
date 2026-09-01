@@ -24,6 +24,7 @@ type WebLyricsLine = {
   syllables: WebLyricsSyllable[];
   backgroundSyllables?: WebLyricsSyllable[];
   translatedText?: string;
+  backgroundTranslatedText?: string;
   oppositeAligned?: boolean;
 };
 
@@ -116,6 +117,20 @@ body {
   line-height: 1.44;
   font-weight: 500;
   letter-spacing: 0.1px;
+}
+.static-lyrics-background {
+  margin-top: 5px;
+  color: rgba(255,255,255,0.78);
+  font-size: calc(18px * var(--ks-font-scale, 1));
+  line-height: 1.4;
+  font-weight: 500;
+}
+.static-lyrics-background-translation {
+  margin-top: 2px;
+  color: rgba(255,255,255,0.58);
+  font-size: calc(15px * var(--ks-font-scale, 1));
+  line-height: 1.4;
+  font-weight: 500;
 }
 .static-lyrics-root.landscape .static-lyrics-line {
   margin-left: auto;
@@ -269,6 +284,8 @@ function toWebLine(line: LyricLineType): WebLyricsLine {
       ? line.backgroundSyllables.map(toWebSyllable)
       : undefined,
     translatedText: String(line.translatedText || "").trim() || undefined,
+    backgroundTranslatedText:
+      String(line.backgroundTranslatedText || "").trim() || undefined,
     oppositeAligned: Boolean(line.oppositeAligned),
   };
 }
