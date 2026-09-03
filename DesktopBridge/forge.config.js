@@ -3,17 +3,40 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 const appIconBase = path.join(__dirname, 'src', 'assets', 'icon.ico');
+const signingCertificateFile = String(process.env.WINDOWS_CERTIFICATE_FILE || '').trim();
+const signingCertificatePassword = String(process.env.WINDOWS_CERTIFICATE_PASSWORD || '');
+
+if (signingCertificateFile && !signingCertificatePassword) {
+  throw new Error('WINDOWS_CERTIFICATE_FILE requires WINDOWS_CERTIFICATE_PASSWORD.');
+}
+if (!signingCertificateFile && signingCertificatePassword) {
+  throw new Error('WINDOWS_CERTIFICATE_PASSWORD requires WINDOWS_CERTIFICATE_FILE.');
+}
 
 module.exports = {
   packagerConfig: {
-    asar: true,
+    asar: {
+      // Native addons and files passed to an external process cannot be read
+      // from inside app.asar. Keep the runtime payload in app.asar.unpacked.
+      // The auto-unpack-natives plugin extends this glob with its .node rule.
+      unpack: 'native/**/*.{node,dll,json}',
+    },
     icon: appIconBase,
   },
   rebuildConfig: {},
   makers: [
     {
       name: '@electron-forge/maker-squirrel',
-      config: {},
+      config: {
+        // Stable filename for docs and direct user downloads.
+        setupExe: 'KineSync-Desktop-Windows-Setup.exe',
+        ...(signingCertificateFile
+          ? {
+              certificateFile: signingCertificateFile,
+              certificatePassword: signingCertificatePassword,
+            }
+          : {}),
+      },
     },
     {
       name: '@electron-forge/maker-zip',

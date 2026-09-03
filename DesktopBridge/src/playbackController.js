@@ -2,6 +2,7 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { getDotnetExecutable } = require("./dotnetExecutable");
+const { resolvePackagedNativePath } = require("./nativeRuntimePaths");
 
 function escapePowerShellSingleQuotes(value) {
   return String(value ?? "").replace(/'/g, "''");
@@ -13,13 +14,13 @@ const SEEK_HELPER_PROJECT_DIR = path.join(
   "native",
   "spotify-seek-helper",
 );
-const SEEK_HELPER_DLL_PATH = path.join(
+const SEEK_HELPER_DLL_PATH = resolvePackagedNativePath(path.join(
   SEEK_HELPER_PROJECT_DIR,
   "bin",
   "Release",
   "net9.0-windows10.0.19041.0",
   "spotify-seek-helper.dll",
-);
+));
 let seekHelperBuildPromise = null;
 
 function runPowerShell(script, timeoutMs = 6000, useSta = false) {
@@ -82,7 +83,10 @@ function runPowerShell(script, timeoutMs = 6000, useSta = false) {
 function runDotnetCommand(args, timeoutMs = 12000) {
   return new Promise((resolve, reject) => {
     const child = spawn(getDotnetExecutable(), args, {
-      cwd: SEEK_HELPER_PROJECT_DIR,
+      // Child processes cannot resolve Electron's app.asar virtual path.
+      // Build commands still run from the project; runtime commands use the
+      // physical unpacked output directory.
+      cwd: args[0] === "build" ? SEEK_HELPER_PROJECT_DIR : path.dirname(SEEK_HELPER_DLL_PATH),
       windowsHide: true,
     });
     let stderr = "";

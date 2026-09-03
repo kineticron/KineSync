@@ -4,8 +4,9 @@ const path = require("node:path");
 
 const { getDotnetExecutable } = require("../src/dotnetExecutable");
 const { createPlaybackController } = require("../src/playbackController");
+const { resolvePackagedNativePath } = require("../src/nativeRuntimePaths");
 
-const SEEK_HELPER_DLL_PATH = path.join(
+const SEEK_HELPER_DLL_PATH = resolvePackagedNativePath(path.join(
   __dirname,
   "..",
   "native",
@@ -14,7 +15,7 @@ const SEEK_HELPER_DLL_PATH = path.join(
   "Release",
   "net9.0-windows10.0.19041.0",
   "spotify-seek-helper.dll",
-);
+));
 
 function runDotnet(args, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {

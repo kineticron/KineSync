@@ -12,21 +12,21 @@ SideStore requires a computer for its initial setup, then can install and
 refresh apps directly on the device.
 
 1. On your device, connect Wi-Fi and turn on LocalDevVPN.
-2. Tap **[Add the KineSync source to SideStore](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2Fsidestore-source.json)**.
+2. Tap **[Add the KineSync source to SideStore](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2Fsidestore-source.json)**.
 3. If the link does not open, copy this source URL and add it from SideStore's
    Sources screen:
 
-   `https://github.com/Kineticron/KineSync/releases/download/ios-latest/sidestore-source.json`
+   `https://github.com/Kineticron/KineSync/releases/download/mobile-latest/sidestore-source.json`
 
 4. Find KineSync in the new source and tap **Install**.
 5. Open KineSync, allow Local Network access, and enter the WebSocket URL and
    key shown by your Desktop Bridge.
 
 You can instead download the
-[latest KineSync IPA](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa),
+[latest KineSync IPA](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa),
 open the file from the Files app, and share it to SideStore. If SideStore is
 already installed, you can also
-[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2FKineSync-iOS-unsigned.ipa).
+[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2FKineSync-iOS-unsigned.ipa).
 
 With a free Apple Account, SideStore must refresh the app within seven days.
 Keep SideStore available in the background and periodically open it with
@@ -37,7 +37,7 @@ limit.
 
 1. Install [Sideloadly](https://sideloadly.io/) on Windows or macOS.
 2. Download
-   [KineSync-iOS-unsigned.ipa](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa)
+   [KineSync-iOS-unsigned.ipa](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa)
    to the computer.
 3. Connect and trust the iPhone or iPad, then drag the IPA into Sideloadly.
 4. Select the device, enter the Apple Account used for sideloading, and click

@@ -63,9 +63,11 @@
 
 ## Prerequisites
 
-- **Windows 10/11**, or an `amd64` Docker host, for DesktopBridge
-- **Node.js 20+** and npm
-- **Expo Go** or a development build on your phone
+- **Windows 10/11** for the native Desktop Bridge installer, or an `amd64`
+  Docker host for the containerized bridge
+- An Android device, or an iPhone/iPad with an IPA sideloading tool
+
+Node.js and npm are only required when running from source.
 
 _Optional (only needed to compile native binaries from source):_
 Visual Studio 2022 with C++ workload, .NET SDK 9+, Python 3.x
@@ -76,18 +78,41 @@ _Recommended:_
 
 ## Quick Start
 
+### Install on Android
+
+[**Download the latest signed APK**](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-Android.apk),
+then open it on the Android device. See the
+[Android installation guide](ANDROID_INSTALL.md) for installation and checksum
+verification.
+
 ### Install on iPhone or iPad
 
-[**Download the latest unsigned IPA**](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa)
+[**Download the latest unsigned IPA**](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa)
 for SideStore, Sideloadly, or another IPA signer. With SideStore already set
 up, you can
-[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2FKineSync-iOS-unsigned.ipa)
+[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2FKineSync-iOS-unsigned.ipa)
 or add the permanent
-[KineSync app source](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fios-latest%2Fsidestore-source.json)
+[KineSync app source](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2Fsidestore-source.json)
 to install KineSync and receive update notices inside SideStore.
 
 See the [complete iOS installation guide](IOS_INSTALL.md) for SideStore,
 Sideloadly, refresh requirements, and troubleshooting.
+
+### Install the Desktop Bridge
+
+Choose one:
+
+- **Windows:** [download the latest installer](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe).
+- **Docker:** download the
+  [ready-to-run setup bundle](https://github.com/Kineticron/KineSync/releases/download/desktop-latest/kinesync-docker-setup.zip)
+  or follow the [one-command Docker setup](DOCKER.md#quick-start).
+
+Open the bridge, then scan its pairing QR code from the mobile app. The QR code
+supplies the bridge URL and handshake key, avoiding manual network setup.
+
+The published installer is unsigned unless maintainers configure the optional
+`WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` repository
+secrets, so Windows SmartScreen may show a first-run warning.
 
 ### Run from source
 
@@ -171,13 +196,19 @@ node --check src\index.js
 
 ## Release channels
 
-- **Windows native binaries:** Stable releases tagged `v*` continue to contain
-  the Desktop Bridge native artifacts used by the existing download system.
-- **Unsigned iOS app:** Every push to `main` creates an immutable prerelease
-  tagged `ios-main-<commit>`. The newest successful build also updates the
-  rolling `ios-latest` prerelease, its permanent IPA URL, SideStore metadata,
-  and checksum. Neither type is ever marked as the repository's latest stable
-  release.
+- **Stable Desktop Bridge (`v*`):** one production release contains the Windows
+  installer and the verified native files consumed by npm postinstall. The
+  newest successful version is the repository's latest stable release.
+- **Mobile latest (`mobile-latest`):** one rolling prerelease contains the
+  signed Android APK, unsigned iOS IPA, checksums, and SideStore source. Each
+  platform updates its own assets without deleting the other platform's files.
+- **Docker latest (`desktop-latest`):** one rolling prerelease contains the
+  small setup bundle. The prebuilt image is published to GHCR as `latest`, an
+  immutable commit tag, and version tags for `v*` releases.
+
+Actions artifacts retain individual build history, so pushes to `main` no
+longer create a new GitHub Release for every commit. See [RELEASES.md](RELEASES.md)
+for maintainer prerequisites and the release checklist.
 
 ## Architecture
 

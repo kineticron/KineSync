@@ -1,8 +1,8 @@
 # Builds an iOS device IPA without Apple Developer Portal signing.
-# Every main-branch push creates an immutable ios-main-* prerelease. The current
-# head also updates the friendly ios-latest alias. Neither tag can overlap the
-# v* tags used by Windows native releases.
-# Manual runs still produce only a workflow artifact.
+# Main-branch pushes update the shared mobile-latest prerelease. The historical
+# ios-latest URL is kept as a compatibility alias for existing SideStore users;
+# per-commit history lives in Actions artifacts instead of one release per push.
+# Manual runs produce only a workflow artifact.
 # The IPA can be re-signed locally (e.g. SideStore or Sideloadly).
 # We disable signing entirely for CI so Pod/library targets are not asked to
 # sign with an empty identity.
@@ -17,6 +17,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -230,13 +234,16 @@ jobs:
           if-no-files-found: error
 
   publish-ios-prerelease:
-    name: Publish iOS-only prerelease
+    name: Publish iOS assets
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ios-unsigned-ipa
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+    concurrency:
+      group: mobile-latest-release
+      cancel-in-progress: false
 
     steps:
       - name: Checkout release metadata generator
@@ -255,36 +262,12 @@ jobs:
         run: |
           set -euo pipefail
           version=$(tr -d '\r\n' < release-assets/ios-release-version.txt)
-          short_sha="${GITHUB_SHA:0:7}"
           node ExpoLyrics/scripts/create-ios-release-metadata.js \
             "release-assets/KineSync-iOS-unsigned.ipa" \
             "${version}" \
             "${GITHUB_SHA}" \
             "release-assets"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "release_name=KineSync iOS unsigned — ${version} (main ${short_sha})" >> "${GITHUB_OUTPUT}"
-
-      - name: Create immutable iOS commit prerelease
-        uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
-        with:
-          tag_name: ios-main-${{ github.sha }}
-          target_commitish: ${{ github.sha }}
-          name: ${{ steps.release.outputs.release_name }}
-          body: |
-            Immutable unsigned iOS build for SideStore and Sideloadly, generated from [`main` commit ${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
-
-            - **Integrity:** Verify the IPA with `KineSync-iOS-unsigned.sha256` if desired.
-            - **Instructions:** [SideStore and Sideloadly installation guide](https://github.com/${{ github.repository }}/blob/main/IOS_INSTALL.md)
-
-            For the permanent newest-build URL and SideStore update source, use the separate [`ios-latest` release](https://github.com/${{ github.repository }}/releases/tag/ios-latest). Windows native binaries remain on stable `v*` releases.
-          files: |
-            release-assets/KineSync-iOS-unsigned.ipa
-            release-assets/KineSync-iOS-unsigned.sha256
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          draft: false
-          prerelease: true
-          make_latest: false
 
       - name: Check whether this commit is still the head of main
         id: main-head
@@ -297,31 +280,56 @@ jobs:
             echo "is_current=true" >> "${GITHUB_OUTPUT}"
           else
             echo "is_current=false" >> "${GITHUB_OUTPUT}"
-            echo "Skipping ios-latest update: main is now ${head_sha}."
+            echo "Skipping rolling release update: main is now ${head_sha}."
           fi
 
-      - name: Update friendly rolling iOS release
+      - name: Ensure shared mobile release exists and points to this commit
         if: steps.main-head.outputs.is_current == 'true'
-        uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
-        with:
-          tag_name: ios-latest
-          target_commitish: ${{ github.sha }}
-          name: KineSync iOS unsigned — latest (${{ steps.release.outputs.version }})
-          body: |
-            Latest successful unsigned iOS build from [`main` commit ${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}), ready for SideStore or Sideloadly.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view mobile-latest >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/mobile-latest" \
+              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            gh release create mobile-latest \
+              --target "${GITHUB_SHA}" \
+              --title "KineSync mobile — latest" \
+              --notes "Rolling release containing the latest successful Android APK and unsigned iOS IPA from main. Assets update independently after each platform build succeeds." \
+              --prerelease \
+              --latest=false
+          fi
 
-            - **Direct IPA:** Download `KineSync-iOS-unsigned.ipa` below.
-            - **SideStore updates:** Add this source URL: `https://github.com/${{ github.repository }}/releases/download/ios-latest/sidestore-source.json`
-            - **Integrity:** Verify the IPA with `KineSync-iOS-unsigned.sha256` if desired.
-            - **Instructions:** [SideStore and Sideloadly installation guide](https://github.com/${{ github.repository }}/blob/main/IOS_INSTALL.md)
+      - name: Update shared mobile-latest iOS assets
+        if: steps.main-head.outputs.is_current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload mobile-latest \
+            release-assets/KineSync-iOS-unsigned.ipa \
+            release-assets/KineSync-iOS-unsigned.sha256 \
+            release-assets/sidestore-source.json \
+            --clobber
 
-            This rolling prerelease contains only the iOS app. Windows native binaries remain on the separate stable `v*` releases.
-          files: |
-            release-assets/KineSync-iOS-unsigned.ipa
-            release-assets/KineSync-iOS-unsigned.sha256
-            release-assets/sidestore-source.json
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          draft: false
-          prerelease: true
-          make_latest: false
+      - name: Update legacy ios-latest compatibility alias
+        if: steps.main-head.outputs.is_current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view ios-latest >/dev/null 2>&1; then
+            gh release create ios-latest \
+              --target "${GITHUB_SHA}" \
+              --title "KineSync iOS — compatibility alias" \
+              --notes "Compatibility alias for existing iOS links. New installs should use the combined mobile-latest release." \
+              --prerelease \
+              --latest=false
+          fi
+          gh release upload ios-latest \
+            release-assets/KineSync-iOS-unsigned.ipa \
+            release-assets/KineSync-iOS-unsigned.sha256 \
+            release-assets/sidestore-source.json \
+            --clobber

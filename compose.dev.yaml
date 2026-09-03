@@ -1,0 +1,8 @@
+# Maintainer-only override for building the Docker image from a source checkout.
+# End users should use compose.yaml, which pulls the published GHCR image.
+services:
+  kinesync:
+    build:
+      context: ./DesktopBridge
+      dockerfile: Dockerfile
+    pull_policy: build

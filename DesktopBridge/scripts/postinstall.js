@@ -19,6 +19,9 @@ const ALLOWED_HOSTS = new Set([
   "github.com",
   "objects.githubusercontent.com",
   "github-releases.githubusercontent.com",
+  // GitHub's release download endpoint currently redirects to this host.
+  // Keep the allow-list explicit rather than accepting arbitrary HTTPS hosts.
+  "release-assets.githubusercontent.com",
 ]);
 
 const NATIVE_MEDIA_DIR = path.join(__dirname, "..", "native", "windows-media-session");
@@ -152,12 +155,22 @@ async function expectedFromManifest(byName) {
   if (manifest.schemaVersion !== 1 || manifest.manifestVersion !== PKG.version || manifest.releaseTag !== TAG || !manifest.assets) {
     throw new Error(`Native manifest does not describe ${TAG}`);
   }
+  for (const name of Object.values(ASSETS)) {
+    const entry = manifest.assets[name];
+    if (!entry || !normalizeDigest(entry.sha256) || !Number.isSafeInteger(entry.size) || entry.size < 1) {
+      throw new Error(`Native manifest is missing a valid entry for ${name}`);
+    }
+  }
   return manifest.assets;
+}
+
+function isExplicitlyEnabled(value) {
+  return ["1", "true", "yes"].includes(String(value || "").trim().toLowerCase());
 }
 
 async function main() {
   if (process.platform !== "win32") return;
-  if (process.env.SKIP_POSTINSTALL || process.env.KINESYNC_NATIVE_SOURCE_BUILD === "1") {
+  if (isExplicitlyEnabled(process.env.SKIP_POSTINSTALL) || isExplicitlyEnabled(process.env.KINESYNC_NATIVE_SOURCE_BUILD)) {
     console.warn(`[postinstall] Native downloader skipped by explicit source-build escape. ${sourceBuildMessage()}`);
     return;
   }
@@ -176,7 +189,9 @@ async function main() {
     return;
   }
 
-  let downloaded = 0;
+  // Verify every missing artifact before changing the install tree. This avoids
+  // leaving a partially hydrated native install after a transient network error.
+  const staged = [];
   for (const [destPath, assetName] of Object.entries(ASSETS)) {
     if (fs.existsSync(destPath)) continue;
     const asset = byName[assetName];
@@ -187,14 +202,15 @@ async function main() {
     try {
       process.stdout.write(`[postinstall] Verifying and downloading ${assetName}...`);
       const data = await downloadChecked(asset, expected, maxBytes);
-      installAtomically(destPath, data);
+      staged.push({ destPath, data });
       console.log(" done.");
-      downloaded++;
     } catch (err) {
       console.warn(` failed: ${err.message}`);
+      return;
     }
   }
-  if (downloaded > 0) console.log(`[postinstall] Installed ${downloaded} verified native artifact(s).`);
+  for (const { destPath, data } of staged) installAtomically(destPath, data);
+  if (staged.length > 0) console.log(`[postinstall] Installed ${staged.length} verified native artifact(s).`);
 }
 
 main().catch((err) => {

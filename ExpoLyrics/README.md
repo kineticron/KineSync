@@ -21,8 +21,13 @@ React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics st
 
 ## Quick Start
 
+For a prebuilt Android app, download the
+[latest signed APK](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-Android.apk).
+See the repository's [Android installation guide](../ANDROID_INSTALL.md) for
+first-time installation and Desktop Bridge setup.
+
 For a prebuilt iPhone/iPad app, use the repository's
-[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/download/ios-latest/KineSync-iOS-unsigned.ipa)
+[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa)
 with SideStore or Sideloadly. See the
 [iOS installation guide](../IOS_INSTALL.md) for the one-tap SideStore source,
 refresh requirements, and troubleshooting.

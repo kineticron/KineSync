@@ -21,12 +21,20 @@
 
 ### Desktop Bridge
 
+For normal Windows use, install the
+[latest Desktop Bridge release](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe).
+It already contains the native runtime and does not require Node.js, npm,
+Visual Studio, or the .NET SDK. An unsigned installer may trigger Windows
+SmartScreen until the project configures its optional code-signing certificate.
+
+The instructions below are for contributors running from source.
+
 ```powershell
 cd DesktopBridge
 npm install
 ```
 
-That's it. On Windows, `npm install` automatically downloads the prebuilt native binaries (`windows_media_session.node`, `spotify-seek-helper.dll`) from the GitHub release that matches the current version. No C++ or .NET toolchain required.
+That's it. On Windows, `npm install` automatically downloads the prebuilt native binaries (`windows_media_session.node`, `spotify-seek-helper.dll`) from the GitHub release that matches the current version. It validates a versioned manifest, exact file sizes, and SHA-256 digests, then installs files only after the entire missing batch is verified. No C++ or .NET toolchain is required.
 
 #### If the automatic download fails
 

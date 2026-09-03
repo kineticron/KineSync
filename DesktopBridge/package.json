@@ -9,6 +9,7 @@
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
+    "make:windows": "electron-forge make --platform=win32 --arch=x64",
     "publish": "electron-forge publish",
     "postinstall": "node scripts/postinstall.js",
     "lint": "echo \"No linting configured\"",

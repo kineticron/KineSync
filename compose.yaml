@@ -2,11 +2,12 @@ name: kinesync
 
 services:
   kinesync:
-    build:
-      context: ./DesktopBridge
-      dockerfile: Dockerfile
-    image: kinesync/desktop-bridge-spotify:local
-    container_name: kinesync
+    # The published image is the default so users never need a local Node.js,
+    # Electron, Spotify, or build toolchain. Local builds live in
+    # compose.dev.yaml so this file is standalone in the release bundle.
+    image: ${KINESYNC_IMAGE:-ghcr.io/kineticron/kinesync-desktop-bridge:latest}
+    pull_policy: ${KINESYNC_PULL_POLICY:-always}
+    container_name: ${KINESYNC_CONTAINER_NAME:-kinesync}
     restart: unless-stopped
     shm_size: "1gb"
     # Keep the browser desktop local by default. The WebSocket bridge remains

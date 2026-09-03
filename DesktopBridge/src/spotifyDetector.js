@@ -17,6 +17,7 @@ const {
   mergeNativePlaybackArtist,
 } = require("./lyrics");
 const { getDotnetExecutable } = require("./dotnetExecutable");
+const { resolvePackagedNativePath } = require("./nativeRuntimePaths");
 
 const EMIT_INTERVAL_MS = 100;
 const MAX_CAPTURE_DELAY_MS = 1_200;
@@ -62,13 +63,13 @@ const SEEK_HELPER_PROJECT_DIR = path.join(
   "native",
   "spotify-seek-helper",
 );
-const SEEK_HELPER_DLL_PATH = path.join(
+const SEEK_HELPER_DLL_PATH = resolvePackagedNativePath(path.join(
   SEEK_HELPER_PROJECT_DIR,
   "bin",
   "Release",
   "net9.0-windows10.0.19041.0",
   "spotify-seek-helper.dll",
-);
+));
 let seekHelperBuildPromise = null;
 
 function hashTrackId(title, artist) {
@@ -112,7 +113,7 @@ function extractArtworkUrl(snapshot) {
 function runDotnetCommand(args, timeoutMs = 12000) {
   return new Promise((resolve, reject) => {
     const child = spawn(getDotnetExecutable(), args, {
-      cwd: SEEK_HELPER_PROJECT_DIR,
+      cwd: args[0] === "build" ? SEEK_HELPER_PROJECT_DIR : path.dirname(SEEK_HELPER_DLL_PATH),
       windowsHide: true,
     });
     let stdout = "";

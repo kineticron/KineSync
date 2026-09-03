@@ -11,6 +11,7 @@ RUN --mount=type=secret,id=build_ca \
 FROM ghcr.io/linuxserver/baseimage-kasmvnc:ubuntunoble@sha256:c6d902c207d6e4a66ca41ce36dda549cd58a5bc8d353468b24b0cf780eb528c8
 
 ARG TARGETARCH
+ARG VCS_REF=unknown
 ARG SPOTIFY_VERSION=1.2.95.453.g0eeebbed
 ARG SPICETIFY_VERSION=2.44.0
 ARG ADBLOCKIFY_COMMIT=64cb2b8c235b13cf943e4c265c19199f69e5d170
@@ -27,6 +28,12 @@ ENV CUSTOM_PORT=3000 \
     ADBLOCKIFY_COMMIT=${ADBLOCKIFY_COMMIT} \
     SPICETIFY_MARKETPLACE_VERSION=${SPICETIFY_MARKETPLACE_VERSION} \
     SPICETIFY_MARKETPLACE_COMMIT=${SPICETIFY_MARKETPLACE_COMMIT}
+
+LABEL org.opencontainers.image.title="KineSync Desktop Bridge" \
+      org.opencontainers.image.description="Self-contained KineSync Desktop Bridge with Spotify and browser desktop" \
+      org.opencontainers.image.source="https://github.com/Kineticron/KineSync" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 ADD --checksum=sha256:256e2eb1ec96fbc0c51afab247298e4e6eabfabbafafd4617584f44cca2fb31f \
     https://repository.spotify.com/pool/non-free/s/spotify-client/spotify-client_${SPOTIFY_VERSION}_amd64.deb \

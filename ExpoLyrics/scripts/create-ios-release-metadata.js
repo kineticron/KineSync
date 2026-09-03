@@ -18,7 +18,7 @@ const outputDirectory = path.resolve(outputArgument);
 const ipa = fs.readFileSync(ipaPath);
 const sha256 = crypto.createHash('sha256').update(ipa).digest('hex');
 const repositoryUrl = 'https://github.com/Kineticron/KineSync';
-const releaseAssetRoot = `${repositoryUrl}/releases/download/ios-latest`;
+const releaseAssetRoot = `${repositoryUrl}/releases/download/mobile-latest`;
 const ipaUrl = `${releaseAssetRoot}/KineSync-iOS-unsigned.ipa`;
 const sourceUrl = `${releaseAssetRoot}/sidestore-source.json`;
 

@@ -1,0 +1,131 @@
+# Publishes the self-contained Docker Desktop Bridge image and a tiny setup
+# bundle for non-developers. The image is amd64-only because Spotify's Linux
+# desktop package is amd64-only.
+name: Desktop Bridge Docker image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - "DesktopBridge/**"
+      - "compose.yaml"
+      - "compose.dev.yaml"
+      - ".env.docker.example"
+      - "scripts/setup-docker.sh"
+      - "scripts/setup-docker.ps1"
+      - "DOCKER.md"
+      - ".github/workflows/docker-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/kinesync-desktop-bridge
+
+jobs:
+  publish-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build and push amd64 image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./DesktopBridge
+          file: ./DesktopBridge/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=desktop-bridge
+          cache-to: type=gha,mode=max,scope=desktop-bridge
+          provenance: true
+          sbom: true
+
+  publish-setup-bundle:
+    name: Publish rolling desktop setup bundle
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Create setup bundle
+        run: |
+          set -euo pipefail
+          mkdir -p release-bundle
+          cp compose.yaml .env.docker.example DOCKER.md scripts/setup-docker.sh scripts/setup-docker.ps1 release-bundle/
+          (cd release-bundle && zip -q -r ../kinesync-docker-setup.zip .)
+          sha256sum kinesync-docker-setup.zip > kinesync-docker-setup.zip.sha256
+
+      - name: Update rolling desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view desktop-latest >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/desktop-latest" \
+              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            gh release create desktop-latest \
+              --target "${GITHUB_SHA}" \
+              --title "KineSync Desktop Bridge — Docker latest" \
+              --notes "Rolling non-developer Docker setup bundle. The prebuilt amd64 image is ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kinesync-desktop-bridge:latest." \
+              --prerelease \
+              --latest=false
+          fi
+          gh release upload desktop-latest \
+            kinesync-docker-setup.zip \
+            kinesync-docker-setup.zip.sha256 \
+            release-bundle/compose.yaml \
+            release-bundle/.env.docker.example \
+            release-bundle/DOCKER.md \
+            release-bundle/setup-docker.sh \
+            release-bundle/setup-docker.ps1 \
+            --clobber

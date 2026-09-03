@@ -1,0 +1,262 @@
+# Builds a signed Android APK for every push to main.
+#
+# The APK is built locally so it can be signed with a persistent Android
+# keystore held in repository secrets. The current head of main updates the
+# shared mobile-latest rolling release.
+# The rolling publisher uploads only its own filenames, so IPA and native
+# release assets already attached to that release are retained.
+
+name: Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-android-apk:
+    name: Build signed Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ExpoLyrics/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: ExpoLyrics
+        run: npm ci
+
+      - name: Setup Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Expo prebuild (Android)
+        working-directory: ExpoLyrics
+        run: npx expo prebuild --clean --platform android
+
+      - name: Configure release signing and version
+        working-directory: ExpoLyrics
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "${name} must be configured as a repository secret." >&2
+              exit 1
+            fi
+          done
+
+          key_store_path="${PWD}/android/app/release.keystore"
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${key_store_path}"
+          chmod 600 "${key_store_path}"
+          if [[ ! -s "${key_store_path}" ]]; then
+            echo "ANDROID_KEYSTORE_BASE64 did not produce a keystore." >&2
+            exit 1
+          fi
+          keytool -list -keystore "${key_store_path}" \
+            -storepass "${ANDROID_KEYSTORE_PASSWORD}" \
+            -alias "${ANDROID_KEY_ALIAS}" >/dev/null
+
+          # expo prebuild intentionally removes the public debug-key fallback
+          # from release builds. Add an explicit CI signing config and connect
+          # it to release without committing secrets or generated native code.
+          node <<'NODE'
+          const fs = require('fs');
+          const file = 'android/app/build.gradle';
+          let source = fs.readFileSync(file, 'utf8');
+          const signingStart = source.indexOf('    signingConfigs {');
+          const buildTypesStart = source.indexOf('    buildTypes {', signingStart);
+          if (signingStart < 0 || buildTypesStart < 0) {
+            throw new Error('Could not locate Android signing/buildTypes blocks');
+          }
+          const signingBlock = source.slice(signingStart, buildTypesStart);
+          if (!signingBlock.includes('signingConfigs.release')) {
+            const close = signingBlock.lastIndexOf('    }');
+            if (close < 0) throw new Error('Could not locate signingConfigs closing brace');
+            const releaseConfig = [
+              '        release {',
+              '            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))',
+              '            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")',
+              '            keyAlias System.getenv("ANDROID_KEY_ALIAS")',
+              '            keyPassword System.getenv("ANDROID_KEY_PASSWORD")',
+              '        }',
+              '',
+            ].join('\n');
+            source = source.slice(0, signingStart) +
+              signingBlock.slice(0, close) + releaseConfig +
+              signingBlock.slice(close) + source.slice(buildTypesStart);
+          }
+          // Recalculate this index because adding signingConfigs.release
+          // changes the source length.
+          const currentBuildTypesStart = source.indexOf('    buildTypes {');
+          const releaseStart = source.indexOf('        release {', currentBuildTypesStart);
+          if (releaseStart < 0) throw new Error('Could not locate release build type');
+          const releaseBodyStart = releaseStart + '        release {'.length;
+          if (!source.slice(releaseBodyStart, source.indexOf('\n        }', releaseBodyStart)).includes('signingConfig signingConfigs.release')) {
+            source = source.slice(0, releaseBodyStart) +
+              '\n            signingConfig signingConfigs.release' +
+              source.slice(releaseBodyStart);
+          }
+          const runNumber = Number(process.env.GITHUB_RUN_NUMBER);
+          if (!Number.isSafeInteger(runNumber) || runNumber < 1) throw new Error('Invalid GITHUB_RUN_NUMBER');
+          const versionCode = 100000 + runNumber;
+          if (versionCode > 2100000000) throw new Error('Android versionCode exceeds platform limit');
+          const updated = source.replace(/(\bversionCode\s+)\d+/, `$1${versionCode}`);
+          if (updated === source) throw new Error('Could not locate Android versionCode');
+          fs.writeFileSync(file, updated);
+          console.log(`Configured release signing and Android versionCode ${versionCode}`);
+          NODE
+
+          export ANDROID_KEYSTORE_PATH="${key_store_path}"
+          ./android/gradlew --no-daemon --stacktrace assembleRelease
+          cp android/app/build/outputs/apk/release/app-release.apk KineSync-Android.apk
+          if [[ ! -s KineSync-Android.apk ]]; then
+            echo "Gradle did not produce an APK." >&2
+            exit 1
+          fi
+          # Verify both the ZIP structure and the cryptographic signature.
+          unzip -t KineSync-Android.apk >/dev/null
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "${sdk_root}" ]]; then
+            echo "ANDROID_HOME/ANDROID_SDK_ROOT is not set." >&2
+            exit 1
+          fi
+          apksigner="$(find "${sdk_root}/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          if [[ -z "${apksigner}" ]]; then
+            echo "Android build-tools apksigner was not found." >&2
+            exit 1
+          fi
+          "${apksigner}" verify --verbose KineSync-Android.apk
+          sha256sum KineSync-Android.apk > KineSync-Android.apk.sha256
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ExpoLyrics-android-apk
+          path: |
+            ExpoLyrics/KineSync-Android.apk
+            ExpoLyrics/KineSync-Android.apk.sha256
+          if-no-files-found: error
+
+  publish-android-apk:
+    name: Publish Android APK
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-android-apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Keep this group in sync with the iOS rolling-release publisher. Builds
+    # may run in parallel, but release mutation is serialized and older runs
+    # cannot overwrite mobile-latest after a newer main commit exists.
+    concurrency:
+      group: mobile-latest-release
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout release metadata
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ExpoLyrics-android-apk
+          path: release-assets
+
+      - name: Verify APK artifact
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          sha256sum --check KineSync-Android.apk.sha256
+          unzip -t KineSync-Android.apk >/dev/null
+
+      - name: Check whether this commit is still the head of main
+        id: main-head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
+          if [[ "${head_sha}" == "${GITHUB_SHA}" ]]; then
+            echo "is_current=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "is_current=false" >> "${GITHUB_OUTPUT}"
+            echo "Skipping mobile-latest update: main is now ${head_sha}."
+          fi
+
+      - name: Point mobile-latest tag at this commit
+        if: steps.main-head.outputs.is_current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Keep the rolling release's tag aligned with the commit whose
+          # assets are being uploaded. This is safe because publishers share
+          # the mobile-latest-release concurrency group.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/mobile-latest" >/dev/null 2>&1; then
+            gh api --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/git/refs/tags/mobile-latest" \
+              -f sha="${GITHUB_SHA}" \
+              -F force=true >/dev/null
+          fi
+
+      - name: Ensure shared mobile-latest release exists
+        if: steps.main-head.outputs.is_current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view mobile-latest >/dev/null 2>&1; then
+            # Another mobile publisher may create this release at the same
+            # time. Treat that expected race as success and upload our files
+            # below, without replacing its title/body/assets.
+            gh release create mobile-latest \
+              --target "${GITHUB_SHA}" \
+              --title "KineSync mobile — latest" \
+              --notes "Latest successful mobile builds from main. Android and iOS assets update independently; use the adjacent checksums to verify downloads." \
+              --prerelease \
+              --latest=false || gh release view mobile-latest >/dev/null
+          fi
+
+      - name: Update shared mobile-latest APK assets
+        if: steps.main-head.outputs.is_current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # gh release upload --clobber replaces only these two filenames;
+          # unrelated IPA, SideStore, or native assets remain untouched.
+          gh release upload mobile-latest \
+            release-assets/KineSync-Android.apk \
+            release-assets/KineSync-Android.apk.sha256 \
+            --clobber

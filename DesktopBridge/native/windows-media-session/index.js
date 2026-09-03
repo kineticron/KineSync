@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { resolvePackagedNativePath } = require("../../src/nativeRuntimePaths");
 
 function loadNativeBinding() {
   const candidates = [
@@ -10,10 +11,10 @@ function loadNativeBinding() {
     path.join(__dirname, "windows_media_session.original.node"),
   ];
 
-  for (const candidatePath of candidates) {
-    if (fs.existsSync(candidatePath)) {
+  for (const candidate of candidates.map(resolvePackagedNativePath)) {
+    if (fs.existsSync(candidate)) {
       // eslint-disable-next-line global-require, import/no-dynamic-require
-      return require(candidatePath);
+      return require(candidate);
     }
   }
 

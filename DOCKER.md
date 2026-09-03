@@ -1,14 +1,21 @@
 # Instant Docker setup
 
-This is the fastest way to get KineSync running. One self-contained image
+This is the fastest way to get KineSync running. One published self-contained image
 includes Spotify for Linux, DesktopBridge, Spicetify Marketplace, Adblockify,
 an embedded ngrok client, and a browser-accessible desktop. Spotify and
 DesktopBridge share one D-Bus session, so playback detection and controls work
 through Linux MPRIS without Spotify Premium.
 
+The normal setup pulls the amd64 image (with OCI provenance and SBOM metadata)
+from GitHub Container
+Registry; users do not need Node.js, npm, a source checkout, or a local build.
+The rolling `desktop-latest` release contains the same Compose file and setup
+helpers at stable URLs for users who do not use GitHub's source view.
+
 ## What you need
 
-- An `amd64` host with Docker and Docker Compose.
+- An `amd64` host with Docker Desktop (Docker Compose v2 included). Linux users
+  can use Docker Engine with the Compose v2 plugin.
 - A Spotify account. Use the same account on the container and playback devices.
 - ExpoLyrics installed or running on your phone.
 - For local mode, the phone and Docker host on the same LAN.
@@ -57,7 +64,30 @@ boundary.
 
 ## Quick start
 
-Run these commands from the repository root.
+The easiest route for a non-developer is to open PowerShell and run this one
+command in the folder where KineSync should keep its configuration:
+
+```powershell
+irm https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.ps1 | iex
+```
+
+The helper refreshes the Compose definition, generates private bridge and
+desktop credentials once, pulls the prebuilt image, and starts the service.
+Run it again after an update; it preserves `.env` and the `/config` volume.
+The shell equivalent is:
+
+```bash
+curl -fsSL https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.sh | sh
+```
+
+For an offline or reviewable install, download
+[`kinesync-docker-setup.zip`](https://github.com/Kineticron/KineSync/releases/download/desktop-latest/kinesync-docker-setup.zip),
+optionally verify it with the adjacent `.sha256` file, extract it, and run
+`setup-docker.ps1` (Windows) or `sh setup-docker.sh`.
+
+## Setup from a source checkout
+
+Run these commands from the repository root only when developing the image:
 
 ### 1. Create your secure configuration
 
@@ -79,6 +109,9 @@ start the container immediately. Open `.env` only if you want to change the
 timezone, bind addresses, username, or config path:
 
 ```dotenv
+KINESYNC_IMAGE=ghcr.io/kineticron/kinesync-desktop-bridge:latest
+KINESYNC_PULL_POLICY=always
+KINESYNC_CONTAINER_NAME=kinesync
 BRIDGE_KEY=<generated automatically>
 KINESYNC_WEB_USER=kinesync
 KINESYNC_WEB_PASSWORD=<generated automatically>
@@ -86,6 +119,8 @@ KINESYNC_CONFIG_PATH=./.kinesync-config
 KINESYNC_WEB_BIND_ADDRESS=127.0.0.1
 # Keep 0.0.0.0 for simple phone-to-host LAN bridging, or use a host LAN IP.
 KINESYNC_BRIDGE_BIND_ADDRESS=0.0.0.0
+KINESYNC_WEB_PORT=3000
+KINESYNC_WEB_HTTPS_PORT=3443
 PUID=568
 PGID=568
 TZ=America/New_York
@@ -103,12 +138,15 @@ TZ=America/New_York
 ### 2. Build and start
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 docker compose ps
 ```
 
-Wait until `kinesync` reports `healthy`. The first build can take several
-minutes because it downloads a pinned Spotify package and installs the runtime.
+Wait until `kinesync` reports `healthy`. The first pull can take several minutes
+because the image contains Spotify and the browser desktop. `KINESYNC_PULL_POLICY`
+defaults to `always`, so restarting with the `latest` tag also checks for image
+updates. Pin `KINESYNC_IMAGE` to a version tag for reproducible deployments.
 
 ### 3. Open the container desktop
 
@@ -221,8 +259,12 @@ docker compose restart
 # Stop
 docker compose down
 
-# Rebuild after pulling source changes
-docker compose up -d --build
+# Pull and restart the latest published image
+docker compose pull
+docker compose up -d
+
+# Maintainer-only: build the image from a source checkout
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
 Application logs persist in:

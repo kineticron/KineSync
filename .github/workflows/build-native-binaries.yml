@@ -1,10 +1,13 @@
-# Builds Windows-only native binaries and attaches them to GitHub releases.
-# Triggered by a version tag push (e.g. v1.0.0).
-# Artifacts: windows_media_session.node, spotify-seek-helper.dll,
+# Builds the Windows Desktop release and attaches it to the matching versioned
+# GitHub release. Triggered by a version tag push (e.g. v1.0.0).
+# Artifacts: Windows installer, windows_media_session.node, spotify-seek-helper.dll,
 #             spotify-seek-helper.runtimeconfig.json,
 #             Microsoft.Windows.SDK.NET.dll, WinRT.Runtime.dll
+#
+# The DesktopBridge postinstall downloader consumes these assets from the same
+# v* release. Keep the tag equal to DesktopBridge/package.json's version.
 
-name: Build native binaries
+name: Build Windows desktop release
 
 on:
   push:
@@ -15,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-native-${{ github.ref }}
+  group: build-native-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -46,11 +49,20 @@ jobs:
 
       - name: Install root DesktopBridge deps
         working-directory: DesktopBridge
-        # SKIP_POSTINSTALL prevents the download script from running here —
-        # we're the ones producing those artifacts, not consuming them.
-        env:
-          SKIP_POSTINSTALL: "1"
-        run: npm ci
+        # We are producing these artifacts, not consuming them. Ignoring all
+        # lifecycle scripts also keeps nested native installs deterministic.
+        run: npm ci --ignore-scripts --audit=false --fund=false
+
+      - name: Validate release tag matches DesktopBridge version
+        working-directory: DesktopBridge
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          expected="v${version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match DesktopBridge/package.json (${expected})."
+            exit 1
+          fi
 
       - name: Build C++ media-session addon
         working-directory: DesktopBridge
@@ -60,16 +72,76 @@ jobs:
         working-directory: DesktopBridge
         run: npm run build:seek-helper
 
+      - name: Prepare optional Windows signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $hasPfx = ![string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PFX_BASE64)
+          $hasPassword = ![string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)
+          if (!$hasPfx -and !$hasPassword) {
+            Write-Host 'No Windows signing secrets configured; producing an unsigned installer.'
+            exit 0
+          }
+          if (!$hasPfx -or !$hasPassword) {
+            throw 'Both WINDOWS_CERTIFICATE_PFX_BASE64 and WINDOWS_CERTIFICATE_PASSWORD must be configured together.'
+          }
+          try {
+            $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64)
+          } catch {
+            throw 'WINDOWS_CERTIFICATE_PFX_BASE64 is not valid base64.'
+          }
+          if ($bytes.Length -lt 1) { throw 'Windows signing certificate is empty.' }
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'kinesync-windows-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          "WINDOWS_CERTIFICATE_FILE=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "WINDOWS_CERTIFICATE_PASSWORD=$env:WINDOWS_CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host 'Windows signing certificate prepared for Forge.'
+
+      - name: Build Windows installer
+        working-directory: DesktopBridge
+        # Native builds above must complete first: Forge packages the native
+        # addon and seek helper into the application payload.
+        run: npm run make:windows
+
       - name: Collect artifacts
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist-native | Out-Null
-          Copy-Item DesktopBridge/native/windows-media-session/build/Release/windows_media_session.node dist-native/
+          Copy-Item DesktopBridge/native/windows-media-session/build/Release/windows_media_session.node dist-native/ -ErrorAction Stop
           $seekOut = "DesktopBridge/native/spotify-seek-helper/bin/Release/net9.0-windows10.0.19041.0"
-          Copy-Item "$seekOut/spotify-seek-helper.dll" dist-native/
-          Copy-Item "$seekOut/spotify-seek-helper.runtimeconfig.json" dist-native/
-          Copy-Item "$seekOut/Microsoft.Windows.SDK.NET.dll" dist-native/
-          Copy-Item "$seekOut/WinRT.Runtime.dll" dist-native/
+          Copy-Item "$seekOut/spotify-seek-helper.dll" dist-native/ -ErrorAction Stop
+          Copy-Item "$seekOut/spotify-seek-helper.runtimeconfig.json" dist-native/ -ErrorAction Stop
+          Copy-Item "$seekOut/Microsoft.Windows.SDK.NET.dll" dist-native/ -ErrorAction Stop
+          Copy-Item "$seekOut/WinRT.Runtime.dll" dist-native/ -ErrorAction Stop
+
+          $expected = @(
+            'windows_media_session.node',
+            'spotify-seek-helper.dll',
+            'spotify-seek-helper.runtimeconfig.json',
+            'Microsoft.Windows.SDK.NET.dll',
+            'WinRT.Runtime.dll'
+          )
+          foreach ($name in $expected) {
+            $file = Join-Path dist-native $name
+            if (!(Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing native artifact: $file"
+            }
+          }
+
+          $installers = @(Get-ChildItem -Path DesktopBridge/out/make -Recurse -File -Filter 'KineSync-Desktop-Windows-Setup.exe')
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one KineSync-Desktop-Windows-Setup.exe under DesktopBridge/out/make; found $($installers.Count)."
+          }
+          if ($installers[0].Length -le 0) {
+            throw "Windows installer is empty: $($installers[0].FullName)"
+          }
+          Copy-Item -LiteralPath $installers[0].FullName -Destination dist-native/ -ErrorAction Stop
+          $installerPath = Join-Path dist-native 'KineSync-Desktop-Windows-Setup.exe'
+          $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$installerHash  KineSync-Desktop-Windows-Setup.exe" | Set-Content -LiteralPath (Join-Path dist-native 'KineSync-Desktop-Windows-Setup.exe.sha256') -Encoding ascii
 
       - name: Create versioned SHA-256 manifest
         working-directory: DesktopBridge
@@ -98,10 +170,20 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: KineSync Desktop Bridge ${{ github.ref_name }}
+          body: |
+            Windows DesktopBridge release ${{ github.ref_name }}.
+
+            - **Installer:** [KineSync-Desktop-Windows-Setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/KineSync-Desktop-Windows-Setup.exe)
+            - **Installer SHA-256:** `KineSync-Desktop-Windows-Setup.exe.sha256`
+
+            These files are consumed automatically by `npm install` on Windows.
+            The versioned SHA-256 manifest is used by the postinstall verifier.
           files: |
-            dist-native/windows_media_session.node
-            dist-native/spotify-seek-helper.dll
-            dist-native/spotify-seek-helper.runtimeconfig.json
-            dist-native/Microsoft.Windows.SDK.NET.dll
-            dist-native/WinRT.Runtime.dll
-            dist-native/native-assets-v*.json
+            dist-native/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          draft: false
+          prerelease: false
+          make_latest: true
