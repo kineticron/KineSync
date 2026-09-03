@@ -136,7 +136,10 @@ jobs:
           NODE
 
           export ANDROID_KEYSTORE_PATH="${key_store_path}"
-          ./android/gradlew --no-daemon --stacktrace assembleRelease
+          # Gradle must run with android/ as its project directory. Calling the
+          # wrapper from ExpoLyrics/ alone leaves Gradle looking for settings
+          # files in the wrong directory.
+          (cd android && ./gradlew --no-daemon --stacktrace assembleRelease)
           cp android/app/build/outputs/apk/release/app-release.apk KineSync-Android.apk
           if [[ ! -s KineSync-Android.apk ]]; then
             echo "Gradle did not produce an APK." >&2
