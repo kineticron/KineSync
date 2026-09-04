@@ -4,6 +4,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function New-KineSyncRandomHex {
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateRange(1, 1024)]
+    [int]$ByteCount
+  )
+
+  $bytes = New-Object byte[] $ByteCount
+  $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $generator.GetBytes($bytes)
+  } finally {
+    $generator.Dispose()
+  }
+  return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 $releaseBase = if ($env:KINESYNC_DOCKER_RELEASE_BASE_URL) {
   $env:KINESYNC_DOCKER_RELEASE_BASE_URL.TrimEnd('/')
 } else {
@@ -42,9 +59,7 @@ if ($isRemoteBootstrap -or -not (Test-Path -LiteralPath $composePath)) {
 if (Test-Path -LiteralPath $envPath) {
   Write-Host '.env already exists; leaving it unchanged.'
 } else {
-  $bridgeKey = [Convert]::ToHexString(
-    [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-  ).ToLowerInvariant()
+  $bridgeKey = New-KineSyncRandomHex -ByteCount 32
 $contents = @"
 KINESYNC_IMAGE=ghcr.io/kineticron/kinesync-desktop-bridge:latest
 KINESYNC_PULL_POLICY=always
