@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A modern, beautiful mobile app for rendering syllable-synced lyrics synced with your Spotify playback using your own self-hosted Desktop Bridge.<br>
+  A modern, beautiful mobile app for rendering syllable-synced lyrics with Spotify playback on your phone or through an optional self-hosted Desktop Bridge.<br>
   Built natively for lyrics from <a href="https://github.com/Spikerko/spicy-lyrics">Spicy Lyrics</a>, a Spicetify extension.
 </p>
 
@@ -11,8 +11,9 @@
 
 | | |
 |:---:|:---:|
-| ✅ **100% free & open-source** | ✅ **App on Expo** — sideloadable for iOS & Android |
-| ✅ **Bridge on Windows or Docker** | ✅ **No Spotify API or Premium** required |
+| ✅ **100% free & open-source** | ✅ **App on Expo:** sideloadable for iOS & Android |
+| ✅ **Phone-only mode:** no computer required | ✅ **No Spotify API or Premium** required |
+| ✅ **Optional bridge on Windows or Docker** | ✅ **Local or remote playback support** |
 
 </div>
 
@@ -45,13 +46,13 @@
 
 ## Features
 
-- **Real-time synced lyrics** — Line-by-line and word-by-word (karaoke) timing
-- **Multi-source lyrics** — Musixmatch, QQ Music, Netease, Kugou, Spicy Lyrics, LRCLib, local vault
-- **Album artwork** — Deezer + Apple iTunes Search (no API keys needed)
-- **AI translation** — Optional Gemini translation of lyrics
-- **Remote relay** — ngrok-based public relay for listening outside your home network
-- **Lyrics vault** — Export and archive lyrics locally (TTML format)
-- **Animated reveals** — Smooth karaoke-style word highlighting with sustain effects
+- **Real-time synced lyrics:** Line-by-line and word-by-word (karaoke) timing
+- **Multi-source lyrics:** Musixmatch, QQ Music, Netease, Kugou, Spicy Lyrics, LRCLib, local vault
+- **Album artwork:** Deezer + Apple iTunes Search (no API keys needed)
+- **AI translation:** Optional Gemini translation of lyrics
+- **Remote relay:** ngrok-based public relay for listening outside your home network
+- **Lyrics vault:** Export and archive lyrics locally (TTML format)
+- **Animated reveals:** Smooth karaoke-style word highlighting with sustain effects
 
 <p align="center">
   <img src="Previews/KineSyncLandscape.png" alt="KineSync landscape mode" width="800">
@@ -63,9 +64,12 @@
 
 ## Prerequisites
 
-- **Windows 10/11** for the native Desktop Bridge installer, or an `amd64`
-  Docker host for the containerized bridge
 - An Android device, or an iPhone/iPad with an IPA sideloading tool
+- A Spotify account
+
+No computer is needed after installing the mobile app when you choose
+**Mobile-Only**. If you opt into Desktop Bridge, use Windows 10/11 for the
+native installer or an `amd64` Windows, macOS, or Linux Docker host.
 
 Node.js and npm are only required when running from source.
 
@@ -78,37 +82,48 @@ _Recommended:_
 
 ## Quick Start
 
+Setup choices are listed from easiest to most advanced. The Desktop Bridge is
+optional: start with Mobile-Only unless you want tighter sync, desktop Spotify
+playback, local lyrics, or remote relay support.
+
 ### Install on Android
 
-[**Download the latest signed APK**](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-Android.apk),
+[**Download the latest signed APK**](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Android.apk),
 then open it on the Android device. See the
 [Android installation guide](ANDROID_INSTALL.md) for installation and checksum
 verification.
 
 ### Install on iPhone or iPad
 
-[**Download the latest unsigned IPA**](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa)
+[**Download the latest unsigned IPA**](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa)
 for SideStore, Sideloadly, or another IPA signer. With SideStore already set
 up, you can
-[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2FKineSync-iOS-unsigned.ipa)
+[install the latest IPA directly](sidestore://install?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Flatest%2Fdownload%2FKineSync-iOS-unsigned.ipa)
 or add the permanent
-[KineSync app source](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Fdownload%2Fmobile-latest%2Fsidestore-source.json)
+[KineSync app source](sidestore://source?url=https%3A%2F%2Fgithub.com%2FKineticron%2FKineSync%2Freleases%2Flatest%2Fdownload%2Fsidestore-source.json)
 to install KineSync and receive update notices inside SideStore.
 
 See the [complete iOS installation guide](IOS_INSTALL.md) for SideStore,
 Sideloadly, refresh requirements, and troubleshooting.
 
-### Install the Desktop Bridge
+### Choose how KineSync follows Spotify
 
-Choose one:
+1. **Mobile-Only (easiest, no Desktop Bridge):** During onboarding, choose
+   **Use this phone only**, sign in to Spotify with an email address and
+   password, and play Spotify inside KineSync. Google and Apple sign-in are not
+   available in the embedded browser.
+2. **Windows installer (optional Desktop Bridge):**
+   [download the latest Windows `.exe`](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe),
+   install it, open KineSync, and scan its pairing QR code from the mobile app.
+3. **Docker (optional Desktop Bridge):** use the
+   [one-command Docker setup](DOCKER.md#one-command-install) or download the
+   [ready-to-run setup bundle](https://github.com/Kineticron/KineSync/releases/latest/download/kinesync-docker-setup.zip).
+4. **From source (advanced/development):** follow the
+   [complete setup guide](SETUP.md#method-4-run-from-source-advanced).
 
-- **Windows:** [download the latest installer](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe).
-- **Docker:** download the
-  [ready-to-run setup bundle](https://github.com/Kineticron/KineSync/releases/download/desktop-latest/kinesync-docker-setup.zip)
-  or follow the [one-command Docker setup](DOCKER.md#quick-start).
-
-Open the bridge, then scan its pairing QR code from the mobile app. The QR code
-supplies the bridge URL and handshake key, avoiding manual network setup.
+With either bridge method, open Desktop Bridge and scan its pairing QR code.
+The QR code supplies the bridge URL and handshake key, avoiding manual network
+setup.
 
 The published installer is unsigned unless maintainers configure the optional
 `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` repository
@@ -151,11 +166,11 @@ Scan the QR code with Expo Go. In the app's **Bridge Settings**, enter your desk
 
 For connecting outside your home network, see the [ngrok relay setup in SETUP.md](SETUP.md#ngrok-relay-mode-remote-access).
 
-## Instant Docker setup
+## Optional Docker Desktop Bridge
 
 The self-contained `amd64` image runs Spotify for Linux, DesktopBridge, and
 automatically configured Spicetify Marketplace with Adblockify. It uses Xpra
-seamless forwarding—not VNC—to present the apps as individual native host
+seamless forwarding, not VNC, to present the apps as individual native host
 windows on Windows, macOS, and Linux. Desktop Bridge remains visible; Spotify
 appears for the first login and is hidden after the account is persisted. The
 one-command installer needs no source checkout or VNC credentials. Container
@@ -169,9 +184,9 @@ login, ExpoLyrics pairing, optional ngrok access, diagnostics, and verification.
 
 The desktop bridge fetches lyrics from multiple sources. Relevant bridge UI settings:
 
-- **Spotify sign-in** — Required for Spicy Lyrics compatibility
-- **Musixmatch** — Anonymous access is configured automatically in both Desktop Bridge and mobile-only modes. An optional user token can be entered as a manual override for synced/rich lyrics.
-- **Gemini API key** — For AI translation (get from [Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key))
+- **Spotify sign-in:** Required for Spicy Lyrics compatibility
+- **Musixmatch:** Anonymous access is configured automatically in both Desktop Bridge and mobile-only modes. An optional user token can be entered as a manual override for synced/rich lyrics.
+- **Gemini API key:** For AI translation (get from [Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key))
 
 More configured sources = better coverage. Sources gracefully fall back when unavailable.
 
@@ -198,21 +213,12 @@ cd DesktopBridge
 node --check src\index.js
 ```
 
-## Release channels
+## Releases
 
-- **Stable Desktop Bridge (`v*`):** one production release contains the Windows
-  installer and the verified native files consumed by npm postinstall. The
-  newest successful version is the repository's latest stable release.
-- **Mobile latest (`mobile-latest`):** one rolling prerelease contains the
-  signed Android APK, unsigned iOS IPA, checksums, and SideStore source. Each
-  platform updates its own assets without deleting the other platform's files.
-- **Docker latest (`desktop-latest`):** one rolling prerelease contains the
-  small setup bundle. The prebuilt image is published to GHCR as `latest`, an
-  immutable commit tag, and version tags for `v*` releases.
-
-Actions artifacts retain individual build history, so pushes to `main` no
-longer create a new GitHub Release for every commit. See [RELEASES.md](RELEASES.md)
-for maintainer prerequisites and the release checklist.
+Each production version uses one normal GitHub Release named `v*`. The release
+contains the Android app, iOS app, Windows installer, Docker setup, checksums,
+and native Windows runtime files. See [RELEASES.md](RELEASES.md) for the release
+process.
 
 ## Architecture
 
@@ -237,4 +243,4 @@ The desktop bridge uses a shared Node.js VM context to load the lyrics service f
 
 ## License
 
-GNU GPL v3.0 — see [LICENSE](LICENSE) for details.
+GNU GPL v3.0. See [LICENSE](LICENSE) for details.

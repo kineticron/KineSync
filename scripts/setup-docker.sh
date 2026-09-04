@@ -3,7 +3,7 @@
 # cloning the repository is not required.
 set -eu
 
-release_base="${KINESYNC_DOCKER_RELEASE_BASE_URL:-https://github.com/Kineticron/KineSync/releases/download/desktop-latest}"
+release_base="${KINESYNC_DOCKER_RELEASE_BASE_URL:-https://github.com/Kineticron/KineSync/releases/latest/download}"
 
 download() {
   if command -v curl >/dev/null 2>&1; then

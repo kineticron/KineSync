@@ -1,6 +1,47 @@
-# Development Setup
+# Complete Setup Guide
 
-## System Requirements
+KineSync can run entirely on a phone. Desktop Bridge is optional and is useful
+for tighter synchronization, desktop Spotify playback, local lyrics, and remote
+relay access. Choose the first method that fits your needs; methods are ordered
+from easiest to most advanced.
+
+## Method 1: Mobile-Only (easiest)
+
+1. Install the mobile app using the [Android](ANDROID_INSTALL.md) or
+   [iPhone/iPad](IOS_INSTALL.md) guide.
+2. During onboarding, choose **Use this phone only**.
+3. Sign in to Spotify with an email address and password, then play Spotify in
+   the KineSync browser.
+
+No Desktop Bridge, computer, Node.js, or developer tools are required. Google
+and Apple sign-in are blocked in embedded browsers, so use Spotify email and
+password credentials. You can switch modes later in **Explore > Playback
+Source**.
+
+## Method 2: Windows installer (optional Desktop Bridge)
+
+This is the easiest Desktop Bridge setup. On Windows 10 or 11, download and run
+the [latest KineSync Desktop installer](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe).
+It contains the native runtime and does not require Node.js, npm, Visual Studio,
+or the .NET SDK. An unsigned installer may trigger Windows SmartScreen.
+
+Open Desktop Bridge, then choose **Use a Desktop Bridge** in the mobile app and
+scan the pairing QR code. The QR includes the local WebSocket URL and handshake
+key. Keep both devices on the same network for local use.
+
+## Method 3: Docker (optional Desktop Bridge)
+
+On an `amd64` Windows, macOS, or Linux computer, use the
+[one-command Docker installer](DOCKER.md#one-command-install). It runs Spotify
+and Desktop Bridge together and presents them as native host windows through
+Xpra. No source checkout or development toolchain is required. Scan Desktop
+Bridge's pairing QR code when setup finishes.
+
+## Method 4: Run from source (advanced)
+
+Use this method for development or when you need to modify KineSync.
+
+### Development requirements
 
 | Component | Requirement                                      |
 | --------- | ------------------------------------------------ |
@@ -9,7 +50,7 @@
 | npm       | 10.x or later                                    |
 | Expo      | Expo Go or a development build                   |
 
-> **Compiling from source only** (most contributors can skip this):
+> **Compiling native binaries from source only** (most contributors can skip this):
 >
 > | Component     | Requirement                                                  |
 > | ------------- | ------------------------------------------------------------ |
@@ -17,17 +58,7 @@
 > | .NET SDK      | 9.0 or later                                                 |
 > | Python        | 3.x on PATH                                                  |
 
-## Step-by-Step Installation
-
-### Desktop Bridge
-
-For normal Windows use, install the
-[latest Desktop Bridge release](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe).
-It already contains the native runtime and does not require Node.js, npm,
-Visual Studio, or the .NET SDK. An unsigned installer may trigger Windows
-SmartScreen until the project configures its optional code-signing certificate.
-
-The instructions below are for contributors running from source.
+### Install Desktop Bridge dependencies
 
 ```powershell
 cd DesktopBridge
@@ -38,7 +69,7 @@ That's it. On Windows, `npm install` automatically downloads the prebuilt native
 
 #### If the automatic download fails
 
-The postinstall script logs a warning and exits cleanly — it never breaks `npm install`. This can happen if:
+The postinstall script logs a warning and exits cleanly. It never breaks `npm install`. This can happen if:
 
 - There is no published GitHub release for the current version yet
 - You are offline or behind a firewall
@@ -71,24 +102,24 @@ Test-Path DesktopBridge\native\spotify-seek-helper\bin\Release\net9.0-windows10.
 - **MSB8036 / Windows SDK not found**: Install or retarget the Windows SDK in Visual Studio Installer
 - **node-gyp / Python errors**: Install Python 3 and ensure `python` works from terminal
 - **binding.gyp missing**: The native source files must be present locally
-- **Addon builds but crashes**: Electron and Node use different ABI versions — rebuild after upgrading Electron
+- **Addon builds but crashes**: Electron and Node use different ABI versions. Rebuild after upgrading Electron.
 
-### Expo App
+### Install Expo app dependencies
 
 ```powershell
 cd ExpoLyrics
 npm install
 ```
 
-No native build steps needed — Expo handles this automatically.
+No native build steps are needed. Expo handles this automatically.
 
 > **Contributors:** Before building, update `ExpoLyrics/app.json`:
 > - Replace `"projectId": "YOUR_EAS_PROJECT_ID"` with your own EAS project ID (`eas init`)
 > - Replace `dev.kineticron.KineSync` bundle identifiers with your own if needed
 
-## Running Locally
+### Run both apps locally
 
-### Direct LAN Mode
+#### Direct LAN mode
 
 1. Start the desktop bridge:
 
@@ -122,7 +153,7 @@ Use this when your phone is not on the same Wi-Fi network as your desktop (e.g. 
 #### 1. Get a free ngrok static domain
 
 1. Sign up at [ngrok.com](https://ngrok.com) (free tier is enough)
-2. In the ngrok dashboard, go to **Cloud Edge → Domains** and copy your static domain — it looks like `your-subdomain.ngrok-free.app`
+2. In the ngrok dashboard, go to **Cloud Edge → Domains** and copy your static domain. It looks like `your-subdomain.ngrok-free.app`.
 3. [Download and install the ngrok CLI](https://ngrok.com/download), then authenticate it:
 
    ```powershell
@@ -147,9 +178,9 @@ Open three terminals:
 
 | Terminal | Directory | Command |
 | -------- | --------- | ------- |
-| 1 — Relay | `DesktopBridge/` | `npm run relay:ngrok` |
-| 2 — Desktop Bridge | `DesktopBridge/` | `npm run start` |
-| 3 — Expo | `ExpoLyrics/` | `npx expo start -c --tunnel` |
+| 1: Relay | `DesktopBridge/` | `npm run relay:ngrok` |
+| 2: Desktop Bridge | `DesktopBridge/` | `npm run start` |
+| 3: Expo | `ExpoLyrics/` | `npx expo start -c --tunnel` |
 
 Start terminal 1 first and wait until it prints something like:
 
@@ -183,17 +214,17 @@ This is the **Expo WebSocket URL** printed by terminal 1.
 
 #### Troubleshooting
 
-- **`ERROR: Set NGROK_URL in your .env`** — `.env` is missing or `NGROK_URL` is empty
-- **ngrok exits immediately** — auth token not set; run `ngrok config add-authtoken <token>`
-- **App connects but no playback** — Desktop Bridge must also be running (terminal 2); check the bridge key matches on both sides
-- **Port 8787 already in use** — change `BRIDGE_RELAY_PORT` in `.env` and update the Desktop Bridge's Relay WebSocket URL to match
+- **`ERROR: Set NGROK_URL in your .env`**: `.env` is missing or `NGROK_URL` is empty
+- **ngrok exits immediately**: auth token not set; run `ngrok config add-authtoken <token>`
+- **App connects but no playback**: Desktop Bridge must also be running (terminal 2); check the bridge key matches on both sides
+- **Port 8787 already in use**: change `BRIDGE_RELAY_PORT` in `.env` and update the Desktop Bridge's Relay WebSocket URL to match
 
 ## Project Conventions
 
 ### Repository Structure
 
-- `DesktopBridge/` — Electron desktop app
-- `ExpoLyrics/` — Expo React Native mobile app
+- `DesktopBridge/`: Electron desktop app
+- `ExpoLyrics/`: Expo React Native mobile app
 - Keep changes focused on one component at a time
 
 ### Desktop Bridge
@@ -203,7 +234,7 @@ This is the **Expo WebSocket URL** printed by terminal 1.
 - Lyrics service: `src/lyrics/` (VM-based modular loader with 16 part files)
 - Native addons: `native/windows-media-session/` and `native/spotify-seek-helper/`
 
-The lyrics service is loaded via a shared Node.js VM context (`src/lyrics/index.js`). All part files share the same context, so top-level `const`/`let`/`class` declarations become global — each name must be unique across all part files.
+The lyrics service is loaded via a shared Node.js VM context (`src/lyrics/index.js`). All part files share the same context, so top-level `const`/`let`/`class` declarations become global. Each name must be unique across all part files.
 
 ### Expo App
 

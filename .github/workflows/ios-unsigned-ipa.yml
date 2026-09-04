@@ -1,7 +1,6 @@
 # Builds an iOS device IPA without Apple Developer Portal signing.
-# Main-branch pushes update the shared mobile-latest prerelease. The historical
-# ios-latest URL is kept as a compatibility alias for existing SideStore users;
-# per-commit history lives in Actions artifacts instead of one release per push.
+# Main-branch pushes publish iOS files to the shared versioned production
+# release. Per-commit history remains available in Actions artifacts.
 # Manual runs produce only a workflow artifact.
 # The IPA can be re-signed locally (e.g. SideStore or Sideloadly).
 # We disable signing entirely for CI so Pod/library targets are not asked to
@@ -48,9 +47,11 @@ jobs:
         working-directory: ExpoLyrics
         run: npm ci
 
-      - name: Stamp unique iOS release version
+      - name: Set shared release version
         working-directory: ExpoLyrics
-        run: node scripts/stamp-ios-release-version.js "${GITHUB_RUN_NUMBER}"
+        run: |
+          version=$(node ../scripts/release-version.js)
+          node scripts/stamp-ios-release-version.js "${version}" "${GITHUB_RUN_NUMBER}"
 
       - name: Expo prebuild (iOS)
         working-directory: ExpoLyrics
@@ -233,7 +234,7 @@ jobs:
             ExpoLyrics/ios-release-version.txt
           if-no-files-found: error
 
-  publish-ios-prerelease:
+  publish-ios-release:
     name: Publish iOS assets
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: ios-unsigned-ipa
@@ -241,10 +242,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    concurrency:
-      group: mobile-latest-release
-      cancel-in-progress: false
-
     steps:
       - name: Checkout release metadata generator
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -269,67 +266,11 @@ jobs:
             "release-assets"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Check whether this commit is still the head of main
-        id: main-head
+      - name: Publish iOS assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
-          if [[ "${head_sha}" == "${GITHUB_SHA}" ]]; then
-            echo "is_current=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "is_current=false" >> "${GITHUB_OUTPUT}"
-            echo "Skipping rolling release update: main is now ${head_sha}."
-          fi
-
-      - name: Ensure shared mobile release exists and points to this commit
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if gh release view mobile-latest >/dev/null 2>&1; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/git/refs/tags/mobile-latest" \
-              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
-          else
-            gh release create mobile-latest \
-              --target "${GITHUB_SHA}" \
-              --title "KineSync mobile — latest" \
-              --notes "Rolling release containing the latest successful Android APK and unsigned iOS IPA from main. Assets update independently after each platform build succeeds." \
-              --prerelease \
-              --latest=false
-          fi
-
-      - name: Update shared mobile-latest iOS assets
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release upload mobile-latest \
+          bash scripts/publish-production-release.sh \
             release-assets/KineSync-iOS-unsigned.ipa \
             release-assets/KineSync-iOS-unsigned.sha256 \
-            release-assets/sidestore-source.json \
-            --clobber
-
-      - name: Update legacy ios-latest compatibility alias
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if ! gh release view ios-latest >/dev/null 2>&1; then
-            gh release create ios-latest \
-              --target "${GITHUB_SHA}" \
-              --title "KineSync iOS — compatibility alias" \
-              --notes "Compatibility alias for existing iOS links. New installs should use the combined mobile-latest release." \
-              --prerelease \
-              --latest=false
-          fi
-          gh release upload ios-latest \
-            release-assets/KineSync-iOS-unsigned.ipa \
-            release-assets/KineSync-iOS-unsigned.sha256 \
-            release-assets/sidestore-source.json \
-            --clobber
+            release-assets/sidestore-source.json

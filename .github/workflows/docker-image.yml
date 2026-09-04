@@ -7,17 +7,6 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
-    paths:
-      - "DesktopBridge/**"
-      - "compose.yaml"
-      - "compose.dev.yaml"
-      - ".env.docker.example"
-      - "scripts/setup-docker.sh"
-      - "scripts/setup-docker.ps1"
-      - "DOCKER.md"
-      - ".github/workflows/docker-image.yml"
   workflow_dispatch:
 
 permissions:
@@ -51,6 +40,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read release version
+        id: release
+        run: |
+          version=$(node scripts/release-version.js)
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
@@ -58,9 +53,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=raw,value=${{ steps.release.outputs.version }},enable={{is_default_branch}}
             type=sha,prefix=sha-
 
       - name: Set up Docker Buildx
@@ -82,10 +75,8 @@ jobs:
           sbom: true
 
   publish-setup-bundle:
-    name: Publish rolling desktop setup bundle
-    # Manual reruns from main must repair/publish the setup release too. The
-    # previous event-name check skipped this job after a successful dispatch.
-    if: github.ref == 'refs/heads/main'
+    name: Publish Docker setup bundle
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: publish-image
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -105,29 +96,15 @@ jobs:
           (cd release-bundle && zip -q -r ../kinesync-docker-setup.zip .)
           sha256sum kinesync-docker-setup.zip > kinesync-docker-setup.zip.sha256
 
-      - name: Update rolling desktop release
+      - name: Publish Docker assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          if gh release view desktop-latest >/dev/null 2>&1; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/git/refs/tags/desktop-latest" \
-              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
-          else
-            gh release create desktop-latest \
-              --target "${GITHUB_SHA}" \
-              --title "KineSync Desktop Bridge — Docker latest" \
-              --notes "Rolling non-developer Docker setup bundle. The prebuilt amd64 image is ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kinesync-desktop-bridge:latest." \
-              --prerelease \
-              --latest=false
-          fi
-          gh release upload desktop-latest \
+          bash scripts/publish-production-release.sh \
             kinesync-docker-setup.zip \
             kinesync-docker-setup.zip.sha256 \
             release-bundle/compose.yaml \
             release-bundle/.env.docker.example \
             release-bundle/DOCKER.md \
             release-bundle/setup-docker.sh \
-            release-bundle/setup-docker.ps1 \
-            --clobber
+            release-bundle/setup-docker.ps1

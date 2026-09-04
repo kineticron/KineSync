@@ -5,6 +5,11 @@ windows. There is no VNC desktop, browser gateway, VNC username, or VNC
 password. Desktop Bridge stays open. Spotify is shown when an account needs to
 be signed in, then disappears after the login is persisted in `/config`.
 
+Docker is an optional Desktop Bridge method. The easiest KineSync setup is
+**Mobile-Only**, selected during mobile-app onboarding; it needs no computer or
+bridge. Use Docker when you want desktop Spotify playback, tighter sync, local
+lyrics, or relay access without maintaining a Windows-native installation.
+
 Docker cannot place a Linux window directly in a Windows, macOS, or Linux
 taskbar. KineSync therefore uses Xpra's seamless application forwarding: Xpra
 runs inside the container and a small native client draws each application as a
@@ -28,7 +33,7 @@ access are not required.
 Open PowerShell and run:
 
 ```powershell
-irm https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.ps1 | iex
+irm https://github.com/Kineticron/KineSync/releases/latest/download/setup-docker.ps1 | iex
 ```
 
 The command installs its small files under
@@ -41,7 +46,7 @@ windows. It can be run from any directory and does not require a clone.
 Open Terminal and run:
 
 ```bash
-curl -fsSL https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.sh | sh
+curl -fsSL https://github.com/Kineticron/KineSync/releases/latest/download/setup-docker.sh | sh
 ```
 
 Files are stored under `${XDG_DATA_HOME:-~/.local/share}/kinesync/docker`. The
@@ -53,7 +58,7 @@ Run the same command again to update. The helper preserves `.env`, Spotify's
 login, bridge settings, and logs.
 
 For an offline or reviewable install, download
-[`kinesync-docker-setup.zip`](https://github.com/Kineticron/KineSync/releases/download/desktop-latest/kinesync-docker-setup.zip),
+[`kinesync-docker-setup.zip`](https://github.com/Kineticron/KineSync/releases/latest/download/kinesync-docker-setup.zip),
 verify the adjacent `.sha256` file, extract it, and run `setup-docker.ps1` or
 `sh setup-docker.sh`.
 
@@ -159,7 +164,7 @@ WebSocket URL: ws://<docker-host-LAN-IP>:3001
 Handshake key: the BRIDGE_KEY value from .env
 ```
 
-Do not use `localhost` on the phone—it refers to the phone itself.
+Do not use `localhost` on the phone because it refers to the phone itself.
 
 ## Remote access with ngrok
 

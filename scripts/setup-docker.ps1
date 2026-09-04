@@ -157,7 +157,7 @@ function Get-KineSyncXpra {
 $releaseBase = if ($env:KINESYNC_DOCKER_RELEASE_BASE_URL) {
   $env:KINESYNC_DOCKER_RELEASE_BASE_URL.TrimEnd('/')
 } else {
-  'https://github.com/Kineticron/KineSync/releases/download/desktop-latest'
+  'https://github.com/Kineticron/KineSync/releases/latest/download'
 }
 
 # A piped one-line install uses a stable per-user folder and needs no clone.

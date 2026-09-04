@@ -18,7 +18,7 @@ const outputDirectory = path.resolve(outputArgument);
 const ipa = fs.readFileSync(ipaPath);
 const sha256 = crypto.createHash('sha256').update(ipa).digest('hex');
 const repositoryUrl = 'https://github.com/Kineticron/KineSync';
-const releaseAssetRoot = `${repositoryUrl}/releases/download/mobile-latest`;
+const releaseAssetRoot = `${repositoryUrl}/releases/latest/download`;
 const ipaUrl = `${releaseAssetRoot}/KineSync-iOS-unsigned.ipa`;
 const sourceUrl = `${releaseAssetRoot}/sidestore-source.json`;
 
@@ -39,13 +39,13 @@ const source = {
       developerName: 'Kineticron',
       subtitle: 'Real-time synchronized lyrics',
       localizedDescription:
-        'Displays word-synchronized lyrics from your KineSync Desktop Bridge, with landscape presentation and iOS Live Activities.',
+        'Displays word-synchronized lyrics with on-device playback or an optional KineSync Desktop Bridge.',
       iconURL: `${repositoryUrl}/raw/main/ExpoLyrics/assets/images/R.png`,
       tintColor: '6B21A8',
       permissions: [
         {
           type: 'network',
-          usageDescription: 'Connects to your KineSync Desktop Bridge over your local network or secure relay.',
+          usageDescription: 'Connects to an optional KineSync Desktop Bridge over your local network or secure relay.',
         },
         {
           type: 'background-audio',

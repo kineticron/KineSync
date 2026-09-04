@@ -1,6 +1,8 @@
 # ExpoLyrics
 
-React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics streamed from the [KineSync Desktop Bridge](../DesktopBridge/).
+React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics
+using on-device Spotify playback or the optional
+[KineSync Desktop Bridge](../DesktopBridge/).
 
 ## Features
 
@@ -22,15 +24,27 @@ React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics st
 ## Quick Start
 
 For a prebuilt Android app, download the
-[latest signed APK](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-Android.apk).
+[latest signed APK](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Android.apk).
 See the repository's [Android installation guide](../ANDROID_INSTALL.md) for
-first-time installation and Desktop Bridge setup.
+first-time installation and playback setup.
 
 For a prebuilt iPhone/iPad app, use the repository's
-[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/download/mobile-latest/KineSync-iOS-unsigned.ipa)
+[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa)
 with SideStore or Sideloadly. See the
 [iOS installation guide](../IOS_INSTALL.md) for the one-tap SideStore source,
 refresh requirements, and troubleshooting.
+
+After installing, choose a playback method from easiest to most advanced:
+
+1. **Mobile-Only (recommended):** Choose **Use this phone only** during
+   onboarding and sign in to Spotify. No Desktop Bridge or computer is needed.
+2. **Windows Desktop Bridge (optional):** Install the
+   [latest Windows `.exe`](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe)
+   and scan its pairing QR code.
+3. **Docker Desktop Bridge (optional):** Follow the
+   [one-command Docker guide](../DOCKER.md#one-command-install).
+4. **From source (advanced):** Follow the repository's
+   [source setup](../SETUP.md#method-4-run-from-source-advanced).
 
 To run from source:
 

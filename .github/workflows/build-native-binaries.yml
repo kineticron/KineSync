@@ -1,18 +1,19 @@
-# Builds the Windows Desktop release and attaches it to the matching versioned
-# GitHub release. Triggered by a version tag push (e.g. v1.0.0).
+# Builds the Windows Desktop release and publishes it with the other production
+# assets from main.
 # Artifacts: Windows installer, windows_media_session.node, spotify-seek-helper.dll,
 #             spotify-seek-helper.runtimeconfig.json,
 #             Microsoft.Windows.SDK.NET.dll, WinRT.Runtime.dll
 #
-# The DesktopBridge postinstall downloader consumes these assets from the same
-# v* release. Keep the tag equal to DesktopBridge/package.json's version.
+# The DesktopBridge postinstall downloader consumes these assets from the shared
+# v* release.
 
 name: Build Windows desktop release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -52,17 +53,6 @@ jobs:
         # We are producing these artifacts, not consuming them. Ignoring all
         # lifecycle scripts also keeps nested native installs deterministic.
         run: npm ci --ignore-scripts --audit=false --fund=false
-
-      - name: Validate release tag matches DesktopBridge version
-        working-directory: DesktopBridge
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./package.json').version")
-          expected="v${version}"
-          if [[ "${GITHUB_REF_NAME}" != "${expected}" ]]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match DesktopBridge/package.json (${expected})."
-            exit 1
-          fi
 
       - name: Build C++ media-session addon
         working-directory: DesktopBridge
@@ -145,7 +135,9 @@ jobs:
 
       - name: Create versioned SHA-256 manifest
         working-directory: DesktopBridge
-        run: node scripts/create-native-manifest.js "${GITHUB_REF_NAME#v}" ../dist-native
+        run: |
+          version=$(node ../scripts/release-version.js)
+          node scripts/create-native-manifest.js "${version}" ../dist-native
 
       - name: Upload native artifacts for publisher
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -155,35 +147,26 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - name: Checkout release publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
       - name: Download native artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: native-release-assets
           path: dist-native
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: KineSync Desktop Bridge ${{ github.ref_name }}
-          body: |
-            Windows DesktopBridge release ${{ github.ref_name }}.
-
-            - **Installer:** [KineSync-Desktop-Windows-Setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/KineSync-Desktop-Windows-Setup.exe)
-            - **Installer SHA-256:** `KineSync-Desktop-Windows-Setup.exe.sha256`
-
-            These files are consumed automatically by `npm install` on Windows.
-            The versioned SHA-256 manifest is used by the postinstall verifier.
-          files: |
-            dist-native/*
-          fail_on_unmatched_files: true
-          overwrite_files: true
-          draft: false
-          prerelease: false
-          make_latest: true
+      - name: Publish Windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/publish-production-release.sh dist-native/*

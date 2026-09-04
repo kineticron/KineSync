@@ -1,10 +1,8 @@
 # Builds a signed Android APK for every push to main.
 #
 # The APK is built locally so it can be signed with a persistent Android
-# keystore held in repository secrets. The current head of main updates the
-# shared mobile-latest rolling release.
-# The rolling publisher uploads only its own filenames, so IPA and native
-# release assets already attached to that release are retained.
+# keystore held in repository secrets. The current head of main publishes the
+# APK to the shared versioned production release.
 
 name: Android APK
 
@@ -53,6 +51,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Set shared release version
+        working-directory: ExpoLyrics
+        run: |
+          version=$(node ../scripts/release-version.js)
+          node scripts/stamp-ios-release-version.js "${version}" "${GITHUB_RUN_NUMBER}"
 
       - name: Expo prebuild (Android)
         working-directory: ExpoLyrics
@@ -177,13 +181,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    # Keep this group in sync with the iOS rolling-release publisher. Builds
-    # may run in parallel, but release mutation is serialized and older runs
-    # cannot overwrite mobile-latest after a newer main commit exists.
-    concurrency:
-      group: mobile-latest-release
-      cancel-in-progress: false
-
     steps:
       - name: Checkout release metadata
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -203,63 +200,10 @@ jobs:
           sha256sum --check KineSync-Android.apk.sha256
           unzip -t KineSync-Android.apk >/dev/null
 
-      - name: Check whether this commit is still the head of main
-        id: main-head
+      - name: Publish Android assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          head_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')
-          if [[ "${head_sha}" == "${GITHUB_SHA}" ]]; then
-            echo "is_current=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "is_current=false" >> "${GITHUB_OUTPUT}"
-            echo "Skipping mobile-latest update: main is now ${head_sha}."
-          fi
-
-      - name: Point mobile-latest tag at this commit
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # Keep the rolling release's tag aligned with the commit whose
-          # assets are being uploaded. This is safe because publishers share
-          # the mobile-latest-release concurrency group.
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/mobile-latest" >/dev/null 2>&1; then
-            gh api --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/git/refs/tags/mobile-latest" \
-              -f sha="${GITHUB_SHA}" \
-              -F force=true >/dev/null
-          fi
-
-      - name: Ensure shared mobile-latest release exists
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if ! gh release view mobile-latest >/dev/null 2>&1; then
-            # Another mobile publisher may create this release at the same
-            # time. Treat that expected race as success and upload our files
-            # below, without replacing its title/body/assets.
-            gh release create mobile-latest \
-              --target "${GITHUB_SHA}" \
-              --title "KineSync mobile — latest" \
-              --notes "Latest successful mobile builds from main. Android and iOS assets update independently; use the adjacent checksums to verify downloads." \
-              --prerelease \
-              --latest=false || gh release view mobile-latest >/dev/null
-          fi
-
-      - name: Update shared mobile-latest APK assets
-        if: steps.main-head.outputs.is_current == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # gh release upload --clobber replaces only these two filenames;
-          # unrelated IPA, SideStore, or native assets remain untouched.
-          gh release upload mobile-latest \
+          bash scripts/publish-production-release.sh \
             release-assets/KineSync-Android.apk \
-            release-assets/KineSync-Android.apk.sha256 \
-            --clobber
+            release-assets/KineSync-Android.apk.sha256
