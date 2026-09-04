@@ -24,11 +24,30 @@ import Reanimated, {
 } from 'react-native-reanimated';
 
 import { usePlaybackStore } from '@/store/playback-store';
+import type { PlaybackMode } from '@/lib/playback-source';
 import type { ConnectionStatus } from '@/types/bridge';
 
 const ReanimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
 
-function getStatusDescriptor(status: ConnectionStatus, latencyMs: number) {
+function getStatusDescriptor(
+  playbackMode: PlaybackMode,
+  status: ConnectionStatus,
+  latencyMs: number,
+) {
+  if (playbackMode === 'mobile') {
+    return {
+      tint: 'rgba(111,232,179,0.07)',
+      border: 'rgba(111,232,179,0.16)',
+      signalColor: '#8FF0C4',
+    };
+  }
+  if (status === 'connecting') {
+    return {
+      tint: 'rgba(255,173,94,0.07)',
+      border: 'rgba(255,173,94,0.16)',
+      signalColor: '#FFD287',
+    };
+  }
   if (status !== 'connected') {
     return {
       tint: 'rgba(255,89,115,0.08)',
@@ -58,17 +77,20 @@ function getStatusDescriptor(status: ConnectionStatus, latencyMs: number) {
 }
 
 const ConnectivityStatusView = memo(function ConnectivityStatusView({
+  playbackMode,
   connectionStatus,
   latencyMs,
   actionText,
   sourceText,
 }: {
+  playbackMode: PlaybackMode;
   connectionStatus: ConnectionStatus;
   latencyMs: number;
   actionText: string;
   sourceText: string;
 }) {
-  const status = getStatusDescriptor(connectionStatus, latencyMs);
+  const status = getStatusDescriptor(playbackMode, connectionStatus, latencyMs);
+  const mobileOnly = playbackMode === 'mobile';
 
   return (
     <View
@@ -92,8 +114,10 @@ const ConnectivityStatusView = memo(function ConnectivityStatusView({
       </View>
 
       <View style={styles.right}>
-        <Text style={styles.pingLabel}>Ping</Text>
-        <Text style={styles.pingValue}>{Math.max(0, Math.round(latencyMs))} ms</Text>
+        <Text style={styles.pingLabel}>{mobileOnly ? 'Mode' : 'Ping'}</Text>
+        <Text style={styles.pingValue}>
+          {mobileOnly ? 'Mobile-Only' : `${Math.max(0, Math.round(latencyMs))} ms`}
+        </Text>
       </View>
     </View>
   );
@@ -150,6 +174,7 @@ type PlaybackControlsProps = {
   hideStatusBar?: boolean;
   onToggleHideStatusBar?: (value: boolean) => void;
   connectionStatus?: ConnectionStatus;
+  playbackMode?: PlaybackMode;
   latencyMs?: number;
   statusActionText?: string;
   statusSourceText?: string;
@@ -325,6 +350,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   hideStatusBar = false,
   onToggleHideStatusBar,
   connectionStatus = 'disconnected',
+  playbackMode = 'desktop',
   latencyMs = 0,
   statusActionText = 'Connecting to bridge...',
   statusSourceText = 'Bridge offline',
@@ -657,6 +683,7 @@ export const PlaybackControls = memo(function PlaybackControls({
             }
             style={[styles.bottomLayer, statusLayerStyle]}>
             <ConnectivityStatusView
+              playbackMode={playbackMode}
               connectionStatus={connectionStatus}
               latencyMs={latencyMs}
               actionText={statusActionText}

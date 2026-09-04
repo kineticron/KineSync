@@ -1,313 +1,190 @@
-# Instant Docker setup
+# Docker setup
 
-This is the fastest way to get KineSync running. One published self-contained image
-includes Spotify for Linux, DesktopBridge, Spicetify Marketplace, Adblockify,
-an embedded ngrok client, and a browser-accessible app view. Spotify and
-DesktopBridge share one D-Bus session, so playback detection and controls work
-through Linux MPRIS without Spotify Premium.
+KineSync's Docker image presents Desktop Bridge and Spotify as individual host
+windows. There is no VNC desktop, browser gateway, VNC username, or VNC
+password. Desktop Bridge stays open. Spotify is shown when an account needs to
+be signed in, then disappears after the login is persisted in `/config`.
 
-The normal setup pulls the amd64 image (with OCI provenance and SBOM metadata)
-from GitHub Container
-Registry; users do not need Node.js, npm, a source checkout, or a local build.
-The rolling `desktop-latest` release contains the same Compose file and setup
-helpers at stable URLs for users who do not use GitHub's source view.
+Docker cannot place a Linux window directly in a Windows, macOS, or Linux
+taskbar. KineSync therefore uses Xpra's seamless application forwarding: Xpra
+runs inside the container and a small native client draws each application as a
+normal window on the host. This gives the WSLg-style experience without relying
+on WSLg or a host-specific display socket.
 
-## What you need
+## Requirements
 
-- An `amd64` host with Docker Desktop (Docker Compose v2 included). Linux users
-  can use Docker Engine with the Compose v2 plugin.
-- A Spotify account. Use the same account on the container and playback devices.
-- ExpoLyrics installed or running on your phone.
-- For local mode, the phone and Docker host on the same LAN.
-- Optional remote mode: an ngrok account, authtoken, and reserved domain.
+- An `amd64` Windows, macOS, or Linux computer
+- Docker Desktop, or Docker Engine with the Compose v2 plugin
+- A Spotify account
+- ExpoLyrics on the phone
 
-The image does not need privileged mode, host D-Bus access, a Docker socket
-mount, Spotify Web API playback access, or a Premium subscription.
+Node.js, npm, a repository clone, Spotify Premium, and Spotify Web API playback
+access are not required.
 
-## Image provenance and sandboxing
+## One-command install
 
-The Compose service enables `no-new-privileges`, keeps Docker's default seccomp
-profile, drops the unnecessary `NET_RAW` capability, and runs Spotify and
-Electron as the unprivileged `abc` user. Chromium's own namespace/setuid
-sandbox is not compatible with that Docker boundary, so only the container
-launchers use `--no-sandbox`; native desktop builds keep Chromium sandboxing.
-Do not grant the container `SYS_ADMIN` or use an unconfined seccomp profile to
-force Chromium's inner sandbox on—the broader container escape surface is a
-worse tradeoff for this local image.
-The two base images are pinned to their registry-provided immutable digests. If
-a base image is changed, inspect the exact multi-architecture digest from a
-trusted registry before updating `DesktopBridge/Dockerfile`:
+### Windows
 
-```bash
-docker buildx imagetools inspect node:22-bookworm-slim
-docker buildx imagetools inspect ghcr.io/linuxserver/baseimage-kasmvnc:ubuntunoble
-```
-
-Record the selected platform digest in the Dockerfile (`image:tag@sha256:...`)
-and review it with the image release notes; never invent a digest.
-
-## Ports and persistent data
-
-| Port/path | Purpose |
-| --- | --- |
-| `3000` | KineSync app view over HTTP; local host binding by default |
-| `3443` | KineSync app view over HTTPS; local host binding by default |
-| `3001` | ExpoLyrics WebSocket bridge; LAN binding by default; not a webpage |
-| `/config` | Spotify login, DesktopBridge settings, certificates, and logs |
-
-The Compose file binds the app view to `127.0.0.1` by default while
-leaving only the WebSocket bridge (`3001`) reachable from the LAN. To open the
-view from another trusted machine, set `KINESYNC_WEB_BIND_ADDRESS` (for
-example, to the Docker host's LAN address) and set `KINESYNC_WEB_PASSWORD` in
-`.env`; do not expose it directly to the public internet. This password is not
-a public deployment security boundary.
-
-## Quick start
-
-The easiest route for a non-developer is to open PowerShell and run this one
-command in the folder where KineSync should keep its configuration:
+Open PowerShell and run:
 
 ```powershell
 irm https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.ps1 | iex
 ```
 
-The helper refreshes the Compose definition, generates a private bridge key,
-pulls the prebuilt image, and starts the service. The localhost-only app view
-opens in the default browser without a username or password. On a headless
-Docker host, open `http://localhost:3000` yourself.
-Run it again after an update; it preserves `.env` and the `/config` volume.
-The shell equivalent is:
+The command installs its small files under
+`%LOCALAPPDATA%\KineSync\Docker`, downloads a checksum-verified portable Xpra
+client without administrator access, starts Docker, and opens the KineSync
+windows. It can be run from any directory and does not require a clone.
+
+### macOS or Linux
+
+Open Terminal and run:
 
 ```bash
 curl -fsSL https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.sh | sh
 ```
 
+Files are stored under `${XDG_DATA_HOME:-~/.local/share}/kinesync/docker`. The
+helper uses an existing Xpra client or installs the official macOS package or
+the appropriate Linux package through apt, dnf, or pacman. Installation may ask
+for the user's `sudo` password.
+
+Run the same command again to update. The helper preserves `.env`, Spotify's
+login, bridge settings, and logs.
+
 For an offline or reviewable install, download
 [`kinesync-docker-setup.zip`](https://github.com/Kineticron/KineSync/releases/download/desktop-latest/kinesync-docker-setup.zip),
-optionally verify it with the adjacent `.sha256` file, extract it, and run
-`setup-docker.ps1` (Windows) or `sh setup-docker.sh`.
+verify the adjacent `.sha256` file, extract it, and run `setup-docker.ps1` or
+`sh setup-docker.sh`.
 
-## Setup from a source checkout
+## First run
 
-Run these commands from the repository root only when developing the image:
+1. Desktop Bridge opens as a normal host window.
+2. Spotify also opens because the container has no saved login yet. Sign in.
+3. Once Spotify stores the account, its window is hidden. Spotify keeps running
+   in the container so Desktop Bridge can read and control it through MPRIS.
+4. Scan the pairing QR in Desktop Bridge with ExpoLyrics.
 
-### 1. Create your local configuration
+The `/config` volume preserves the Spotify login across restarts and upgrades.
+Spicetify Marketplace and Adblockify are already installed in the image.
 
-PowerShell:
+## Ports and data
 
-```powershell
-./scripts/setup-docker.ps1
-```
+| Port/path | Purpose |
+| --- | --- |
+| `14500` | Xpra seamless-window transport, bound to `127.0.0.1` by default |
+| `3001` | ExpoLyrics WebSocket bridge, reachable from the LAN by default |
+| `/config` | Spotify login, Desktop Bridge settings, certificates, and logs |
 
-Linux/macOS shell:
+The Xpra transport has no application password because Compose restricts it to
+the local computer. Do not change `KINESYNC_UI_BIND_ADDRESS` to a LAN or public
+address. This transport is not a public deployment boundary.
 
-```bash
-sh ./scripts/setup-docker.sh
-```
+Opening `http://localhost:3001` shows **Upgrade Required**. That is expected:
+port 3001 accepts WebSocket upgrades and is not a webpage.
 
-The setup helper creates `.env` once with a cryptographically random bridge
-key; it never overwrites an existing file. Most users can
-start the container immediately. Open `.env` only if you want to change the
-timezone, bind addresses, or config path:
+## Configuration
+
+The generated `.env` contains:
 
 ```dotenv
 KINESYNC_IMAGE=ghcr.io/kineticron/kinesync-desktop-bridge:latest
 KINESYNC_PULL_POLICY=always
 KINESYNC_CONTAINER_NAME=kinesync
 BRIDGE_KEY=<generated automatically>
-KINESYNC_WEB_USER=kinesync
-KINESYNC_WEB_PASSWORD=
 KINESYNC_CONFIG_PATH=./.kinesync-config
-KINESYNC_WEB_BIND_ADDRESS=127.0.0.1
-# Keep 0.0.0.0 for simple phone-to-host LAN bridging, or use a host LAN IP.
+KINESYNC_UI_PORT=14500
+KINESYNC_UI_BIND_ADDRESS=127.0.0.1
 KINESYNC_BRIDGE_BIND_ADDRESS=0.0.0.0
-KINESYNC_WEB_PORT=3000
-KINESYNC_WEB_HTTPS_PORT=3443
 PUID=568
 PGID=568
 TZ=America/New_York
 ```
 
-- `BRIDGE_KEY` must exactly match the handshake key entered in ExpoLyrics; the
-  desktop pairing QR fills it in automatically.
-- No web credentials are needed with the default localhost-only binding.
-- If you expose the app view to another trusted machine, set a strong
-  `KINESYNC_WEB_PASSWORD`. Existing installations can clear the old generated
-  value to enable the new passwordless localhost experience.
+- `BRIDGE_KEY` must match the key in ExpoLyrics; the pairing QR fills it in.
 - Keep `.env` private. It is ignored by Git.
-- Change `TZ` to your IANA timezone if necessary.
-- On a Linux host, set `PUID` and `PGID` to the output of `id -u` and `id -g`
-  if that user should own the local config files. Docker Desktop users can keep
-  the example values.
+- Change `TZ` to the appropriate IANA timezone when needed.
+- Keep `KINESYNC_UI_BIND_ADDRESS=127.0.0.1`.
+- On Linux, `PUID` and `PGID` default to the user running the setup helper.
 
-### 2. Build and start
+When the command is rerun from an older one-line install folder, that install is
+migrated in place. Obsolete VNC/web variables can remain in `.env`, but the
+current Compose file ignores them and adds the local Xpra settings.
 
-```bash
-docker compose pull
-docker compose up -d
-docker compose ps
-```
+## Source checkout and manual operation
 
-Wait until `kinesync` reports `healthy`. The first pull can take several minutes
-because the image contains Spotify and the app view. `KINESYNC_PULL_POLICY`
-defaults to `always`, so restarting with the `latest` tag also checks for image
-updates. Pin `KINESYNC_IMAGE` to a version tag for reproducible deployments.
-
-### 3. Open KineSync
-
-Open `http://localhost:<KINESYNC_WEB_PORT>` on the Docker host (port `3000`
-by default). If you configured
-`KINESYNC_WEB_BIND_ADDRESS` for LAN access, use the corresponding host address
-instead and sign in with the credentials configured in `.env`. On the default
-localhost binding, KineSync opens directly with no sign-in prompt.
-
-Opening `http://localhost:3001` displays **Upgrade Required**. That is expected:
-port `3001` accepts WebSocket upgrades and does not host a webpage.
-
-### 4. Sign into Spotify
-
-1. On the first run, Spotify opens in front of KineSync. Use its QR code, or
-   click **Log in**.
-2. Login links open in the bundled KineSync Login Browser inside the app view.
-3. Use the same account as your phone, laptop, and other Spotify devices.
-4. After login, Spotify is minimized automatically while it continues running
-   for playback detection. KineSync remains visible. Spotify can be reopened
-   from the right-click application menu if needed.
-
-The `/config` volume persists this login across restarts and image updates.
-Spicetify, Marketplace, and Adblockify are already installed and applied in the
-image, so they are active on the first Spotify launch with no additional setup.
-
-### 5. Confirm playback detection
-
-1. Start a track on any Spotify instance logged into the same account.
-2. Confirm containerized Spotify mirrors the track and playback state.
-3. Confirm DesktopBridge shows the track with source `linux-mpris`.
-
-The container does not inspect another machine. Spotify synchronizes account
-state into its containerized client, and DesktopBridge observes that local
-client through MPRIS.
-
-### 6. Connect ExpoLyrics on the LAN
-
-Find the Docker host's LAN IP. Examples:
+Developers can run the helper from the repository root:
 
 ```powershell
-ipconfig
+./scripts/setup-docker.ps1
 ```
 
 ```bash
-hostname -I
+sh ./scripts/setup-docker.sh
 ```
 
-In ExpoLyrics, open **Bridge Settings** and enter:
+Useful Compose commands, run from the install folder or source root:
+
+```bash
+docker compose ps
+docker compose logs -f kinesync
+docker compose restart
+docker compose down
+docker compose pull
+docker compose up -d
+```
+
+To build the image from a checkout and launch its native windows:
+
+```powershell
+./scripts/setup-docker.ps1 -BuildLocal
+```
+
+```bash
+KINESYNC_BUILD_LOCAL=1 sh ./scripts/setup-docker.sh
+```
+
+For a Compose-only local build without launching the window client:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+```
+
+## Connect ExpoLyrics manually
+
+If QR pairing is unavailable, find the Docker host's LAN IP and enter:
 
 ```text
 WebSocket URL: ws://<docker-host-LAN-IP>:3001
 Handshake key: the BRIDGE_KEY value from .env
 ```
 
-For example: `ws://192.168.1.50:3001`.
+Do not use `localhost` on the phone—it refers to the phone itself.
 
-Do not enter `localhost` on a phone: there, `localhost` means the phone itself.
-Save the settings and wait for the connected status.
+## Remote access with ngrok
 
-### 7. Verify the setup
-
-Verify all of the following before considering setup complete:
-
-- Track title, artist, artwork, position, and lyrics appear in ExpoLyrics.
-- Pause and resume work in both directions.
-- Seeking changes the real Spotify position.
-- Next and previous work.
-- Playback started on a different Spotify device still appears.
-- `docker compose restart` preserves the Spotify login and reconnects the app.
-
-## Optional remote access with ngrok
-
-Use this when the phone connects away from the home LAN. Ngrok is embedded in
-DesktopBridge; Docker users do not install a CLI or run extra terminals.
-
-1. Create an ngrok account.
-2. Copy the authtoken from the ngrok dashboard.
-3. Reserve or copy a static domain such as `example.ngrok-free.app`.
-4. In DesktopBridge's **Relay** page, enter:
-   - the same Bridge Key used by ExpoLyrics;
-   - the ngrok domain, with or without `https://`;
-   - the ngrok authtoken.
-5. Click **Save relay**.
-   KineSync stops its existing listener and agent session before starting the
-   saved endpoint. If ngrok is still releasing the domain, KineSync retries it
-   automatically.
-6. Wait for **Remote relay: connected via ngrok**.
-7. Copy the displayed Mobile URL or scan its QR code.
-8. Use that `wss://.../bridge/<bridge-id>` URL and the same handshake key in
-   ExpoLyrics.
-
-Only one running endpoint can own a reserved free domain. Stop any older
-KineSync/ngrok instance if ngrok reports `ERR_NGROK_334`.
-Use the **Agent Authtoken** from ngrok's authtoken page, not an API key;
-`ERR_NGROK_105` means the saved value is not a valid authtoken.
-`ERR_NGROK_108` means the account has too many active agent sessions; stop
-stale agents at <https://dashboard.ngrok.com/agents> and save again.
-
-## Routine operations
-
-```bash
-# Status
-docker compose ps
-
-# Follow service output
-docker compose logs -f kinesync
-
-# Restart without losing settings
-docker compose restart
-
-# Stop
-docker compose down
-
-# Pull and restart the latest published image
-docker compose pull
-docker compose up -d
-
-# Maintainer-only: build the image from a source checkout
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-```
-
-Application logs persist in:
-
-```text
-/config/log/spotify.log
-/config/log/desktop-bridge.log
-```
-
-With the default local volume, they are under `.kinesync-config/log/` on the
-host. Back up `/config` to preserve login and settings.
+Ngrok is embedded in Desktop Bridge. In its **Relay** page, enter the bridge
+key, reserved ngrok domain, and agent authtoken. Save, wait for the connected
+status, then use the displayed `wss://.../bridge/<bridge-id>` URL in ExpoLyrics.
+Only one running endpoint can own a reserved free domain.
 
 ## Troubleshooting
 
-### Antivirus or HTTPS scanning blocks a connection
+### No windows appear
 
-Some antivirus products intercept encrypted network calls. If Spotify reports
-`accounts:4` or **No internet connection**, or ngrok reports a TLS handshake
-error, add the affected endpoint to the product's HTTPS/web-scanning exception
-list and restart the container:
-
-- Spotify login: <https://accounts.spotify.com>
-- ngrok agent: <https://connect.ngrok-agent.com>
-
-Add only the affected endpoint; do not disable network protection globally.
+- Confirm `docker compose ps` reports `kinesync` as running or healthy.
+- Run the setup command again; it reconnects the native Xpra client.
+- Check that another program is not using `KINESYNC_UI_PORT`.
+- Keep the UI address on `127.0.0.1`; remote-host Xpra connections are not part
+  of this setup.
 
 ### ExpoLyrics cannot connect
 
-- Use `ws://<host-LAN-IP>:3001`, not an HTTP URL and not phone-localhost.
-- Ensure no firewall blocks TCP `3001` between the phone and Docker host.
-- Ensure the ExpoLyrics handshake key exactly matches `BRIDGE_KEY`.
-- With ngrok, use the full displayed `wss://.../bridge/<bridge-id>` URL.
+- Use `ws://<host-LAN-IP>:3001`, not an HTTP URL.
+- Allow TCP 3001 through the host firewall on the local network.
+- Confirm the ExpoLyrics handshake key exactly matches `BRIDGE_KEY`.
 
 ### Playback is missing
-
-Run:
 
 ```bash
 docker exec --user abc kinesync bash -lc '
@@ -316,24 +193,36 @@ docker exec --user abc kinesync bash -lc '
   playerctl -l
   playerctl --player=spotify status
   playerctl --player=spotify metadata
-  playerctl --player=spotify position
 '
 ```
 
-`spotify` should appear and metadata should match the Spotify window. If Spotify
-does not mirror the other device, DesktopBridge has no local state to observe.
+`spotify` should be listed. The container does not inspect Spotify on another
+machine; Spotify synchronizes account state and Desktop Bridge observes the
+containerized client.
 
-### Controls do not work
-
-Check `/config/log/desktop-bridge.log` for `[playback]` messages. Linux controls
-use MPRIS `PlayPause`, `Next`, `Previous`, and `SetPosition`; they do not fall
-back to Premium-only Spotify Web API controls.
-
-### Health check
+### Logs and health
 
 ```bash
 docker inspect --format '{{json .State.Health}}' kinesync
+docker compose logs kinesync
 ```
 
-The health check confirms the local WebSocket server accepts TCP connections.
-It does not prove that Spotify is logged in or playing.
+Persistent application logs are under `/config/log/` (normally
+`.kinesync-config/log/` on the host). The health check validates the WebSocket
+listener; it does not prove Spotify is logged in or playing.
+
+## Image security and provenance
+
+The service enables `no-new-privileges`, keeps Docker's default seccomp profile,
+drops `NET_RAW`, and runs Spotify and Electron as the unprivileged `abc` user.
+Chromium is launched with `--no-sandbox` inside that container boundary; native
+desktop builds keep Chromium sandboxing. Do not add `SYS_ADMIN`, privileged
+mode, a Docker socket, host D-Bus, or an unconfined seccomp profile.
+
+Base images are pinned to immutable registry digests. Maintainers can inspect
+updates with:
+
+```bash
+docker buildx imagetools inspect node:22-bookworm-slim
+docker buildx imagetools inspect ubuntu:24.04
+```

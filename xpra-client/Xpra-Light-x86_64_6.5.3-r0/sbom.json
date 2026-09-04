@@ -1,0 +1,2846 @@
+{
+  "components": [
+    {
+      "bom-ref": "BomRef.8703960158535168.20400568526966523",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "aom",
+      "type": "library",
+      "version": "3.14.1-2"
+    },
+    {
+      "bom-ref": "BomRef.37716209846640114.8444717165116782",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "atk",
+      "purl": "pkg:generic/atk?download_url=https://gnome.pages.gitlab.gnome.org/at-spi2-core/atk/",
+      "type": "library",
+      "version": "2.60.6-1"
+    },
+    {
+      "bom-ref": "BomRef.3905609585543127.9286915397592984",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "brotli",
+      "purl": "pkg:github/google/brotli",
+      "type": "library",
+      "version": "1.2.0-1"
+    },
+    {
+      "bom-ref": "BomRef.9010682875570629.06529084633949467",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "bzip2",
+      "purl": "pkg:generic/bzip2?download_url=https://sourceware.org/bzip2/",
+      "type": "library",
+      "version": "1.0.8-4"
+    },
+    {
+      "bom-ref": "BomRef.616168876964818.5259852826179826",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later OR MPL-1.1"
+          }
+        }
+      ],
+      "name": "cairo",
+      "type": "library",
+      "version": "1.18.4-4"
+    },
+    {
+      "bom-ref": "BomRef.14584453775222161.8663984859579124",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSL-1.0"
+          }
+        }
+      ],
+      "name": "crypto++",
+      "purl": "pkg:github/weidai11/cryptopp",
+      "type": "library",
+      "version": "8.9.0-2"
+    },
+    {
+      "bom-ref": "BomRef.8426482258663253.5959193972499932",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "curl",
+      "type": "library",
+      "version": "8.21.0-2"
+    },
+    {
+      "bom-ref": "BomRef.015502765171908961.21634536318326147",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "cyrus-sasl",
+      "purl": "pkg:generic/sasl?download_url=https://www.cyrusimap.org/sasl/",
+      "type": "library",
+      "version": "2.1.28-6"
+    },
+    {
+      "bom-ref": "BomRef.6241174405308009.37326507140264575",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "dav1d",
+      "purl": "pkg:generic/dav1d?download_url=https://code.videolan.org/videolan/dav1d",
+      "type": "library",
+      "version": "1.5.4-1"
+    },
+    {
+      "bom-ref": "BomRef.47534846949805154.6625973000828312",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "expat",
+      "type": "library",
+      "version": "2.8.3-1"
+    },
+    {
+      "bom-ref": "BomRef.8420789925734367.8130898032126086",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "fontconfig",
+      "purl": "pkg:generic/fontconfig?download_url=https://wiki.freedesktop.org/www/Software/fontconfig/",
+      "type": "library",
+      "version": "2.18.3-1"
+    },
+    {
+      "bom-ref": "BomRef.2619775879264479.8237978109656013",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-2.0-or-later OR FTL"
+          }
+        }
+      ],
+      "name": "freetype",
+      "type": "library",
+      "version": "2.14.3-1"
+    },
+    {
+      "bom-ref": "BomRef.6300087064722488.1335190150830985",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "fribidi",
+      "purl": "pkg:github/fribidi/fribidi",
+      "type": "library",
+      "version": "1.0.16-1"
+    },
+    {
+      "bom-ref": "BomRef.6740172266513804.8910052798017304",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-3.0-or-later WITH GCC-exception-3.1 AND LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gcc-libs",
+      "type": "library",
+      "version": "16.2.0-3"
+    },
+    {
+      "bom-ref": "BomRef.9486419587760789.7449072251181136",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gdk-pixbuf2",
+      "purl": "pkg:generic/gdk-pixbuf?download_url=https://gitlab.gnome.org/GNOME/gdk-pixbuf",
+      "type": "library",
+      "version": "2.44.7-1"
+    },
+    {
+      "bom-ref": "BomRef.20774585114780109.4791593837440433",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gettext-runtime",
+      "purl": "pkg:generic/gettext?download_url=https://www.gnu.org/software/gettext/",
+      "type": "library",
+      "version": "1.0-1"
+    },
+    {
+      "bom-ref": "BomRef.5644567064611457.5971501838067718",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "glib-networking",
+      "purl": "pkg:generic/glib-networking?download_url=https://gitlab.gnome.org/GNOME/glib-networking",
+      "type": "library",
+      "version": "2.80.1-3"
+    },
+    {
+      "bom-ref": "BomRef.4927690767450229.16943017138296368",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "glib2",
+      "purl": "pkg:generic/glib?download_url=https://gitlab.gnome.org/GNOME/glib",
+      "type": "library",
+      "version": "2.88.3-1"
+    },
+    {
+      "bom-ref": "BomRef.6023775485960964.5240138219464155",
+      "licenses": [
+        {
+          "license": {
+            "name": "LGPL3  GPL"
+          }
+        }
+      ],
+      "name": "gmp",
+      "type": "library",
+      "version": "6.3.0-2"
+    },
+    {
+      "bom-ref": "BomRef.8368106904381273.9702175846182246",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-3.0-or-later  spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gnutls",
+      "type": "library",
+      "version": "3.8.13-3"
+    },
+    {
+      "bom-ref": "BomRef.31391292711693586.24918072186023887",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.0-only"
+          }
+        }
+      ],
+      "name": "gobject-introspection-runtime",
+      "type": "library",
+      "version": "1.86.0-4"
+    },
+    {
+      "bom-ref": "BomRef.9023159482163887.9818522269425649",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "graphite2",
+      "purl": "pkg:github/silnrsi/graphite",
+      "type": "library",
+      "version": "1.3.15-1"
+    },
+    {
+      "bom-ref": "BomRef.9082437398650631.8734416393681217",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL"
+          }
+        }
+      ],
+      "name": "gss",
+      "purl": "pkg:generic/gss?download_url=https://www.gnu.org/software/gss/",
+      "type": "library",
+      "version": "1.0.4-2"
+    },
+    {
+      "bom-ref": "BomRef.8539089058730827.45094895719404327",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gst-plugins-bad",
+      "type": "library",
+      "version": "1.28.6-2"
+    },
+    {
+      "bom-ref": "BomRef.037309929572076905.1658130009862896",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gst-plugins-bad-libs",
+      "type": "library",
+      "version": "1.28.6-2"
+    },
+    {
+      "bom-ref": "BomRef.05514018129883036.44399777774161275",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gst-plugins-base",
+      "type": "library",
+      "version": "1.28.6-1"
+    },
+    {
+      "bom-ref": "BomRef.18331152775242987.7453731663201435",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gst-plugins-good",
+      "type": "library",
+      "version": "1.28.6-1"
+    },
+    {
+      "bom-ref": "BomRef.5298110108289762.3718791727535907",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gst-plugins-ugly",
+      "type": "library",
+      "version": "1.28.6-1"
+    },
+    {
+      "bom-ref": "BomRef.30006829353949216.5631318713645019",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gstreamer",
+      "type": "library",
+      "version": "1.28.6-1"
+    },
+    {
+      "bom-ref": "BomRef.05627700822919346.20014933956229186",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "gtk3",
+      "type": "library",
+      "version": "3.24.52-1"
+    },
+    {
+      "bom-ref": "BomRef.30153519485349733.767886452532994",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "harfbuzz",
+      "type": "library",
+      "version": "14.3.1-1"
+    },
+    {
+      "bom-ref": "BomRef.9388026359679675.05995924054339963",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "highway",
+      "purl": "pkg:github/google/highway",
+      "type": "library",
+      "version": "1.4.0-3"
+    },
+    {
+      "bom-ref": "BomRef.5627949411518666.9625815544349925",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-2.0"
+          }
+        }
+      ],
+      "name": "jbigkit",
+      "purl": "pkg:generic/jbigkit?download_url=https://www.cl.cam.ac.uk/~mgk25/jbigkit/",
+      "type": "library",
+      "version": "2.1-6"
+    },
+    {
+      "bom-ref": "BomRef.009598261940857111.4778744216937101",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT AND GPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "lcms2",
+      "purl": "pkg:generic/color-engine?download_url=https://www.littlecms.com/color-engine/",
+      "type": "library",
+      "version": "2.19.1-1"
+    },
+    {
+      "bom-ref": "BomRef.25756039932243957.23737996378952642",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "lerc",
+      "purl": "pkg:github/esri/lerc",
+      "type": "library",
+      "version": "4.1.1-1"
+    },
+    {
+      "bom-ref": "BomRef.44027904009795893.4007234556895338",
+      "licenses": [
+        {
+          "license": {
+            "name": "LGPL"
+          }
+        }
+      ],
+      "name": "libdatrie",
+      "purl": "pkg:generic/datrie?download_url=https://linux.thai.net/projects/datrie",
+      "type": "library",
+      "version": "0.2.14-1"
+    },
+    {
+      "bom-ref": "BomRef.8671236108407604.46178388836514894",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libdeflate",
+      "purl": "pkg:github/ebiggers/libdeflate",
+      "type": "library",
+      "version": "1.25-1"
+    },
+    {
+      "bom-ref": "BomRef.148023445706018.08666039942617332",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libepoxy",
+      "purl": "pkg:github/anholt/libepoxy",
+      "type": "library",
+      "version": "1.5.10-7"
+    },
+    {
+      "bom-ref": "BomRef.8485840615366603.038849687549756595",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libffi",
+      "purl": "pkg:generic/libffi?download_url=https://sourceware.org/libffi",
+      "type": "library",
+      "version": "3.8.0-1"
+    },
+    {
+      "bom-ref": "BomRef.8984734696237349.8133123201271375",
+      "licenses": [
+        {
+          "license": {
+            "name": "LGPL"
+          }
+        }
+      ],
+      "name": "libgcrypt",
+      "type": "library",
+      "version": "1.12.2-2"
+    },
+    {
+      "bom-ref": "BomRef.7317380102686571.19013484736339936",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "libgpg-error",
+      "type": "library",
+      "version": "1.61-1"
+    },
+    {
+      "bom-ref": "BomRef.9978692148464113.7913824630628611",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later  documentation:spdx:GPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "libiconv",
+      "purl": "pkg:generic/libiconv?download_url=https://www.gnu.org/software/libiconv/",
+      "type": "library",
+      "version": "1.19-1"
+    },
+    {
+      "bom-ref": "BomRef.022213707667411264.02519555447459676",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-3.0-or-later AND LGPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "libidn",
+      "purl": "pkg:generic/libidn?download_url=https://www.gnu.org/software/libidn",
+      "type": "library",
+      "version": "1.44-1"
+    },
+    {
+      "bom-ref": "BomRef.49278387876328633.2949824129137354",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "libidn2",
+      "purl": "pkg:generic/libidn?download_url=https://www.gnu.org/software/libidn/%23libidn2",
+      "type": "library",
+      "version": "2.3.8-4"
+    },
+    {
+      "bom-ref": "BomRef.2905707355189977.6182840764005153",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-3.0-or-later  OR  custom"
+          }
+        }
+      ],
+      "name": "libimagequant",
+      "purl": "pkg:github/imageoptim/libimagequant",
+      "type": "library",
+      "version": "4.4.1-1"
+    },
+    {
+      "bom-ref": "BomRef.9268053274223833.9196919998526186",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom:BSD-like"
+          }
+        }
+      ],
+      "name": "libjpeg-turbo",
+      "type": "library",
+      "version": "3.2.0-1"
+    },
+    {
+      "bom-ref": "BomRef.5319242394412982.5905589581556067",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "libogg",
+      "type": "library",
+      "version": "1.3.6-1"
+    },
+    {
+      "bom-ref": "BomRef.9446048612883026.32700644831951753",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "libpng",
+      "purl": "pkg:generic/libpng.html?download_url=http://www.libpng.org/pub/png/libpng.html",
+      "type": "library",
+      "version": "1.6.58-1"
+    },
+    {
+      "bom-ref": "BomRef.0444547267975377.486878600020864",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "libproxy",
+      "purl": "pkg:generic/libproxy?download_url=https://libproxy.github.io/libproxy/",
+      "type": "library",
+      "version": "0.5.12-1"
+    },
+    {
+      "bom-ref": "BomRef.09169288350540206.19442916590863235",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libpsl",
+      "purl": "pkg:generic/libpsl?download_url=https://rockdaboot.github.io/libpsl/",
+      "type": "library",
+      "version": "0.21.5-3"
+    },
+    {
+      "bom-ref": "BomRef.14460464457161537.9119246136597147",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libraqm",
+      "purl": "pkg:github/host-oman/libraqm",
+      "type": "library",
+      "version": "0.11.0-1"
+    },
+    {
+      "bom-ref": "BomRef.2640202849587171.8564478819433413",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "librsvg",
+      "purl": "pkg:generic/LibRsvg?download_url=https://wiki.gnome.org/Projects/LibRsvg",
+      "type": "library",
+      "version": "2.62.3-1"
+    },
+    {
+      "bom-ref": "BomRef.03776549443075061.38084912523645253",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:ISC"
+          }
+        }
+      ],
+      "name": "libsodium",
+      "purl": "pkg:github/jedisct1/libsodium",
+      "type": "library",
+      "version": "1.0.22-3"
+    },
+    {
+      "bom-ref": "BomRef.3695611641562411.08380135624015306",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.0-or-later"
+          }
+        }
+      ],
+      "name": "libsoup3",
+      "purl": "pkg:generic/libsoup?download_url=https://wiki.gnome.org/Projects/libsoup/",
+      "type": "library",
+      "version": "3.6.6-1"
+    },
+    {
+      "bom-ref": "BomRef.5366401628094337.1340791963917376",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "libssh2",
+      "type": "library",
+      "version": "1.11.1-2"
+    },
+    {
+      "bom-ref": "BomRef.2085575741389527.21153217448320982",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL3, LGPL"
+          }
+        }
+      ],
+      "name": "libtasn1",
+      "purl": "pkg:generic/libtasn1?download_url=https://www.gnu.org/software/libtasn1/",
+      "type": "library",
+      "version": "4.21.0-1"
+    },
+    {
+      "bom-ref": "BomRef.6536784553833791.7420086499094645",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "libthai",
+      "purl": "pkg:generic/libthai?download_url=https://linux.thai.net/projects/libthai",
+      "type": "library",
+      "version": "0.1.30-1"
+    },
+    {
+      "bom-ref": "BomRef.9476193130039935.08181274371884195",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libtiff",
+      "purl": "pkg:generic/libtiff?download_url=https://libtiff.gitlab.io/libtiff/",
+      "type": "library",
+      "version": "4.7.2-1"
+    },
+    {
+      "bom-ref": "BomRef.6801257463540353.28113378004531886",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-3.0-or-later OR GPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "libunistring",
+      "purl": "pkg:generic/libunistring?download_url=https://www.gnu.org/software/libunistring",
+      "type": "library",
+      "version": "1.4.2-1"
+    },
+    {
+      "bom-ref": "BomRef.2428977166779107.12059024633850024",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libuv",
+      "type": "library",
+      "version": "1.52.1-1"
+    },
+    {
+      "bom-ref": "BomRef.40259750059220534.01954779491586034",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "libvorbis",
+      "type": "library",
+      "version": "1.3.7-3"
+    },
+    {
+      "bom-ref": "BomRef.08639309907149129.03407856954875654",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "libvpx",
+      "type": "library",
+      "version": "1.16.0-1"
+    },
+    {
+      "bom-ref": "BomRef.9480681058927023.635734468706036",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "libwebp",
+      "purl": "pkg:generic/webp?download_url=https://developers.google.com/speed/webp/",
+      "type": "library",
+      "version": "1.6.0-1"
+    },
+    {
+      "bom-ref": "BomRef.8041541527203856.5408649561599304",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT AND BSD-3-Clause-Clear"
+          }
+        }
+      ],
+      "name": "libwinpthread",
+      "type": "library",
+      "version": "14.0.0.r262.g5ea8e9fac-1"
+    },
+    {
+      "bom-ref": "BomRef.3251447431424819.8138356866082723",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.0-or-later AND GPL-2.0-or-later"
+          }
+        }
+      ],
+      "name": "libwmf",
+      "type": "library",
+      "version": "0.2.15-1"
+    },
+    {
+      "bom-ref": "BomRef.6369735022978205.6339955152515289",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "libxml2",
+      "purl": "pkg:generic/home?download_url=https://gitlab.gnome.org/GNOME/libxml2/-/wikis/home",
+      "type": "library",
+      "version": "2.15.3-1"
+    },
+    {
+      "bom-ref": "BomRef.17192656008043095.6507155760008964",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "libyaml",
+      "type": "library",
+      "version": "0.2.5-2"
+    },
+    {
+      "bom-ref": "BomRef.7414999761013785.39615655792952575",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "libyuv",
+      "purl": "pkg:generic/libyuv?download_url=https://chromium.googlesource.com/libyuv/libyuv",
+      "type": "library",
+      "version": "1924.r2921.644251f25-1"
+    },
+    {
+      "bom-ref": "BomRef.3583561612369288.29007663274212203",
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD  GPL2"
+          }
+        }
+      ],
+      "name": "lz4",
+      "purl": "pkg:generic/lz4?download_url=https://lz4.github.io/lz4/",
+      "type": "library",
+      "version": "1.10.0-1"
+    },
+    {
+      "bom-ref": "BomRef.32941522354512187.6681441876702295",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "ncurses",
+      "purl": "pkg:generic/ncurses?download_url=https://www.gnu.org/software/ncurses/",
+      "type": "library",
+      "version": "6.6-4"
+    },
+    {
+      "bom-ref": "BomRef.6621292438950844.49208469577042324",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later"
+          }
+        }
+      ],
+      "name": "nettle",
+      "purl": "pkg:generic/nettle?download_url=https://www.lysator.liu.se/~nisse/nettle",
+      "type": "library",
+      "version": "4.0-1"
+    },
+    {
+      "bom-ref": "BomRef.602256205968538.6731525218659875",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "nghttp2",
+      "type": "library",
+      "version": "1.70.0-1"
+    },
+    {
+      "bom-ref": "BomRef.23241889584590292.2271812356304621",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "nghttp3",
+      "purl": "pkg:generic/nghttp3?download_url=https://nghttp2.org/nghttp3/",
+      "type": "library",
+      "version": "1.18.0-1"
+    },
+    {
+      "bom-ref": "BomRef.0973959990781853.7203669890298062",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "ngtcp2",
+      "purl": "pkg:generic/ngtcp2?download_url=https://nghttp2.org/ngtcp2/",
+      "type": "library",
+      "version": "1.25.0-1"
+    },
+    {
+      "bom-ref": "BomRef.48495436671162817.826737555629507",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "openh264",
+      "type": "library",
+      "version": "2.6.0-2"
+    },
+    {
+      "bom-ref": "BomRef.3861557764340955.5033341837163883",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "openjpeg2",
+      "type": "library",
+      "version": "2.5.4-2"
+    },
+    {
+      "bom-ref": "BomRef.21668976032437381.11421056270489749",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "openjph",
+      "type": "library",
+      "version": "0.31.0-1"
+    },
+    {
+      "bom-ref": "BomRef.1973583655735447.07574655488577742",
+      "licenses": [
+        {
+          "license": {
+            "name": "The OpenLDAP Public License"
+          }
+        }
+      ],
+      "name": "openldap",
+      "type": "library",
+      "version": "2.6.12-1"
+    },
+    {
+      "bom-ref": "BomRef.4424738870534348.20593057647155455",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "openssl",
+      "type": "library",
+      "version": "3.6.3-1"
+    },
+    {
+      "bom-ref": "BomRef.29866585205314977.7641118367194641",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "opus",
+      "type": "library",
+      "version": "1.6.1-1"
+    },
+    {
+      "bom-ref": "BomRef.7884790545727764.0634644808565128",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "orc",
+      "purl": "pkg:generic/orc.html?download_url=https://gstreamer.freedesktop.org/projects/orc.html",
+      "type": "library",
+      "version": "0.4.42-1"
+    },
+    {
+      "bom-ref": "BomRef.7669549339558359.9654162455371055",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "p11-kit",
+      "purl": "pkg:generic/p11-kit.html?download_url=https://p11-glue.freedesktop.org/p11-kit.html",
+      "type": "library",
+      "version": "0.26.5-1"
+    },
+    {
+      "bom-ref": "BomRef.9019522514571139.9113783145317442",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1"
+          }
+        }
+      ],
+      "name": "pango",
+      "type": "library",
+      "version": "1.58.2-1"
+    },
+    {
+      "bom-ref": "BomRef.9619734780146091.75563629696767",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "pcre2",
+      "type": "library",
+      "version": "10.47-1"
+    },
+    {
+      "bom-ref": "BomRef.840568490393837.6146395166399616",
+      "licenses": [
+        {
+          "license": {
+            "name": "custom"
+          }
+        }
+      ],
+      "name": "pdfium-bin",
+      "purl": "pkg:github/bblanchon/pdfium-binaries",
+      "type": "library",
+      "version": "149.0.7789.0-1"
+    },
+    {
+      "bom-ref": "BomRef.5088112155835839.6401304546021478",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "pixman",
+      "purl": "pkg:generic/pixman?download_url=https://gitlab.freedesktop.org/pixman/pixman",
+      "type": "library",
+      "version": "0.46.4-3"
+    },
+    {
+      "bom-ref": "BomRef.3032047166466939.6043152835670619",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:PSF-2.0"
+          }
+        }
+      ],
+      "name": "python",
+      "type": "library",
+      "version": "3.14.7-1"
+    },
+    {
+      "bom-ref": "BomRef.16976235861785083.1434519499495489",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-aioquic",
+      "purl": "pkg:github/aiortc/aioquic",
+      "type": "library",
+      "version": "1.3.0-4"
+    },
+    {
+      "bom-ref": "BomRef.6034155708270674.1882312302178718",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-attrs",
+      "type": "library",
+      "version": "26.1.0-1"
+    },
+    {
+      "bom-ref": "BomRef.38228066072136.20219300769115978",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-bcrypt",
+      "purl": "pkg:github/pyca/bcrypt",
+      "type": "library",
+      "version": "5.0.0-3"
+    },
+    {
+      "bom-ref": "BomRef.6843183464150693.2229975923100156",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-only OR MPL-1.1"
+          }
+        }
+      ],
+      "name": "python-cairo",
+      "type": "library",
+      "version": "1.29.0-3"
+    },
+    {
+      "bom-ref": "BomRef.3442485234242365.7361429310468011",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MPL-2.0"
+          }
+        }
+      ],
+      "name": "python-certifi",
+      "purl": "pkg:github/certifi/python-certifi",
+      "type": "library",
+      "version": "2026.7.22-1"
+    },
+    {
+      "bom-ref": "BomRef.18994188603573925.8841888791380732",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-cffi",
+      "type": "library",
+      "version": "2.1.1-1"
+    },
+    {
+      "bom-ref": "BomRef.38462355629048917.617777203375341",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-comtypes",
+      "purl": "pkg:github/enthought/comtypes",
+      "type": "library",
+      "version": "1.4.16-1"
+    },
+    {
+      "bom-ref": "BomRef.9011432433184019.2256690396828308",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause OR Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-cryptography",
+      "type": "library",
+      "version": "50.0.0-1"
+    },
+    {
+      "bom-ref": "BomRef.151959659613224.8220728231952423",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "python-decorator",
+      "purl": "pkg:github/micheles/decorator",
+      "type": "library",
+      "version": "5.3.1-1"
+    },
+    {
+      "bom-ref": "BomRef.7499503077161527.15842002392924892",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause AND Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-fido2",
+      "purl": "pkg:generic/python-fido2?download_url=https://developers.yubico.com/python-fido2/",
+      "type": "library",
+      "version": "2.2.1-1"
+    },
+    {
+      "bom-ref": "BomRef.9483299759300426.7163047527912358",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-idna",
+      "purl": "pkg:github/kjd/idna",
+      "type": "library",
+      "version": "3.18-1"
+    },
+    {
+      "bom-ref": "BomRef.7112139297338109.20671317689943935",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-ifaddr",
+      "purl": "pkg:github/pydron/ifaddr",
+      "type": "library",
+      "version": "0.2.0-6"
+    },
+    {
+      "bom-ref": "BomRef.7507269731206092.01347902348052088",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "python-invoke",
+      "purl": "pkg:github/pyinvoke/invoke",
+      "type": "library",
+      "version": "2.2.1-3"
+    },
+    {
+      "bom-ref": "BomRef.4768543627244458.7989598337749918",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:PSF AND MIT"
+          }
+        }
+      ],
+      "name": "python-ldap",
+      "purl": "pkg:github/python-ldap/python-ldap",
+      "type": "library",
+      "version": "3.4.7-1"
+    },
+    {
+      "bom-ref": "BomRef.549806294083207.6599640333264891",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-netifaces",
+      "purl": "pkg:generic/netifaces?download_url=https://alastairs-place.net/netifaces/",
+      "type": "library",
+      "version": "0.11.0-8"
+    },
+    {
+      "bom-ref": "BomRef.9053380244101262.46423810991252645",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-oauthlib",
+      "purl": "pkg:github/idan/oauthlib",
+      "type": "library",
+      "version": "3.3.1-3"
+    },
+    {
+      "bom-ref": "BomRef.4615087605636222.6199432167066594",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "python-paramiko",
+      "type": "library",
+      "version": "3.5.1-3"
+    },
+    {
+      "bom-ref": "BomRef.9649981111900425.3822140287071333",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT-CMU"
+          }
+        }
+      ],
+      "name": "python-pillow",
+      "purl": "pkg:github/python-pillow/pillow",
+      "type": "library",
+      "version": "12.3.0-1"
+    },
+    {
+      "bom-ref": "BomRef.4971705938065494.09851367634000585",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "python-pyasn1",
+      "purl": "pkg:github/pyasn1/pyasn1",
+      "type": "library",
+      "version": "0.6.4-1"
+    },
+    {
+      "bom-ref": "BomRef.364409144148913.5180995306887999",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "python-pyasn1-modules",
+      "type": "library",
+      "version": "0.4.2-3"
+    },
+    {
+      "bom-ref": "BomRef.4868992182386145.005395280814860404",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-pycparser",
+      "purl": "pkg:github/eliben/pycparser",
+      "type": "library",
+      "version": "3.0-2"
+    },
+    {
+      "bom-ref": "BomRef.16046269668137803.909061749162016",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "python-pycryptodome",
+      "type": "library",
+      "version": "3.23.0-3"
+    },
+    {
+      "bom-ref": "BomRef.001525029963171498.02469614008740073",
+      "licenses": [
+        {
+          "license": {
+            "name": "PublicDomain"
+          }
+        }
+      ],
+      "name": "python-pycryptodomex",
+      "type": "library",
+      "version": "3.23.0-3"
+    },
+    {
+      "bom-ref": "BomRef.1743501597647551.49140254344450796",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-pylsqpack",
+      "purl": "pkg:github/aiortc/pylsqpack",
+      "type": "library",
+      "version": "0.3.24-1"
+    },
+    {
+      "bom-ref": "BomRef.8257376422607892.6451938803444596",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-pynacl",
+      "purl": "pkg:github/pyca/pynacl",
+      "type": "library",
+      "version": "1.6.2-3"
+    },
+    {
+      "bom-ref": "BomRef.8424860395988377.12798856602662412",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-pyopengl",
+      "purl": "pkg:generic/pyopengl?download_url=https://mcfletch.github.io/pyopengl/",
+      "type": "library",
+      "version": "3.1.10-3"
+    },
+    {
+      "bom-ref": "BomRef.5177362004119541.45757193593042245",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-pyopengl-accelerate",
+      "purl": "pkg:generic/pyopengl?download_url=https://mcfletch.github.io/pyopengl/",
+      "type": "library",
+      "version": "3.1.10-3"
+    },
+    {
+      "bom-ref": "BomRef.8570297878538623.12034160370060176",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-pyopenssl",
+      "type": "library",
+      "version": "26.4.0-1"
+    },
+    {
+      "bom-ref": "BomRef.3905960504377839.8077670194108927",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-pyvda",
+      "purl": "pkg:github/mrob95/pyvda",
+      "type": "library",
+      "version": "0.5.0-3"
+    },
+    {
+      "bom-ref": "BomRef.44893316670669037.38087604312719836",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:PSF-2.0"
+          }
+        }
+      ],
+      "name": "python-pywin32",
+      "purl": "pkg:github/mhammond/pywin32",
+      "type": "library",
+      "version": "310-4"
+    },
+    {
+      "bom-ref": "BomRef.7948758953638656.7242461320696522",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-service-identity",
+      "type": "library",
+      "version": "24.2.0-5"
+    },
+    {
+      "bom-ref": "BomRef.13510486094893948.6180834239772802",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "python-setproctitle",
+      "purl": "pkg:github/dvarrazzo/py-setproctitle",
+      "type": "library",
+      "version": "1.3.7-3"
+    },
+    {
+      "bom-ref": "BomRef.9257133204011166.31974595897595026",
+      "licenses": [
+        {
+          "expression": ""
+        }
+      ],
+      "name": "python-shadowcopy",
+      "type": "library",
+      "version": ""
+    },
+    {
+      "bom-ref": "BomRef.02821900779404629.2188876864609688",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Apache-2.0"
+          }
+        }
+      ],
+      "name": "python-winkerberos",
+      "purl": "pkg:github/mongodb/winkerberos",
+      "type": "library",
+      "version": "0.13.0-3"
+    },
+    {
+      "bom-ref": "BomRef.12426386802354328.770115906425776",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-winloop",
+      "purl": "pkg:github/vizonex/winloop",
+      "type": "library",
+      "version": "0.2.3-3"
+    },
+    {
+      "bom-ref": "BomRef.5470802802195818.8679309323858281",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:MIT"
+          }
+        }
+      ],
+      "name": "python-yaml",
+      "type": "library",
+      "version": "6.0.3-3"
+    },
+    {
+      "bom-ref": "BomRef.19363888680605512.3876151308615161",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "python-zeroconf",
+      "purl": "pkg:github/python-zeroconf/python-zeroconf",
+      "type": "library",
+      "version": "0.149.16-1"
+    },
+    {
+      "bom-ref": "BomRef.6340550701226871.7280776598239044",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:LGPL-2.1-or-later"
+          }
+        }
+      ],
+      "name": "qrencode",
+      "purl": "pkg:generic/index.en.html?download_url=https://fukuchi.org/works/qrencode/index.en.html",
+      "type": "library",
+      "version": "4.1.1-4"
+    },
+    {
+      "bom-ref": "BomRef.3773533036250626.7464640317835131",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "rav1e",
+      "purl": "pkg:github/xiph/rav1e",
+      "type": "library",
+      "version": "0.8.1-1"
+    },
+    {
+      "bom-ref": "BomRef.5250891090516986.6850021369754887",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL"
+          }
+        }
+      ],
+      "name": "shishi",
+      "purl": "pkg:generic/shishi?download_url=https://www.gnu.org/software/shishi/",
+      "type": "library",
+      "version": "1.0.3-2"
+    },
+    {
+      "bom-ref": "BomRef.7936715294052021.02221926132081986",
+      "licenses": [
+        {
+          "license": {
+            "name": "PublicDomain"
+          }
+        }
+      ],
+      "name": "sqlite3",
+      "type": "library",
+      "version": "3.53.4-1"
+    },
+    {
+      "bom-ref": "BomRef.8707454370001413.005325728678261199",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-2-Clause AND GPL-2.0-or-later"
+          }
+        }
+      ],
+      "name": "xxhash",
+      "type": "library",
+      "version": "0.8.3-2"
+    },
+    {
+      "bom-ref": "BomRef.5673832205006852.4343830357996027",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later"
+          }
+        }
+      ],
+      "name": "xz",
+      "purl": "pkg:generic/xz?download_url=https://tukaani.org/xz",
+      "type": "library",
+      "version": "5.8.3-1"
+    },
+    {
+      "bom-ref": "BomRef.29416784211876157.3635423770577939",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:Zlib"
+          }
+        }
+      ],
+      "name": "zlib",
+      "type": "library",
+      "version": "1.3.2-2"
+    },
+    {
+      "bom-ref": "BomRef.1604938501284382.4338554370728752",
+      "licenses": [
+        {
+          "license": {
+            "name": "spdx:BSD-3-Clause OR GPL-2.0-or-later"
+          }
+        }
+      ],
+      "name": "zstd",
+      "purl": "pkg:generic/zstd?download_url=https://facebook.github.io/zstd/",
+      "type": "library",
+      "version": "1.5.7-2"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "BomRef.009598261940857111.4778744216937101",
+        "BomRef.5366401628094337.1340791963917376",
+        "BomRef.9480681058927023.635734468706036",
+        "BomRef.9268053274223833.9196919998526186",
+        "BomRef.8703960158535168.20400568526966523",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.9010682875570629.06529084633949467",
+        "BomRef.29866585205314977.7641118367194641",
+        "BomRef.9019522514571139.9113783145317442",
+        "BomRef.6369735022978205.6339955152515289",
+        "BomRef.7884790545727764.0634644808565128",
+        "BomRef.616168876964818.5259852826179826",
+        "BomRef.8426482258663253.5959193972499932",
+        "BomRef.2640202849587171.8564478819433413",
+        "BomRef.6621292438950844.49208469577042324",
+        "BomRef.3861557764340955.5033341837163883",
+        "BomRef.48495436671162817.826737555629507"
+      ],
+      "ref": "BomRef.8539089058730827.45094895719404327"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9486419587760789.7449072251181136",
+        "BomRef.05514018129883036.44399777774161275",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.6369735022978205.6339955152515289",
+        "BomRef.08639309907149129.03407856954875654",
+        "BomRef.3695611641562411.08380135624015306",
+        "BomRef.616168876964818.5259852826179826",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.9010682875570629.06529084633949467",
+        "BomRef.30006829353949216.5631318713645019",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.18331152775242987.7453731663201435"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.05514018129883036.44399777774161275",
+        "BomRef.30006829353949216.5631318713645019",
+        "BomRef.4927690767450229.16943017138296368"
+      ],
+      "ref": "BomRef.5298110108289762.3718791727535907"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9486419587760789.7449072251181136",
+        "BomRef.9019522514571139.9113783145317442",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.148023445706018.08666039942617332",
+        "BomRef.616168876964818.5259852826179826",
+        "BomRef.37716209846640114.8444717165116782",
+        "BomRef.4927690767450229.16943017138296368"
+      ],
+      "ref": "BomRef.05627700822919346.20014933956229186"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.840568490393837.6146395166399616"
+    },
+    {
+      "dependsOn": [
+        "BomRef.1743501597647551.49140254344450796",
+        "BomRef.7948758953638656.7242461320696522",
+        "BomRef.3442485234242365.7361429310468011",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.8570297878538623.12034160370060176",
+        "BomRef.9011432433184019.2256690396828308",
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.16976235861785083.1434519499495489"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.9011432433184019.2256690396828308"
+      ],
+      "ref": "BomRef.7499503077161527.15842002392924892"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.9483299759300426.7163047527912358"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.7507269731206092.01347902348052088"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.4971705938065494.09851367634000585",
+        "BomRef.1973583655735447.07574655488577742",
+        "BomRef.364409144148913.5180995306887999"
+      ],
+      "ref": "BomRef.4768543627244458.7989598337749918"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.549806294083207.6599640333264891"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.9053380244101262.46423810991252645"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.8257376422607892.6451938803444596",
+        "BomRef.9011432433184019.2256690396828308",
+        "BomRef.38228066072136.20219300769115978"
+      ],
+      "ref": "BomRef.4615087605636222.6199432167066594"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.6023775485960964.5240138219464155"
+      ],
+      "ref": "BomRef.16046269668137803.909061749162016"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.001525029963171498.02469614008740073"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.8424860395988377.12798856602662412"
+      ],
+      "ref": "BomRef.5177362004119541.45757193593042245"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.44893316670669037.38087604312719836",
+        "BomRef.38462355629048917.617777203375341"
+      ],
+      "ref": "BomRef.3905960504377839.8077670194108927"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.13510486094893948.6180834239772802"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.02821900779404629.2188876864609688"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.2428977166779107.12059024633850024"
+      ],
+      "ref": "BomRef.12426386802354328.770115906425776"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.17192656008043095.6507155760008964"
+      ],
+      "ref": "BomRef.5470802802195818.8679309323858281"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.7112139297338109.20671317689943935"
+      ],
+      "ref": "BomRef.19363888680605512.3876151308615161"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.8041541527203856.5408649561599304"
+      ],
+      "ref": "BomRef.6340550701226871.7280776598239044"
+    },
+    {
+      "ref": "BomRef.8707454370001413.005325728678261199"
+    },
+    {
+      "ref": "BomRef.9257133204011166.31974595897595026"
+    },
+    {
+      "dependsOn": [
+        "BomRef.8041541527203856.5408649561599304",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.8703960158535168.20400568526966523"
+    },
+    {
+      "dependsOn": [
+        "BomRef.8041541527203856.5408649561599304"
+      ],
+      "ref": "BomRef.6740172266513804.8910052798017304"
+    },
+    {
+      "ref": "BomRef.8041541527203856.5408649561599304"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.4927690767450229.16943017138296368"
+      ],
+      "ref": "BomRef.37716209846640114.8444717165116782"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9978692148464113.7913824630628611",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.20774585114780109.4791593837440433"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.9619734780146091.75563629696767",
+        "BomRef.8485840615366603.038849687549756595",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.4927690767450229.16943017138296368"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.8420789925734367.8130898032126086",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.5088112155835839.6401304546021478",
+        "BomRef.2619775879264479.8237978109656013"
+      ],
+      "ref": "BomRef.616168876964818.5259852826179826"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3905609585543127.9286915397592984",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.9010682875570629.06529084633949467",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.30153519485349733.767886452532994"
+      ],
+      "ref": "BomRef.2619775879264479.8237978109656013"
+    },
+    {
+      "dependsOn": [
+        "BomRef.47534846949805154.6625973000828312",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.8420789925734367.8130898032126086"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.9446048612883026.32700644831951753"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.5088112155835839.6401304546021478"
+    },
+    {
+      "ref": "BomRef.29416784211876157.3635423770577939"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.14584453775222161.8663984859579124"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3905609585543127.9286915397592984",
+        "BomRef.602256205968538.6731525218659875",
+        "BomRef.5366401628094337.1340791963917376",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.0973959990781853.7203669890298062",
+        "BomRef.23241889584590292.2271812356304621",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.1604938501284382.4338554370728752",
+        "BomRef.49278387876328633.2949824129137354",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.09169288350540206.19442916590863235"
+      ],
+      "ref": "BomRef.8426482258663253.5959193972499932"
+    },
+    {
+      "ref": "BomRef.3905609585543127.9286915397592984"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9978692148464113.7913824630628611",
+        "BomRef.6801257463540353.28113378004531886"
+      ],
+      "ref": "BomRef.49278387876328633.2949824129137354"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9978692148464113.7913824630628611",
+        "BomRef.6801257463540353.28113378004531886",
+        "BomRef.49278387876328633.2949824129137354"
+      ],
+      "ref": "BomRef.09169288350540206.19442916590863235"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.1604938501284382.4338554370728752"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.4424738870534348.20593057647155455"
+      ],
+      "ref": "BomRef.5366401628094337.1340791963917376"
+    },
+    {
+      "ref": "BomRef.4424738870534348.20593057647155455"
+    },
+    {
+      "ref": "BomRef.602256205968538.6731525218659875"
+    },
+    {
+      "dependsOn": [
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.8368106904381273.9702175846182246"
+      ],
+      "ref": "BomRef.0973959990781853.7203669890298062"
+    },
+    {
+      "ref": "BomRef.23241889584590292.2271812356304621"
+    },
+    {
+      "dependsOn": [
+        "BomRef.4424738870534348.20593057647155455"
+      ],
+      "ref": "BomRef.015502765171908961.21634536318326147"
+    },
+    {
+      "ref": "BomRef.47534846949805154.6625973000828312"
+    },
+    {
+      "ref": "BomRef.9010682875570629.06529084633949467"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.9023159482163887.9818522269425649"
+      ],
+      "ref": "BomRef.30153519485349733.767886452532994"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.9486419587760789.7449072251181136"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.9268053274223833.9196919998526186"
+    },
+    {
+      "dependsOn": [
+        "BomRef.5673832205006852.4343830357996027",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.25756039932243957.23737996378952642",
+        "BomRef.8671236108407604.46178388836514894",
+        "BomRef.5627949411518666.9625815544349925",
+        "BomRef.9480681058927023.635734468706036",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.1604938501284382.4338554370728752",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.9476193130039935.08181274371884195"
+    },
+    {
+      "ref": "BomRef.9978692148464113.7913824630628611"
+    },
+    {
+      "dependsOn": [
+        "BomRef.0444547267975377.486878600020864",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.8368106904381273.9702175846182246",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.5644567064611457.5971501838067718"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3905609585543127.9286915397592984",
+        "BomRef.2085575741389527.21153217448320982",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.6801257463540353.28113378004531886",
+        "BomRef.1604938501284382.4338554370728752",
+        "BomRef.49278387876328633.2949824129137354",
+        "BomRef.6023775485960964.5240138219464155",
+        "BomRef.8041541527203856.5408649561599304",
+        "BomRef.7669549339558359.9654162455371055",
+        "BomRef.6621292438950844.49208469577042324"
+      ],
+      "ref": "BomRef.8368106904381273.9702175846182246"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.8426482258663253.5959193972499932",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.4927690767450229.16943017138296368"
+      ],
+      "ref": "BomRef.0444547267975377.486878600020864"
+    },
+    {
+      "ref": "BomRef.8485840615366603.038849687549756595"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.9010682875570629.06529084633949467"
+      ],
+      "ref": "BomRef.9619734780146091.75563629696767"
+    },
+    {
+      "dependsOn": [
+        "BomRef.5673832205006852.4343830357996027",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.47534846949805154.6625973000828312",
+        "BomRef.9010682875570629.06529084633949467",
+        "BomRef.7936715294052021.02221926132081986",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.8485840615366603.038849687549756595",
+        "BomRef.32941522354512187.6681441876702295"
+      ],
+      "ref": "BomRef.3032047166466939.6043152835670619"
+    },
+    {
+      "ref": "BomRef.6023775485960964.5240138219464155"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.2085575741389527.21153217448320982"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9978692148464113.7913824630628611"
+      ],
+      "ref": "BomRef.6801257463540353.28113378004531886"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.6023775485960964.5240138219464155"
+      ],
+      "ref": "BomRef.6621292438950844.49208469577042324"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.2085575741389527.21153217448320982",
+        "BomRef.8485840615366603.038849687549756595"
+      ],
+      "ref": "BomRef.7669549339558359.9654162455371055"
+    },
+    {
+      "dependsOn": [
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.8485840615366603.038849687549756595"
+      ],
+      "ref": "BomRef.31391292711693586.24918072186023887"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.9023159482163887.9818522269425649"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.5250891090516986.6850021369754887"
+      ],
+      "ref": "BomRef.9082437398650631.8734416393681217"
+    },
+    {
+      "dependsOn": [
+        "BomRef.2085575741389527.21153217448320982",
+        "BomRef.7317380102686571.19013484736339936",
+        "BomRef.8984734696237349.8133123201271375",
+        "BomRef.8368106904381273.9702175846182246",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.022213707667411264.02519555447459676"
+      ],
+      "ref": "BomRef.5250891090516986.6850021369754887"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.009598261940857111.4778744216937101"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9486419587760789.7449072251181136",
+        "BomRef.6369735022978205.6339955152515289",
+        "BomRef.616168876964818.5259852826179826",
+        "BomRef.9019522514571139.9113783145317442"
+      ],
+      "ref": "BomRef.2640202849587171.8564478819433413"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.9480681058927023.635734468706036"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9978692148464113.7913824630628611",
+        "BomRef.29416784211876157.3635423770577939"
+      ],
+      "ref": "BomRef.6369735022978205.6339955152515289"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.48495436671162817.826737555629507"
+    },
+    {
+      "dependsOn": [
+        "BomRef.009598261940857111.4778744216937101",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.3861557764340955.5033341837163883"
+    },
+    {
+      "ref": "BomRef.29866585205314977.7641118367194641"
+    },
+    {
+      "ref": "BomRef.7884790545727764.0634644808565128"
+    },
+    {
+      "dependsOn": [
+        "BomRef.616168876964818.5259852826179826",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.6536784553833791.7420086499094645",
+        "BomRef.30153519485349733.767886452532994",
+        "BomRef.8420789925734367.8130898032126086",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.6300087064722488.1335190150830985"
+      ],
+      "ref": "BomRef.9019522514571139.9113783145317442"
+    },
+    {
+      "dependsOn": [
+        "BomRef.05514018129883036.44399777774161275"
+      ],
+      "ref": "BomRef.037309929572076905.1658130009862896"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9019522514571139.9113783145317442",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.7884790545727764.0634644808565128",
+        "BomRef.40259750059220534.01954779491586034",
+        "BomRef.29866585205314977.7641118367194641",
+        "BomRef.30006829353949216.5631318713645019",
+        "BomRef.9268053274223833.9196919998526186",
+        "BomRef.5319242394412982.5905589581556067"
+      ],
+      "ref": "BomRef.05514018129883036.44399777774161275"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.8041541527203856.5408649561599304",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.4927690767450229.16943017138296368"
+      ],
+      "ref": "BomRef.30006829353949216.5631318713645019"
+    },
+    {
+      "ref": "BomRef.5319242394412982.5905589581556067"
+    },
+    {
+      "dependsOn": [
+        "BomRef.5319242394412982.5905589581556067"
+      ],
+      "ref": "BomRef.40259750059220534.01954779491586034"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3905609585543127.9286915397592984",
+        "BomRef.602256205968538.6731525218659875",
+        "BomRef.7936715294052021.02221926132081986",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.09169288350540206.19442916590863235",
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.5644567064611457.5971501838067718"
+      ],
+      "ref": "BomRef.3695611641562411.08380135624015306"
+    },
+    {
+      "dependsOn": [
+        "BomRef.8041541527203856.5408649561599304"
+      ],
+      "ref": "BomRef.08639309907149129.03407856954875654"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.148023445706018.08666039942617332"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.9388026359679675.05995924054339963"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.25756039932243957.23737996378952642"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9978692148464113.7913824630628611"
+      ],
+      "ref": "BomRef.44027904009795893.4007234556895338"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304",
+        "BomRef.7317380102686571.19013484736339936"
+      ],
+      "ref": "BomRef.8984734696237349.8133123201271375"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.7317380102686571.19013484736339936"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433",
+        "BomRef.9978692148464113.7913824630628611"
+      ],
+      "ref": "BomRef.022213707667411264.02519555447459676"
+    },
+    {
+      "dependsOn": [
+        "BomRef.30153519485349733.767886452532994",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.6300087064722488.1335190150830985"
+      ],
+      "ref": "BomRef.14460464457161537.9119246136597147"
+    },
+    {
+      "ref": "BomRef.6300087064722488.1335190150830985"
+    },
+    {
+      "dependsOn": [
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.03776549443075061.38084912523645253"
+    },
+    {
+      "dependsOn": [
+        "BomRef.29416784211876157.3635423770577939"
+      ],
+      "ref": "BomRef.7936715294052021.02221926132081986"
+    },
+    {
+      "dependsOn": [
+        "BomRef.44027904009795893.4007234556895338"
+      ],
+      "ref": "BomRef.6536784553833791.7420086499094645"
+    },
+    {
+      "ref": "BomRef.5627949411518666.9625815544349925"
+    },
+    {
+      "ref": "BomRef.8671236108407604.46178388836514894"
+    },
+    {
+      "dependsOn": [
+        "BomRef.20774585114780109.4791593837440433"
+      ],
+      "ref": "BomRef.5673832205006852.4343830357996027"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9486419587760789.7449072251181136",
+        "BomRef.6369735022978205.6339955152515289",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.4927690767450229.16943017138296368",
+        "BomRef.9446048612883026.32700644831951753",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.9268053274223833.9196919998526186"
+      ],
+      "ref": "BomRef.3251447431424819.8138356866082723"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9268053274223833.9196919998526186",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.7414999761013785.39615655792952575"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9619734780146091.75563629696767",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.32941522354512187.6681441876702295"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.21668976032437381.11421056270489749"
+    },
+    {
+      "dependsOn": [
+        "BomRef.015502765171908961.21634536318326147",
+        "BomRef.4424738870534348.20593057647155455"
+      ],
+      "ref": "BomRef.1973583655735447.07574655488577742"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.3442485234242365.7361429310468011"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.4424738870534348.20593057647155455",
+        "BomRef.18994188603573925.8841888791380732"
+      ],
+      "ref": "BomRef.9011432433184019.2256690396828308"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.1743501597647551.49140254344450796"
+    },
+    {
+      "dependsOn": [
+        "BomRef.9011432433184019.2256690396828308",
+        "BomRef.4424738870534348.20593057647155455"
+      ],
+      "ref": "BomRef.8570297878538623.12034160370060176"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.4971705938065494.09851367634000585",
+        "BomRef.9011432433184019.2256690396828308",
+        "BomRef.364409144148913.5180995306887999",
+        "BomRef.6034155708270674.1882312302178718"
+      ],
+      "ref": "BomRef.7948758953638656.7242461320696522"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.6034155708270674.1882312302178718"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.38228066072136.20219300769115978"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.616168876964818.5259852826179826"
+      ],
+      "ref": "BomRef.6843183464150693.2229975923100156"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.4868992182386145.005395280814860404",
+        "BomRef.8485840615366603.038849687549756595"
+      ],
+      "ref": "BomRef.18994188603573925.8841888791380732"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.4868992182386145.005395280814860404"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.38462355629048917.617777203375341"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.151959659613224.8220728231952423"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.7112139297338109.20671317689943935"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.4971705938065494.09851367634000585"
+    },
+    {
+      "dependsOn": [
+        "BomRef.4971705938065494.09851367634000585"
+      ],
+      "ref": "BomRef.364409144148913.5180995306887999"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.03776549443075061.38084912523645253",
+        "BomRef.18994188603573925.8841888791380732"
+      ],
+      "ref": "BomRef.8257376422607892.6451938803444596"
+    },
+    {
+      "dependsOn": [
+        "BomRef.009598261940857111.4778744216937101",
+        "BomRef.14460464457161537.9119246136597147",
+        "BomRef.29416784211876157.3635423770577939",
+        "BomRef.9476193130039935.08181274371884195",
+        "BomRef.9480681058927023.635734468706036",
+        "BomRef.2619775879264479.8237978109656013",
+        "BomRef.9268053274223833.9196919998526186",
+        "BomRef.2905707355189977.6182840764005153",
+        "BomRef.3861557764340955.5033341837163883"
+      ],
+      "ref": "BomRef.9649981111900425.3822140287071333"
+    },
+    {
+      "ref": "BomRef.2905707355189977.6182840764005153"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619"
+      ],
+      "ref": "BomRef.8424860395988377.12798856602662412"
+    },
+    {
+      "dependsOn": [
+        "BomRef.3032047166466939.6043152835670619",
+        "BomRef.6740172266513804.8910052798017304"
+      ],
+      "ref": "BomRef.44893316670669037.38087604312719836"
+    },
+    {
+      "ref": "BomRef.2428977166779107.12059024633850024"
+    },
+    {
+      "ref": "BomRef.17192656008043095.6507155760008964"
+    },
+    {
+      "ref": "BomRef.6241174405308009.37326507140264575"
+    },
+    {
+      "ref": "BomRef.3583561612369288.29007663274212203"
+    },
+    {
+      "ref": "BomRef.3773533036250626.7464640317835131"
+    },
+    {
+      "dependsOn": [
+        "BomRef.05627700822919346.20014933956229186",
+        "BomRef.5298110108289762.3718791727535907",
+        "BomRef.8539089058730827.45094895719404327",
+        "BomRef.18331152775242987.7453731663201435",
+        "BomRef.840568490393837.6146395166399616",
+        "BomRef.16976235861785083.1434519499495489",
+        "BomRef.7499503077161527.15842002392924892",
+        "BomRef.9483299759300426.7163047527912358",
+        "BomRef.7507269731206092.01347902348052088",
+        "BomRef.4768543627244458.7989598337749918",
+        "BomRef.549806294083207.6599640333264891",
+        "BomRef.9053380244101262.46423810991252645",
+        "BomRef.4615087605636222.6199432167066594",
+        "BomRef.16046269668137803.909061749162016",
+        "BomRef.001525029963171498.02469614008740073",
+        "BomRef.5177362004119541.45757193593042245",
+        "BomRef.3905960504377839.8077670194108927",
+        "BomRef.13510486094893948.6180834239772802",
+        "BomRef.02821900779404629.2188876864609688",
+        "BomRef.12426386802354328.770115906425776",
+        "BomRef.5470802802195818.8679309323858281",
+        "BomRef.19363888680605512.3876151308615161",
+        "BomRef.6340550701226871.7280776598239044",
+        "BomRef.8707454370001413.005325728678261199",
+        "BomRef.9257133204011166.31974595897595026"
+      ],
+      "ref": "Xpra"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "Xpra",
+      "licenses": [
+        {
+          "license": {
+            "name": "GPL2+"
+          }
+        }
+      ],
+      "name": "Xpra",
+      "type": "application"
+    },
+    "timestamp": "2026-08-18T15:40:47.822678+00:00",
+    "tools": {
+      "components": [
+        {
+          "name": "my-own-SBOM-generator",
+          "type": "application"
+        },
+        {
+          "description": "Python library for CycloneDX",
+          "externalReferences": [
+            {
+              "type": "build-system",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib/actions"
+            },
+            {
+              "type": "distribution",
+              "url": "https://pypi.org/project/cyclonedx-python-lib/"
+            },
+            {
+              "type": "documentation",
+              "url": "https://cyclonedx-python-library.readthedocs.io/"
+            },
+            {
+              "type": "issue-tracker",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib/issues"
+            },
+            {
+              "type": "license",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib/blob/main/LICENSE"
+            },
+            {
+              "type": "release-notes",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib/blob/main/CHANGELOG.md"
+            },
+            {
+              "type": "vcs",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib"
+            },
+            {
+              "type": "website",
+              "url": "https://github.com/CycloneDX/cyclonedx-python-lib/#readme"
+            }
+          ],
+          "group": "CycloneDX",
+          "licenses": [
+            {
+              "license": {
+                "id": "Apache-2.0"
+              }
+            }
+          ],
+          "name": "cyclonedx-python-lib",
+          "type": "library",
+          "version": "9.1.0"
+        }
+      ]
+    }
+  },
+  "serialNumber": "urn:uuid:c8984546-91ec-4680-bcc5-4d351696eb0f",
+  "version": 1,
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5"
+}

@@ -1,0 +1,118 @@
+#!/bin/bash
+set -euo pipefail
+
+app_root=/opt/kinesync
+log_dir="${HOME}/log"
+spotify_cache="${HOME}/.cache/spotify"
+spotify_show_request="${HOME}/.kinesync-show-spotify"
+spotify_track_active="${HOME}/.kinesync-spotify-track-active"
+
+spotify_pid=""
+bridge_pid=""
+spotify_hidden=0
+spotify_force_visible_until=0
+
+# Xpra intentionally isolates its own D-Bus. Start one private session bus that
+# both Spotify and Desktop Bridge inherit for MPRIS metadata and controls.
+eval "$(dbus-launch --sh-syntax)"
+
+clear_spotify_locks() {
+  rm -f "$spotify_cache/SingletonCookie" \
+    "$spotify_cache/SingletonLock" \
+    "$spotify_cache/SingletonSocket" \
+    "$spotify_cache/Browser/LOCK"
+}
+
+hide_spotify() {
+  local window_ids
+  window_ids="$(xdotool search --onlyvisible --class spotify 2>/dev/null || true)"
+  if [ -n "$window_ids" ]; then
+    while IFS= read -r window_id; do
+      [ -z "$window_id" ] || xdotool windowunmap "$window_id" 2>/dev/null || true
+    done <<< "$window_ids"
+    spotify_hidden=1
+  fi
+}
+
+show_spotify_for_login() {
+  local window_id window_name shown=1
+  while IFS= read -r window_id; do
+    [ -n "$window_id" ] || continue
+    window_name="$(xdotool getwindowname "$window_id" 2>/dev/null || true)"
+    if [ "$window_name" = "Spotify" ]; then
+      xdotool windowmap "$window_id" 2>/dev/null || true
+      xdotool windowactivate "$window_id" 2>/dev/null || true
+      spotify_hidden=0
+      shown=0
+    fi
+  done < <(xdotool search --class spotify 2>/dev/null || true)
+  return "$shown"
+}
+
+existing_spotify_pid() {
+  pgrep -u "$(id -u)" -x spotify | head -n1 || true
+}
+
+existing_bridge_pid() {
+  pgrep -u "$(id -u)" -x electron | head -n1 || true
+}
+
+start_spotify() {
+  local existing_pid
+  existing_pid="$(existing_spotify_pid)"
+  if [ -n "$existing_pid" ]; then
+    spotify_pid="$existing_pid"
+    return
+  fi
+  clear_spotify_locks
+  echo "[supervisor] starting Spotify" >>"$log_dir/spotify.log"
+  spotify --no-sandbox \
+    --remote-debugging-address=127.0.0.1 \
+    --remote-debugging-port=43880 \
+    --remote-allow-origins=http://127.0.0.1:43880 \
+    >>"$log_dir/spotify.log" 2>&1 &
+  spotify_pid=$!
+  spotify_hidden=0
+}
+
+start_bridge() {
+  local existing_pid
+  existing_pid="$(existing_bridge_pid)"
+  if [ -n "$existing_pid" ]; then
+    bridge_pid="$existing_pid"
+    return
+  fi
+  rm -f "$spotify_track_active"
+  echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
+  /usr/local/bin/start-kinesync-bridge >>"$log_dir/desktop-bridge.log" 2>&1 &
+  bridge_pid=$!
+}
+
+stop_children() {
+  [ -z "$spotify_pid" ] || kill "$spotify_pid" 2>/dev/null || true
+  [ -z "$bridge_pid" ] || kill "$bridge_pid" 2>/dev/null || true
+  [ -z "${DBUS_SESSION_BUS_PID:-}" ] || kill "$DBUS_SESSION_BUS_PID" 2>/dev/null || true
+}
+trap stop_children EXIT INT TERM
+
+start_bridge
+start_spotify
+
+while true; do
+  if ! kill -0 "$spotify_pid" 2>/dev/null; then
+    start_spotify
+  fi
+  if [ -f "$spotify_show_request" ]; then
+    rm -f "$spotify_show_request"
+    spotify_force_visible_until=$(( $(date +%s) + 30 ))
+  fi
+  if [ ! -f "$spotify_track_active" ] || [ "$(date +%s)" -lt "$spotify_force_visible_until" ]; then
+    show_spotify_for_login || true
+  else
+    if [ "$spotify_hidden" -eq 0 ]; then hide_spotify; fi
+  fi
+  if ! kill -0 "$bridge_pid" 2>/dev/null; then
+    start_bridge
+  fi
+  sleep 1
+done

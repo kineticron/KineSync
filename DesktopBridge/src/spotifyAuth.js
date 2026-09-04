@@ -225,6 +225,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
   let lastForceRefreshAt = 0;
   let interactiveLoginPromise = null;
   let lastInteractiveLoginAt = 0;
+  let accessTokenSource = "";
 
   const ensureSessionCookie = async (spDcValue) => {
     if (!spDcValue) return;
@@ -271,7 +272,10 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
 
   return {
     isAuthenticated() {
-      return Boolean(getSpDcCookie());
+      return Boolean(
+        getSpDcCookie() ||
+          (accessToken && accessTokenExpiresAt > Date.now()),
+      );
     },
 
     async getAccessToken(options = {}) {
@@ -325,6 +329,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
         .then((result) => {
           accessToken = result.token;
           accessTokenExpiresAt = result.expiresAt;
+          accessTokenSource = "web-session";
           lastError = "";
           return accessToken;
         })
@@ -441,6 +446,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
 
               accessToken = result.token;
               accessTokenExpiresAt = result.expiresAt;
+              accessTokenSource = "web-session";
               lastError = "";
 
               authWindow.close();
@@ -464,6 +470,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
                   );
                   accessToken = result.token;
                   accessTokenExpiresAt = result.expiresAt;
+                  accessTokenSource = "web-session";
                   lastError = "";
                 } catch (retryErr) {
                   lastError =
@@ -524,6 +531,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
                   .then((result) => {
                     accessToken = result.token;
                     accessTokenExpiresAt = result.expiresAt;
+                    accessTokenSource = "web-session";
                     lastError = "";
                     resolve({ ok: true });
                   })
@@ -552,6 +560,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
     logout() {
       accessToken = "";
       accessTokenExpiresAt = 0;
+      accessTokenSource = "";
       lastError = "";
       setSpDcCookie("");
       session.defaultSession.cookies
@@ -566,11 +575,30 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
         accessToken && accessTokenExpiresAt > Date.now(),
       );
       return {
-        spotifyAuthenticated: hasSession,
+        spotifyAuthenticated: hasSession || hasAccess,
         spotifyAccessTokenValid: hasAccess,
         spotifyAccessTokenExpiresAt: accessTokenExpiresAt,
+        spotifyAccessTokenSource: hasAccess ? accessTokenSource : "",
         spotifyAuthError: lastError,
       };
+    },
+
+    adoptAccessToken(token, expiresAt) {
+      const safeToken = String(token || "").trim();
+      const safeExpiresAt = Number(expiresAt || 0);
+      if (
+        safeToken.length < 20 ||
+        safeToken.length > 4096 ||
+        !Number.isFinite(safeExpiresAt) ||
+        safeExpiresAt <= Date.now() + 30_000
+      ) {
+        return false;
+      }
+      accessToken = safeToken;
+      accessTokenExpiresAt = safeExpiresAt;
+      accessTokenSource = "container-client";
+      lastError = "";
+      return true;
     },
   };
 }

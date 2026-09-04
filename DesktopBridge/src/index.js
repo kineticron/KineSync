@@ -15,6 +15,9 @@ const { createPlaybackController } = require("./playbackController");
 const { createSpotifyDetector } = require("./spotifyDetector");
 const { createSpotifyAuth } = require("./spotifyAuth");
 const {
+  createContainerSpotifyTokenWatcher,
+} = require("./containerSpotifyTokenWatcher");
+const {
   buildDefaultTtmlFilename,
   lyricsToTtml,
 } = require("./lyricsTtmlExport");
@@ -194,6 +197,37 @@ app.whenReady().then(() => {
   let lyricsRequestVersion = 0;
   let activeLyricsRequest = null;
   let latestLyricsPacket = null;
+  const containerSpotifyTrackMarker =
+    process.env.KINESYNC_CONTAINER === "true"
+      ? path.join(
+          process.env.HOME || "/config",
+          ".kinesync-spotify-track-active",
+        )
+      : "";
+  let containerSpotifyTrackActive = null;
+
+  const setContainerSpotifyTrackActive = (active) => {
+    if (!containerSpotifyTrackMarker || containerSpotifyTrackActive === active) {
+      return;
+    }
+    try {
+      if (active) {
+        fs.writeFileSync(containerSpotifyTrackMarker, "active\n", {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      } else {
+        fs.rmSync(containerSpotifyTrackMarker, { force: true });
+      }
+      containerSpotifyTrackActive = active;
+    } catch (error) {
+      console.warn(
+        `[docker] unable to update Spotify track marker: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
 
   const getMusixmatchTokenStatus = () => {
     const status = musixmatchTokenManager.getStatus();
@@ -260,7 +294,10 @@ app.whenReady().then(() => {
   };
 
   const getSpotifyAuthStatus = () => {
-    return spotifyAuth.getStatus();
+    return {
+      ...spotifyAuth.getStatus(),
+      spotifyContainerAuthEnabled: process.env.KINESYNC_CONTAINER === "true",
+    };
   };
 
   const getNgrokStatus = () =>
@@ -302,6 +339,25 @@ app.whenReady().then(() => {
       mainWindow.webContents.send("bridge:status", payload);
     }
   };
+
+  let containerSpotifyTokenSeen = false;
+  const containerSpotifyTokenWatcher =
+    process.env.KINESYNC_CONTAINER === "true"
+      ? createContainerSpotifyTokenWatcher({
+          onToken: (token, expiresAt) => {
+            if (spotifyAuth.adoptAccessToken(token, expiresAt)) {
+              if (!containerSpotifyTokenSeen) {
+                containerSpotifyTokenSeen = true;
+                console.log(
+                  "[spotify-auth] using the signed-in container Spotify session",
+                );
+              }
+              pushStatus();
+            }
+          },
+        })
+      : null;
+  containerSpotifyTokenWatcher?.start();
 
   const broadcastPlayback = (packet, options = {}) => {
     for (const transport of bridgeTransports) {
@@ -495,6 +551,27 @@ app.whenReady().then(() => {
   ipcMain.handle("spotify:status", () => {
       return getSpotifyAuthStatus();
     });
+
+  ipcMain.handle("spotify:desktop:show", () => {
+    if (process.env.KINESYNC_CONTAINER !== "true") {
+      return {
+        ok: false,
+        error: "The container Spotify window is only available in Docker mode.",
+      };
+    }
+    try {
+      fs.writeFileSync(path.join(process.env.HOME || "/config", ".kinesync-show-spotify"), "show\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
 
     // Ngrok Relay Control
     // eslint-disable-next-line global-require
@@ -1134,6 +1211,9 @@ app.whenReady().then(() => {
   detector.on("snapshot", (packet) => {
     const previousSnapshot = latestSnapshot;
     latestSnapshot = packet;
+    // Keep this aligned with the status text below: when the bridge says
+    // "No track", Docker must leave Spotify available for sign-in/recovery.
+    setContainerSpotifyTrackActive(Boolean(packet?.title));
     broadcastPlayback(packet);
     const timing =
       packet.timing && typeof packet.timing === "object"
@@ -1440,6 +1520,7 @@ app.whenReady().then(() => {
       ipcMain.removeHandler("spotify:login");
       ipcMain.removeHandler("spotify:logout");
       ipcMain.removeHandler("spotify:status");
+      ipcMain.removeHandler("spotify:desktop:show");
       ipcMain.removeHandler("bridge:lyrics:export-ttml");
       ipcMain.removeHandler("bridge:lyrics:vault:save");
       ipcMain.removeHandler("bridge:lyrics:vault:import-ttml");
@@ -1452,6 +1533,7 @@ app.whenReady().then(() => {
       ipcMain.removeHandler("ngrok:relay:stop");
       clearInterval(statusTimer);
       detector.stop();
+      containerSpotifyTokenWatcher?.stop();
       relayBridge.stop();
       bridge.stop();
     });

@@ -1,6 +1,7 @@
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
+import { useKeepAwake } from "expo-keep-awake";
 import { useFocusEffect, useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -86,6 +87,7 @@ import {
   requestImmediateTranslationForCurrentSource,
 } from "@/lib/lyrics-sync";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
+import type { PlaybackMode } from "@/lib/playback-source";
 import {
   animateIconButtonPressIn,
   animateIconButtonPressOut,
@@ -95,6 +97,7 @@ import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
 
 type TutorialIconName = ComponentProps<typeof Ionicons>["name"];
+const LYRICS_PLAYBACK_WAKE_LOCK_TAG = "kinesync-lyrics-playback";
 const CONTROLS_IDLE_TIMEOUT_MS = 2500;
 const PLAYER_MODE_TRANSITION_MS = 420;
 const PLAYER_MODE_EASE = ReanimatedEasing.out(ReanimatedEasing.cubic);
@@ -144,6 +147,11 @@ const BUTTON_TUTORIAL_ITEMS: {
 
 function getLineKey(line: LyricLine) {
   return `${line.lineStartTime}-${line.lineEndTime}`;
+}
+
+function LyricsPlaybackWakeLock() {
+  useKeepAwake(LYRICS_PLAYBACK_WAKE_LOCK_TAG);
+  return null;
 }
 
 function isCensorshipBoundary(leftText: string, rightText: string) {
@@ -347,6 +355,7 @@ type PlaybackControlsDockProps = {
   autoHidePlaybackControls?: boolean;
   onToggleAutoHidePlaybackControls?: () => void;
   connectionStatus?: "connected" | "disconnected" | "connecting";
+  playbackMode?: PlaybackMode;
   latencyMs?: number;
   statusActionText?: string;
   statusSourceText?: string;
@@ -381,6 +390,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   autoHidePlaybackControls,
   onToggleAutoHidePlaybackControls,
   connectionStatus = "disconnected",
+  playbackMode = "desktop",
   latencyMs = 0,
   statusActionText = "",
   statusSourceText = "",
@@ -417,6 +427,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       hideStatusBar={hideStatusBar}
       onToggleHideStatusBar={onToggleHideStatusBar}
       connectionStatus={connectionStatus}
+      playbackMode={playbackMode}
       latencyMs={latencyMs}
       statusActionText={statusActionText}
       statusSourceText={statusSourceText}
@@ -715,14 +726,21 @@ export default function HomeScreen() {
     if (lyricsSource) {
       return lyricsSource;
     }
+    if (playbackMode === "mobile") {
+      return "On-device playback";
+    }
     return bridgeConnected ? "Waiting for source" : "Bridge offline";
-  }, [bridgeConnected, derivedStatusSource, lyricsSource]);
+  }, [bridgeConnected, derivedStatusSource, lyricsSource, playbackMode]);
   const footerActionText = useMemo(() => {
     const baseAction =
       lyricsStatusMessage ||
-      (bridgeConnected ? "Waiting for lyrics" : "Connecting to bridge...");
+      (playbackMode === "mobile"
+        ? "Mobile-Only"
+        : bridgeConnected
+          ? "Waiting for lyrics"
+          : "Connecting to bridge...");
     return trimTrailingSourceFromAction(baseAction, footerSourceText);
-  }, [bridgeConnected, footerSourceText, lyricsStatusMessage]);
+  }, [bridgeConnected, footerSourceText, lyricsStatusMessage, playbackMode]);
   const translationLoading = Boolean(lyricsMetadata.translation?.isLoading);
   const lyricsTimingMode = useMemo(
     () => detectLyricsTimingMode(lyrics, lyricsSource),
@@ -1467,6 +1485,9 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
+      {isScreenFocused && isPlaying && lyrics.length > 0 ? (
+        <LyricsPlaybackWakeLock />
+      ) : null}
       {hasResolvedArtwork ? (
         // ponytail: single blurred image; sharp layer was fully occluded by tint anyway
         <BridgedArtworkImage
@@ -1920,6 +1941,7 @@ export default function HomeScreen() {
             }
             onToggleHideStatusBar={setHidePlaybackStatusBar}
             connectionStatus={connectionStatus}
+            playbackMode={playbackMode}
             latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
             statusActionText={footerActionText}
             statusSourceText={footerSourceText}
@@ -1977,6 +1999,7 @@ export default function HomeScreen() {
         lyricsRendererMode={lyricsRendererMode}
         onChangeLyricsRendererMode={setLyricsRendererMode}
         connectionStatus={connectionStatus}
+        playbackMode={playbackMode}
         latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
         errorMessage={errorMessage}
       />

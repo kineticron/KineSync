@@ -3,7 +3,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-const supervisorPath = path.join(
+const sessionPath = path.join(
+  __dirname,
+  "..",
+  "docker",
+  "root",
+  "usr",
+  "local",
+  "bin",
+  "start-kinesync-session",
+);
+const launcherPath = path.join(
   __dirname,
   "..",
   "docker",
@@ -13,33 +23,79 @@ const supervisorPath = path.join(
   "bin",
   "start-kinesync",
 );
+const repositoryRoot = path.join(__dirname, "..", "..");
 
-test("Spotify window probe reads all xwininfo output under pipefail", () => {
-  const supervisor = fs.readFileSync(supervisorPath, "utf8");
-  const functionBody = supervisor.match(
-    /spotify_window_exists\(\) \{([\s\S]*?)\n  \}/,
-  )?.[1];
-  const commands = functionBody
-    ?.split("\n")
-    .filter((line) => !line.trimStart().startsWith("#"))
-    .join("\n");
+test("Docker uses seamless Xpra windows instead of a VNC desktop", () => {
+  const launcher = fs.readFileSync(launcherPath, "utf8");
 
-  assert.ok(functionBody, "spotify_window_exists function is present");
-  assert.match(commands, /xwininfo -root -tree/);
-  assert.doesNotMatch(commands, /grep\s+-q/);
-  assert.match(commands, /grep\s+'"Spotify"'\s+>\/dev\/null/);
+  assert.match(launcher, /xpra start :100/);
+  assert.match(launcher, /--bind-tcp=0\.0\.0\.0:14500/);
+  assert.match(launcher, /--compressors=brotli/);
+  assert.match(launcher, /--start-child=\/usr\/local\/bin\/start-kinesync-session/);
+  assert.doesNotMatch(launcher, /kasm|vnc/i);
 });
 
-test("Spotify is minimized only after a persisted login is detected", () => {
-  const supervisor = fs.readFileSync(supervisorPath, "utf8");
+test("Spotify visibility follows detected tracks and manual show is temporary", () => {
+  const session = fs.readFileSync(sessionPath, "utf8");
 
-  assert.match(supervisor, /spotify_is_logged_in\(\)/);
-  assert.match(supervisor, /spotify\/Users/);
-  assert.match(supervisor, /-name '\*-user'/);
-  assert.match(
-    supervisor,
-    /spotify_minimized" -eq 0 \] && spotify_is_logged_in/,
+  assert.match(session, /\.kinesync-spotify-track-active/);
+  assert.match(session, /spotify_force_visible_until/);
+  assert.match(session, /date \+%s.*30/);
+  assert.match(session, /! -f "\$spotify_track_active"/);
+  assert.match(session, /spotify_hidden" -eq 0 \]; then hide_spotify/);
+  assert.match(session, /xdotool search --onlyvisible --class spotify/);
+  assert.match(session, /xdotool windowunmap/);
+  assert.match(session, /show_spotify_for_login\(\)/);
+  assert.match(session, /xdotool windowmap/);
+  assert.match(session, /\.kinesync-show-spotify/);
+  assert.match(session, /--remote-debugging-address=127\.0\.0\.1/);
+  assert.match(session, /--remote-debugging-port=43880/);
+  assert.match(session, /spotify_hidden=0/);
+  assert.doesNotMatch(session, /spotify_is_logged_in|spotify\/Users/);
+  assert.match(session, /trap stop_children EXIT INT TERM\s+\n?start_bridge\s+start_spotify/);
+});
+
+test("Desktop Bridge and Spotify start in the same supervised session", () => {
+  const session = fs.readFileSync(sessionPath, "utf8");
+
+  assert.match(session, /start_bridge\(\)/);
+  assert.match(session, /start_spotify\(\)/);
+  assert.match(session, /dbus-launch --sh-syntax/);
+  assert.match(session, /while true; do/);
+  assert.match(session, /kill -0 "\$bridge_pid"/);
+  assert.match(session, /kill -0 "\$spotify_pid"/);
+  assert.doesNotMatch(session, /45|no managed window|stop_spotify/);
+});
+
+test("the Windows one-line setup is checkout-independent and PowerShell 5 compatible", () => {
+  const setup = fs.readFileSync(
+    path.join(repositoryRoot, "scripts", "setup-docker.ps1"),
+    "utf8",
   );
-  assert.match(supervisor, /wmctrl[\s\S]*-b add,hidden/);
-  assert.match(supervisor, /trap stop_children EXIT INT TERM\s+start_bridge\s+start_spotify/);
+
+  assert.match(setup, /RandomNumberGenerator\]::Create\(\)/);
+  assert.match(setup, /generator\.GetBytes\(\$bytes\)/);
+  assert.doesNotMatch(setup, /RandomNumberGenerator\]::GetBytes\(/);
+  assert.match(setup, /LOCALAPPDATA 'KineSync\\Docker'/);
+  assert.match(setup, /Xpra-Light-x86_64/);
+  assert.match(setup, /--noproxy '\*' --ssl-no-revoke/);
+  assert.match(setup, /xpraArchiveSha256/);
+  assert.match(setup, /Wait-KineSyncWindowService/);
+  assert.match(setup, /xpra id --compressors=brotli/);
+  assert.match(setup, /\[switch\]\$BuildLocal/);
+  assert.match(setup, /compose\.dev\.yaml/);
+  assert.match(setup, /docker container ls --format/);
+  assert.doesNotMatch(setup, /docker inspect --format '\{\{\.State\.Running\}\}' \$containerName/);
+  assert.doesNotMatch(setup, /KINESYNC_WEB_|localhost:3000|kasm/i);
+});
+
+test("Compose exposes only seamless windows and the pairing bridge", () => {
+  const compose = fs.readFileSync(
+    path.join(repositoryRoot, "compose.yaml"),
+    "utf8",
+  );
+
+  assert.match(compose, /KINESYNC_UI_PORT:-14500/);
+  assert.match(compose, /KINESYNC_BRIDGE_BIND_ADDRESS:-0\.0\.0\.0}:3001:3001/);
+  assert.doesNotMatch(compose, /KINESYNC_WEB_|CUSTOM_USER|PASSWORD|3000|3443|vnc|kasm/i);
 });

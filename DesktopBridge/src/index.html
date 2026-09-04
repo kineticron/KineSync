@@ -333,9 +333,15 @@
                 <button id="spotify-logout" class="button secondary" type="button">
                   Sign out
                 </button>
+                <button id="spotify-desktop-show" class="button secondary" type="button">
+                  Show container Spotify
+                </button>
               </div>
               <p class="hint" id="spotify-auth-help">
                 Sign in to enable Spotify playback detection, controls, and Spicy Lyrics.
+              </p>
+              <p class="hint" id="spotify-desktop-status">
+                If the saved desktop session expired, reopen Spotify here to sign in again.
               </p>
             </div>
           </section>
@@ -1445,13 +1451,18 @@
 
       const spotifyLoginButton = document.getElementById("spotify-login");
       const spotifyLogoutButton = document.getElementById("spotify-logout");
+      const spotifyDesktopShowButton = document.getElementById("spotify-desktop-show");
 
       const renderSpotifyAuthStatus = (payload = {}) => {
         const authenticated = Boolean(payload.spotifyAuthenticated);
         const tokenValid = Boolean(payload.spotifyAccessTokenValid);
+        const containerAuth = Boolean(payload.spotifyContainerAuthEnabled);
+        const tokenSource = String(payload.spotifyAccessTokenSource || "");
         const authError = String(payload.spotifyAuthError || "").trim();
         let label = "Spotify: not signed in";
-        if (authenticated && tokenValid) {
+        if (tokenValid && tokenSource === "container-client") {
+          label = "Spotify: connected through the container app";
+        } else if (authenticated && tokenValid) {
           label = "Spotify: signed in (token active)";
         } else if (authenticated && authError) {
           label = `Spotify: signed in (error: ${authError})`;
@@ -1459,6 +1470,16 @@
           label = "Spotify: signed in (token refreshing...)";
         }
         setText("spotify-auth-status", label);
+        if (spotifyLoginButton) spotifyLoginButton.hidden = containerAuth;
+        if (spotifyLogoutButton) spotifyLogoutButton.hidden = containerAuth;
+        if (containerAuth) {
+          setText(
+            "spotify-auth-help",
+            tokenValid
+              ? "Your container Spotify login also supplies playback controls and Spicy Lyrics. No second sign-in is needed."
+              : "Sign in through the container Spotify window; its session will connect here automatically.",
+          );
+        }
       };
 
       if (spotifyLoginButton) {
@@ -1486,6 +1507,25 @@
         spotifyLogoutButton.addEventListener("click", () => {
           void window.spotifyAuth.logout().then(() => {
             setText("spotify-auth-status", "Spotify: signed out");
+          });
+        });
+      }
+
+      if (spotifyDesktopShowButton) {
+        spotifyDesktopShowButton.addEventListener("click", () => {
+          setText("spotify-desktop-status", "Opening the container Spotify window...");
+          void window.spotifyAuth.showDesktopApp().then((result) => {
+            setText(
+              "spotify-desktop-status",
+              result?.ok
+                ? "Container Spotify opened."
+                : `Unable to open container Spotify: ${result?.error || "Unknown error"}`,
+            );
+          }).catch((error) => {
+            setText(
+              "spotify-desktop-status",
+              `Unable to open container Spotify: ${error instanceof Error ? error.message : String(error)}`,
+            );
           });
         });
       }

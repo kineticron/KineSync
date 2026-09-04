@@ -15,6 +15,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
+import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { saveCurrentTrackToVault } from "@/lib/lyrics-sync";
 import { usePlaybackStore, type LyricsRendererMode } from "@/store/playback-store";
@@ -55,6 +56,7 @@ type SettingsMenuProps = {
   lyricsRendererMode: LyricsRendererMode;
   onChangeLyricsRendererMode: (mode: LyricsRendererMode) => void;
   connectionStatus: ConnectionStatus;
+  playbackMode: PlaybackMode;
   latencyMs: number;
   errorMessage: string;
 };
@@ -102,7 +104,17 @@ function inferActiveSource(lyricsSource: string): LyricsSourcePreference {
   return "auto";
 }
 
-function getConnectionDescriptor(status: ConnectionStatus, latencyMs: number) {
+function getConnectionDescriptor(
+  playbackMode: PlaybackMode,
+  status: ConnectionStatus,
+  latencyMs: number,
+) {
+  if (playbackMode === "mobile") {
+    return { label: "Mobile-Only", color: "#8FF0C4" };
+  }
+  if (status === "connecting") {
+    return { label: "Connecting", color: "#FFD287" };
+  }
   if (status !== "connected") {
     return { label: "Offline", color: "#FF93A4" };
   }
@@ -231,6 +243,7 @@ function SourceChip({
 }
 
 function StatusPanel({
+  playbackMode,
   connectionStatus,
   latencyMs,
   timingLabel,
@@ -241,6 +254,7 @@ function StatusPanel({
   bridgeForwardBiasMs,
   bridgeNativeExtrapolation,
 }: {
+  playbackMode: PlaybackMode;
   connectionStatus: ConnectionStatus;
   latencyMs: number;
   timingLabel: string;
@@ -251,8 +265,13 @@ function StatusPanel({
   bridgeForwardBiasMs: number;
   bridgeNativeExtrapolation: boolean;
 }) {
-  const connection = getConnectionDescriptor(connectionStatus, latencyMs);
+  const connection = getConnectionDescriptor(
+    playbackMode,
+    connectionStatus,
+    latencyMs,
+  );
   const ping = Math.max(0, Math.round(latencyMs));
+  const mobileOnly = playbackMode === "mobile";
 
   return (
     <View style={styles.statusPanel}>
@@ -262,8 +281,14 @@ function StatusPanel({
           <Text style={styles.statusConnectionText}>{connection.label}</Text>
         </View>
         <View style={styles.statusPing}>
-          <Ionicons name="pulse" size={12} color="rgba(248,248,254,0.48)" />
-          <Text style={styles.statusPingText}>{ping} ms</Text>
+          <Ionicons
+            name={mobileOnly ? "phone-portrait-outline" : "pulse"}
+            size={12}
+            color="rgba(248,248,254,0.48)"
+          />
+          <Text style={styles.statusPingText}>
+            {mobileOnly ? "On device" : `${ping} ms`}
+          </Text>
         </View>
       </View>
 
@@ -275,7 +300,7 @@ function StatusPanel({
         <Text style={styles.statusMetaText}>{timingLabel}</Text>
       </View>
 
-      {connectionStatus === "connected" && (
+      {!mobileOnly && connectionStatus === "connected" && (
         <Text style={styles.statusBridgeTiming} numberOfLines={2}>
           Bridge pipeline {Math.max(0, bridgePipelineMs)} ms · forward bias{" "}
           {Math.max(0, bridgeForwardBiasMs)} ms · native extrap{" "}
@@ -289,7 +314,7 @@ function StatusPanel({
         </Text>
       )}
 
-      {!!errorMessage && (
+      {!mobileOnly && !!errorMessage && (
         <Text style={styles.statusError} numberOfLines={2}>
           {errorMessage}
         </Text>
@@ -319,6 +344,7 @@ export const SettingsMenu = memo(function SettingsMenu({
   lyricsRendererMode,
   onChangeLyricsRendererMode,
   connectionStatus,
+  playbackMode,
   latencyMs,
   errorMessage,
 }: SettingsMenuProps) {
@@ -596,6 +622,7 @@ export const SettingsMenu = memo(function SettingsMenu({
 
             <MenuSection title="Status">
               <StatusPanel
+                playbackMode={playbackMode}
                 connectionStatus={connectionStatus}
                 latencyMs={latencyMs}
                 timingLabel={lyricsTimingLabel}

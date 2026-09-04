@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "$(id -u)" -eq 0 ]; then
+  runtime_uid="${PUID:-568}"
+  runtime_gid="${PGID:-568}"
+  groupmod --non-unique --gid "$runtime_gid" abc
+  usermod --non-unique --uid "$runtime_uid" --gid "$runtime_gid" abc
+  mkdir -p /config "/run/user/$runtime_uid"
+  chown -R abc:abc /config "/run/user/$runtime_uid"
+  chmod 0700 "/run/user/$runtime_uid"
+  export XDG_RUNTIME_DIR="/run/user/$runtime_uid"
+  exec setpriv --reuid=abc --regid=abc --init-groups "$@"
+fi
+
+exec "$@"

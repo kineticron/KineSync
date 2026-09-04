@@ -1,14 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-export HOME="${FM_HOME:-/config}"
+export HOME="${HOME:-/config}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export MEDIA_SESSION_PROVIDER=mpris
 export ELECTRON_DISABLE_SECURITY_WARNINGS=true
 
 log_dir="$HOME/log"
-spotify_cache="$HOME/.cache/spotify"
-mkdir -p "$log_dir" "$XDG_CONFIG_HOME" "$HOME/.pki/nssdb"
+mkdir -p "$log_dir" "$XDG_CONFIG_HOME" "$HOME/.pki/nssdb" "$HOME/.xpra"
+chmod 700 "$HOME/.xpra"
 
 # Import administrator-provided private CAs without disabling TLS validation.
 if compgen -G "$HOME/certs/*.crt" >/dev/null; then
@@ -35,119 +35,20 @@ fi
 xdg-mime default kinesync-login-browser.desktop x-scheme-handler/http || true
 xdg-mime default kinesync-login-browser.desktop x-scheme-handler/https || true
 
-# Spotify and the bridge must share one session bus for MPRIS playback data.
-exec dbus-run-session -- bash -lc '
-  set -euo pipefail
-  app_root="/opt/kinesync"
-  log_dir="${HOME}/log"
-  spotify_cache="${HOME}/.cache/spotify"
-
-  spotify_pid=""
-  bridge_pid=""
-  spotify_started_at=0
-  spotify_minimized=0
-
-  clear_spotify_locks() {
-    # Spotify can leave these behind after an unclean container shutdown and
-    # then remain alive without creating a window on the next launch.
-    rm -f "$spotify_cache/SingletonCookie" \
-      "$spotify_cache/SingletonLock" \
-      "$spotify_cache/SingletonSocket" \
-      "$spotify_cache/Browser/LOCK"
-  }
-
-  spotify_window_exists() {
-    # Do not use grep -q here. With pipefail enabled, an early match closes the
-    # pipe and xwininfo exits on SIGPIPE (141), making a visible window look
-    # absent and causing the supervisor to restart a healthy Spotify process.
-    xwininfo -root -tree 2>/dev/null | grep '"Spotify"' >/dev/null
-  }
-
-  spotify_is_logged_in() {
-    find "$XDG_CONFIG_HOME/spotify/Users" -mindepth 1 -maxdepth 1 \
-      -type d -name '*-user' -print -quit 2>/dev/null | grep . >/dev/null
-  }
-
-  minimize_spotify() {
-    # Keep Spotify alive for MPRIS, but leave the bridge as the only visible
-    # app after the account has been persisted. It remains available from the
-    # Openbox menu if the user needs to bring it back.
-    if wmctrl -lx 2>/dev/null | grep -i 'spotify' >/dev/null; then
-      if wmctrl -x -r spotify.Spotify -b add,hidden 2>/dev/null || \
-        wmctrl -r Spotify -b add,hidden 2>/dev/null; then
-        spotify_minimized=1
-      fi
-    fi
-  }
-
-  stop_spotify() {
-    pkill -TERM -x spotify 2>/dev/null || true
-    sleep 2
-    pkill -KILL -x spotify 2>/dev/null || true
-    spotify_pid=""
-  }
-
-  existing_spotify_pid() {
-    pgrep -u "$(id -u)" -x spotify | head -n1 || true
-  }
-
-  existing_bridge_pid() {
-    pgrep -u "$(id -u)" -x electron | head -n1 || true
-  }
-
-  start_spotify() {
-    local existing_pid
-    existing_pid="$(existing_spotify_pid)"
-    if [ -n "$existing_pid" ]; then
-      spotify_pid="$existing_pid"
-      spotify_started_at=$(date +%s)
-      return
-    fi
-    clear_spotify_locks
-    echo "[supervisor] starting Spotify" >>"$log_dir/spotify.log"
-    spotify --no-sandbox >>"$log_dir/spotify.log" 2>&1 &
-    spotify_pid=$!
-    spotify_started_at=$(date +%s)
-    spotify_minimized=0
-  }
-
-  start_bridge() {
-    local existing_pid
-    existing_pid="$(existing_bridge_pid)"
-    if [ -n "$existing_pid" ]; then
-      bridge_pid="$existing_pid"
-      return
-    fi
-    echo "[supervisor] starting DesktopBridge" >>"$log_dir/desktop-bridge.log"
-    /usr/local/bin/start-kinesync-bridge >>"$log_dir/desktop-bridge.log" 2>&1 &
-    bridge_pid=$!
-  }
-
-  stop_children() {
-    [ -z "$spotify_pid" ] || kill "$spotify_pid" 2>/dev/null || true
-    [ -z "$bridge_pid" ] || kill "$bridge_pid" 2>/dev/null || true
-  }
-  trap stop_children EXIT INT TERM
-
-  start_bridge
-  start_spotify
-
-  # Keep both applications available for the lifetime of the container.
-  # They share this dbus-run-session so MPRIS remains connected after a restart.
-  while true; do
-    if ! kill -0 "$spotify_pid" 2>/dev/null; then
-      start_spotify
-    elif [ "$(( $(date +%s) - spotify_started_at ))" -ge 45 ] && ! spotify_window_exists; then
-      echo "[supervisor] Spotify has no managed window; restarting it" >>"$log_dir/spotify.log"
-      stop_spotify
-      start_spotify
-    fi
-    if [ "$spotify_minimized" -eq 0 ] && spotify_is_logged_in; then
-      minimize_spotify
-    fi
-    if ! kill -0 "$bridge_pid" 2>/dev/null; then
-      start_bridge
-    fi
-    sleep 1
-  done
-'
+# Xpra forwards each application as an independent host window instead of
+# exposing a remote desktop. The TCP listener is published on loopback only.
+exec xpra start :100 \
+  --daemon=no \
+  --bind-tcp=0.0.0.0:14500 \
+  --tcp-auth=none \
+  --compressors=brotli \
+  --html=no \
+  --mdns=no \
+  --webcam=no \
+  --printing=no \
+  --pulseaudio=no \
+  --notifications=no \
+  --system-tray=no \
+  --start-child=/usr/local/bin/start-kinesync-session \
+  --exit-with-children=yes \
+  >>"$log_dir/xpra.log" 2>&1

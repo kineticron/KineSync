@@ -1,0 +1,44 @@
+# GdkPixbuf Image Loader Modules file
+# Automatically generated file, do not edit
+# Created by gdk-pixbuf-query-loaders from gdk-pixbuf-2.44.7
+#
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/io-wmf.dll"
+"wmf" 0 "gdk-pixbuf" "Windows Metafile" ""
+"image/wmf" "image/x-wmf" ""
+"wmf" "apm" ""
+"\327\315\306\232" "" 100
+"\001" "" 100
+
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-ico.dll"
+"ico" 5 "gdk-pixbuf" "Windows icon" "LGPL"
+"image/x-icon" "image/x-ico" "image/x-win-bitmap" "image/vnd.microsoft.icon" "application/ico" "image/ico" "image/icon" "text/ico" ""
+"ico" "cur" ""
+"  \001   " "zz znz" 100
+"  \002   " "zz znz" 100
+
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-jpeg.dll"
+"jpeg" 5 "gdk-pixbuf" "JPEG" "LGPL"
+"image/jpeg" ""
+"jpeg" "jpe" "jpg" ""
+"\377\330" "" 100
+
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-png.dll"
+"png" 5 "gdk-pixbuf" "PNG" "LGPL"
+"image/png" ""
+"png" ""
+"\211PNG\r\n\032\n" "" 100
+
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-xpm.dll"
+"legacy-xpm" 4 "gdk-pixbuf" "XPM" "LGPL"
+"image/x-xpixmap" ""
+""
+"/* XPM */" "" 100
+
+"lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll"
+"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"
+"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""
+"svg" "svgz" "svg.gz" ""
+" <svg" "*    " 100
+" <!DOCTYPE svg" "*             " 100
+
+

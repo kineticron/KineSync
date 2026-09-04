@@ -205,15 +205,25 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
     useEffect(() =>
       usePlaybackStore.subscribe((state) => {
+        const previousPlaybackMode = playbackModeRef.current;
         const changed =
           connectionStatusRef.current !== state.connectionStatus ||
           playbackModeRef.current !== state.playbackMode;
         connectionStatusRef.current = state.connectionStatus;
         playbackModeRef.current = state.playbackMode;
+        if (
+          previousPlaybackMode === "desktop" &&
+          state.playbackMode === "mobile"
+        ) {
+          // A WebView left dormant while Desktop Bridge owns playback can keep
+          // stale Spotify Connect state. Remount it on the explicit handoff.
+          refreshBrowser(true, true);
+          return;
+        }
         if (changed) {
           syncBrowserMonitoring();
         }
-      }), [syncBrowserMonitoring]);
+      }), [refreshBrowser, syncBrowserMonitoring]);
 
     useEffect(() => {
       reloadBrowserCallback = () => refreshBrowser(true, true);

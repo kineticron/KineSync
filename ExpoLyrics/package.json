@@ -38,6 +38,7 @@
     "expo-haptics": "~57.0.1",
     "expo-image": "~57.0.2",
     "expo-image-manipulator": "~57.0.7",
+    "expo-keep-awake": "~57.0.1",
     "expo-linear-gradient": "~57.0.1",
     "expo-linking": "~57.0.5",
     "expo-router": "~57.0.10",

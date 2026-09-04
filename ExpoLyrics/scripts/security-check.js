@@ -82,6 +82,12 @@ assert(
   'Spotify WebView events must belong to the active generation',
 );
 assert(
+  fallback.includes('previousPlaybackMode === "desktop"') &&
+    fallback.includes('state.playbackMode === "mobile"') &&
+    fallback.includes('refreshBrowser(true, true)'),
+  'switching from Desktop Bridge to Mobile Only must remount the Spotify WebView',
+);
+assert(
   bridgeSettings.includes('bridgeSettingsWriteQueue.then'),
   'bridge settings writes must be serialized',
 );

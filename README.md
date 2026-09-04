@@ -154,11 +154,13 @@ For connecting outside your home network, see the [ngrok relay setup in SETUP.md
 ## Instant Docker setup
 
 The self-contained `amd64` image runs Spotify for Linux, DesktopBridge, and
-automatically configured Spicetify Marketplace with Adblockify in a shared
-browser-accessible app view. It needs no web credentials on the default
-localhost-only binding, and Spotify automatically minimizes after its first
-login. On Linux, playback detection and controls use MPRIS
-over their shared D-Bus session; Windows builds continue using GSMTC.
+automatically configured Spicetify Marketplace with Adblockify. It uses Xpra
+seamless forwarding—not VNC—to present the apps as individual native host
+windows on Windows, macOS, and Linux. Desktop Bridge remains visible; Spotify
+appears for the first login and is hidden after the account is persisted. The
+one-command installer needs no source checkout or VNC credentials. Container
+playback detection uses MPRIS over a shared D-Bus session; Windows native builds
+continue using GSMTC.
 
 See [DOCKER.md](DOCKER.md) for the start-to-finish setup, first-time Spotify
 login, ExpoLyrics pairing, optional ngrok access, diagnostics, and verification.

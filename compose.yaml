@@ -10,8 +10,9 @@ services:
     container_name: ${KINESYNC_CONTAINER_NAME:-kinesync}
     restart: unless-stopped
     shm_size: "1gb"
-    # The app view is passwordless because it is loopback-only by default. If
-    # it is intentionally exposed to the LAN, set KINESYNC_WEB_PASSWORD.
+    # Xpra forwards the Linux apps as independent host windows. Keep its
+    # unauthenticated transport bound to loopback; the bridge remains reachable
+    # from the LAN so phones can pair with the host.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -20,14 +21,10 @@ services:
       PUID: ${PUID:-568}
       PGID: ${PGID:-568}
       TZ: ${TZ:-America/New_York}
-      CUSTOM_USER: ${KINESYNC_WEB_USER:-kinesync}
-      PASSWORD: ${KINESYNC_WEB_PASSWORD:-}
       BRIDGE_KEY: ${BRIDGE_KEY:-}
       MEDIA_SESSION_PROVIDER: mpris
-      START_DOCKER: "false"
     ports:
-      - "${KINESYNC_WEB_BIND_ADDRESS:-127.0.0.1}:${KINESYNC_WEB_PORT:-3000}:3000"
+      - "${KINESYNC_UI_BIND_ADDRESS:-127.0.0.1}:${KINESYNC_UI_PORT:-14500}:14500"
       - "${KINESYNC_BRIDGE_BIND_ADDRESS:-0.0.0.0}:3001:3001"
-      - "${KINESYNC_WEB_BIND_ADDRESS:-127.0.0.1}:${KINESYNC_WEB_HTTPS_PORT:-3443}:3443"
     volumes:
       - ${KINESYNC_CONFIG_PATH:-./.kinesync-config}:/config

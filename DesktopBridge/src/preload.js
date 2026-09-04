@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('spotifyAuth', {
   getStatus() {
     return ipcRenderer.invoke('spotify:status');
   },
+  showDesktopApp() {
+    return ipcRenderer.invoke('spotify:desktop:show');
+  },
 });
 
 contextBridge.exposeInMainWorld('bridgeLyrics', {
