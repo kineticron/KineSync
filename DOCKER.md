@@ -2,7 +2,7 @@
 
 This is the fastest way to get KineSync running. One published self-contained image
 includes Spotify for Linux, DesktopBridge, Spicetify Marketplace, Adblockify,
-an embedded ngrok client, and a browser-accessible desktop. Spotify and
+an embedded ngrok client, and a browser-accessible app view. Spotify and
 DesktopBridge share one D-Bus session, so playback detection and controls work
 through Linux MPRIS without Spotify Premium.
 
@@ -50,17 +50,17 @@ and review it with the image release notes; never invent a digest.
 
 | Port/path | Purpose |
 | --- | --- |
-| `3000` | Browser desktop over HTTP; local host binding by default |
-| `3443` | Browser desktop over HTTPS; local host binding by default |
+| `3000` | KineSync app view over HTTP; local host binding by default |
+| `3443` | KineSync app view over HTTPS; local host binding by default |
 | `3001` | ExpoLyrics WebSocket bridge; LAN binding by default; not a webpage |
 | `/config` | Spotify login, DesktopBridge settings, certificates, and logs |
 
-The Compose file binds the browser desktop to `127.0.0.1` by default while
+The Compose file binds the app view to `127.0.0.1` by default while
 leaving only the WebSocket bridge (`3001`) reachable from the LAN. To open the
-desktop from another trusted machine, set `KINESYNC_WEB_BIND_ADDRESS` (for
-example, to the Docker host's LAN address) in `.env`; do not expose it directly
-to the public internet. The web password is not a public deployment security
-boundary.
+view from another trusted machine, set `KINESYNC_WEB_BIND_ADDRESS` (for
+example, to the Docker host's LAN address) and set `KINESYNC_WEB_PASSWORD` in
+`.env`; do not expose it directly to the public internet. This password is not
+a public deployment security boundary.
 
 ## Quick start
 
@@ -71,8 +71,10 @@ command in the folder where KineSync should keep its configuration:
 irm https://github.com/Kineticron/KineSync/releases/download/desktop-latest/setup-docker.ps1 | iex
 ```
 
-The helper refreshes the Compose definition, generates private bridge and
-desktop credentials once, pulls the prebuilt image, and starts the service.
+The helper refreshes the Compose definition, generates a private bridge key,
+pulls the prebuilt image, and starts the service. The localhost-only app view
+opens in the default browser without a username or password. On a headless
+Docker host, open `http://localhost:3000` yourself.
 Run it again after an update; it preserves `.env` and the `/config` volume.
 The shell equivalent is:
 
@@ -89,7 +91,7 @@ optionally verify it with the adjacent `.sha256` file, extract it, and run
 
 Run these commands from the repository root only when developing the image:
 
-### 1. Create your secure configuration
+### 1. Create your local configuration
 
 PowerShell:
 
@@ -103,10 +105,10 @@ Linux/macOS shell:
 sh ./scripts/setup-docker.sh
 ```
 
-The setup helper creates `.env` once with separate cryptographically random
-bridge and web passwords; it never overwrites an existing file. Most users can
+The setup helper creates `.env` once with a cryptographically random bridge
+key; it never overwrites an existing file. Most users can
 start the container immediately. Open `.env` only if you want to change the
-timezone, bind addresses, username, or config path:
+timezone, bind addresses, or config path:
 
 ```dotenv
 KINESYNC_IMAGE=ghcr.io/kineticron/kinesync-desktop-bridge:latest
@@ -114,7 +116,7 @@ KINESYNC_PULL_POLICY=always
 KINESYNC_CONTAINER_NAME=kinesync
 BRIDGE_KEY=<generated automatically>
 KINESYNC_WEB_USER=kinesync
-KINESYNC_WEB_PASSWORD=<generated automatically>
+KINESYNC_WEB_PASSWORD=
 KINESYNC_CONFIG_PATH=./.kinesync-config
 KINESYNC_WEB_BIND_ADDRESS=127.0.0.1
 # Keep 0.0.0.0 for simple phone-to-host LAN bridging, or use a host LAN IP.
@@ -128,7 +130,10 @@ TZ=America/New_York
 
 - `BRIDGE_KEY` must exactly match the handshake key entered in ExpoLyrics; the
   desktop pairing QR fills it in automatically.
-- `KINESYNC_WEB_PASSWORD` opens the browser desktop.
+- No web credentials are needed with the default localhost-only binding.
+- If you expose the app view to another trusted machine, set a strong
+  `KINESYNC_WEB_PASSWORD`. Existing installations can clear the old generated
+  value to enable the new passwordless localhost experience.
 - Keep `.env` private. It is ignored by Git.
 - Change `TZ` to your IANA timezone if necessary.
 - On a Linux host, set `PUID` and `PGID` to the output of `id -u` and `id -g`
@@ -144,28 +149,30 @@ docker compose ps
 ```
 
 Wait until `kinesync` reports `healthy`. The first pull can take several minutes
-because the image contains Spotify and the browser desktop. `KINESYNC_PULL_POLICY`
+because the image contains Spotify and the app view. `KINESYNC_PULL_POLICY`
 defaults to `always`, so restarting with the `latest` tag also checks for image
 updates. Pin `KINESYNC_IMAGE` to a version tag for reproducible deployments.
 
-### 3. Open the container desktop
+### 3. Open KineSync
 
 Open `http://localhost:<KINESYNC_WEB_PORT>` on the Docker host (port `3000`
 by default). If you configured
 `KINESYNC_WEB_BIND_ADDRESS` for LAN access, use the corresponding host address
-instead. Sign in with `KINESYNC_WEB_USER` and `KINESYNC_WEB_PASSWORD` from
-`.env`.
+instead and sign in with the credentials configured in `.env`. On the default
+localhost binding, KineSync opens directly with no sign-in prompt.
 
 Opening `http://localhost:3001` displays **Upgrade Required**. That is expected:
 port `3001` accepts WebSocket upgrades and does not host a webpage.
 
 ### 4. Sign into Spotify
 
-1. Select the Spotify window in the browser desktop.
-2. Use its QR code, or click **Log in**. Login links open in the bundled
-   KineSync Login Browser inside the same desktop.
+1. On the first run, Spotify opens in front of KineSync. Use its QR code, or
+   click **Log in**.
+2. Login links open in the bundled KineSync Login Browser inside the app view.
 3. Use the same account as your phone, laptop, and other Spotify devices.
-4. Leave the containerized Spotify client running.
+4. After login, Spotify is minimized automatically while it continues running
+   for playback detection. KineSync remains visible. Spotify can be reopened
+   from the right-click application menu if needed.
 
 The `/config` volume persists this login across restarts and image updates.
 Spicetify, Marketplace, and Adblockify are already installed and applied in the

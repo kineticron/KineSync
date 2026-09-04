@@ -57,7 +57,7 @@ ADD --checksum=sha256:802c83f4f822eb254f60ef34ea8c53ea9d97889b9e886ac532e42953b9
 
 RUN test "${TARGETARCH:-amd64}" = "amd64" && \
     apt-get update && \
-    apt-get install -y --no-install-recommends dbus-x11 libnss3-tools playerctl unzip /tmp/spotify-client.deb && \
+    apt-get install -y --no-install-recommends dbus-x11 libnss3-tools playerctl unzip wmctrl /tmp/spotify-client.deb && \
     mkdir -p /opt/spicetify \
       /opt/kinesync-spicetify-home/.config/spicetify/Extensions \
       /opt/kinesync-spicetify-home/.config/spicetify/CustomApps \

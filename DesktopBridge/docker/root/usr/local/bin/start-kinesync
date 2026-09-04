@@ -45,6 +45,7 @@ exec dbus-run-session -- bash -lc '
   spotify_pid=""
   bridge_pid=""
   spotify_started_at=0
+  spotify_minimized=0
 
   clear_spotify_locks() {
     # Spotify can leave these behind after an unclean container shutdown and
@@ -55,11 +56,28 @@ exec dbus-run-session -- bash -lc '
       "$spotify_cache/Browser/LOCK"
   }
 
-  spotify_window_visible() {
+  spotify_window_exists() {
     # Do not use grep -q here. With pipefail enabled, an early match closes the
     # pipe and xwininfo exits on SIGPIPE (141), making a visible window look
     # absent and causing the supervisor to restart a healthy Spotify process.
     xwininfo -root -tree 2>/dev/null | grep '"Spotify"' >/dev/null
+  }
+
+  spotify_is_logged_in() {
+    find "$XDG_CONFIG_HOME/spotify/Users" -mindepth 1 -maxdepth 1 \
+      -type d -name '*-user' -print -quit 2>/dev/null | grep . >/dev/null
+  }
+
+  minimize_spotify() {
+    # Keep Spotify alive for MPRIS, but leave the bridge as the only visible
+    # app after the account has been persisted. It remains available from the
+    # Openbox menu if the user needs to bring it back.
+    if wmctrl -lx 2>/dev/null | grep -i 'spotify' >/dev/null; then
+      if wmctrl -x -r spotify.Spotify -b add,hidden 2>/dev/null || \
+        wmctrl -r Spotify -b add,hidden 2>/dev/null; then
+        spotify_minimized=1
+      fi
+    fi
   }
 
   stop_spotify() {
@@ -90,6 +108,7 @@ exec dbus-run-session -- bash -lc '
     spotify --no-sandbox >>"$log_dir/spotify.log" 2>&1 &
     spotify_pid=$!
     spotify_started_at=$(date +%s)
+    spotify_minimized=0
   }
 
   start_bridge() {
@@ -110,22 +129,25 @@ exec dbus-run-session -- bash -lc '
   }
   trap stop_children EXIT INT TERM
 
-  start_spotify
   start_bridge
+  start_spotify
 
   # Keep both applications available for the lifetime of the container.
   # They share this dbus-run-session so MPRIS remains connected after a restart.
   while true; do
     if ! kill -0 "$spotify_pid" 2>/dev/null; then
       start_spotify
-    elif [ "$(( $(date +%s) - spotify_started_at ))" -ge 45 ] && ! spotify_window_visible; then
-      echo "[supervisor] Spotify has no visible window; restarting it" >>"$log_dir/spotify.log"
+    elif [ "$(( $(date +%s) - spotify_started_at ))" -ge 45 ] && ! spotify_window_exists; then
+      echo "[supervisor] Spotify has no managed window; restarting it" >>"$log_dir/spotify.log"
       stop_spotify
       start_spotify
+    fi
+    if [ "$spotify_minimized" -eq 0 ] && spotify_is_logged_in; then
+      minimize_spotify
     fi
     if ! kill -0 "$bridge_pid" 2>/dev/null; then
       start_bridge
     fi
-    sleep 5
+    sleep 1
   done
 '

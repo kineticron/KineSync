@@ -10,9 +10,8 @@ services:
     container_name: ${KINESYNC_CONTAINER_NAME:-kinesync}
     restart: unless-stopped
     shm_size: "1gb"
-    # Keep the browser desktop local by default. The WebSocket bridge remains
-    # reachable on the LAN for the phone, while the UI can be exposed
-    # intentionally with KINESYNC_WEB_BIND_ADDRESS if needed.
+    # The app view is passwordless because it is loopback-only by default. If
+    # it is intentionally exposed to the LAN, set KINESYNC_WEB_PASSWORD.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -22,8 +21,8 @@ services:
       PGID: ${PGID:-568}
       TZ: ${TZ:-America/New_York}
       CUSTOM_USER: ${KINESYNC_WEB_USER:-kinesync}
-      PASSWORD: ${KINESYNC_WEB_PASSWORD:?Set KINESYNC_WEB_PASSWORD in .env}
-      BRIDGE_KEY: ${BRIDGE_KEY:?Set BRIDGE_KEY in .env}
+      PASSWORD: ${KINESYNC_WEB_PASSWORD:-}
+      BRIDGE_KEY: ${BRIDGE_KEY:-}
       MEDIA_SESSION_PROVIDER: mpris
       START_DOCKER: "false"
     ports:

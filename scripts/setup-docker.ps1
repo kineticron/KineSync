@@ -45,17 +45,13 @@ if (Test-Path -LiteralPath $envPath) {
   $bridgeKey = [Convert]::ToHexString(
     [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
   ).ToLowerInvariant()
-  $webPassword = [Convert]::ToHexString(
-    [Security.Cryptography.RandomNumberGenerator]::GetBytes(24)
-  ).ToLowerInvariant()
-
 $contents = @"
 KINESYNC_IMAGE=ghcr.io/kineticron/kinesync-desktop-bridge:latest
 KINESYNC_PULL_POLICY=always
 KINESYNC_CONTAINER_NAME=kinesync
 BRIDGE_KEY=$bridgeKey
 KINESYNC_WEB_USER=kinesync
-KINESYNC_WEB_PASSWORD=$webPassword
+KINESYNC_WEB_PASSWORD=
 KINESYNC_CONFIG_PATH=./.kinesync-config
 KINESYNC_WEB_PORT=3000
 KINESYNC_WEB_HTTPS_PORT=3443
@@ -68,7 +64,7 @@ TZ=America/New_York
 $tempEnvPath = "$envPath.tmp.$PID"
 [IO.File]::WriteAllText($tempEnvPath, $contents, [Text.UTF8Encoding]::new($false))
 Move-Item -LiteralPath $tempEnvPath -Destination $envPath -Force
-Write-Host 'Created .env with unique random bridge and web passwords.'
+Write-Host 'Created local configuration. The localhost-only app view needs no password.'
 }
 
 if ($SkipStart -or $env:KINESYNC_SKIP_START -eq '1') {
@@ -91,4 +87,9 @@ Write-Host 'Starting KineSync…'
 docker compose --project-directory $repoRoot up -d kinesync
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose could not start KineSync.' }
 docker compose --project-directory $repoRoot ps kinesync
-Write-Host 'Done. The browser desktop is at http://localhost:3000; pair ExpoLyrics with ws://<this-host-LAN-IP>:3001.'
+Write-Host 'Done. Open KineSync at http://localhost:3000; pair ExpoLyrics with ws://<this-host-LAN-IP>:3001.'
+try {
+  Start-Process 'http://localhost:3000'
+} catch {
+  Write-Host 'Open http://localhost:3000 in a browser to finish setup.'
+}

@@ -82,7 +82,7 @@ else
     echo 'KINESYNC_CONTAINER_NAME=kinesync'
     echo "BRIDGE_KEY=$(random_hex 32)"
     echo 'KINESYNC_WEB_USER=kinesync'
-    echo "KINESYNC_WEB_PASSWORD=$(random_hex 24)"
+    echo 'KINESYNC_WEB_PASSWORD='
     echo "KINESYNC_CONFIG_PATH=$config_path"
     echo 'KINESYNC_WEB_PORT=3000'
     echo 'KINESYNC_WEB_HTTPS_PORT=3443'
@@ -94,7 +94,7 @@ else
   } > "$temp_env"
   mv "$temp_env" "$env_path"
   trap - 0 1 2 15
-  echo 'Created .env with unique random bridge and web passwords.'
+  echo 'Created local configuration. The localhost-only app view needs no password.'
 fi
 
 if [ "${KINESYNC_SKIP_START:-0}" = 1 ]; then
@@ -116,4 +116,9 @@ docker compose --project-directory "$repo_root" pull kinesync
 echo 'Starting KineSync…'
 docker compose --project-directory "$repo_root" up -d kinesync
 docker compose --project-directory "$repo_root" ps kinesync
-echo 'Done. The browser desktop is at http://localhost:3000; pair ExpoLyrics with ws://<this-host-LAN-IP>:3001.'
+echo 'Done. Open KineSync at http://localhost:3000; pair ExpoLyrics with ws://<this-host-LAN-IP>:3001.'
+if command -v xdg-open >/dev/null 2>&1 && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
+  xdg-open http://localhost:3000 >/dev/null 2>&1 &
+elif command -v open >/dev/null 2>&1; then
+  open http://localhost:3000 >/dev/null 2>&1 &
+fi
