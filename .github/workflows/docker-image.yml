@@ -83,7 +83,9 @@ jobs:
 
   publish-setup-bundle:
     name: Publish rolling desktop setup bundle
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Manual reruns from main must repair/publish the setup release too. The
+    # previous event-name check skipped this job after a successful dispatch.
+    if: github.ref == 'refs/heads/main'
     needs: publish-image
     runs-on: ubuntu-24.04
     timeout-minutes: 10
