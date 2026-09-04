@@ -50,9 +50,19 @@ jobs:
 
       - name: Install root DesktopBridge deps
         working-directory: DesktopBridge
-        # We are producing these artifacts, not consuming them. Ignoring all
-        # lifecycle scripts also keeps nested native installs deterministic.
-        run: npm ci --ignore-scripts --audit=false --fund=false
+        # Skip only KineSync's native downloader. Dependency install scripts
+        # must run because electron-winstaller selects its host 7-Zip binary.
+        env:
+          SKIP_POSTINSTALL: "1"
+        run: npm ci --audit=false --fund=false
+
+      - name: Verify Squirrel packaging helpers
+        working-directory: DesktopBridge
+        run: |
+          set -euo pipefail
+          test -f node_modules/electron-winstaller/vendor/7z.exe
+          test -f node_modules/electron-winstaller/vendor/7z.dll
+          test -f node_modules/electron-winstaller/vendor/Squirrel.exe
 
       - name: Build C++ media-session addon
         working-directory: DesktopBridge
