@@ -57,6 +57,13 @@ jobs:
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
+      - name: Verify Live Activity native target
+        working-directory: ExpoLyrics
+        run: |
+          npm run test:live-activity
+          python3 scripts/check-ios-live-activity.py
+          node scripts/verify-live-activity-project.js
+
       - name: Build Release and locate .app
         run: |
           set -euo pipefail
@@ -224,6 +231,7 @@ jobs:
           IPA="${GITHUB_WORKSPACE}/ExpoLyrics/KineSync-iOS-unsigned.ipa"
           rm -f "${IPA}"
           ditto -c -k --sequesterRsrc --keepParent "${STAGE}/Payload" "${IPA}"
+          python3 ExpoLyrics/scripts/verify-ios-live-activity.py "${IPA}" --expected-app "${APP}"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

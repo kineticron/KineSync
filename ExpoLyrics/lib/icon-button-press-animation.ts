@@ -3,7 +3,7 @@ import {
   type SharedValue,
 } from "react-native-reanimated";
 
-export const ICON_BUTTON_PRESS_SCALE = 1.16;
+export const ICON_BUTTON_PRESS_SCALE = 1.08;
 
 const PRESS_SPRING = {
   damping: 15,

@@ -47,16 +47,17 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/R.png",
-          "imageWidth": 200,
+          "imageWidth": 112,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#090C13",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#090C13"
           }
         }
       ],
       "./plugins/with-network-security-config.js",
       "./plugins/with-release-signing.js",
+      "./plugins/with-live-activity.js",
       [
         "expo-build-properties",
         {

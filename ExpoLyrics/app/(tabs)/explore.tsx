@@ -1,5 +1,5 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { BlurView } from 'expo-blur';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -40,6 +39,12 @@ import {
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
 import { requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
+import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
+import { Design } from '@/constants/design';
+import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
+
+const settingsEntrance = FadeInDown.duration(320).reduceMotion(ReduceMotion.System);
 
 const SPOTIFY_LOGIN_URL =
   'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
@@ -111,19 +116,23 @@ function FieldRow({
   autoCapitalize = 'none',
   secureTextEntry = false,
 }: FieldRowProps) {
+  const [focused, setFocused] = useState(false);
   return (
     <View style={styles.fieldRow}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        style={styles.input}
+        style={[styles.input, focused && styles.inputFocused]}
+        accessibilityLabel={label}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         autoCapitalize={autoCapitalize}
         autoCorrect={false}
         keyboardType={keyboardType}
         placeholder={placeholder}
         placeholderTextColor="rgba(255,255,255,0.36)"
-        selectionColor="#FFFFFF"
+        selectionColor={Design.accent}
         secureTextEntry={secureTextEntry}
       />
     </View>
@@ -141,6 +150,7 @@ async function resetOnboardingCompleted(): Promise<void> {
 }
 
 export default function BridgeSettingsScreen() {
+  const liveActivityMessage = useLiveActivityStatus((state) => state.message);
   const router = useRouter();
   const serverUrl = usePlaybackStore((s) => s.serverUrl);
   const handshakeKey = usePlaybackStore((s) => s.handshakeKey);
@@ -433,9 +443,13 @@ export default function BridgeSettingsScreen() {
                 <Ionicons name="chevron-back" size={23} color="#FFFFFF" />
               </Pressable>
               <View style={styles.headerCopy}>
-                <Text style={styles.eyebrow}>Sync</Text>
+                <Text style={styles.eyebrow}>Make it yours</Text>
                 <Text style={styles.title}>Settings</Text>
               </View>
+              <Image source={require('@/assets/images/R.png')} style={styles.headerLogo} accessibilityLabel="KineSync" />
+            </View>
+            <View style={styles.summary}>
+              <Text style={styles.summaryText}>A little tuning. A better listen.</Text>
               <View
                 style={[
                   styles.statusChip,
@@ -452,13 +466,16 @@ export default function BridgeSettingsScreen() {
               </View>
             </View>
 
-            <BlurView intensity={36} tint="dark" style={styles.card}>
+            <Animated.View entering={settingsEntrance} style={styles.card}>
               <SettingSection title="Playback source">
                 <Text style={styles.onboardingHint}>
-                  Choose how KineSync gets Spotify playback. Only settings for the selected mode are shown below.
+                  Where’s the music coming from?
                 </Text>
-                <View style={styles.modeChoices}>
+                <View style={styles.modeChoices} accessibilityRole="radiogroup" accessibilityLabel="Playback source">
                   <Pressable
+                    accessibilityRole="radio"
+                    aria-checked={playbackMode === 'desktop'}
+                    accessibilityState={{ checked: playbackMode === 'desktop' }}
                     style={({ pressed }) => [
                       styles.modeChoice,
                       playbackMode === 'desktop' && styles.modeChoiceActive,
@@ -470,8 +487,12 @@ export default function BridgeSettingsScreen() {
                       <Text style={styles.modeChoiceTitle}>Desktop Bridge</Text>
                       <Text style={styles.modeChoiceHint}>Best sync; requires the bridge app.</Text>
                     </View>
+                    <Ionicons name={playbackMode === 'desktop' ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={playbackMode === 'desktop' ? Design.accent : Design.muted} />
                   </Pressable>
                   <Pressable
+                    accessibilityRole="radio"
+                    aria-checked={playbackMode === 'mobile'}
+                    accessibilityState={{ checked: playbackMode === 'mobile' }}
                     style={({ pressed }) => [
                       styles.modeChoice,
                       playbackMode === 'mobile' && styles.modeChoiceActive,
@@ -483,6 +504,7 @@ export default function BridgeSettingsScreen() {
                       <Text style={styles.modeChoiceTitle}>Mobile-Only</Text>
                       <Text style={styles.modeChoiceHint}>Play Spotify inside KineSync.</Text>
                     </View>
+                    <Ionicons name={playbackMode === 'mobile' ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={playbackMode === 'mobile' ? Design.accent : Design.muted} />
                   </Pressable>
                 </View>
               </SettingSection>
@@ -508,7 +530,7 @@ export default function BridgeSettingsScreen() {
                     pressed && styles.buttonPressed,
                   ]}
                   onPress={saveAndReconnect}>
-                  <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  <Ionicons name="checkmark" size={18} color={Design.accentInk} />
                   <Text style={styles.primaryButtonText}>Save and reconnect</Text>
                 </Pressable>
                 {bridgeSaveError ? (
@@ -531,7 +553,7 @@ export default function BridgeSettingsScreen() {
                 <Pressable
                   style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
                   onPress={() => setLoginOpen(true)}>
-                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" />
+                  <Ionicons name="log-in-outline" size={18} color={Design.accentInk} />
                   <Text style={styles.primaryButtonText}>
                     {spotifySignedIn ? 'Spotify signed in' : 'Log in to Spotify'}
                   </Text>
@@ -654,9 +676,16 @@ export default function BridgeSettingsScreen() {
                   <Text style={styles.secondaryButtonText}>Apply timing</Text>
                 </Pressable>
               </SettingSection> : null}
-            </BlurView>
+            </Animated.View>
 
-            <BlurView intensity={36} tint="dark" style={styles.card}>
+            <View style={styles.card}>
+              {Platform.OS === 'ios' ? <SettingSection title="Live lyrics">
+                <Text style={styles.onboardingHint}>{liveActivityMessage}</Text>
+                <Pressable style={styles.secondaryButton} onPress={restartLiveActivity}>
+                  <Ionicons name="mic-outline" size={17} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>Restart live lyrics</Text>
+                </Pressable>
+              </SettingSection> : null}
               <SettingSection title="Onboarding">
                 <Pressable
                   style={({ pressed }) => [
@@ -671,7 +700,7 @@ export default function BridgeSettingsScreen() {
                   Reset the onboarding flow to see the setup guide again
                 </Text>
               </SettingSection>
-            </BlurView>
+            </View>
 
             <View style={styles.footerCard}>
               <View style={styles.footerIconWrap}>
@@ -761,7 +790,7 @@ export default function BridgeSettingsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#0A0B11',
+    backgroundColor: Design.background,
     overflow: 'hidden',
   },
   ambientShapeA: {
@@ -795,10 +824,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 34,
-    gap: 16,
+    gap: 20,
   },
   header: {
     flexDirection: 'row',
@@ -808,9 +840,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.1)',
@@ -820,7 +852,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   eyebrow: {
-    color: 'rgba(255,255,255,0.54)',
+    color: Design.accent,
     fontSize: 12,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -828,7 +860,8 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#FFFFFF',
-    fontSize: 28,
+    fontSize: 32,
+    letterSpacing: -1,
     fontWeight: '700',
     marginTop: 2,
   },
@@ -845,21 +878,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   card: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    paddingVertical: 16,
-    overflow: 'hidden',
+    gap: 14,
   },
   section: {
-    paddingHorizontal: 16,
-    gap: 12,
+    padding: 18,
+    gap: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Design.border,
+    backgroundColor: 'rgba(20,26,36,0.92)',
   },
   sectionTitle: {
-    color: 'rgba(248,248,254,0.72)',
+    color: Design.accent,
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.3,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
   },
   sectionBody: {
     gap: 12,
@@ -893,8 +927,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   modeChoiceHint: {
-    color: 'rgba(255,255,255,0.52)',
-    fontSize: 11,
+    color: Design.muted,
+    fontSize: 12,
+    lineHeight: 17,
   },
   fieldRow: {
     gap: 7,
@@ -905,10 +940,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   input: {
-    minHeight: 46,
+    minHeight: 50,
     borderRadius: 12,
     paddingHorizontal: 13,
-    backgroundColor: 'rgba(255,255,255,0.09)',
+    backgroundColor: 'rgba(3,8,15,0.4)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
     color: '#FFFFFF',
@@ -916,18 +951,19 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   primaryButton: {
-    minHeight: 46,
-    borderRadius: 999,
+    minHeight: 50,
+    borderRadius: 16,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: Design.accent,
   },
   secondaryButton: {
-    minHeight: 42,
-    borderRadius: 999,
+    minHeight: 48,
+    borderRadius: 16,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     flexDirection: 'row',
     alignItems: 'center',
@@ -940,19 +976,19 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   primaryButtonText: {
-    color: '#FFFFFF',
+    color: Design.accentInk,
     fontSize: 14,
     fontWeight: '700',
   },
   secondaryButtonText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
   },
   divider: {
-    height: 1,
-    marginVertical: 16,
-    backgroundColor: 'rgba(255,255,255,0.09)',
+    display: 'none',
   },
   footerCard: {
     minHeight: 54,
@@ -1007,11 +1043,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   onboardingHint: {
-    color: 'rgba(255,255,255,0.48)',
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 8,
-    marginLeft: 4,
+    color: Design.muted,
+    fontSize: 13,
+    lineHeight: 20,
   },
   validationError: {
     color: '#FF93A4',
@@ -1019,6 +1053,10 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 8,
   },
+  inputFocused: { borderColor: Design.accent, backgroundColor: 'rgba(168,240,207,0.04)' },
+  headerLogo: { width: 44, height: 44, borderRadius: 14 },
+  summary: { gap: 12, alignItems: 'flex-start', paddingHorizontal: 4 },
+  summaryText: { color: Design.muted, fontSize: 15, lineHeight: 22 },
   scannerModal: {
     flex: 1,
     backgroundColor: '#090A11',

@@ -11,6 +11,7 @@
     "lint": "expo lint",
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:security": "node ./scripts/security-check.js",
+    "test:live-activity": "node ./scripts/check-live-activity.mjs",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs"
   },
   "dependencies": {

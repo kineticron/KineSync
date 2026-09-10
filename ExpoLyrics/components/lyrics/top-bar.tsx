@@ -2,6 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { memo } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
+import { Image } from "expo-image";
 import Reanimated, {
   interpolate,
   useAnimatedStyle,
@@ -57,6 +58,8 @@ export const TopBar = memo(function TopBar({
   return (
     <View style={styles.container}>
       <Pressable
+        accessibilityRole={onTrackPress ? 'button' : undefined}
+        accessibilityLabel={onTrackPress ? `${title}, ${artist}. Show album artwork` : `${title}, ${artist}`}
         style={({ pressed }) => [
           styles.trackMetaWrap,
           pressed && styles.trackMetaWrapPressed,
@@ -75,7 +78,7 @@ export const TopBar = memo(function TopBar({
             recyclingKey={`topbar-${artworkUrl}`}
           />
         ) : (
-          <View style={[styles.coverArt, styles.coverArtEmpty]} />
+          <Image source={require('@/assets/images/R.png')} style={styles.coverArt} />
         )}
 
         <View style={styles.titleWrap}>
@@ -97,7 +100,9 @@ export const TopBar = memo(function TopBar({
         <Reanimated.View style={menuAnimatedStyle}>
           <BlurView intensity={34} tint="light" style={styles.iconCapsule}>
             <Pressable
+              accessibilityRole="button"
               accessibilityLabel="Open player menu"
+              hitSlop={5}
               style={({ pressed }) => [
                 styles.iconButton,
                 pressed && styles.iconButtonPressed,

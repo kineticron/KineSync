@@ -21,7 +21,10 @@ import Reanimated, {
   withSpring,
   withSequence,
   type SharedValue,
+  useReducedMotion,
 } from 'react-native-reanimated';
+import { selectionAsync } from 'expo-haptics';
+import { Design } from '@/constants/design';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import type { PlaybackMode } from '@/lib/playback-source';
@@ -186,6 +189,7 @@ type PlaybackControlsProps = {
 };
 
 type TransportButtonProps = {
+  accessibilityLabel: string;
   onPress: () => void;
   onLongPress?: () => void;
   delayLongPress?: number;
@@ -196,6 +200,7 @@ type TransportButtonProps = {
 };
 
 function TransportButton({
+  accessibilityLabel,
   onPress,
   onLongPress,
   delayLongPress = 280,
@@ -204,6 +209,7 @@ function TransportButton({
   children,
   style,
 }: TransportButtonProps) {
+  const reduceMotion = useReducedMotion();
   const scale = useSharedValue(1);
   const slide = useSharedValue(0);
   const pressHaloOpacity = useSharedValue(0);
@@ -242,7 +248,8 @@ function TransportButton({
       longPressTriggeredRef.current = false;
       return;
     }
-    if (direction !== 'none') {
+    void selectionAsync().catch(() => {});
+    if (direction !== 'none' && !reduceMotion) {
       const delta = direction === 'forward' ? 8 : -8;
       slide.value = withSequence(
         withTiming(delta, {
@@ -256,7 +263,7 @@ function TransportButton({
       );
     }
     onPress();
-  }, [direction, onPress, onUserInteraction, slide]);
+  }, [direction, onPress, onUserInteraction, reduceMotion, slide]);
 
   const handleLongPress = useCallback(() => {
     if (!onLongPress) {
@@ -294,6 +301,8 @@ function TransportButton({
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
       delayLongPress={delayLongPress}
@@ -301,7 +310,7 @@ function TransportButton({
         onUserInteraction?.();
         startInteractionKeepAlive();
         animatePressHalo(1);
-        animateScale(0.78);
+        animateScale(reduceMotion ? 1 : 0.92);
       }}
       onPressOut={() => {
         onUserInteraction?.();
@@ -607,6 +616,7 @@ export const PlaybackControls = memo(function PlaybackControls({
 
       <View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay]}>
         <TransportButton
+          accessibilityLabel="Previous track"
           onPress={onPrevious}
           onUserInteraction={onUserInteraction}
           direction="backward"
@@ -619,6 +629,7 @@ export const PlaybackControls = memo(function PlaybackControls({
         </TransportButton>
 
         <TransportButton
+          accessibilityLabel={isPlaying ? 'Pause playback' : 'Play music'}
           onPress={onPlayPause}
           onLongPress={
             isPlaying && onPlayPauseResync ? onPlayPauseResync : undefined
@@ -635,7 +646,7 @@ export const PlaybackControls = memo(function PlaybackControls({
               <Ionicons
                 name="play"
                 size={isOverlay ? 30 : 48}
-                color="#FFFFFF"
+                color={Design.accentInk}
                 style={isOverlay ? styles.playGlyphOverlay : styles.playGlyph}
               />
             </Reanimated.View>
@@ -649,13 +660,14 @@ export const PlaybackControls = memo(function PlaybackControls({
               <Ionicons
                 name="pause"
                 size={isOverlay ? 26 : 44}
-                color="#FFFFFF"
+                color={Design.accentInk}
               />
             </Reanimated.View>
           </View>
         </TransportButton>
 
         <TransportButton
+          accessibilityLabel="Next track"
           onPress={onNext}
           onUserInteraction={onUserInteraction}
           direction="forward"
@@ -1065,10 +1077,12 @@ const styles = StyleSheet.create({
   playButtonShell: {
     width: 86,
     height: 86,
+    backgroundColor: Design.accent,
   },
   playButtonShellOverlay: {
     width: 56,
     height: 56,
+    backgroundColor: Design.accent,
   },
   playIconFrame: {
     width: 64,

@@ -1,3 +1,4 @@
+import { extractSourceFromStatusMessage, trimTrailingSourceFromAction } from "@/lib/lyrics-status";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
@@ -30,6 +31,7 @@ import {
 } from "react-native";
 import Reanimated, {
   useSharedValue,
+  useReducedMotion,
   withTiming,
   withRepeat,
   withSequence,
@@ -80,6 +82,7 @@ import {
   type SpotifyBrowserFallbackHandle,
 } from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
+import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
 import {
@@ -199,60 +202,6 @@ function getPrimaryLineText(line: LyricLine) {
     text += currentText;
   }
   return text.trim();
-}
-
-function trimTrailingSourceFromAction(actionText: string, sourceText: string) {
-  const action = String(actionText || "").trim();
-  const source = String(sourceText || "").trim();
-  if (!action || !source) {
-    return action;
-  }
-
-  const escapedSource = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const trailingSourcePatterns = [
-    new RegExp(`\\s*\\(${escapedSource}\\)\\s*[.!…]*$`, "i"),
-    new RegExp(
-      `\\s+from\\s+${escapedSource}(?:\\s+on\\s+desktop)?\\s*[.!…]*$`,
-      "i",
-    ),
-    new RegExp(`\\s+source\\s+${escapedSource}\\s*[.!…]*$`, "i"),
-  ];
-
-  for (const pattern of trailingSourcePatterns) {
-    if (pattern.test(action)) {
-      return action.replace(pattern, (match) =>
-        match.toLowerCase().includes(" from ") ? " from" : "",
-      );
-    }
-  }
-
-  return action;
-}
-
-function extractSourceFromStatusMessage(statusMessage: string) {
-  const message = String(statusMessage || "").trim();
-  if (!message) {
-    return "";
-  }
-
-  const parentheticalMatch = message.match(/\(([^()]+)\)\s*[.!…]*$/);
-  if (parentheticalMatch) {
-    return parentheticalMatch[1]?.trim() || "";
-  }
-
-  const fromMatch = message.match(
-    /\bfrom\s+(.+?)(?:\s+on\s+desktop)?\s*[.!…]*$/i,
-  );
-  if (fromMatch) {
-    return fromMatch[1]?.trim() || "";
-  }
-
-  const sourceMatch = message.match(/\bsource\s+(.+?)\s*[.!…]*$/i);
-  if (sourceMatch) {
-    return sourceMatch[1]?.trim() || "";
-  }
-
-  return "";
 }
 
 function base64ToUint8Array(base64: string) {
@@ -501,6 +450,7 @@ function ButtonTutorialModal({
 
 export default function HomeScreen() {
   const router = useRouter();
+  const reduceMotion = useReducedMotion();
   const [isScreenFocused, setIsScreenFocused] = useState(true);
   useFocusEffect(
     useCallback(() => {
@@ -958,6 +908,7 @@ export default function HomeScreen() {
     };
 
     const startAmbientAnimations = () => {
+      if (reduceMotion || hasResolvedArtwork) return;
       ambientPhaseA.value = withRepeat(
         withSequence(
           withTiming(1, { duration: 18000 }),
@@ -996,7 +947,7 @@ export default function HomeScreen() {
       subscription.remove();
       stopAmbientAnimations();
     };
-  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode, isScreenFocused]);
+  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode, hasResolvedArtwork, isScreenFocused, reduceMotion]);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
     if (usePlaybackStore.getState().connectionStatus === "connected") {
@@ -1526,9 +1477,9 @@ export default function HomeScreen() {
               ]}
             >
               <HorizontalPlayerPanel
-                title={currentTrack?.title || "Waiting for Spotify"}
+                title={currentTrack?.title || "KineSync"}
                 artist={
-                  currentTrack?.artist || "Desktop bridge not detected yet"
+                  currentTrack?.artist || "Feel every word."
                 }
                 artworkUrl={resolvedArtworkUrl}
                 animatedArtworkUrl={resolvedAnimatedSquareUrl}
@@ -1592,7 +1543,9 @@ export default function HomeScreen() {
                 { paddingLeft: LANDSCAPE_LYRICS_PADDING },
               ]}
             >
-              {lyricsRendererMode === "webview" ? (
+              {!currentTrack ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} onConnect={() => router.push('/explore')} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
+              ) : lyricsRendererMode === "webview" ? (
                 <WebLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
@@ -1675,19 +1628,19 @@ export default function HomeScreen() {
             >
               <Reanimated.View style={lyricsChromeOpacityStyle}>
                 <TopBar
-                  title={currentTrack?.title || "Waiting for Spotify"}
+                  title={currentTrack?.title || "KineSync"}
                   artist={
-                    currentTrack?.artist || "Desktop bridge not detected yet"
+                    currentTrack?.artist || "Feel every word."
                   }
                   artworkUrl={resolvedArtworkUrl}
-                  onTrackPress={handleShowFullscreenAlbum}
+                  onTrackPress={currentTrack ? handleShowFullscreenAlbum : undefined}
                   onTrackPressIn={() => {
                     topBarTrackPress.value = 1;
                   }}
                   onTrackPressOut={() => {
                     topBarTrackPress.value = 0;
                   }}
-                  hideArtwork
+                  hideArtwork={Boolean(currentTrack)}
                   lyricsTimingMode={lyricsTimingMode}
                   lyricsSource={lyricsSource}
                   onMenuPress={() => setMenuOpen(true)}
@@ -1833,7 +1786,9 @@ export default function HomeScreen() {
             <Reanimated.View
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}
             >
-              {lyricsRendererMode === "webview" ? (
+              {!currentTrack ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} onConnect={() => router.push('/explore')} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
+              ) : lyricsRendererMode === "webview" ? (
                 <WebLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}

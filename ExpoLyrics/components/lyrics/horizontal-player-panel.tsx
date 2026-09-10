@@ -1,5 +1,6 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
+import { Image } from 'expo-image';
 import { memo, type ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Reanimated, {
@@ -69,6 +70,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
           { width: artworkSize, height: artworkSize },
         ]}
         onPress={onArtworkPress}
+        accessibilityRole="button"
         accessibilityLabel="Show playback controls"
       >
         {artworkUrl ? (
@@ -79,7 +81,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
             style={styles.artwork}
           />
         ) : (
-          <View style={[styles.artwork, styles.artworkEmpty]} />
+          <Image source={require('@/assets/images/R.png')} style={styles.artwork} contentFit="cover" />
         )}
 
         {controlsOverlayVisible ? (
@@ -125,6 +127,8 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
             <Reanimated.View style={menuAnimatedStyle}>
               <BlurView intensity={34} tint="light" style={styles.iconCapsule}>
                 <Pressable
+                  accessibilityRole="button"
+                  hitSlop={5}
                   accessibilityLabel="Open player menu"
                   style={({ pressed }) => [
                     styles.iconButton,

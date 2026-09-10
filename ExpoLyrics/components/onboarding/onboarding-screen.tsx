@@ -1,14 +1,15 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { Image } from "expo-image";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
-  Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -17,14 +18,13 @@ import {
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, {
-  Easing as ReanimatedEasing,
   Extrapolation,
   interpolate,
   interpolateColor,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
-  withTiming,
+  useReducedMotion,
   type SharedValue,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -49,6 +49,8 @@ import {
   requestReloadSpotifyBrowser,
 } from "@/components/lyrics/spotify-browser-fallback";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { MotionPressable as Pressable } from "@/components/ui/motion-pressable";
+import { Design } from "@/constants/design";
 
 const SPOTIFY_LOGIN_URL =
   "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F";
@@ -110,24 +112,24 @@ const ONBOARDING_STEPS: {
 }[] = [
   {
     icon: "musical-notes-outline",
-    eyebrow: "Welcome",
-    title: "Syllable-synced lyrics,\non your terms.",
+    eyebrow: "Made for your music",
+    title: "Every word.\nRight on time.",
     description:
-      "A modern, beautiful mobile app for rendering syllable-synced lyrics synced with your Spotify playback using your own self-hosted Desktop Bridge. Free, forever.",
+      "Follow the lyrics as they flow with your Spotify playback. Your own little front row, wherever you listen.",
   },
   {
     icon: "color-palette-outline",
     eyebrow: "Your vibe",
-    title: "Customize the visuals.",
+    title: "Find your flow.",
     description:
-      "These settings control how much UI stays on screen while the music plays. Go minimal or extra. \n All settings can be changed later.",
+      "Keep it minimal or sing along with every detail. You can always change these later.",
   },
   {
     icon: "scan-outline",
     eyebrow: "Connect",
-    title: "Pick where playback\ncomes from.",
+    title: "Let’s get\nyou connected.",
     description:
-      "Use a Desktop Bridge on your PC for the tightest sync, or run everything on this phone with the built-in Spotify player.",
+      "Pair with your desktop for precise sync, or keep the music on this phone.",
   },
 ];
 
@@ -153,14 +155,19 @@ function StepPage({
   index,
   itemWidth,
   scrollX,
+  active,
   children,
 }: {
   index: number;
   itemWidth: number;
   scrollX: SharedValue<number>;
+  active: boolean;
   children: ReactNode;
 }) {
+  const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
   const animatedStyle = useAnimatedStyle(() => {
+    if (reduceMotion) return { opacity: 1, transform: [{ translateX: 0 }, { scale: 1 }] };
     const progress = itemWidth > 0 ? scrollX.value / itemWidth : 0;
     const inputRange = [index - 1, index, index + 1];
     return {
@@ -192,11 +199,11 @@ function StepPage({
   }, [index, itemWidth]);
 
   return (
-    <View style={[styles.page, { width: itemWidth }]}>
+    <ScrollView style={{ width: itemWidth }} aria-hidden={!active} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} contentContainerStyle={[styles.page, { paddingTop: insets.top + 96, paddingBottom: insets.bottom + 166 }]} showsVerticalScrollIndicator={false} nestedScrollEnabled>
       <Reanimated.View style={[styles.pageInner, animatedStyle]}>
         {children}
       </Reanimated.View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -291,11 +298,11 @@ function ChoiceRow({
 }
 
 function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
+  const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const itemWidth = Math.max(1, windowWidth);
   const scrollX = useSharedValue(0);
-  const buttonScale = useSharedValue(1);
   const [step, setStep] = useState(0);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState("");
@@ -305,6 +312,15 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const [spotifySignedIn, setSpotifySignedIn] = useState(false);
   const spotifyLoginCompletedRef = useRef(false);
   const scrollRef = useRef<any>(null);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  useEffect(() => {
+    // Preserve the selected page on rotation or split-screen resizing.
+    const offset = stepRef.current * itemWidth;
+    scrollX.value = offset;
+    scrollRef.current?.scrollTo({ x: offset, animated: false });
+  }, [itemWidth, scrollX]);
 
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const setServerUrlStore = usePlaybackStore((s) => s.setServerUrl);
@@ -413,10 +429,6 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     },
   });
 
-  const buttonAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: buttonScale.value }],
-  }));
-
   const backgroundAnimatedStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
       scrollX.value / itemWidth,
@@ -426,8 +438,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   }));
 
   const footerLabel = useMemo(
-    () => (isLastStep ? "Get started" : "Next"),
-    [isLastStep],
+    () => (isLastStep ? "Let’s play" : step === 0 ? "Make it yours" : "Continue"),
+    [isLastStep, step],
   );
 
   const persistBridgeSettings = useCallback(() => {
@@ -463,12 +475,9 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     }
     const nextStep = Math.min(step + 1, ONBOARDING_STEPS.length - 1);
     setStep(nextStep);
-    scrollX.value = withTiming(nextStep * itemWidth, {
-      duration: 360,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    scrollRef.current?.scrollTo({ x: nextStep * itemWidth, animated: true });
-  }, [isLastStep, itemWidth, onDismiss, persistBridgeSettings, scrollX, step]);
+    // Scroll events are the single source of truth for the page animation.
+    scrollRef.current?.scrollTo({ x: nextStep * itemWidth, animated: !reduceMotion });
+  }, [isLastStep, itemWidth, onDismiss, persistBridgeSettings, reduceMotion, step]);
 
   const handleSkip = useCallback(() => {
     persistBridgeSettings();
@@ -515,8 +524,9 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           style={[styles.ambientGlow, styles.ambientGlowB]}
         />
 
+        <LinearGradient pointerEvents="none" colors={[Design.background, 'rgba(9,12,19,0)']} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top + 88, zIndex: 15 }} />
         <View style={[styles.topBar, { paddingTop: insets.top + 10 }]}>
-          <View />
+          <Text style={styles.brandName}>KineSync<Text style={styles.brandDot}> /</Text></Text>
           <Pressable
             onPress={handleSkip}
             hitSlop={12}
@@ -555,11 +565,23 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               index={index}
               itemWidth={itemWidth}
               scrollX={scrollX}
+              active={index === step}
             >
-              <GlassIcon icon={stepData.icon} active={index === step} />
+              {index === 0 ? (
+                <View style={styles.welcomeLogoWrap}>
+                  <Image source={require('@/assets/images/R.png')} style={styles.welcomeLogo} accessibilityLabel="KineSync logo" />
+                  <View style={styles.sparkle}><Ionicons name="sparkles" size={22} color={Design.accent} /></View>
+                </View>
+              ) : <GlassIcon icon={stepData.icon} active={index === step} />}
               <Text style={styles.eyebrow}>{stepData.eyebrow}</Text>
               <Text style={styles.title}>{stepData.title}</Text>
               <Text style={styles.description}>{stepData.description}</Text>
+              {index === 0 && (
+                <View style={styles.featureRow}>
+                  <View style={styles.featurePill}><Ionicons name="pulse" size={15} color={Design.accent} /><Text style={styles.featureText}>Live lyrics</Text></View>
+                  <View style={styles.featurePill}><Ionicons name="heart-outline" size={15} color={Design.accent} /><Text style={styles.featureText}>Free, forever</Text></View>
+                </View>
+              )}
 
               {index === 1 ? (
                 <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
@@ -742,6 +764,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         </Reanimated.ScrollView>
 
         <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
+          <LinearGradient pointerEvents="none" colors={['rgba(9,12,19,0)', Design.background, Design.background]} locations={[0, 0.3, 1]} style={StyleSheet.absoluteFill} />
+          <Text style={styles.stepLabel}>STEP {step + 1} OF {ONBOARDING_STEPS.length}</Text>
           <View style={styles.dots}>
             {ONBOARDING_STEPS.map((stepData, index) => (
               <Dot
@@ -753,18 +777,9 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             ))}
           </View>
 
-          <Reanimated.View style={buttonAnimatedStyle}>
+          <View style={styles.nextWrap}>
             <Pressable
               onPress={handleNext}
-              onPressIn={() => {
-                buttonScale.value = withTiming(0.97, { duration: 90 });
-              }}
-              onPressOut={() => {
-                buttonScale.value = withTiming(1, {
-                  duration: 180,
-                  easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-                });
-              }}
               style={({ pressed }) => [
                 styles.nextButton,
                 pressed && styles.buttonPressed,
@@ -772,7 +787,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             >
               <BlurView intensity={30} tint="light" style={styles.nextBlur}>
                 <LinearGradient
-                  colors={["rgba(143,240,196,0.28)", "rgba(90,109,255,0.34)"]}
+                  colors={["#BDF6DD", "#8CDEBA"]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.nextGradient}
@@ -781,12 +796,12 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   <Ionicons
                     name={isLastStep ? "checkmark" : "arrow-forward"}
                     size={18}
-                    color="#F8F8FE"
+                    color={Design.accentInk}
                   />
                 </LinearGradient>
               </BlurView>
             </Pressable>
-          </Reanimated.View>
+          </View>
         </View>
 
         {/* Spotify sign-in — cookies are shared with the background player */}
@@ -911,7 +926,7 @@ const styles = StyleSheet.create({
     width: 290,
     height: 290,
     borderRadius: 145,
-    opacity: 0.34,
+    opacity: 0.08,
   },
   ambientGlowA: {
     top: 58,
@@ -977,7 +992,7 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
   },
   page: {
-    flex: 1,
+    flexGrow: 1,
     paddingHorizontal: 22,
     paddingTop: 106,
     paddingBottom: 142,
@@ -990,9 +1005,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   iconGlassOuter: {
-    width: 112,
-    height: 112,
-    borderRadius: 56,
+    width: 80,
+    height: 80,
+    borderRadius: 26,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
@@ -1014,8 +1029,9 @@ const styles = StyleSheet.create({
   },
   title: {
     color: "#FFFFFF",
-    fontSize: 31,
-    lineHeight: 37,
+    fontSize: 38,
+    lineHeight: 43,
+    letterSpacing: -1.5,
     fontWeight: "800",
     textAlign: "center",
     maxWidth: 350,
@@ -1025,14 +1041,14 @@ const styles = StyleSheet.create({
     color: "rgba(248,248,254,0.68)",
     fontSize: 16,
     lineHeight: 23,
-    fontWeight: "500",
+    fontWeight: "400",
     textAlign: "center",
     maxWidth: 350,
   },
   inlinePanel: {
     width: "100%",
     marginTop: 26,
-    borderRadius: 18,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.14)",
     backgroundColor: "rgba(255,255,255,0.06)",
@@ -1110,13 +1126,23 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   nextText: {
-    color: "#FFFFFF",
+    color: Design.accentInk,
     fontSize: 17,
     fontWeight: "800",
   },
   buttonPressed: {
     opacity: 0.86,
   },
+  brandName: { color: Design.text, fontSize: 20, fontWeight: '800', letterSpacing: -0.7 },
+  brandDot: { color: Design.accent },
+  welcomeLogoWrap: { marginBottom: 36, width: 120, height: 120 },
+  welcomeLogo: { width: 120, height: 120, borderRadius: 32, borderWidth: 1, borderColor: Design.border },
+  sparkle: { position: 'absolute', right: -15, top: -14, backgroundColor: Design.surface, borderRadius: 18, padding: 10, transform: [{ rotate: '12deg' }] },
+  featureRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10, marginTop: 28 },
+  featurePill: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 20, paddingHorizontal: 13, paddingVertical: 9, borderWidth: 1, borderColor: Design.border, backgroundColor: 'rgba(168,240,207,0.04)' },
+  featureText: { color: Design.muted, fontSize: 12, fontWeight: '600' },
+  stepLabel: { color: Design.muted, textAlign: 'center', fontSize: 10, fontWeight: '700', letterSpacing: 1.8, marginBottom: 5 },
+  nextWrap: { width: '100%', maxWidth: 440, alignSelf: 'center' },
   fieldGroup: {
     gap: 7,
   },

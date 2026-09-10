@@ -321,6 +321,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     set({
       currentTrack: metadataChanged ? incomingTrack : prev.currentTrack,
+      // A new song must never publish the previous song's lyrics to ActivityKit
+      // (or render them while its own lyrics request is still pending).
+      ...(trackChanged ? { lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '' } : {}),
       anchorPositionMs: correctedPosition,
       anchorTimestampMs: nowWall,
       anchorMonotonicMs: nowMono,

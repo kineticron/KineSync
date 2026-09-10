@@ -3,7 +3,6 @@ import { BlurView } from "expo-blur";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -24,6 +23,11 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { bridgeClient } from "@/lib/bridge-client";
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
+import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
+import { Design } from '@/constants/design';
+import Animated, { FadeInDown, ReduceMotion, useReducedMotion } from 'react-native-reanimated';
+
+const menuEntrance = FadeInDown.duration(240).reduceMotion(ReduceMotion.System);
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -439,6 +443,7 @@ export const SettingsMenu = memo(function SettingsMenu({
   }, [vaultSaving, lyricsStatusMessage]);
 
   const { width, height } = useWindowDimensions();
+  const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const isLandscape = width > height;
   const landscapeOverlayStyle = isLandscape
@@ -454,7 +459,7 @@ export const SettingsMenu = memo(function SettingsMenu({
     <>
     <Modal
       transparent
-      animationType="fade"
+      animationType={reduceMotion ? 'none' : 'fade'}
       visible={open}
       onRequestClose={onClose}
       supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
@@ -462,20 +467,22 @@ export const SettingsMenu = memo(function SettingsMenu({
       <GestureHandlerRootView
         style={[
           styles.overlay,
+          !isLandscape && { paddingTop: insets.top + 68, paddingBottom: Math.max(insets.bottom, 16) },
           isLandscape && styles.overlayLandscape,
           landscapeOverlayStyle,
         ]}
       >
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <BlurView
-          intensity={34}
-          tint="dark"
-          style={[styles.card, isLandscape && styles.cardLandscape]}
+        <Pressable accessibilityLabel="Dismiss player menu" style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Animated.View
+          entering={menuEntrance}
+          style={[styles.card, { width: Math.min(width - 28, 360) }, isLandscape && styles.cardLandscape]}
         >
+          <BlurView pointerEvents="none" intensity={34} tint="dark" style={StyleSheet.absoluteFill} />
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Settings</Text>
+            <View><Text style={styles.headerEyebrow}>MAKE IT YOURS</Text><Text style={styles.headerTitle}>Listening room</Text></View>
             <Pressable
               onPress={onClose}
+              accessibilityLabel="Close player menu"
               hitSlop={10}
               style={({ pressed }) => [
                 styles.headerClose,
@@ -635,7 +642,7 @@ export const SettingsMenu = memo(function SettingsMenu({
               />
             </MenuSection>
           </ScrollView>
-        </BlurView>
+        </Animated.View>
       </GestureHandlerRootView>
     </Modal>
 
@@ -697,9 +704,10 @@ const styles = StyleSheet.create({
     marginLeft: "auto",
     width: 306,
     maxHeight: "78%",
-    borderRadius: 18,
+    borderRadius: 26,
+    backgroundColor: 'rgba(15,21,31,0.94)',
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
+    borderColor: Design.border,
     overflow: "hidden",
   },
   cardLandscape: {
@@ -714,20 +722,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 6,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 16,
   },
   headerTitle: {
     color: "#F8F8FE",
-    fontSize: 16,
+    fontSize: 23,
     fontWeight: "700",
-    letterSpacing: 0.2,
+    letterSpacing: -0.6,
   },
   headerClose: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.08)",
@@ -739,21 +747,21 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   section: {
-    paddingHorizontal: 10,
-    paddingBottom: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 16,
   },
   sectionTitle: {
-    color: "rgba(248,248,254,0.56)",
+    color: Design.accent,
     fontSize: 11,
     fontWeight: "600",
-    letterSpacing: 0.35,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
-    marginBottom: 4,
+    marginBottom: 8,
     marginTop: 4,
     paddingHorizontal: 4,
   },
   row: {
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: 10,
     paddingHorizontal: 8,
     flexDirection: "row",
@@ -772,7 +780,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: 'rgba(168,240,207,0.07)',
     marginRight: 8,
   },
   rowLabel: {
@@ -782,6 +790,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 8,
   },
+  headerEyebrow: { color: Design.muted, fontSize: 9, fontWeight: '700', letterSpacing: 1.7, marginBottom: 5 },
   sourceGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
