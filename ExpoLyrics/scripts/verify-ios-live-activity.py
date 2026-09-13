@@ -12,7 +12,8 @@ from pathlib import Path
 
 TARGET = 'KineSyncLyricsWidget'
 ARM64 = 0x0100000C
-ACTIVITY_MODULE = 'KineSyncLiveActivity'
+HOST_ACTIVITY_MODULE = 'KineSyncLiveActivity'
+WIDGET_ACTIVITY_MODULE = TARGET
 
 
 def require(condition, message):
@@ -156,8 +157,10 @@ def verify(ipa, expected_app=None):
             require(has_arm64(binary), f'Not an arm64 device executable: {name}')
             require(marker in binary, f'Native lyrics code is missing: {name}')
             modules.append(activity_attributes_module(binary))
-        require(modules[0] == modules[1] == ACTIVITY_MODULE,
-                f'ActivityAttributes module mismatch: host={modules[0]}, widget={modules[1]}')
+        require(modules[0] == HOST_ACTIVITY_MODULE,
+                f'Unexpected host ActivityAttributes module: {modules[0]}')
+        require(modules[1] == WIDGET_ACTIVITY_MODULE,
+                f'Unexpected widget ActivityAttributes module: {modules[1]}')
         if expected_app:
             source = Path(expected_app)
             # Compare every embedded extension file against xcodebuild's output.
@@ -168,7 +171,7 @@ def verify(ipa, expected_app=None):
                     archived = f'{widget_path}/{file.relative_to(extension).as_posix()}'
                     require(archived in names, f'Packaging dropped {archived}')
                     require(hashlib.sha256(archive.read(archived)).digest() == hashlib.sha256(file.read_bytes()).digest(), f'Packaging changed {archived}')
-        print(f'Verified native host + arm64 WidgetKit extension + shared {ACTIVITY_MODULE}.LyricsActivityAttributes in {Path(ipa).name}')
+        print(f'Verified native host + arm64 WidgetKit extension + shared LyricsActivityAttributes source in {Path(ipa).name}')
 
 
 if __name__ == '__main__':

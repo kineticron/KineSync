@@ -89,13 +89,15 @@ try {
   const info = require('@expo/plist').default.parse(fs.readFileSync(path.join(fixture, TARGET, 'Info.plist'), 'utf8'));
   assert.equal(info.CFBundleShortVersionString, '9.8.7');
   assert.equal(info.CFBundleVersion, '987');
-  // Reject a widget compiled under a different Swift attributes module.
+  // Reject a widget module name that collides with the Expo host pod. The
+  // generated ExpoModulesProvider imports KineSyncLiveActivity to find the
+  // host Module class; a same-named widget module shadows it in Release builds.
   const extension = Object.values(objects.PBXNativeTarget).find((target) => typeof target === 'object' && String(target.name).replace(/^"|"$/g, '') === TARGET);
   const widgetConfig = objects.XCConfigurationList[extension.buildConfigurationList].buildConfigurations[0].value;
   const settings = objects.XCBuildConfiguration[widgetConfig].buildSettings;
   const moduleName = settings.PRODUCT_MODULE_NAME;
-  settings.PRODUCT_MODULE_NAME = TARGET;
-  assert.throws(() => verifyProject(project, fixture, root), /same ActivityAttributes module/);
+  settings.PRODUCT_MODULE_NAME = 'KineSyncLiveActivity';
+  assert.throws(() => verifyProject(project, fixture, root), /must remain distinct/);
   settings.PRODUCT_MODULE_NAME = moduleName;
   // Reject a missing extension embed phase.
   const copy = host.buildPhases.find(({ value }) => objects.PBXCopyFilesBuildPhase?.[value]?.files.length);

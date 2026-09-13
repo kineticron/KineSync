@@ -43,8 +43,8 @@ class IpaChecks(unittest.TestCase):
         self.widget = {**self.host, 'CFBundleIdentifier': 'dev.kineticron.KineSync.KineSyncLyricsWidget',
                        'CFBundleExecutable': 'KineSyncLyricsWidget', 'CFBundlePackageType': 'XPC!',
                        'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.widgetkit-extension'}}
-        self.binary = executable()
-        self.widget_binary = None
+        self.binary = executable(check.HOST_ACTIVITY_MODULE)
+        self.widget_binary = executable(check.WIDGET_ACTIVITY_MODULE)
 
     def archive(self, *, missing_widget=False, cpu=None):
         data = io.BytesIO()
@@ -53,7 +53,7 @@ class IpaChecks(unittest.TestCase):
             archive.writestr(self.host_path + '/KineSync', self.binary + b'KineSyncLiveActivity')
             if not missing_widget:
                 archive.writestr(self.widget_path + '/Info.plist', plistlib.dumps(self.widget))
-                binary = (self.widget_binary or self.binary) if cpu is None else struct.pack('<8I', 0xFEEDFACF, cpu, 0, 2, 0, 0, 0, 0)
+                binary = self.widget_binary if cpu is None else struct.pack('<8I', 0xFEEDFACF, cpu, 0, 2, 0, 0, 0, 0)
                 archive.writestr(self.widget_path + '/KineSyncLyricsWidget', binary + b'LyricsActivityAttributes')
         return data.getvalue()
 
@@ -101,9 +101,9 @@ class IpaChecks(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'arm64 device executable'):
             self.verify()
 
-    def test_different_compiled_swift_modules_are_rejected(self):
-        self.widget_binary = executable('KineSyncLyricsWidget')
-        with self.assertRaisesRegex(ValueError, 'module mismatch'):
+    def test_wrong_widget_swift_module_is_rejected(self):
+        self.widget_binary = executable(check.HOST_ACTIVITY_MODULE)
+        with self.assertRaisesRegex(ValueError, 'Unexpected widget'):
             self.verify()
 
     def test_marker_strings_without_type_descriptors_are_rejected(self):

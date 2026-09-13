@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const xcode = require('xcode');
 const plist = require('@expo/plist').default;
-const { TARGET, ACTIVITY_MODULE } = require('../plugins/with-live-activity');
+const { TARGET } = require('../plugins/with-live-activity');
 const unquote = (value) => String(value || '').replace(/^"|"$/g, '');
 
 function verifyWidgetSource(widgetSource) {
@@ -45,7 +45,7 @@ function verifyProject(project, iosDir, projectRoot) {
     const settings = objects.XCBuildConfiguration[value].buildSettings;
     assert(hostIds.some((id) => unquote(settings.PRODUCT_BUNDLE_IDENTIFIER) === `${id}.${TARGET}`), 'Widget bundle ID must be nested under host ID');
     assert.equal(settings.APPLICATION_EXTENSION_API_ONLY, 'YES');
-    assert.equal(unquote(settings.PRODUCT_MODULE_NAME), ACTIVITY_MODULE, 'Host and widget must use the same ActivityAttributes module');
+    assert.equal(unquote(settings.PRODUCT_MODULE_NAME), TARGET, 'Widget Swift module must remain distinct from the Expo host pod');
     assert.equal(unquote(settings.SWIFT_VERSION), '5.0', 'Use the Swift 5 language mode, not a compiler release number');
     assert.equal(settings.SKIP_INSTALL, 'YES');
     assert.equal(unquote(settings.INFOPLIST_FILE), `${TARGET}/Info.plist`);

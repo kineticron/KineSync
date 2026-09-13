@@ -17,13 +17,14 @@ There is no evidence in that artifact that Sideloadly support is the problem.
 
 Reading Swift's compiled type descriptors revealed separate module identities:
 `KineSyncLiveActivity.LyricsActivityAttributes` in the host and
-`KineSyncLyricsWidget.LyricsActivityAttributes` in the extension. Copying the
-same source did not make those compiled names identical. The plugin now gives
-the extension the host module's name, keeping the attributes identity stable
-across both processes. This removes a potential registration mismatch; it is
-not yet a proven explanation of rendering failure on the reported beta device.
-The IPA verifier now reads the actual type descriptors and rejects that old
-artifact, instead of accepting any binary containing the attributes string.
+`KineSyncLyricsWidget.LyricsActivityAttributes` in the extension. That is the
+normal shape for a shared `ActivityAttributes` source compiled into separate app
+and widget targets. Forcing those module names to match caused the widget target
+to collide with the Expo host pod, so Expo's generated `ExpoModulesProvider`
+could no longer resolve `KineSyncLiveActivityModule`. The plugin now explicitly
+keeps the widget module name distinct while continuing to copy the exact same
+attributes source into both targets. The IPA verifier reads the compiled type
+descriptors and checks the expected host and widget modules separately.
 
 The widget also uses an intrinsic 24-point icon without a geometry-dependent
 scale and nonempty text fallbacks in each presentation. Restart previously
@@ -106,7 +107,8 @@ rule would otherwise omit them from a clean checkout. Expo Autolinking links
 the local module. The config plugin recreates the extension, copies the exact
 shared `LyricsActivityAttributes.swift`, enables `NSSupportsLiveActivities` in
 the host, adds the host target dependency and `PlugIns` copy phase, and aligns
-extension bundle ID, versions, and the Swift module name. It also declares the extension to EAS for
+extension bundle ID and versions while keeping its Swift module distinct from
+the Expo host pod. It also declares the extension to EAS for
 credential provisioning if signed EAS builds are used. It is safe to rerun and
 survives `expo prebuild --clean`.
 
@@ -123,7 +125,8 @@ Both `.github/workflows/ios-unsigned-ipa.yml` and `ios-development-build.yml`:
    disabled for all targets.
 3. Copy the complete `.app` with `ditto`, preserving `PlugIns`, then zip Payload.
 4. Validate the **actual IPA** before uploading: host flag, extension point,
-   bundle IDs/versions, compiled native code, matching Swift attributes modules, arm64 iOS device binaries, and
+   bundle IDs/versions, compiled native code, expected host/widget Swift modules,
+   arm64 iOS device binaries, and
    byte-for-byte preservation of every extension file from the built `.app`.
 
 Sideloadly can remove all or individual extensions. Keep **Remove Extensions**
