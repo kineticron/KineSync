@@ -1697,14 +1697,19 @@ export default function HomeScreen() {
           pointerEvents={
             fullscreenAlbumMode || albumArtworkMorphing ? "none" : "auto"
           }
-          style={[styles.lyricsWrap, lyricsViewportStyle, showEmptyState && { bottom: Math.max(controlsDockHeight + 12, 210) }]}
+          style={[styles.lyricsWrap, lyricsViewportStyle]}
         >
           <Reanimated.View
             entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
               PLAYER_MODE_EASE,
             )}
             exiting={FadeOut.duration(300).easing(PLAYER_MODE_EASE)}
-            style={styles.lyricsContentWrap}
+            style={[
+              styles.lyricsContentWrap,
+              showEmptyState && {
+                paddingBottom: Math.max(controlsDockHeight + 12, 210),
+              },
+            ]}
           >
             <Reanimated.View
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}

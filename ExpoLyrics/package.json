@@ -12,17 +12,9 @@
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:security": "node ./scripts/security-check.js",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
-    "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs"
+    "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs"
   },
   "dependencies": {
-    "@applemusic-like-lyrics/core": "^0.5.2",
-    "@pixi/app": "^7.4.3",
-    "@pixi/core": "^7.4.3",
-    "@pixi/display": "^7.4.3",
-    "@pixi/filter-blur": "^7.4.3",
-    "@pixi/filter-bulge-pinch": "^5.1.1",
-    "@pixi/filter-color-matrix": "^7.4.3",
-    "@pixi/sprite": "^7.4.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-masked-view/masked-view": "^0.3.2",
     "@react-native-vector-icons/ionicons": "^13.1.2",

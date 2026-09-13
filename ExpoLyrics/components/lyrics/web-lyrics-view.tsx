@@ -3,9 +3,9 @@ import { AppState, Platform, StyleSheet, View } from "react-native";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
 import {
-  AMLL_WEBVIEW_CSS,
-  AMLL_WEBVIEW_JS,
-} from "@/components/lyrics/amll-webview-bundle";
+  SPICY_WEBVIEW_CSS,
+  SPICY_WEBVIEW_JS,
+} from "@/components/lyrics/spicy-webview-bundle";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine as LyricLineType } from "@/types/bridge";
@@ -16,6 +16,7 @@ type WebLyricsSyllable = {
   text: string;
   startTime: number;
   endTime: number;
+  isPartOfWord?: boolean;
 };
 
 type WebLyricsLine = {
@@ -57,7 +58,7 @@ function createWebLyricsHtml() {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <style>
-${AMLL_WEBVIEW_CSS}
+${SPICY_WEBVIEW_CSS}
 html,
 body,
 #app {
@@ -76,7 +77,7 @@ body {
   touch-action: manipulation;
 }
 #app,
-#amll-root {
+#SpicyLyricsPage {
   position: absolute;
   inset: 0;
   background: transparent;
@@ -147,58 +148,6 @@ body {
   margin-left: auto;
   text-align: right;
 }
-.kinesync-amll-player {
-  background: transparent;
-  --amll-lp-color: #fff;
-  --amll-lp-font-size: calc(36px * var(--ks-font-scale, 1));
-  --amll-lp-hover-bg-color: transparent;
-  font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-weight: 800;
-  overflow: visible;
-}
-.kinesync-amll-player.landscape {
-  --amll-lp-font-size: calc(32px * var(--ks-font-scale, 1));
-}
-.kinesync-amll-player [class*="lyricLineWrapper"] {
-  box-sizing: border-box;
-  max-width: calc(100% - 44px);
-  margin-top: 8px;
-  margin-bottom: 8px;
-  overflow: visible !important;
-}
-.kinesync-amll-player.landscape [class*="lyricLineWrapper"] {
-  max-width: calc(100% - 56px);
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-.kinesync-amll-player [class*="lyricLineWrapper"]:not([style*="right"]) {
-  margin-left: 22px;
-}
-.kinesync-amll-player [class*="lyricLineWrapper"][style*="right"] {
-  margin-right: 22px;
-}
-.kinesync-amll-player.landscape [class*="lyricLineWrapper"]:not([style*="right"]) {
-  margin-left: 28px;
-}
-.kinesync-amll-player.landscape [class*="lyricLineWrapper"][style*="right"] {
-  margin-right: 28px;
-}
-.kinesync-amll-player [class*="lyricMainLine"],
-.kinesync-amll-player [class*="lyricSubLine"] {
-  font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-weight: 800;
-}
-.kinesync-amll-player [class*="lyricSubLine"] {
-  font-weight: 700;
-}
-.kinesync-amll-player .kinesync-selected-line,
-.kinesync-selected-line {
-  background-color: rgba(255,255,255,0.13) !important;
-}
-.kinesync-amll-player .kinesync-pressed-line,
-.kinesync-pressed-line {
-  background-color: rgba(255,255,255,0.16) !important;
-}
 .kinesync-credits-footer {
   box-sizing: border-box;
   width: min(88%, 720px);
@@ -211,7 +160,7 @@ body {
   font-weight: 600;
   cursor: pointer;
 }
-.kinesync-amll-player.landscape .kinesync-credits-footer {
+#SpicyLyricsPage.landscape .kinesync-credits-footer {
   margin-left: auto;
   text-align: right;
 }
@@ -226,7 +175,7 @@ body {
   align-items: center;
   gap: 6px;
 }
-.kinesync-amll-player.landscape .kinesync-credits-profile,
+#SpicyLyricsPage.landscape .kinesync-credits-profile,
 .static-lyrics-root.landscape .kinesync-credits-profile {
   justify-content: flex-end;
 }
@@ -265,14 +214,21 @@ body {
 </head>
 <body>
 <div id="app">
-  <div id="amll-root"></div>
+  <div id="SpicyLyricsPage" class="SpicyRenderer NoLineHoverBackground">
+    <div class="LyricsContainer">
+      <div class="LyricsContent">
+        <div id="spicyScrollRoot" class="SpicyLyricsScrollContainer" data-lyrics-type="Syllable"></div>
+      </div>
+    </div>
+  </div>
+  <div id="spicyCredits" class="kinesync-credits-footer" hidden></div>
   <div id="staticLyricsRoot" class="static-lyrics-root" hidden></div>
   <div id="empty" class="empty" hidden>
     <div id="emptyTitle" class="empty-title"></div>
     <div id="emptySub" class="empty-sub"></div>
   </div>
 </div>
-<script>${escapeScript(AMLL_WEBVIEW_JS)}</script>
+<script>${escapeScript(SPICY_WEBVIEW_JS)}</script>
 </body>
 </html>`;
 }
@@ -284,12 +240,13 @@ function toFiniteMs(value: unknown, fallback = 0) {
   return Number.isFinite(numberValue) ? Math.max(0, numberValue) : fallback;
 }
 
-function toWebSyllable(syllable: { text: string; startTime: number; endTime: number }): WebLyricsSyllable {
+function toWebSyllable(syllable: { text: string; startTime: number; endTime: number; isPartOfWord?: boolean }): WebLyricsSyllable {
   const startTime = toFiniteMs(syllable.startTime);
   return {
     text: String(syllable.text || ""),
     startTime,
     endTime: Math.max(startTime + 1, toFiniteMs(syllable.endTime, startTime + 1)),
+    isPartOfWord: syllable.isPartOfWord,
   };
 }
 

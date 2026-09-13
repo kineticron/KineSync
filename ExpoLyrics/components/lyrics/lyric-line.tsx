@@ -14,6 +14,7 @@ import Reanimated, {
   useAnimatedStyle,
   useSharedValue,
   withDelay,
+  withSpring,
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
@@ -35,19 +36,20 @@ const IDLE_PLAYBACK_SLICE = {
   anchorMonotonicMs: 0,
 } as const;
 
-const SCALE_ACTIVE = 1.05;
+// AMLL renders the focused line at 100% and springs surrounding lines to 97%.
+// Keep the text rasterized at its full target size and scale only inactive rows.
+const SCALE_ACTIVE = 1;
 const OPACITY_ACTIVE = 1;
-const OPACITY_NEAR = 0.5;
-const OPACITY_MID = 0.5;
-const OPACITY_FAR = 0.5;
-const COLOR_DONE = "rgba(255,255,255,0.5)";
-const COLOR_ACTIVE_PENDING = "rgba(255,255,255,0.5)";
-const COLOR_INACTIVE = "rgba(255,255,255,0.5)";
+const OPACITY_NEAR = 1;
+const OPACITY_MID = 1;
+const OPACITY_FAR = 1;
+// AMLL's mask resolves to ~0.2 alpha for solid/inactive rows and ~0.4 on the
+// unrevealed side of an active gradient at the configured 100% active scale.
+const COLOR_DONE = "rgba(255,255,255,0.20)";
+const COLOR_ACTIVE_PENDING = "rgba(255,255,255,0.40)";
+const COLOR_INACTIVE = "rgba(255,255,255,0.20)";
 const COLOR_ACTIVE_PROGRESS = "#FFFFFF";
-const SUSTAIN_MS_THRESHOLD = 680;
-const MIN_MS_PER_CHAR_FOR_LETTER_SWEEP = 220;
-const MAX_LETTER_SWEEP_CHARS = 5;
-const WORD_SUSTAIN_MIN_MS = 920;
+const SUSTAIN_MS_THRESHOLD = 1000;
 const SUSTAIN_SHORT_SCALE_BOOST = 0.068;
 const SUSTAIN_LONG_SCALE_BOOST = 0.04;
 const SUSTAIN_LONG_MS = 1200;
@@ -59,13 +61,13 @@ const SUSTAIN_GLOW_COLOR = "rgba(255,255,255,0.24)";
 const SUSTAIN_GLOW_COLOR_BG = "rgba(255,255,255,0.18)";
 const WORD_SUSTAIN_SCALE_EXPANSION_MAX = 4.2;
 const WORD_SUSTAIN_SCALE_EXPANSION_MAX_BG = 2.4;
-const BASE_FONT_SIZE = 32;
-const BASE_LINE_HEIGHT = 42;
+const BASE_FONT_SIZE = 36;
+const BASE_LINE_HEIGHT = 43.2;
 const LYRIC_TEXT_LANE_WIDTH = "88%";
-const LINE_INNER_PADDING_HORIZONTAL = 16;
+const LINE_INNER_PADDING_HORIZONTAL = 10;
 const LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE = 2;
-const BG_FONT_SIZE = BASE_FONT_SIZE * 0.62;
-const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.62;
+const BG_FONT_SIZE = BASE_FONT_SIZE * 0.7;
+const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.7;
 const PRIMARY_REVEAL_VERTICAL_PAD = 10;
 const BG_REVEAL_VERTICAL_PAD = 6;
 const PRIMARY_REVEAL_HORIZONTAL_PAD = 18;
@@ -74,9 +76,21 @@ const PRIMARY_GLYPH_PAINT_WIDTH =
   BASE_FONT_SIZE + PRIMARY_REVEAL_HORIZONTAL_PAD;
 const BG_GLYPH_PAINT_WIDTH = BG_FONT_SIZE + BG_REVEAL_HORIZONTAL_PAD;
 const SUSTAIN_LINE_HEIGHT_LIFT_FACTOR = 0.58;
-// ponytail: render oversized, scale down — text rasterizes at full size, no upscale pixelation
-const SCALE_TRANSFORM_INACTIVE = 1 / SCALE_ACTIVE; // ≈ 0.952
+const SCALE_TRANSFORM_INACTIVE = 0.97;
 const SCALE_TRANSFORM_ACTIVE = 1.0;
+const AMLL_LINE_SPRING = {
+  mass: 2,
+  damping: 25,
+  stiffness: 100,
+  overshootClamping: false,
+} as const;
+const AMLL_BG_SPRING = {
+  mass: 1,
+  damping: 20,
+  stiffness: 50,
+  overshootClamping: false,
+} as const;
+const AMLL_WORD_FADE_WIDTH = 0.56;
 
 // ponytail: worklet version — used inside useAnimatedStyle only
 function getInwardScaleTransformWorklet(
@@ -107,7 +121,8 @@ function getScaledPrimaryRevealHorizontalPad(fontSize = BASE_FONT_SIZE) {
   return PRIMARY_REVEAL_HORIZONTAL_PAD * (fontSize / BASE_FONT_SIZE);
 }
 
-const REVEAL_SWEEP_EASING = ReanimatedEasing.out(ReanimatedEasing.ease);
+// AMLL deliberately keeps the mask sweep linear so word timestamps stay exact.
+const REVEAL_SWEEP_EASING = ReanimatedEasing.linear;
 
 function getSyllableProgress(
   positionMs: number,
@@ -219,13 +234,15 @@ function interpolate(x: number, domain: number[], range: number[]) {
 function getPrimaryTokenRiseY(progress: number, fontSize = BASE_FONT_SIZE) {
   "worklet";
   const p = Math.max(0, Math.min(1, progress));
-  return interpolate(p, [0, 1], [0.01 * fontSize, -0.04 * fontSize]);
+  const eased = 1 - (1 - p) * (1 - p);
+  return -0.05 * fontSize * eased;
 }
 
 function getBackgroundTokenRiseY(progress: number, fontSize = BG_FONT_SIZE) {
   "worklet";
   const p = Math.max(0, Math.min(1, progress));
-  return interpolate(p, [0, 1], [0.005 * fontSize, -0.025 * fontSize]);
+  const eased = 1 - (1 - p) * (1 - p);
+  return -0.1 * fontSize * eased;
 }
 
 function smoothstep(value: number) {
@@ -264,14 +281,14 @@ function getSustainMode(text: string, durationMs: number): SustainMode {
   if (charCount === 0 || durationMs < SUSTAIN_MS_THRESHOLD) {
     return "none";
   }
-  if (charCount === 1) {
+  const cjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
+    trimmed,
+  );
+  if (cjk) {
     return "solo";
   }
-  const msPerChar = durationMs / charCount;
-  if (msPerChar >= MIN_MS_PER_CHAR_FOR_LETTER_SWEEP) {
-    return "letter-sweep";
-  }
-  if (charCount > MAX_LETTER_SWEEP_CHARS && durationMs >= WORD_SUSTAIN_MIN_MS) {
+  // AMLL only emphasizes non-CJK words between 2 and 7 characters.
+  if (charCount > 1 && charCount <= 7) {
     return "letter-sweep";
   }
   return "none";
@@ -1082,6 +1099,8 @@ type LyricLineProps = {
   line: LyricLineType;
   isActive: boolean;
   isPast: boolean;
+  isSelected?: boolean;
+  blurAmount?: number;
   inactiveOpacityDistance: number;
   showTranslatedText: boolean;
   pauseTone?: "none" | "past" | "future";
@@ -1145,6 +1164,8 @@ function areLyricLinePropsEqual(prev: LyricLineProps, next: LyricLineProps) {
     areLyricLinesEqual(prev.line, next.line) &&
     prev.isActive === next.isActive &&
     prev.isPast === next.isPast &&
+    Boolean(prev.isSelected) === Boolean(next.isSelected) &&
+    (prev.blurAmount ?? 0) === (next.blurAmount ?? 0) &&
     getInactiveOpacity(prev.inactiveOpacityDistance) ===
       getInactiveOpacity(next.inactiveOpacityDistance) &&
     prev.showTranslatedText === next.showTranslatedText &&
@@ -1167,6 +1188,8 @@ export const LyricLine = memo(function LyricLine({
   line,
   isActive,
   isPast,
+  isSelected = false,
+  blurAmount = 0,
   inactiveOpacityDistance,
   showTranslatedText,
   pauseTone = "none",
@@ -1182,7 +1205,6 @@ export const LyricLine = memo(function LyricLine({
   fontScale = 1,
   landscapeMode = false,
 }: LyricLineProps) {
-  // ponytail: oversized render — always at SCALE_ACTIVE size, scaled down when inactive
   const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
   const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
   const scaledLineTextStyle = useMemo(
@@ -1281,11 +1303,12 @@ export const LyricLine = memo(function LyricLine({
   const opacityAnim = useSharedValue(
     visuallyActive ? OPACITY_ACTIVE : getInactiveOpacity(inactiveOpacityDistance),
   );
+  const blurAnim = useSharedValue(Math.max(0, Math.min(5, blurAmount)));
 
   useEffect(() => {
-    scaleAnim.value = withTiming(
+    scaleAnim.value = withSpring(
       visuallyActive ? SCALE_TRANSFORM_ACTIVE : SCALE_TRANSFORM_INACTIVE,
-      { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
+      AMLL_LINE_SPRING,
     );
   }, [visuallyActive, scaleAnim]);
 
@@ -1295,6 +1318,13 @@ export const LyricLine = memo(function LyricLine({
       { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
     );
   }, [inactiveOpacity, visuallyActive, opacityAnim]);
+
+  useEffect(() => {
+    blurAnim.value = withTiming(Math.max(0, Math.min(5, blurAmount)), {
+      duration: 400,
+      easing: ReanimatedEasing.out(ReanimatedEasing.ease),
+    });
+  }, [blurAmount, blurAnim]);
 
   useEffect(() => {
     if (
@@ -1318,7 +1348,7 @@ export const LyricLine = memo(function LyricLine({
     };
   }, [line.lineStartTime, line.lineEndTime]);
 
-  const textWeight = "700" as const;
+  const textWeight = "800" as const;
   const translatedText = String(line.translatedText || "").trim();
   const backgroundTranslatedText = String(
     line.backgroundTranslatedText || "",
@@ -1331,11 +1361,7 @@ export const LyricLine = memo(function LyricLine({
   const lineInnerPaddingHorizontal = landscapeMode
     ? LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE
     : LINE_INNER_PADDING_HORIZONTAL;
-  const translatedColor = isPast
-    ? "rgba(255,255,255,0.72)"
-    : visuallyActive
-      ? "rgba(255,255,255,0.66)"
-      : "rgba(255,255,255,0.42)";
+  const translatedColor = "rgba(255,255,255,0.30)";
   const onPressLine = tapEnabled ? () => onPress?.(line) : undefined;
   const onLongPressLine = onLongPress ? () => onLongPress(line) : undefined;
   const flushPendingTokenWidths = useCallback(() => {
@@ -1408,10 +1434,18 @@ export const LyricLine = memo(function LyricLine({
     const laneFraction = landscapeMode ? 0.9 : 0.88;
     return { width: Math.round(laneWidthPx * laneFraction) };
   }, [laneWidthPx, landscapeMode, textLaneWidth]);
-  const lineAnimStyle = useAnimatedStyle(() => ({
-    opacity: opacityAnim.value,
-    transform: getInwardScaleTransformWorklet(scaleAnim.value, laneWidthPx, alignRight),
-  }), [laneWidthPx, alignRight]);
+  const lineAnimStyle = useAnimatedStyle(
+    () => ({
+      opacity: opacityAnim.value,
+      filter: [{ blur: blurAnim.value }],
+      transform: getInwardScaleTransformWorklet(
+        scaleAnim.value,
+        laneWidthPx,
+        alignRight,
+      ),
+    }),
+    [laneWidthPx, alignRight],
+  );
   const containerStyle = useMemo(
     () => [
       styles.lineOuter as ViewStyle,
@@ -1437,7 +1471,11 @@ export const LyricLine = memo(function LyricLine({
       <Pressable
         onLongPress={onLongPressLine}
         onPress={onPressLine}
-        style={styles.linePressable as ViewStyle}
+        style={({ pressed }) => [
+          styles.linePressable as ViewStyle,
+          isSelected && (styles.lineSelected as ViewStyle),
+          pressed && (styles.linePressed as ViewStyle),
+        ]}
       >
         <View
           style={[
@@ -1845,8 +1883,8 @@ export const LyricLine = memo(function LyricLine({
                 styles.translatedText,
                 {
                   color: translatedColor,
-                  fontSize: 14 * fontScale,
-                  lineHeight: 18 * fontScale,
+                  fontSize: BASE_FONT_SIZE * 0.5 * fontScale,
+                  lineHeight: BASE_FONT_SIZE * 0.75 * fontScale,
                   ...translatedTextWidthStyle,
                 },
                 alignRight && styles.translatedTextOpposite,
@@ -1894,7 +1932,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   isPlaying: boolean;
   tokenWidth: number;
   shouldMeasure: boolean;
-  textWeight: "700";
+  textWeight: "800";
   sustainMode: "solo" | "letter-sweep";
   lineFontSize?: number;
   lineLineHeight?: number;
@@ -2038,7 +2076,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   totalChars: number;
   durationMs: number;
   color: string;
-  textWeight: "700";
+  textWeight: "800";
   sustainMode: "solo" | "letter-sweep";
   progress: SharedValue<number>;
   layer: "pending" | "soft" | "progress";
@@ -2138,7 +2176,7 @@ const PrimaryWordSustainRevealToken = memo(
     isPlaying: boolean;
     tokenWidth: number;
     shouldMeasure: boolean;
-    textWeight: "700";
+    textWeight: "800";
     lineFontSize?: number;
     lineLineHeight?: number;
     revealClipStyle?: { height: number };
@@ -2318,7 +2356,7 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
   isPlaying: boolean;
   tokenWidth: number;
   shouldMeasure: boolean;
-  textWeight: "700";
+  textWeight: "800";
   lineFontSize?: number;
   lineLineHeight?: number;
   revealClipStyle?: { height: number };
@@ -2351,6 +2389,7 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
 
   const displayWidth =
     tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
+  const fadeLeadWidth = lineLineHeight * AMLL_WORD_FADE_WIDTH;
   const tokenRiseStyle = useAnimatedStyle(() => ({
     transform: [
       { translateY: getPrimaryTokenRiseY(progress.value, lineFontSize) },
@@ -2360,10 +2399,10 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
     const p = Math.max(0, Math.min(1, progress.value));
     const visible = p > 0 && p < 1;
     return {
-          opacity: visible ? 1 : 0,
-          width: visible
-            ? getRevealClipWidth(displayWidth, p, 0, 0)
-            : 0,
+      opacity: visible ? 1 : 0,
+      width: visible
+        ? getRevealClipWidth(displayWidth, p, fadeLeadWidth, 0)
+        : 0,
     };
   });
   const progressRevealStyle = useAnimatedStyle(() => ({
@@ -2435,12 +2474,14 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
   );
 });
 
-const COLOR_BG_DONE = "rgba(255,255,255,0.70)";
-const COLOR_BG_PENDING = "rgba(255,255,255,0.32)";
-const COLOR_BG_REVEAL_SOFT = "rgba(255,255,255,0.05)";
-const COLOR_BG_REVEAL_MID = "rgba(255,255,255,0.10)";
-const COLOR_BG_PROGRESS = "rgba(255,255,255,0.47)";
-const COLOR_BG_INACTIVE = "rgba(255,255,255,0.28)";
+// AMLL's background line has a 0.4 group opacity. Encode that directly into
+// native text colors so the independently animated BG wrapper only owns motion.
+const COLOR_BG_DONE = "rgba(255,255,255,0.08)";
+const COLOR_BG_PENDING = "rgba(255,255,255,0.16)";
+const COLOR_BG_REVEAL_SOFT = "rgba(255,255,255,0.22)";
+const COLOR_BG_REVEAL_MID = "rgba(255,255,255,0.30)";
+const COLOR_BG_PROGRESS = "rgba(255,255,255,0.40)";
+const COLOR_BG_INACTIVE = "rgba(255,255,255,0.08)";
 
 const BackgroundRevealSweepToken = memo(function BackgroundRevealSweepToken({
   text,
@@ -2492,14 +2533,25 @@ const BackgroundRevealSweepToken = memo(function BackgroundRevealSweepToken({
 
   const displayWidth =
     tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
+  const fadeLeadWidth = lineLineHeight * AMLL_WORD_FADE_WIDTH;
   const tokenRiseStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: getBackgroundTokenRiseY(progress.value, lineFontSize) }],
   }));
   const softRevealStyle = useAnimatedStyle(() => ({
-    width: getRevealClipWidth(displayWidth, progress.value, 6, 0),
+    width: getRevealClipWidth(
+      displayWidth,
+      progress.value,
+      fadeLeadWidth,
+      0,
+    ),
   }));
   const midRevealStyle = useAnimatedStyle(() => ({
-    width: getRevealClipWidth(displayWidth, progress.value, 3, 0),
+    width: getRevealClipWidth(
+      displayWidth,
+      progress.value,
+      fadeLeadWidth * 0.5,
+      0,
+    ),
   }));
   const progressRevealStyle = useAnimatedStyle(() => ({
     width: getRevealClipWidth(displayWidth, progress.value, 0, 0),
@@ -3096,6 +3148,25 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const isBgActive =
     effectivePlaybackPosition > 0 && effectivePlaybackPosition < bgEnd;
   const isBgPast = parentIsPast || effectivePlaybackPosition >= bgEnd;
+  const globallyPlaying = usePlaybackStore((state) => state.isPlaying);
+  const bgPresented = parentIsActive || parentBgStillActive || !globallyPlaying;
+  const bgScale = useSharedValue(bgPresented ? 1 : 0.75);
+  const bgSlideY = useSharedValue(bgPresented ? 0 : -80);
+  const bgOpacity = useSharedValue(bgPresented ? 1 : 0);
+
+  useEffect(() => {
+    bgScale.value = withSpring(bgPresented ? 1 : 0.75, AMLL_BG_SPRING);
+    bgSlideY.value = withSpring(bgPresented ? 0 : -80, AMLL_BG_SPRING);
+    bgOpacity.value = withTiming(bgPresented ? 1 : 0, {
+      duration: 300,
+      easing: ReanimatedEasing.out(ReanimatedEasing.ease),
+    });
+  }, [bgOpacity, bgPresented, bgScale, bgSlideY]);
+
+  const bgPresentationStyle = useAnimatedStyle(() => ({
+    opacity: bgOpacity.value,
+    transform: [{ translateY: bgSlideY.value }, { scale: bgScale.value }],
+  }));
 
   useEffect(() => {
     if (
@@ -3154,18 +3225,15 @@ const BackgroundVocals = memo(function BackgroundVocals({
     [flushPendingWidths],
   );
 
-  const translationColor = isBgPast
-    ? "rgba(255,255,255,0.64)"
-    : isBgActive
-      ? "rgba(255,255,255,0.58)"
-      : "rgba(255,255,255,0.38)";
+  const translationColor = "rgba(255,255,255,0.12)";
 
   return (
-    <View
+    <Reanimated.View
       style={[
         styles.bgVocalsGroup,
         { width: textLaneWidth as number },
         alignRight && styles.bgVocalsGroupOpposite,
+        bgPresentationStyle,
       ]}
     >
       <View
@@ -3509,7 +3577,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
           {translatedText}
         </Text>
       )}
-    </View>
+    </Reanimated.View>
   );
 });
 
@@ -3616,9 +3684,9 @@ const PauseDots = memo(function PauseDots({
 
 const styles = StyleSheet.create({
   lineOuter: {
-    minHeight: 84,
+    minHeight: 72,
     justifyContent: "center",
-    paddingVertical: 10,
+    paddingVertical: 8,
   } as ViewStyle,
   lineOuterLandscape: {
     overflow: "visible",
@@ -3626,7 +3694,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: LANDSCAPE_LINE_SCALE_BLEED,
   } as ViewStyle,
   linePressable: {
-    paddingVertical: 2,
+    paddingVertical: 6,
+    borderRadius: 9,
+    overflow: "visible",
+  } as ViewStyle,
+  lineSelected: {
+    backgroundColor: "rgba(255,255,255,0.13)",
+  } as ViewStyle,
+  linePressed: {
+    backgroundColor: "rgba(255,255,255,0.16)",
   } as ViewStyle,
   lineInner: {
     alignItems: "flex-start",
@@ -3772,7 +3848,7 @@ const styles = StyleSheet.create({
   bgVocalsText: {
     fontSize: BG_FONT_SIZE,
     lineHeight: BG_LINE_HEIGHT,
-    fontWeight: "500",
+    fontWeight: "800",
     textAlign: "left",
     letterSpacing: 0.1,
   } as TextStyle,
@@ -3789,6 +3865,7 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.3)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
+    fontWeight: "700",
   } as TextStyle,
   translatedText: {
     alignSelf: "flex-start",
@@ -3801,6 +3878,7 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.34)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
+    fontWeight: "700",
   } as TextStyle,
   translatedTextOpposite: {
     alignSelf: "flex-end",

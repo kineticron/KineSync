@@ -35,6 +35,7 @@ import Animated, {
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
+  withSpring,
   withTiming,
 } from "react-native-reanimated";
 
@@ -57,8 +58,8 @@ import type {
 
 import { LyricLine } from "./lyric-line";
 
-const LONG_PAUSE_THRESHOLD_MS = 3000;
-const PAUSE_DOTS_EARLY_EXIT_MS = 500;
+const LONG_PAUSE_THRESHOLD_MS = 4000;
+const PAUSE_DOTS_EARLY_EXIT_MS = 250;
 const SOURCE_CHANGE_AUTOSCROLL_DELAY_MS = 500;
 const TOP_LIST_PADDING = 150;
 const BOTTOM_LIST_PADDING = 280;
@@ -78,8 +79,12 @@ const SCROLL_SETTLE_VERIFY_MS = LYRIC_SCROLL_ANIMATION_MS + 100;
 const PENDING_ANCHOR_RETRY_MS = 96;
 const MAX_PENDING_ANCHOR_RETRIES = 18;
 const STARTUP_DOTS_WARMUP_MS = 100;
-// Fast start, long gentle deceleration — no overshoot (P1 0.22,0.88 → P2 0.34,1)
-const LYRIC_SCROLL_EASING = ReanimatedEasing.bezier(0.22, 0.88, 0.34, 1);
+const AMLL_SCROLL_SPRING = {
+  mass: 1,
+  damping: 28,
+  stiffness: 180,
+  overshootClamping: false,
+} as const;
 const AUTO_FOLLOW_DISABLE_GRACE_MS = 2000;
 const AUTO_FOLLOW_DISABLE_DISTANCE_PX = 120;
 const AUTO_FOLLOW_RESUME_DISTANCE_PX = 64;
@@ -1017,6 +1022,7 @@ export function LyricsView({
   previewPositionMs = null,
   autoFollowEnabled = true,
   resumeAutoFollowSignal = 0,
+  selectedLineKeys,
   onLinePress,
   onLineLongPress,
   onCreditsTimestampPress,
@@ -1030,9 +1036,10 @@ export function LyricsView({
   fontScale = 1,
   landscapeMode = false,
 }: LyricsViewProps) {
+  const [viewportHeight, setViewportHeight] = useState(0);
   const activeLineTopOffset = landscapeMode
     ? LANDSCAPE_ACTIVE_LINE_TOP_OFFSET
-    : ACTIVE_LINE_TOP_OFFSET;
+    : viewportHeight * 0.08;
   const topListPadding = landscapeMode
     ? LANDSCAPE_TOP_LIST_PADDING
     : TOP_LIST_PADDING;
@@ -1111,7 +1118,6 @@ export function LyricsView({
   const [startupDotsWarmupActive, setStartupDotsWarmupActive] = useState(false);
   const [isSourceAutoScrollCooldown, setIsSourceAutoScrollCooldown] =
     useState(false);
-  const [viewportHeight, setViewportHeight] = useState(0);
   const [contentLayoutVersion, setContentLayoutVersion] = useState(0);
   // ponytail: batch cell layout bumps — fast scroll fires onLayout per cell,
   // debounce so we only re-render once per frame instead of per-cell
@@ -1471,12 +1477,9 @@ export function LyricsView({
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
-        lyricScrollOffset.value = withTiming(
+        lyricScrollOffset.value = withSpring(
           offset,
-          {
-            duration: LYRIC_SCROLL_ANIMATION_MS,
-            easing: LYRIC_SCROLL_EASING,
-          },
+          AMLL_SCROLL_SPRING,
           (finished) => {
             if (finished) {
               lyricScrollActive.value = false;
@@ -1861,6 +1864,7 @@ export function LyricsView({
     },
     [
       autoFollowEnabled,
+      activeLineTopOffset,
       getScrollOffsetForRange,
       isRangeAnchoredAndVisible,
       listReady,
@@ -2211,6 +2215,12 @@ export function LyricsView({
       const inactiveOpacityDistance = Math.abs(
         ws.focusLineIndex - index,
       );
+      const blurAmount = isActive
+        ? 0
+        : Math.min(5, Math.max(0, inactiveOpacityDistance + 1));
+      const isSelected = Boolean(
+        selectedLineKeys?.has(`${item.lineStartTime}-${item.lineEndTime}`),
+      );
       const showPauseDotsAfter =
         ws.isLongPause && index === ws.pauseAfterIndex;
       const showPauseDotsBefore =
@@ -2221,6 +2231,8 @@ export function LyricsView({
           line={item}
           isActive={isActive}
           isPast={isPast}
+          isSelected={isSelected}
+          blurAmount={blurAmount}
           inactiveOpacityDistance={inactiveOpacityDistance}
           showPauseDotsAfter={showPauseDotsAfter}
           showPauseDotsBefore={showPauseDotsBefore}
@@ -2249,6 +2261,7 @@ export function LyricsView({
       landscapeMode,
       onLineLongPress,
       onLinePress,
+      selectedLineKeys,
       showTranslatedText,
       tapToSeekEnabled,
       previewPlaybackPosition,
