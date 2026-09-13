@@ -4,6 +4,9 @@ const { withInfoPlist, withXcodeProject } = require('expo/config-plugins');
 const plist = require('@expo/plist');
 
 const TARGET = 'KineSyncLyricsWidget';
+// ActivityKit registers the Swift attributes type. Match the module that starts
+// the activity, not just the source filename copied into the extension.
+const ACTIVITY_MODULE = 'KineSyncLiveActivity';
 const unquote = (value) => String(value || '').replace(/^"|"$/g, '');
 
 function configureProject(project, { projectRoot, platformProjectRoot, bundleIdentifier, version, buildNumber }) {
@@ -47,6 +50,7 @@ function configureProject(project, { projectRoot, platformProjectRoot, bundleIde
     Object.assign(objects.XCBuildConfiguration[value].buildSettings, {
       PRODUCT_BUNDLE_IDENTIFIER: `"${bundleIdentifier}.${TARGET}"`,
       PRODUCT_NAME: `"${TARGET}"`,
+      PRODUCT_MODULE_NAME: ACTIVITY_MODULE,
       INFOPLIST_FILE: `"${TARGET}/Info.plist"`,
       GENERATE_INFOPLIST_FILE: 'NO',
       IPHONEOS_DEPLOYMENT_TARGET: '16.4',
@@ -97,3 +101,4 @@ function withLiveActivity(config) {
 module.exports = withLiveActivity;
 module.exports.configureProject = configureProject;
 module.exports.TARGET = TARGET;
+module.exports.ACTIVITY_MODULE = ACTIVITY_MODULE;

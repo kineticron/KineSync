@@ -5,6 +5,39 @@ SwiftUI WidgetKit extension to render it. Start playback in the foreground,
 then leave the app to see the compact Dynamic Island. Hold the Island to expand.
 The Lock Screen also shows the lyrics on devices without Dynamic Island.
 
+## Blank Island investigation (September 2026)
+
+The reported device runs iOS 27 Developer Beta. We downloaded the actual
+[iOS unsigned IPA run 34446072397](https://github.com/kineticron/KineSync/actions/runs/34446072397)
+for commit `e353eff` on `expo-ui-live-activity` (version 1.0.7, build 38).
+The archive contains the arm64 widget, WidgetBundle entry point, matching
+versions, correct extension point and host support flag. Its system frameworks
+and Swift runpaths are present. It was compiled with Xcode 26.6 / iOS 26.5 SDK.
+There is no evidence in that artifact that Sideloadly support is the problem.
+
+Reading Swift's compiled type descriptors revealed separate module identities:
+`KineSyncLiveActivity.LyricsActivityAttributes` in the host and
+`KineSyncLyricsWidget.LyricsActivityAttributes` in the extension. Copying the
+same source did not make those compiled names identical. The plugin now gives
+the extension the host module's name, keeping the attributes identity stable
+across both processes. This removes a potential registration mismatch; it is
+not yet a proven explanation of rendering failure on the reported beta device.
+The IPA verifier now reads the actual type descriptors and rejects that old
+artifact, instead of accepting any binary containing the attributes string.
+
+The widget also uses an intrinsic 24-point icon without a geometry-dependent
+scale and nonempty text fallbacks in each presentation. Restart previously
+reused the active session; it now ends it and requests a new one. Old `lyrics`
+sessions are retired on first playback after upgrading to `lyrics-v2`.
+
+A successful ActivityKit request is not a renderer acknowledgement. For device
+investigation, collect Console logs for subsystem
+`dev.kineticron.KineSync.live-activity`: category `host` reports the requested
+type, and `widget` reports registration in the extension process. These logs
+contain type names, not song titles, lyrics, tokens, or pairing keys. Check the
+Lock Screen as well as compact and expanded Island after installing the new
+IPA. Physical-device confirmation on iOS 27 beta remains required.
+
 ## Content and rendering budgets
 
 The compact leading and minimal regions use the app's diagonal microphone:
@@ -73,7 +106,7 @@ rule would otherwise omit them from a clean checkout. Expo Autolinking links
 the local module. The config plugin recreates the extension, copies the exact
 shared `LyricsActivityAttributes.swift`, enables `NSSupportsLiveActivities` in
 the host, adds the host target dependency and `PlugIns` copy phase, and aligns
-extension bundle ID and versions. It also declares the extension to EAS for
+extension bundle ID, versions, and the Swift module name. It also declares the extension to EAS for
 credential provisioning if signed EAS builds are used. It is safe to rerun and
 survives `expo prebuild --clean`.
 
@@ -90,7 +123,7 @@ Both `.github/workflows/ios-unsigned-ipa.yml` and `ios-development-build.yml`:
    disabled for all targets.
 3. Copy the complete `.app` with `ditto`, preserving `PlugIns`, then zip Payload.
 4. Validate the **actual IPA** before uploading: host flag, extension point,
-   bundle IDs/versions, compiled native code, arm64 iOS device binaries, and
+   bundle IDs/versions, compiled native code, matching Swift attributes modules, arm64 iOS device binaries, and
    byte-for-byte preservation of every extension file from the built `.app`.
 
 Sideloadly can remove all or individual extensions. Keep **Remove Extensions**
@@ -122,7 +155,7 @@ node scripts/verify-live-activity-project.js
 The JS suite uses the installed Expo SDK's real Xcode template to check target
 generation and repeat runs, source/clock behavior, and module autolinking. IPA
 regressions use synthetic binaries and test missing extensions, broken IDs,
-version mismatch, absent flags, and simulator binaries. These checks do not
+version mismatch, absent flags, simulator binaries, missing type descriptors, and mismatched Swift module identities. These checks do not
 replace Xcode compilation or a physical-device rendering test.
 
 Before releasing, test a freshly built, Sideloadly-installed IPA:

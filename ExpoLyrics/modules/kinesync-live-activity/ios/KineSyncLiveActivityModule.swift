@@ -2,6 +2,7 @@ import ActivityKit
 import ExpoModulesCore
 import Foundation
 import UIKit
+import os
 
 public final class KineSyncLiveActivityModule: Module {
   public func definition() -> ModuleDefinition {
@@ -45,6 +46,8 @@ private struct LyricsSnapshot: Decodable {
 @MainActor
 private final class LyricsActivityController {
   static let shared = LyricsActivityController()
+  private let logger = Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "host")
+  private let sessionVersion = "lyrics-v2"
   private var activity: Activity<LyricsActivityAttributes>?
   private var snapshot: LyricsSnapshot?
   private var lines: [LyricsSnapshot.Line] = []
@@ -101,6 +104,19 @@ private final class LyricsActivityController {
       return status
     }
 
+    // Restart really creates a fresh presentation. A .active ActivityKit state
+    // only acknowledges the session; it does not confirm a widget was rendered.
+    if retry {
+      await endCurrentActivities()
+      guard generation == revision else { return status }
+    }
+    // Retire pre-fix presentations after installing a new widget binary.
+    for existing in Activity<LyricsActivityAttributes>.activities where existing.attributes.session != sessionVersion {
+      endingIDs.insert(existing.id)
+      await existing.end(nil, dismissalPolicy: .immediate)
+      endingIDs.remove(existing.id)
+    }
+    guard generation == revision else { return status }
     // Recover a surviving activity after a JS reload/relaunch and remove duplicates.
     if activity == nil {
       let existing = Activity<LyricsActivityAttributes>.activities.filter {
@@ -229,8 +245,9 @@ private final class LyricsActivityController {
       }
       do {
         adopt(try Activity.request(
-          attributes: LyricsActivityAttributes(session: "lyrics"), content: content, pushType: nil
+          attributes: LyricsActivityAttributes(session: sessionVersion), content: content, pushType: nil
         ))
+        logger.info("Requested activity with attributes \(String(reflecting: LyricsActivityAttributes.self), privacy: .public)")
       } catch {
         // Keep the actual ActivityKit reason visible; never silently swallow a failure.
         suppressedTrack = value.trackId
@@ -241,7 +258,7 @@ private final class LyricsActivityController {
     guard generation == revision else { return }
     lastState = state
     lastStaleDate = staleDate
-    setStatus("active", value.isPlaying ? "Live lyrics are active. Hold the Dynamic Island to expand." : "Live lyrics are paused.")
+    setStatus("active", value.isPlaying ? "Live Activity started" : "Live Activity paused")
   }
 
   private func schedule(generation: Int) {
@@ -259,9 +276,7 @@ private final class LyricsActivityController {
     }
   }
 
-  func stop() async {
-    revision += 1
-    let generation = revision
+  private func endCurrentActivities() async {
     timer?.cancel()
     observation?.cancel()
     activity = nil
@@ -269,10 +284,17 @@ private final class LyricsActivityController {
     lastStaleDate = nil
     let ending = Activity<LyricsActivityAttributes>.activities
     endingIDs.formUnion(ending.map(\.id))
+    await updateTask?.value
     for existing in ending {
       await existing.end(nil, dismissalPolicy: .immediate)
     }
     endingIDs.subtract(ending.map(\.id))
+  }
+
+  func stop() async {
+    revision += 1
+    let generation = revision
+    await endCurrentActivities()
     guard generation == revision else { return }
     setStatus("idle", "Start a song to show live lyrics.")
   }

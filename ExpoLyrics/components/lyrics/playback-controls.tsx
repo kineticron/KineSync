@@ -24,7 +24,6 @@ import Reanimated, {
   useReducedMotion,
 } from 'react-native-reanimated';
 import { selectionAsync } from 'expo-haptics';
-import { Design } from '@/constants/design';
 
 import { usePlaybackStore } from '@/store/playback-store';
 import type { PlaybackMode } from '@/lib/playback-source';
@@ -646,7 +645,7 @@ export const PlaybackControls = memo(function PlaybackControls({
               <Ionicons
                 name="play"
                 size={isOverlay ? 30 : 48}
-                color={Design.accentInk}
+                color="#FFFFFF"
                 style={isOverlay ? styles.playGlyphOverlay : styles.playGlyph}
               />
             </Reanimated.View>
@@ -660,7 +659,7 @@ export const PlaybackControls = memo(function PlaybackControls({
               <Ionicons
                 name="pause"
                 size={isOverlay ? 26 : 44}
-                color={Design.accentInk}
+                color="#FFFFFF"
               />
             </Reanimated.View>
           </View>
@@ -1077,12 +1076,10 @@ const styles = StyleSheet.create({
   playButtonShell: {
     width: 86,
     height: 86,
-    backgroundColor: Design.accent,
   },
   playButtonShellOverlay: {
     width: 56,
     height: 56,
-    backgroundColor: Design.accent,
   },
   playIconFrame: {
     width: 64,

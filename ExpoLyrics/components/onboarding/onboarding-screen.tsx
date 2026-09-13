@@ -33,6 +33,7 @@ import { WebView } from "react-native-webview";
 
 import { bridgeClient } from "@/lib/bridge-client";
 import { extractHost, isPrivateIpv4, isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
+import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { usePlaybackStore } from "@/store/playback-store";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
@@ -107,29 +108,25 @@ type IoniconName = ComponentProps<typeof Ionicons>["name"];
 const ONBOARDING_STEPS: {
   icon: IoniconName;
   title: string;
-  eyebrow: string;
   description: string;
 }[] = [
   {
     icon: "musical-notes-outline",
-    eyebrow: "Made for your music",
-    title: "Every word.\nRight on time.",
+    title: "KineSync",
     description:
-      "Follow the lyrics as they flow with your Spotify playback. Your own little front row, wherever you listen.",
+      "Synced lyrics for Spotify.",
   },
   {
     icon: "color-palette-outline",
-    eyebrow: "Your vibe",
-    title: "Find your flow.",
+    title: "Display",
     description:
-      "Keep it minimal or sing along with every detail. You can always change these later.",
+      "Change these anytime in Settings.",
   },
   {
     icon: "scan-outline",
-    eyebrow: "Connect",
-    title: "Let’s get\nyou connected.",
+    title: "Connect",
     description:
-      "Pair with your desktop for precise sync, or keep the music on this phone.",
+      "Choose a playback source.",
   },
 ];
 
@@ -309,7 +306,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const [scanCompleted, setScanCompleted] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<"unset" | "desktop" | "phone">("unset");
   const [loginOpen, setLoginOpen] = useState(false);
-  const [spotifySignedIn, setSpotifySignedIn] = useState(false);
+  const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const setSpotifySignedIn = useSpotifySessionStore((s) => s.setSignedIn);
   const spotifyLoginCompletedRef = useRef(false);
   const scrollRef = useRef<any>(null);
   const stepRef = useRef(step);
@@ -353,7 +351,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     setSpotifySignedIn(true);
     setLoginOpen(false);
     requestReloadSpotifyBrowser();
-  }, []);
+  }, [setSpotifySignedIn]);
 
   const openSpotifyLogin = useCallback(() => {
     spotifyLoginCompletedRef.current = false;
@@ -438,13 +436,13 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   }));
 
   const footerLabel = useMemo(
-    () => (isLastStep ? "Let’s play" : step === 0 ? "Make it yours" : "Continue"),
-    [isLastStep, step],
+    () => (isLastStep ? "Done" : "Continue"),
+    [isLastStep],
   );
 
   const persistBridgeSettings = useCallback(() => {
     if (playbackMode === "phone") {
-      // Phone-only: nothing to connect to, just surface the built-in player.
+      // Keep the empty-state login action visible until a session is verified.
       setPlaybackModeStore("mobile");
       bridgeClient.disconnect();
       setServerUrlStore("");
@@ -455,7 +453,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         playbackMode: "mobile",
         onboardingCompleted: true,
       });
-      setTimeout(requestOpenSpotifyBrowser, 320);
+      if (useSpotifySessionStore.getState().signedIn) setTimeout(requestOpenSpotifyBrowser, 320);
       return;
     }
     setPlaybackModeStore("desktop");
@@ -573,15 +571,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   <View style={styles.sparkle}><Ionicons name="sparkles" size={22} color={Design.accent} /></View>
                 </View>
               ) : <GlassIcon icon={stepData.icon} active={index === step} />}
-              <Text style={styles.eyebrow}>{stepData.eyebrow}</Text>
               <Text style={styles.title}>{stepData.title}</Text>
               <Text style={styles.description}>{stepData.description}</Text>
-              {index === 0 && (
-                <View style={styles.featureRow}>
-                  <View style={styles.featurePill}><Ionicons name="pulse" size={15} color={Design.accent} /><Text style={styles.featureText}>Live lyrics</Text></View>
-                  <View style={styles.featurePill}><Ionicons name="heart-outline" size={15} color={Design.accent} /><Text style={styles.featureText}>Free, forever</Text></View>
-                </View>
-              )}
 
               {index === 1 ? (
                 <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
@@ -829,11 +820,6 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                 if (!isSpotifyNativeAppRedirect(url)) {
                   return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
                 }
-
-                // Spotify has already established the authenticated cookies by
-                // the time it attempts this native-app handoff. Cancel it so
-                // the installed app cannot steal focus, then finish onboarding.
-                completeSpotifySignIn();
                 return false;
               }}
               sharedCookiesEnabled
@@ -1138,9 +1124,6 @@ const styles = StyleSheet.create({
   welcomeLogoWrap: { marginBottom: 36, width: 120, height: 120 },
   welcomeLogo: { width: 120, height: 120, borderRadius: 32, borderWidth: 1, borderColor: Design.border },
   sparkle: { position: 'absolute', right: -15, top: -14, backgroundColor: Design.surface, borderRadius: 18, padding: 10, transform: [{ rotate: '12deg' }] },
-  featureRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10, marginTop: 28 },
-  featurePill: { flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: 20, paddingHorizontal: 13, paddingVertical: 9, borderWidth: 1, borderColor: Design.border, backgroundColor: 'rgba(168,240,207,0.04)' },
-  featureText: { color: Design.muted, fontSize: 12, fontWeight: '600' },
   stepLabel: { color: Design.muted, textAlign: 'center', fontSize: 10, fontWeight: '700', letterSpacing: 1.8, marginBottom: 5 },
   nextWrap: { width: '100%', maxWidth: 440, alignSelf: 'center' },
   fieldGroup: {

@@ -65,7 +65,7 @@ try {
   const project = require('xcode').project(pbxPath);
   project.parseSync();
   const { configureProject, TARGET } = require('../plugins/with-live-activity');
-  const { verifyProject } = require('./verify-live-activity-project');
+  const { verifyProject, verifyWidgetSource } = require('./verify-live-activity-project');
   const host = project.getFirstTarget().firstTarget;
   const objects = project.hash.project.objects;
   const firstConfig = objects.XCConfigurationList[host.buildConfigurationList].buildConfigurations[0].value;
@@ -73,6 +73,12 @@ try {
   const options = { projectRoot: root, platformProjectRoot: fixture, bundleIdentifier, version: '9.8.7', buildNumber: '987' };
   configureProject(project, options);
   verifyProject(project, fixture, root);
+  const widgetSource = fs.readFileSync(path.join(root, 'widgets/KineSyncLyricsActivity.swift'), 'utf8');
+  assert.throws(
+    () => verifyWidgetSource(widgetSource.replace('KineSyncLyricsActivity()', 'MissingLyricsActivity()')),
+    /register KineSyncLyricsActivity/,
+    'A widget bundle that omits the Live Activity must fail verification',
+  );
   const first = project.writeSync();
   configureProject(project, options);
   assert.equal(project.writeSync(), first, 'Repeated prebuild must not duplicate targets, sources, or embed phases');
@@ -83,7 +89,15 @@ try {
   const info = require('@expo/plist').default.parse(fs.readFileSync(path.join(fixture, TARGET, 'Info.plist'), 'utf8'));
   assert.equal(info.CFBundleShortVersionString, '9.8.7');
   assert.equal(info.CFBundleVersion, '987');
-  // Prove the verifier rejects the original invisible-widget failure mode.
+  // Reject a widget compiled under a different Swift attributes module.
+  const extension = Object.values(objects.PBXNativeTarget).find((target) => typeof target === 'object' && String(target.name).replace(/^"|"$/g, '') === TARGET);
+  const widgetConfig = objects.XCConfigurationList[extension.buildConfigurationList].buildConfigurations[0].value;
+  const settings = objects.XCBuildConfiguration[widgetConfig].buildSettings;
+  const moduleName = settings.PRODUCT_MODULE_NAME;
+  settings.PRODUCT_MODULE_NAME = TARGET;
+  assert.throws(() => verifyProject(project, fixture, root), /same ActivityAttributes module/);
+  settings.PRODUCT_MODULE_NAME = moduleName;
+  // Reject a missing extension embed phase.
   const copy = host.buildPhases.find(({ value }) => objects.PBXCopyFilesBuildPhase?.[value]?.files.length);
   const files = objects.PBXCopyFilesBuildPhase[copy.value].files;
   objects.PBXCopyFilesBuildPhase[copy.value].files = [];

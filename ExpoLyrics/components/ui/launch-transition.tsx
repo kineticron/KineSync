@@ -86,7 +86,6 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
           </Animated.View>
           <Animated.View style={[styles.wordmark, labelStyle]}>
             <Text style={styles.name}>KineSync</Text>
-            <Text style={styles.tagline}>Feel every word.</Text>
           </Animated.View>
         </View>
       )}

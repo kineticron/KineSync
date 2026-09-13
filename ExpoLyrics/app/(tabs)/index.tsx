@@ -18,7 +18,6 @@ import {
 import {
   Alert,
   AppState,
-  type AppStateStatus,
   Modal,
   Platform,
   Pressable,
@@ -31,13 +30,9 @@ import {
 } from "react-native";
 import Reanimated, {
   useSharedValue,
-  useReducedMotion,
   withTiming,
-  withRepeat,
-  withSequence,
   useAnimatedStyle,
   Easing as ReanimatedEasing,
-  cancelAnimation,
   interpolate,
   interpolateColor,
   Extrapolation,
@@ -82,6 +77,8 @@ import {
   type SpotifyBrowserFallbackHandle,
 } from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
+import { PromotionalBackdrop } from "@/components/ui/promotional-backdrop";
+import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
@@ -450,7 +447,6 @@ function ButtonTutorialModal({
 
 export default function HomeScreen() {
   const router = useRouter();
-  const reduceMotion = useReducedMotion();
   const [isScreenFocused, setIsScreenFocused] = useState(true);
   useFocusEffect(
     useCallback(() => {
@@ -464,6 +460,8 @@ export default function HomeScreen() {
   const currentTrack = usePlaybackStore((s) => s.currentTrack);
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const playbackMode = usePlaybackStore((s) => s.playbackMode);
+  const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const showEmptyState = !currentTrack || (playbackMode === 'mobile' && !spotifySignedIn) || (playbackMode === 'desktop' && connectionStatus !== 'connected');
   const driftOffset = usePlaybackStore((s) => s.driftOffset);
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
@@ -523,8 +521,6 @@ export default function HomeScreen() {
     () => new Set(),
   );
   const [shareBusy, setShareBusy] = useState(false);
-  const ambientPhaseA = useSharedValue(0);
-  const ambientPhaseB = useSharedValue(0);
   const fullscreenAlbumProgress = useSharedValue(0);
   const topBarTrackPress = useSharedValue(0);
   const fullscreenLyricsButtonScale = useSharedValue(1);
@@ -538,7 +534,6 @@ export default function HomeScreen() {
   const autoHidePlaybackControlsRef = useRef(autoHidePlaybackControls);
   const fullscreenAlbumModeRef = useRef(fullscreenAlbumMode);
   const albumArtworkMorphingRef = useRef(albumArtworkMorphing);
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const trackArtworkUrl = currentTrack?.artworkUrl ?? "";
   const trackAlbumTitle = String(currentTrack?.album || "").trim();
   const [resolvedAnimatedSquareUrl, setResolvedAnimatedSquareUrl] = useState("");
@@ -902,52 +897,9 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
-    const stopAmbientAnimations = () => {
-      cancelAnimation(ambientPhaseA);
-      cancelAnimation(ambientPhaseB);
-    };
-
-    const startAmbientAnimations = () => {
-      if (reduceMotion || hasResolvedArtwork) return;
-      ambientPhaseA.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 18000 }),
-          withTiming(0, { duration: 18000 }),
-        ),
-        -1,
-        false,
-      );
-      ambientPhaseB.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 22000 }),
-          withTiming(0, { duration: 22000 }),
-        ),
-        -1,
-        false,
-      );
-    };
-
-    // ponytail: skip blobs when covered by fullscreen album art or backgrounded — saves CPU on older devices
-    if (appStateRef.current === "active" && isScreenFocused && !fullscreenAlbumMode) {
-      startAmbientAnimations();
-    }
-
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      appStateRef.current = nextState;
-      if (nextState === "active") {
-        setScrubPreviewPositionMs(null);
-        if (isScreenFocused && !fullscreenAlbumMode) startAmbientAnimations();
-        return;
-      }
-      setScrubPreviewPositionMs(null);
-      stopAmbientAnimations();
-    });
-
-    return () => {
-      subscription.remove();
-      stopAmbientAnimations();
-    };
-  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode, hasResolvedArtwork, isScreenFocused, reduceMotion]);
+    const subscription = AppState.addEventListener('change', () => setScrubPreviewPositionMs(null));
+    return () => subscription.remove();
+  }, []);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
     if (usePlaybackStore.getState().connectionStatus === "connected") {
@@ -1264,26 +1216,6 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
-  const ambientBlobAStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: interpolate(ambientPhaseA.value, [0, 1], [-36, 36]) },
-        { translateY: interpolate(ambientPhaseA.value, [0, 1], [-20, 30]) },
-      ],
-      opacity: interpolate(ambientPhaseA.value, [0, 1], [0.22, 0.32]),
-    };
-  });
-
-  const ambientBlobBStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: interpolate(ambientPhaseB.value, [0, 1], [26, -28]) },
-        { translateY: interpolate(ambientPhaseB.value, [0, 1], [26, -18]) },
-      ],
-      opacity: interpolate(ambientPhaseB.value, [0, 1], [0.2, 0.3]),
-    };
-  });
-
   const controlsStyle = useAnimatedStyle(() => {
     return {
       opacity: controlsOpacity.value,
@@ -1449,19 +1381,10 @@ export default function HomeScreen() {
           recyclingKey={`background-blur-${resolvedArtworkUrl}`}
         />
       ) : null}
-      {!hasResolvedArtwork && (
-        <>
-          <Reanimated.View
-            style={[styles.ambientBlob, styles.ambientBlobA, ambientBlobAStyle]}
-          />
-          <Reanimated.View
-            style={[styles.ambientBlob, styles.ambientBlobB, ambientBlobBStyle]}
-          />
-        </>
-      )}
+      {!hasResolvedArtwork && <PromotionalBackdrop />}
       <View
         style={[
-          styles.backgroundTint,
+          hasResolvedArtwork && styles.backgroundTint,
           hasResolvedArtwork && styles.backgroundTintWithArtwork,
         ]}
       />
@@ -1479,7 +1402,7 @@ export default function HomeScreen() {
               <HorizontalPlayerPanel
                 title={currentTrack?.title || "KineSync"}
                 artist={
-                  currentTrack?.artist || "Feel every word."
+                  currentTrack?.artist || ""
                 }
                 artworkUrl={resolvedArtworkUrl}
                 animatedArtworkUrl={resolvedAnimatedSquareUrl}
@@ -1543,8 +1466,8 @@ export default function HomeScreen() {
                 { paddingLeft: LANDSCAPE_LYRICS_PADDING },
               ]}
             >
-              {!currentTrack ? (
-                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} onConnect={() => router.push('/explore')} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
+              {showEmptyState ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
               ) : lyricsRendererMode === "webview" ? (
                 <WebLyricsView
                   active={isScreenFocused}
@@ -1630,7 +1553,7 @@ export default function HomeScreen() {
                 <TopBar
                   title={currentTrack?.title || "KineSync"}
                   artist={
-                    currentTrack?.artist || "Feel every word."
+                    currentTrack?.artist || ""
                   }
                   artworkUrl={resolvedArtworkUrl}
                   onTrackPress={currentTrack ? handleShowFullscreenAlbum : undefined}
@@ -1774,7 +1697,7 @@ export default function HomeScreen() {
           pointerEvents={
             fullscreenAlbumMode || albumArtworkMorphing ? "none" : "auto"
           }
-          style={[styles.lyricsWrap, lyricsViewportStyle]}
+          style={[styles.lyricsWrap, lyricsViewportStyle, showEmptyState && { bottom: Math.max(controlsDockHeight + 12, 210) }]}
         >
           <Reanimated.View
             entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
@@ -1786,8 +1709,8 @@ export default function HomeScreen() {
             <Reanimated.View
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}
             >
-              {!currentTrack ? (
-                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} onConnect={() => router.push('/explore')} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
+              {showEmptyState ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
               ) : lyricsRendererMode === "webview" ? (
                 <WebLyricsView
                   active={isScreenFocused}
@@ -1994,22 +1917,6 @@ const styles = StyleSheet.create({
   backgroundBlur: {
     ...StyleSheet.absoluteFill,
     opacity: 0.96,
-  },
-  ambientBlob: {
-    position: "absolute",
-    width: 320,
-    height: 320,
-    borderRadius: 160,
-  },
-  ambientBlobA: {
-    top: 72,
-    left: -40,
-    backgroundColor: "#5A6DFF",
-  },
-  ambientBlobB: {
-    right: -76,
-    bottom: 160,
-    backgroundColor: "#B668F2",
   },
   backgroundTint: {
     ...StyleSheet.absoluteFill,

@@ -1,9 +1,14 @@
 import ActivityKit
 import SwiftUI
 import WidgetKit
+import os
 
 @main
 struct KineSyncLyricsWidgetBundle: WidgetBundle {
+  init() {
+    Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "widget")
+      .info("Registered widget for \(String(reflecting: LyricsActivityAttributes.self), privacy: .public)")
+  }
   var body: some Widget { KineSyncLyricsActivity() }
 }
 
@@ -36,7 +41,7 @@ struct KineSyncLyricsActivity: Widget {
         // Apple's smaller reference device offers 52.33 x 36.67 pt per side.
         LyricsMicrophone(mode: context.state.timingMode).frame(width: 22, height: 22)
       } compactTrailing: {
-        Text(context.isStale ? "Open" : context.state.isPlaying ? context.state.lyric : "Paused")
+        Text(context.isStale ? "Open" : context.state.isPlaying ? (context.state.lyric.isEmpty ? "Lyrics" : context.state.lyric) : "Paused")
           .font(.system(size: 12, weight: .semibold))
           .foregroundColor(.white)
           .lineLimit(1)
@@ -73,7 +78,7 @@ private struct LyricsDetails: View {
   let stale: Bool
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text("\(state.title) · \(state.artist)")
+      Text(state.title.isEmpty ? "KineSync" : "\(state.title) · \(state.artist)")
         .font(.system(size: 12, weight: .semibold))
         .lineLimit(1)
         .frame(height: 15, alignment: .leading)
@@ -81,7 +86,7 @@ private struct LyricsDetails: View {
         Text(state.album).font(.system(size: 10)).lineLimit(1).foregroundColor(.white.opacity(0.65))
           .frame(height: 13, alignment: .leading)
       }
-      Text(stale ? "Open KineSync to refresh lyrics" : state.lyric)
+      Text(stale ? "Open KineSync to refresh" : state.lyric.isEmpty ? "Waiting for lyrics" : state.lyric)
         .font(.system(size: 17, weight: .bold))
         .lineLimit(2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -110,7 +115,6 @@ private struct LyricsMicrophone: View {
   let mode: String
   private var filled: Bool { mode == "karaoke" }
   var body: some View {
-    GeometryReader { geometry in
       ZStack {
         VStack(spacing: -0.5) {
           ZStack {
@@ -133,9 +137,6 @@ private struct LyricsMicrophone: View {
       }
       .foregroundColor(.white)
       .frame(width: 24, height: 24)
-      .scaleEffect(min(geometry.size.width, geometry.size.height) / 24)
-      .frame(width: geometry.size.width, height: geometry.size.height)
-    }
     .opacity(mode == "unknown" ? 0.6 : 1)
     .accessibilityLabel(filled ? "Karaoke lyrics" : mode == "static" ? "Static lyrics" : "Line lyrics")
   }

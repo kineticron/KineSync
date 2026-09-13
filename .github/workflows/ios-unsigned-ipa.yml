@@ -64,6 +64,24 @@ jobs:
           python3 scripts/check-ios-live-activity.py
           node scripts/verify-live-activity-project.js
 
+      - name: Capture native Live Activity preview
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
+
+      - name: Upload Live Activity preview
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Live-Activity-preview
+          path: |
+            ExpoLyrics/.expo/live-activity-preview/*.png
+            ExpoLyrics/.expo/live-activity-preview/*.log
+            ExpoLyrics/.expo/live-activity-preview/*.txt
+            ExpoLyrics/.expo/live-activity-preview/devices.json
+          if-no-files-found: ignore
+
       - name: Build Release and locate .app
         run: |
           set -euo pipefail

@@ -1,3 +1,5 @@
+import { router } from "expo-router";
+import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import {
   forwardRef,
@@ -134,6 +136,14 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     );
     const playbackModeRef = useRef(usePlaybackStore.getState().playbackMode);
     const [browserOpen, setBrowserOpen] = useState(false);
+    const openBrowser = useCallback(() => {
+      if (useSpotifySessionStore.getState().signedIn) {
+        setBrowserOpen(true);
+      } else {
+        router.push({ pathname: '/explore', params: { action: 'login' } });
+      }
+    }, []);
+
     const [browserGeneration, setBrowserGeneration] = useState(0);
     const browserGenerationRef = useRef(0);
     const lastBrowserEventAtRef = useRef(Date.now());
@@ -227,7 +237,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
     useEffect(() => {
       reloadBrowserCallback = () => refreshBrowser(true, true);
-      openBrowserCallback = () => setBrowserOpen(true);
+      openBrowserCallback = openBrowser;
       return () => {
         reloadBrowserCallback = null;
         openBrowserCallback = null;
@@ -235,7 +245,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           clearTimeout(lyricsRefreshTimerRef.current);
         }
       };
-    }, [refreshBrowser]);
+    }, [openBrowser, refreshBrowser]);
 
     // A locally advancing WebView clock does not prove that Spotify Connect is
     // still authoritative after suspension. Recreate the player after a genuine
@@ -580,23 +590,27 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     );
 
     const sendCommand = useCallback((command: BrowserCommand) => {
+      if (!useSpotifySessionStore.getState().signedIn) {
+        openBrowser();
+        return;
+      }
       if (!browserReady) {
         if (automaticRecoveryRef.current) {
           pendingRecoveryCommandRef.current = command;
           setStatus("Reconnecting Spotify player…");
           return;
         }
-        setBrowserOpen(true);
+        openBrowser();
         setStatus("Open Spotify browser and wait for it to finish loading.");
         return;
       }
       getActiveWebView()?.injectJavaScript(makeBrowserCommandScript(command));
-    }, [browserReady, getActiveWebView]);
+    }, [browserReady, getActiveWebView, openBrowser]);
 
     useImperativeHandle(
       ref,
       () => ({
-        openBrowser: () => setBrowserOpen(true),
+        openBrowser,
         reload: () => refreshBrowser(true),
         togglePlayPause: () => sendCommand({ type: "toggle" }),
         resyncPlayback: () => {
@@ -611,12 +625,14 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           sendCommand({ type: "seek", positionMs: Math.max(0, positionMs) }),
         runDiagnostics: () => sendCommand({ type: "diagnostics" }),
       }),
-      [refreshBrowser, sendCommand],
+      [openBrowser, refreshBrowser, sendCommand],
     );
 
     return (
       <View
         pointerEvents={browserOpen ? "auto" : "none"}
+        aria-hidden={!browserOpen}
+        importantForAccessibility={browserOpen ? 'auto' : 'no-hide-descendants'}
         style={[
           styles.browserOverlay,
           browserOpen ? styles.browserOverlayOpen : styles.browserOverlayClosed,
@@ -776,6 +792,8 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                       return;
                     }
                     if (event.type === "signedIn") {
+                      useSpotifySessionStore.getState().setSignedIn(event.signedIn);
+                      if (!event.signedIn) setBrowserOpen(false);
                       setStatus(
                         event.signedIn
                           ? "Signed in to Spotify. Start a track in the web player."

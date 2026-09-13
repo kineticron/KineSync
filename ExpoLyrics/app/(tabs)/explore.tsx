@@ -1,6 +1,9 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
+import { BlurView } from 'expo-blur';
+import { PromotionalBackdrop } from '@/components/ui/promotional-backdrop';
+import { useSpotifySessionStore } from '@/store/spotify-session-store';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -64,6 +67,7 @@ type FieldRowProps = {
 type SettingSectionProps = {
   title: string;
   children: ReactNode;
+  collapsible?: boolean;
 };
 
 function getConnectionTone(status: ConnectionStatus) {
@@ -98,11 +102,18 @@ function sanitizeNumberInput(value: string, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function SettingSection({ title, children }: SettingSectionProps) {
+function SettingSection({ title, children, collapsible = false }: SettingSectionProps) {
+  const [expanded, setExpanded] = useState(false);
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionBody}>{children}</View>
+      <BlurView pointerEvents="none" intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+      {collapsible ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded }} onPress={() => setExpanded(!expanded)} style={styles.sectionToggle}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#FFFFFF" />
+        </Pressable>
+      ) : <Text style={styles.sectionTitle}>{title}</Text>}
+      {(!collapsible || expanded) && <Animated.View entering={collapsible ? settingsEntrance : undefined} style={styles.sectionBody}>{children}</Animated.View>}
     </View>
   );
 }
@@ -152,6 +163,7 @@ async function resetOnboardingCompleted(): Promise<void> {
 export default function BridgeSettingsScreen() {
   const liveActivityMessage = useLiveActivityStatus((state) => state.message);
   const router = useRouter();
+  const { action } = useLocalSearchParams<{ action?: string }>();
   const serverUrl = usePlaybackStore((s) => s.serverUrl);
   const handshakeKey = usePlaybackStore((s) => s.handshakeKey);
   const setServerUrl = usePlaybackStore((s) => s.setServerUrl);
@@ -174,7 +186,7 @@ export default function BridgeSettingsScreen() {
   const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
   const [musixmatchTokenInput, setMusixmatchTokenInput] = useState('');
   const [musixmatchTokenStatus, setMusixmatchTokenStatus] = useState(
-    'Anonymous token will be created automatically when first needed.',
+    'Automatic token',
   );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
@@ -185,7 +197,8 @@ export default function BridgeSettingsScreen() {
   const [scanError, setScanError] = useState('');
   const [bridgeSaveError, setBridgeSaveError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
-  const [spotifySignedIn, setSpotifySignedIn] = useState(false);
+  const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const setSpotifySignedIn = useSpotifySessionStore((s) => s.setSignedIn);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const scanHandledRef = useRef(false);
   const connectionTone = useMemo(
@@ -277,10 +290,10 @@ export default function BridgeSettingsScreen() {
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using the saved manual override.'
+          ? 'Using manual token'
           : status.automaticConfigured
-            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
-            : 'Anonymous token will be created automatically when first needed.',
+            ? 'Automatic token ready'
+            : 'Automatic token',
       );
       setGeminiKeyInput(settings.geminiApiKey);
     });
@@ -301,10 +314,10 @@ export default function BridgeSettingsScreen() {
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using the saved manual override.'
+          ? 'Using manual token'
           : status.automaticConfigured
-            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
-            : 'Anonymous token will be created automatically when first needed.',
+            ? 'Automatic token ready'
+            : 'Automatic token',
       );
       setGeminiKeyInput(settings.geminiApiKey);
       setMobileLyricsSaved(true);
@@ -365,11 +378,18 @@ export default function BridgeSettingsScreen() {
     }
   }, [cameraPermission?.granted, requestCameraPermission]);
 
+  useEffect(() => {
+    if (!action) return;
+    router.setParams({ action: undefined });
+    if (action === 'login') setLoginOpen(true);
+    if (action === 'scan') void openScanner();
+  }, [action, openScanner, router]);
+
   const completeSpotifySignIn = useCallback(() => {
     setSpotifySignedIn(true);
     setLoginOpen(false);
     requestReloadSpotifyBrowser();
-  }, []);
+  }, [setSpotifySignedIn]);
 
   const returnToLyrics = useCallback(() => {
     if (router.canGoBack()) {
@@ -418,9 +438,7 @@ export default function BridgeSettingsScreen() {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.ambientShapeA} />
-      <View style={styles.ambientShapeB} />
-      <View style={styles.backgroundTint} />
+      <PromotionalBackdrop />
 
       <SafeAreaView style={styles.safeArea}>
         <KeyboardAvoidingView
@@ -443,13 +461,11 @@ export default function BridgeSettingsScreen() {
                 <Ionicons name="chevron-back" size={23} color="#FFFFFF" />
               </Pressable>
               <View style={styles.headerCopy}>
-                <Text style={styles.eyebrow}>Make it yours</Text>
                 <Text style={styles.title}>Settings</Text>
               </View>
               <Image source={require('@/assets/images/R.png')} style={styles.headerLogo} accessibilityLabel="KineSync" />
             </View>
             <View style={styles.summary}>
-              <Text style={styles.summaryText}>A little tuning. A better listen.</Text>
               <View
                 style={[
                   styles.statusChip,
@@ -468,9 +484,6 @@ export default function BridgeSettingsScreen() {
 
             <Animated.View entering={settingsEntrance} style={styles.card}>
               <SettingSection title="Playback source">
-                <Text style={styles.onboardingHint}>
-                  Where’s the music coming from?
-                </Text>
                 <View style={styles.modeChoices} accessibilityRole="radiogroup" accessibilityLabel="Playback source">
                   <Pressable
                     accessibilityRole="radio"
@@ -530,7 +543,7 @@ export default function BridgeSettingsScreen() {
                     pressed && styles.buttonPressed,
                   ]}
                   onPress={saveAndReconnect}>
-                  <Ionicons name="checkmark" size={18} color={Design.accentInk} />
+                  <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                   <Text style={styles.primaryButtonText}>Save and reconnect</Text>
                 </Pressable>
                 {bridgeSaveError ? (
@@ -540,29 +553,26 @@ export default function BridgeSettingsScreen() {
                   style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
                   onPress={openScanner}>
                   <Ionicons name="qr-code-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Scan QR code from Desktop Bridge</Text>
+                  <Text style={styles.secondaryButtonText}>Scan QR code</Text>
                 </Pressable>
               </SettingSection> : null}
 
               {playbackMode === 'desktop' ? <View style={styles.divider} /> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Mobile-Only">
-                <Text style={styles.onboardingHint}>
-                  Spotify runs in KineSync on this phone. Sign in to refresh your Spotify session.
-                </Text>
                 <Pressable
                   style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
                   onPress={() => setLoginOpen(true)}>
-                  <Ionicons name="log-in-outline" size={18} color={Design.accentInk} />
+                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" />
                   <Text style={styles.primaryButtonText}>
-                    {spotifySignedIn ? 'Spotify signed in' : 'Log in to Spotify'}
+                    {spotifySignedIn ? 'Spotify signed in' : 'Sign in with Spotify'}
                   </Text>
                 </Pressable>
               </SettingSection> : null}
 
               {playbackMode === 'mobile' ? <View style={styles.divider} /> : null}
 
-              {playbackMode === 'mobile' ? <SettingSection title="Mobile Lyrics APIs">
+              {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
                 <FieldRow
                   label="Spotify Bearer Token"
                   value={spotifyTokenInput}
@@ -577,10 +587,6 @@ export default function BridgeSettingsScreen() {
                   placeholder="Optional; anonymous access is automatic"
                   secureTextEntry
                 />
-                <Text style={styles.onboardingHint}>
-                  KineSync creates and reuses an anonymous Musixmatch token automatically.
-                  A token entered here takes precedence as a manual override.
-                </Text>
                 <Text style={styles.onboardingHint}>{musixmatchTokenStatus}</Text>
                 <FieldRow
                   label="Gemini API Key"
@@ -604,7 +610,7 @@ export default function BridgeSettingsScreen() {
 
               <View style={styles.divider} />
 
-              {playbackMode === 'desktop' ? <SettingSection title="Timing">
+              {playbackMode === 'desktop' ? <SettingSection title="Timing diagnostics" collapsible>
                 <View style={styles.timingDiagnostics}>
                   <Text style={styles.timingDiagnosticsTitle}>Bridge timing (live)</Text>
                   <Text style={styles.timingDiagnosticsLine}>
@@ -624,12 +630,6 @@ export default function BridgeSettingsScreen() {
                   </Text>
                   <Text style={styles.timingDiagnosticsLine}>
                     Phone network latency: {Math.max(0, Number(driftOffset || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsHint}>
-                    With native extrapolation on, keep playback compensation at 0 —
-                    the bridge already advances position. If lyrics run ahead, lower
-                    compensation. If native extrap is no, rebuild the addon
-                    (npm run build:native-media) and restart DesktopBridge.
                   </Text>
                 </View>
                 <Pressable
@@ -694,22 +694,19 @@ export default function BridgeSettingsScreen() {
                   ]}
                   onPress={handleShowOnboarding}>
                   <Ionicons name="school-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Show onboarding again</Text>
+                  <Text style={styles.secondaryButtonText}>Setup guide</Text>
                 </Pressable>
-                <Text style={styles.onboardingHint}>
-                  Reset the onboarding flow to see the setup guide again
-                </Text>
               </SettingSection>
             </View>
 
-            <View style={styles.footerCard}>
+            {playbackMode === 'desktop' && <View style={styles.footerCard}>
               <View style={styles.footerIconWrap}>
                 <Ionicons name="wifi" size={18} color="rgba(255,255,255,0.74)" />
               </View>
               <Text style={styles.footerText}>
                 {serverUrl || 'No bridge URL saved'}
               </Text>
-            </View>
+            </View>}
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -742,7 +739,7 @@ export default function BridgeSettingsScreen() {
         onRequestClose={() => setLoginOpen(false)}>
         <View style={styles.loginModal}>
           <SafeAreaView style={styles.loginHeader}>
-            <Text style={styles.loginTitle}>Log in to Spotify</Text>
+            <Text style={styles.loginTitle}>Sign in with Spotify</Text>
             <Pressable
               hitSlop={10}
               onPress={() => setLoginOpen(false)}
@@ -758,7 +755,6 @@ export default function BridgeSettingsScreen() {
               if (!isSpotifyNativeAppRedirect(url)) {
                 return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
               }
-              completeSpotifySignIn();
               return false;
             }}
             sharedCookiesEnabled
@@ -792,30 +788,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Design.background,
     overflow: 'hidden',
-  },
-  ambientShapeA: {
-    position: 'absolute',
-    top: 52,
-    left: -92,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: '#5A6DFF',
-    opacity: 0.24,
-  },
-  ambientShapeB: {
-    position: 'absolute',
-    right: -108,
-    bottom: 132,
-    width: 310,
-    height: 310,
-    borderRadius: 155,
-    backgroundColor: '#B668F2',
-    opacity: 0.2,
-  },
-  backgroundTint: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(8, 9, 14, 0.76)',
   },
   safeArea: {
     flex: 1,
@@ -851,13 +823,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  eyebrow: {
-    color: Design.accent,
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
   title: {
     color: '#FFFFFF',
     fontSize: 32,
@@ -886,10 +851,12 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: Design.border,
-    backgroundColor: 'rgba(20,26,36,0.92)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    overflow: 'hidden',
   },
+  sectionToggle: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: {
-    color: Design.accent,
+    color: 'rgba(255,255,255,0.65)',
     fontSize: 11,
     fontWeight: '600',
     letterSpacing: 1.4,
@@ -914,8 +881,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
   },
   modeChoiceActive: {
-    backgroundColor: 'rgba(143,240,196,0.13)',
-    borderColor: 'rgba(143,240,196,0.5)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.4)',
   },
   modeChoiceCopy: {
     flex: 1,
@@ -958,7 +925,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Design.accent,
+    backgroundColor: 'rgba(255,255,255,0.15)',
   },
   secondaryButton: {
     minHeight: 48,
@@ -976,7 +943,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   primaryButtonText: {
-    color: Design.accentInk,
+    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
   },

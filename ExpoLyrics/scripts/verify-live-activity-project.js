@@ -4,8 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const xcode = require('xcode');
 const plist = require('@expo/plist').default;
-const { TARGET } = require('../plugins/with-live-activity');
+const { TARGET, ACTIVITY_MODULE } = require('../plugins/with-live-activity');
 const unquote = (value) => String(value || '').replace(/^"|"$/g, '');
+
+function verifyWidgetSource(widgetSource) {
+  assert.match(widgetSource, /@main\s+struct\s+KineSyncLyricsWidgetBundle\s*:\s*WidgetBundle/, 'Lyrics widget must have a @main WidgetBundle entry point');
+  assert.match(widgetSource, /var\s+body\s*:\s*some\s+Widget\s*\{\s*KineSyncLyricsActivity\(\)\s*\}/, 'WidgetBundle must register KineSyncLyricsActivity');
+  assert.match(widgetSource, /ActivityConfiguration\(for:\s*LyricsActivityAttributes\.self\)/, 'Lyrics widget must register an ActivityConfiguration for LyricsActivityAttributes');
+}
 
 function verifyProject(project, iosDir, projectRoot) {
   const objects = project.hash.project.objects;
@@ -27,6 +33,10 @@ function verifyProject(project, iosDir, projectRoot) {
   }
   const shared = 'modules/kinesync-live-activity/ios/LyricsActivityAttributes.swift';
   assert.equal(fs.readFileSync(path.join(iosDir, TARGET, 'LyricsActivityAttributes.swift'), 'utf8'), fs.readFileSync(path.join(projectRoot, shared), 'utf8'), 'Host and widget ActivityAttributes must match');
+  const widgetSourcePath = path.join(projectRoot, 'widgets/KineSyncLyricsActivity.swift');
+  const widgetSource = fs.readFileSync(widgetSourcePath, 'utf8');
+  verifyWidgetSource(widgetSource);
+  assert.equal(fs.readFileSync(path.join(iosDir, TARGET, 'KineSyncLyricsActivity.swift'), 'utf8'), widgetSource, 'Generated widget implementation must match the registered source');
   const info = plist.parse(fs.readFileSync(path.join(iosDir, TARGET, 'Info.plist'), 'utf8'));
   assert.equal(info.NSExtension.NSExtensionPointIdentifier, 'com.apple.widgetkit-extension');
   const hostList = objects.XCConfigurationList[host.buildConfigurationList].buildConfigurations;
@@ -35,6 +45,7 @@ function verifyProject(project, iosDir, projectRoot) {
     const settings = objects.XCBuildConfiguration[value].buildSettings;
     assert(hostIds.some((id) => unquote(settings.PRODUCT_BUNDLE_IDENTIFIER) === `${id}.${TARGET}`), 'Widget bundle ID must be nested under host ID');
     assert.equal(settings.APPLICATION_EXTENSION_API_ONLY, 'YES');
+    assert.equal(unquote(settings.PRODUCT_MODULE_NAME), ACTIVITY_MODULE, 'Host and widget must use the same ActivityAttributes module');
     assert.equal(unquote(settings.SWIFT_VERSION), '5.0', 'Use the Swift 5 language mode, not a compiler release number');
     assert.equal(settings.SKIP_INSTALL, 'YES');
     assert.equal(unquote(settings.INFOPLIST_FILE), `${TARGET}/Info.plist`);
@@ -55,4 +66,4 @@ if (require.main === module) {
   console.log('Verified host ActivityKit support, native pod, widget sources, dependency, and PlugIns embedding.');
 }
 
-module.exports = { verifyProject };
+module.exports = { verifyProject, verifyWidgetSource };
