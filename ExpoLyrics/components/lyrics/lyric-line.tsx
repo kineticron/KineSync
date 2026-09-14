@@ -1,5 +1,4 @@
 import {
-  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -13,7 +12,7 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
+  Platform,
   type ViewStyle,
   type TextStyle,
 } from "react-native";
@@ -32,9 +31,11 @@ import { useShallow } from "zustand/react/shallow";
 
 import {
   LANDSCAPE_LINE_SCALE_BLEED,
+  LANDSCAPE_LYRIC_TEXT_LANE_WIDTH,
 } from "@/constants/player-layout";
 import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
+import { LYRICS_LAYOUT } from "@/lib/lyrics-layout";
 import type { LyricLine as LyricLineType, LyricSyllable } from "@/types/bridge";
 
 const IDLE_PLAYBACK_SLICE = {
@@ -45,9 +46,8 @@ const IDLE_PLAYBACK_SLICE = {
   anchorMonotonicMs: 0,
 } as const;
 
-// AMLL renders the focused line at 100% and springs surrounding lines to 97%.
-// Keep the text rasterized at its full target size and scale only inactive rows.
-const SCALE_ACTIVE = 1;
+// Keep main's text metrics; AMLL effects only change how the glyphs are painted.
+const SCALE_ACTIVE = LYRICS_LAYOUT.activeScale;
 // AMLL's group wrapper resolves highlighted lyric groups to 0.85 opacity.
 const OPACITY_ACTIVE = 0.85;
 const OPACITY_NEAR = 1;
@@ -69,12 +69,13 @@ const SUSTAIN_GLOW_COLOR = "rgba(255,255,255,0.24)";
 const SUSTAIN_GLOW_COLOR_BG = "rgba(255,255,255,0.18)";
 const WORD_SUSTAIN_SCALE_EXPANSION_MAX = 4.2;
 const WORD_SUSTAIN_SCALE_EXPANSION_MAX_BG = 2.4;
-const BASE_FONT_SIZE = 36;
-const BASE_LINE_HEIGHT = 43.2;
-const LYRIC_TEXT_LANE_WIDTH = "100%";
-const LINE_INNER_PADDING_HORIZONTAL = 20;
-const BG_FONT_SIZE = BASE_FONT_SIZE * 0.7;
-const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.7;
+const BASE_FONT_SIZE: number = LYRICS_LAYOUT.fontSize;
+const BASE_LINE_HEIGHT: number = LYRICS_LAYOUT.lineHeight;
+const LYRIC_TEXT_LANE_WIDTH = LYRICS_LAYOUT.textLane;
+const LINE_INNER_PADDING_HORIZONTAL = LYRICS_LAYOUT.innerInset;
+const LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE = LYRICS_LAYOUT.landscapeInnerInset;
+const BG_FONT_SIZE = BASE_FONT_SIZE * LYRICS_LAYOUT.backgroundScale;
+const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * LYRICS_LAYOUT.backgroundScale;
 const PRIMARY_REVEAL_VERTICAL_PAD = 10;
 const BG_REVEAL_VERTICAL_PAD = 6;
 const PRIMARY_REVEAL_HORIZONTAL_PAD = 18;
@@ -110,6 +111,7 @@ const AMLL_DEFAULT_POS_Y_SPRING: AmlPosYSpringPolicy = {
   overshootClamping: false,
 };
 const AMLL_WORD_FADE_WIDTH = 0.5;
+const ENABLE_NATIVE_LYRIC_BLUR = Platform.OS === "android";
 
 // ponytail: worklet version — used inside useAnimatedStyle only
 function getInwardScaleTransformWorklet(
@@ -387,6 +389,7 @@ function cubicBezierYForX(
 ) {
   "worklet";
   const target = Math.max(0, Math.min(1, x));
+  if (target === 0 || target === 1) return target;
   let low = 0;
   let high = 1;
   let t = target;
@@ -601,14 +604,15 @@ function getSustainGlyphStyle(
 
   return {
     opacity: getCompletedLayerOpacity(revealProgress, visuals.opacity),
-    fontSize: visuals.fontSize,
-    lineHeight: visuals.lineHeight,
+    fontSize: primaryLiftBase,
+    lineHeight: primaryLineHeight,
     paddingRight: revealHorizontalPad,
     marginRight: -revealHorizontalPad,
     ...getSustainGlowStyle(visuals.glowRadius, false),
     transform: [
       { translateX: visuals.translateX },
       { translateY: visuals.translateY },
+      { scale: visuals.scale },
     ],
   };
 }
@@ -1219,113 +1223,6 @@ function buildAmlGroupEmphasisMeta(
   return result;
 }
 
-type AmlLineBreakChild = {
-  width: number;
-  text: string;
-  isSpace: boolean;
-};
-
-const AMLL_LINE_BREAK_PUNCTUATION_RE =
-  /[,.;:!?，。；：！？、）】》」』’”)[\]}>~…]$/;
-const AMLL_CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-
-/** Port of AMLL's `calcBalancedBreaks`, adapted to measured RN flex children. */
-function calcAmlBalancedBreaks(
-  children: AmlLineBreakChild[],
-  containerWidth: number,
-  fullText: string,
-) {
-  const count = children.length;
-  if (count === 0 || containerWidth <= 0) return [] as number[];
-
-  const cjkBoundaries = new Set<number>();
-  const SegmenterCtor = (Intl as unknown as {
-    Segmenter?: new (
-      locales?: string | string[],
-      options?: { granularity: "word" },
-    ) => { segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }> };
-  }).Segmenter;
-  if (SegmenterCtor) {
-    const segmenter = new SegmenterCtor(undefined, { granularity: "word" });
-    let offset = 0;
-    for (const part of segmenter.segment(fullText)) {
-      if (offset > 0 && part.isWordLike && AMLL_CJK_RE.test(part.segment)) {
-        cjkBoundaries.add(offset);
-      }
-      offset += part.segment.length;
-    }
-  }
-
-  const charOffsets = new Int32Array(count + 1);
-  const prefixWidth = new Float64Array(count + 1);
-  for (let i = 0; i < count; i += 1) {
-    charOffsets[i + 1] = charOffsets[i] + children[i].text.length;
-    prefixWidth[i + 1] = prefixWidth[i] + children[i].width;
-  }
-  if (prefixWidth[count] <= containerWidth) return [] as number[];
-
-  const overflowPenaltyMultiplier = 1000;
-  const cjkPenalty = (containerWidth * 0.15) ** 2;
-  const normalPenalty = (containerWidth * 0.5) ** 2;
-  const spaceReward = (containerWidth * 0.4) ** 2;
-  const punctuationReward = (containerWidth * 0.6) ** 2;
-  const dp = new Float64Array(count + 1).fill(Number.POSITIVE_INFINITY);
-  const nextBreak = new Int32Array(count + 1).fill(-1);
-  dp[count] = 0;
-
-  for (let i = count - 1; i >= 0; i -= 1) {
-    for (let j = i + 1; j <= count; j += 1) {
-      const width = prefixWidth[j] - prefixWidth[i];
-      let lineCost: number;
-      if (width > containerWidth) {
-        if (j !== i + 1) continue;
-        lineCost = (width - containerWidth) ** 2 * overflowPenaltyMultiplier;
-      } else {
-        lineCost = (containerWidth - width) ** 2;
-      }
-
-      let breakPenalty = 0;
-      if (j < count) {
-        const previousChild = children[j - 1];
-        if (AMLL_LINE_BREAK_PUNCTUATION_RE.test(previousChild.text)) {
-          breakPenalty = -punctuationReward;
-        } else if (previousChild.isSpace) {
-          breakPenalty = -spaceReward;
-        } else if (cjkBoundaries.has(charOffsets[j])) {
-          breakPenalty = cjkPenalty;
-        } else {
-          breakPenalty = normalPenalty;
-        }
-      }
-
-      const totalCost = lineCost + breakPenalty + dp[j];
-      if (totalCost < dp[i]) {
-        dp[i] = totalCost;
-        nextBreak[i] = j;
-      }
-    }
-  }
-
-  const breaks: number[] = [];
-  let cursor = 0;
-  while (cursor < count) {
-    const next = nextBreak[cursor];
-    if (next <= cursor) break;
-    cursor = next;
-    if (cursor > 0 && cursor < count) breaks.push(cursor);
-  }
-  return breaks;
-}
-
-function getSyllableGroupText(
-  syllables: LyricSyllable[],
-  group: SyllableGroup,
-) {
-  return group.syllableIndexes
-    .map((index) => String(syllables[index]?.text || ""))
-    .join("");
-}
-
 function getSyllableDisplayText(text: string) {
   return String(text || "").replace(/\s+$/u, "");
 }
@@ -1475,13 +1372,7 @@ export const LyricLine = memo(function LyricLine({
   posYSpringPolicy = AMLL_DEFAULT_POS_Y_SPRING,
   groupMotionDelayMs = 0,
 }: LyricLineProps) {
-  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
-  const amllResponsiveBaseFontSize =
-    viewportWidth <= 768
-      ? Math.max(viewportWidth * 0.08, 12)
-      : Math.max(viewportHeight * 0.05, viewportWidth * 0.025, 12);
-  const resolvedFontScale =
-    fontScale * (amllResponsiveBaseFontSize / BASE_FONT_SIZE);
+  const resolvedFontScale = fontScale;
   const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * resolvedFontScale;
   const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * resolvedFontScale;
   const scaledLineTextStyle = useMemo(
@@ -1494,9 +1385,6 @@ export const LyricLine = memo(function LyricLine({
   const bgEnd = line.backgroundSyllables?.length
     ? line.backgroundSyllables[line.backgroundSyllables.length - 1].endTime
     : 0;
-  const bgStart = line.backgroundSyllables?.[0]?.startTime ?? Number.POSITIVE_INFINITY;
-  const mainStart = line.syllables?.[0]?.startTime ?? line.lineStartTime;
-  const backgroundComesFirst = bgStart < mainStart;
   const hasBgExtension = bgEnd > line.lineEndTime;
   const shouldPrewarmNativeReveal =
     shouldDrivePlaybackUpdates &&
@@ -1633,19 +1521,26 @@ export const LyricLine = memo(function LyricLine({
       tokenWidthFlushFrameRef.current = null;
       pendingTokenWidthsRef.current = {};
     };
-  }, [line.lineStartTime, line.lineEndTime]);
+  }, [line.lineStartTime, line.lineEndTime, line.syllables, lineFontSize, lineLineHeight]);
 
-  const textWeight = "800" as const;
+  const textWeight = "700" as const;
   const translatedText = String(line.translatedText || "").trim();
   const backgroundTranslatedText = String(
     line.backgroundTranslatedText || "",
   ).trim();
   const isOppositeAligned = Boolean(line.oppositeAligned);
-  const alignRight = isOppositeAligned;
-  const textLaneWidth = hasDuetLines ? "85%" : LYRIC_TEXT_LANE_WIDTH;
-  const lineInnerPaddingHorizontal =
-    viewportWidth <= 500 ? LINE_INNER_PADDING_HORIZONTAL : lineFontSize;
-  const translatedColor = "rgba(255,255,255,0.30)";
+  const alignRight = landscapeMode ? !isOppositeAligned : isOppositeAligned;
+  const textLaneWidth = landscapeMode
+    ? LANDSCAPE_LYRIC_TEXT_LANE_WIDTH
+    : LYRIC_TEXT_LANE_WIDTH;
+  const lineInnerPaddingHorizontal = landscapeMode
+    ? LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE
+    : LINE_INNER_PADDING_HORIZONTAL;
+  const translatedColor = isPast
+    ? "rgba(255,255,255,0.72)"
+    : visuallyActive
+      ? "rgba(255,255,255,0.66)"
+      : "rgba(255,255,255,0.42)";
   const onPressLine = tapEnabled ? () => onPress?.(line) : undefined;
   const onLongPressLine = onLongPress ? () => onLongPress(line) : undefined;
   const flushPendingTokenWidths = useCallback(() => {
@@ -1695,7 +1590,6 @@ export const LyricLine = memo(function LyricLine({
     () => buildAmlGroupEmphasisMeta(line.syllables, syllableGroups),
     [line.syllables, syllableGroups],
   );
-  const [groupWidths, setGroupWidths] = useState<Record<number, number>>({});
   const usesTimedSpacingLayout = useMemo(
     () => usesTimedTokenSpacing(line.syllables),
     [line.syllables],
@@ -1715,40 +1609,20 @@ export const LyricLine = memo(function LyricLine({
   );
   useEffect(() => {
     setLaneWidthPx(0);
-    setGroupWidths({});
   }, [line.lineStartTime, line.lineEndTime, lineFontSize, textLaneWidth]);
-  const balancedBreakIndexes = useMemo(() => {
-    const laneFraction = hasDuetLines ? 0.85 : 1;
-    const availableWidth = laneWidthPx * laneFraction;
-    if (
-      availableWidth <= 0 ||
-      syllableGroups.length <= 1 ||
-      syllableGroups.some((_, index) => !(groupWidths[index] > 0))
-    ) {
-      return new Set<number>();
-    }
-    const children = syllableGroups.map((group, index) => {
-      const text = getSyllableGroupText(line.syllables, group);
-      return {
-        width: groupWidths[index],
-        text,
-        isSpace: text.trim().length === 0,
-      };
-    });
-    const fullText = children.map((child) => child.text).join("");
-    return new Set(calcAmlBalancedBreaks(children, availableWidth, fullText));
-  }, [groupWidths, hasDuetLines, laneWidthPx, line.syllables, syllableGroups]);
   const translatedTextWidthStyle = useMemo(() => {
     if (laneWidthPx <= 0) {
       return { width: textLaneWidth as number | `${number}%` };
     }
-    const laneFraction = hasDuetLines ? 0.85 : 1;
+    const laneFraction = landscapeMode ? 0.9 : 0.88;
     return { width: Math.round(laneWidthPx * laneFraction) };
-  }, [hasDuetLines, laneWidthPx, textLaneWidth]);
+  }, [laneWidthPx, landscapeMode, textLaneWidth]);
   const lineAnimStyle = useAnimatedStyle(
     () => ({
       opacity: opacityAnim.value,
-      filter: [{ blur: blurAnim.value }],
+      // iOS filter blur reparents Fabric children into a SwiftUI host. Recycled
+      // animated lyric rows must keep a stable native hierarchy.
+      ...(ENABLE_NATIVE_LYRIC_BLUR ? { filter: [{ blur: blurAnim.value }] } : {}),
       transform: getInwardScaleTransformWorklet(
         scaleAnim.value,
         laneWidthPx,
@@ -1761,9 +1635,9 @@ export const LyricLine = memo(function LyricLine({
     () => [
       styles.lineOuter as ViewStyle,
       landscapeMode && (styles.lineOuterLandscape as ViewStyle),
-      ({ minHeight: 72 * resolvedFontScale } as ViewStyle),
+      fontScale !== 1 && ({ minHeight: 84 * fontScale } as ViewStyle),
     ] as ViewStyle[],
-    [landscapeMode, resolvedFontScale],
+    [landscapeMode, fontScale],
   );
   const toneOpacity =
     pauseTone === "future" ? 0.76 : pauseTone === "past" ? 0.94 : 1;
@@ -1787,7 +1661,6 @@ export const LyricLine = memo(function LyricLine({
           onPress={onPressLine}
           style={({ pressed }) => [
             styles.linePressable as ViewStyle,
-            { paddingVertical: lineFontSize * 0.4 } as ViewStyle,
             isSelected && (styles.lineSelected as ViewStyle),
             pressed && (styles.linePressed as ViewStyle),
           ]}
@@ -1802,25 +1675,6 @@ export const LyricLine = memo(function LyricLine({
             } as ViewStyle,
           ] as ViewStyle[]}
         >
-          {!!line.backgroundSyllables?.length && backgroundComesFirst && (
-            <BackgroundVocals
-              syllables={line.backgroundSyllables}
-              translatedText={
-                showTranslatedText ? backgroundTranslatedText : ""
-              }
-              parentIsActive={isActive}
-              parentIsPast={isPast}
-              parentBgStillActive={bgStillActive}
-              parentShouldPrewarmNativeReveal={shouldPrewarmNativeReveal}
-              playbackPositionOverrideMs={playbackPositionOverrideMs}
-              alignRight={alignRight}
-              textLaneWidth={textLaneWidth}
-              fontScale={resolvedFontScale}
-              precedesMain
-              posYSpringPolicy={posYSpringPolicy}
-              groupMotionDelayMs={groupMotionDelayMs}
-            />
-          )}
           <View
             onLayout={handleLaneLayout}
             style={[
@@ -1843,28 +1697,14 @@ export const LyricLine = memo(function LyricLine({
               ] as ViewStyle[]}
             >
               {syllableGroups.map((group, groupIdx) => (
-                <Fragment key={`${line.lineStartTime}-word-${groupIdx}`}>
-                  {balancedBreakIndexes.has(groupIdx) && (
-                    <View style={styles.forcedLineBreak as ViewStyle} />
-                  )}
-                  <View
-                    // AMLL balances measured wrapper widths before applying
-                    // explicit line breaks. Keep each word wrapper indivisible
-                    // here so the DP break decisions remain authoritative.
-                    onLayout={(event) => {
-                      const width = event.nativeEvent.layout.width;
-                      if (!Number.isFinite(width) || width <= 0) return;
-                      setGroupWidths((previous) =>
-                        Math.abs((previous[groupIdx] ?? 0) - width) < 0.5
-                          ? previous
-                          : { ...previous, [groupIdx]: width },
-                      );
-                    }}
-                    style={[
-                      styles.wordWrap as ViewStyle,
-                      usesTimedSpacingLayout && (styles.wordWrapPhrase as ViewStyle),
-                    ] as ViewStyle[]}
-                  >
+                <View
+                  // Group syllables into a flex item, then wrap only at safe clusters.
+                  key={`${line.lineStartTime}-word-${groupIdx}`}
+                  style={[
+                    styles.wordWrap as ViewStyle,
+                    usesTimedSpacingLayout && (styles.wordWrapPhrase as ViewStyle),
+                  ] as ViewStyle[]}
+                >
                   {alignRight &&
                     groupNeedsLeadingGap(
                       syllableGroups,
@@ -2063,13 +1903,14 @@ export const LyricLine = memo(function LyricLine({
                                         progress,
                                         wordStyle.opacity,
                                       ),
-                                      fontSize: wordStyle.fontSize,
-                                      lineHeight: wordStyle.lineHeight,
+                                      fontSize: lineFontSize,
+                                      lineHeight: lineLineHeight,
                                       paddingRight: PRIMARY_REVEAL_HORIZONTAL_PAD,
                                       marginRight: -PRIMARY_REVEAL_HORIZONTAL_PAD,
                                       transform: [
                                         { translateX: wordStyle.translateX },
                                         { translateY: wordStyle.translateY },
+                                        { scale: wordStyle.scale },
                                       ],
                                     },
                                   ]}
@@ -2224,8 +2065,7 @@ export const LyricLine = memo(function LyricLine({
                   {!alignRight && group.needsTrailingGap && (
                     <Text style={styles.gapText}> </Text>
                   )}
-                  </View>
-                </Fragment>
+                </View>
               ))}
             </View>
           </View>
@@ -2235,8 +2075,8 @@ export const LyricLine = memo(function LyricLine({
                 styles.translatedText,
                 {
                   color: translatedColor,
-                  fontSize: BASE_FONT_SIZE * 0.5 * resolvedFontScale,
-                  lineHeight: BASE_FONT_SIZE * 0.75 * resolvedFontScale,
+                  fontSize: 14 * fontScale,
+                  lineHeight: 18 * fontScale,
                   ...translatedTextWidthStyle,
                 },
                 alignRight && styles.translatedTextOpposite,
@@ -2245,7 +2085,7 @@ export const LyricLine = memo(function LyricLine({
               {translatedText}
             </Text>
           )}
-          {!!line.backgroundSyllables?.length && !backgroundComesFirst && (
+          {!!line.backgroundSyllables?.length && (
             <BackgroundVocals
               syllables={line.backgroundSyllables}
               translatedText={
@@ -2307,7 +2147,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   isPlaying: boolean;
   tokenWidth: number;
   shouldMeasure: boolean;
-  textWeight: "800";
+  textWeight: "700";
   sustainMode: "solo" | "letter-sweep";
   emphasisMeta?: AmlGroupEmphasisMeta;
   isLastWord?: boolean;
@@ -2484,7 +2324,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   totalChars: number;
   durationMs: number;
   color: string;
-  textWeight: "800";
+  textWeight: "700";
   sustainMode: "solo" | "letter-sweep";
   isLastWord?: boolean;
   progress: SharedValue<number>;
@@ -2591,7 +2431,7 @@ const PrimaryWordSustainRevealToken = memo(
     isPlaying: boolean;
     tokenWidth: number;
     shouldMeasure: boolean;
-    textWeight: "800";
+    textWeight: "700";
     lineFontSize?: number;
     lineLineHeight?: number;
     revealClipStyle?: { height: number };
@@ -2776,7 +2616,7 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
   isPlaying: boolean;
   tokenWidth: number;
   shouldMeasure: boolean;
-  textWeight: "800";
+  textWeight: "700";
   lineFontSize?: number;
   lineLineHeight?: number;
   revealClipStyle?: { height: number };
@@ -3645,33 +3485,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const bgSlideY = useSharedValue(bgPresented ? 0 : hiddenSlideY);
   const bgOpacity = useSharedValue(bgPresented ? 1 : 0);
   const [bgMeasuredHeight, setBgMeasuredHeight] = useState(0);
-  const [bgMeasuredWidth, setBgMeasuredWidth] = useState(0);
-  const [bgGroupWidths, setBgGroupWidths] = useState<Record<number, number>>({});
-  const balancedBgBreakIndexes = useMemo(() => {
-    if (
-      bgMeasuredWidth <= 0 ||
-      syllableGroups.length <= 1 ||
-      syllableGroups.some((_, index) => !(bgGroupWidths[index] > 0))
-    ) {
-      return new Set<number>();
-    }
-    const children = syllableGroups.map((group, index) => {
-      const text = getSyllableGroupText(syllables, group);
-      return {
-        width: bgGroupWidths[index],
-        text,
-        isSpace: text.trim().length === 0,
-      };
-    });
-    return new Set(
-      calcAmlBalancedBreaks(
-        children,
-        bgMeasuredWidth,
-        children.map((child) => child.text).join(""),
-      ),
-    );
-  }, [bgGroupWidths, bgMeasuredWidth, syllableGroups, syllables]);
-
   useEffect(() => {
     const scaleAnimation = withSpring(
       bgPresented ? 1 : 0.75,
@@ -3705,25 +3518,15 @@ const BackgroundVocals = memo(function BackgroundVocals({
     posYSpringPolicy,
   ]);
 
-  const backgroundGroupGap = BASE_FONT_SIZE * 0.3 * fontScale;
+  // Paint-only background effects: reserve the same space before, during and
+  // after playback so the primary line and following rows never jump.
   const bgPresentationStyle = useAnimatedStyle(() => ({
-    opacity: bgOpacity.value,
-    marginTop: precedesMain
-      ? -bgMeasuredHeight *
-        (1 - Math.max(0, Math.min(1, 1 - Math.abs(bgSlideY.value) / 80)))
-      : bgPresented
-        ? backgroundGroupGap
-        : 0,
-    marginBottom: precedesMain ? backgroundGroupGap : 0,
+    opacity: 0.5 + bgOpacity.value * 0.5,
     transform: [
-      { translateY: (bgSlideY.value / 100) * bgMeasuredHeight },
-      {
-        scale:
-          bgScale.value *
-          (0.8 + Math.max(0, Math.min(1, 1 - Math.abs(bgSlideY.value) / 80)) * 0.2),
-      },
+      { translateY: (bgSlideY.value / 100) * Math.min(bgMeasuredHeight, bgLineHeight) },
+      { scale: bgScale.value },
     ],
-  }), [backgroundGroupGap, bgMeasuredHeight, bgPresented, precedesMain]);
+  }));
 
   useEffect(() => {
     if (
@@ -3735,7 +3538,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
     widthFlushFrameRef.current = null;
     pendingWidthsRef.current = {};
     setWidths({});
-    setBgGroupWidths({});
     return () => {
       if (
         widthFlushFrameRef.current !== null &&
@@ -3746,7 +3548,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
       widthFlushFrameRef.current = null;
       pendingWidthsRef.current = {};
     };
-  }, [syllables]);
+  }, [syllables, bgFontSize, bgLineHeight]);
 
   const flushPendingWidths = useCallback(() => {
     widthFlushFrameRef.current = null;
@@ -3788,22 +3590,16 @@ const BackgroundVocals = memo(function BackgroundVocals({
   return (
     <Reanimated.View
       onLayout={(event) => {
-        const { height: nextHeight, width: nextWidth } = event.nativeEvent.layout;
+        const { height: nextHeight } = event.nativeEvent.layout;
         if (Number.isFinite(nextHeight) && nextHeight > 0) {
           setBgMeasuredHeight((previous) =>
             Math.abs(previous - nextHeight) < 0.5 ? previous : nextHeight,
-          );
-        }
-        if (Number.isFinite(nextWidth) && nextWidth > 0) {
-          setBgMeasuredWidth((previous) =>
-            Math.abs(previous - nextWidth) < 0.5 ? previous : nextWidth,
           );
         }
       }}
       style={[
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
-        !precedesMain && !bgPresented && styles.bgVocalsGroupHiddenAfter,
         { width: textLaneWidth as number },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,
@@ -3816,22 +3612,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
         ]}
       >
       {syllableGroups.map((group, groupIdx) => (
-        <Fragment key={`bg-word-${groupIdx}`}>
-          {balancedBgBreakIndexes.has(groupIdx) && (
-            <View style={styles.forcedLineBreak} />
-          )}
-          <View
-            onLayout={(event) => {
-              const width = event.nativeEvent.layout.width;
-              if (!Number.isFinite(width) || width <= 0) return;
-              setBgGroupWidths((previous) =>
-                Math.abs((previous[groupIdx] ?? 0) - width) < 0.5
-                  ? previous
-                  : { ...previous, [groupIdx]: width },
-              );
-            }}
-            style={styles.wordWrap}
-          >
+        <View key={`bg-word-${groupIdx}`} style={styles.wordWrap}>
           {alignRight &&
             groupNeedsLeadingGap(syllableGroups, syllables, groupIdx) && (
               <Text style={styles.bgVocalsGapText}> </Text>
@@ -4169,8 +3950,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
           {!alignRight && group.needsTrailingGap && (
             <Text style={styles.bgVocalsGapText}> </Text>
           )}
-          </View>
-        </Fragment>
+        </View>
       ))}
       </View>
       {!!translatedText && (
@@ -4391,11 +4171,11 @@ const PauseDots = memo(function PauseDots({
     pauseVisualDurationMs,
     pauseHoldMs,
   );
-  const dotSize = fontSize * 0.3;
-  const dotGap = fontSize * 0.18;
-  const innerVerticalPad = fontSize * 0.4;
-  const outerVerticalMargin = fontSize * 0.4;
-  const contentHeight = fontSize * 0.5;
+  const dotSize = 12;
+  const dotGap = 8;
+  const innerVerticalPad = 0;
+  const outerVerticalMargin = 0;
+  const contentHeight = 16;
 
   return (
     <Reanimated.View
@@ -4415,7 +4195,8 @@ const PauseDots = memo(function PauseDots({
           // so adding another .4em here would shift the dots too far inward.
           paddingHorizontal: 0,
           paddingVertical: innerVerticalPad,
-          marginVertical: outerVerticalMargin,
+          marginTop: 15,
+          marginBottom: outerVerticalMargin,
           opacity: snapshot.opacity,
           transform: [{ scale: snapshot.scale }],
         },
@@ -4443,9 +4224,9 @@ const PauseDots = memo(function PauseDots({
 
 const styles = StyleSheet.create({
   lineOuter: {
-    minHeight: 72,
+    minHeight: 84,
     justifyContent: "center",
-    paddingVertical: 0,
+    paddingVertical: 10,
   } as ViewStyle,
   lineOuterLandscape: {
     overflow: "visible",
@@ -4453,7 +4234,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: LANDSCAPE_LINE_SCALE_BLEED,
   } as ViewStyle,
   linePressable: {
-    paddingVertical: 0,
+    paddingVertical: 2,
     borderRadius: 9,
     overflow: "visible",
   } as ViewStyle,
@@ -4500,8 +4281,12 @@ const styles = StyleSheet.create({
   wordWrap: {
     flexDirection: "row",
     alignItems: "flex-start",
-    flexShrink: 0,
-    flexWrap: "nowrap",
+    // Allow "word" groups to shrink so the parent can wrap them.
+    // Without this, a long word can exceed screen width and overflow horizontally.
+    flexShrink: 1,
+    maxWidth: "100%",
+    // If a single word is wider than the screen, allow it to wrap at syllable boundaries.
+    flexWrap: "wrap",
   } as ViewStyle,
   wordWrapPhrase: {
     flexWrap: "nowrap",
@@ -4574,7 +4359,7 @@ const styles = StyleSheet.create({
     fontSize: BASE_FONT_SIZE,
     lineHeight: BASE_LINE_HEIGHT,
     textAlign: "left",
-    letterSpacing: 0,
+    letterSpacing: 0.1,
   } as TextStyle,
   gapText: {
     fontSize: BASE_FONT_SIZE,
@@ -4586,6 +4371,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     alignSelf: "flex-start",
     width: "100%",
+    marginTop: 3,
   } as ViewStyle,
   bgVocalsGroup: {
     alignSelf: "flex-start",
@@ -4611,7 +4397,7 @@ const styles = StyleSheet.create({
   bgVocalsText: {
     fontSize: BG_FONT_SIZE,
     lineHeight: BG_LINE_HEIGHT,
-    fontWeight: "800",
+    fontWeight: "500",
     textAlign: "left",
     letterSpacing: 0.1,
   } as TextStyle,

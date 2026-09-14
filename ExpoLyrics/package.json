@@ -12,6 +12,7 @@
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:security": "node ./scripts/security-check.js",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
+    "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs"
   },
   "dependencies": {

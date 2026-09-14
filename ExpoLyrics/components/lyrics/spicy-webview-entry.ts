@@ -1,17 +1,15 @@
 /*
  * KineSync standalone host adapter for Spicy Lyrics v6.3.15.
- * Renderer construction, animator lifecycle, interludes, virtualizer, and scroll
- * behavior are ported from Spikerko/spicy-lyrics @
+ * Word construction, animator lifecycle and interlude effects are ported from Spikerko/spicy-lyrics @
  * 2a14863f8c29782f9ab3becff2b1360dfb74a4fb (AGPL-3.0).
  * KineSync-specific bridge/selection/translation behavior stays at this boundary.
  */
 import "./spicy-webview.css";
+import "./spicy-layout.css";
 import {
   animate,
   createDotTiming,
   resetSpicyAnimatorState,
-  resetSpicyBlurState,
-  SPICY_INTERLUDE_GAP_MS,
   timeSetter,
   type SpicyLetter,
   type SpicyLyricsType,
@@ -19,16 +17,16 @@ import {
   type SpicyWord,
 } from "./spicy-upstream-runtime";
 import {
-  destroyLyricsVirtualizer,
-  initLyricsVirtualizer,
-  setOnNewElementMounted,
-  triggerRemeasureLV,
-} from "./spicy-upstream-virtualizer";
-import {
-  noteUserScroll as noteSpicyUserScroll,
-  reset as resetSpicyScroll,
+  destroyLyricsLayout,
+  initLyricsLayout,
+  remeasureLyricsLayout,
+  noteLyricsUserScroll,
+  resetLyricsScroll,
   scrollToActiveLine,
-} from "./spicy-upstream-scroll";
+} from "./spicy-layout-host";
+import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING, getPlaybackWindowState } from "../../lib/lyrics-layout";
+import { LANDSCAPE_TOP_LIST_PADDING, LANDSCAPE_LYRICS_HORIZONTAL_INSET, LANDSCAPE_LYRICS_EDGE_BLEED, LANDSCAPE_LYRIC_TEXT_LANE_WIDTH } from "../../constants/player-layout";
+import type { LyricLine } from "../../types/bridge";
 
 type KineSyncSyllable = {
   text?: string;
@@ -472,12 +470,13 @@ function createDotRuntimeLine(
 
 function renderSyncedLyrics() {
   if (!scrollRoot || !scrollViewport) return;
-  destroyLyricsVirtualizer();
+  const previousOffset = scrollViewport.scrollTop;
+  destroyLyricsLayout();
   scrollRoot.replaceChildren();
   runtimeLines = [];
   sourceElements = new Map();
   const virtualContainer = document.createElement("div");
-  virtualContainer.classList.add("VirtualLyricsContainer");
+  virtualContainer.classList.add("KineSyncLyricsRows");
   scrollRoot.appendChild(virtualContainer);
 
   const firstStart = finiteMs(sourceLines[0]?.lineStartTime);
@@ -487,7 +486,7 @@ function renderSyncedLyrics() {
   const introStart = finiteMs(upstreamLyricsStart, 0);
   if (
     sourceLines.length &&
-    firstStart - introStart >= SPICY_INTERLUDE_GAP_MS
+    firstStart - introStart >= LONG_PAUSE_THRESHOLD_MS
   ) {
     runtimeLines.push(
       createDotRuntimeLine(
@@ -524,7 +523,7 @@ function renderSyncedLyrics() {
     const next = sourceLines[sourceIndex + 1];
     const leadEnd = finiteMs(line.lineEndTime);
     const nextStart = finiteMs(next?.lineStartTime);
-    if (next && nextStart - leadEnd >= SPICY_INTERLUDE_GAP_MS) {
+    if (next && nextStart - leadEnd >= LONG_PAUSE_THRESHOLD_MS) {
       runtimeLines.push(createDotRuntimeLine(leadEnd, nextStart, Boolean(next.oppositeAligned)));
     }
   });
@@ -542,13 +541,9 @@ function renderSyncedLyrics() {
   if (creditsRoot) scrollRoot.appendChild(creditsRoot);
 
   resetSpicyAnimatorState();
-  resetSpicyScroll();
-  setOnNewElementMounted(resetSpicyBlurState);
-  initLyricsVirtualizer(
-    scrollViewport,
-    virtualContainer,
-    runtimeLines.map((line) => line.HTMLElement),
-  );
+  resetLyricsScroll();
+  initLyricsLayout(scrollViewport, virtualContainer, runtimeLines, sourceLines as LyricLine[]);
+  if (!autoFollowEnabled) scrollViewport.scrollTop = previousOffset;
   updateSelection();
   pendingForceScroll = true;
 }
@@ -611,25 +606,26 @@ function renderCredits(songwriters: string[] = [], attribution?: LyricsAttributi
 }
 
 function renderStaticLyrics() {
-  if (!scrollRoot || !scrollViewport) return;
-  destroyLyricsVirtualizer();
-  scrollRoot.replaceChildren();
+  if (!staticLyricsRoot) return;
+  const previousOffset = staticLyricsRoot.scrollTop;
+  destroyLyricsLayout();
+  scrollRoot?.replaceChildren();
+  staticLyricsRoot.replaceChildren();
   runtimeLines = [];
   sourceElements = new Map();
-  const virtualContainer = document.createElement("div");
-  virtualContainer.classList.add("VirtualLyricsContainer");
-  scrollRoot.appendChild(virtualContainer);
-  const lineElements: HTMLElement[] = [];
 
   sourceLines.forEach((line, sourceIndex) => {
     const text = getStaticLineText(line);
     const row = document.createElement("div");
-    row.classList.add("line", "static");
+    row.classList.add("static-lyrics-line");
     row.dataset.sourceIndex = String(sourceIndex);
     row.textContent = text;
     if (isRtl(text)) row.classList.add("rtl");
     if (showTranslatedText && line.translatedText) {
-      appendTranslation(row, line.translatedText);
+      const translation = document.createElement("div");
+      translation.className = "static-lyrics-translation";
+      translation.textContent = line.translatedText;
+      row.appendChild(translation);
     }
     // KineSync can carry a compatibility background/translation even for a
     // static source. Spicy itself has no static BG-row type, so keep it as a
@@ -640,33 +636,24 @@ function renderStaticLyrics() {
       .trim();
     if (backgroundText) {
       const background = document.createElement("div");
-      background.className = "ks-static-background";
+      background.className = "static-lyrics-background";
       background.textContent = backgroundText;
       if (showTranslatedText && line.backgroundTranslatedText) {
         const translated = document.createElement("div");
-        translated.className = "ks-translation ks-static-background-translation";
+        translated.className = "static-lyrics-background-translation";
         translated.textContent = line.backgroundTranslatedText;
         background.appendChild(translated);
       }
       row.appendChild(background);
     }
     addSourceElement(sourceIndex, row);
-    lineElements.push(row);
+    staticLyricsRoot.appendChild(row);
   });
 
-  scrollRoot.classList.remove("HasDuetLines");
-  scrollRoot.classList.toggle(
-    "HasRtlLines",
-    sourceLines.some((line) => isRtl(getStaticLineText(line))),
-  );
-  scrollRoot.dataset.lyricsType = "Static";
   renderCredits(staticSongwriters, staticAttribution, 0);
-  if (creditsRoot) scrollRoot.appendChild(creditsRoot);
-
-  resetSpicyScroll();
-  setOnNewElementMounted(null);
-  initLyricsVirtualizer(scrollViewport, virtualContainer, lineElements);
-  updateSelection();
+  if (creditsRoot) staticLyricsRoot.appendChild(creditsRoot);
+  staticLyricsRoot.scrollTop = previousOffset;
+  resetLyricsScroll();
 }
 
 function updateSelection() {
@@ -685,18 +672,25 @@ function showEmpty(title: string, sub: string) {
 
 function applyPageOptions() {
   page?.classList.toggle("landscape", landscapeMode);
-  page?.style.setProperty("--ks-font-scale", String(Math.max(0.82, Math.min(1.35, fontScale))));
+  page?.style.setProperty("--ks-font-scale", String(fontScale));
+  const metrics: Record<string, string> = {
+    "--ks-font-size": `${LYRICS_LAYOUT.fontSize * LYRICS_LAYOUT.activeScale}px`,
+    "--ks-line-height": `${LYRICS_LAYOUT.lineHeight * LYRICS_LAYOUT.activeScale}px`,
+    "--ks-bg-scale": String(LYRICS_LAYOUT.backgroundScale),
+    "--ks-top-padding": `${landscapeMode ? LANDSCAPE_TOP_LIST_PADDING : TOP_LIST_PADDING}px`,
+    "--ks-list-inset": `${landscapeMode ? LANDSCAPE_LYRICS_HORIZONTAL_INSET + LANDSCAPE_LYRICS_EDGE_BLEED : LYRICS_LAYOUT.listInset}px`,
+    "--ks-inner-inset": `${landscapeMode ? LYRICS_LAYOUT.landscapeInnerInset : LYRICS_LAYOUT.innerInset}px`,
+    "--ks-text-lane": landscapeMode ? LANDSCAPE_LYRIC_TEXT_LANE_WIDTH : LYRICS_LAYOUT.textLane,
+    "--ks-row-height": `${LYRICS_LAYOUT.rowMinHeight}px`,
+    "--ks-row-padding": `${LYRICS_LAYOUT.rowPadding + LYRICS_LAYOUT.pressPadding}px`,
+  };
+  for (const [name, value] of Object.entries(metrics)) page?.style.setProperty(name, value);
   staticLyricsRoot?.classList.toggle("landscape", landscapeMode);
-  staticLyricsRoot?.style.setProperty("--ks-font-scale", String(Math.max(0.82, Math.min(1.35, fontScale))));
+  staticLyricsRoot?.style.setProperty("--ks-font-scale", String(fontScale));
 }
 
 function computeActiveSource(position: number) {
-  let next = -1;
-  for (let index = 0; index < sourceLines.length; index += 1) {
-    const start = finiteMs(sourceLines[index].lineStartTime);
-    const end = Math.max(start + 1, finiteMs(sourceLines[index].lineEndTime, start + 1));
-    if (position >= start && position < end) next = index;
-  }
+  const next = getPlaybackWindowState(position, sourceLines as LyricLine[]).activeLineStartIndex;
   if (next !== activeSourceIndex) {
     activeSourceIndex = next;
     post({ type: "activeLineChange", index: activeSourceIndex });
@@ -715,10 +709,11 @@ function setLyrics(message: IncomingMessage) {
   staticAttribution = message.attribution;
   activeSourceIndex = -1;
   if (scrollRoot) scrollRoot.hidden = false;
-  if (staticLyricsRoot) staticLyricsRoot.hidden = true;
+  if (page) page.hidden = staticLyricsMode;
+  if (staticLyricsRoot) staticLyricsRoot.hidden = !staticLyricsMode;
   if (staticLyricsMode) {
     renderStaticLyrics();
-    scrollViewport?.scrollTo({ top: 0, behavior: "auto" });
+    staticLyricsRoot?.scrollTo({ top: 0, behavior: "auto" });
     post({ type: "activeLineChange", index: -1 });
   } else {
     renderCredits(message.songwriters || [], message.attribution, finiteMs(message.lastLyricEndTime));
@@ -751,7 +746,7 @@ function applyOptions(message: IncomingMessage) {
     if (staticLyricsMode) renderStaticLyrics();
     else renderSyncedLyrics();
   } else if (layoutChanged && !staticLyricsMode) {
-    triggerRemeasureLV();
+    remeasureLyricsLayout();
   }
   updateSelection();
   scheduleFrame();
@@ -838,8 +833,7 @@ function noteUserScroll() {
   touchMoved = true;
   window.clearTimeout(longPressTimer);
   if (staticLyricsMode) return;
-  if (scrollViewport) noteSpicyUserScroll(scrollViewport);
-  setAutoFollow(false);
+  noteLyricsUserScroll();
 }
 
 scrollViewport?.addEventListener("touchmove", noteUserScroll, { passive: true });
@@ -869,12 +863,10 @@ function frame() {
     computeActiveSource(position);
     if (scrollViewport) {
       scrollToActiveLine(
-        runtimeLines,
-        scrollViewport,
         position,
-        isPlaying,
         autoFollowEnabled,
         pendingForceScroll,
+        setAutoFollow,
       );
     }
     pendingForceScroll = false;
@@ -888,11 +880,9 @@ document.addEventListener("visibilitychange", () => {
   scheduleFrame();
 });
 
-// ScrollToActiveLine.ts resets its anchor on window focus/resize. Keep those
-// lifecycle hooks in the standalone host as well; the next frame force-centers
-// through the same `lastLine == null` path used upstream.
+// Recompute native row anchors when the viewport changes.
 const resetScrollAnchor = () => {
-  resetSpicyScroll();
+  resetLyricsScroll();
   pendingForceScroll = true;
   scheduleFrame();
 };

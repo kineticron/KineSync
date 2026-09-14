@@ -1,0 +1,104 @@
+/* Native KineSync geometry. Upstream CSS continues to paint words and letters. */
+#SpicyLyricsPage[hidden] { display: none; }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent {
+  --DefaultLyricsSize: calc(var(--ks-font-size) * var(--ks-font-scale, 1));
+  --LyricsLeftSidePadding: 0px;
+  --LyricsRightSidePadding: 0px;
+  mask-image: none;
+  -webkit-mask-image: none;
+  scroll-behavior: auto !important;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer {
+  padding: var(--ks-top-padding) var(--ks-list-inset) 280px;
+  margin: 0;
+  min-height: 100%;
+  transition: none;
+}
+.KineSyncLyricsRows { position: relative; width: 100%; }
+.ks-lyric-row {
+  box-sizing: border-box;
+  min-height: calc(var(--ks-row-height) * var(--ks-font-scale, 1));
+  padding: var(--ks-row-padding) 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.ks-lyric-inner { padding: 0 var(--ks-inner-inset); }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line {
+  box-sizing: border-box;
+  width: var(--ks-text-lane) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  --font-size: var(--DefaultLyricsSize);
+  --lyrics-line-height: calc(var(--ks-line-height) * var(--ks-font-scale, 1));
+  line-height: var(--lyrics-line-height) !important;
+  letter-spacing: 0;
+  transform-origin: left center;
+  text-align: left;
+  justify-content: flex-start;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .ks-align-right .line {
+  margin-left: auto !important;
+  text-align: right;
+  justify-content: flex-end;
+  transform-origin: right center;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .word,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .letter,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .letterGroup {
+  line-height: inherit !important;
+  font-size: inherit !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .word-group {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.rtl .word,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.rtl .letter,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.rtl .letterGroup {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.bg-line {
+  --font-size: calc(var(--DefaultLyricsSize) * var(--ks-bg-scale));
+  --lyrics-line-height: calc(var(--ks-line-height) * var(--ks-font-scale, 1) * var(--ks-bg-scale));
+  margin-top: 3px !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.bg-line,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.bg-line * {
+  font-weight: 500 !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line .ks-translation {
+  margin: 4px 2px 0;
+  font-size: calc(14px * var(--ks-font-scale, 1)) !important;
+  line-height: calc(18px * var(--ks-font-scale, 1)) !important;
+  font-weight: 500 !important;
+  white-space: pre-wrap;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.bg-line .ks-translation {
+  margin-top: 2px;
+  font-size: calc(12px * var(--ks-font-scale, 1)) !important;
+  line-height: calc(16px * var(--ks-font-scale, 1)) !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .ks-pause-dots {
+  height: 16px !important;
+  line-height: 16px !important;
+  margin: 15px var(--ks-inner-inset) 0 !important;
+  overflow: visible !important;
+  font-size: 12px !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .ks-pause-dots[hidden] {
+  display: none !important;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .ks-pause-dots .dotGroup {
+  height: 16px !important;
+  gap: 8px;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .ks-pause-dots .dot {
+  font-size: 22px !important;
+  line-height: 16px !important;
+}

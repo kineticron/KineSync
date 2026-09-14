@@ -19,8 +19,10 @@ closely ports the upstream implementations from `src/modules/Spring.ts`,
 `components/lyrics/spicy-upstream-*.ts` and are wrapped by
 `components/lyrics/spicy-webview-entry.ts`, which replaces Spicetify, Spotify,
 network, and global-store dependencies with KineSync's local WebView bridge and
-playback clock while preserving the renderer's DOM, spring/spline, emphasis,
-blur, interlude-dot, virtualizer, line-state, and auto-scroll behavior.
+playback clock. The renderer preserves upstream spring/spline, emphasis,
+blur, interlude-dot and line-state effects. `spicy-layout-host.ts` and
+`spicy-layout.css` provide KineSync's native row geometry and scrolling policy;
+the upstream virtualizer and scroll controller are not bundled into the host.
 
 ## Apple Music-like Lyrics native renderer parity
 
@@ -30,6 +32,9 @@ at commit `eb5c852f7bf809f32425c3025f423598c619af58`.
 
 Apple Music-like Lyrics is licensed under the GNU Affero General Public License
 v3.0 (AGPL-3.0). The native KineSync implementation reproduces the upstream
-layout anchor, line/background scale and spring parameters, distance blur,
-word-fade width, emphasis curves, duet inset, and interlude-dot choreography
-using React Native and Reanimated primitives.
+line/background scale and spring parameters, word-fade width, emphasis curves,
+and interlude-dot choreography using React Native and Reanimated primitives.
+KineSync owns font sizes, line wrapping, row spacing, alignment and scrolling.
+Background animation changes only painting, keeping its layout space reserved.
+Native filter blur is restricted to Android: iOS lyric rows avoid the SwiftUI
+filter wrapper and retain a stable Fabric view hierarchy during recycling.

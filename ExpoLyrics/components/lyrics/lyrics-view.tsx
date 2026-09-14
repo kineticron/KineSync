@@ -1,3 +1,27 @@
+import {
+  type LyricLineRange,
+  type BackgroundActiveLine,
+  type LyricTimingIndex,
+  type CreditsLayout,
+  EMPTY_WINDOW_STATE,
+  LYRICS_LAYOUT,
+  arePlaybackWindowStatesEqual,
+  getBackgroundActiveLines,
+  getLyricTimingIndex,
+  getPlaybackWindowState,
+  getCreditsAwareScrollOffset,
+  getBottomListPadding,
+  getFocusIndexAtPosition,
+  getAutoScrollTargetRange,
+  areLyricLineRangesEqual,
+  isIndexWithinRange,
+  isIndexWithinUpdateWindow,
+  TOP_LIST_PADDING,
+  BOTTOM_LIST_PADDING,
+  ACTIVE_LINE_TOP_OFFSET,
+  ACTIVE_RANGE_BOTTOM_PADDING,
+  STARTUP_DOTS_WARMUP_MS,
+} from "@/lib/lyrics-layout";
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import {
   memo,
@@ -8,7 +32,6 @@ import {
   useReducer,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
   AppState,
@@ -21,7 +44,6 @@ import {
   type LayoutChangeEvent,
   Pressable,
   View,
-  useWindowDimensions,
   type StyleProp,
   type ViewStyle,
 } from "react-native";
@@ -32,20 +54,21 @@ import Animated, {
   Easing as ReanimatedEasing,
   runOnJS,
   scrollTo,
-  type SharedValue,
   useAnimatedReaction,
   useAnimatedRef,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
-  withDelay,
-  withSpring,
   withTiming,
 } from "react-native-reanimated";
 
 import {
   getLandscapeLyricsCenterUpwardOffset,
   getLyricsViewportCenterUpwardOffset,
+  LANDSCAPE_ACTIVE_LINE_TOP_OFFSET,
+  LANDSCAPE_LYRICS_EDGE_BLEED,
+  LANDSCAPE_LYRICS_HORIZONTAL_INSET,
+  LANDSCAPE_TOP_LIST_PADDING,
 } from "@/constants/player-layout";
 import { getPrimaryLineText } from "@/lib/active-lyric-line";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
@@ -58,25 +81,15 @@ import type {
 
 import { LyricLine } from "./lyric-line";
 
-const AMLL_MIN_INTERLUDE_GAP_MS = 7000;
-const AMLL_INTERLUDE_ENTER_HOLD_MS = 500;
-const AMLL_INTERLUDE_EXIT_TOTAL_MS = 1000;
-const AMLL_INTERLUDE_DOT_ENTER_TOTAL_MS = 910;
-const AMLL_SEEK_JITTER_TOLERANCE_MS = 150;
-const AMLL_SEEK_MAX_TRUSTED_GAP_MS = 800;
-const AMLL_SEEK_DRIFT_SLACK = 0.5;
 const SOURCE_CHANGE_AUTOSCROLL_DELAY_MS = 500;
-const TOP_LIST_PADDING = 150;
-const BOTTOM_LIST_PADDING = 280;
+
 const STATIC_LYRIC_FONT_SIZE = 26;
 const STATIC_LYRIC_LINE_HEIGHT = 38;
 const STATIC_LYRIC_HORIZONTAL_INSET = 28;
 const STATIC_LYRIC_MAX_WIDTH = 300;
 const STATIC_TRANSLATED_FONT_SIZE = 18;
 const STATIC_TRANSLATED_LINE_HEIGHT = 26;
-const ACTIVE_LINE_TOP_OFFSET = 0;
-const AMLL_ALIGN_POSITION = 0.35;
-const ACTIVE_RANGE_BOTTOM_PADDING = 24;
+
 const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
 const LYRIC_SCROLL_ANIMATION_MS = 440;
 const PROGRAMMATIC_SCROLL_GUARD_MS = LYRIC_SCROLL_ANIMATION_MS + 40;
@@ -84,152 +97,9 @@ const SCROLL_OFFSET_EPSILON = 2;
 const SCROLL_SETTLE_VERIFY_MS = LYRIC_SCROLL_ANIMATION_MS + 100;
 const PENDING_ANCHOR_RETRY_MS = 96;
 const MAX_PENDING_ANCHOR_RETRIES = 18;
-type AmlPosYSpringPolicyInput = {
-  index: number;
-  lyrics: LyricLineType[];
-  isInterlude: boolean;
-  isSeek: boolean;
-  isSongEnd: boolean;
-};
 
-type AmlPosYSpringPolicy = {
-  mass: number;
-  stiffness: number;
-  damping: number;
-  overshootClamping: false;
-};
-
-const AMLL_DEFAULT_POS_Y_SPRING: AmlPosYSpringPolicy = {
-  mass: 0.9,
-  stiffness: 90,
-  damping: 15,
-  overshootClamping: false,
-};
-const AMLL_PLAYBACK_STAGGER_MS = 50;
-const AMLL_PLAYBACK_STAGGER_DECAY = 1.05;
-
-// Port of AMLL core's getPosYSpringPolicy. AMLL deliberately uses the softer
-// 90/15 policy for seeks/interludes, but retunes ordinary lyric transitions
-// from the interval between consecutive line starts.
-function getAmlPosYSpringPolicy({
-  index,
-  lyrics,
-  isInterlude,
-  isSeek,
-  isSongEnd,
-}: AmlPosYSpringPolicyInput): AmlPosYSpringPolicy {
-  if (isSeek || isInterlude) {
-    return AMLL_DEFAULT_POS_Y_SPRING;
-  }
-  if (isSongEnd) {
-    return { mass: 0.9, stiffness: 140, damping: 22, overshootClamping: false } as const;
-  }
-  const current = lyrics[index];
-  const previous = index > 0 ? lyrics[index - 1] : undefined;
-  if (!current || !previous) {
-    return AMLL_DEFAULT_POS_Y_SPRING;
-  }
-  const interval = Math.max(
-    100,
-    Math.min(800, current.lineStartTime - previous.lineStartTime),
-  );
-  const ratio = Math.pow(1 - (interval - 100) / 700, 0.2);
-  const stiffness = 170 + ratio * 50;
-  return {
-    mass: 0.9,
-    stiffness,
-    damping: 2.2 * Math.sqrt(stiffness),
-    overshootClamping: false,
-  } as const;
-}
-
-type LyricRowMotionTransition = {
-  serial: number;
-  kind: "idle" | "scroll" | "rebuild";
-  startOffset: number;
-  targetOffset: number;
-  springPolicy: AmlPosYSpringPolicy;
-  delayByIndex: ReadonlyMap<number, number>;
-  rebuildStartCorrectionByIndex: ReadonlyMap<number, number>;
-};
-
-const EMPTY_ROW_DELAYS = new Map<number, number>();
-const EMPTY_REBUILD_CORRECTIONS = new Map<number, number>();
-
-const LyricRowMotion = memo(function LyricRowMotion({
-  index,
-  transition,
-  globalOffset,
-  enabled,
-  children,
-}: {
-  index: number;
-  transition: LyricRowMotionTransition;
-  globalOffset: SharedValue<number>;
-  enabled: SharedValue<boolean>;
-  children: ReactNode;
-}) {
-  const progress = useSharedValue(1);
-  const delayMs = transition.delayByIndex.get(index) ?? 0;
-  const rebuildStartCorrection =
-    transition.rebuildStartCorrectionByIndex.get(index);
-  const shouldRun =
-    transition.kind === "scroll" ||
-    (transition.kind === "rebuild" && rebuildStartCorrection !== undefined);
-
-  useEffect(() => {
-    cancelAnimation(progress);
-    if (!shouldRun) {
-      progress.value = 1;
-      return;
-    }
-    progress.value = 0;
-    const animation = withSpring(1, transition.springPolicy);
-    progress.value = delayMs > 0 ? withDelay(delayMs, animation) : animation;
-  }, [
-    delayMs,
-    progress,
-    shouldRun,
-    transition.serial,
-    transition.springPolicy.damping,
-    transition.springPolicy.mass,
-    transition.springPolicy.stiffness,
-    transition.springPolicy,
-  ]);
-
-  const animatedStyle = useAnimatedStyle(() => {
-    if (!enabled.value || !shouldRun) {
-      return { transform: [{ translateY: 0 }] };
-    }
-    if (transition.kind === "rebuild") {
-      return {
-        transform: [
-          {
-            translateY:
-              (rebuildStartCorrection ?? 0) * (1 - progress.value),
-          },
-        ],
-      };
-    }
-    const globalDelta = globalOffset.value - transition.startOffset;
-    const targetDelta = transition.targetOffset - transition.startOffset;
-    return {
-      transform: [
-        {
-          translateY: globalDelta - targetDelta * progress.value,
-        },
-      ],
-    };
-  }, [
-    rebuildStartCorrection,
-    shouldRun,
-    transition.kind,
-    transition.startOffset,
-    transition.targetOffset,
-  ]);
-
-  return <Animated.View style={animatedStyle}>{children}</Animated.View>;
-});
+// Fast start, long gentle deceleration — no overshoot (P1 0.22,0.88 → P2 0.34,1)
+const LYRIC_SCROLL_EASING = ReanimatedEasing.bezier(0.22, 0.88, 0.34, 1);
 const AUTO_FOLLOW_DISABLE_GRACE_MS = 2000;
 const AUTO_FOLLOW_DISABLE_DISTANCE_PX = 120;
 const AUTO_FOLLOW_RESUME_DISTANCE_PX = 64;
@@ -238,7 +108,7 @@ const USER_SCROLL_IDLE_RESET_MS = 700;
 const SHOULD_USE_UI_THREAD_SCROLL = true;
 // ponytail: only the active line ±1 needs JS-driven syllable updates;
 // farther cells use static colors and don't need per-frame re-render
-const LYRICS_JS_UPDATE_RADIUS = 1;
+
 const ReanimatedFlashList = Animated.createAnimatedComponent(FlashList<LyricLineType>);
 
 function getFlashListLeadingInset(
@@ -271,607 +141,6 @@ function normalizeFlashListItemTop(
     return layoutY;
   }
   return layoutY + leadingInset;
-}
-
-type LyricLineRange = {
-  startIndex: number;
-  endIndex: number;
-};
-
-type PlaybackWindowState = {
-  activeLineStartIndex: number;
-  activeLineEndIndex: number;
-  highlightedLineIndices: ReadonlySet<number>;
-  visualActiveLineStartIndex: number;
-  visualActiveLineEndIndex: number;
-  focusLineIndex: number;
-  pauseAfterIndex: number;
-  pauseBeforeIndex: number;
-  isLongPause: boolean;
-  pauseProgress: number;
-  pauseStartMs: number;
-  pauseVisualDurationMs: number;
-  pauseHoldMs: number;
-};
-
-type BackgroundActiveLine = {
-  index: number;
-  lineEndTime: number;
-  backgroundEndTime: number;
-};
-
-type LyricTimingIndex = {
-  maxEndTimeByIndex: number[];
-};
-
-type TimelinePlaybackState = {
-  playingLineIndices: Set<number>;
-  highlightedLineIndices: Set<number>;
-  playbackCursor: number;
-  scrollToIndex: number;
-};
-
-type InterludeCandidate = {
-  startTime: number;
-  endTime: number;
-  anchorLineIndex: number;
-  nextLineIndex: number;
-};
-
-type InterludePlaybackContext = {
-  gapStartMs: number;
-  gapEndMs: number;
-  anchorMs: number;
-  holdMs: number;
-};
-
-type PlaybackWindowStateWithoutComputedRanges = Omit<
-  PlaybackWindowState,
-  "visualActiveLineStartIndex" | "visualActiveLineEndIndex"
->;
-
-const EMPTY_WINDOW_STATE: PlaybackWindowState = {
-  activeLineStartIndex: -1,
-  activeLineEndIndex: -1,
-  highlightedLineIndices: new Set<number>(),
-  visualActiveLineStartIndex: -1,
-  visualActiveLineEndIndex: -1,
-  focusLineIndex: -1,
-  pauseAfterIndex: -1,
-  pauseBeforeIndex: -1,
-  isLongPause: false,
-  pauseProgress: 0,
-  pauseStartMs: 0,
-  pauseVisualDurationMs: 0,
-  pauseHoldMs: 0,
-};
-
-function areIndexSetsEqual(a: ReadonlySet<number>, b: ReadonlySet<number>) {
-  if (a === b) {
-    return true;
-  }
-  if (a.size !== b.size) {
-    return false;
-  }
-  for (const index of a) {
-    if (!b.has(index)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function arePlaybackWindowStatesEqual(
-  a: PlaybackWindowState,
-  b: PlaybackWindowState,
-) {
-  return (
-    a.activeLineStartIndex === b.activeLineStartIndex &&
-    a.activeLineEndIndex === b.activeLineEndIndex &&
-    areIndexSetsEqual(a.highlightedLineIndices, b.highlightedLineIndices) &&
-    a.visualActiveLineStartIndex === b.visualActiveLineStartIndex &&
-    a.visualActiveLineEndIndex === b.visualActiveLineEndIndex &&
-    a.focusLineIndex === b.focusLineIndex &&
-    a.pauseAfterIndex === b.pauseAfterIndex &&
-    a.pauseBeforeIndex === b.pauseBeforeIndex &&
-    a.isLongPause === b.isLongPause &&
-    Math.abs(a.pauseProgress - b.pauseProgress) < 0.004 &&
-    a.pauseStartMs === b.pauseStartMs &&
-    a.pauseVisualDurationMs === b.pauseVisualDurationMs &&
-    a.pauseHoldMs === b.pauseHoldMs
-  );
-}
-
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function findActiveLineIndex(positionMs: number, lyrics: LyricLineType[]) {
-  let low = 0;
-  let high = lyrics.length - 1;
-  while (low <= high) {
-    const mid = (low + high) >> 1;
-    const line = lyrics[mid];
-    if (positionMs < line.lineStartTime) {
-      high = mid - 1;
-    } else if (positionMs >= line.lineEndTime) {
-      low = mid + 1;
-    } else {
-      return mid;
-    }
-  }
-  return -1;
-}
-
-function findLastEndedLineIndex(positionMs: number, lyrics: LyricLineType[]) {
-  let low = 0;
-  let high = lyrics.length - 1;
-  let result = -1;
-  while (low <= high) {
-    const mid = (low + high) >> 1;
-    if (lyrics[mid].lineEndTime <= positionMs) {
-      result = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return result;
-}
-
-function findFirstUpcomingLineIndex(
-  positionMs: number,
-  lyrics: LyricLineType[],
-) {
-  let low = 0;
-  let high = lyrics.length - 1;
-  let result = -1;
-  while (low <= high) {
-    const mid = (low + high) >> 1;
-    if (lyrics[mid].lineStartTime > positionMs) {
-      result = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-  return result;
-}
-
-function getBackgroundEndTime(line: LyricLineType) {
-  const backgroundSyllables = line.backgroundSyllables;
-  if (!backgroundSyllables?.length) {
-    return line.lineEndTime;
-  }
-  return Math.max(
-    line.lineEndTime,
-    backgroundSyllables[backgroundSyllables.length - 1].endTime,
-  );
-}
-
-function getBackgroundActiveLines(lyrics: LyricLineType[]) {
-  const activeLines: BackgroundActiveLine[] = [];
-  for (let index = 0; index < lyrics.length; index += 1) {
-    const line = lyrics[index];
-    const backgroundEndTime = getBackgroundEndTime(line);
-    if (backgroundEndTime > line.lineEndTime) {
-      activeLines.push({
-        index,
-        lineEndTime: line.lineEndTime,
-        backgroundEndTime,
-      });
-    }
-  }
-  return activeLines;
-}
-
-function getLyricTimingIndex(lyrics: LyricLineType[]): LyricTimingIndex {
-  const maxEndTimeByIndex: number[] = [];
-  let maxEndTime = 0;
-
-  for (let index = 0; index < lyrics.length; index += 1) {
-    maxEndTime = Math.max(maxEndTime, lyrics[index].lineEndTime);
-    maxEndTimeByIndex.push(maxEndTime);
-  }
-
-  return { maxEndTimeByIndex };
-}
-
-function getInterludeCandidate(
-  playbackPosition: number,
-  lyrics: LyricLineType[],
-  timingIndex: LyricTimingIndex,
-): InterludeCandidate | null {
-  const nextLineIndex = findFirstUpcomingLineIndex(playbackPosition, lyrics);
-  if (nextLineIndex < 0) {
-    return null;
-  }
-
-  const startTime =
-    nextLineIndex === 0
-      ? 0
-      : (timingIndex.maxEndTimeByIndex[nextLineIndex - 1] ?? 0);
-  const endTime = Math.max(startTime, lyrics[nextLineIndex].lineStartTime);
-  if (
-    endTime - startTime < AMLL_MIN_INTERLUDE_GAP_MS ||
-    playbackPosition < startTime ||
-    playbackPosition >= endTime
-  ) {
-    return null;
-  }
-
-  return {
-    startTime,
-    endTime,
-    anchorLineIndex: nextLineIndex - 1,
-    nextLineIndex,
-  };
-}
-
-function createInterludePlaybackContext(
-  candidate: InterludeCandidate,
-  playbackPosition: number,
-  resetAtCurrentPosition: boolean,
-): InterludePlaybackContext {
-  const anchorMs = resetAtCurrentPosition
-    ? Math.max(candidate.startTime, Math.min(candidate.endTime, playbackPosition))
-    : candidate.startTime;
-  const isNaturalIntro =
-    candidate.anchorLineIndex === -1 && anchorMs <= candidate.startTime;
-  return {
-    gapStartMs: candidate.startTime,
-    gapEndMs: candidate.endTime,
-    anchorMs,
-    holdMs: isNaturalIntro ? 0 : AMLL_INTERLUDE_ENTER_HOLD_MS,
-  };
-}
-
-function interludeContextMatches(
-  context: InterludePlaybackContext | null,
-  candidate: InterludeCandidate,
-) {
-  return (
-    context !== null &&
-    context.gapStartMs === candidate.startTime &&
-    context.gapEndMs === candidate.endTime
-  );
-}
-
-function getMaxLyricEndTime(timingIndex: LyricTimingIndex) {
-  return timingIndex.maxEndTimeByIndex.length > 0
-    ? timingIndex.maxEndTimeByIndex[timingIndex.maxEndTimeByIndex.length - 1]
-    : 0;
-}
-
-function rebuildTimelinePlaybackState(
-  playbackPosition: number,
-  lyrics: LyricLineType[],
-  timingIndex: LyricTimingIndex,
-): TimelinePlaybackState {
-  const playingLineIndices = new Set<number>();
-  const highlightedLineIndices = new Set<number>();
-  const upcomingIndex = findFirstUpcomingLineIndex(playbackPosition, lyrics);
-  const firstGreater = upcomingIndex >= 0 ? upcomingIndex : lyrics.length;
-
-  let anchorIndex = -1;
-  for (let index = firstGreater - 1; index >= 0; index -= 1) {
-    const line = lyrics[index];
-    if (line.lineEndTime > line.lineStartTime) {
-      anchorIndex = index;
-      break;
-    }
-  }
-
-  if (anchorIndex < 0) {
-    return {
-      playingLineIndices,
-      highlightedLineIndices,
-      playbackCursor: firstGreater,
-      scrollToIndex: 0,
-    };
-  }
-
-  const anchorStartTime = lyrics[anchorIndex].lineStartTime;
-  let minPlaying = -1;
-  let minHighlighted = -1;
-
-  for (let index = anchorIndex; index >= 0; index -= 1) {
-    const line = lyrics[index];
-    if (line.lineEndTime <= anchorStartTime) {
-      continue;
-    }
-
-    if (isLineInPrimaryWindow(playbackPosition, line)) {
-      playingLineIndices.add(index);
-      minPlaying = index;
-    }
-
-    highlightedLineIndices.add(index);
-    minHighlighted = index;
-  }
-
-  const activeInterlude = getInterludeCandidate(
-    playbackPosition,
-    lyrics,
-    timingIndex,
-  );
-  const isPastMaxEnd =
-    lyrics.length > 0 && playbackPosition >= getMaxLyricEndTime(timingIndex);
-  if (
-    (activeInterlude !== null || isPastMaxEnd) &&
-    playingLineIndices.size === 0
-  ) {
-    highlightedLineIndices.clear();
-  }
-
-  return {
-    playingLineIndices,
-    highlightedLineIndices,
-    playbackCursor: minPlaying === -1 ? firstGreater : minPlaying,
-    scrollToIndex: minHighlighted,
-  };
-}
-
-function advanceTimelinePlaybackState(
-  timelineState: TimelinePlaybackState,
-  playbackPosition: number,
-  lyrics: LyricLineType[],
-  timingIndex: LyricTimingIndex,
-) {
-  for (const index of timelineState.playingLineIndices) {
-    const line = lyrics[index];
-    if (
-      !line ||
-      playbackPosition < line.lineStartTime ||
-      line.lineEndTime <= playbackPosition
-    ) {
-      timelineState.playingLineIndices.delete(index);
-    }
-  }
-
-  const addedPlayingIndices: number[] = [];
-  let cursor = Math.max(0, timelineState.playbackCursor);
-  while (cursor < lyrics.length) {
-    const line = lyrics[cursor];
-    if (line.lineStartTime > playbackPosition) {
-      break;
-    }
-
-    if (
-      isLineInPrimaryWindow(playbackPosition, line) &&
-      !timelineState.playingLineIndices.has(cursor)
-    ) {
-      timelineState.playingLineIndices.add(cursor);
-      addedPlayingIndices.push(cursor);
-    }
-    cursor += 1;
-  }
-  timelineState.playbackCursor = cursor;
-
-  const expiredHighlightedIndices: number[] = [];
-  for (const index of timelineState.highlightedLineIndices) {
-    if (!timelineState.playingLineIndices.has(index)) {
-      expiredHighlightedIndices.push(index);
-    }
-  }
-
-  if (addedPlayingIndices.length > 0) {
-    for (const index of addedPlayingIndices) {
-      timelineState.highlightedLineIndices.add(index);
-    }
-    for (const index of expiredHighlightedIndices) {
-      timelineState.highlightedLineIndices.delete(index);
-    }
-
-    let minHighlighted = Number.POSITIVE_INFINITY;
-    for (const index of timelineState.highlightedLineIndices) {
-      if (index < minHighlighted) {
-        minHighlighted = index;
-      }
-    }
-    if (Number.isFinite(minHighlighted)) {
-      timelineState.scrollToIndex = minHighlighted;
-    }
-  }
-
-  const activeInterlude = getInterludeCandidate(
-    playbackPosition,
-    lyrics,
-    timingIndex,
-  );
-  const isPastMaxEnd =
-    lyrics.length > 0 && playbackPosition >= getMaxLyricEndTime(timingIndex);
-  if (
-    (activeInterlude !== null || isPastMaxEnd) &&
-    timelineState.playingLineIndices.size === 0
-  ) {
-    timelineState.highlightedLineIndices.clear();
-  }
-}
-
-function getHighlightedLineRange(indices: ReadonlySet<number>) {
-  let startIndex = Number.POSITIVE_INFINITY;
-  let endIndex = -1;
-  for (const index of indices) {
-    startIndex = Math.min(startIndex, index);
-    endIndex = Math.max(endIndex, index);
-  }
-  return {
-    startIndex: Number.isFinite(startIndex) ? startIndex : -1,
-    endIndex,
-  };
-}
-
-function getLatestHighlightedLineIndex(
-  indices: ReadonlySet<number>,
-  fallbackIndex: number,
-) {
-  let latestIndex = fallbackIndex;
-  for (const index of indices) {
-    latestIndex = Math.max(latestIndex, index);
-  }
-  return latestIndex;
-}
-
-function getMonotonicNow() {
-  return typeof performance !== "undefined" &&
-    typeof performance.now === "function"
-    ? performance.now()
-    : Date.now();
-}
-
-function extendLineIndexRange(
-  startIndex: number,
-  endIndex: number,
-  index: number,
-) {
-  if (index < 0) {
-    return { startIndex, endIndex };
-  }
-  return {
-    startIndex: startIndex < 0 ? index : Math.min(startIndex, index),
-    endIndex: endIndex < 0 ? index : Math.max(endIndex, index),
-  };
-}
-
-function isLineInPrimaryWindow(
-  playbackPosition: number,
-  line: LyricLineType,
-) {
-  return (
-    playbackPosition >= line.lineStartTime &&
-    playbackPosition < line.lineEndTime
-  );
-}
-
-function addVisualActiveRange(
-  state: PlaybackWindowStateWithoutComputedRanges,
-  playbackPosition: number,
-  backgroundActiveLines: BackgroundActiveLine[],
-): PlaybackWindowState {
-  let visualStart = state.activeLineStartIndex;
-  let visualEnd = state.activeLineEndIndex;
-
-  for (const line of backgroundActiveLines) {
-    const backgroundStillActive =
-      playbackPosition >= line.lineEndTime &&
-      playbackPosition < line.backgroundEndTime;
-    if (!backgroundStillActive) {
-      continue;
-    }
-    ({ startIndex: visualStart, endIndex: visualEnd } = extendLineIndexRange(
-      visualStart,
-      visualEnd,
-      line.index,
-    ));
-  }
-
-  return {
-    ...state,
-    visualActiveLineStartIndex: visualStart,
-    visualActiveLineEndIndex: visualEnd,
-  };
-}
-
-function getPlaybackWindowState(
-  playbackPosition: number,
-  lyrics: LyricLineType[],
-  backgroundActiveLines: BackgroundActiveLine[] = getBackgroundActiveLines(lyrics),
-  timingIndex: LyricTimingIndex = getLyricTimingIndex(lyrics),
-  interludeContext: InterludePlaybackContext | null = null,
-  timelinePlaybackState: TimelinePlaybackState | null = null,
-): PlaybackWindowState {
-  if (!lyrics.length) {
-    return EMPTY_WINDOW_STATE;
-  }
-
-  const finalize = (state: PlaybackWindowStateWithoutComputedRanges) =>
-    addVisualActiveRange(state, playbackPosition, backgroundActiveLines);
-  const resolvedTimelineState =
-    timelinePlaybackState ??
-    rebuildTimelinePlaybackState(playbackPosition, lyrics, timingIndex);
-  const highlightedLineIndices =
-    resolvedTimelineState.highlightedLineIndices.size > 0
-      ? new Set(resolvedTimelineState.highlightedLineIndices)
-      : EMPTY_WINDOW_STATE.highlightedLineIndices;
-  const highlightedRange = getHighlightedLineRange(highlightedLineIndices);
-  const interlude = getInterludeCandidate(
-    playbackPosition,
-    lyrics,
-    timingIndex,
-  );
-
-  if (interlude) {
-    const resolvedContext = interludeContextMatches(interludeContext, interlude)
-      ? interludeContext!
-      : createInterludePlaybackContext(interlude, playbackPosition, true);
-    const remainingMs = Math.max(0, interlude.endTime - resolvedContext.anchorMs);
-    const bodyMs =
-      remainingMs - resolvedContext.holdMs - AMLL_INTERLUDE_EXIT_TOTAL_MS;
-    const canDisplayInterlude = bodyMs >= AMLL_INTERLUDE_DOT_ENTER_TOTAL_MS;
-    const elapsedMs = Math.max(0, playbackPosition - resolvedContext.anchorMs);
-    const pauseProgress =
-      canDisplayInterlude && remainingMs > 0
-        ? clamp01(elapsedMs / remainingMs)
-        : 0;
-
-    return finalize({
-      activeLineStartIndex: -1,
-      activeLineEndIndex: -1,
-      highlightedLineIndices: EMPTY_WINDOW_STATE.highlightedLineIndices,
-      focusLineIndex: canDisplayInterlude
-        ? interlude.anchorLineIndex >= 0
-          ? interlude.anchorLineIndex
-          : interlude.nextLineIndex
-        : interlude.nextLineIndex,
-      pauseAfterIndex:
-        canDisplayInterlude && interlude.anchorLineIndex >= 0
-          ? interlude.anchorLineIndex
-          : -1,
-      pauseBeforeIndex:
-        canDisplayInterlude && interlude.anchorLineIndex < 0
-          ? interlude.nextLineIndex
-          : -1,
-      isLongPause: canDisplayInterlude,
-      pauseProgress,
-      pauseStartMs: resolvedContext.anchorMs,
-      pauseVisualDurationMs: remainingMs,
-      pauseHoldMs: resolvedContext.holdMs,
-    });
-  }
-
-  if (highlightedRange.startIndex >= 0) {
-    return finalize({
-      activeLineStartIndex: highlightedRange.startIndex,
-      activeLineEndIndex: highlightedRange.endIndex,
-      highlightedLineIndices,
-      focusLineIndex: highlightedRange.startIndex,
-      pauseAfterIndex: -1,
-      pauseBeforeIndex: -1,
-      isLongPause: false,
-      pauseProgress: 0,
-      pauseStartMs: 0,
-      pauseVisualDurationMs: 0,
-      pauseHoldMs: 0,
-    });
-  }
-
-  return finalize({
-    activeLineStartIndex: -1,
-    activeLineEndIndex: -1,
-    highlightedLineIndices: EMPTY_WINDOW_STATE.highlightedLineIndices,
-    focusLineIndex: Math.max(
-      0,
-      Math.min(resolvedTimelineState.scrollToIndex, lyrics.length - 1),
-    ),
-    pauseAfterIndex: -1,
-    pauseBeforeIndex: -1,
-    isLongPause: false,
-    pauseProgress: 0,
-    pauseStartMs: 0,
-    pauseVisualDurationMs: 0,
-    pauseHoldMs: 0,
-  });
 }
 
 type LyricsViewProps = {
@@ -1036,332 +305,27 @@ const CreditsFooter = memo(function CreditsFooter({
   );
 });
 
-type CreditsLayout = {
-  top: number;
-  bottom: number;
-};
-
-function getCreditsAwareScrollOffset({
-  range,
-  lyricsLength,
-  listHeight,
-  creditsLayout,
-  getAbsoluteLineTop,
-  creditsActive,
-  hasCredits,
-  activeLineTopOffset = ACTIVE_LINE_TOP_OFFSET,
-}: {
-  range: LyricLineRange;
-  lyricsLength: number;
-  listHeight: number;
-  creditsLayout: CreditsLayout | null;
-  getAbsoluteLineTop: (index: number) => number | null;
-  creditsActive: boolean;
-  hasCredits: boolean;
-  activeLineTopOffset?: number;
-}) {
-  const startIndex = Math.max(0, Math.min(range.startIndex, lyricsLength - 1));
-  const top = getAbsoluteLineTop(startIndex);
-  if (top === null) {
-    return null;
-  }
-  const safeTopOffset = Math.min(activeLineTopOffset, Math.max(0, listHeight));
-  const normalOffset = Math.max(0, top - safeTopOffset);
-  const isLastLineRange =
-    range.endIndex >= lyricsLength - 1 && range.startIndex >= lyricsLength - 1;
-  if (
-    !creditsActive ||
-    !hasCredits ||
-    !isLastLineRange ||
-    !creditsLayout ||
-    listHeight <= 0
-  ) {
-    return normalOffset;
-  }
-
-  const lastLineIndex = lyricsLength - 1;
-  const lastLineTop = getAbsoluteLineTop(lastLineIndex);
-  if (lastLineTop === null) {
-    return normalOffset;
-  }
-
-  const blockHeight = creditsLayout.bottom - lastLineTop;
-  const availableHeight =
-    listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING;
-  if (blockHeight <= availableHeight) {
-    return normalOffset;
-  }
-
-  return Math.max(
-    0,
-    creditsLayout.bottom - listHeight + ACTIVE_RANGE_BOTTOM_PADDING,
-  );
-}
-
-function getMaxScrollTarget({
-  lyricsLength,
-  listHeight,
-  lastLineTop,
-  creditsLayout,
-  hasCredits,
-  activeLineTopOffset = ACTIVE_LINE_TOP_OFFSET,
-}: {
-  lyricsLength: number;
-  listHeight: number;
-  lastLineTop: number;
-  creditsLayout: CreditsLayout | null;
-  hasCredits: boolean;
-  activeLineTopOffset?: number;
-}) {
-  let maxScrollTarget = Math.max(0, lastLineTop - activeLineTopOffset);
-  if (!hasCredits || !creditsLayout || listHeight <= 0 || lyricsLength <= 0) {
-    return maxScrollTarget;
-  }
-
-  const blockHeight = creditsLayout.bottom - lastLineTop;
-  const availableHeight =
-    listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING;
-  if (blockHeight > availableHeight) {
-    maxScrollTarget = Math.max(
-      maxScrollTarget,
-      creditsLayout.bottom - listHeight + ACTIVE_RANGE_BOTTOM_PADDING,
-    );
-  }
-
-  return maxScrollTarget;
-}
-
-function getBottomListPadding({
-  viewportHeight,
-  lyricsLength,
-  lastLineTop,
-  lastLineHeight,
-  creditsLayout,
-  hasCredits,
-  activeLineTopOffset = ACTIVE_LINE_TOP_OFFSET,
-}: {
-  viewportHeight: number;
-  lyricsLength: number;
-  lastLineTop: number | null;
-  lastLineHeight: number;
-  creditsLayout: CreditsLayout | null;
-  hasCredits: boolean;
-  activeLineTopOffset?: number;
-}) {
-  if (viewportHeight <= 0 || lyricsLength <= 0 || lastLineTop === null) {
-    return Math.max(BOTTOM_LIST_PADDING, viewportHeight);
-  }
-
-  const contentBottom =
-    creditsLayout?.bottom ?? lastLineTop + lastLineHeight;
-  const maxScrollTarget = getMaxScrollTarget({
-    lyricsLength,
-    listHeight: viewportHeight,
-    lastLineTop,
-    creditsLayout,
-    hasCredits,
-    activeLineTopOffset,
-  });
-
-  return Math.max(0, maxScrollTarget + viewportHeight - contentBottom);
-}
-
-function getFocusIndexAtPosition(positionMs: number, lyrics: LyricLineType[]) {
-  const active = findActiveLineIndex(positionMs, lyrics);
-  if (active >= 0) {
-    return active;
-  }
-  const previous = findLastEndedLineIndex(positionMs, lyrics);
-  if (previous >= 0) {
-    return previous;
-  }
-  return findFirstUpcomingLineIndex(positionMs, lyrics);
-}
-
-function getAutoScrollTargetRange(
-  windowState: PlaybackWindowState,
-  lyrics: LyricLineType[],
-): LyricLineRange | null {
-  if (!lyrics.length) {
-    return null;
-  }
-
-  const clampIndex = (index: number) =>
-    Math.max(0, Math.min(index, lyrics.length - 1));
-
-  if (windowState.isLongPause) {
-    const startIndex = clampIndex(
-      windowState.pauseAfterIndex >= 0
-        ? windowState.pauseAfterIndex
-        : windowState.pauseBeforeIndex >= 1
-          ? windowState.pauseBeforeIndex - 1
-          : 0,
-    );
-    const endIndex =
-      windowState.pauseBeforeIndex >= 0
-        ? clampIndex(windowState.pauseBeforeIndex + 1)
-        : startIndex;
-    return { startIndex, endIndex };
-  }
-
-  const visualStart = windowState.visualActiveLineStartIndex;
-  const visualEnd = windowState.visualActiveLineEndIndex;
-  const activeStart = windowState.activeLineStartIndex;
-  const activeEnd = windowState.activeLineEndIndex;
-
-  // Overlap / multi-line: anchor on the earliest active line and keep the full range visible.
-  if (visualStart >= 0 && visualEnd > visualStart) {
-    return {
-      startIndex: clampIndex(visualStart),
-      endIndex: clampIndex(visualEnd),
-    };
-  }
-  if (activeStart >= 0 && activeEnd > activeStart) {
-    return {
-      startIndex: clampIndex(activeStart),
-      endIndex: clampIndex(activeEnd),
-    };
-  }
-
-  // A highlighted line remains the scroll anchor through a short gap. AMLL only
-  // advances scrollToIndex when a new lyric actually enters playback.
-  if (activeStart >= 0 && activeEnd === activeStart) {
-    const safeIndex = clampIndex(activeStart);
-    return { startIndex: safeIndex, endIndex: safeIndex };
-  }
-
-  const focusIndex = windowState.focusLineIndex;
-  if (focusIndex >= 0 && focusIndex < lyrics.length) {
-    return { startIndex: focusIndex, endIndex: focusIndex };
-  }
-
-  if (visualStart >= 0 && visualStart < lyrics.length) {
-    const safeVisualEnd =
-      visualEnd >= visualStart
-        ? Math.min(visualEnd, lyrics.length - 1)
-        : visualStart;
-    return { startIndex: visualStart, endIndex: safeVisualEnd };
-  }
-
-  return null;
-}
-
-function areLyricLineRangesEqual(
-  a: LyricLineRange | null,
-  b: LyricLineRange | null,
-) {
-  if (a === b) {
-    return true;
-  }
-  if (!a || !b) {
-    return false;
-  }
-  return a.startIndex === b.startIndex && a.endIndex === b.endIndex;
-}
-
-function isIndexWithinUpdateWindow(
-  index: number,
-  windowState: PlaybackWindowState,
-) {
-  const visualStart =
-    windowState.visualActiveLineStartIndex >= 0
-      ? windowState.visualActiveLineStartIndex
-      : windowState.focusLineIndex;
-  const visualEnd =
-    windowState.visualActiveLineEndIndex >= 0
-      ? windowState.visualActiveLineEndIndex
-      : visualStart;
-
-  if (visualStart >= 0) {
-    return (
-      index >= visualStart - LYRICS_JS_UPDATE_RADIUS &&
-      index <= visualEnd + LYRICS_JS_UPDATE_RADIUS
-    );
-  }
-
-  if (windowState.pauseAfterIndex >= 0 || windowState.pauseBeforeIndex >= 0) {
-    const pauseStart =
-      windowState.pauseAfterIndex >= 0
-        ? windowState.pauseAfterIndex
-        : windowState.pauseBeforeIndex;
-    const pauseEnd =
-      windowState.pauseBeforeIndex >= 0
-        ? windowState.pauseBeforeIndex
-        : pauseStart;
-    return (
-      index >= pauseStart - LYRICS_JS_UPDATE_RADIUS &&
-      index <= pauseEnd + LYRICS_JS_UPDATE_RADIUS
-    );
-  }
-
-  return false;
-}
-
 function usePlaybackWindowState(
   lyrics: LyricLineType[],
   backgroundActiveLines: BackgroundActiveLine[],
   timingIndex: LyricTimingIndex,
 ) {
-  const interludeContextRef = useRef<InterludePlaybackContext | null>(null);
-  const timelinePlaybackStateRef = useRef<TimelinePlaybackState | null>(null);
-  const seekContinuityRef = useRef({
-    mediaTime: 0,
-    wallTime: 0,
-    hasBaseline: false,
-  });
-  const [committedSeekSerial, setCommittedSeekSerial] = useState(0);
-  const [windowState, setWindowState] = useState(() => {
-    const initialPosition = usePlaybackStore.getState().playbackPosition;
-    const initialTimelineState = rebuildTimelinePlaybackState(
-      initialPosition,
-      lyrics,
-      timingIndex,
-    );
-    timelinePlaybackStateRef.current = initialTimelineState;
-    return getPlaybackWindowState(
-      initialPosition,
+  const [windowState, setWindowState] = useState(() =>
+    getPlaybackWindowState(
+      usePlaybackStore.getState().playbackPosition,
       lyrics,
       backgroundActiveLines,
       timingIndex,
-      null,
-      initialTimelineState,
-    );
-  });
+    ),
+  );
 
   useEffect(() => {
-    const currentPlayback = usePlaybackStore.getState();
-    const currentPosition = currentPlayback.playbackPosition;
-    timelinePlaybackStateRef.current = rebuildTimelinePlaybackState(
-      currentPosition,
-      lyrics,
-      timingIndex,
-    );
-    const initialInterlude = getInterludeCandidate(
-      currentPosition,
-      lyrics,
-      timingIndex,
-    );
-    interludeContextRef.current = initialInterlude
-      ? createInterludePlaybackContext(
-          initialInterlude,
-          currentPosition,
-          currentPosition > initialInterlude.startTime,
-        )
-      : null;
-    seekContinuityRef.current = {
-      mediaTime: currentPosition,
-      wallTime: getMonotonicNow(),
-      hasBaseline: true,
-    };
-
     const computeWindowState = () =>
       getPlaybackWindowState(
         usePlaybackStore.getState().playbackPosition,
         lyrics,
         backgroundActiveLines,
         timingIndex,
-        interludeContextRef.current,
-        timelinePlaybackStateRef.current,
       );
 
     setWindowState((prev) => {
@@ -1369,81 +333,18 @@ function usePlaybackWindowState(
       return arePlaybackWindowStatesEqual(prev, next) ? prev : next;
     });
 
+    let previousPosition = usePlaybackStore.getState().playbackPosition;
     return usePlaybackStore.subscribe((state) => {
       const playbackPosition = state.playbackPosition;
-      const continuity = seekContinuityRef.current;
-      const now = getMonotonicNow();
-      if (playbackPosition === continuity.mediaTime) {
-        continuity.wallTime = now;
+      if (playbackPosition === previousPosition) {
         return;
       }
-
-      let isSeek = false;
-      if (continuity.hasBaseline) {
-        if (playbackPosition < continuity.mediaTime) {
-          isSeek = true;
-        } else {
-          const mediaDelta = playbackPosition - continuity.mediaTime;
-          const elapsed = Math.max(0, now - continuity.wallTime);
-          const wallDelta = Math.min(elapsed, AMLL_SEEK_MAX_TRUSTED_GAP_MS);
-          const expected = state.isPlaying ? wallDelta : 0;
-          const tolerance = state.isPlaying
-            ? Math.max(
-                AMLL_SEEK_JITTER_TOLERANCE_MS,
-                wallDelta * AMLL_SEEK_DRIFT_SLACK,
-              )
-            : AMLL_SEEK_JITTER_TOLERANCE_MS;
-          isSeek = mediaDelta - expected > tolerance;
-        }
-      }
-      continuity.mediaTime = playbackPosition;
-      continuity.wallTime = now;
-      continuity.hasBaseline = true;
-
-      if (isSeek) {
-        setCommittedSeekSerial((serial) => serial + 1);
-      }
-
-      if (isSeek || timelinePlaybackStateRef.current === null) {
-        timelinePlaybackStateRef.current = rebuildTimelinePlaybackState(
-          playbackPosition,
-          lyrics,
-          timingIndex,
-        );
-      } else {
-        advanceTimelinePlaybackState(
-          timelinePlaybackStateRef.current,
-          playbackPosition,
-          lyrics,
-          timingIndex,
-        );
-      }
-
-      const interlude = getInterludeCandidate(
-        playbackPosition,
-        lyrics,
-        timingIndex,
-      );
-      if (!interlude) {
-        interludeContextRef.current = null;
-      } else if (
-        isSeek ||
-        !interludeContextMatches(interludeContextRef.current, interlude)
-      ) {
-        interludeContextRef.current = createInterludePlaybackContext(
-          interlude,
-          playbackPosition,
-          isSeek,
-        );
-      }
-
+      previousPosition = playbackPosition;
       const next = getPlaybackWindowState(
         playbackPosition,
         lyrics,
         backgroundActiveLines,
         timingIndex,
-        interludeContextRef.current,
-        timelinePlaybackStateRef.current,
       );
       setWindowState((prev) =>
         arePlaybackWindowStatesEqual(prev, next) ? prev : next,
@@ -1452,19 +353,19 @@ function usePlaybackWindowState(
   }, [backgroundActiveLines, lyrics, timingIndex]);
 
   if (lyrics.length === 0) {
-    return { windowState: EMPTY_WINDOW_STATE, committedSeekSerial };
+    return EMPTY_WINDOW_STATE;
   }
 
-  return { windowState, committedSeekSerial };
+  return windowState;
 }
 
 export function LyricsView({
   tapToSeekEnabled,
+  selectedLineKeys,
   showTranslatedText = true,
   previewPositionMs = null,
   autoFollowEnabled = true,
   resumeAutoFollowSignal = 0,
-  selectedLineKeys,
   onLinePress,
   onLineLongPress,
   onCreditsTimestampPress,
@@ -1478,27 +379,16 @@ export function LyricsView({
   fontScale = 1,
   landscapeMode = false,
 }: LyricsViewProps) {
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const isNarrowViewport = windowWidth <= 1024;
-  const [viewportHeight, setViewportHeight] = useState(0);
-  const amllResponsiveBaseFontSize =
-    windowWidth <= 768
-      ? Math.max(windowWidth * 0.08, 12)
-      : Math.max(windowHeight * 0.05, windowWidth * 0.025, 12);
-  const activeLineTopOffset = Math.max(
-    0,
-    viewportHeight * AMLL_ALIGN_POSITION -
-      (amllResponsiveBaseFontSize * 1.2 * fontScale) / 2,
-  );
-  const topListPadding = activeLineTopOffset;
+  const activeLineTopOffset = landscapeMode
+    ? LANDSCAPE_ACTIVE_LINE_TOP_OFFSET
+    : ACTIVE_LINE_TOP_OFFSET;
+  const topListPadding = landscapeMode
+    ? LANDSCAPE_TOP_LIST_PADDING
+    : TOP_LIST_PADDING;
   const lyrics = usePlaybackStore((s) => s.lyrics);
   const lyricsSource = usePlaybackStore((s) => s.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore((s) => s.lyricsStatusMessage);
   const lyricsMetadata = usePlaybackStore((s) => s.lyricsMetadata);
-  const hasDuetLines = useMemo(
-    () => lyrics.some((line) => Boolean(line.oppositeAligned)),
-    [lyrics],
-  );
   const lyricsTimingMode = useMemo(
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
@@ -1517,10 +407,7 @@ export function LyricsView({
     [lyrics],
   );
   const lyricTimingIndex = useMemo(() => getLyricTimingIndex(lyrics), [lyrics]);
-  const {
-    windowState: liveWindowState,
-    committedSeekSerial,
-  } = usePlaybackWindowState(
+  const liveWindowState = usePlaybackWindowState(
     lyrics,
     backgroundActiveLines,
     lyricTimingIndex,
@@ -1529,27 +416,6 @@ export function LyricsView({
   const listRef = useAnimatedRef<FlashListRef<LyricLineType>>();
   const lyricScrollOffset = useSharedValue(0);
   const lyricScrollActive = useSharedValue(false);
-  const lyricRowMotionEnabled = useSharedValue(false);
-  const rowMotionSerialRef = useRef(0);
-  const lastRowMotionFocusKeyRef = useRef("");
-  const pendingRebuildFlyInRef = useRef(true);
-  const [rowMotionTransition, setRowMotionTransition] =
-    useState<LyricRowMotionTransition>(() => ({
-      serial: 0,
-      kind: "idle",
-      startOffset: 0,
-      targetOffset: 0,
-      springPolicy: AMLL_DEFAULT_POS_Y_SPRING,
-      delayByIndex: EMPTY_ROW_DELAYS,
-      rebuildStartCorrectionByIndex: EMPTY_REBUILD_CORRECTIONS,
-    }));
-  useEffect(() => {
-    lyricRowMotionEnabled.value = rowMotionTransition.kind !== "idle";
-  }, [
-    lyricRowMotionEnabled,
-    rowMotionTransition.kind,
-    rowMotionTransition.serial,
-  ]);
   const activeLineRef = useRef(-1);
   const onAutoFollowChangeRef = useRef(onAutoFollowChange);
   const listHeightRef = useRef(0);
@@ -1575,12 +441,13 @@ export function LyricsView({
   );
   const lastScrollRequestRef = useRef("");
   const lastResumeAutoFollowSignalRef = useRef(0);
-  const consumedCommittedSeekSerialRef = useRef(0);
   const pendingAnchorRangeRef = useRef<LyricLineRange | null>(null);
   const pendingAnchorAnimatedRef = useRef(true);
   const sourceAutoScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const startupDotsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasShownStartupDotsRef = useRef(false);
   const pendingAnchorRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -1590,9 +457,10 @@ export function LyricsView({
   const initialAutoScrollPendingRef = useRef(suppressInitialAutoScrollAnimation);
   const initialAutoScrollSettledRef = useRef(false);
   const lastLayoutSettleSignalRef = useRef(layoutSettleSignal);
-  const [isUserTouchScrolling, setIsUserTouchScrolling] = useState(false);
+  const [startupDotsWarmupActive, setStartupDotsWarmupActive] = useState(false);
   const [isSourceAutoScrollCooldown, setIsSourceAutoScrollCooldown] =
     useState(false);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const [contentLayoutVersion, setContentLayoutVersion] = useState(0);
   // ponytail: batch cell layout bumps — fast scroll fires onLayout per cell,
   // debounce so we only re-render once per frame instead of per-cell
@@ -1681,33 +549,39 @@ export function LyricsView({
       lyricTimingIndex,
     ],
   );
-  const effectiveWindowState = displayWindowState;
+  const effectiveWindowState = useMemo(() => {
+    if (!startupDotsWarmupActive) {
+      return displayWindowState;
+    }
+    const focusIndex =
+      displayWindowState.focusLineIndex >= 0 ? displayWindowState.focusLineIndex : 0;
+    const pauseAfterIndex = focusIndex > 0 ? focusIndex - 1 : -1;
+    return {
+      ...displayWindowState,
+      activeLineStartIndex: -1,
+      activeLineEndIndex: -1,
+      visualActiveLineStartIndex: -1,
+      visualActiveLineEndIndex: -1,
+      isLongPause: true,
+      pauseProgress: 0,
+      pauseAfterIndex,
+      pauseBeforeIndex: focusIndex,
+    };
+  }, [displayWindowState, startupDotsWarmupActive]);
   // ponytail: coarse fingerprint for extraData — only changes when cell rendering
   // actually differs (index boundaries + pause on/off), NOT on every pauseProgress tick
   const extraDataFingerprint = useMemo(
-    () => {
-      const highlightedFingerprint = Array.from(
-        effectiveWindowState.highlightedLineIndices,
-      )
-        .sort((a, b) => a - b)
-        .join(",");
-      return `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${highlightedFingerprint}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}:${effectiveWindowState.pauseStartMs}:${effectiveWindowState.pauseVisualDurationMs}:${effectiveWindowState.pauseHoldMs}:${isUserTouchScrolling ? 1 : 0}:${isNarrowViewport ? 1 : 0}`;
-    },
+    () =>
+      `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}`,
     [
       effectiveWindowState.activeLineStartIndex,
       effectiveWindowState.activeLineEndIndex,
-      effectiveWindowState.highlightedLineIndices,
       effectiveWindowState.visualActiveLineStartIndex,
       effectiveWindowState.visualActiveLineEndIndex,
       effectiveWindowState.focusLineIndex,
       effectiveWindowState.pauseAfterIndex,
       effectiveWindowState.pauseBeforeIndex,
       effectiveWindowState.isLongPause,
-      effectiveWindowState.pauseStartMs,
-      effectiveWindowState.pauseVisualDurationMs,
-      effectiveWindowState.pauseHoldMs,
-      isNarrowViewport,
-      isUserTouchScrolling,
     ],
   );
   const activeLineIndex = effectiveWindowState.activeLineStartIndex;
@@ -1769,7 +643,11 @@ export function LyricsView({
       return null;
     }
 
-    return getAutoScrollTargetRange(effectiveWindowState, lyrics);
+    return getAutoScrollTargetRange(
+      effectiveWindowState,
+      playbackPositionRef.current,
+      lyrics,
+    );
   }, [
     effectiveWindowState,
     lyrics,
@@ -1793,10 +671,12 @@ export function LyricsView({
       }
       const prevRange = getAutoScrollTargetRange(
         effectiveWindowStateRef.current,
+        previousPosition,
         lyrics,
       );
       const nextRange = getAutoScrollTargetRange(
         effectiveWindowStateRef.current,
+        playbackPosition,
         lyrics,
       );
       previousPosition = playbackPosition;
@@ -1824,12 +704,26 @@ export function LyricsView({
   }, [layoutSettleSignal]);
 
   useEffect(() => {
+    if (hasShownStartupDotsRef.current || lyrics.length === 0) {
+      return;
+    }
+    hasShownStartupDotsRef.current = true;
+    setStartupDotsWarmupActive(true);
+    if (startupDotsTimerRef.current) {
+      clearTimeout(startupDotsTimerRef.current);
+    }
+    startupDotsTimerRef.current = setTimeout(() => {
+      setStartupDotsWarmupActive(false);
+      startupDotsTimerRef.current = null;
+    }, STARTUP_DOTS_WARMUP_MS);
+  }, [lyrics.length]);
+
+  useEffect(() => {
     if (!autoFollowEnabled) {
       return;
     }
     userScrollInProgressRef.current = false;
     userScrollSessionRef.current = false;
-    setIsUserTouchScrolling(false);
     lastScrollRequestRef.current = "";
   }, [autoFollowEnabled]);
 
@@ -1852,7 +746,7 @@ export function LyricsView({
       const measuredTop = rowOffsetsRef.current.get(safeIndex);
       return measuredTop ?? null;
     },
-    [listReady, lyrics.length],
+    [listReady, listRef, lyrics.length],
   );
 
   const getLineHeight = useCallback(
@@ -1867,96 +761,7 @@ export function LyricsView({
       }
       return rowHeightsRef.current.get(safeIndex);
     },
-    [listReady, lyrics.length],
-  );
-
-  const buildRowMotionTransition = useCallback(
-    ({
-      kind,
-      startOffset,
-      targetOffset,
-      scrollToIndex,
-      springPolicy,
-      disableStagger,
-    }: {
-      kind: "scroll" | "rebuild";
-      startOffset: number;
-      targetOffset: number;
-      scrollToIndex: number;
-      springPolicy: AmlPosYSpringPolicy;
-      disableStagger: boolean;
-    }): LyricRowMotionTransition => {
-      const delayByIndex = new Map<number, number>();
-      const rebuildStartCorrectionByIndex = new Map<number, number>();
-      let delayMs = 0;
-      let baseDelayMs = disableStagger ? 0 : AMLL_PLAYBACK_STAGGER_MS;
-      const targetViewportHeight = listHeightRef.current;
-
-      for (let index = 0; index < lyrics.length; index += 1) {
-        delayByIndex.set(index, disableStagger ? 0 : delayMs);
-
-        const absoluteTop = getAbsoluteLineTop(index);
-        const height = getLineHeight(index);
-        if (
-          kind === "rebuild" &&
-          targetViewportHeight > 0 &&
-          absoluteTop !== null &&
-          height !== undefined
-        ) {
-          const viewportTop = absoluteTop - targetOffset;
-          const viewportBottom = viewportTop + height;
-          if (viewportBottom >= 0 && viewportTop <= targetViewportHeight) {
-            // AMLL's DOM LyricGroup constructor starts every group at
-            // window.innerHeight * 2. Only arm rows that are already in the
-            // target viewport so a later FlashList mount cannot replay it.
-            rebuildStartCorrectionByIndex.set(
-              index,
-              targetViewportHeight * 2 - viewportTop,
-            );
-          }
-        }
-
-        if (
-          !disableStagger &&
-          absoluteTop !== null &&
-          height !== undefined &&
-          absoluteTop - targetOffset + height >= 0
-        ) {
-          // AMLL increments the delay only after laying out rows that reach or
-          // sit below the viewport's top edge. Once at/after scrollToIndex the
-          // 50ms base delay decays by 1.05 for each following row.
-          delayMs += baseDelayMs;
-          if (index >= scrollToIndex) {
-            baseDelayMs /= AMLL_PLAYBACK_STAGGER_DECAY;
-          }
-        }
-      }
-
-      rowMotionSerialRef.current += 1;
-      return {
-        serial: rowMotionSerialRef.current,
-        kind,
-        startOffset,
-        targetOffset,
-        springPolicy,
-        delayByIndex,
-        rebuildStartCorrectionByIndex,
-      };
-    },
-    [getAbsoluteLineTop, getLineHeight, lyrics.length],
-  );
-
-  const getLineViewportAnchorTop = useCallback(
-    (index: number) => {
-      const measuredHeight = getLineHeight(index);
-      const fallbackHeight = amllResponsiveBaseFontSize * 1.2 * fontScale;
-      const targetHeight = measuredHeight ?? fallbackHeight;
-      return Math.max(
-        0,
-        listHeightRef.current * AMLL_ALIGN_POSITION - targetHeight / 2,
-      );
-    },
-    [amllResponsiveBaseFontSize, fontScale, getLineHeight],
+    [listReady, listRef, lyrics.length],
   );
 
   const getScrollOffsetForLineIndex = useCallback(
@@ -1965,9 +770,9 @@ export function LyricsView({
       if (absoluteTop === null) {
         return null;
       }
-      return Math.max(0, absoluteTop - getLineViewportAnchorTop(index));
+      return Math.max(0, absoluteTop - activeLineTopOffset);
     },
-    [getAbsoluteLineTop, getLineViewportAnchorTop],
+    [activeLineTopOffset, getAbsoluteLineTop],
   );
 
   const markProgrammaticScroll = useCallback((animated: boolean) => {
@@ -1996,7 +801,6 @@ export function LyricsView({
     userScrollIdleTimerRef.current = setTimeout(() => {
       userScrollInProgressRef.current = false;
       userScrollSessionRef.current = false;
-      setIsUserTouchScrolling(false);
       userScrollIdleTimerRef.current = null;
     }, USER_SCROLL_IDLE_RESET_MS);
   }, [clearUserScrollIdleTimer]);
@@ -2007,12 +811,6 @@ export function LyricsView({
       animated: boolean,
       animationStyle: ScrollAnimationStyle,
       startOffset: number,
-      springPolicy = {
-        mass: 0.9,
-        stiffness: 90,
-        damping: 15,
-        overshootClamping: false,
-      },
     ) => {
       if (
         animated &&
@@ -2022,9 +820,12 @@ export function LyricsView({
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
-        lyricScrollOffset.value = withSpring(
+        lyricScrollOffset.value = withTiming(
           offset,
-          springPolicy,
+          {
+            duration: LYRIC_SCROLL_ANIMATION_MS,
+            easing: LYRIC_SCROLL_EASING,
+          },
           (finished) => {
             if (finished) {
               lyricScrollActive.value = false;
@@ -2067,7 +868,7 @@ export function LyricsView({
         offset += height;
       }
     },
-    [lyrics.length],
+    [lyrics.length, topListPadding],
   );
 
   const getRangeMetrics = useCallback(
@@ -2094,51 +895,6 @@ export function LyricsView({
       if (!listHeight || lyrics.length === 0) {
         return null;
       }
-
-      const currentWindowState = effectiveWindowStateRef.current;
-      if (currentWindowState.isLongPause) {
-        const interludeRowIndex =
-          currentWindowState.pauseAfterIndex >= 0
-            ? currentWindowState.pauseAfterIndex
-            : currentWindowState.pauseBeforeIndex;
-        const rowTop = getAbsoluteLineTop(interludeRowIndex);
-        const rowHeight = getLineHeight(interludeRowIndex);
-        if (rowTop !== null && rowHeight !== undefined) {
-          const interludeHeight = amllResponsiveBaseFontSize * fontScale * 2.1;
-          const interludeCenter =
-            currentWindowState.pauseAfterIndex >= 0
-              ? rowTop + rowHeight - interludeHeight / 2
-              : rowTop + interludeHeight / 2;
-          const lastLineTop = getAbsoluteLineTop(lyrics.length - 1);
-          const maxScrollTarget =
-            lastLineTop === null
-              ? Number.POSITIVE_INFINITY
-              : getMaxScrollTarget({
-                  lyricsLength: lyrics.length,
-                  listHeight,
-                  lastLineTop,
-                  creditsLayout: creditsLayoutRef.current,
-                  hasCredits,
-                  activeLineTopOffset,
-                });
-          const clampScrollTarget = (offset: number) =>
-            Math.min(maxScrollTarget, Math.max(0, offset));
-          let interludeOffset = clampScrollTarget(
-            interludeCenter - listHeight * AMLL_ALIGN_POSITION,
-          );
-          const metrics = getRangeMetrics(range);
-          if (metrics) {
-            interludeOffset = clampScrollTarget(
-              Math.max(
-                interludeOffset,
-                metrics.bottom - listHeight + ACTIVE_RANGE_BOTTOM_PADDING,
-              ),
-            );
-          }
-          return interludeOffset;
-        }
-      }
-
       const isLastLineRange =
         range.endIndex >= lyrics.length - 1 &&
         range.startIndex >= lyrics.length - 1;
@@ -2166,10 +922,9 @@ export function LyricsView({
       }
       const { top, bottom } = metrics;
       const activeRangeHeight = bottom - top;
-      const rangeAnchorTop = getLineViewportAnchorTop(range.startIndex);
       const activeRangeFits =
         activeRangeHeight <=
-        listHeight - rangeAnchorTop - ACTIVE_RANGE_BOTTOM_PADDING;
+        listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING;
       if (activeRangeFits) {
         return anchorOffset;
       }
@@ -2180,12 +935,8 @@ export function LyricsView({
     },
     [
       activeLineTopOffset,
-      amllResponsiveBaseFontSize,
       creditsActive,
-      fontScale,
       getAbsoluteLineTop,
-      getLineHeight,
-      getLineViewportAnchorTop,
       getRangeMetrics,
       getScrollOffsetForLineIndex,
       lyrics.length,
@@ -2202,21 +953,6 @@ export function LyricsView({
       const targetOffset = getScrollOffsetForRange(range);
       if (targetOffset === null) {
         return false;
-      }
-      if (effectiveWindowStateRef.current.isLongPause) {
-        const metrics = getRangeMetrics(range);
-        if (!metrics) {
-          return false;
-        }
-        const scrollOffset = scrollOffsetRef.current;
-        return (
-          Math.abs(scrollOffset - targetOffset) <= ACTIVE_LINE_ALIGNMENT_EPSILON &&
-          metrics.bottom <=
-            scrollOffset +
-              listHeight -
-              ACTIVE_RANGE_BOTTOM_PADDING +
-              ACTIVE_LINE_ALIGNMENT_EPSILON
-        );
       }
       const isLastLineRange =
         range.endIndex >= lyrics.length - 1 &&
@@ -2244,12 +980,11 @@ export function LyricsView({
       const { top, bottom } = metrics;
       const activeLineViewportTop = top - scrollOffsetRef.current;
       const activeRangeHeight = bottom - top;
-      const rangeAnchorTop = getLineViewportAnchorTop(range.startIndex);
       const activeRangeFits =
         activeRangeHeight <=
-        listHeight - rangeAnchorTop - ACTIVE_RANGE_BOTTOM_PADDING;
+        listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING;
       const topIsAnchored =
-        Math.abs(activeLineViewportTop - rangeAnchorTop) <=
+        Math.abs(activeLineViewportTop - activeLineTopOffset) <=
         ACTIVE_LINE_ALIGNMENT_EPSILON;
       const bottomIsVisible =
         bottom <=
@@ -2265,7 +1000,6 @@ export function LyricsView({
     [
       activeLineTopOffset,
       creditsActive,
-      getLineViewportAnchorTop,
       getRangeMetrics,
       getScrollOffsetForRange,
       lyrics.length,
@@ -2288,6 +1022,8 @@ export function LyricsView({
   autoFollowEnabledRef.current = autoFollowEnabled;
   const previewPlaybackPositionRef = useRef(previewPlaybackPosition);
   previewPlaybackPositionRef.current = previewPlaybackPosition;
+  const startupDotsWarmupActiveRef = useRef(startupDotsWarmupActive);
+  startupDotsWarmupActiveRef.current = startupDotsWarmupActive;
   const isSourceAutoScrollCooldownRef = useRef(isSourceAutoScrollCooldown);
   isSourceAutoScrollCooldownRef.current = isSourceAutoScrollCooldown;
   const getDistanceFromRangeAnchorRef = useRef(getDistanceFromRangeAnchor);
@@ -2300,6 +1036,7 @@ export function LyricsView({
     if (
       !currentScrollTarget ||
       previewPlaybackPositionRef.current !== null ||
+      startupDotsWarmupActiveRef.current ||
       isSourceAutoScrollCooldownRef.current ||
       programmaticScrollInProgressRef.current ||
       (!userScrollSessionRef.current && !userScrollInProgressRef.current)
@@ -2403,31 +1140,14 @@ export function LyricsView({
         clearTimeout(pendingAnchorRetryTimerRef.current);
         pendingAnchorRetryTimerRef.current = null;
       }
-      const hasCommittedSeek =
-        previewPlaybackPositionRef.current === null &&
-        committedSeekSerial > consumedCommittedSeekSerialRef.current;
-      if (
-        !force &&
-        !pendingRebuildFlyInRef.current &&
-        isRangeAnchoredAndVisible(range)
-      ) {
-        if (hasCommittedSeek) {
-          consumedCommittedSeekSerialRef.current = committedSeekSerial;
-        }
+      if (!force && isRangeAnchoredAndVisible(range)) {
         pendingAnchorRangeRef.current = null;
         return;
       }
       const requestKey = `${range.startIndex}:${range.endIndex}:${Math.round(
         resolvedOffset,
       )}:${Math.round(scrollOffsetRef.current)}:${shouldAnimate ? effectiveAnimationStyle : "i"}`;
-      if (
-        !force &&
-        !pendingRebuildFlyInRef.current &&
-        lastScrollRequestRef.current === requestKey
-      ) {
-        if (hasCommittedSeek) {
-          consumedCommittedSeekSerialRef.current = committedSeekSerial;
-        }
+      if (!force && lastScrollRequestRef.current === requestKey) {
         return;
       }
       lastScrollRequestRef.current = requestKey;
@@ -2442,76 +1162,11 @@ export function LyricsView({
         pendingAnchorRangeRef.current = range;
         markProgrammaticScroll(shouldAnimate);
         const startOffset = scrollOffsetRef.current;
-        const currentPosition =
-          previewPlaybackPositionRef.current ??
-          usePlaybackStore.getState().playbackPosition;
-        const isCommittedSeek =
-          previewPlaybackPositionRef.current === null &&
-          committedSeekSerial > consumedCommittedSeekSerialRef.current;
-        if (isCommittedSeek) {
-          consumedCommittedSeekSerialRef.current = committedSeekSerial;
-        }
-        const isInterludeCandidate = Boolean(
-          getInterludeCandidate(currentPosition, lyrics, lyricTimingIndex),
-        );
-        const isRebuildTransition = pendingRebuildFlyInRef.current;
-        if (isRebuildTransition) {
-          pendingRebuildFlyInRef.current = false;
-        }
-        const lastLine = lyrics[lyrics.length - 1];
-        const isSeekTransition =
-          previewPlaybackPositionRef.current !== null || isCommittedSeek;
-        const isSongEndTransition =
-          range.startIndex >= lyrics.length - 1 &&
-          Boolean(lastLine) &&
-          currentPosition >= lastLine.lineEndTime;
-        const springPolicy = isRebuildTransition
-          ? AMLL_DEFAULT_POS_Y_SPRING
-          : getAmlPosYSpringPolicy({
-              index: range.startIndex,
-              lyrics,
-              isInterlude: isInterludeCandidate,
-              isSeek: isSeekTransition,
-              isSongEnd: isSongEndTransition,
-            });
-        const shouldUseRowMotionCorrection =
-          shouldAnimate && effectiveAnimationStyle === "lyric";
-        const rowMotionFocusKey = isRebuildTransition
-          ? `rebuild:${range.startIndex}:${range.endIndex}`
-          : `${range.startIndex}:${range.endIndex}:${isInterludeCandidate ? "interlude" : "line"}:${
-              isCommittedSeek
-                ? `seek-${committedSeekSerial}`
-                : previewPlaybackPositionRef.current !== null
-                  ? "preview"
-                  : isSongEndTransition
-                    ? "end"
-                    : "playback"
-            }`;
-        if (
-          isRebuildTransition ||
-          (shouldUseRowMotionCorrection &&
-            lastRowMotionFocusKeyRef.current !== rowMotionFocusKey)
-        ) {
-          lastRowMotionFocusKeyRef.current = rowMotionFocusKey;
-          lyricRowMotionEnabled.value = false;
-          setRowMotionTransition(
-            buildRowMotionTransition({
-              kind: isRebuildTransition ? "rebuild" : "scroll",
-              startOffset,
-              targetOffset: resolvedOffset,
-              scrollToIndex: range.startIndex,
-              springPolicy,
-              disableStagger:
-                isRebuildTransition || isSeekTransition || isInterludeCandidate,
-            }),
-          );
-        }
         scrollToOffset(
           resolvedOffset,
           shouldAnimate,
           effectiveAnimationStyle,
           startOffset,
-          springPolicy,
         );
         if (!shouldAnimate) {
           scrollOffsetRef.current = resolvedOffset;
@@ -2556,15 +1211,11 @@ export function LyricsView({
     [
       autoFollowEnabled,
       activeLineTopOffset,
-      buildRowMotionTransition,
-      committedSeekSerial,
       getScrollOffsetForRange,
       isRangeAnchoredAndVisible,
       listReady,
       listRef,
-      lyricRowMotionEnabled,
-      lyrics,
-      lyricTimingIndex,
+      lyrics.length,
       markInitialAutoScrollSettled,
       markProgrammaticScroll,
       scrollToOffset,
@@ -2645,24 +1296,10 @@ export function LyricsView({
   );
 
   useLayoutEffect(() => {
-    lyricRowMotionEnabled.value = false;
-    lastRowMotionFocusKeyRef.current = "";
-    pendingRebuildFlyInRef.current = lyrics.length > 0;
-    rowMotionSerialRef.current += 1;
-    setRowMotionTransition({
-      serial: rowMotionSerialRef.current,
-      kind: "idle",
-      startOffset: 0,
-      targetOffset: 0,
-      springPolicy: AMLL_DEFAULT_POS_Y_SPRING,
-      delayByIndex: EMPTY_ROW_DELAYS,
-      rebuildStartCorrectionByIndex: EMPTY_REBUILD_CORRECTIONS,
-    });
     activeLineRef.current = -1;
     scrollOffsetRef.current = 0;
     userScrollInProgressRef.current = false;
     userScrollSessionRef.current = false;
-    setIsUserTouchScrolling(false);
     autoFollowDisableGraceUntilRef.current =
       Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
     lastScrollRequestRef.current = "";
@@ -2679,7 +1316,7 @@ export function LyricsView({
     rowOffsetsRef.current.clear();
     creditsLayoutRef.current = null;
     setContentLayoutVersion(0);
-  }, [lyricRowMotionEnabled, lyrics]);
+  }, [lyrics]);
 
   // Reset measurement state when layout-affecting props change
   useEffect(() => {
@@ -2689,6 +1326,10 @@ export function LyricsView({
 
   useEffect(
     () => () => {
+      if (startupDotsTimerRef.current) {
+        clearTimeout(startupDotsTimerRef.current);
+        startupDotsTimerRef.current = null;
+      }
       if (
         pendingScrollFrameRef.current !== null &&
         typeof cancelAnimationFrame === "function"
@@ -2707,8 +1348,6 @@ export function LyricsView({
       }
       cancelAnimation(lyricScrollOffset);
       lyricScrollActive.value = false;
-      lyricRowMotionEnabled.value = false;
-      lastRowMotionFocusKeyRef.current = "";
       pendingAnchorRangeRef.current = null;
       pendingAnchorAnimatedRef.current = true;
       pendingAnchorRetryCountRef.current = 0;
@@ -2722,12 +1361,7 @@ export function LyricsView({
       }
       programmaticScrollInProgressRef.current = false;
     },
-    [
-      clearUserScrollIdleTimer,
-      lyricRowMotionEnabled,
-      lyricScrollActive,
-      lyricScrollOffset,
-    ],
+    [clearUserScrollIdleTimer, lyricScrollActive, lyricScrollOffset],
   );
 
   useEffect(() => {
@@ -2740,12 +1374,9 @@ export function LyricsView({
 
       cancelAnimation(lyricScrollOffset);
       lyricScrollActive.value = false;
-      lyricRowMotionEnabled.value = false;
-      lastRowMotionFocusKeyRef.current = "";
       programmaticScrollInProgressRef.current = false;
       userScrollInProgressRef.current = false;
       userScrollSessionRef.current = false;
-      setIsUserTouchScrolling(false);
       autoFollowDisableGraceUntilRef.current =
         Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
       lastScrollRequestRef.current = "";
@@ -2765,7 +1396,6 @@ export function LyricsView({
     autoFollowEnabled,
     lyricScrollActive,
     lyricScrollOffset,
-    lyricRowMotionEnabled,
     scheduleScrollToRange,
     scrollTargetRange,
   ]);
@@ -2813,7 +1443,6 @@ export function LyricsView({
     lastResumeAutoFollowSignalRef.current = resumeAutoFollowSignal;
     userScrollInProgressRef.current = false;
     userScrollSessionRef.current = false;
-    setIsUserTouchScrolling(false);
     lastScrollRequestRef.current = "";
     onAutoFollowChange?.(true);
     if (isSourceAutoScrollCooldown || !scrollTargetRange) {
@@ -2852,6 +1481,7 @@ export function LyricsView({
       !listReady ||
       !scrollTargetRange ||
       isSourceAutoScrollCooldown ||
+      startupDotsWarmupActive ||
       suspendViewportScrollAdjustments ||
       userScrollInProgressRef.current
     ) {
@@ -2886,6 +1516,7 @@ export function LyricsView({
     previewPlaybackPosition,
     scheduleScrollToRange,
     scrollTargetRange,
+    startupDotsWarmupActive,
     suspendViewportScrollAdjustments,
     viewportHeight,
     layoutSettleSignal,
@@ -2909,8 +1540,14 @@ export function LyricsView({
   const renderItem = useCallback(
     ({ item, index }: { item: LyricLineType; index: number }) => {
       const ws = effectiveWindowStateRef.current;
-      const hasActiveLines = ws.highlightedLineIndices.size > 0;
-      const isActive = ws.highlightedLineIndices.has(index);
+      const hasActiveLines = ws.activeLineStartIndex >= 0;
+      const isActive =
+        hasActiveLines &&
+        isIndexWithinRange(
+          index,
+          ws.activeLineStartIndex,
+          ws.activeLineEndIndex,
+        );
       const shouldDrivePlaybackUpdates = isIndexWithinUpdateWindow(
         index,
         ws,
@@ -2924,40 +1561,22 @@ export function LyricsView({
       const inactiveOpacityDistance = Math.abs(
         ws.focusLineIndex - index,
       );
-      const scrollFocusIndex = Math.max(0, ws.focusLineIndex);
-      const latestHighlightedIndex = getLatestHighlightedLineIndex(
-        ws.highlightedLineIndices,
-        scrollFocusIndex,
-      );
-      const blurDistance =
-        index < scrollFocusIndex
-          ? Math.abs(scrollFocusIndex - index) + 1
-          : Math.abs(index - latestHighlightedIndex);
-      const blurAmount =
-        isUserTouchScrolling || isActive
-          ? 0
-          : (1 + blurDistance) * (isNarrowViewport ? 0.8 : 1);
-      const isSelected = Boolean(
-        selectedLineKeys?.has(`${item.lineStartTime}-${item.lineEndTime}`),
-      );
       const showPauseDotsAfter =
-        ws.isLongPause && ws.pauseAfterIndex >= 0 && index === ws.pauseAfterIndex;
+        ws.isLongPause && index === ws.pauseAfterIndex;
       const showPauseDotsBefore =
-        ws.isLongPause && ws.pauseAfterIndex < 0 && index === ws.pauseBeforeIndex;
+        ws.isLongPause && index === ws.pauseBeforeIndex;
 
       return (
         <LyricLine
           line={item}
           isActive={isActive}
           isPast={isPast}
-          isSelected={isSelected}
-          blurAmount={blurAmount}
+          isSelected={Boolean(selectedLineKeys?.has(`${item.lineStartTime}-${item.lineEndTime}`))}
           inactiveOpacityDistance={inactiveOpacityDistance}
           showPauseDotsAfter={showPauseDotsAfter}
           showPauseDotsBefore={showPauseDotsBefore}
           pauseStartMs={ws.pauseStartMs}
           pauseVisualDurationMs={ws.pauseVisualDurationMs}
-          pauseHoldMs={ws.pauseHoldMs}
           playbackPositionOverrideMs={previewPlaybackPosition}
           pauseTone={
             ws.isLongPause
@@ -2973,17 +1592,11 @@ export function LyricsView({
           shouldDrivePlaybackUpdates={shouldDrivePlaybackUpdates}
           fontScale={fontScale}
           landscapeMode={landscapeMode}
-          hasDuetLines={hasDuetLines}
-          posYSpringPolicy={rowMotionTransition.springPolicy}
-          groupMotionDelayMs={rowMotionTransition.delayByIndex.get(index) ?? 0}
         />
       );
     },
     [
       fontScale,
-      hasDuetLines,
-      isNarrowViewport,
-      isUserTouchScrolling,
       landscapeMode,
       onLineLongPress,
       onLinePress,
@@ -2991,7 +1604,6 @@ export function LyricsView({
       showTranslatedText,
       tapToSeekEnabled,
       previewPlaybackPosition,
-      rowMotionTransition,
     ],
   );
 
@@ -3004,27 +1616,12 @@ export function LyricsView({
           allCellsMeasured
             ? undefined
             : (event) => handleCellLayout(index, event)
-          }
+        }
       >
-        <LyricRowMotion
-          index={index}
-          transition={rowMotionTransition}
-          globalOffset={lyricScrollOffset}
-          enabled={lyricRowMotionEnabled}
-        >
-          {renderItem({ item, index })}
-        </LyricRowMotion>
+        {renderItem({ item, index })}
       </View>
     ),
-    [
-      allCellsMeasured,
-      handleCellLayout,
-      landscapeMode,
-      lyricRowMotionEnabled,
-      lyricScrollOffset,
-      renderItem,
-      rowMotionTransition,
-    ],
+    [allCellsMeasured, handleCellLayout, landscapeMode, renderItem],
   );
 
   const keyExtractor = useCallback(
@@ -3112,6 +1709,7 @@ export function LyricsView({
       }
     },
     [
+      bumpContentLayoutVersion,
       getAbsoluteLineTop,
       getLineHeight,
       isRangeAnchoredAndVisible,
@@ -3320,7 +1918,7 @@ export function LyricsView({
         data={lyrics}
         renderItem={flashListRenderItem}
         keyExtractor={keyExtractor}
-        extraData={`${extraDataFingerprint}:${rowMotionTransition.serial}`}
+        extraData={extraDataFingerprint}
         drawDistance={320}
         ListFooterComponent={listFooter}
         onLoad={() => {
@@ -3357,11 +1955,8 @@ export function LyricsView({
           onUserInteraction?.();
           cancelAnimation(lyricScrollOffset);
           lyricScrollActive.value = false;
-          lyricRowMotionEnabled.value = false;
-          lastRowMotionFocusKeyRef.current = "";
           userScrollInProgressRef.current = true;
           userScrollSessionRef.current = true;
-          setIsUserTouchScrolling(true);
           scheduleUserScrollIdleReset();
           lastScrollRequestRef.current = "";
           pendingAnchorRangeRef.current = null;
@@ -3375,7 +1970,6 @@ export function LyricsView({
         }}
         onScrollEndDrag={() => {
           userScrollInProgressRef.current = false;
-          setIsUserTouchScrolling(false);
           scheduleUserScrollIdleReset();
         }}
         onMomentumScrollBegin={() => {
@@ -3388,10 +1982,7 @@ export function LyricsView({
           onUserInteraction?.();
           cancelAnimation(lyricScrollOffset);
           lyricScrollActive.value = false;
-          lyricRowMotionEnabled.value = false;
-          lastRowMotionFocusKeyRef.current = "";
           userScrollInProgressRef.current = true;
-          setIsUserTouchScrolling(true);
           scheduleUserScrollIdleReset();
           lastScrollRequestRef.current = "";
           pendingAnchorRangeRef.current = null;
@@ -3412,7 +2003,6 @@ export function LyricsView({
           }
           userScrollInProgressRef.current = false;
           userScrollSessionRef.current = false;
-          setIsUserTouchScrolling(false);
         }}
       />
     </View>
@@ -3427,10 +2017,13 @@ const styles = StyleSheet.create({
     overflow: "visible",
   },
   listContent: {
-    paddingHorizontal: 0,
+    paddingHorizontal: LYRICS_LAYOUT.listInset,
   },
   listContentLandscape: {
-    paddingHorizontal: 0,
+    paddingLeft:
+      LANDSCAPE_LYRICS_HORIZONTAL_INSET + LANDSCAPE_LYRICS_EDGE_BLEED,
+    paddingRight:
+      LANDSCAPE_LYRICS_HORIZONTAL_INSET + LANDSCAPE_LYRICS_EDGE_BLEED,
   },
   flashListCellLandscape: {
     overflow: "visible",
