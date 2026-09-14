@@ -62,7 +62,8 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "16.4"
+            "deploymentTarget": "16.4",
+            "reactNativeReleaseLevel": "experimental"
           },
           "android": {
             "usesCleartextTraffic": true

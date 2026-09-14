@@ -1,10 +1,34 @@
 /*
- * KineSync standalone WebView adapter for Spicy Lyrics.
- * Renderer DOM/CSS contract and animation curves are adapted from
- * Spikerko/spicy-lyrics v6.3.15, commit 2a14863f8c29782f9ab3becff2b1360dfb74a4fb.
- * Upstream license: AGPL-3.0.
+ * KineSync standalone host adapter for Spicy Lyrics v6.3.15.
+ * Renderer construction, animator lifecycle, interludes, virtualizer, and scroll
+ * behavior are ported from Spikerko/spicy-lyrics @
+ * 2a14863f8c29782f9ab3becff2b1360dfb74a4fb (AGPL-3.0).
+ * KineSync-specific bridge/selection/translation behavior stays at this boundary.
  */
 import "./spicy-webview.css";
+import {
+  animate,
+  createDotTiming,
+  resetSpicyAnimatorState,
+  resetSpicyBlurState,
+  SPICY_INTERLUDE_GAP_MS,
+  timeSetter,
+  type SpicyLetter,
+  type SpicyLyricsType,
+  type SpicyRuntimeLine,
+  type SpicyWord,
+} from "./spicy-upstream-runtime";
+import {
+  destroyLyricsVirtualizer,
+  initLyricsVirtualizer,
+  setOnNewElementMounted,
+  triggerRemeasureLV,
+} from "./spicy-upstream-virtualizer";
+import {
+  noteUserScroll as noteSpicyUserScroll,
+  reset as resetSpicyScroll,
+  scrollToActiveLine,
+} from "./spicy-upstream-scroll";
 
 type KineSyncSyllable = {
   text?: string;
@@ -18,6 +42,12 @@ type KineSyncLine = {
   lineEndTime?: number;
   syllables?: KineSyncSyllable[];
   backgroundSyllables?: KineSyncSyllable[];
+  spicyBackgrounds?: {
+    lineStartTime?: number;
+    lineEndTime?: number;
+    syllables?: KineSyncSyllable[];
+  }[];
+  spicyLyricsStartTime?: number;
   backgroundText?: string;
   translatedText?: string;
   backgroundTranslatedText?: string;
@@ -60,17 +90,9 @@ const bridgeWindow = window as typeof window & {
   ReactNativeWebView?: { postMessage: (message: string) => void };
 };
 
-type RenderedLine = {
-  sourceIndex: number;
-  line: KineSyncLine;
-  element: HTMLDivElement;
-  words: { syllable: KineSyncSyllable; element: HTMLElement }[];
-  backgroundElement?: HTMLDivElement;
-  backgroundWords?: { syllable: KineSyncSyllable; element: HTMLElement }[];
-};
-
 const page = document.getElementById("SpicyLyricsPage") as HTMLElement | null;
 const scrollRoot = document.getElementById("spicyScrollRoot") as HTMLElement | null;
+const scrollViewport = scrollRoot?.parentElement as HTMLElement | null;
 const empty = document.getElementById("empty") as HTMLElement | null;
 const emptyTitle = document.getElementById("emptyTitle") as HTMLElement | null;
 const emptySub = document.getElementById("emptySub") as HTMLElement | null;
@@ -78,7 +100,8 @@ const creditsRoot = document.getElementById("spicyCredits") as HTMLElement | nul
 const staticLyricsRoot = document.getElementById("staticLyricsRoot") as HTMLElement | null;
 
 let sourceLines: KineSyncLine[] = [];
-let renderedLines: RenderedLine[] = [];
+let runtimeLines: SpicyRuntimeLine[] = [];
+let sourceElements = new Map<number, HTMLElement[]>();
 let selectedKeys: Record<string, boolean> = {};
 let anchorPositionMs = 0;
 let anchorClientMs = performance.now();
@@ -94,19 +117,16 @@ let autoFollowEnabled = true;
 let resumeAutoFollowSignal = 0;
 let lastLyricEndTime = 0;
 let staticLyricsMode = false;
+let currentLyricsType: SpicyLyricsType = "Syllable";
 let staticSongwriters: string[] = [];
 let staticAttribution: LyricsAttribution | undefined;
 let frameRequestId: number | null = null;
-let animateUntilMs = 0;
 let longPressTimer = 0;
 let pressedTimer = 0;
 let touchStartIndex = -1;
 let touchMoved = false;
 let longPressTriggered = false;
-let scrollVelocity = 0;
-let scrollTarget = 0;
-let userScrolling = false;
-const IDLE_ANIMATION_GRACE_MS = 750;
+let pendingForceScroll = true;
 
 function post(payload: unknown) {
   bridgeWindow.ReactNativeWebView?.postMessage(JSON.stringify(payload));
@@ -130,23 +150,6 @@ function projectedPosition() {
   return durationMs > 0 ? Math.min(durationMs, next) : next;
 }
 
-function clamp01(value: number) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function interpolate(points: [number, number][], progress: number) {
-  const p = clamp01(progress);
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const [x0, y0] = points[i];
-    const [x1, y1] = points[i + 1];
-    if (p <= x1) {
-      const t = (p - x0) / Math.max(0.0001, x1 - x0);
-      return y0 + (y1 - y0) * clamp01(t);
-    }
-  }
-  return points[points.length - 1][1];
-}
-
 function getBackgroundSyllables(line: KineSyncLine) {
   if (line.backgroundSyllables?.length) return line.backgroundSyllables;
   const text = String(line.backgroundText || "").trim();
@@ -154,14 +157,135 @@ function getBackgroundSyllables(line: KineSyncLine) {
   return [{ text, startTime: line.lineStartTime, endTime: line.lineEndTime }];
 }
 
-function renderWord(parent: HTMLElement, syllable: KineSyncSyllable, last: boolean) {
-  const word = document.createElement("span");
-  word.className = "word";
-  if (syllable.isPartOfWord) word.classList.add("PartOfWord");
-  if (last) word.classList.add("LastWordInLine");
-  word.textContent = String(syllable.text || "");
-  parent.appendChild(word);
-  return word;
+function stripZeroWidth(value: string) {
+  // Upstream deliberately preserves ZWNJ/ZWJ because they are meaningful in
+  // Arabic/Persian/Indic scripts and emoji sequences.
+  return value.replace(/[\u200B\u200E\u200F\u2060\uFEFF]/g, "");
+}
+
+function isRtl(text: string) {
+  if (!text) return false;
+  const rtlRegex =
+    /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFB4F\uFB50-\uFDFF\uFE70-\uFEFF]/;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (/[\d\s,.;:?!()[\]{}"'\\/<>@#$%^&*_=+-]/.test(char)) continue;
+    return rtlRegex.test(char);
+  }
+  return false;
+}
+
+function addSourceElement(sourceIndex: number, element: HTMLElement) {
+  const elements = sourceElements.get(sourceIndex) || [];
+  elements.push(element);
+  sourceElements.set(sourceIndex, elements);
+}
+
+function createSpicyWord(
+  parent: HTMLElement,
+  syllable: KineSyncSyllable,
+  index: number,
+  siblings: KineSyncSyllable[],
+  isBackground: boolean,
+): { word: SpicyWord; element: HTMLElement } {
+  const text = stripZeroWidth(String(syllable.text || ""));
+  const startTime = finiteMs(syllable.startTime);
+  const endTime = Math.max(startTime + 1, finiteMs(syllable.endTime, startTime + 1));
+  const totalTime = endTime - startTime;
+  const letterCapable = text.split("").length > 0 && totalTime >= 1000 && !isRtl(text);
+  let word = document.createElement("span");
+  let runtimeWord: SpicyWord;
+
+  if (letterCapable) {
+    word = document.createElement("div");
+    const letters = text.split("");
+    const emphasizedEndTime = endTime - 250;
+    const letterDuration = (emphasizedEndTime - startTime) / letters.length;
+    const runtimeLetters: SpicyLetter[] = [];
+    letters.forEach((letterText, letterIndex) => {
+      const letter = document.createElement("span");
+      letter.textContent = letterText;
+      letter.classList.add("letter", "Emphasis");
+      if (letterText.trim().length === 0) letter.classList.add("SpaceLetter");
+      if (letterIndex === letters.length - 1) letter.classList.add("LastLetterInWord");
+      const letterStartTime = startTime + letterIndex * letterDuration;
+      letter.style.setProperty("--gradient-position", "-20%");
+      letter.style.setProperty("--text-shadow-opacity", "0%");
+      letter.style.setProperty("--text-shadow-blur-radius", "4px");
+      letter.style.scale = "0.95";
+      letter.style.transform = "translateY(calc(var(--DefaultLyricsSize) * 0.02))";
+      word.appendChild(letter);
+      runtimeLetters.push({
+        HTMLElement: letter,
+        StartTime: letterStartTime,
+        EndTime: letterStartTime + letterDuration,
+        TotalTime: letterDuration,
+        Emphasis: true,
+        BGLetter: isBackground || undefined,
+      });
+    });
+    word.classList.add("letterGroup");
+    word.style.setProperty("--text-shadow-opacity", "0%");
+    word.style.setProperty("--text-shadow-blur-radius", "4px");
+    word.style.scale = "0.95";
+    word.style.transform = `translateY(calc(var(--${isBackground ? "font-size" : "DefaultLyricsSize"}) * 0.02))`;
+    runtimeWord = {
+      HTMLElement: word,
+      StartTime: startTime,
+      EndTime: emphasizedEndTime,
+      TotalTime: emphasizedEndTime - startTime,
+      LetterGroup: true,
+      Letters: runtimeLetters,
+      BGWord: isBackground || undefined,
+    };
+  } else {
+    word.textContent = text;
+    word.classList.add("word");
+    if (isBackground) word.classList.add("bg-word");
+    word.style.setProperty("--gradient-position", isBackground ? "0%" : "-20%");
+    word.style.setProperty("--text-shadow-opacity", "0%");
+    word.style.setProperty("--text-shadow-blur-radius", "4px");
+    word.style.scale = "0.95";
+    word.style.transform = `translateY(calc(var(--${isBackground ? "font-size" : "DefaultLyricsSize"}) * 0.01))`;
+    runtimeWord = {
+      HTMLElement: word,
+      StartTime: startTime,
+      EndTime: endTime,
+      TotalTime: totalTime,
+      BGWord: isBackground || undefined,
+    };
+  }
+
+  if (index === siblings.length - 1) word.classList.add("LastWordInLine");
+  else if (syllable.isPartOfWord) word.classList.add("PartOfWord");
+  return { word: runtimeWord, element: word };
+}
+
+function renderWords(
+  lineElement: HTMLElement,
+  syllables: KineSyncSyllable[],
+  isBackground = false,
+): SpicyWord[] {
+  const words: SpicyWord[] = [];
+  let currentWordGroup: HTMLSpanElement | null = null;
+  syllables.forEach((syllable, index, all) => {
+    const built = createSpicyWord(lineElement, syllable, index, all, isBackground);
+    const previous = all[index - 1];
+    if (syllable.isPartOfWord || (previous?.isPartOfWord && currentWordGroup)) {
+      if (!currentWordGroup) {
+        currentWordGroup = document.createElement("span");
+        currentWordGroup.classList.add("word-group");
+        lineElement.appendChild(currentWordGroup);
+      }
+      currentWordGroup.appendChild(built.element);
+      if (!syllable.isPartOfWord && previous?.isPartOfWord) currentWordGroup = null;
+    } else {
+      currentWordGroup = null;
+      lineElement.appendChild(built.element);
+    }
+    words.push(built.word);
+  });
+  return words;
 }
 
 function appendTranslation(parent: HTMLElement, text: string | undefined) {
@@ -173,54 +297,264 @@ function appendTranslation(parent: HTMLElement, text: string | undefined) {
   parent.appendChild(translation);
 }
 
-function createLineElement(line: KineSyncLine, sourceIndex: number) {
-  const lineElement = document.createElement("div");
-  lineElement.className = "line NotSung";
-  lineElement.dataset.sourceIndex = String(sourceIndex);
-  const opposite = landscapeMode ? !line.oppositeAligned : Boolean(line.oppositeAligned);
-  lineElement.classList.toggle("OppositeAligned", opposite);
-
+function createLeadRuntimeLine(line: KineSyncLine, sourceIndex: number): SpicyRuntimeLine {
+  const element = document.createElement("div");
+  element.classList.add("line");
+  element.dataset.sourceIndex = String(sourceIndex);
+  if (line.oppositeAligned) element.classList.add("OppositeAligned");
   const syllables = line.syllables || [];
-  const words = syllables.map((syllable, index) => ({
-    syllable,
-    element: renderWord(lineElement, syllable, index === syllables.length - 1),
-  }));
-  appendTranslation(lineElement, line.translatedText);
+  if (syllables.some((syllable) => isRtl(String(syllable.text || "")))) element.classList.add("rtl");
+  const words = renderWords(element, syllables);
+  appendTranslation(element, line.translatedText);
+  const startTime = finiteMs(line.lineStartTime);
+  const endTime = Math.max(startTime + 1, finiteMs(line.lineEndTime, startTime + 1));
+  addSourceElement(sourceIndex, element);
+  return {
+    HTMLElement: element,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    Syllables: { Lead: words },
+    sourceIndex,
+  };
+}
 
-  const rendered: RenderedLine = { sourceIndex, line, element: lineElement, words };
-  const background = getBackgroundSyllables(line);
-  if (background.length) {
-    const bg = document.createElement("div");
-    bg.className = "line bg-line NotSung";
-    bg.dataset.sourceIndex = String(sourceIndex);
-    bg.classList.toggle("OppositeAligned", opposite);
-    const bgWords = background.map((syllable, index) => ({
-      syllable,
-      element: renderWord(bg, syllable, index === background.length - 1),
-    }));
-    appendTranslation(bg, line.backgroundTranslatedText);
-    rendered.backgroundElement = bg;
-    rendered.backgroundWords = bgWords;
+function createBackgroundRuntimeLine(line: KineSyncLine, sourceIndex: number): SpicyRuntimeLine | null {
+  const syllables = getBackgroundSyllables(line);
+  if (!syllables.length) return null;
+  const element = document.createElement("div");
+  element.classList.add("line", "bg-line");
+  element.dataset.sourceIndex = String(sourceIndex);
+  if (line.oppositeAligned) element.classList.add("OppositeAligned");
+  if (syllables.some((syllable) => isRtl(String(syllable.text || "")))) element.classList.add("rtl");
+  const words = renderWords(element, syllables, true);
+  appendTranslation(element, line.backgroundTranslatedText);
+  const startTime = finiteMs(syllables[0]?.startTime, line.lineStartTime);
+  const endTime = Math.max(
+    startTime + 1,
+    finiteMs(syllables[syllables.length - 1]?.endTime, line.lineEndTime),
+  );
+  addSourceElement(sourceIndex, element);
+  return {
+    HTMLElement: element,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    Syllables: { Lead: words },
+    BGLine: true,
+    sourceIndex,
+  };
+}
+
+function createExactSpicyBackgroundRuntimeLine(
+  parentLine: KineSyncLine,
+  background: NonNullable<KineSyncLine["spicyBackgrounds"]>[number],
+  sourceIndex: number,
+  translatedText = "",
+): SpicyRuntimeLine | null {
+  const syllables = Array.isArray(background.syllables) ? background.syllables : [];
+  if (!syllables.length) return null;
+  const element = document.createElement("div");
+  element.classList.add("line", "bg-line");
+  element.dataset.sourceIndex = String(sourceIndex);
+  if (parentLine.oppositeAligned) element.classList.add("OppositeAligned");
+  const words = renderWords(element, syllables, true);
+  if (isRtl(syllables.map((syllable) => String(syllable.text || "")).join(""))) {
+    element.classList.add("rtl");
   }
-  return rendered;
+  appendTranslation(element, translatedText);
+  addSourceElement(sourceIndex, element);
+  const startTime = finiteMs(background.lineStartTime);
+  const endTime = Math.max(
+    startTime + 1,
+    finiteMs(background.lineEndTime, startTime + 1),
+  );
+  return {
+    HTMLElement: element,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    Syllables: { Lead: words },
+    BGLine: true,
+    sourceIndex,
+  };
+}
+
+function getLineSyncedText(syllables: KineSyncSyllable[]) {
+  return stripZeroWidth(syllables.map((syllable) => String(syllable.text || "")).join(""));
+}
+
+function createLineLeadRuntimeLine(line: KineSyncLine, sourceIndex: number): SpicyRuntimeLine {
+  const element = document.createElement("div");
+  const syllables = line.syllables || [];
+  const text = getLineSyncedText(syllables);
+  element.textContent = text;
+  element.classList.add("line");
+  element.dataset.sourceIndex = String(sourceIndex);
+  if (line.oppositeAligned) element.classList.add("OppositeAligned");
+  if (isRtl(text)) element.classList.add("rtl");
+  appendTranslation(element, line.translatedText);
+  const startTime = finiteMs(line.lineStartTime);
+  const endTime = Math.max(startTime + 1, finiteMs(line.lineEndTime, startTime + 1));
+  addSourceElement(sourceIndex, element);
+  return {
+    HTMLElement: element,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    sourceIndex,
+  };
+}
+
+function createLineBackgroundRuntimeLine(
+  line: KineSyncLine,
+  sourceIndex: number,
+): SpicyRuntimeLine | null {
+  const syllables = getBackgroundSyllables(line);
+  if (!syllables.length) return null;
+  const element = document.createElement("div");
+  const text = getLineSyncedText(syllables);
+  element.textContent = text;
+  element.classList.add("line", "bg-line");
+  element.dataset.sourceIndex = String(sourceIndex);
+  if (line.oppositeAligned) element.classList.add("OppositeAligned");
+  if (isRtl(text)) element.classList.add("rtl");
+  appendTranslation(element, line.backgroundTranslatedText);
+  const startTime = finiteMs(syllables[0]?.startTime, line.lineStartTime);
+  const endTime = Math.max(
+    startTime + 1,
+    finiteMs(syllables[syllables.length - 1]?.endTime, line.lineEndTime),
+  );
+  addSourceElement(sourceIndex, element);
+  return {
+    HTMLElement: element,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    BGLine: true,
+    sourceIndex,
+  };
+}
+
+function createDotRuntimeLine(
+  startTime: number,
+  endTime: number,
+  oppositeAligned = false,
+): SpicyRuntimeLine {
+  const line = document.createElement("div");
+  line.classList.add("line", "musical-line");
+  if (oppositeAligned) line.classList.add("OppositeAligned");
+  const group = document.createElement("div");
+  group.classList.add("dotGroup");
+  const words: SpicyWord[] = createDotTiming(startTime, endTime).map(([dotStart, dotEnd]) => {
+    const dot = document.createElement("span");
+    dot.classList.add("word", "dot");
+    dot.textContent = "•";
+    group.appendChild(dot);
+    return {
+      HTMLElement: dot,
+      StartTime: dotStart,
+      EndTime: dotEnd,
+      TotalTime: dotEnd - dotStart,
+      Dot: true,
+    };
+  });
+  line.appendChild(group);
+  return {
+    HTMLElement: line,
+    StartTime: startTime,
+    EndTime: endTime,
+    TotalTime: endTime - startTime,
+    Syllables: { Lead: words },
+    DotLine: true,
+  };
 }
 
 function renderSyncedLyrics() {
-  if (!scrollRoot) return;
+  if (!scrollRoot || !scrollViewport) return;
+  destroyLyricsVirtualizer();
   scrollRoot.replaceChildren();
-  renderedLines = sourceLines.map((line, index) => createLineElement(line, index));
-  for (const rendered of renderedLines) {
-    scrollRoot.appendChild(rendered.element);
-    if (rendered.backgroundElement) scrollRoot.appendChild(rendered.backgroundElement);
+  runtimeLines = [];
+  sourceElements = new Map();
+  const virtualContainer = document.createElement("div");
+  virtualContainer.classList.add("VirtualLyricsContainer");
+  scrollRoot.appendChild(virtualContainer);
+
+  const firstStart = finiteMs(sourceLines[0]?.lineStartTime);
+  const upstreamLyricsStart = sourceLines.find(
+    (line) => line.spicyLyricsStartTime !== undefined,
+  )?.spicyLyricsStartTime;
+  const introStart = finiteMs(upstreamLyricsStart, 0);
+  if (
+    sourceLines.length &&
+    firstStart - introStart >= SPICY_INTERLUDE_GAP_MS
+  ) {
+    runtimeLines.push(
+      createDotRuntimeLine(
+        introStart,
+        firstStart,
+        Boolean(sourceLines[0]?.oppositeAligned),
+      ),
+    );
   }
-  if (creditsRoot) {
-    scrollRoot.appendChild(creditsRoot);
-  }
+
+  sourceLines.forEach((line, sourceIndex) => {
+    runtimeLines.push(
+      currentLyricsType === "Line"
+        ? createLineLeadRuntimeLine(line, sourceIndex)
+        : createLeadRuntimeLine(line, sourceIndex),
+    );
+    if (currentLyricsType === "Line") {
+      const background = createLineBackgroundRuntimeLine(line, sourceIndex);
+      if (background) runtimeLines.push(background);
+    } else if (Array.isArray(line.spicyBackgrounds)) {
+      line.spicyBackgrounds.forEach((background, backgroundIndex) => {
+        const runtimeBackground = createExactSpicyBackgroundRuntimeLine(
+          line,
+          background,
+          sourceIndex,
+          backgroundIndex === 0 ? String(line.backgroundTranslatedText || "") : "",
+        );
+        if (runtimeBackground) runtimeLines.push(runtimeBackground);
+      });
+    } else {
+      const background = createBackgroundRuntimeLine(line, sourceIndex);
+      if (background) runtimeLines.push(background);
+    }
+    const next = sourceLines[sourceIndex + 1];
+    const leadEnd = finiteMs(line.lineEndTime);
+    const nextStart = finiteMs(next?.lineStartTime);
+    if (next && nextStart - leadEnd >= SPICY_INTERLUDE_GAP_MS) {
+      runtimeLines.push(createDotRuntimeLine(leadEnd, nextStart, Boolean(next.oppositeAligned)));
+    }
+  });
+
+  scrollRoot.classList.toggle("HasDuetLines", sourceLines.some((line) => Boolean(line.oppositeAligned)));
+  scrollRoot.classList.toggle(
+    "HasRtlLines",
+    sourceLines.some((line) =>
+      [...(line.syllables || []), ...getBackgroundSyllables(line)].some((syllable) =>
+        isRtl(String(syllable.text || "")),
+      ),
+    ),
+  );
+  scrollRoot.dataset.lyricsType = currentLyricsType;
+  if (creditsRoot) scrollRoot.appendChild(creditsRoot);
+
+  resetSpicyAnimatorState();
+  resetSpicyScroll();
+  setOnNewElementMounted(resetSpicyBlurState);
+  initLyricsVirtualizer(
+    scrollViewport,
+    virtualContainer,
+    runtimeLines.map((line) => line.HTMLElement),
+  );
   updateSelection();
+  pendingForceScroll = true;
 }
 
 function getStaticLineText(line: KineSyncLine) {
-  return (line.syllables || []).map((s) => String(s.text || "")).join("").trim();
+  return stripZeroWidth((line.syllables || []).map((s) => String(s.text || "")).join(""));
 }
 
 function appendCreditsContent(
@@ -239,10 +573,7 @@ function appendCreditsContent(
     row.appendChild(document.createTextNode(value));
     container.appendChild(row);
   };
-  const appendProfile = (
-    label: string,
-    profile: { username?: string; avatar?: string },
-  ) => {
+  const appendProfile = (label: string, profile: { username?: string; avatar?: string }) => {
     if (!profile.username) return;
     const row = document.createElement("div");
     row.className = "kinesync-credits-profile";
@@ -267,10 +598,7 @@ function appendCreditsContent(
   if (attribution?.community) append("", "These lyrics have been provided by the Spicy Lyrics community");
   if (attribution?.maker?.username) appendProfile("Made By: ", attribution.maker);
   if (attribution?.uploader?.username) {
-    appendProfile(
-      attribution.maker?.username ? "Uploaded By: " : "Made By: ",
-      attribution.uploader,
-    );
+    appendProfile(attribution.maker?.username ? "Uploaded By: " : "Made By: ", attribution.uploader);
   }
 }
 
@@ -283,52 +611,69 @@ function renderCredits(songwriters: string[] = [], attribution?: LyricsAttributi
 }
 
 function renderStaticLyrics() {
-  if (!staticLyricsRoot) return;
-  staticLyricsRoot.replaceChildren();
-  for (const line of sourceLines) {
+  if (!scrollRoot || !scrollViewport) return;
+  destroyLyricsVirtualizer();
+  scrollRoot.replaceChildren();
+  runtimeLines = [];
+  sourceElements = new Map();
+  const virtualContainer = document.createElement("div");
+  virtualContainer.classList.add("VirtualLyricsContainer");
+  scrollRoot.appendChild(virtualContainer);
+  const lineElements: HTMLElement[] = [];
+
+  sourceLines.forEach((line, sourceIndex) => {
     const text = getStaticLineText(line);
-    if (!text) continue;
     const row = document.createElement("div");
-    row.className = "static-lyrics-line";
+    row.classList.add("line", "static");
+    row.dataset.sourceIndex = String(sourceIndex);
     row.textContent = text;
+    if (isRtl(text)) row.classList.add("rtl");
     if (showTranslatedText && line.translatedText) {
-      const translated = document.createElement("div");
-      translated.className = "static-lyrics-translation";
-      translated.textContent = line.translatedText;
-      row.appendChild(translated);
+      appendTranslation(row, line.translatedText);
     }
+    // KineSync can carry a compatibility background/translation even for a
+    // static source. Spicy itself has no static BG-row type, so keep it as a
+    // host extension inside the same upstream-style `.line.static` row.
     const backgroundText = getBackgroundSyllables(line)
       .map((syllable) => String(syllable.text || ""))
       .join("")
       .trim();
     if (backgroundText) {
       const background = document.createElement("div");
-      background.className = "static-lyrics-background";
+      background.className = "ks-static-background";
       background.textContent = backgroundText;
       if (showTranslatedText && line.backgroundTranslatedText) {
         const translated = document.createElement("div");
-        translated.className = "static-lyrics-background-translation";
+        translated.className = "ks-translation ks-static-background-translation";
         translated.textContent = line.backgroundTranslatedText;
         background.appendChild(translated);
       }
       row.appendChild(background);
     }
-    staticLyricsRoot.appendChild(row);
-  }
-  if (staticSongwriters.length || staticAttribution) {
-    const credits = document.createElement("div");
-    credits.className = "kinesync-credits-footer";
-    appendCreditsContent(credits, staticSongwriters, staticAttribution);
-    staticLyricsRoot.appendChild(credits);
-  }
+    addSourceElement(sourceIndex, row);
+    lineElements.push(row);
+  });
+
+  scrollRoot.classList.remove("HasDuetLines");
+  scrollRoot.classList.toggle(
+    "HasRtlLines",
+    sourceLines.some((line) => isRtl(getStaticLineText(line))),
+  );
+  scrollRoot.dataset.lyricsType = "Static";
+  renderCredits(staticSongwriters, staticAttribution, 0);
+  if (creditsRoot) scrollRoot.appendChild(creditsRoot);
+
+  resetSpicyScroll();
+  setOnNewElementMounted(null);
+  initLyricsVirtualizer(scrollViewport, virtualContainer, lineElements);
+  updateSelection();
 }
 
 function updateSelection() {
-  for (const rendered of renderedLines) {
-    const selected = Boolean(selectedKeys[sourceKey(rendered.line)]);
-    rendered.element.classList.toggle("ks-selected", selected);
-    rendered.backgroundElement?.classList.toggle("ks-selected", selected);
-  }
+  sourceLines.forEach((line, index) => {
+    const selected = Boolean(selectedKeys[sourceKey(line)]);
+    sourceElements.get(index)?.forEach((element) => element.classList.toggle("ks-selected", selected));
+  });
 }
 
 function showEmpty(title: string, sub: string) {
@@ -345,158 +690,89 @@ function applyPageOptions() {
   staticLyricsRoot?.style.setProperty("--ks-font-scale", String(Math.max(0.82, Math.min(1.35, fontScale))));
 }
 
-function lineProgress(position: number, start: number, end: number) {
-  return clamp01((position - start) / Math.max(1, end - start));
-}
-
-function updateWordVisual(entry: { syllable: KineSyncSyllable; element: HTMLElement }, position: number) {
-  const start = finiteMs(entry.syllable.startTime);
-  const end = Math.max(start + 1, finiteMs(entry.syllable.endTime, start + 1));
-  const p = lineProgress(position, start, end);
-  const active = position >= start && position < end;
-  const sung = position >= end;
-  const gradient = sung ? 100 : active ? -20 + p * 120 : -20;
-  entry.element.style.setProperty("--gradient-position", `${gradient}%`);
-
-  if (active) {
-    // Spicy Lyrics' syllable renderer uses a 0.95 -> 1.0505 -> 1 scale arc,
-    // upward motion, and a glow envelope while the word is active.
-    const scale = interpolate([[0, 0.95], [0.7, 1.0505], [1, 1]], p);
-    const y = interpolate([[0, 0.01], [0.9, -1 / 60], [1, 0]], p);
-    const glow = interpolate([[0, 0], [0.15, 1], [0.6, 1], [1, 0]], p);
-    entry.element.style.transform = `translateY(${y}em) scale(${scale})`;
-    entry.element.style.setProperty("--text-shadow-opacity", `${Math.round(glow * 55)}%`);
-  } else {
-    entry.element.style.transform = sung ? "translateY(0) scale(1)" : "translateY(0.01em) scale(0.95)";
-    entry.element.style.setProperty("--text-shadow-opacity", "0%");
+function computeActiveSource(position: number) {
+  let next = -1;
+  for (let index = 0; index < sourceLines.length; index += 1) {
+    const start = finiteMs(sourceLines[index].lineStartTime);
+    const end = Math.max(start + 1, finiteMs(sourceLines[index].lineEndTime, start + 1));
+    if (position >= start && position < end) next = index;
   }
-}
-
-function updateLineVisual(rendered: RenderedLine, position: number) {
-  const start = finiteMs(rendered.line.lineStartTime);
-  const end = Math.max(start + 1, finiteMs(rendered.line.lineEndTime, start + 1));
-  const active = position >= start && position < end;
-  const sung = position >= end;
-  rendered.element.classList.toggle("Active", active);
-  rendered.element.classList.toggle("Sung", sung);
-  rendered.element.classList.toggle("NotSung", !active && !sung);
-  for (const word of rendered.words) updateWordVisual(word, position);
-
-  if (rendered.backgroundElement && rendered.backgroundWords?.length) {
-    const bgStart = finiteMs(rendered.backgroundWords[0].syllable.startTime, start);
-    const bgEnd = Math.max(
-      bgStart + 1,
-      finiteMs(rendered.backgroundWords[rendered.backgroundWords.length - 1].syllable.endTime, end),
-    );
-    const bgActive = position >= bgStart && position < bgEnd;
-    const bgSung = position >= bgEnd;
-    rendered.backgroundElement.classList.toggle("Active", bgActive);
-    rendered.backgroundElement.classList.toggle("Sung", bgSung);
-    rendered.backgroundElement.classList.toggle("NotSung", !bgActive && !bgSung);
-    for (const word of rendered.backgroundWords) updateWordVisual(word, position);
-  }
-}
-
-function updateAutoFollow(deltaMs: number) {
-  if (!scrollRoot || !autoFollowEnabled || activeSourceIndex < 0) return;
-  const target = renderedLines[activeSourceIndex]?.element;
-  if (!target) return;
-  const desired = Math.max(0, target.offsetTop - scrollRoot.clientHeight * 0.08);
-  scrollTarget = desired;
-  if (previewPositionMs !== null) {
-    scrollRoot.scrollTop = desired;
-    scrollVelocity = 0;
-    return;
-  }
-  const dt = Math.min(0.05, Math.max(0.001, deltaMs / 1000));
-  const displacement = scrollRoot.scrollTop - scrollTarget;
-  // Damped spring: mirrors Spicy's spring-driven convergence without polling Spotify.
-  const acceleration = -170 * displacement - 26 * scrollVelocity;
-  scrollVelocity += acceleration * dt;
-  const next = scrollRoot.scrollTop + scrollVelocity * dt;
-  scrollRoot.scrollTop = Math.abs(next - desired) < 0.4 && Math.abs(scrollVelocity) < 2 ? desired : next;
-}
-
-function update(position: number, deltaMs: number) {
-  if (staticLyricsMode) return;
-  let nextActive = -1;
-  for (const rendered of renderedLines) {
-    updateLineVisual(rendered, position);
-    const start = finiteMs(rendered.line.lineStartTime);
-    const end = Math.max(start + 1, finiteMs(rendered.line.lineEndTime, start + 1));
-    if (position >= start && position < end) nextActive = rendered.sourceIndex;
-  }
-  if (nextActive !== activeSourceIndex) {
-    activeSourceIndex = nextActive;
+  if (next !== activeSourceIndex) {
+    activeSourceIndex = next;
     post({ type: "activeLineChange", index: activeSourceIndex });
   }
-  updateAutoFollow(deltaMs);
 }
 
 function setLyrics(message: IncomingMessage) {
   sourceLines = Array.isArray(message.lines) ? message.lines : [];
   staticLyricsMode = message.timingMode === "static";
+  // KineSync intentionally keeps interpolated/line-synced sources on the
+  // syllable runtime. They arrive as timed synthetic syllables and should use
+  // the same word/spring/gradient machinery as karaoke instead of Spicy's
+  // separate direct-text Line renderer.
+  currentLyricsType = "Syllable";
   staticSongwriters = Array.isArray(message.songwriters) ? message.songwriters : [];
   staticAttribution = message.attribution;
   activeSourceIndex = -1;
-  if (scrollRoot) scrollRoot.hidden = staticLyricsMode;
-  if (staticLyricsRoot) staticLyricsRoot.hidden = !staticLyricsMode;
+  if (scrollRoot) scrollRoot.hidden = false;
+  if (staticLyricsRoot) staticLyricsRoot.hidden = true;
   if (staticLyricsMode) {
     renderStaticLyrics();
-    staticLyricsRoot?.scrollTo({ top: 0, behavior: "auto" });
+    scrollViewport?.scrollTo({ top: 0, behavior: "auto" });
     post({ type: "activeLineChange", index: -1 });
   } else {
-    renderSyncedLyrics();
     renderCredits(message.songwriters || [], message.attribution, finiteMs(message.lastLyricEndTime));
-    if (scrollRoot) scrollRoot.scrollTop = 0;
+    renderSyncedLyrics();
   }
   showEmpty(message.emptyTitle || "No synced lyrics yet", message.emptySub || "");
-  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
+  scheduleFrame();
 }
 
 function applyOptions(message: IncomingMessage) {
   const translationsChanged = showTranslatedText !== Boolean(message.showTranslatedText);
   const nextLandscape = Boolean(message.landscapeMode);
-  const landscapeChanged = landscapeMode !== nextLandscape;
+  const layoutChanged = landscapeMode !== nextLandscape || fontScale !== finiteMs(message.fontScale, 1);
   showTranslatedText = Boolean(message.showTranslatedText);
   tapToSeekEnabled = Boolean(message.tapToSeekEnabled);
   landscapeMode = nextLandscape;
   fontScale = finiteMs(message.fontScale, 1);
   selectedKeys = message.selectedKeys || {};
   if (typeof message.autoFollowEnabled === "boolean") autoFollowEnabled = message.autoFollowEnabled;
-  if (typeof message.resumeAutoFollowSignal === "number" && message.resumeAutoFollowSignal !== resumeAutoFollowSignal) {
+  if (
+    typeof message.resumeAutoFollowSignal === "number" &&
+    message.resumeAutoFollowSignal !== resumeAutoFollowSignal
+  ) {
     resumeAutoFollowSignal = message.resumeAutoFollowSignal;
     autoFollowEnabled = true;
-    scrollVelocity = 0;
+    pendingForceScroll = true;
   }
   applyPageOptions();
-  if ((translationsChanged || landscapeChanged) && sourceLines.length) {
+  if ((translationsChanged || layoutChanged) && sourceLines.length) {
     if (staticLyricsMode) renderStaticLyrics();
     else renderSyncedLyrics();
+  } else if (layoutChanged && !staticLyricsMode) {
+    triggerRemeasureLV();
   }
   updateSelection();
-  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
+  scheduleFrame();
 }
 
 function sync(message: IncomingMessage) {
   const next = finiteMs(message.positionMs);
-  const force = Boolean(message.force) || Math.abs(projectedPosition() - next) > 900;
+  const force = Boolean(message.force) || Math.abs(projectedPosition() - next) > 1000;
   anchorPositionMs = next;
   anchorClientMs = performance.now();
   isPlaying = Boolean(message.isPlaying);
   durationMs = finiteMs(message.durationMs);
   previewPositionMs = message.previewPositionMs == null ? null : finiteMs(message.previewPositionMs);
-  if (force) {
-    scrollVelocity = 0;
-    update(projectedPosition(), 16);
-  }
-  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
+  if (force) pendingForceScroll = true;
+  scheduleFrame();
 }
 
 function setAutoFollow(enabled: boolean) {
   if (autoFollowEnabled === enabled) return;
   autoFollowEnabled = enabled;
-  scrollVelocity = 0;
+  if (enabled) pendingForceScroll = true;
   post({ type: "autoFollowChange", enabled });
 }
 
@@ -509,17 +785,16 @@ function sourceIndexFromTarget(target: EventTarget | null) {
 
 function setPressed(index: number) {
   window.clearTimeout(pressedTimer);
-  for (const rendered of renderedLines) {
-    const pressed = rendered.sourceIndex === index;
-    rendered.element.classList.toggle("ks-pressed", pressed);
-    rendered.backgroundElement?.classList.toggle("ks-pressed", pressed);
-  }
+  sourceElements.forEach((elements, sourceIndex) => {
+    elements.forEach((element) => element.classList.toggle("ks-pressed", sourceIndex === index));
+  });
   pressedTimer = window.setTimeout(() => {
     document.querySelectorAll(".ks-pressed").forEach((node) => node.classList.remove("ks-pressed"));
   }, 420);
 }
 
-scrollRoot?.addEventListener("click", (event) => {
+scrollViewport?.addEventListener("click", (event) => {
+  if (staticLyricsMode) return;
   if (longPressTriggered) {
     longPressTriggered = false;
     return;
@@ -533,7 +808,8 @@ scrollRoot?.addEventListener("click", (event) => {
   }
 });
 
-scrollRoot?.addEventListener("contextmenu", (event) => {
+scrollViewport?.addEventListener("contextmenu", (event) => {
+  if (staticLyricsMode) return;
   const index = sourceIndexFromTarget(event.target);
   if (index < 0 || index >= sourceLines.length) return;
   event.preventDefault();
@@ -541,7 +817,8 @@ scrollRoot?.addEventListener("contextmenu", (event) => {
   post({ type: "lineLongPress", index });
 });
 
-scrollRoot?.addEventListener("touchstart", (event) => {
+scrollViewport?.addEventListener("touchstart", (event) => {
+  if (staticLyricsMode) return;
   touchMoved = false;
   longPressTriggered = false;
   touchStartIndex = sourceIndexFromTarget(event.target);
@@ -557,24 +834,20 @@ scrollRoot?.addEventListener("touchstart", (event) => {
   }
 }, { passive: true });
 
-scrollRoot?.addEventListener("touchmove", () => {
+function noteUserScroll() {
   touchMoved = true;
-  userScrolling = true;
   window.clearTimeout(longPressTimer);
+  if (staticLyricsMode) return;
+  if (scrollViewport) noteSpicyUserScroll(scrollViewport);
   setAutoFollow(false);
-}, { passive: true });
+}
 
-scrollRoot?.addEventListener("touchend", () => {
+scrollViewport?.addEventListener("touchmove", noteUserScroll, { passive: true });
+scrollViewport?.addEventListener("touchend", () => {
   window.clearTimeout(longPressTimer);
   touchStartIndex = -1;
-  userScrolling = false;
 }, { passive: true });
-
-scrollRoot?.addEventListener("wheel", () => {
-  userScrolling = true;
-  setAutoFollow(false);
-  window.setTimeout(() => { userScrolling = false; }, 150);
-}, { passive: true });
+scrollViewport?.addEventListener("wheel", noteUserScroll, { passive: true });
 
 creditsRoot?.addEventListener("click", () => {
   if (lastLyricEndTime <= 0) return;
@@ -582,37 +855,55 @@ creditsRoot?.addEventListener("click", () => {
   post({ type: "creditsPress", positionMs: lastLyricEndTime });
 });
 
-function playbackNeedsFrames() {
-  return !staticLyricsMode && isPlaying && previewPositionMs === null && sourceLines.length > 0 && (durationMs <= 0 || projectedPosition() < durationMs);
-}
-
-function scheduleFrame(graceMs = 0) {
-  const now = performance.now();
-  animateUntilMs = Math.max(animateUntilMs, now + Math.max(0, graceMs));
+function scheduleFrame() {
   if (document.visibilityState === "hidden" || frameRequestId !== null) return;
   frameRequestId = requestAnimationFrame(frame);
 }
 
-let lastFrameMs = performance.now();
-function frame(now: number) {
+function frame() {
   frameRequestId = null;
-  const delta = Math.max(0, Math.min(80, now - lastFrameMs));
-  lastFrameMs = now;
-  update(projectedPosition(), delta || 16);
-  if (playbackNeedsFrames() || now < animateUntilMs || (!userScrolling && Math.abs(scrollVelocity) > 0.5)) {
-    frameRequestId = requestAnimationFrame(frame);
+  if (!staticLyricsMode) {
+    const position = projectedPosition();
+    timeSetter(runtimeLines, position, currentLyricsType);
+    animate(runtimeLines, position, currentLyricsType);
+    computeActiveSource(position);
+    if (scrollViewport) {
+      scrollToActiveLine(
+        runtimeLines,
+        scrollViewport,
+        position,
+        isPlaying,
+        autoFollowEnabled,
+        pendingForceScroll,
+      );
+    }
+    pendingForceScroll = false;
   }
+  if (!staticLyricsMode && sourceLines.length > 0) frameRequestId = requestAnimationFrame(frame);
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") {
-    if (frameRequestId !== null) cancelAnimationFrame(frameRequestId);
-    frameRequestId = null;
-    return;
-  }
-  lastFrameMs = performance.now();
-  scheduleFrame(IDLE_ANIMATION_GRACE_MS);
+  if (document.visibilityState === "hidden") return;
+  pendingForceScroll = true;
+  scheduleFrame();
 });
+
+// ScrollToActiveLine.ts resets its anchor on window focus/resize. Keep those
+// lifecycle hooks in the standalone host as well; the next frame force-centers
+// through the same `lastLine == null` path used upstream.
+const resetScrollAnchor = () => {
+  resetSpicyScroll();
+  pendingForceScroll = true;
+  scheduleFrame();
+};
+window.addEventListener("focus", resetScrollAnchor);
+window.addEventListener("resize", resetScrollAnchor);
+
+const lyricsContent = scrollRoot?.closest<HTMLElement>(".LyricsContent");
+if (lyricsContent) {
+  const lyricsContentObserver = new ResizeObserver(resetScrollAnchor);
+  lyricsContentObserver.observe(lyricsContent);
+}
 
 bridgeWindow.KineSyncLyrics = {
   receive(message: IncomingMessage) {

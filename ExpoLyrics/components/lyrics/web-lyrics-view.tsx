@@ -8,7 +8,11 @@ import {
 } from "@/components/lyrics/spicy-webview-bundle";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { usePlaybackStore } from "@/store/playback-store";
-import type { LyricLine as LyricLineType } from "@/types/bridge";
+import type {
+  LyricLine as LyricLineType,
+  LyricSyllable,
+  SpicyBackgroundSyllableBlock,
+} from "@/types/bridge";
 
 const TransparentWebView = WebView as unknown as React.ComponentType<Record<string, unknown>>;
 
@@ -24,6 +28,8 @@ type WebLyricsLine = {
   lineEndTime: number;
   syllables: WebLyricsSyllable[];
   backgroundSyllables?: WebLyricsSyllable[];
+  spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
+  spicyLyricsStartTime?: number;
   translatedText?: string;
   backgroundTranslatedText?: string;
   oppositeAligned?: boolean;
@@ -214,7 +220,7 @@ body {
 </head>
 <body>
 <div id="app">
-  <div id="SpicyLyricsPage" class="SpicyRenderer NoLineHoverBackground">
+  <div id="SpicyLyricsPage" class="SpicyRenderer">
     <div class="LyricsContainer">
       <div class="LyricsContent">
         <div id="spicyScrollRoot" class="SpicyLyricsScrollContainer" data-lyrics-type="Syllable"></div>
@@ -250,15 +256,37 @@ function toWebSyllable(syllable: { text: string; startTime: number; endTime: num
   };
 }
 
-function toWebLine(line: LyricLineType): WebLyricsLine {
-  const startTime = toFiniteMs(line.lineStartTime);
+function toExactWebSyllable(syllable: LyricSyllable): WebLyricsSyllable {
+  return {
+    text: syllable.text,
+    startTime: syllable.startTime,
+    endTime: syllable.endTime,
+    isPartOfWord: syllable.isPartOfWord,
+  };
+}
+
+function toWebLine(
+  line: LyricLineType,
+  preserveExactSpicySyllables = false,
+): WebLyricsLine {
+  const startTime = preserveExactSpicySyllables
+    ? line.lineStartTime
+    : toFiniteMs(line.lineStartTime);
   return {
     lineStartTime: startTime,
-    lineEndTime: Math.max(startTime + 1, toFiniteMs(line.lineEndTime, startTime + 1)),
-    syllables: (line.syllables || []).map(toWebSyllable),
+    lineEndTime: preserveExactSpicySyllables
+      ? line.lineEndTime
+      : Math.max(startTime + 1, toFiniteMs(line.lineEndTime, startTime + 1)),
+    syllables: (line.syllables || []).map(
+      preserveExactSpicySyllables ? toExactWebSyllable : toWebSyllable,
+    ),
     backgroundSyllables: line.backgroundSyllables?.length
-      ? line.backgroundSyllables.map(toWebSyllable)
+      ? line.backgroundSyllables.map(
+          preserveExactSpicySyllables ? toExactWebSyllable : toWebSyllable,
+        )
       : undefined,
+    spicyBackgrounds: line.spicyBackgrounds,
+    spicyLyricsStartTime: line.spicyLyricsStartTime,
     translatedText: String(line.translatedText || "").trim() || undefined,
     backgroundTranslatedText:
       String(line.backgroundTranslatedText || "").trim() || undefined,
@@ -315,6 +343,9 @@ export const WebLyricsView = memo(function WebLyricsView({
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
   );
+  const preserveExactSpicySyllables = String(lyricsSource || "")
+    .toLowerCase()
+    .includes("spicy-lyrics-syllable");
   const anchorPositionMs = usePlaybackStore((state) => state.anchorPositionMs);
   const isPlaying = usePlaybackStore((state) => state.isPlaying);
 
@@ -357,7 +388,9 @@ export const WebLyricsView = memo(function WebLyricsView({
     }
     inject({
       type: "setLyrics",
-      lines: lyrics.map(toWebLine),
+      lines: lyrics.map((line) =>
+        toWebLine(line, preserveExactSpicySyllables),
+      ),
       timingMode: lyricsTimingMode,
       emptyTitle: lyricsMetadata.instrumental
         ? "This song is an instrumental"
@@ -366,6 +399,9 @@ export const WebLyricsView = memo(function WebLyricsView({
       songwriters,
       attribution: lyricsMetadata.attribution,
       lastLyricEndTime,
+      spicyLyricsStartTime: lyrics.find((line) =>
+        Number.isFinite(line.spicyLyricsStartTime),
+      )?.spicyLyricsStartTime,
     });
   }, [
     inject,
@@ -376,6 +412,7 @@ export const WebLyricsView = memo(function WebLyricsView({
     lyricsSource,
     lyricsStatusMessage,
     lyricsTimingMode,
+    preserveExactSpicySyllables,
     ready,
     songwriters,
   ]);

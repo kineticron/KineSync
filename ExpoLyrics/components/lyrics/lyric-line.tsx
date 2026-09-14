@@ -1,16 +1,26 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated as RNAnimated,
   Pressable,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
   type ViewStyle,
   type TextStyle,
 } from "react-native";
 import Reanimated, {
   cancelAnimation,
   Easing as ReanimatedEasing,
+  FadeOut,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -22,7 +32,6 @@ import { useShallow } from "zustand/react/shallow";
 
 import {
   LANDSCAPE_LINE_SCALE_BLEED,
-  LANDSCAPE_LYRIC_TEXT_LANE_WIDTH,
 } from "@/constants/player-layout";
 import { usePlaybackStore } from "@/store/playback-store";
 import { getGraphemeCount, getGraphemes } from "@/lib/graphemes";
@@ -39,7 +48,8 @@ const IDLE_PLAYBACK_SLICE = {
 // AMLL renders the focused line at 100% and springs surrounding lines to 97%.
 // Keep the text rasterized at its full target size and scale only inactive rows.
 const SCALE_ACTIVE = 1;
-const OPACITY_ACTIVE = 1;
+// AMLL's group wrapper resolves highlighted lyric groups to 0.85 opacity.
+const OPACITY_ACTIVE = 0.85;
 const OPACITY_NEAR = 1;
 const OPACITY_MID = 1;
 const OPACITY_FAR = 1;
@@ -53,8 +63,6 @@ const SUSTAIN_MS_THRESHOLD = 1000;
 const SUSTAIN_SHORT_SCALE_BOOST = 0.068;
 const SUSTAIN_LONG_SCALE_BOOST = 0.04;
 const SUSTAIN_LONG_MS = 1200;
-const SUSTAIN_GLOW_RADIUS_MAX = 7;
-const SUSTAIN_GLOW_RADIUS_MAX_BG = 4;
 const SUSTAIN_WORD_GLOW_RADIUS_MAX = 8;
 const SUSTAIN_WORD_GLOW_RADIUS_MAX_BG = 4.5;
 const SUSTAIN_GLOW_COLOR = "rgba(255,255,255,0.24)";
@@ -63,9 +71,8 @@ const WORD_SUSTAIN_SCALE_EXPANSION_MAX = 4.2;
 const WORD_SUSTAIN_SCALE_EXPANSION_MAX_BG = 2.4;
 const BASE_FONT_SIZE = 36;
 const BASE_LINE_HEIGHT = 43.2;
-const LYRIC_TEXT_LANE_WIDTH = "88%";
-const LINE_INNER_PADDING_HORIZONTAL = 10;
-const LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE = 2;
+const LYRIC_TEXT_LANE_WIDTH = "100%";
+const LINE_INNER_PADDING_HORIZONTAL = 20;
 const BG_FONT_SIZE = BASE_FONT_SIZE * 0.7;
 const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * 0.7;
 const PRIMARY_REVEAL_VERTICAL_PAD = 10;
@@ -90,7 +97,19 @@ const AMLL_BG_SPRING = {
   stiffness: 50,
   overshootClamping: false,
 } as const;
-const AMLL_WORD_FADE_WIDTH = 0.56;
+type AmlPosYSpringPolicy = {
+  mass: number;
+  damping: number;
+  stiffness: number;
+  overshootClamping: false;
+};
+const AMLL_DEFAULT_POS_Y_SPRING: AmlPosYSpringPolicy = {
+  mass: 0.9,
+  damping: 15,
+  stiffness: 90,
+  overshootClamping: false,
+};
+const AMLL_WORD_FADE_WIDTH = 0.5;
 
 // ponytail: worklet version — used inside useAnimatedStyle only
 function getInwardScaleTransformWorklet(
@@ -131,6 +150,22 @@ function getSyllableProgress(
 ) {
   const duration = Math.max(1, endTime - startTime);
   return Math.max(0, Math.min(1, (positionMs - startTime) / duration));
+}
+
+function getAmlWordFloatEndTime(startTime: number, endTime: number) {
+  return startTime + Math.max(1000, endTime - startTime);
+}
+
+function getAmlWordFloatProgress(
+  positionMs: number,
+  startTime: number,
+  endTime: number,
+) {
+  return getSyllableProgress(
+    positionMs,
+    startTime,
+    getAmlWordFloatEndTime(startTime, endTime),
+  );
 }
 
 function getMonotonicNow() {
@@ -195,6 +230,31 @@ function syncRevealProgress(
   });
 }
 
+function useAmlWordFloatProgress(
+  playbackPosition: number,
+  startTime: number,
+  endTime: number,
+  isPlaying: boolean,
+) {
+  const floatEndTime = getAmlWordFloatEndTime(startTime, endTime);
+  const progress = useSharedValue(
+    getSyllableProgress(playbackPosition, startTime, floatEndTime),
+  );
+
+  useEffect(() => {
+    syncRevealProgress(
+      progress,
+      playbackPosition,
+      startTime,
+      floatEndTime,
+      isPlaying,
+      ReanimatedEasing.linear,
+    );
+  }, [floatEndTime, isPlaying, playbackPosition, progress, startTime]);
+
+  return progress;
+}
+
 function estimateTokenWidth(text: string, fontSize: number) {
   const glyphCount = Math.max(1, getGraphemes(text || " ").length);
   return glyphCount * fontSize * 0.58;
@@ -234,14 +294,15 @@ function interpolate(x: number, domain: number[], range: number[]) {
 function getPrimaryTokenRiseY(progress: number, fontSize = BASE_FONT_SIZE) {
   "worklet";
   const p = Math.max(0, Math.min(1, progress));
-  const eased = 1 - (1 - p) * (1 - p);
+  // Web Animations `ease-out` = cubic-bezier(0, 0, .58, 1).
+  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
   return -0.05 * fontSize * eased;
 }
 
 function getBackgroundTokenRiseY(progress: number, fontSize = BG_FONT_SIZE) {
   "worklet";
   const p = Math.max(0, Math.min(1, progress));
-  const eased = 1 - (1 - p) * (1 - p);
+  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
   return -0.1 * fontSize * eased;
 }
 
@@ -308,7 +369,44 @@ type SustainGlyphVisuals = {
   translateY: number;
   opacity: number;
   glowRadius: number;
+  glowOpacity: number;
 };
+
+function cubicBezierCoordinate(t: number, p1: number, p2: number) {
+  "worklet";
+  const inv = 1 - t;
+  return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
+}
+
+function cubicBezierYForX(
+  x: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+) {
+  "worklet";
+  const target = Math.max(0, Math.min(1, x));
+  let low = 0;
+  let high = 1;
+  let t = target;
+  for (let i = 0; i < 10; i += 1) {
+    t = (low + high) / 2;
+    const bx = cubicBezierCoordinate(t, x1, x2);
+    if (bx < target) low = t;
+    else high = t;
+  }
+  return cubicBezierCoordinate(t, y1, y2);
+}
+
+function getAmlEmphasisEasing(x: number) {
+  "worklet";
+  const p = Math.max(0, Math.min(1, x));
+  if (p < 0.5) {
+    return cubicBezierYForX(p / 0.5, 0.2, 0.4, 0.58, 1);
+  }
+  return 1 - cubicBezierYForX((p - 0.5) / 0.5, 0.3, 0, 0.58, 1);
+}
 
 function getSustainScaleBoost(durationMs: number, isBackground = false) {
   "worklet";
@@ -317,57 +415,6 @@ function getSustainScaleBoost(durationMs: number, isBackground = false) {
       ? SUSTAIN_LONG_SCALE_BOOST
       : SUSTAIN_SHORT_SCALE_BOOST;
   return isBackground ? maxBoost * 0.55 : maxBoost;
-}
-
-function getSustainActiveIntensity(
-  progress: number,
-  charIdx: number,
-  totalChars: number,
-  isSoloMode: boolean,
-) {
-  "worklet";
-  if (isSoloMode) {
-    return interpolate(
-      progress,
-      [0, 0.12, 0.5, 0.88, 1],
-      [0, 0.55, 1, 0.55, 0],
-    );
-  }
-
-  const activeLetterFloat = progress * totalChars;
-  const charCenter = charIdx + 0.5;
-  const distance = Math.abs(charCenter - activeLetterFloat);
-  // exp(-(3.1²)*0.48) ≈ 0.01 — skip math for distant glyphs
-  if (distance > 3.1) return 0;
-  const falloff = Math.exp(-(distance * distance) * 0.48);
-  const fadeIn = smoothstep(progress / 0.12);
-  const fadeOut = smoothstep((1 - progress) / 0.12);
-  return falloff * fadeIn * fadeOut;
-}
-
-function getSustainGlowIntensity(
-  progress: number,
-  charIdx: number,
-  totalChars: number,
-) {
-  "worklet";
-  const activeLetterFloat = progress * totalChars;
-  const charCenter = charIdx + 0.5;
-  const distance = Math.abs(charCenter - activeLetterFloat);
-  // exp(-(5.5²)*0.16) ≈ 0.01 — glow falloff is wider (0.16 vs 0.48)
-  if (distance > 5.5) return 0;
-  const falloff = Math.exp(-(distance * distance) * 0.16);
-  const fadeIn = smoothstep(progress / 0.16);
-  const fadeOut = smoothstep((1 - progress) / 0.16);
-  return falloff * fadeIn * fadeOut;
-}
-
-function getSustainGlowRadius(glowIntensity: number, isBackground: boolean) {
-  "worklet";
-  const maxGlow = isBackground
-    ? SUSTAIN_GLOW_RADIUS_MAX_BG
-    : SUSTAIN_GLOW_RADIUS_MAX;
-  return interpolate(glowIntensity, [0, 0.12, 1], [0, 0, maxGlow]);
 }
 
 function getWordSustainGlowRadius(
@@ -424,40 +471,52 @@ function computeSustainGlyphVisuals(
   primaryLiftBase = BASE_FONT_SIZE,
   primaryLineHeight = BASE_LINE_HEIGHT,
   forScaleTransform = false,
+  isLastWord = false,
 ): SustainGlyphVisuals {
   "worklet";
-  const activeIntensity = getSustainActiveIntensity(
-    progress,
-    charIdx,
-    totalChars,
-    isSoloMode,
+  void isSoloMode;
+  void forScaleTransform;
+  const duration = Math.max(1, durationMs);
+  let animationDuration = Math.max(1000, duration);
+  let amount = animationDuration / 2000;
+  amount = amount > 1 ? Math.sqrt(amount) : amount ** 3;
+  amount *= 0.6;
+  let blur = animationDuration / 3000;
+  blur = blur > 1 ? Math.sqrt(blur) : blur ** 3;
+  blur *= 0.5;
+  if (isLastWord) {
+    amount *= 1.6;
+    blur *= 1.5;
+    animationDuration *= 1.2;
+  }
+  amount = Math.min(1.2, amount);
+  blur = Math.min(0.8, blur);
+
+  const safeChars = Math.max(1, totalChars);
+  const charDelay = (animationDuration / 2.5 / safeChars) * charIdx;
+  const elapsed = Math.max(0, Math.min(animationDuration, progress * duration - charDelay));
+  const glowProgress = elapsed / animationDuration;
+  const emphasis = getAmlEmphasisEasing(glowProgress);
+
+  const floatDuration = animationDuration * 1.4;
+  const floatElapsed = Math.max(
+    0,
+    Math.min(floatDuration, progress * duration + 400 - charDelay),
   );
-  const glowIntensity = isSoloMode
-    ? activeIntensity
-    : getSustainGlowIntensity(progress, charIdx, totalChars);
-  const scaleBoost = getSustainScaleBoost(durationMs, isBackground);
-  const easedActiveIntensity = smoothstep(activeIntensity);
-  const easedGlowIntensity = smoothstep(glowIntensity);
-  const scale = 1 + scaleBoost * easedActiveIntensity;
+  const floatProgress = floatElapsed / Math.max(1, floatDuration);
+  const floatLift = Math.sin(floatProgress * Math.PI) * (isBackground ? 2 : 1);
+
+  const scale = 1 + emphasis * 0.1 * amount;
   const liftBase = primaryLiftBase;
-  const baseLineHeight = primaryLineHeight;
   const fontSize = liftBase * scale;
-  const lineHeight = baseLineHeight + (fontSize - liftBase) * 2;
-  const lineHeightGrowth = lineHeight - baseLineHeight;
-  const letterLevitation = -0.018 * liftBase * easedActiveIntensity;
-  // ponytail: forScaleTransform uses center-pivot math; false path keeps fontSize-growth compensations for legacy callers
-  const translateX = forScaleTransform ? 0 : -0.29 * liftBase * (scale - 1);
-  const translateY = forScaleTransform
-    ? letterLevitation - (scale - 1) * primaryLineHeight / 2
-    : letterLevitation -
-      lineHeightGrowth * SUSTAIN_LINE_HEIGHT_LIFT_FACTOR -
-      (scale - 1) * liftBase * (isBackground ? 0.18 : 0.22);
-  const opacity = interpolate(
-    easedActiveIntensity,
-    [0, 0.2, 1],
-    [0.82, 0.92, 1],
-  );
-  const glowRadius = getSustainGlowRadius(easedGlowIntensity, isBackground);
+  const lineHeight = primaryLineHeight;
+  const translateX =
+    -emphasis * 0.03 * amount * (safeChars / 2 - charIdx) * liftBase;
+  const translateY =
+    (-emphasis * 0.025 * amount - floatLift * 0.05) * liftBase;
+  const opacity = 1;
+  const glowRadius = Math.min(0.3, blur * 0.3) * liftBase;
+  const glowOpacity = emphasis * blur;
 
   return {
     scale,
@@ -467,6 +526,7 @@ function computeSustainGlyphVisuals(
     translateY,
     opacity,
     glowRadius,
+    glowOpacity,
   };
 }
 
@@ -510,6 +570,7 @@ function computeWordSustainVisuals(
     translateY,
     opacity,
     glowRadius,
+    glowOpacity: activeIntensity,
   };
 }
 
@@ -522,6 +583,8 @@ function getSustainGlyphStyle(
   primaryLiftBase = BASE_FONT_SIZE,
   primaryLineHeight = BASE_LINE_HEIGHT,
   revealHorizontalPad = getScaledPrimaryRevealHorizontalPad(primaryLiftBase),
+  revealProgress = progress,
+  isLastWord = false,
 ) {
   const visuals = computeSustainGlyphVisuals(
     progress,
@@ -532,10 +595,12 @@ function getSustainGlyphStyle(
     false,
     primaryLiftBase,
     primaryLineHeight,
+    false,
+    isLastWord,
   );
 
   return {
-    opacity: getCompletedLayerOpacity(progress, visuals.opacity),
+    opacity: getCompletedLayerOpacity(revealProgress, visuals.opacity),
     fontSize: visuals.fontSize,
     lineHeight: visuals.lineHeight,
     paddingRight: revealHorizontalPad,
@@ -556,6 +621,8 @@ function getBackgroundSustainGlyphStyle(
   mode: "solo" | "letter-sweep" = "letter-sweep",
   bgLiftBase = BG_FONT_SIZE,
   bgLineHeight = BG_LINE_HEIGHT,
+  revealProgress = progress,
+  isLastWord = false,
 ) {
   const visuals = computeSustainGlyphVisuals(
     progress,
@@ -566,10 +633,12 @@ function getBackgroundSustainGlyphStyle(
     true,
     bgLiftBase,
     bgLineHeight,
+    false,
+    isLastWord,
   );
 
   return {
-    opacity: getCompletedLayerOpacity(progress, visuals.opacity),
+    opacity: getCompletedLayerOpacity(revealProgress, visuals.opacity),
     fontSize: bgLiftBase,
     lineHeight: bgLineHeight,
     paddingRight: BG_REVEAL_HORIZONTAL_PAD,
@@ -741,6 +810,16 @@ type SyllableGroup = {
   syllableIndexes: number[];
   clusters: number[][];
   needsTrailingGap: boolean;
+};
+
+type AmlGroupEmphasisMeta = {
+  startTime: number;
+  endTime: number;
+  durationMs: number;
+  charOffset: number;
+  totalChars: number;
+  isLastWord: boolean;
+  mode: "solo" | "letter-sweep";
 };
 
 function shouldAttachToPrevious(text: string, previousText = "") {
@@ -1073,6 +1152,180 @@ function groupSyllablesIntoWords(syllables: LyricSyllable[]): SyllableGroup[] {
   }));
 }
 
+/**
+ * AMLL decides emphasis after `chunkAndSplitLyricWords`: adjacent pieces that
+ * visually form one word share a single start/end envelope, and if either an
+ * individual piece or the merged word qualifies, every character in that
+ * chunk participates in the same staggered emphasis animation. KineSync keeps
+ * provider syllables separate for timestamp-accurate masks, so carry that
+ * merged-word envelope as metadata instead of destructively merging tokens.
+ */
+function buildAmlGroupEmphasisMeta(
+  syllables: LyricSyllable[],
+  groups: SyllableGroup[],
+) {
+  const result = new Map<number, AmlGroupEmphasisMeta>();
+
+  groups.forEach((group, groupIndex) => {
+    if (!group.syllableIndexes.length) return;
+
+    let startTime = Number.POSITIVE_INFINITY;
+    let endTime = Number.NEGATIVE_INFINITY;
+    let mergedText = "";
+    let memberQualifies = false;
+    let totalChars = 0;
+    const charOffsets = new Map<number, number>();
+
+    group.syllableIndexes.forEach((syllableIndex) => {
+      const syllable = syllables[syllableIndex];
+      if (!syllable) return;
+      const rawText = String(syllable.text || "");
+      const trimmedText = rawText.trim();
+      const durationMs = Math.max(1, syllable.endTime - syllable.startTime);
+      startTime = Math.min(startTime, syllable.startTime);
+      endTime = Math.max(endTime, syllable.endTime);
+      mergedText += rawText;
+      memberQualifies ||= getSustainMode(trimmedText, durationMs) !== "none";
+      charOffsets.set(syllableIndex, totalChars);
+      totalChars += getGraphemeCount(trimmedText);
+    });
+
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || totalChars <= 0) {
+      return;
+    }
+
+    const durationMs = Math.max(1, endTime - startTime);
+    const mergedMode = getSustainMode(mergedText.trim(), durationMs);
+    if (!memberQualifies && mergedMode === "none") {
+      return;
+    }
+
+    const mode: "solo" | "letter-sweep" =
+      mergedMode === "solo" ? "solo" : "letter-sweep";
+    const isLastWord = groupIndex === groups.length - 1;
+    group.syllableIndexes.forEach((syllableIndex) => {
+      result.set(syllableIndex, {
+        startTime,
+        endTime,
+        durationMs,
+        charOffset: charOffsets.get(syllableIndex) ?? 0,
+        totalChars,
+        isLastWord,
+        mode,
+      });
+    });
+  });
+
+  return result;
+}
+
+type AmlLineBreakChild = {
+  width: number;
+  text: string;
+  isSpace: boolean;
+};
+
+const AMLL_LINE_BREAK_PUNCTUATION_RE =
+  /[,.;:!?，。；：！？、）】》」』’”)[\]}>~…]$/;
+const AMLL_CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+/** Port of AMLL's `calcBalancedBreaks`, adapted to measured RN flex children. */
+function calcAmlBalancedBreaks(
+  children: AmlLineBreakChild[],
+  containerWidth: number,
+  fullText: string,
+) {
+  const count = children.length;
+  if (count === 0 || containerWidth <= 0) return [] as number[];
+
+  const cjkBoundaries = new Set<number>();
+  const SegmenterCtor = (Intl as unknown as {
+    Segmenter?: new (
+      locales?: string | string[],
+      options?: { granularity: "word" },
+    ) => { segment: (input: string) => Iterable<{ segment: string; isWordLike?: boolean }> };
+  }).Segmenter;
+  if (SegmenterCtor) {
+    const segmenter = new SegmenterCtor(undefined, { granularity: "word" });
+    let offset = 0;
+    for (const part of segmenter.segment(fullText)) {
+      if (offset > 0 && part.isWordLike && AMLL_CJK_RE.test(part.segment)) {
+        cjkBoundaries.add(offset);
+      }
+      offset += part.segment.length;
+    }
+  }
+
+  const charOffsets = new Int32Array(count + 1);
+  const prefixWidth = new Float64Array(count + 1);
+  for (let i = 0; i < count; i += 1) {
+    charOffsets[i + 1] = charOffsets[i] + children[i].text.length;
+    prefixWidth[i + 1] = prefixWidth[i] + children[i].width;
+  }
+  if (prefixWidth[count] <= containerWidth) return [] as number[];
+
+  const overflowPenaltyMultiplier = 1000;
+  const cjkPenalty = (containerWidth * 0.15) ** 2;
+  const normalPenalty = (containerWidth * 0.5) ** 2;
+  const spaceReward = (containerWidth * 0.4) ** 2;
+  const punctuationReward = (containerWidth * 0.6) ** 2;
+  const dp = new Float64Array(count + 1).fill(Number.POSITIVE_INFINITY);
+  const nextBreak = new Int32Array(count + 1).fill(-1);
+  dp[count] = 0;
+
+  for (let i = count - 1; i >= 0; i -= 1) {
+    for (let j = i + 1; j <= count; j += 1) {
+      const width = prefixWidth[j] - prefixWidth[i];
+      let lineCost: number;
+      if (width > containerWidth) {
+        if (j !== i + 1) continue;
+        lineCost = (width - containerWidth) ** 2 * overflowPenaltyMultiplier;
+      } else {
+        lineCost = (containerWidth - width) ** 2;
+      }
+
+      let breakPenalty = 0;
+      if (j < count) {
+        const previousChild = children[j - 1];
+        if (AMLL_LINE_BREAK_PUNCTUATION_RE.test(previousChild.text)) {
+          breakPenalty = -punctuationReward;
+        } else if (previousChild.isSpace) {
+          breakPenalty = -spaceReward;
+        } else if (cjkBoundaries.has(charOffsets[j])) {
+          breakPenalty = cjkPenalty;
+        } else {
+          breakPenalty = normalPenalty;
+        }
+      }
+
+      const totalCost = lineCost + breakPenalty + dp[j];
+      if (totalCost < dp[i]) {
+        dp[i] = totalCost;
+        nextBreak[i] = j;
+      }
+    }
+  }
+
+  const breaks: number[] = [];
+  let cursor = 0;
+  while (cursor < count) {
+    const next = nextBreak[cursor];
+    if (next <= cursor) break;
+    cursor = next;
+    if (cursor > 0 && cursor < count) breaks.push(cursor);
+  }
+  return breaks;
+}
+
+function getSyllableGroupText(
+  syllables: LyricSyllable[],
+  group: SyllableGroup,
+) {
+  return group.syllableIndexes
+    .map((index) => String(syllables[index]?.text || ""))
+    .join("");
+}
+
 function getSyllableDisplayText(text: string) {
   return String(text || "").replace(/\s+$/u, "");
 }
@@ -1108,6 +1361,7 @@ type LyricLineProps = {
   showPauseDotsBefore?: boolean;
   pauseStartMs?: number;
   pauseVisualDurationMs?: number;
+  pauseHoldMs?: number;
   playbackPositionOverrideMs?: number | null;
   onPress?: (line: LyricLineType) => void;
   onLongPress?: (line: LyricLineType) => void;
@@ -1115,6 +1369,9 @@ type LyricLineProps = {
   shouldDrivePlaybackUpdates: boolean;
   fontScale?: number;
   landscapeMode?: boolean;
+  hasDuetLines?: boolean;
+  posYSpringPolicy?: AmlPosYSpringPolicy;
+  groupMotionDelayMs?: number;
 };
 
 function areSyllableArraysEqual(
@@ -1174,11 +1431,20 @@ function areLyricLinePropsEqual(prev: LyricLineProps, next: LyricLineProps) {
     prev.showPauseDotsBefore === next.showPauseDotsBefore &&
     (prev.pauseStartMs ?? 0) === (next.pauseStartMs ?? 0) &&
     (prev.pauseVisualDurationMs ?? 0) === (next.pauseVisualDurationMs ?? 0) &&
+    (prev.pauseHoldMs ?? 0) === (next.pauseHoldMs ?? 0) &&
     prev.playbackPositionOverrideMs === next.playbackPositionOverrideMs &&
     prev.tapEnabled === next.tapEnabled &&
     prev.shouldDrivePlaybackUpdates === next.shouldDrivePlaybackUpdates &&
     (prev.fontScale ?? 1) === (next.fontScale ?? 1) &&
     Boolean(prev.landscapeMode) === Boolean(next.landscapeMode) &&
+    Boolean(prev.hasDuetLines) === Boolean(next.hasDuetLines) &&
+    (prev.posYSpringPolicy?.mass ?? AMLL_DEFAULT_POS_Y_SPRING.mass) ===
+      (next.posYSpringPolicy?.mass ?? AMLL_DEFAULT_POS_Y_SPRING.mass) &&
+    (prev.posYSpringPolicy?.damping ?? AMLL_DEFAULT_POS_Y_SPRING.damping) ===
+      (next.posYSpringPolicy?.damping ?? AMLL_DEFAULT_POS_Y_SPRING.damping) &&
+    (prev.posYSpringPolicy?.stiffness ?? AMLL_DEFAULT_POS_Y_SPRING.stiffness) ===
+      (next.posYSpringPolicy?.stiffness ?? AMLL_DEFAULT_POS_Y_SPRING.stiffness) &&
+    (prev.groupMotionDelayMs ?? 0) === (next.groupMotionDelayMs ?? 0) &&
     prev.onPress === next.onPress &&
     prev.onLongPress === next.onLongPress
   );
@@ -1197,6 +1463,7 @@ export const LyricLine = memo(function LyricLine({
   showPauseDotsBefore = false,
   pauseStartMs = 0,
   pauseVisualDurationMs = 0,
+  pauseHoldMs = 0,
   playbackPositionOverrideMs = null,
   onPress,
   onLongPress,
@@ -1204,9 +1471,19 @@ export const LyricLine = memo(function LyricLine({
   shouldDrivePlaybackUpdates,
   fontScale = 1,
   landscapeMode = false,
+  hasDuetLines = false,
+  posYSpringPolicy = AMLL_DEFAULT_POS_Y_SPRING,
+  groupMotionDelayMs = 0,
 }: LyricLineProps) {
-  const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * fontScale;
-  const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const amllResponsiveBaseFontSize =
+    viewportWidth <= 768
+      ? Math.max(viewportWidth * 0.08, 12)
+      : Math.max(viewportHeight * 0.05, viewportWidth * 0.025, 12);
+  const resolvedFontScale =
+    fontScale * (amllResponsiveBaseFontSize / BASE_FONT_SIZE);
+  const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * resolvedFontScale;
+  const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * resolvedFontScale;
   const scaledLineTextStyle = useMemo(
     () => ({
       fontSize: lineFontSize,
@@ -1217,6 +1494,9 @@ export const LyricLine = memo(function LyricLine({
   const bgEnd = line.backgroundSyllables?.length
     ? line.backgroundSyllables[line.backgroundSyllables.length - 1].endTime
     : 0;
+  const bgStart = line.backgroundSyllables?.[0]?.startTime ?? Number.POSITIVE_INFINITY;
+  const mainStart = line.syllables?.[0]?.startTime ?? line.lineStartTime;
+  const backgroundComesFirst = bgStart < mainStart;
   const hasBgExtension = bgEnd > line.lineEndTime;
   const shouldPrewarmNativeReveal =
     shouldDrivePlaybackUpdates &&
@@ -1285,6 +1565,7 @@ export const LyricLine = memo(function LyricLine({
   );
 
   const visuallyActive = isActive || bgStillActive;
+  const globallyPlaying = usePlaybackStore((state) => state.isPlaying);
   const inactiveOpacity = getInactiveOpacity(inactiveOpacityDistance);
   const shouldAnimateRevealSweep = isPlaying && shouldUseNativeRevealTree;
   const nativeRevealPlaybackPosition = useMemo(
@@ -1299,7 +1580,11 @@ export const LyricLine = memo(function LyricLine({
   const [tokenWidths, setTokenWidths] = useState<Record<number, number>>({});
   const pendingTokenWidthsRef = useRef<Record<number, number>>({});
   const tokenWidthFlushFrameRef = useRef<number | null>(null);
-  const scaleAnim = useSharedValue(visuallyActive ? SCALE_TRANSFORM_ACTIVE : SCALE_TRANSFORM_INACTIVE);
+  const scaleAnim = useSharedValue(
+    visuallyActive || !globallyPlaying
+      ? SCALE_TRANSFORM_ACTIVE
+      : SCALE_TRANSFORM_INACTIVE,
+  );
   const opacityAnim = useSharedValue(
     visuallyActive ? OPACITY_ACTIVE : getInactiveOpacity(inactiveOpacityDistance),
   );
@@ -1307,22 +1592,24 @@ export const LyricLine = memo(function LyricLine({
 
   useEffect(() => {
     scaleAnim.value = withSpring(
-      visuallyActive ? SCALE_TRANSFORM_ACTIVE : SCALE_TRANSFORM_INACTIVE,
+      visuallyActive || !globallyPlaying
+        ? SCALE_TRANSFORM_ACTIVE
+        : SCALE_TRANSFORM_INACTIVE,
       AMLL_LINE_SPRING,
     );
-  }, [visuallyActive, scaleAnim]);
+  }, [globallyPlaying, visuallyActive, scaleAnim]);
 
   useEffect(() => {
-    opacityAnim.value = withTiming(
-      visuallyActive ? OPACITY_ACTIVE : inactiveOpacity,
-      { easing: ReanimatedEasing.bezier(0.61, 1, 0.88, 1) },
-    );
+    opacityAnim.value = withTiming(visuallyActive ? OPACITY_ACTIVE : inactiveOpacity, {
+      duration: 400,
+      easing: ReanimatedEasing.ease,
+    });
   }, [inactiveOpacity, visuallyActive, opacityAnim]);
 
   useEffect(() => {
     blurAnim.value = withTiming(Math.max(0, Math.min(5, blurAmount)), {
       duration: 400,
-      easing: ReanimatedEasing.out(ReanimatedEasing.ease),
+      easing: ReanimatedEasing.ease,
     });
   }, [blurAmount, blurAnim]);
 
@@ -1354,13 +1641,10 @@ export const LyricLine = memo(function LyricLine({
     line.backgroundTranslatedText || "",
   ).trim();
   const isOppositeAligned = Boolean(line.oppositeAligned);
-  const alignRight = landscapeMode ? !isOppositeAligned : isOppositeAligned;
-  const textLaneWidth = landscapeMode
-    ? LANDSCAPE_LYRIC_TEXT_LANE_WIDTH
-    : LYRIC_TEXT_LANE_WIDTH;
-  const lineInnerPaddingHorizontal = landscapeMode
-    ? LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE
-    : LINE_INNER_PADDING_HORIZONTAL;
+  const alignRight = isOppositeAligned;
+  const textLaneWidth = hasDuetLines ? "85%" : LYRIC_TEXT_LANE_WIDTH;
+  const lineInnerPaddingHorizontal =
+    viewportWidth <= 500 ? LINE_INNER_PADDING_HORIZONTAL : lineFontSize;
   const translatedColor = "rgba(255,255,255,0.30)";
   const onPressLine = tapEnabled ? () => onPress?.(line) : undefined;
   const onLongPressLine = onLongPress ? () => onLongPress(line) : undefined;
@@ -1407,6 +1691,11 @@ export const LyricLine = memo(function LyricLine({
     () => groupSyllablesIntoWords(line.syllables),
     [line.syllables],
   );
+  const emphasisMetaBySyllable = useMemo(
+    () => buildAmlGroupEmphasisMeta(line.syllables, syllableGroups),
+    [line.syllables, syllableGroups],
+  );
+  const [groupWidths, setGroupWidths] = useState<Record<number, number>>({});
   const usesTimedSpacingLayout = useMemo(
     () => usesTimedTokenSpacing(line.syllables),
     [line.syllables],
@@ -1426,14 +1715,36 @@ export const LyricLine = memo(function LyricLine({
   );
   useEffect(() => {
     setLaneWidthPx(0);
-  }, [line.lineStartTime, line.lineEndTime, textLaneWidth]);
+    setGroupWidths({});
+  }, [line.lineStartTime, line.lineEndTime, lineFontSize, textLaneWidth]);
+  const balancedBreakIndexes = useMemo(() => {
+    const laneFraction = hasDuetLines ? 0.85 : 1;
+    const availableWidth = laneWidthPx * laneFraction;
+    if (
+      availableWidth <= 0 ||
+      syllableGroups.length <= 1 ||
+      syllableGroups.some((_, index) => !(groupWidths[index] > 0))
+    ) {
+      return new Set<number>();
+    }
+    const children = syllableGroups.map((group, index) => {
+      const text = getSyllableGroupText(line.syllables, group);
+      return {
+        width: groupWidths[index],
+        text,
+        isSpace: text.trim().length === 0,
+      };
+    });
+    const fullText = children.map((child) => child.text).join("");
+    return new Set(calcAmlBalancedBreaks(children, availableWidth, fullText));
+  }, [groupWidths, hasDuetLines, laneWidthPx, line.syllables, syllableGroups]);
   const translatedTextWidthStyle = useMemo(() => {
     if (laneWidthPx <= 0) {
       return { width: textLaneWidth as number | `${number}%` };
     }
-    const laneFraction = landscapeMode ? 0.9 : 0.88;
+    const laneFraction = hasDuetLines ? 0.85 : 1;
     return { width: Math.round(laneWidthPx * laneFraction) };
-  }, [laneWidthPx, landscapeMode, textLaneWidth]);
+  }, [hasDuetLines, laneWidthPx, textLaneWidth]);
   const lineAnimStyle = useAnimatedStyle(
     () => ({
       opacity: opacityAnim.value,
@@ -1450,33 +1761,37 @@ export const LyricLine = memo(function LyricLine({
     () => [
       styles.lineOuter as ViewStyle,
       landscapeMode && (styles.lineOuterLandscape as ViewStyle),
-      fontScale !== 1 && ({ minHeight: 84 * fontScale } as ViewStyle),
+      ({ minHeight: 72 * resolvedFontScale } as ViewStyle),
     ] as ViewStyle[],
-    [fontScale, landscapeMode],
+    [landscapeMode, resolvedFontScale],
   );
   const toneOpacity =
     pauseTone === "future" ? 0.76 : pauseTone === "past" ? 0.94 : 1;
 
   return (
-    <Reanimated.View style={[...containerStyle, lineAnimStyle]}>
+    <View style={containerStyle}>
       {showPauseDotsBefore && (
         <PauseDots
           alignRight={alignRight}
           pauseStartMs={pauseStartMs}
           pauseVisualDurationMs={pauseVisualDurationMs}
+          pauseHoldMs={pauseHoldMs}
+          playbackPositionOverrideMs={playbackPositionOverrideMs}
           fontSize={lineFontSize}
           edgeInset={lineInnerPaddingHorizontal}
         />
       )}
-      <Pressable
-        onLongPress={onLongPressLine}
-        onPress={onPressLine}
-        style={({ pressed }) => [
-          styles.linePressable as ViewStyle,
-          isSelected && (styles.lineSelected as ViewStyle),
-          pressed && (styles.linePressed as ViewStyle),
-        ]}
-      >
+      <Reanimated.View style={lineAnimStyle}>
+        <Pressable
+          onLongPress={onLongPressLine}
+          onPress={onPressLine}
+          style={({ pressed }) => [
+            styles.linePressable as ViewStyle,
+            { paddingVertical: lineFontSize * 0.4 } as ViewStyle,
+            isSelected && (styles.lineSelected as ViewStyle),
+            pressed && (styles.linePressed as ViewStyle),
+          ]}
+        >
         <View
           style={[
             styles.lineInner as ViewStyle,
@@ -1487,6 +1802,25 @@ export const LyricLine = memo(function LyricLine({
             } as ViewStyle,
           ] as ViewStyle[]}
         >
+          {!!line.backgroundSyllables?.length && backgroundComesFirst && (
+            <BackgroundVocals
+              syllables={line.backgroundSyllables}
+              translatedText={
+                showTranslatedText ? backgroundTranslatedText : ""
+              }
+              parentIsActive={isActive}
+              parentIsPast={isPast}
+              parentBgStillActive={bgStillActive}
+              parentShouldPrewarmNativeReveal={shouldPrewarmNativeReveal}
+              playbackPositionOverrideMs={playbackPositionOverrideMs}
+              alignRight={alignRight}
+              textLaneWidth={textLaneWidth}
+              fontScale={resolvedFontScale}
+              precedesMain
+              posYSpringPolicy={posYSpringPolicy}
+              groupMotionDelayMs={groupMotionDelayMs}
+            />
+          )}
           <View
             onLayout={handleLaneLayout}
             style={[
@@ -1509,14 +1843,28 @@ export const LyricLine = memo(function LyricLine({
               ] as ViewStyle[]}
             >
               {syllableGroups.map((group, groupIdx) => (
-                <View
-                  // Group syllables into a flex item, then wrap only at safe clusters.
-                  key={`${line.lineStartTime}-word-${groupIdx}`}
-                  style={[
-                    styles.wordWrap as ViewStyle,
-                    usesTimedSpacingLayout && (styles.wordWrapPhrase as ViewStyle),
-                  ] as ViewStyle[]}
-                >
+                <Fragment key={`${line.lineStartTime}-word-${groupIdx}`}>
+                  {balancedBreakIndexes.has(groupIdx) && (
+                    <View style={styles.forcedLineBreak as ViewStyle} />
+                  )}
+                  <View
+                    // AMLL balances measured wrapper widths before applying
+                    // explicit line breaks. Keep each word wrapper indivisible
+                    // here so the DP break decisions remain authoritative.
+                    onLayout={(event) => {
+                      const width = event.nativeEvent.layout.width;
+                      if (!Number.isFinite(width) || width <= 0) return;
+                      setGroupWidths((previous) =>
+                        Math.abs((previous[groupIdx] ?? 0) - width) < 0.5
+                          ? previous
+                          : { ...previous, [groupIdx]: width },
+                      );
+                    }}
+                    style={[
+                      styles.wordWrap as ViewStyle,
+                      usesTimedSpacingLayout && (styles.wordWrapPhrase as ViewStyle),
+                    ] as ViewStyle[]}
+                  >
                   {alignRight &&
                     groupNeedsLeadingGap(
                       syllableGroups,
@@ -1592,10 +1940,10 @@ export const LyricLine = memo(function LyricLine({
                           1,
                           syl.endTime - syl.startTime,
                         );
-                        const sustainMode = getSustainMode(
-                          renderedText,
-                          tokenDurationMs,
-                        );
+                        const emphasisMeta = emphasisMetaBySyllable.get(idx);
+                        const sustainMode =
+                          emphasisMeta?.mode ??
+                          getSustainMode(renderedText, tokenDurationMs);
                         const hasSustainEffect = isSustainMode(sustainMode);
                         const glyphSustainMode =
                           sustainMode === "solo" ||
@@ -1603,7 +1951,11 @@ export const LyricLine = memo(function LyricLine({
                             ? sustainMode
                             : "letter-sweep";
                         const regularRiseY = getPrimaryTokenRiseY(
-                          progress,
+                          getAmlWordFloatProgress(
+                            playbackPosition,
+                            syl.startTime,
+                            syl.endTime,
+                          ),
                           lineFontSize,
                         );
 
@@ -1665,6 +2017,11 @@ export const LyricLine = memo(function LyricLine({
                               shouldMeasure={shouldMeasure}
                               textWeight={textWeight}
                               sustainMode={glyphSustainMode}
+                              emphasisMeta={emphasisMeta}
+                              isLastWord={
+                                emphasisMeta?.isLastWord ??
+                                idx === line.syllables.length - 1
+                              }
                               lineFontSize={lineFontSize}
                               lineLineHeight={lineLineHeight}
                               onMeasure={(width) => setTokenWidth(idx, width)}
@@ -1724,15 +2081,25 @@ export const LyricLine = memo(function LyricLine({
                             return (
                               <View style={styles.sustainRow}>
                                 {renderedChars.map((char, charIdx) => {
+                                  const motionProgress = emphasisMeta
+                                    ? getSyllableProgress(
+                                        playbackPosition,
+                                        emphasisMeta.startTime,
+                                        emphasisMeta.endTime,
+                                      )
+                                    : progress;
                                   const style = getSustainGlyphStyle(
-                                    progress,
-                                    charIdx,
-                                    renderedChars.length,
-                                    tokenDurationMs,
+                                    motionProgress,
+                                    (emphasisMeta?.charOffset ?? 0) + charIdx,
+                                    emphasisMeta?.totalChars ?? renderedChars.length,
+                                    emphasisMeta?.durationMs ?? tokenDurationMs,
                                     glyphSustainMode,
                                     lineFontSize,
                                     lineLineHeight,
                                     getScaledPrimaryRevealHorizontalPad(lineFontSize),
+                                    progress,
+                                    emphasisMeta?.isLastWord ??
+                                      idx === line.syllables.length - 1,
                                   );
                                   return (
                                     <View
@@ -1857,11 +2224,28 @@ export const LyricLine = memo(function LyricLine({
                   {!alignRight && group.needsTrailingGap && (
                     <Text style={styles.gapText}> </Text>
                   )}
-                </View>
+                  </View>
+                </Fragment>
               ))}
             </View>
           </View>
-          {!!line.backgroundSyllables?.length && (
+          {!!translatedText && showTranslatedText && (
+            <Text
+              style={[
+                styles.translatedText,
+                {
+                  color: translatedColor,
+                  fontSize: BASE_FONT_SIZE * 0.5 * resolvedFontScale,
+                  lineHeight: BASE_FONT_SIZE * 0.75 * resolvedFontScale,
+                  ...translatedTextWidthStyle,
+                },
+                alignRight && styles.translatedTextOpposite,
+              ]}
+            >
+              {translatedText}
+            </Text>
+          )}
+          {!!line.backgroundSyllables?.length && !backgroundComesFirst && (
             <BackgroundVocals
               syllables={line.backgroundSyllables}
               translatedText={
@@ -1874,38 +2258,27 @@ export const LyricLine = memo(function LyricLine({
               playbackPositionOverrideMs={playbackPositionOverrideMs}
               alignRight={alignRight}
               textLaneWidth={textLaneWidth}
-              fontScale={fontScale}
+              fontScale={resolvedFontScale}
+              posYSpringPolicy={posYSpringPolicy}
+              groupMotionDelayMs={groupMotionDelayMs}
             />
-          )}
-          {!!translatedText && showTranslatedText && (
-            <Text
-              style={[
-                styles.translatedText,
-                {
-                  color: translatedColor,
-                  fontSize: BASE_FONT_SIZE * 0.5 * fontScale,
-                  lineHeight: BASE_FONT_SIZE * 0.75 * fontScale,
-                  ...translatedTextWidthStyle,
-                },
-                alignRight && styles.translatedTextOpposite,
-              ]}
-            >
-              {translatedText}
-            </Text>
           )}
           </View>
         </View>
-      </Pressable>
+        </Pressable>
+      </Reanimated.View>
       {showPauseDotsAfter && (
         <PauseDots
           alignRight={alignRight}
           pauseStartMs={pauseStartMs}
           pauseVisualDurationMs={pauseVisualDurationMs}
+          pauseHoldMs={pauseHoldMs}
+          playbackPositionOverrideMs={playbackPositionOverrideMs}
           fontSize={lineFontSize}
           edgeInset={lineInnerPaddingHorizontal}
         />
       )}
-    </Reanimated.View>
+    </View>
   );
 }, areLyricLinePropsEqual);
 
@@ -1919,6 +2292,8 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   shouldMeasure,
   textWeight,
   sustainMode,
+  emphasisMeta,
+  isLastWord = false,
   lineFontSize = BASE_FONT_SIZE,
   lineLineHeight = BASE_LINE_HEIGHT,
   revealClipStyle,
@@ -1934,6 +2309,8 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   shouldMeasure: boolean;
   textWeight: "800";
   sustainMode: "solo" | "letter-sweep";
+  emphasisMeta?: AmlGroupEmphasisMeta;
+  isLastWord?: boolean;
   lineFontSize?: number;
   lineLineHeight?: number;
   revealClipStyle?: { height: number };
@@ -1943,9 +2320,19 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   const progress = useSharedValue(
     getSyllableProgress(playbackPosition, startTime, endTime),
   );
+  const floatProgress = useAmlWordFloatProgress(
+    playbackPosition,
+    startTime,
+    endTime,
+    isPlaying,
+  );
+  const motionStartTime = emphasisMeta?.startTime ?? startTime;
+  const motionEndTime = emphasisMeta?.endTime ?? endTime;
+  const motionDurationMs = Math.max(1, motionEndTime - motionStartTime);
+  const motionProgress = useSharedValue(
+    getSyllableProgress(playbackPosition, motionStartTime, motionEndTime),
+  );
   const renderedChars = useMemo(() => getGraphemes(text), [text]);
-  const tokenDurationMs = Math.max(1, endTime - startTime);
-
   useEffect(() => {
     const easing = getGraphemeCount(text) <= 2
       ? ReanimatedEasing.linear
@@ -1958,7 +2345,24 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
       isPlaying,
       easing,
     );
-  }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+  }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
+
+  useEffect(() => {
+    syncRevealProgress(
+      motionProgress,
+      playbackPosition,
+      motionStartTime,
+      motionEndTime,
+      isPlaying,
+      ReanimatedEasing.linear,
+    );
+  }, [
+    isPlaying,
+    motionEndTime,
+    motionProgress,
+    motionStartTime,
+    playbackPosition,
+  ]);
 
   // Soft edge + solid progress only (mid layer dropped — same look, fewer UI nodes)
   const softRevealStyle = useAnimatedStyle(() => {
@@ -1981,7 +2385,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   }));
   const tokenRiseStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateY: getPrimaryTokenRiseY(progress.value, lineFontSize) },
+      { translateY: getPrimaryTokenRiseY(floatProgress.value, lineFontSize) },
     ],
   }));
 
@@ -1994,13 +2398,15 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
         <View key={`${color}-${charIdx}`} style={styles.sustainGlyphSlot}>
           <PrimarySustainGlyph
             char={char}
-            charIdx={charIdx}
-            totalChars={renderedChars.length}
-            durationMs={tokenDurationMs}
+            charIdx={(emphasisMeta?.charOffset ?? 0) + charIdx}
+            totalChars={emphasisMeta?.totalChars ?? renderedChars.length}
+            durationMs={motionDurationMs}
             color={color}
             textWeight={textWeight}
             sustainMode={sustainMode}
-            progress={progress}
+            isLastWord={isLastWord}
+            progress={motionProgress}
+            revealProgress={progress}
             layer={layer}
             canHidePending={tokenWidth > 0}
             lineFontSize={lineFontSize}
@@ -2064,7 +2470,9 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   color,
   textWeight,
   sustainMode,
+  isLastWord = false,
   progress,
+  revealProgress,
   layer,
   canHidePending,
   lineFontSize = BASE_FONT_SIZE,
@@ -2078,7 +2486,9 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   color: string;
   textWeight: "800";
   sustainMode: "solo" | "letter-sweep";
+  isLastWord?: boolean;
   progress: SharedValue<number>;
+  revealProgress: SharedValue<number>;
   layer: "pending" | "soft" | "progress";
   canHidePending: boolean;
   lineFontSize?: number;
@@ -2097,6 +2507,7 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
   // Prefer transform scale over animated fontSize/lineHeight (layout thrash).
   const animatedStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.value));
+    const revealP = Math.max(0, Math.min(1, revealProgress.value));
     const visuals = computeSustainGlyphVisuals(
       p,
       charIdx,
@@ -2107,16 +2518,20 @@ const PrimarySustainGlyph = memo(function PrimarySustainGlyph({
       lineFontSize,
       lineLineHeight,
       true,
+      isLastWord,
     );
     const resolvedOpacity =
       layer === "pending" && canHidePending
-        ? visuals.opacity * Math.max(0, Math.min(1, (1 - p) / 0.035))
-        : getCompletedLayerOpacity(p, visuals.opacity);
+        ? visuals.opacity * Math.max(0, Math.min(1, (1 - revealP) / 0.035))
+        : getCompletedLayerOpacity(revealP, visuals.opacity);
     const glow = visuals.glowRadius;
 
     return {
       opacity: resolvedOpacity,
-      textShadowColor: glow > 0.35 ? SUSTAIN_GLOW_COLOR : "transparent",
+      textShadowColor:
+        glow > 0.01
+          ? `rgba(255,255,255,${Math.max(0, Math.min(1, visuals.glowOpacity))})`
+          : "transparent",
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: glow > 0.35 ? glow : 0,
       transform: [
@@ -2193,8 +2608,13 @@ const PrimaryWordSustainRevealToken = memo(
     const progress = useSharedValue(
       getSyllableProgress(playbackPosition, startTime, endTime),
     );
+    const floatProgress = useAmlWordFloatProgress(
+      playbackPosition,
+      startTime,
+      endTime,
+      isPlaying,
+    );
     const tokenDurationMs = Math.max(1, endTime - startTime);
-
     useEffect(() => {
       const easing = getGraphemeCount(text) <= 2
         ? ReanimatedEasing.linear
@@ -2207,7 +2627,7 @@ const PrimaryWordSustainRevealToken = memo(
         isPlaying,
         easing,
       );
-    }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+    }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
     const wordMotionStyle = useAnimatedStyle(() => {
       const p = Math.max(0, Math.min(1, progress.value));
@@ -2273,7 +2693,7 @@ const PrimaryWordSustainRevealToken = memo(
     }));
     const tokenRiseStyle = useAnimatedStyle(() => ({
       transform: [
-        { translateY: getPrimaryTokenRiseY(progress.value, lineFontSize) },
+        { translateY: getPrimaryTokenRiseY(floatProgress.value, lineFontSize) },
       ],
     }));
 
@@ -2372,6 +2792,12 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
   const progress = useSharedValue(
     getSyllableProgress(playbackPosition, startTime, endTime),
   );
+  const floatProgress = useAmlWordFloatProgress(
+    playbackPosition,
+    startTime,
+    endTime,
+    isPlaying,
+  );
 
   useEffect(() => {
     const easing = getGraphemeCount(text) <= 2
@@ -2385,14 +2811,14 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
       isPlaying,
       easing,
     );
-  }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+  }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
   const displayWidth =
     tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
   const fadeLeadWidth = lineLineHeight * AMLL_WORD_FADE_WIDTH;
   const tokenRiseStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateY: getPrimaryTokenRiseY(progress.value, lineFontSize) },
+      { translateY: getPrimaryTokenRiseY(floatProgress.value, lineFontSize) },
     ],
   }));
   const softRevealStyle = useAnimatedStyle(() => {
@@ -2516,6 +2942,12 @@ const BackgroundRevealSweepToken = memo(function BackgroundRevealSweepToken({
   const progress = useSharedValue(
     getSyllableProgress(playbackPosition, startTime, endTime),
   );
+  const floatProgress = useAmlWordFloatProgress(
+    playbackPosition,
+    startTime,
+    endTime,
+    isPlaying,
+  );
 
   useEffect(() => {
     const easing = getGraphemeCount(text) <= 2
@@ -2529,13 +2961,15 @@ const BackgroundRevealSweepToken = memo(function BackgroundRevealSweepToken({
       isPlaying,
       easing,
     );
-  }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+  }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
   const displayWidth =
     tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
   const fadeLeadWidth = lineLineHeight * AMLL_WORD_FADE_WIDTH;
   const tokenRiseStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: getBackgroundTokenRiseY(progress.value, lineFontSize) }],
+    transform: [
+      { translateY: getBackgroundTokenRiseY(floatProgress.value, lineFontSize) },
+    ],
   }));
   const softRevealStyle = useAnimatedStyle(() => ({
     width: getRevealClipWidth(
@@ -2647,6 +3081,8 @@ const BackgroundSustainRevealToken = memo(
     tokenWidth,
     shouldMeasure,
     sustainMode,
+    emphasisMeta,
+    isLastWord = false,
     lineFontSize = BG_FONT_SIZE,
     lineLineHeight = BG_LINE_HEIGHT,
     onMeasure,
@@ -2659,6 +3095,8 @@ const BackgroundSustainRevealToken = memo(
     tokenWidth: number;
     shouldMeasure: boolean;
     sustainMode: "solo" | "letter-sweep";
+    emphasisMeta?: AmlGroupEmphasisMeta;
+    isLastWord?: boolean;
     lineFontSize?: number;
     lineLineHeight?: number;
     onMeasure: (width: number) => void;
@@ -2666,8 +3104,19 @@ const BackgroundSustainRevealToken = memo(
     const progress = useSharedValue(
       getSyllableProgress(playbackPosition, startTime, endTime),
     );
+    const floatProgress = useAmlWordFloatProgress(
+      playbackPosition,
+      startTime,
+      endTime,
+      isPlaying,
+    );
+    const motionStartTime = emphasisMeta?.startTime ?? startTime;
+    const motionEndTime = emphasisMeta?.endTime ?? endTime;
+    const motionDurationMs = Math.max(1, motionEndTime - motionStartTime);
+    const motionProgress = useSharedValue(
+      getSyllableProgress(playbackPosition, motionStartTime, motionEndTime),
+    );
     const renderedChars = useMemo(() => getGraphemes(text), [text]);
-    const tokenDurationMs = Math.max(1, endTime - startTime);
 
     useEffect(() => {
       const easing = getGraphemeCount(text) <= 2
@@ -2681,7 +3130,24 @@ const BackgroundSustainRevealToken = memo(
         isPlaying,
         easing,
       );
-    }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+    }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
+
+    useEffect(() => {
+      syncRevealProgress(
+        motionProgress,
+        playbackPosition,
+        motionStartTime,
+        motionEndTime,
+        isPlaying,
+        ReanimatedEasing.linear,
+      );
+    }, [
+      isPlaying,
+      motionEndTime,
+      motionProgress,
+      motionStartTime,
+      playbackPosition,
+    ]);
 
     const displayWidth =
       tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
@@ -2711,7 +3177,7 @@ const BackgroundSustainRevealToken = memo(
     }));
     const tokenRiseStyle = useAnimatedStyle(() => ({
       transform: [
-        { translateY: getBackgroundTokenRiseY(progress.value, lineFontSize) },
+        { translateY: getBackgroundTokenRiseY(floatProgress.value, lineFontSize) },
       ],
     }));
 
@@ -2721,12 +3187,14 @@ const BackgroundSustainRevealToken = memo(
           <View key={`${color}-${charIdx}`} style={styles.sustainGlyphSlot}>
             <BackgroundSustainGlyph
               char={char}
-              charIdx={charIdx}
-              totalChars={renderedChars.length}
-              durationMs={tokenDurationMs}
+              charIdx={(emphasisMeta?.charOffset ?? 0) + charIdx}
+              totalChars={emphasisMeta?.totalChars ?? renderedChars.length}
+              durationMs={motionDurationMs}
               color={color}
               sustainMode={sustainMode}
-              progress={progress}
+              isLastWord={isLastWord}
+              progress={motionProgress}
+              revealProgress={progress}
               lineFontSize={lineFontSize}
               lineLineHeight={lineLineHeight}
             />
@@ -2817,6 +3285,12 @@ const BackgroundWordSustainRevealToken = memo(
     const progress = useSharedValue(
       getSyllableProgress(playbackPosition, startTime, endTime),
     );
+    const floatProgress = useAmlWordFloatProgress(
+      playbackPosition,
+      startTime,
+      endTime,
+      isPlaying,
+    );
     const tokenDurationMs = Math.max(1, endTime - startTime);
 
     useEffect(() => {
@@ -2831,7 +3305,7 @@ const BackgroundWordSustainRevealToken = memo(
         isPlaying,
         easing,
       );
-    }, [endTime, isPlaying, playbackPosition, progress, startTime]);
+    }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
     const displayWidth =
       tokenWidth > 0 ? tokenWidth : estimateTokenWidth(text, lineFontSize);
@@ -2898,7 +3372,7 @@ const BackgroundWordSustainRevealToken = memo(
     }));
     const tokenRiseStyle = useAnimatedStyle(() => ({
       transform: [
-        { translateY: getBackgroundTokenRiseY(progress.value, lineFontSize) },
+        { translateY: getBackgroundTokenRiseY(floatProgress.value, lineFontSize) },
       ],
     }));
 
@@ -2977,7 +3451,9 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
   durationMs,
   color,
   sustainMode,
+  isLastWord = false,
   progress,
+  revealProgress,
   lineFontSize = BG_FONT_SIZE,
   lineLineHeight = BG_LINE_HEIGHT,
 }: {
@@ -2987,13 +3463,16 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
   durationMs: number;
   color: string;
   sustainMode: "solo" | "letter-sweep";
+  isLastWord?: boolean;
   progress: SharedValue<number>;
+  revealProgress: SharedValue<number>;
   lineFontSize?: number;
   lineLineHeight?: number;
 }) {
   const isSoloMode = sustainMode === "solo";
   const animatedStyle = useAnimatedStyle(() => {
     const p = Math.max(0, Math.min(1, progress.value));
+    const revealP = Math.max(0, Math.min(1, revealProgress.value));
     const visuals = computeSustainGlyphVisuals(
       p,
       charIdx,
@@ -3004,13 +3483,14 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
       lineFontSize,
       lineLineHeight,
       true,
+      isLastWord,
     );
 
     return {
-      opacity: getCompletedLayerOpacity(p, visuals.opacity),
+      opacity: getCompletedLayerOpacity(revealP, visuals.opacity),
       fontSize: lineFontSize,
       lineHeight: lineLineHeight,
-      textShadowColor: SUSTAIN_GLOW_COLOR_BG,
+      textShadowColor: `rgba(255,255,255,${Math.max(0, Math.min(1, visuals.glowOpacity))})`,
       textShadowOffset: { width: 0, height: 0 },
       textShadowRadius: visuals.glowRadius,
       transform: [
@@ -3058,6 +3538,9 @@ const BackgroundVocals = memo(function BackgroundVocals({
   parentShouldPrewarmNativeReveal,
   playbackPositionOverrideMs = null,
   fontScale = 1,
+  precedesMain = false,
+  posYSpringPolicy = AMLL_DEFAULT_POS_Y_SPRING,
+  groupMotionDelayMs = 0,
 }: {
   syllables: LyricSyllable[];
   translatedText?: string;
@@ -3069,6 +3552,9 @@ const BackgroundVocals = memo(function BackgroundVocals({
   parentShouldPrewarmNativeReveal: boolean;
   playbackPositionOverrideMs?: number | null;
   fontScale?: number;
+  precedesMain?: boolean;
+  posYSpringPolicy?: AmlPosYSpringPolicy;
+  groupMotionDelayMs?: number;
 }) {
   const bgFontSize = BG_FONT_SIZE * SCALE_ACTIVE * fontScale;
   const bgLineHeight = BG_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
@@ -3087,6 +3573,10 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const syllableGroups = useMemo(
     () => groupSyllablesIntoWords(syllables),
     [syllables],
+  );
+  const emphasisMetaBySyllable = useMemo(
+    () => buildAmlGroupEmphasisMeta(syllables, syllableGroups),
+    [syllables, syllableGroups],
   );
   const shouldUseNativeBackgroundReveal =
     playbackPositionOverrideMs == null &&
@@ -3151,22 +3641,89 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const globallyPlaying = usePlaybackStore((state) => state.isPlaying);
   const bgPresented = parentIsActive || parentBgStillActive || !globallyPlaying;
   const bgScale = useSharedValue(bgPresented ? 1 : 0.75);
-  const bgSlideY = useSharedValue(bgPresented ? 0 : -80);
+  const hiddenSlideY = precedesMain ? 80 : -80;
+  const bgSlideY = useSharedValue(bgPresented ? 0 : hiddenSlideY);
   const bgOpacity = useSharedValue(bgPresented ? 1 : 0);
+  const [bgMeasuredHeight, setBgMeasuredHeight] = useState(0);
+  const [bgMeasuredWidth, setBgMeasuredWidth] = useState(0);
+  const [bgGroupWidths, setBgGroupWidths] = useState<Record<number, number>>({});
+  const balancedBgBreakIndexes = useMemo(() => {
+    if (
+      bgMeasuredWidth <= 0 ||
+      syllableGroups.length <= 1 ||
+      syllableGroups.some((_, index) => !(bgGroupWidths[index] > 0))
+    ) {
+      return new Set<number>();
+    }
+    const children = syllableGroups.map((group, index) => {
+      const text = getSyllableGroupText(syllables, group);
+      return {
+        width: bgGroupWidths[index],
+        text,
+        isSpace: text.trim().length === 0,
+      };
+    });
+    return new Set(
+      calcAmlBalancedBreaks(
+        children,
+        bgMeasuredWidth,
+        children.map((child) => child.text).join(""),
+      ),
+    );
+  }, [bgGroupWidths, bgMeasuredWidth, syllableGroups, syllables]);
 
   useEffect(() => {
-    bgScale.value = withSpring(bgPresented ? 1 : 0.75, AMLL_BG_SPRING);
-    bgSlideY.value = withSpring(bgPresented ? 0 : -80, AMLL_BG_SPRING);
+    const scaleAnimation = withSpring(
+      bgPresented ? 1 : 0.75,
+      AMLL_BG_SPRING,
+    );
+    const slideAnimation = withSpring(
+      bgPresented ? 0 : hiddenSlideY,
+      posYSpringPolicy,
+    );
+    // Upstream staggers the group posY/bgSlideY spring, not the line-scale
+    // spring. bgScale starts immediately with its dedicated 50/20 policy.
+    bgScale.value = scaleAnimation;
+    bgSlideY.value =
+      groupMotionDelayMs > 0
+        ? withDelay(groupMotionDelayMs, slideAnimation)
+        : slideAnimation;
     bgOpacity.value = withTiming(bgPresented ? 1 : 0, {
       duration: 300,
-      easing: ReanimatedEasing.out(ReanimatedEasing.ease),
+      easing: ReanimatedEasing.ease,
     });
-  }, [bgOpacity, bgPresented, bgScale, bgSlideY]);
+  }, [
+    bgOpacity,
+    bgPresented,
+    bgScale,
+    bgSlideY,
+    groupMotionDelayMs,
+    hiddenSlideY,
+    posYSpringPolicy.damping,
+    posYSpringPolicy.mass,
+    posYSpringPolicy.stiffness,
+    posYSpringPolicy,
+  ]);
 
+  const backgroundGroupGap = BASE_FONT_SIZE * 0.3 * fontScale;
   const bgPresentationStyle = useAnimatedStyle(() => ({
     opacity: bgOpacity.value,
-    transform: [{ translateY: bgSlideY.value }, { scale: bgScale.value }],
-  }));
+    marginTop: precedesMain
+      ? -bgMeasuredHeight *
+        (1 - Math.max(0, Math.min(1, 1 - Math.abs(bgSlideY.value) / 80)))
+      : bgPresented
+        ? backgroundGroupGap
+        : 0,
+    marginBottom: precedesMain ? backgroundGroupGap : 0,
+    transform: [
+      { translateY: (bgSlideY.value / 100) * bgMeasuredHeight },
+      {
+        scale:
+          bgScale.value *
+          (0.8 + Math.max(0, Math.min(1, 1 - Math.abs(bgSlideY.value) / 80)) * 0.2),
+      },
+    ],
+  }), [backgroundGroupGap, bgMeasuredHeight, bgPresented, precedesMain]);
 
   useEffect(() => {
     if (
@@ -3178,6 +3735,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
     widthFlushFrameRef.current = null;
     pendingWidthsRef.current = {};
     setWidths({});
+    setBgGroupWidths({});
     return () => {
       if (
         widthFlushFrameRef.current !== null &&
@@ -3229,8 +3787,23 @@ const BackgroundVocals = memo(function BackgroundVocals({
 
   return (
     <Reanimated.View
+      onLayout={(event) => {
+        const { height: nextHeight, width: nextWidth } = event.nativeEvent.layout;
+        if (Number.isFinite(nextHeight) && nextHeight > 0) {
+          setBgMeasuredHeight((previous) =>
+            Math.abs(previous - nextHeight) < 0.5 ? previous : nextHeight,
+          );
+        }
+        if (Number.isFinite(nextWidth) && nextWidth > 0) {
+          setBgMeasuredWidth((previous) =>
+            Math.abs(previous - nextWidth) < 0.5 ? previous : nextWidth,
+          );
+        }
+      }}
       style={[
         styles.bgVocalsGroup,
+        precedesMain && styles.bgVocalsGroupPrecedes,
+        !precedesMain && !bgPresented && styles.bgVocalsGroupHiddenAfter,
         { width: textLaneWidth as number },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,
@@ -3243,7 +3816,22 @@ const BackgroundVocals = memo(function BackgroundVocals({
         ]}
       >
       {syllableGroups.map((group, groupIdx) => (
-        <View key={`bg-word-${groupIdx}`} style={styles.wordWrap}>
+        <Fragment key={`bg-word-${groupIdx}`}>
+          {balancedBgBreakIndexes.has(groupIdx) && (
+            <View style={styles.forcedLineBreak} />
+          )}
+          <View
+            onLayout={(event) => {
+              const width = event.nativeEvent.layout.width;
+              if (!Number.isFinite(width) || width <= 0) return;
+              setBgGroupWidths((previous) =>
+                Math.abs((previous[groupIdx] ?? 0) - width) < 0.5
+                  ? previous
+                  : { ...previous, [groupIdx]: width },
+              );
+            }}
+            style={styles.wordWrap}
+          >
           {alignRight &&
             groupNeedsLeadingGap(syllableGroups, syllables, groupIdx) && (
               <Text style={styles.bgVocalsGapText}> </Text>
@@ -3266,7 +3854,9 @@ const BackgroundVocals = memo(function BackgroundVocals({
                   alignRight && text
                     ? getGraphemes(text)
                     : getSyllableGraphemes(syl);
-                const sustainMode = getSustainMode(text, tokenDurationMs);
+                const emphasisMeta = emphasisMetaBySyllable.get(idx);
+                const sustainMode =
+                  emphasisMeta?.mode ?? getSustainMode(text, tokenDurationMs);
                 const hasSustainEffect = isSustainMode(sustainMode);
                 const glyphSustainMode =
                   sustainMode === "solo" || sustainMode === "letter-sweep"
@@ -3322,13 +3912,22 @@ const BackgroundVocals = memo(function BackgroundVocals({
                                 bgTextStyle,
                                 { color },
                                 getBackgroundSustainGlyphStyle(
-                                  progress,
-                                  charIdx,
-                                  renderedChars.length,
-                                  tokenDurationMs,
+                                  emphasisMeta
+                                    ? getSyllableProgress(
+                                        effectivePlaybackPosition,
+                                        emphasisMeta.startTime,
+                                        emphasisMeta.endTime,
+                                      )
+                                    : progress,
+                                  (emphasisMeta?.charOffset ?? 0) + charIdx,
+                                  emphasisMeta?.totalChars ?? renderedChars.length,
+                                  emphasisMeta?.durationMs ?? tokenDurationMs,
                                   glyphSustainMode,
                                   bgFontSize,
                                   bgLineHeight,
+                                  progress,
+                                  emphasisMeta?.isLastWord ??
+                                    idx === syllables.length - 1,
                                 ),
                               ]}
                             >
@@ -3406,6 +4005,10 @@ const BackgroundVocals = memo(function BackgroundVocals({
                       tokenWidth={w}
                       shouldMeasure={needsMeasure}
                       sustainMode={glyphSustainMode}
+                      emphasisMeta={emphasisMeta}
+                      isLastWord={
+                        emphasisMeta?.isLastWord ?? idx === syllables.length - 1
+                      }
                       lineFontSize={bgFontSize}
                       lineLineHeight={bgLineHeight}
                       onMeasure={(width) => measureToken(idx, width)}
@@ -3468,7 +4071,14 @@ const BackgroundVocals = memo(function BackgroundVocals({
                 }
 
                 const clampedProgress = clamp01(progress);
-                const regularRiseY = getBackgroundTokenRiseY(clampedProgress);
+                const regularRiseY = getBackgroundTokenRiseY(
+                  getAmlWordFloatProgress(
+                    effectivePlaybackPosition,
+                    syl.startTime,
+                    syl.endTime,
+                  ),
+                  bgFontSize,
+                );
                 const bgRevealPad = hasSustainEffect
                   ? BG_REVEAL_HORIZONTAL_PAD
                   : 0;
@@ -3559,7 +4169,8 @@ const BackgroundVocals = memo(function BackgroundVocals({
           {!alignRight && group.needsTrailingGap && (
             <Text style={styles.bgVocalsGapText}> </Text>
           )}
-        </View>
+          </View>
+        </Fragment>
       ))}
       </View>
       {!!translatedText && (
@@ -3581,104 +4192,252 @@ const BackgroundVocals = memo(function BackgroundVocals({
   );
 });
 
-function getPauseDotStrength(progress: number, dotIndex: number) {
-  const dotStart = dotIndex / 3;
-  const dotEnd = (dotIndex + 1) / 3;
-  if (progress <= dotStart) {
-    return 0;
+const AMLL_DOT3_TRAILING_MS = 750;
+const AMLL_DOTS_EXIT_PHASE1_MS = 750;
+const AMLL_DOTS_EXIT_PHASE2_MS = 250;
+const AMLL_DOTS_EXIT_TOTAL_MS =
+  AMLL_DOTS_EXIT_PHASE1_MS + AMLL_DOTS_EXIT_PHASE2_MS;
+const AMLL_DOTS_EXIT_FADE_MS = 250;
+const AMLL_DOTS_DISMISS_FADE_MS = 150;
+const AMLL_DOTS_ENTER_FADE_MS = 180;
+const AMLL_DOT_ENTER_FADE_MS = 750;
+const AMLL_DOT_ENTER_STAGGER_MS = 80;
+const AMLL_DOT_ENTER_TOTAL_MS =
+  AMLL_DOT_ENTER_STAGGER_MS * 2 + AMLL_DOT_ENTER_FADE_MS;
+const AMLL_DOTS_BREATHE_PERIOD_MS = 4000;
+const AMLL_DOTS_FALLBACK_THRESHOLD_MS = 3000;
+const AMLL_DOTS_MAX_SCALE = 1.25;
+const AMLL_DOTS_MIN_SCALE = 0.4;
+const AMLL_DOT_INACTIVE_OPACITY = 0.2;
+const AMLL_DOT_ACTIVE_OPACITY = 0.9;
+
+function amlDotsBezier(
+  progress: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+) {
+  return cubicBezierYForX(clamp01(progress), x1, y1, x2, y2);
+}
+
+function amlDotOpacity(fraction: number) {
+  return (
+    AMLL_DOT_INACTIVE_OPACITY +
+    (AMLL_DOT_ACTIVE_OPACITY - AMLL_DOT_INACTIVE_OPACITY) * clamp01(fraction)
+  );
+}
+
+function amlDotsBreathingProgress(t: number) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const angle = 4 * Math.PI * t;
+  const s = Math.sin(angle);
+  const c = Math.cos(angle);
+  return t - 0.084 * s + 0.008 * (1 - c) + 0.0046 * s * (c - s);
+}
+
+function amlDotEnterAlpha(index: number, internalMs: number) {
+  const t = clamp01(
+    (internalMs - index * AMLL_DOT_ENTER_STAGGER_MS) / AMLL_DOT_ENTER_FADE_MS,
+  );
+  return t * t;
+}
+
+function amlDotFraction(
+  startDelay: number,
+  duration: number,
+  internalMs: number,
+  target: number,
+) {
+  if (internalMs <= startDelay || duration <= 0) return 0;
+  const eased = amlDotsBezier(
+    (internalMs - startDelay) / duration,
+    0.56,
+    0.01,
+    0.45,
+    1,
+  );
+  return eased * target;
+}
+
+function resolveAmlPauseDotsSnapshot(
+  elapsedMs: number,
+  totalDurationMs: number,
+  holdMs: number,
+) {
+  const delayEndMs = Math.max(0, holdMs);
+  const bodyMs = totalDurationMs - delayEndMs - AMLL_DOTS_EXIT_TOTAL_MS;
+  if (bodyMs < AMLL_DOT_ENTER_TOTAL_MS || elapsedMs < 0) {
+    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
   }
-  if (progress >= dotEnd) {
-    return 1;
+  const bodyEndMs = delayEndMs + bodyMs;
+  const totalEndMs = bodyEndMs + AMLL_DOTS_EXIT_TOTAL_MS;
+  if (elapsedMs >= totalEndMs) {
+    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
   }
-  return (progress - dotStart) / Math.max(0.001, dotEnd - dotStart);
+  if (elapsedMs < delayEndMs) {
+    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
+  }
+
+  const internalMs = elapsedMs - delayEndMs;
+  const enterOpacity = amlDotsBezier(
+    internalMs / AMLL_DOTS_ENTER_FADE_MS,
+    0.59,
+    0.02,
+    0.07,
+    1,
+  );
+  const fallback = bodyMs < AMLL_DOTS_FALLBACK_THRESHOLD_MS;
+  const breatheCycles = Math.max(1, Math.floor(bodyMs / AMLL_DOTS_BREATHE_PERIOD_MS));
+  const breathePeriodMs = bodyMs / breatheCycles;
+  const segmentMs = Math.round((bodyMs + AMLL_DOT3_TRAILING_MS) / 3);
+  const dot3DurationMs = bodyMs - segmentMs * 2;
+  const dot3Target = fallback ? 1 : dot3DurationMs / segmentMs;
+  const writeDots = (fractions: readonly [number, number, number]) =>
+    fractions.map(
+      (fraction, index) =>
+        amlDotOpacity(fraction) * amlDotEnterAlpha(index, internalMs),
+    ) as [number, number, number];
+
+  if (elapsedMs >= bodyEndMs) {
+    const exitElapsedMs = elapsedMs - bodyEndMs;
+    const fadeT = clamp01(
+      (exitElapsedMs - (AMLL_DOTS_EXIT_TOTAL_MS - AMLL_DOTS_EXIT_FADE_MS)) /
+        AMLL_DOTS_EXIT_FADE_MS,
+    );
+    const opacity =
+      enterOpacity *
+      (1 - amlDotsBezier(fadeT, 0.43, 0.08, 0.83, 0.31));
+    let scale: number;
+    if (exitElapsedMs < AMLL_DOTS_EXIT_PHASE1_MS) {
+      scale =
+        1 +
+        amlDotsBezier(
+          exitElapsedMs / AMLL_DOTS_EXIT_PHASE1_MS,
+          0.14,
+          0.06,
+          0.25,
+          1,
+        ) *
+          (AMLL_DOTS_MAX_SCALE - 1);
+    } else {
+      const phase2 =
+        (exitElapsedMs - AMLL_DOTS_EXIT_PHASE1_MS) / AMLL_DOTS_EXIT_PHASE2_MS;
+      scale =
+        AMLL_DOTS_MAX_SCALE -
+        amlDotsBezier(phase2, 0.29, 0.03, 1, 0.38) *
+          (AMLL_DOTS_MAX_SCALE - AMLL_DOTS_MIN_SCALE);
+    }
+    const trailing = clamp01(exitElapsedMs / AMLL_DOT3_TRAILING_MS);
+    return {
+      opacity,
+      scale,
+      dots: writeDots([
+        1,
+        1,
+        dot3Target + (1 - dot3Target) * trailing,
+      ]),
+    };
+  }
+
+  if (fallback) {
+    return { opacity: enterOpacity, scale: 1, dots: writeDots([1, 1, 1]) };
+  }
+
+  const cycleT = (internalMs % breathePeriodMs) / breathePeriodMs;
+  const breathe = amlDotsBreathingProgress(cycleT);
+  const scale =
+    breathe <= 0.5
+      ? 1 + (breathe / 0.5) * (AMLL_DOTS_MAX_SCALE - 1)
+      : AMLL_DOTS_MAX_SCALE -
+        ((breathe - 0.5) / 0.5) * (AMLL_DOTS_MAX_SCALE - 1);
+  return {
+    opacity: enterOpacity,
+    scale,
+    dots: writeDots([
+      amlDotFraction(0, segmentMs, internalMs, 1),
+      amlDotFraction(segmentMs, segmentMs, internalMs, 1),
+      amlDotFraction(segmentMs * 2, dot3DurationMs, internalMs, dot3Target),
+    ]),
+  };
 }
 
 const PauseDots = memo(function PauseDots({
   alignRight = false,
   pauseStartMs,
   pauseVisualDurationMs,
+  pauseHoldMs,
+  playbackPositionOverrideMs = null,
   fontSize = BASE_FONT_SIZE,
   edgeInset = LINE_INNER_PADDING_HORIZONTAL,
 }: {
   alignRight?: boolean;
   pauseStartMs: number;
   pauseVisualDurationMs: number;
+  pauseHoldMs: number;
+  playbackPositionOverrideMs?: number | null;
   fontSize?: number;
   edgeInset?: number;
 }) {
-  // ponytail: visible always true when mounted (caller uses conditional render); fade-in only
-  const fadeAnim = useRef(new RNAnimated.Value(0)).current;
-  const exitScale = useRef(new RNAnimated.Value(0)).current;
-
-  useEffect(() => {
-    RNAnimated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 240,
-      useNativeDriver: true,
-    }).start();
-    RNAnimated.spring(exitScale, {
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
-  }, [fadeAnim, exitScale]);
-
-  // Self-subscribe to playback store for live progress — avoids needing
-  // FlashList re-renders on every tick
-  const progress = usePlaybackStore(
+  const playbackPosition = usePlaybackStore(
     useCallback(
-      (state) => {
-        if (pauseVisualDurationMs <= 0) return 0;
-        return clamp01((state.playbackPosition - pauseStartMs) / pauseVisualDurationMs);
-      },
-      [pauseStartMs, pauseVisualDurationMs],
+      (state) => playbackPositionOverrideMs ?? state.playbackPosition,
+      [playbackPositionOverrideMs],
     ),
   );
+  const snapshot = resolveAmlPauseDotsSnapshot(
+    playbackPosition - pauseStartMs,
+    pauseVisualDurationMs,
+    pauseHoldMs,
+  );
+  const dotSize = fontSize * 0.3;
+  const dotGap = fontSize * 0.18;
+  const innerVerticalPad = fontSize * 0.4;
+  const outerVerticalMargin = fontSize * 0.4;
+  const contentHeight = fontSize * 0.5;
 
   return (
-    <RNAnimated.View
+    <Reanimated.View
+      exiting={FadeOut.duration(AMLL_DOTS_DISMISS_FADE_MS).easing(
+        ReanimatedEasing.bezier(0.43, 0.08, 0.83, 0.31),
+      )}
       style={[
         styles.pauseDotsRow,
         alignRight
           ? { alignSelf: "flex-end", marginLeft: 0, marginRight: edgeInset }
           : { marginLeft: edgeInset },
         {
-          opacity: fadeAnim,
-          transform: [{ scale: exitScale }],
+          gap: dotGap,
+          height: contentHeight + innerVerticalPad * 2,
+          // Upstream's horizontal padding is the lyric-line inset itself. This
+          // component already applies that inset via marginLeft/marginRight,
+          // so adding another .4em here would shift the dots too far inward.
+          paddingHorizontal: 0,
+          paddingVertical: innerVerticalPad,
+          marginVertical: outerVerticalMargin,
+          opacity: snapshot.opacity,
+          transform: [{ scale: snapshot.scale }],
         },
       ]}
     >
       {[0, 1, 2].map((idx) => {
-        const dotProgress = getPauseDotStrength(progress, idx);
-
-        const dp = dotProgress;
-        const targetScale = interpolate(dp, [0, 0.7, 1], [0.75, 1.05, 1]);
-        const targetYOffsetFloat = interpolate(dp, [0, 0.9, 1], [0, -0.12, 0]);
-        const targetYOffset = targetYOffsetFloat * fontSize;
-        const targetOpacity = interpolate(dp, [0, 0.6, 1], [0.35, 1, 1]);
-        const targetGlow = interpolate(dp, [0, 0.6, 1], [0, 1, 1]);
-
         return (
           <View
             key={idx}
             style={[
               styles.pauseDot,
               {
-                opacity: targetOpacity,
-                transform: [
-                  { translateY: targetYOffset },
-                  { scale: targetScale },
-                ],
-                shadowColor: `rgba(255,255,255,0.9)`,
-                shadowRadius: 4 + 6 * targetGlow,
-                shadowOpacity: targetGlow,
-                shadowOffset: { width: 0, height: 0 },
-                elevation: 4 + 6 * targetGlow,
+                width: dotSize,
+                height: dotSize,
+                borderRadius: dotSize / 2,
+                opacity: snapshot.dots[idx],
               },
             ]}
           />
         );
       })}
-    </RNAnimated.View>
+    </Reanimated.View>
   );
 });
 
@@ -3686,7 +4445,7 @@ const styles = StyleSheet.create({
   lineOuter: {
     minHeight: 72,
     justifyContent: "center",
-    paddingVertical: 8,
+    paddingVertical: 0,
   } as ViewStyle,
   lineOuterLandscape: {
     overflow: "visible",
@@ -3694,7 +4453,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: LANDSCAPE_LINE_SCALE_BLEED,
   } as ViewStyle,
   linePressable: {
-    paddingVertical: 6,
+    paddingVertical: 0,
     borderRadius: 9,
     overflow: "visible",
   } as ViewStyle,
@@ -3741,12 +4500,8 @@ const styles = StyleSheet.create({
   wordWrap: {
     flexDirection: "row",
     alignItems: "flex-start",
-    // Allow "word" groups to shrink so the parent can wrap them.
-    // Without this, a long word can exceed screen width and overflow horizontally.
-    flexShrink: 1,
-    maxWidth: "100%",
-    // If a single word is wider than the screen, allow it to wrap at syllable boundaries.
-    flexWrap: "wrap",
+    flexShrink: 0,
+    flexWrap: "nowrap",
   } as ViewStyle,
   wordWrapPhrase: {
     flexWrap: "nowrap",
@@ -3804,17 +4559,15 @@ const styles = StyleSheet.create({
     width: BG_GLYPH_PAINT_WIDTH,
   } as TextStyle,
   pauseDotsRow: {
-    marginTop: 15,
-    marginBottom: 0,
     flexDirection: "row",
-    gap: 8,
     alignItems: "center",
-    height: 16,
+  } as ViewStyle,
+  forcedLineBreak: {
+    width: "100%",
+    height: 0,
+    flexShrink: 0,
   } as ViewStyle,
   pauseDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
     backgroundColor: "#FFFFFF",
   } as ViewStyle,
   lineText: {
@@ -3833,10 +4586,20 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     alignSelf: "flex-start",
     width: "100%",
-    marginTop: 3,
   } as ViewStyle,
   bgVocalsGroup: {
     alignSelf: "flex-start",
+  } as ViewStyle,
+  bgVocalsGroupPrecedes: {
+    marginBottom: 0,
+  } as ViewStyle,
+  bgVocalsGroupHiddenBefore: {
+    position: "absolute",
+    bottom: "100%",
+  } as ViewStyle,
+  bgVocalsGroupHiddenAfter: {
+    position: "absolute",
+    top: "100%",
   } as ViewStyle,
   bgVocalsGroupOpposite: {
     alignSelf: "flex-end",

@@ -137,11 +137,24 @@ export type LyricSyllable = {
   graphemes?: string[];
 };
 
+export type SpicyBackgroundSyllableBlock = {
+  /** Exact upstream Background.StartTime converted from seconds to milliseconds. */
+  lineStartTime: number;
+  /** Exact upstream Background.EndTime converted from seconds to milliseconds. */
+  lineEndTime: number;
+  /** Exact upstream Background.Syllables entries, in their original block. */
+  syllables: LyricSyllable[];
+};
+
 export type LyricLine = {
   lineStartTime: number;
   lineEndTime: number;
   syllables: LyricSyllable[];
   backgroundSyllables?: LyricSyllable[];
+  /** Exact Spicy Background[] blocks for the WebView renderer. */
+  spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
+  /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
+  spicyLyricsStartTime?: number;
   translatedText?: string;
   backgroundTranslatedText?: string;
   oppositeAligned?: boolean;

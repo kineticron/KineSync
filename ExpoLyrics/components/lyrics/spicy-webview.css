@@ -1,3 +1,154 @@
+#SpicyLyricsPage .LyricsContainer {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  width: 100%;
+  z-index: 4;
+}
+
+#SpicyLyricsPage .LyricsContainer.Hidden {
+  display: none;
+}
+
+@property --SL-LyricsContent_MaskTopPadding {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent {
+  --TextGlowDef: rgba(255, 255, 255, 0.15) 0px 0px 6px;
+  --ActiveTextGlowDef: rgba(255, 255, 255, 0.4) 0px 0px 14px;
+  --StrongTextGlowDef: rgba(255, 255, 255, 0.68) 0px 0px 16.4px;
+  --StrongerTextGlowDef: rgba(255, 255, 255, 0.74) 0px 0px 16px;
+  --DefaultLyricsSize: clamp(1.85rem, calc(1cqw * 7), 3.5rem);
+  --amll-lyric-player-font-size: var(--DefaultLyricsSize);
+  --Simplebar-Scrollbar-Color: rgba(255, 255, 255, 0.6);
+  --vertical-gap: 0px;
+
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  height: calc(100% - var(--vertical-gap));
+  width: 100%;
+  font-size: var(--DefaultLyricsSize) !important;
+  font-weight: 700;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  z-index: 9;
+
+  --ImageMask: linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 16px,
+    var(--spice-sidebar) calc(64px + var(--SL-LyricsContent_MaskTopPadding)),
+    var(--spice-sidebar) calc(100% - 64px),
+    transparent calc(100% - 16px),
+    transparent
+  );
+
+  -webkit-mask-image: var(--ImageMask);
+  mask-image: var(--ImageMask);
+  container-type: size;
+  opacity: 1;
+  transition: opacity 0.25s, --SL-LyricsContent_MaskTopPadding 0.5s;
+}
+
+#SpicyLyricsPage:not(.Fullscreen):has(.ViewControls .ViewControl:hover) .LyricsContainer .LyricsContent {
+  --SL-LyricsContent_MaskTopPadding: 32px;
+}
+
+.spicy-pip-wrapper #SpicyLyricsPage .LyricsContainer .LyricsContent:has(.LyricsNotice) {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent:not(:has(.LyricsNotice)) * {
+  font-weight: 700 !important;
+}
+
+.spicy-pip-wrapper #SpicyLyricsPage .LyricsContainer .LyricsContent {
+  /* Compact sizing tuned for the popup: comfortably readable at the default
+     popup size (the floor dominates here, since the popup container is
+     narrow), scales with width, and is capped so very wide popups don't end
+     up with oversized text. */
+  --DefaultLyricsSize: clamp(1.7rem, calc(1cqw * 5.5), 2.6rem);
+}
+
+/* #SpicyLyricsPage.Fullscreen.MinimalLyricsMode .LyricsContainer .LyricsContent {
+  --vertical-gap: 14cqh;
+} */
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent.HiddenTransitioned {
+  opacity: 0;
+}
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer {
+  width: 100%;
+  box-sizing: border-box;
+  transition:
+    padding-right 0.4s,
+    padding-left 0.4s;
+  display: flex;
+  flex-direction: column;
+  /* The virtualizer appends a permanent spacer of half the viewport height to the
+     scroll element — that is what actually lets the last line reach the centre.
+     This margin is only the small budget on top of it (centre scrolls add a +30px
+     offset, and the credits block below the lines already contributes height).
+     Anything larger is dead space that can be scrolled into past the credits. */
+  margin-bottom: 6cqh;
+  margin-top: 25cqh;
+}
+
+body:has(.Root:not(.global-nav)) #SpicyLyricsPage .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer {
+  margin-top: 0cqh;
+  padding-top: 25cqh;
+}
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer .VirtualLyricsContainer {
+  position: relative;
+  width: 100%;
+  container-type: size;
+  /* height set dynamically via JS by the virtualizer */
+}
+
+/* With position:absolute, CSS margins don't collapse between siblings.
+   Clear them here — TanStack Virtual's gap option provides equivalent spacing.
+   Specificity (1,6,0) beats Mixed.css rules at (1,5,0) that are loaded after this file. */
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer .VirtualLyricsContainer .line {
+  margin: 0 !important;
+}
+
+#SpicyLyricsPage.Fullscreen.MinimalLyricsMode
+  .LyricsContainer
+  .LyricsContent
+  .SpicyLyricsScrollContainer {
+  margin-top: 40cqh;
+}
+
+body:has(.Root:not(.global-nav)) #SpicyLyricsPage.Fullscreen.MinimalLyricsMode
+  .LyricsContainer
+  .LyricsContent
+  .SpicyLyricsScrollContainer {
+  margin-top: 0cqh;
+  padding-top: 40cqh;
+}
+/*
+#SpicyLyricsPage .LyricsContainer .LyricsContent .BottomSpacer {
+  display: block;
+  height: 45vh;
+  width: 100%;
+}
+
+#SpicyLyricsPage .LyricsContainer .LyricsContent .TopSpacer {
+  display: block;
+  height: 20vh;
+  width: 100%;
+}
+ */
+
 :root {
   --SpicyLyrics-LineSpacing: 1cqw 0;
 }
@@ -879,111 +1030,23 @@
   opacity: 1;
   scale: 1.05;
 }
-#SpicyLyricsPage.SpicyRenderer {
-  --DefaultLyricsSize: calc(36px * var(--ks-font-scale, 1));
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  background: transparent;
-  color: #fff;
-  container-type: inline-size;
-  font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-#SpicyLyricsPage.SpicyRenderer.landscape {
-  --DefaultLyricsSize: calc(32px * var(--ks-font-scale, 1));
-}
-
-#SpicyLyricsPage .LyricsContainer,
-#SpicyLyricsPage .LyricsContent,
-#SpicyLyricsPage .SpicyLyricsScrollContainer {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-}
-
-#SpicyLyricsPage .SpicyLyricsScrollContainer {
-  box-sizing: border-box;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8vh 22px 38vh;
-  scrollbar-width: none;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
-}
-
-#SpicyLyricsPage.landscape .SpicyLyricsScrollContainer {
-  padding-left: 28px;
-  padding-right: 28px;
-}
-
-#SpicyLyricsPage .SpicyLyricsScrollContainer::-webkit-scrollbar {
-  display: none;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line {
-  position: relative;
-  isolation: isolate;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 1.55em;
-  margin: 0 0 0.42em;
-  padding: 0.12em 0.15em;
-  transform-origin: left center;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.OppositeAligned {
-  transform-origin: right center;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.bg-line {
-  --font-size: calc(var(--DefaultLyricsSize) * 0.7);
-  min-height: 1.2em;
-  margin-top: -0.28em !important;
-  margin-bottom: 0.4em !important;
-  opacity: 0.72;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .ks-translation {
-  flex-basis: 100%;
-  margin-top: 0.16em;
-  color: rgba(255,255,255,0.46);
-  -webkit-text-fill-color: rgba(255,255,255,0.46);
-  background: none;
-  font-size: 0.5em;
-  line-height: 1.35;
-  font-weight: 600;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-selected::before {
-  content: "";
-  position: absolute;
-  inset: -0.18em -0.22em;
-  z-index: -1;
-  border-radius: 14px;
-  opacity: 1 !important;
-  scale: 1 !important;
-  background-color: rgba(255,255,255,0.13) !important;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-pressed::before {
-  content: "";
-  position: absolute;
-  inset: -0.18em -0.22em;
-  z-index: -1;
-  border-radius: 14px;
-  opacity: 1 !important;
-  scale: 1.02 !important;
-  background-color: rgba(255,255,255,0.16) !important;
-}
-
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .word {
-  transition: none !important;
-}
-/*
- * Adapted from Spicy Lyrics v6.3.15 (Spikerko/spicy-lyrics), AGPL-3.0.
- * Upstream commit: 2a14863f8c29782f9ab3becff2b1360dfb74a4fb
- * This file intentionally keeps the upstream renderer class contract while
- * KineSync supplies its own playback clock and WebView bridge.
- */
+/* KineSync WebView host shell. The renderer CSS above is copied verbatim from
+ * Spicy Lyrics v6.3.15; only viewport/bridge plumbing lives below. */
+html, body, #app, #SpicyLyricsPage { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+#SpicyLyricsPage { position: absolute; inset: 0; color: #fff; container-type: inline-size; font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --spice-sidebar: #fff; --LyricsLeftSidePadding: 18cqw; --LyricsRightSidePadding: 15.5cqw; }
+#SpicyLyricsPage .LyricsContainer { position: absolute; inset: 0; }
+#SpicyLyricsPage .LyricsContainer .LyricsContent { position: absolute; inset: 0; --DefaultLyricsSize: calc(clamp(1.85rem, 7cqw, 3.5rem) * var(--ks-font-scale, 1)); }
+#SpicyLyricsPage .LyricsContainer .LyricsContent .SpicyLyricsScrollContainer { position: relative; min-height: 100%; overflow: visible; padding: 0 var(--LyricsRightSidePadding) 50cqh var(--LyricsLeftSidePadding); margin-top: 25cqh; }
+#SpicyLyricsPage .LyricsContainer .LyricsContent::-webkit-scrollbar { display: none; }
+#SpicyLyricsPage .LyricsContainer .LyricsContent { scrollbar-width: none; -webkit-overflow-scrolling: touch; touch-action: pan-y; scroll-behavior: smooth !important; }
+#SpicyLyricsPage .LyricsContainer .LyricsContent.InstantScroll { scroll-behavior: auto !important; }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .ks-translation { flex-basis: 100%; width: 100%; margin-top: .3em; color: rgba(255,255,255,.3); -webkit-text-fill-color: rgba(255,255,255,.3); background: none; font-size: .5em !important; line-height: 1.5em !important; font-weight: 700 !important; }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.static .ks-static-background { flex-basis: 100%; width: 100%; margin-top: .3em; color: rgba(255,255,255,.45); -webkit-text-fill-color: rgba(255,255,255,.45); background: none; font-size: .7em !important; line-height: 1.35em !important; font-weight: 600 !important; }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-selected::before,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-pressed::before { content: ""; position: absolute; top: 50%; transform: translate(-.5cqw,-50%); width: calc(100% + 1cqw); height: calc(100% + 1.7cqw); border-radius: 16px; z-index: -1; }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-selected::before { background: rgba(255,255,255,.1); }
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line.ks-pressed::before { background: rgba(255,255,255,.16); }
+.kinesync-credits-footer { box-sizing: border-box; width: 100%; margin: 1cqw 0 6cqh; color: white; opacity: .6; font-size: .47em; line-height: 1.35; font-weight: 600; cursor: pointer; }
+.kinesync-credits-strong { font-weight: 700; }
+.kinesync-credits-profile { display: flex; align-items: center; gap: .2em; }
+.kinesync-credits-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
