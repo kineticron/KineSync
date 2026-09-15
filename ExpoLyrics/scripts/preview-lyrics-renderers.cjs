@@ -17,7 +17,12 @@ for (const name of ['SPICY_WEBVIEW_JS', 'SPICY_WEBVIEW_CSS']) {
 const ast = ts.createSourceFile('host.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const helpers = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && ['escapeScript', 'createWebLyricsHtml'].includes(node.name?.text)).map((node) => node.getText(ast)).join('\n');
 vm.runInNewContext(ts.transpileModule(helpers + '\nglobalThis.result = createWebLyricsHtml();', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, globals);
-const renderer = globals.result;
+// Instrument only the fixture, never the app bundle, to catch idle RAF polling.
+const renderer = globals.result.replace('<script>', `<script>
+window.lyricsTestFrames = 0;
+const nativeRaf = window.requestAnimationFrame.bind(window);
+window.requestAnimationFrame = callback => nativeRaf(time => { window.lyricsTestFrames++; callback(time); });
+</script><script>`);
 const harness = `<!doctype html><meta charset="utf-8"><title>Lyrics renderer checks</title>
 <style>body{background:#161c28;color:white;font:15px system-ui;margin:20px}button{font:inherit;padding:8px;margin:4px}iframe{display:block;border:1px solid #566073;background:linear-gradient(#283650,#171c2a);width:390px;height:600px}pre{white-space:pre-wrap} .controls{max-width:1000px;margin-bottom:12px}</style>
 <div class="controls"><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button></div>
@@ -40,6 +45,7 @@ document.getElementById('pause').onclick=()=>{playing=false;sync()};
 document.getElementById('seek').onclick=()=>{position=10500;sync()};
 document.getElementById('static').onclick=()=>{send({type:'setLyrics',lines:lines.slice(0,7),timingMode:'static'});sync()};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const waitFor=async(predicate,timeoutMs=1600)=>{const deadline=performance.now()+timeoutMs;while(performance.now()<deadline){if(predicate())return true;await wait(40)}return predicate()};
 document.getElementById('checks').onclick=async()=>{
   const messages=[]; const check=(condition,label)=>{if(!condition)throw new Error(label);messages.push('PASS '+label);results.textContent=messages.join('\\n')};
   try {
@@ -54,10 +60,10 @@ document.getElementById('checks').onclick=async()=>{
     const originalHeight=row().offsetHeight;position=10000;sync();await wait(650);
     check(row().offsetHeight===originalHeight,'background completion does not change row height');
     check(scroll.scrollWidth===scroll.clientWidth,'wrapped text does not overflow horizontally');
-    position=lines.at(-1).lineStartTime+1000;sync();await wait(650);
-    check(Math.abs(d.querySelector('.ks-lyric-row:last-child').getBoundingClientRect().top)<2,'last row reaches the top anchor');
-    position=1500;sync();await wait(650);
-    check(Math.abs(d.querySelector('.ks-lyric-row').getBoundingClientRect().top)<2,'backward seek restores first row');
+    position=lines.at(-1).lineStartTime+1000;sync();
+    check(await waitFor(()=>Math.abs(d.querySelector('.ks-lyric-row:last-child').getBoundingClientRect().top)<2),'last row reaches the top anchor');
+    position=1500;sync();
+    check(await waitFor(()=>Math.abs(d.querySelector('.ks-lyric-row').getBoundingClientRect().top)<2),'backward seek restores first row (top '+d.querySelector('.ks-lyric-row').getBoundingClientRect().top+')');
     landscape=true;scale=.9;frame.style.width='620px';frame.style.height='350px';position=5500;options();sync();await wait(800);
     check(Math.abs(parseFloat(w.getComputedStyle(lead()).fontSize)-30.24)<.1,'landscape font follows only the supplied scale');
     check(row().classList.contains('ks-align-right'),'landscape lead aligns right');
@@ -72,6 +78,30 @@ document.getElementById('checks').onclick=async()=>{
     check(Math.abs(scroll.scrollTop-1000)<2,'disabled auto-follow preserves manual position');
     send({type:'options',fontScale:1,landscapeMode:false,showTranslatedText:true,tapToSeekEnabled:true,autoFollowEnabled:true,resumeAutoFollowSignal:1});await wait(650);
     check(Math.abs(d.querySelectorAll('.ks-lyric-row')[2].getBoundingClientRect().top)<2,'resume returns to active row');
+    check(d.querySelectorAll('.ks-lyric-row:not(.ks-offscreen)').length<20,'only nearby rows paint on a 70-line song');
+    const gapLines=[{lineStartTime:1000,lineEndTime:2000,syllables:[{text:'First line',startTime:1000,endTime:2000}]},{lineStartTime:4000,lineEndTime:5000,syllables:[{text:'Ready next',startTime:4000,endTime:5000}]},{lineStartTime:10000,lineEndTime:11000,syllables:[{text:'After the pause',startTime:10000,endTime:11000}]}];
+    send({type:'setLyrics',lines:gapLines,timingMode:'karaoke'});position=3000;playing=false;sync();await wait(650);
+    const gapRow=d.querySelectorAll('.ks-lyric-row')[1];
+    check(gapRow.classList.contains('ks-preactive'),'short gap preactivates the upcoming scroll target');
+    check(Math.abs(gapRow.getBoundingClientRect().top)<2,'preactivation matches the scrolled row');
+    check(w.getComputedStyle(gapRow.querySelector('.line')).opacity==='1','upcoming line has active brightness');
+    const upcomingRevealToken=gapRow.querySelector('.line:not(.musical-line)')?.querySelector('.word, .letter');
+    check(upcomingRevealToken && w.getComputedStyle(upcomingRevealToken).getPropertyValue('--gradient-position').trim()==='-20%','advance highlight does not start the word reveal');
+    const idleFrames=w.lyricsTestFrames;await wait(450);
+    check(w.lyricsTestFrames===idleFrames,'paused settled renderer schedules zero animation frames');
+    position=4500;sync();await wait(650);
+    check(!gapRow.classList.contains('ks-preactive') && gapRow.querySelector('.line').classList.contains('Active'),'real start hands over to normal reveal');
+    position=7000;sync();await wait(650);
+    check(!d.querySelector('.ks-preactive') && d.querySelector('.ks-pause-dots:not([hidden])'),'long gaps retain the interlude');
+    position=9600;sync();await wait(650);
+    check(d.querySelectorAll('.ks-lyric-row')[2].classList.contains('ks-preactive'),'interlude exit preactivates 500ms before the next line');
+    position=1500;playing=true;sync();await wait(100);
+    send({type:'visibility',active:false});const hiddenFrames=w.lyricsTestFrames;await wait(250);
+    check(w.lyricsTestFrames===hiddenFrames,'inactive WebView stops immediately during playback');
+    send({type:'visibility',active:true});await wait(100);
+    check(w.lyricsTestFrames>hiddenFrames,'foreground WebView wakes and resumes playback');
+    playing=false;sync();await wait(4500);const finalFrames=w.lyricsTestFrames;await wait(300);
+    check(w.lyricsTestFrames===finalFrames,'pause allows springs to settle then returns to zero RAF work');
     results.textContent=messages.join('\\n')+'\\nAll browser checks passed.';
   } catch(error){results.textContent=messages.join('\\n')+'\\nFAIL '+error.message}
 };

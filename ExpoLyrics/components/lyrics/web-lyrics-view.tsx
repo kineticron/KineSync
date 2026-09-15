@@ -375,12 +375,13 @@ export const WebLyricsView = memo(function WebLyricsView({
     const subscription = AppState.addEventListener("change", (nextState) => {
       const previousState = appStateRef.current;
       appStateRef.current = nextState;
+      if (nextState !== "active") inject({ type: "visibility", active: false });
       if (nextState === "active" && previousState !== "active") {
         setWebViewGeneration((generation) => generation + 1);
       }
     });
     return () => subscription.remove();
-  }, []);
+  }, [inject]);
 
   useEffect(() => {
     if (!ready) {
@@ -442,6 +443,7 @@ export const WebLyricsView = memo(function WebLyricsView({
   useEffect(() => {
     inject({
       type: "sync",
+      active: active && appStateRef.current === "active",
       positionMs: previewPositionMs ?? anchorPositionMs,
       previewPositionMs,
       isPlaying: active && previewPositionMs === null ? isPlaying : false,

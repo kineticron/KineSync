@@ -12,7 +12,6 @@ import {
   StyleSheet,
   Text,
   View,
-  Platform,
   type ViewStyle,
   type TextStyle,
 } from "react-native";
@@ -21,6 +20,7 @@ import Reanimated, {
   Easing as ReanimatedEasing,
   FadeOut,
   useAnimatedStyle,
+  useDerivedValue,
   useSharedValue,
   withDelay,
   withSpring,
@@ -111,7 +111,6 @@ const AMLL_DEFAULT_POS_Y_SPRING: AmlPosYSpringPolicy = {
   overshootClamping: false,
 };
 const AMLL_WORD_FADE_WIDTH = 0.5;
-const ENABLE_NATIVE_LYRIC_BLUR = Platform.OS === "android";
 
 // ponytail: worklet version — used inside useAnimatedStyle only
 function getInwardScaleTransformWorklet(
@@ -199,6 +198,7 @@ function syncRevealProgress(
   isPlaying: boolean,
   easing: typeof REVEAL_SWEEP_EASING,
 ) {
+  const stop = () => cancelAnimation(progress);
   const nextProgress = getSyllableProgress(
     playbackPosition,
     startTime,
@@ -208,7 +208,7 @@ function syncRevealProgress(
   if (!isPlaying || nextProgress >= 1) {
     cancelAnimation(progress);
     progress.value = nextProgress;
-    return;
+    return stop;
   }
 
   if (playbackPosition < startTime) {
@@ -221,15 +221,17 @@ function syncRevealProgress(
         easing,
       }),
     );
-    return;
+    return stop;
   }
 
-  // Cancel any in-flight animation, then animate from current value to 1.
+  // Start from the projected timestamp, including seeks within this word.
   cancelAnimation(progress);
+  progress.value = nextProgress;
   progress.value = withTiming(1, {
     duration: Math.max(1, endTime - playbackPosition),
     easing,
   });
+  return stop;
 }
 
 function useAmlWordFloatProgress(
@@ -244,7 +246,7 @@ function useAmlWordFloatProgress(
   );
 
   useEffect(() => {
-    syncRevealProgress(
+    return syncRevealProgress(
       progress,
       playbackPosition,
       startTime,
@@ -277,6 +279,7 @@ function getInactiveOpacity(distanceFromActive: number) {
 }
 
 function clamp01(value: number) {
+  "worklet";
   return Math.max(0, Math.min(1, value));
 }
 
@@ -291,21 +294,6 @@ function interpolate(x: number, domain: number[], range: number[]) {
     }
   }
   return range[range.length - 1];
-}
-
-function getPrimaryTokenRiseY(progress: number, fontSize = BASE_FONT_SIZE) {
-  "worklet";
-  const p = Math.max(0, Math.min(1, progress));
-  // Web Animations `ease-out` = cubic-bezier(0, 0, .58, 1).
-  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
-  return -0.05 * fontSize * eased;
-}
-
-function getBackgroundTokenRiseY(progress: number, fontSize = BG_FONT_SIZE) {
-  "worklet";
-  const p = Math.max(0, Math.min(1, progress));
-  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
-  return -0.1 * fontSize * eased;
 }
 
 function smoothstep(value: number) {
@@ -374,6 +362,9 @@ type SustainGlyphVisuals = {
   glowOpacity: number;
 };
 
+// Worklets captures helper values eagerly when the module loads. Keep this
+// dependency chain above its callers; JS function hoisting does not survive
+// the native Worklets transform.
 function cubicBezierCoordinate(t: number, p1: number, p2: number) {
   "worklet";
   const inv = 1 - t;
@@ -400,6 +391,21 @@ function cubicBezierYForX(
     else high = t;
   }
   return cubicBezierCoordinate(t, y1, y2);
+}
+
+function getPrimaryTokenRiseY(progress: number, fontSize = BASE_FONT_SIZE) {
+  "worklet";
+  const p = Math.max(0, Math.min(1, progress));
+  // Web Animations `ease-out` = cubic-bezier(0, 0, .58, 1).
+  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
+  return -0.05 * fontSize * eased;
+}
+
+function getBackgroundTokenRiseY(progress: number, fontSize = BG_FONT_SIZE) {
+  "worklet";
+  const p = Math.max(0, Math.min(1, progress));
+  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
+  return -0.1 * fontSize * eased;
 }
 
 function getAmlEmphasisEasing(x: number) {
@@ -1246,6 +1252,7 @@ function groupNeedsLeadingGap(
 }
 
 type LyricLineProps = {
+  rendererActive?: boolean;
   line: LyricLineType;
   isActive: boolean;
   isPast: boolean;
@@ -1315,6 +1322,7 @@ function areLyricLinesEqual(a: LyricLineType, b: LyricLineType) {
 
 function areLyricLinePropsEqual(prev: LyricLineProps, next: LyricLineProps) {
   return (
+    (prev.rendererActive ?? true) === (next.rendererActive ?? true) &&
     areLyricLinesEqual(prev.line, next.line) &&
     prev.isActive === next.isActive &&
     prev.isPast === next.isPast &&
@@ -1348,6 +1356,7 @@ function areLyricLinePropsEqual(prev: LyricLineProps, next: LyricLineProps) {
 }
 
 export const LyricLine = memo(function LyricLine({
+  rendererActive = true,
   line,
   isActive,
   isPast,
@@ -1400,11 +1409,12 @@ export const LyricLine = memo(function LyricLine({
     isActive && playbackPositionOverrideMs != null;
   // Single shallow selector — far/inactive rows stay cold on the 64ms clock.
   const needsPlaybackSlice =
-    shouldDrivePlaybackUpdates ||
-    shouldUseNativeRevealTree ||
-    needsPrimaryJsPlayback ||
-    isActive ||
-    shouldPrewarmNativeReveal;
+    rendererActive &&
+    (shouldDrivePlaybackUpdates ||
+      shouldUseNativeRevealTree ||
+      needsPrimaryJsPlayback ||
+      isActive ||
+      shouldPrewarmNativeReveal);
 
   const {
     bgStillActive,
@@ -1455,7 +1465,8 @@ export const LyricLine = memo(function LyricLine({
   const visuallyActive = isActive || bgStillActive;
   const globallyPlaying = usePlaybackStore((state) => state.isPlaying);
   const inactiveOpacity = getInactiveOpacity(inactiveOpacityDistance);
-  const shouldAnimateRevealSweep = isPlaying && shouldUseNativeRevealTree;
+  const shouldAnimateRevealSweep =
+    rendererActive && isPlaying && shouldUseNativeRevealTree;
   const nativeRevealPlaybackPosition = useMemo(
     () =>
       getProjectedPlaybackPosition(
@@ -1479,27 +1490,39 @@ export const LyricLine = memo(function LyricLine({
   const blurAnim = useSharedValue(Math.max(0, Math.min(5, blurAmount)));
 
   useEffect(() => {
+    if (!rendererActive) {
+      cancelAnimation(scaleAnim);
+      return;
+    }
     scaleAnim.value = withSpring(
       visuallyActive || !globallyPlaying
         ? SCALE_TRANSFORM_ACTIVE
         : SCALE_TRANSFORM_INACTIVE,
       AMLL_LINE_SPRING,
     );
-  }, [globallyPlaying, visuallyActive, scaleAnim]);
+  }, [globallyPlaying, rendererActive, visuallyActive, scaleAnim]);
 
   useEffect(() => {
+    if (!rendererActive) {
+      cancelAnimation(opacityAnim);
+      return;
+    }
     opacityAnim.value = withTiming(visuallyActive ? OPACITY_ACTIVE : inactiveOpacity, {
       duration: 400,
       easing: ReanimatedEasing.ease,
     });
-  }, [inactiveOpacity, visuallyActive, opacityAnim]);
+  }, [inactiveOpacity, rendererActive, visuallyActive, opacityAnim]);
 
   useEffect(() => {
+    if (!rendererActive) {
+      cancelAnimation(blurAnim);
+      return;
+    }
     blurAnim.value = withTiming(Math.max(0, Math.min(5, blurAmount)), {
       duration: 400,
       easing: ReanimatedEasing.ease,
     });
-  }, [blurAmount, blurAnim]);
+  }, [blurAmount, blurAnim, rendererActive]);
 
   useEffect(() => {
     if (
@@ -1620,9 +1643,9 @@ export const LyricLine = memo(function LyricLine({
   const lineAnimStyle = useAnimatedStyle(
     () => ({
       opacity: opacityAnim.value,
-      // iOS filter blur reparents Fabric children into a SwiftUI host. Recycled
-      // animated lyric rows must keep a stable native hierarchy.
-      ...(ENABLE_NATIVE_LYRIC_BLUR ? { filter: [{ blur: blurAnim.value }] } : {}),
+      // Keep the filter present even at zero so the native view hierarchy stays
+      // stable while focus moves between rows.
+      filter: [{ blur: blurAnim.value }],
       transform: getInwardScaleTransformWorklet(
         scaleAnim.value,
         laneWidthPx,
@@ -1646,6 +1669,7 @@ export const LyricLine = memo(function LyricLine({
     <View style={containerStyle}>
       {showPauseDotsBefore && (
         <PauseDots
+          rendererActive={rendererActive}
           alignRight={alignRight}
           pauseStartMs={pauseStartMs}
           pauseVisualDurationMs={pauseVisualDurationMs}
@@ -2087,6 +2111,7 @@ export const LyricLine = memo(function LyricLine({
           )}
           {!!line.backgroundSyllables?.length && (
             <BackgroundVocals
+              rendererActive={rendererActive}
               syllables={line.backgroundSyllables}
               translatedText={
                 showTranslatedText ? backgroundTranslatedText : ""
@@ -2109,6 +2134,7 @@ export const LyricLine = memo(function LyricLine({
       </Reanimated.View>
       {showPauseDotsAfter && (
         <PauseDots
+          rendererActive={rendererActive}
           alignRight={alignRight}
           pauseStartMs={pauseStartMs}
           pauseVisualDurationMs={pauseVisualDurationMs}
@@ -2177,7 +2203,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
     const easing = getGraphemeCount(text) <= 2
       ? ReanimatedEasing.linear
       : REVEAL_SWEEP_EASING;
-    syncRevealProgress(
+    return syncRevealProgress(
       progress,
       playbackPosition,
       startTime,
@@ -2188,7 +2214,7 @@ const PrimarySustainRevealToken = memo(function PrimarySustainRevealToken({
   }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
   useEffect(() => {
-    syncRevealProgress(
+    return syncRevealProgress(
       motionProgress,
       playbackPosition,
       motionStartTime,
@@ -2459,7 +2485,7 @@ const PrimaryWordSustainRevealToken = memo(
       const easing = getGraphemeCount(text) <= 2
         ? ReanimatedEasing.linear
         : REVEAL_SWEEP_EASING;
-      syncRevealProgress(
+      return syncRevealProgress(
         progress,
         playbackPosition,
         startTime,
@@ -2643,7 +2669,7 @@ const PrimaryRevealSweepToken = memo(function PrimaryRevealSweepToken({
     const easing = getGraphemeCount(text) <= 2
       ? ReanimatedEasing.linear
       : REVEAL_SWEEP_EASING;
-    syncRevealProgress(
+    return syncRevealProgress(
       progress,
       playbackPosition,
       startTime,
@@ -2793,7 +2819,7 @@ const BackgroundRevealSweepToken = memo(function BackgroundRevealSweepToken({
     const easing = getGraphemeCount(text) <= 2
       ? ReanimatedEasing.linear
       : REVEAL_SWEEP_EASING;
-    syncRevealProgress(
+    return syncRevealProgress(
       progress,
       playbackPosition,
       startTime,
@@ -2962,7 +2988,7 @@ const BackgroundSustainRevealToken = memo(
       const easing = getGraphemeCount(text) <= 2
         ? ReanimatedEasing.linear
         : REVEAL_SWEEP_EASING;
-      syncRevealProgress(
+      return syncRevealProgress(
         progress,
         playbackPosition,
         startTime,
@@ -2973,7 +2999,7 @@ const BackgroundSustainRevealToken = memo(
     }, [endTime, isPlaying, playbackPosition, progress, startTime, text]);
 
     useEffect(() => {
-      syncRevealProgress(
+      return syncRevealProgress(
         motionProgress,
         playbackPosition,
         motionStartTime,
@@ -3137,7 +3163,7 @@ const BackgroundWordSustainRevealToken = memo(
       const easing = getGraphemeCount(text) <= 2
         ? ReanimatedEasing.linear
         : REVEAL_SWEEP_EASING;
-      syncRevealProgress(
+      return syncRevealProgress(
         progress,
         playbackPosition,
         startTime,
@@ -3368,6 +3394,7 @@ const BackgroundSustainGlyph = memo(function BackgroundSustainGlyph({
 });
 
 const BackgroundVocals = memo(function BackgroundVocals({
+  rendererActive = true,
   syllables,
   translatedText = "",
   alignRight = false,
@@ -3382,6 +3409,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
   posYSpringPolicy = AMLL_DEFAULT_POS_Y_SPRING,
   groupMotionDelayMs = 0,
 }: {
+  rendererActive?: boolean;
   syllables: LyricSyllable[];
   translatedText?: string;
   alignRight?: boolean;
@@ -3425,37 +3453,19 @@ const BackgroundVocals = memo(function BackgroundVocals({
     playbackPositionOverrideMs != null &&
     (parentIsActive || parentBgStillActive || parentShouldPrewarmNativeReveal);
 
-  const playbackPosition = usePlaybackStore(
-    useCallback(
-      (state) => {
-        if (!needsBackgroundJsPlayback) {
-          return 0;
-        }
-        const pos = playbackPositionOverrideMs ?? state.playbackPosition;
-        if (pos >= bgStart && pos < bgEnd) return pos;
-        return pos >= bgEnd ? bgEnd : 0;
-      },
-      [bgStart, bgEnd, needsBackgroundJsPlayback, playbackPositionOverrideMs],
-    ),
-  );
-  const isPlaying = usePlaybackStore(
-    useCallback(
-      (state) => (shouldUseNativeBackgroundReveal ? state.isPlaying : false),
-      [shouldUseNativeBackgroundReveal],
-    ),
-  );
-  const anchorPositionMs = usePlaybackStore(
-    useCallback(
-      (state) => (shouldUseNativeBackgroundReveal ? state.anchorPositionMs : 0),
-      [shouldUseNativeBackgroundReveal],
-    ),
-  );
-  const anchorMonotonicMs = usePlaybackStore(
-    useCallback(
-      (state) =>
-        shouldUseNativeBackgroundReveal ? state.anchorMonotonicMs : 0,
-      [shouldUseNativeBackgroundReveal],
-    ),
+  const { playbackPosition, isPlaying, anchorPositionMs, anchorMonotonicMs, globallyPlaying } = usePlaybackStore(
+    useShallow(useCallback((state) => {
+      const pos = playbackPositionOverrideMs ?? state.playbackPosition;
+      return {
+        playbackPosition: needsBackgroundJsPlayback
+          ? (pos >= bgEnd ? bgEnd : pos >= bgStart ? pos : 0) : 0,
+        isPlaying:
+          rendererActive && shouldUseNativeBackgroundReveal && state.isPlaying,
+        anchorPositionMs: shouldUseNativeBackgroundReveal ? state.anchorPositionMs : 0,
+        anchorMonotonicMs: shouldUseNativeBackgroundReveal ? state.anchorMonotonicMs : 0,
+        globallyPlaying: state.isPlaying,
+      };
+    }, [bgEnd, bgStart, needsBackgroundJsPlayback, playbackPositionOverrideMs, rendererActive, shouldUseNativeBackgroundReveal])),
   );
   const shouldAnimateRevealSweep = isPlaying && shouldUseNativeBackgroundReveal;
   const nativeRevealPlaybackPosition = useMemo(
@@ -3478,7 +3488,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const isBgActive =
     effectivePlaybackPosition > 0 && effectivePlaybackPosition < bgEnd;
   const isBgPast = parentIsPast || effectivePlaybackPosition >= bgEnd;
-  const globallyPlaying = usePlaybackStore((state) => state.isPlaying);
   const bgPresented = parentIsActive || parentBgStillActive || !globallyPlaying;
   const bgScale = useSharedValue(bgPresented ? 1 : 0.75);
   const hiddenSlideY = precedesMain ? 80 : -80;
@@ -3486,6 +3495,12 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const bgOpacity = useSharedValue(bgPresented ? 1 : 0);
   const [bgMeasuredHeight, setBgMeasuredHeight] = useState(0);
   useEffect(() => {
+    if (!rendererActive) {
+      cancelAnimation(bgScale);
+      cancelAnimation(bgSlideY);
+      cancelAnimation(bgOpacity);
+      return;
+    }
     const scaleAnimation = withSpring(
       bgPresented ? 1 : 0.75,
       AMLL_BG_SPRING,
@@ -3516,6 +3531,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
     posYSpringPolicy.mass,
     posYSpringPolicy.stiffness,
     posYSpringPolicy,
+    rendererActive,
   ]);
 
   // Paint-only background effects: reserve the same space before, during and
@@ -3998,10 +4014,12 @@ function amlDotsBezier(
   x2: number,
   y2: number,
 ) {
+  "worklet";
   return cubicBezierYForX(clamp01(progress), x1, y1, x2, y2);
 }
 
 function amlDotOpacity(fraction: number) {
+  "worklet";
   return (
     AMLL_DOT_INACTIVE_OPACITY +
     (AMLL_DOT_ACTIVE_OPACITY - AMLL_DOT_INACTIVE_OPACITY) * clamp01(fraction)
@@ -4009,6 +4027,7 @@ function amlDotOpacity(fraction: number) {
 }
 
 function amlDotsBreathingProgress(t: number) {
+  "worklet";
   if (t <= 0) return 0;
   if (t >= 1) return 1;
   const angle = 4 * Math.PI * t;
@@ -4018,6 +4037,7 @@ function amlDotsBreathingProgress(t: number) {
 }
 
 function amlDotEnterAlpha(index: number, internalMs: number) {
+  "worklet";
   const t = clamp01(
     (internalMs - index * AMLL_DOT_ENTER_STAGGER_MS) / AMLL_DOT_ENTER_FADE_MS,
   );
@@ -4030,6 +4050,7 @@ function amlDotFraction(
   internalMs: number,
   target: number,
 ) {
+  "worklet";
   if (internalMs <= startDelay || duration <= 0) return 0;
   const eased = amlDotsBezier(
     (internalMs - startDelay) / duration,
@@ -4046,6 +4067,7 @@ function resolveAmlPauseDotsSnapshot(
   totalDurationMs: number,
   holdMs: number,
 ) {
+  "worklet";
   const delayEndMs = Math.max(0, holdMs);
   const bodyMs = totalDurationMs - delayEndMs - AMLL_DOTS_EXIT_TOTAL_MS;
   if (bodyMs < AMLL_DOT_ENTER_TOTAL_MS || elapsedMs < 0) {
@@ -4143,7 +4165,16 @@ function resolveAmlPauseDotsSnapshot(
   };
 }
 
+const PauseDot = memo(function PauseDot({ index, snapshot }: {
+  index: number;
+  snapshot: Pick<SharedValue<ReturnType<typeof resolveAmlPauseDotsSnapshot>>, "value">;
+}) {
+  const animatedStyle = useAnimatedStyle(() => ({ opacity: snapshot.value.dots[index] }));
+  return <Reanimated.View style={[styles.pauseDot, { width: 12, height: 12, borderRadius: 6 }, animatedStyle]} />;
+});
+
 const PauseDots = memo(function PauseDots({
+  rendererActive = true,
   alignRight = false,
   pauseStartMs,
   pauseVisualDurationMs,
@@ -4152,6 +4183,7 @@ const PauseDots = memo(function PauseDots({
   fontSize = BASE_FONT_SIZE,
   edgeInset = LINE_INNER_PADDING_HORIZONTAL,
 }: {
+  rendererActive?: boolean;
   alignRight?: boolean;
   pauseStartMs: number;
   pauseVisualDurationMs: number;
@@ -4160,18 +4192,41 @@ const PauseDots = memo(function PauseDots({
   fontSize?: number;
   edgeInset?: number;
 }) {
-  const playbackPosition = usePlaybackStore(
-    useCallback(
-      (state) => playbackPositionOverrideMs ?? state.playbackPosition,
-      [playbackPositionOverrideMs],
-    ),
+  const { anchorPositionMs, anchorMonotonicMs, isPlaying } = usePlaybackStore(
+    useShallow((state) => ({
+      anchorPositionMs: state.anchorPositionMs,
+      anchorMonotonicMs: state.anchorMonotonicMs,
+      isPlaying: rendererActive && state.isPlaying,
+    })),
   );
-  const snapshot = resolveAmlPauseDotsSnapshot(
-    playbackPosition - pauseStartMs,
-    pauseVisualDurationMs,
-    pauseHoldMs,
+  const position = playbackPositionOverrideMs ?? getProjectedPlaybackPosition(
+    anchorPositionMs, anchorMonotonicMs, isPlaying,
   );
-  const dotSize = 12;
+  const elapsed = useSharedValue(position - pauseStartMs);
+  useEffect(() => {
+    cancelAnimation(elapsed);
+    if (!rendererActive && playbackPositionOverrideMs === null) {
+      return;
+    }
+    const current = playbackPositionOverrideMs ?? getProjectedPlaybackPosition(
+      anchorPositionMs, anchorMonotonicMs, isPlaying,
+    );
+    elapsed.value = current - pauseStartMs;
+    if (isPlaying && playbackPositionOverrideMs === null && elapsed.value < pauseVisualDurationMs) {
+      elapsed.value = withTiming(pauseVisualDurationMs, {
+        duration: Math.max(1, pauseVisualDurationMs - elapsed.value),
+        easing: ReanimatedEasing.linear,
+      });
+    }
+    return () => cancelAnimation(elapsed);
+  }, [anchorPositionMs, anchorMonotonicMs, isPlaying, playbackPositionOverrideMs, pauseStartMs, pauseVisualDurationMs, rendererActive, elapsed]);
+  const snapshot = useDerivedValue(() => resolveAmlPauseDotsSnapshot(
+    elapsed.value, pauseVisualDurationMs, pauseHoldMs,
+  ));
+  const presentation = useAnimatedStyle(() => ({
+    opacity: snapshot.value.opacity,
+    transform: [{ scale: snapshot.value.scale }],
+  }));
   const dotGap = 8;
   const innerVerticalPad = 0;
   const outerVerticalMargin = 0;
@@ -4197,27 +4252,13 @@ const PauseDots = memo(function PauseDots({
           paddingVertical: innerVerticalPad,
           marginTop: 15,
           marginBottom: outerVerticalMargin,
-          opacity: snapshot.opacity,
-          transform: [{ scale: snapshot.scale }],
         },
+        presentation,
       ]}
     >
-      {[0, 1, 2].map((idx) => {
-        return (
-          <View
-            key={idx}
-            style={[
-              styles.pauseDot,
-              {
-                width: dotSize,
-                height: dotSize,
-                borderRadius: dotSize / 2,
-                opacity: snapshot.dots[idx],
-              },
-            ]}
-          />
-        );
-      })}
+      {[0, 1, 2].map((index) => (
+        <PauseDot key={index} index={index} snapshot={snapshot} />
+      ))}
     </Reanimated.View>
   );
 });

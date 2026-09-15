@@ -10,7 +10,6 @@ import {
   animate,
   createDotTiming,
   resetSpicyAnimatorState,
-  timeSetter,
   type SpicyLetter,
   type SpicyLyricsType,
   type SpicyRuntimeLine,
@@ -23,8 +22,12 @@ import {
   noteLyricsUserScroll,
   resetLyricsScroll,
   scrollToActiveLine,
+  getLyricsPlaybackState,
+  getVisibleLyricsLines,
+  isLyricsScrollAnimating,
 } from "./spicy-layout-host";
-import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING, getPlaybackWindowState } from "../../lib/lyrics-layout";
+import { createLyricsFrameLoop } from "./spicy-frame-loop";
+import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING } from "../../lib/lyrics-layout";
 import { LANDSCAPE_TOP_LIST_PADDING, LANDSCAPE_LYRICS_HORIZONTAL_INSET, LANDSCAPE_LYRICS_EDGE_BLEED, LANDSCAPE_LYRIC_TEXT_LANE_WIDTH } from "../../constants/player-layout";
 import type { LyricLine } from "../../types/bridge";
 
@@ -66,6 +69,7 @@ type IncomingMessage = {
   positionMs?: number;
   previewPositionMs?: number | null;
   isPlaying?: boolean;
+  active?: boolean;
   durationMs?: number;
   force?: boolean;
   showTranslatedText?: boolean;
@@ -118,7 +122,8 @@ let staticLyricsMode = false;
 let currentLyricsType: SpicyLyricsType = "Syllable";
 let staticSongwriters: string[] = [];
 let staticAttribution: LyricsAttribution | undefined;
-let frameRequestId: number | null = null;
+let rendererActive = true;
+let animationCues: number[] = [];
 let longPressTimer = 0;
 let pressedTimer = 0;
 let touchStartIndex = -1;
@@ -542,7 +547,9 @@ function renderSyncedLyrics() {
 
   resetSpicyAnimatorState();
   resetLyricsScroll();
-  initLyricsLayout(scrollViewport, virtualContainer, runtimeLines, sourceLines as LyricLine[]);
+  initLyricsLayout(scrollViewport, virtualContainer, runtimeLines, sourceLines as LyricLine[], scheduleFrame);
+  animationCues = [...new Set(runtimeLines.flatMap((line) =>
+    [line.StartTime, line.EndTime, line.EndTime - 500]))].sort((a, b) => a - b);
   if (!autoFollowEnabled) scrollViewport.scrollTop = previousOffset;
   updateSelection();
   pendingForceScroll = true;
@@ -690,7 +697,7 @@ function applyPageOptions() {
 }
 
 function computeActiveSource(position: number) {
-  const next = getPlaybackWindowState(position, sourceLines as LyricLine[]).activeLineStartIndex;
+  const next = getLyricsPlaybackState(position).activeLineStartIndex;
   if (next !== activeSourceIndex) {
     activeSourceIndex = next;
     post({ type: "activeLineChange", index: activeSourceIndex });
@@ -760,8 +767,9 @@ function sync(message: IncomingMessage) {
   isPlaying = Boolean(message.isPlaying);
   durationMs = finiteMs(message.durationMs);
   previewPositionMs = message.previewPositionMs == null ? null : finiteMs(message.previewPositionMs);
+  if (typeof message.active === "boolean") rendererActive = message.active;
   if (force) pendingForceScroll = true;
-  scheduleFrame();
+  updateSuspension();
 }
 
 function setAutoFollow(enabled: boolean) {
@@ -834,6 +842,7 @@ function noteUserScroll() {
   window.clearTimeout(longPressTimer);
   if (staticLyricsMode) return;
   noteLyricsUserScroll();
+  scheduleFrame();
 }
 
 scrollViewport?.addEventListener("touchmove", noteUserScroll, { passive: true });
@@ -842,6 +851,8 @@ scrollViewport?.addEventListener("touchend", () => {
   touchStartIndex = -1;
 }, { passive: true });
 scrollViewport?.addEventListener("wheel", noteUserScroll, { passive: true });
+// Scroll also wakes a paused renderer during touch momentum/programmatic seeks.
+scrollViewport?.addEventListener("scroll", scheduleFrame, { passive: true });
 
 creditsRoot?.addEventListener("click", () => {
   if (lastLyricEndTime <= 0) return;
@@ -850,17 +861,12 @@ creditsRoot?.addEventListener("click", () => {
 });
 
 function scheduleFrame() {
-  if (document.visibilityState === "hidden" || frameRequestId !== null) return;
-  frameRequestId = requestAnimationFrame(frame);
+  frameLoop.wake();
 }
 
 function frame() {
-  frameRequestId = null;
-  if (!staticLyricsMode) {
+  if (!staticLyricsMode && sourceLines.length > 0) {
     const position = projectedPosition();
-    timeSetter(runtimeLines, position, currentLyricsType);
-    animate(runtimeLines, position, currentLyricsType);
-    computeActiveSource(position);
     if (scrollViewport) {
       scrollToActiveLine(
         position,
@@ -869,15 +875,46 @@ function frame() {
         setAutoFollow,
       );
     }
+    computeActiveSource(position);
+    const visible = getVisibleLyricsLines();
+    const clockRunning = isPlaying && previewPositionMs === null &&
+      (durationMs <= 0 || position < durationMs);
+    const springsMoving = animate(visible, position, currentLyricsType,
+      getLyricsPlaybackState(position).focusLineIndex, clockRunning);
     pendingForceScroll = false;
+    if (springsMoving || isLyricsScrollAnimating()) return 0;
+    if (clockRunning) {
+      if (visible.some((line) => !line.HTMLElement.hidden && position >= line.StartTime && position < line.EndTime)) return 0;
+      // Sleep through gaps/offscreen playback, waking exactly at the next
+      // timeline boundary (including the native 500ms early dot exit).
+      let low = 0;
+      let high = animationCues.length;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (animationCues[mid] <= position) low = mid + 1;
+        else high = mid;
+      }
+      if (low < animationCues.length) return animationCues[low] - position;
+    }
   }
-  if (!staticLyricsMode && sourceLines.length > 0) frameRequestId = requestAnimationFrame(frame);
+  return null;
+}
+
+const frameLoop = createLyricsFrameLoop({
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (id) => cancelAnimationFrame(id),
+  setTimer: (callback, delay) => window.setTimeout(callback, delay),
+  clearTimer: (id) => window.clearTimeout(id),
+  render: frame,
+});
+
+function updateSuspension() {
+  frameLoop.setSuspended(!rendererActive || document.visibilityState === "hidden");
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") return;
   pendingForceScroll = true;
-  scheduleFrame();
+  updateSuspension();
 });
 
 // Recompute native row anchors when the viewport changes.
@@ -901,6 +938,10 @@ bridgeWindow.KineSyncLyrics = {
     if (message.type === "setLyrics") setLyrics(message);
     else if (message.type === "options") applyOptions(message);
     else if (message.type === "sync") sync(message);
+    else if (message.type === "visibility") {
+      rendererActive = message.active !== false;
+      updateSuspension();
+    }
   },
 };
 

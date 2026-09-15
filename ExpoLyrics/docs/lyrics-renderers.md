@@ -18,15 +18,28 @@ overlap, scroll-range and end-padding functions live in `lib/lyrics-layout.ts`.
 
 The native `LyricLine` retains AMLL's linear reveal, word float, emphasis/glow,
 line/background springs and dot effects. Emphasis uses transforms during both
-playback and seek preview so it cannot change wrapping. Native filter blur is
-disabled on iOS to avoid placing recycled animated rows inside React Native's
-SwiftUI filter wrapper. Android can still use the filter; neither a JavaScript
-bundle build nor the mocked native mounts can verify device-level stability.
+playback and seek preview so it cannot change wrapping. Native filter blur stays
+present on both platforms, including at zero blur, and clears for manual scrolling.
+When the lyrics route or app is inactive, the native host keeps its FlashList and
+measurements mounted but unsubscribes its playback-window/scroll planners and
+cancels row, background, reveal, pause-dot and list-scroll animations. Returning to
+an auto-following screen resynchronizes from the current playback timestamp; a
+manually scrolled screen keeps its existing position.
+
+Worklet helpers must be declared before their callers. Expo's production
+Worklets transform captures closure values eagerly; moving the Bézier solver
+below the text-lift worklets captures `undefined` and crashes on rendering with
+`cubicBezierYForX is not a function`. Regression tests compile with that transform
+before mounting the components. Device-level stability still requires an iOS run.
 
 The WebView uses Spicy's word/letter runtime and effect styles inside KineSync
 rows. Its original center-scroll controller and virtualizer are no longer used.
 The host keeps source rows mounted to make their measured geometry independent
-of animation. Long songs should be included in device performance testing.
+of animation, but only paints/animates nearby rows. During a short lyric gap, the
+same upcoming row selected by the KineSync scroll planner is preactivated for
+brightness/blur without advancing its real word timestamps. Settled/paused and
+hidden WebViews sleep instead of polling `requestAnimationFrame`. Long songs
+should still be included in device performance testing.
 Static lyrics use the existing native-sized static host.
 
 ## Validation
@@ -43,7 +56,8 @@ node scripts/preview-lyrics-renderers.cjs
 
 The preview serves the exact embedded WebView HTML on `127.0.0.1:8766`, using
 sample lyrics only. Its **Run browser checks** button covers geometry, both
-orientations, backgrounds, translations, static mode, seeks and follow/resume.
+orientations, backgrounds, translations, static mode, seeks, follow/resume,
+advance highlighting, nearby-row painting, and idle/visibility suspension.
 It must be restarted after rebuilding the bundle.
 
 On iOS, switch to the native renderer during playback, seek in both directions,

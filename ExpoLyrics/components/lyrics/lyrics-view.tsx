@@ -144,6 +144,7 @@ function normalizeFlashListItemTop(
 }
 
 type LyricsViewProps = {
+  active?: boolean;
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
   previewPositionMs?: number | null;
@@ -208,6 +209,7 @@ const CreditsProfileLine = memo(function CreditsProfileLine({
 });
 
 const CreditsFooter = memo(function CreditsFooter({
+  rendererActive = true,
   songwriters,
   attribution,
   lastLyricEndTime,
@@ -215,6 +217,7 @@ const CreditsFooter = memo(function CreditsFooter({
   style,
   alignRight = false,
 }: {
+  rendererActive?: boolean;
   songwriters: string[];
   attribution?: LyricsAttributionMetadata;
   lastLyricEndTime: number;
@@ -232,11 +235,16 @@ const CreditsFooter = memo(function CreditsFooter({
   const activeProgress = useSharedValue(isActive ? 1 : 0);
 
   useEffect(() => {
+    cancelAnimation(activeProgress);
+    if (!rendererActive) {
+      return;
+    }
     activeProgress.value = withTiming(isActive ? 1 : 0, {
       duration: 260,
       easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
     });
-  }, [activeProgress, isActive]);
+    return () => cancelAnimation(activeProgress);
+  }, [activeProgress, isActive, rendererActive]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: 0.52 + activeProgress.value * 0.48,
@@ -309,6 +317,7 @@ function usePlaybackWindowState(
   lyrics: LyricLineType[],
   backgroundActiveLines: BackgroundActiveLine[],
   timingIndex: LyricTimingIndex,
+  active = true,
 ) {
   const [windowState, setWindowState] = useState(() =>
     getPlaybackWindowState(
@@ -320,6 +329,9 @@ function usePlaybackWindowState(
   );
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     const computeWindowState = () =>
       getPlaybackWindowState(
         usePlaybackStore.getState().playbackPosition,
@@ -350,7 +362,7 @@ function usePlaybackWindowState(
         arePlaybackWindowStatesEqual(prev, next) ? prev : next,
       );
     });
-  }, [backgroundActiveLines, lyrics, timingIndex]);
+  }, [active, backgroundActiveLines, lyrics, timingIndex]);
 
   if (lyrics.length === 0) {
     return EMPTY_WINDOW_STATE;
@@ -360,6 +372,7 @@ function usePlaybackWindowState(
 }
 
 export function LyricsView({
+  active = true,
   tapToSeekEnabled,
   selectedLineKeys,
   showTranslatedText = true,
@@ -389,6 +402,8 @@ export function LyricsView({
   const lyricsSource = usePlaybackStore((s) => s.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore((s) => s.lyricsStatusMessage);
   const lyricsMetadata = usePlaybackStore((s) => s.lyricsMetadata);
+  const [appIsActive, setAppIsActive] = useState(AppState.currentState === "active");
+  const rendererActive = active && appIsActive;
   const lyricsTimingMode = useMemo(
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
@@ -411,8 +426,10 @@ export function LyricsView({
     lyrics,
     backgroundActiveLines,
     lyricTimingIndex,
+    rendererActive,
   );
   const [listReady, setListReady] = useState(false);
+  const [isUserTouchScrolling, setIsUserTouchScrolling] = useState(false);
   const listRef = useAnimatedRef<FlashListRef<LyricLineType>>();
   const lyricScrollOffset = useSharedValue(0);
   const lyricScrollActive = useSharedValue(false);
@@ -436,6 +453,8 @@ export function LyricsView({
   const userScrollInProgressRef = useRef(false);
   const userScrollSessionRef = useRef(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const rendererActiveRef = useRef(rendererActive);
+  rendererActiveRef.current = rendererActive;
   const autoFollowDisableGraceUntilRef = useRef(
     Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS,
   );
@@ -572,7 +591,7 @@ export function LyricsView({
   // actually differs (index boundaries + pause on/off), NOT on every pauseProgress tick
   const extraDataFingerprint = useMemo(
     () =>
-      `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}`,
+      `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}:${isUserTouchScrolling ? 1 : 0}:${rendererActive ? 1 : 0}`,
     [
       effectiveWindowState.activeLineStartIndex,
       effectiveWindowState.activeLineEndIndex,
@@ -582,6 +601,8 @@ export function LyricsView({
       effectiveWindowState.pauseAfterIndex,
       effectiveWindowState.pauseBeforeIndex,
       effectiveWindowState.isLongPause,
+      isUserTouchScrolling,
+      rendererActive,
     ],
   );
   const activeLineIndex = effectiveWindowState.activeLineStartIndex;
@@ -611,6 +632,9 @@ export function LyricsView({
     () => lastLyricEndTime > 0 && usePlaybackStore.getState().playbackPosition >= lastLyricEndTime,
   );
   useEffect(() => {
+    if (!rendererActive) {
+      return;
+    }
     const check = (pos: number) => lastLyricEndTime > 0 && pos >= lastLyricEndTime;
     setLiveCreditsActive(check(usePlaybackStore.getState().playbackPosition));
     let prev = liveCreditsActive;
@@ -622,7 +646,7 @@ export function LyricsView({
       }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastLyricEndTime]);
+  }, [lastLyricEndTime, rendererActive]);
   const creditsActive =
     previewPlaybackPosition !== null
       ? lastLyricEndTime > 0 && previewPlaybackPosition >= lastLyricEndTime
@@ -657,6 +681,9 @@ export function LyricsView({
   ]);
   scrollTargetRangeRef.current = scrollTargetRange;
   useEffect(() => {
+    if (!rendererActive) {
+      return;
+    }
     let previousPosition = usePlaybackStore.getState().playbackPosition;
     playbackPositionRef.current = previousPosition;
     return usePlaybackStore.subscribe((state) => {
@@ -684,7 +711,7 @@ export function LyricsView({
         bumpScrollPlanner();
       }
     });
-  }, [lyrics, previewPlaybackPosition]);
+  }, [lyrics, previewPlaybackPosition, rendererActive]);
   useEffect(() => {
     onAutoFollowChangeRef.current = onAutoFollowChange;
   }, [onAutoFollowChange]);
@@ -801,6 +828,7 @@ export function LyricsView({
     userScrollIdleTimerRef.current = setTimeout(() => {
       userScrollInProgressRef.current = false;
       userScrollSessionRef.current = false;
+      setIsUserTouchScrolling(false);
       userScrollIdleTimerRef.current = null;
     }, USER_SCROLL_IDLE_RESET_MS);
   }, [clearUserScrollIdleTimer]);
@@ -1079,7 +1107,7 @@ export function LyricsView({
         force?: boolean;
       } = {},
     ) => {
-      if (!listReady || lyrics.length === 0) {
+      if (!rendererActiveRef.current || !listReady || lyrics.length === 0) {
         return;
       }
       const shouldSettleInitialAutoScroll =
@@ -1104,6 +1132,9 @@ export function LyricsView({
             viewOffset: activeLineTopOffset,
           })
           .then(() => {
+            if (!rendererActiveRef.current) {
+              return;
+            }
             if (getScrollOffsetForRange(range) === null) {
               if (
                 pendingAnchorRetryCountRef.current < MAX_PENDING_ANCHOR_RETRIES &&
@@ -1159,6 +1190,9 @@ export function LyricsView({
       }
       const performScroll = () => {
         pendingScrollFrameRef.current = null;
+        if (!rendererActiveRef.current) {
+          return;
+        }
         pendingAnchorRangeRef.current = range;
         markProgrammaticScroll(shouldAnimate);
         const startOffset = scrollOffsetRef.current;
@@ -1177,7 +1211,11 @@ export function LyricsView({
         scrollSettleTimerRef.current = setTimeout(
           () => {
             scrollSettleTimerRef.current = null;
-            if (!listReady || lyrics.length === 0) {
+            if (
+              !rendererActiveRef.current ||
+              !listReady ||
+              lyrics.length === 0
+            ) {
               return;
             }
             const settledOffset = getScrollOffsetForRange(range);
@@ -1368,6 +1406,7 @@ export function LyricsView({
     const subscription = AppState.addEventListener("change", (nextState) => {
       const previousState = appStateRef.current;
       appStateRef.current = nextState;
+      setAppIsActive(nextState === "active");
       if (nextState !== "active" || previousState === "active") {
         return;
       }
@@ -1380,25 +1419,50 @@ export function LyricsView({
       autoFollowDisableGraceUntilRef.current =
         Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
       lastScrollRequestRef.current = "";
-      onAutoFollowChangeRef.current?.(true);
-
-      if (autoFollowEnabled && scrollTargetRange) {
-        scheduleScrollToRange(scrollTargetRange, {
-          animated: true,
-          animationStyle: "lyric",
-          force: true,
-        });
-      }
     });
 
     return () => subscription.remove();
   }, [
-    autoFollowEnabled,
     lyricScrollActive,
     lyricScrollOffset,
-    scheduleScrollToRange,
-    scrollTargetRange,
   ]);
+
+  useEffect(() => {
+    if (rendererActive) {
+      autoFollowDisableGraceUntilRef.current =
+        Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
+      lastScrollRequestRef.current = "";
+      return;
+    }
+
+    // Keep the native list exactly where it was while the lyrics screen is not
+    // visible. In particular, cancel the UI-thread scroll timing rather than
+    // letting it finish behind another tab/screen.
+    cancelAnimation(lyricScrollOffset);
+    lyricScrollActive.value = false;
+    programmaticScrollInProgressRef.current = false;
+    userScrollInProgressRef.current = false;
+    userScrollSessionRef.current = false;
+    if (
+      pendingScrollFrameRef.current !== null &&
+      typeof cancelAnimationFrame === "function"
+    ) {
+      cancelAnimationFrame(pendingScrollFrameRef.current);
+      pendingScrollFrameRef.current = null;
+    }
+    if (programmaticScrollTimerRef.current) {
+      clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
+    if (scrollSettleTimerRef.current) {
+      clearTimeout(scrollSettleTimerRef.current);
+      scrollSettleTimerRef.current = null;
+    }
+    if (pendingAnchorRetryTimerRef.current) {
+      clearTimeout(pendingAnchorRetryTimerRef.current);
+      pendingAnchorRetryTimerRef.current = null;
+    }
+  }, [rendererActive, lyricScrollActive, lyricScrollOffset]);
 
   useEffect(() => {
     if (!hasMountedLyricsChangeEffectRef.current) {
@@ -1434,6 +1498,7 @@ export function LyricsView({
 
   useEffect(() => {
     if (
+      !rendererActive ||
       !listReady ||
       resumeAutoFollowSignal <= 0 ||
       resumeAutoFollowSignal === lastResumeAutoFollowSignalRef.current
@@ -1457,6 +1522,7 @@ export function LyricsView({
     isSourceAutoScrollCooldown,
     listReady,
     onAutoFollowChange,
+    rendererActive,
     resumeAutoFollowSignal,
     scheduleScrollToRange,
     scrollTargetRange,
@@ -1478,6 +1544,7 @@ export function LyricsView({
 
   useEffect(() => {
     if (
+      !rendererActive ||
       !listReady ||
       !scrollTargetRange ||
       isSourceAutoScrollCooldown ||
@@ -1514,6 +1581,7 @@ export function LyricsView({
     markInitialAutoScrollSettled,
     listReady,
     previewPlaybackPosition,
+    rendererActive,
     scheduleScrollToRange,
     scrollTargetRange,
     startupDotsWarmupActive,
@@ -1568,10 +1636,17 @@ export function LyricsView({
 
       return (
         <LyricLine
+          rendererActive={rendererActive}
           line={item}
           isActive={isActive}
           isPast={isPast}
           isSelected={Boolean(selectedLineKeys?.has(`${item.lineStartTime}-${item.lineEndTime}`))}
+          blurAmount={
+            isUserTouchScrolling || isActive ||
+            isIndexWithinRange(index, ws.visualActiveLineStartIndex, ws.visualActiveLineEndIndex)
+              ? 0
+              : Math.min(5, (1 + inactiveOpacityDistance) * 0.8)
+          }
           inactiveOpacityDistance={inactiveOpacityDistance}
           showPauseDotsAfter={showPauseDotsAfter}
           showPauseDotsBefore={showPauseDotsBefore}
@@ -1601,9 +1676,11 @@ export function LyricsView({
       onLineLongPress,
       onLinePress,
       selectedLineKeys,
+      isUserTouchScrolling,
       showTranslatedText,
       tapToSeekEnabled,
       previewPlaybackPosition,
+      rendererActive,
     ],
   );
 
@@ -1727,6 +1804,7 @@ export function LyricsView({
     return (
       <View onLayout={handleCreditsLayout}>
         <CreditsFooter
+          rendererActive={rendererActive}
           songwriters={songwriters}
           attribution={attribution}
           lastLyricEndTime={lastLyricEndTime}
@@ -1740,6 +1818,7 @@ export function LyricsView({
     onCreditsTimestampPress,
     attribution,
     hasCredits,
+    rendererActive,
     songwriters,
   ]);
 
@@ -1953,6 +2032,7 @@ export function LyricsView({
             return;
           }
           onUserInteraction?.();
+          setIsUserTouchScrolling(true);
           cancelAnimation(lyricScrollOffset);
           lyricScrollActive.value = false;
           userScrollInProgressRef.current = true;
@@ -1970,6 +2050,7 @@ export function LyricsView({
         }}
         onScrollEndDrag={() => {
           userScrollInProgressRef.current = false;
+          setIsUserTouchScrolling(false);
           scheduleUserScrollIdleReset();
         }}
         onMomentumScrollBegin={() => {
@@ -1980,6 +2061,7 @@ export function LyricsView({
             return;
           }
           onUserInteraction?.();
+          setIsUserTouchScrolling(true);
           cancelAnimation(lyricScrollOffset);
           lyricScrollActive.value = false;
           userScrollInProgressRef.current = true;
@@ -1995,6 +2077,7 @@ export function LyricsView({
           }
         }}
         onMomentumScrollEnd={() => {
+          setIsUserTouchScrolling(false);
           clearUserScrollIdleTimer();
           programmaticScrollInProgressRef.current = false;
           if (programmaticScrollTimerRef.current) {

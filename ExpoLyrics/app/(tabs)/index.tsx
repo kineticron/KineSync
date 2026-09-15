@@ -1488,6 +1488,7 @@ export default function HomeScreen() {
                 />
               ) : (
                 <LyricsView
+                  active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
@@ -1734,6 +1735,7 @@ export default function HomeScreen() {
                 />
               ) : (
                 <LyricsView
+                  active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}

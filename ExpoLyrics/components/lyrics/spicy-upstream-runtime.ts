@@ -60,6 +60,7 @@ export type SpicyLyricsType = "Syllable" | "Line";
 const SLEEP_OFFSET_SQ_LIMIT = (1 / 3840) ** 2;
 const SLEEP_VELOCITY_SQ_LIMIT = 1e-2 ** 2;
 const EPS = 1e-5;
+let snapSprings = false;
 
 // Literal TypeScript port used by Spicy Lyrics (itself a port of Fraktality/spr).
 export class Spring {
@@ -78,6 +79,11 @@ export class Spring {
   }
 
   Step(dt: number): number {
+    if (snapSprings || this.CanSleep()) {
+      this.p = this.g;
+      this.v = 0;
+      return this.p;
+    }
     const d = this.d;
     const f = this.f * (2 * Math.PI);
     const g = this.g;
@@ -328,6 +334,7 @@ export function resetSpicyAnimatorState(): void {
   blurringLastLine = null;
   lastFrameTime = performance.now();
   styleQueue.clear();
+  animationState = new WeakMap();
 }
 
 // Upstream's LyricsVirtualizer mount callback only invalidates the blur-line
@@ -466,7 +473,7 @@ function animateLetterGroup(word: SpicyWord, processedPosition: number, deltaTim
       const currentScale = letter.AnimatorStore.Scale.Step(deltaTime);
       const currentYOffset = letter.AnimatorStore.YOffset.Step(deltaTime);
       const currentGlow = letter.AnimatorStore.Glow.Step(deltaTime);
-      letter.HTMLElement.style.setProperty("--gradient-position", `${targetGradient}%`);
+      setStyleIfChanged(letter.HTMLElement, "--gradient-position", `${targetGradient}%`);
       setStyleIfChanged(
         letter.HTMLElement,
         "transform",
@@ -505,7 +512,7 @@ function animateLetterGroup(word: SpicyWord, processedPosition: number, deltaTim
     const currentScale = letter.AnimatorStore.Scale.Step(deltaTime);
     const currentYOffset = letter.AnimatorStore.YOffset.Step(deltaTime);
     const currentGlow = letter.AnimatorStore.Glow.Step(deltaTime);
-    letter.HTMLElement.style.setProperty("--gradient-position", sung ? "100%" : "-20%");
+    setStyleIfChanged(letter.HTMLElement, "--gradient-position", sung ? "100%" : "-20%");
     setStyleIfChanged(
       letter.HTMLElement,
       "transform",
@@ -581,7 +588,7 @@ function animateActiveWord(word: SpicyWord, processedPosition: number, deltaTime
     0.001,
   );
   if (!word.LetterGroup) {
-    word.HTMLElement.style.setProperty("--gradient-position", `${targetGradient}%`);
+    setStyleIfChanged(word.HTMLElement, "--gradient-position", `${targetGradient}%`);
     setStyleIfChanged(word.HTMLElement, "--text-shadow-blur-radius", `${4 + 2 * currentGlow}px`, 0.5);
     setStyleIfChanged(
       word.HTMLElement,
@@ -609,7 +616,7 @@ function settleSungWord(word: SpicyWord, deltaTime: number): void {
     );
     setStyleIfChanged(word.HTMLElement, "scale", `${currentScale}`, 0.001);
     if (!word.LetterGroup) {
-      word.HTMLElement.style.setProperty("--gradient-position", "100%");
+      setStyleIfChanged(word.HTMLElement, "--gradient-position", "100%");
       setStyleIfChanged(word.HTMLElement, "--text-shadow-blur-radius", `${4 + 2 * currentGlow}px`, 0.5);
       setStyleIfChanged(
         word.HTMLElement,
@@ -653,7 +660,7 @@ function settleSungWord(word: SpicyWord, deltaTime: number): void {
       const currentScale = letter.AnimatorStore.Scale.Step(deltaTime);
       const currentYOffset = letter.AnimatorStore.YOffset.Step(deltaTime);
       const currentGlow = letter.AnimatorStore.Glow.Step(deltaTime);
-      letter.HTMLElement.style.setProperty("--gradient-position", "100%");
+      setStyleIfChanged(letter.HTMLElement, "--gradient-position", "100%");
       setStyleIfChanged(
         letter.HTMLElement,
         "transform",
@@ -661,10 +668,11 @@ function settleSungWord(word: SpicyWord, deltaTime: number): void {
         0.001,
       );
       setStyleIfChanged(letter.HTMLElement, "scale", `${currentScale}`, 0.001);
-      letter.HTMLElement.style.setProperty("--text-shadow-blur-radius", `${4 + 12 * currentGlow}px`);
-      letter.HTMLElement.style.setProperty(
+      setStyleIfChanged(letter.HTMLElement, "--text-shadow-blur-radius", `${4 + 12 * currentGlow}px`, 0.5);
+      setStyleIfChanged(letter.HTMLElement,
         "--text-shadow-opacity",
         `${currentGlow * LETTER_GLOW_MULTIPLIER_OPACITY}%`,
+        1,
       );
     }
   }
@@ -730,65 +738,79 @@ function animateLineLyrics(
   }
 }
 
+let animationFrame = 0;
+let animationState = new WeakMap<SpicyRuntimeLine, {
+  status: SpicyElementStatus; position: number; frame: number; settled: boolean;
+}>();
+
+function storeSettled(store?: SpicyAnimatorStore) {
+  return !store || (store.Scale.CanSleep() && store.YOffset.CanSleep() &&
+    store.Glow.CanSleep() && (!store.Opacity || store.Opacity.CanSleep()));
+}
+
+function lineSettled(line: SpicyRuntimeLine) {
+  if (line.AnimatorStore && !line.AnimatorStore.Glow.CanSleep()) return false;
+  return (line.Syllables?.Lead ?? []).every((word) =>
+    storeSettled(word.AnimatorStore) &&
+    (!word.Letters || word.Letters.every((letter) => storeSettled(letter.AnimatorStore))));
+}
+
 export function animate(
   lines: SpicyRuntimeLine[],
   position: number,
   lyricsType: SpicyLyricsType = "Syllable",
-): void {
+  focusSourceIndex = -1,
+  playing = true,
+): boolean {
   const processedPosition = position;
   lastProcessedPosition = processedPosition;
   const now = performance.now();
-  const deltaTime = (now - lastFrameTime) / 1000;
+  const deltaTime = Math.min(0.064, Math.max(0, (now - lastFrameTime) / 1000));
   lastFrameTime = now;
-
-  if (lyricsType === "Line") {
-    animateLineLyrics(lines, processedPosition, deltaTime);
-    flushStyleBatch();
-    return;
-  }
-
+  animationFrame++;
+  let needsFrame = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!line.HTMLElement.isConnected) continue;
+    if (!line.HTMLElement.isConnected || line.HTMLElement.hidden) continue;
     const lineState = getElementState(processedPosition, line.StartTime, line.EndTime);
-
-    if (lineState === "Active") {
-      if (blurringLastLine !== index) {
-        applyBlur(lines, index);
-        blurringLastLine = index;
-      }
-      line.HTMLElement.classList.add("Active");
-      line.HTMLElement.classList.remove("NotSung", "Sung");
-      if (line.DotLine) {
-        line.HTMLElement.classList.toggle(
-          "pre-hidden",
-          processedPosition > line.EndTime - PRE_HIDDEN_DOT_LINE_MS,
-        );
-      }
-      for (const word of line.Syllables?.Lead || []) {
-        animateActiveWord(word, processedPosition, deltaTime);
-      }
-    } else if (lineState === "NotSung") {
-      line.HTMLElement.classList.add("NotSung");
-      line.HTMLElement.classList.remove("Sung", "Active");
-      if (line.DotLine) line.HTMLElement.classList.add("pre-hidden");
-      // Upstream intentionally does not step/reset word stores in this branch.
-    } else {
-      line.HTMLElement.classList.add("Sung");
-      line.HTMLElement.classList.remove("Active", "NotSung");
-      if (line.DotLine) line.HTMLElement.classList.remove("pre-hidden");
-
-      const nextLine = lines[index + 1];
-      const nextStatus = nextLine
-        ? getElementState(processedPosition, nextLine.StartTime, nextLine.EndTime)
-        : undefined;
-      if (!nextLine || nextStatus === "NotSung" || nextStatus === "Active") {
-        for (const word of line.Syllables?.Lead || []) settleSungWord(word, deltaTime);
+    const previous = animationState.get(line);
+    const statusChanged = previous?.status !== lineState;
+    const distance = Math.abs((line.sourceIndex ?? focusSourceIndex) - focusSourceIndex);
+    setStyleIfChanged(line.HTMLElement, "--BlurAmount",
+      `${lineState === "Active" || distance === 0 ? 0 : Math.min(BLUR_MULTIPLIER * distance, BLUR_MULTIPLIER * 5.465)}px`, 0.25);
+    if (statusChanged) {
+      line.HTMLElement.classList.remove("Active", "NotSung", "Sung");
+      line.HTMLElement.classList.add(lineState);
+      line.Status = lineState;
+    }
+    const preHidden = lineState !== "Active" || position > line.EndTime - PRE_HIDDEN_DOT_LINE_MS;
+    if (line.DotLine && line.HTMLElement.classList.contains("pre-hidden") !== preHidden) {
+      line.HTMLElement.classList.toggle("pre-hidden", preHidden);
+    }
+    // Reentering the viewport or seeking must paint the current timestamp,
+    // never replay springs from a stale offscreen position.
+    snapSprings = !previous || previous.frame !== animationFrame - 1 ||
+      position < previous.position || Math.abs(position - previous.position) > 1000;
+    const unchanged = previous?.settled && !statusChanged && !snapSprings &&
+      (lineState !== "Active" || position === previous.position);
+    if (!unchanged) {
+      if (lyricsType === "Line") animateLineLyrics([line], position, deltaTime);
+      else for (const word of line.Syllables?.Lead ?? []) {
+        if (lineState === "Sung" && previous && !snapSprings) settleSungWord(word, deltaTime);
+        else animateActiveWord(word, position, deltaTime);
       }
     }
+    const settled = unchanged || lineSettled(line);
+    const animating = !settled || (playing && lineState === "Active");
+    if (line.HTMLElement.classList.contains("ks-animating") !== animating) {
+      line.HTMLElement.classList.toggle("ks-animating", animating);
+    }
+    needsFrame ||= !settled;
+    animationState.set(line, { status: lineState, position, frame: animationFrame, settled });
   }
-
+  snapSprings = false;
   flushStyleBatch();
+  return needsFrame;
 }
 
 export const SPICY_INTERLUDE_GAP_MS = 3000;

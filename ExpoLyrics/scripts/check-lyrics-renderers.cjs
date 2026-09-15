@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
+const babel = require('@babel/core');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 
@@ -26,6 +27,24 @@ const View = primitive('View');
 const Text = primitive('Text');
 const easing = (value) => value;
 const Easing = { linear: easing, ease: easing, out: () => easing, inOut: () => easing, bezier: () => easing };
+const uiRuntime = vm.createContext({});
+function unpackWorklet(worklet) {
+  assert.ok(worklet.__workletHash, 'animated callbacks must be compiled as worklets');
+  const unpacked = { __closure: {} };
+  for (const [name, value] of Object.entries(worklet.__closure)) {
+    if (typeof value === 'function') {
+      assert.ok(value.__workletHash, `UI callback captured non-worklet helper ${name}`);
+      unpacked.__closure[name] = unpackWorklet(value);
+    } else {
+      unpacked.__closure[name] = value;
+    }
+  }
+  // Match Worklets' release value-unpacker: evaluate only the serialized source,
+  // then bind its closure. No module globals or JS function hoisting are available.
+  const fn = vm.runInContext(`(${worklet.__initData.code})`, uiRuntime).bind(unpacked);
+  unpacked._recur = fn;
+  return fn;
+}
 const mocks = {
   react: React,
   'react-native': {
@@ -40,7 +59,8 @@ const mocks = {
     Easing,
     FadeOut: { duration: () => ({ easing: () => ({}) }) },
     useSharedValue: (value) => React.useRef({ value }).current,
-    useAnimatedStyle: (compute) => compute(),
+    useAnimatedStyle: (compute) => unpackWorklet(compute)(),
+    useDerivedValue: (compute) => ({ value: unpackWorklet(compute)() }),
     withTiming: (value) => value,
     withSpring: (value) => value,
     withDelay: (_, value) => value,
@@ -55,7 +75,14 @@ function load(file) {
   const resolved = path.resolve(root, file);
   if (cache.has(resolved)) return cache.get(resolved).exports;
   const source = fs.readFileSync(resolved, 'utf8');
-  const code = ts.transpileModule(source, {
+  const code = resolved.endsWith('lyric-line.tsx') ? babel.transformSync(source, {
+    filename: resolved,
+    babelrc: false,
+    configFile: false,
+    presets: ['babel-preset-expo'],
+    caller: { name: 'metro', platform, supportsStaticESM: false },
+    envName: 'production',
+  }).code : ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText;
   const module = { exports: {} };
@@ -93,8 +120,10 @@ for (const anchor of [0, 32]) {
 }
 assert.equal(layout.getCreditsAwareScrollOffset({ range: { startIndex: 3, endIndex: 3 }, lyricsLength: 4, listHeight: 400, creditsLayout: { top: 700, bottom: 1200 }, getAbsoluteLineTop: () => 600, creditsActive: true, hasCredits: true }), 824);
 
-// Mount the actual native component and execute every initial animated-style
-// callback. Host primitives are mocked; this does not replace an iOS device test.
+// Compile with Expo's production Babel/Worklets transform, then mount the actual
+// native component and execute the animated-style callbacks. Plain TypeScript
+// transpilation misses eager worklet closures capturing uninitialized helpers.
+// Host primitives are mocked; this does not replace an iOS device test.
 for (platform of ['ios', 'android']) {
   cache.delete(path.resolve(root, 'components/lyrics/lyric-line.tsx'));
   const { LyricLine } = load('components/lyrics/lyric-line.tsx');
@@ -113,13 +142,13 @@ for (platform of ['ios', 'android']) {
           shouldDrivePlaybackUpdates: true, showTranslatedText: true,
           tapEnabled: true, landscapeMode, fontScale: 0.9,
           playbackPositionOverrideMs: preview, blurAmount: 4,
-          showPauseDotsBefore: position === 0, pauseStartMs: 0,
+          showPauseDotsBefore: true, pauseStartMs: 0,
           pauseVisualDurationMs: 7000, pauseHoldMs: 0,
         }));
         assert.ok(html.includes('Translation') && html.includes('Echo translation'));
         assert.ok(paintedStyles.some((style) => Math.abs(style.fontSize - 32 * 1.05 * 0.9) < 0.001), JSON.stringify({ platform, landscapeMode, position, preview, sizes: paintedStyles.map((s) => s.fontSize).filter(Boolean) }));
         assert.ok(paintedStyles.some((style) => style.alignItems === (landscapeMode ? 'flex-end' : 'flex-start')));
-        if (platform === 'ios') assert.ok(paintedStyles.every((style) => !('filter' in style)), 'iOS rows never enter the SwiftUI filter hierarchy');
+        assert.ok(paintedStyles.some((style) => style.filter?.[0]?.blur === 4), 'native blur is preserved on both platforms');
         const checkFinite = (value) => {
           if (typeof value === 'number') assert.ok(Number.isFinite(value), 'animated styles stay finite');
           else if (value && typeof value === 'object') Object.values(value).forEach(checkFinite);
@@ -144,7 +173,8 @@ class ElementBox {
   clientHeight = 400;
   className = '';
   classes = new Set();
-  classList = { add: (...names) => names.forEach((n) => this.classes.add(n)), toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name), contains: (name) => this.classes.has(name) };
+  classList = { add: (...names) => names.forEach((n) => this.classes.add(n)), remove: (...names) => names.forEach((n) => this.classes.delete(n)), toggle: (name, enabled) => enabled ? this.classes.add(name) : this.classes.delete(name), contains: (name) => this.classes.has(name) };
+  isConnected = true;
   style = { setProperty: (name, value) => { this.style[name] = value; } };
   appendChild(child) {
     if (child.parentElement) child.parentElement.children = child.parentElement.children.filter((item) => item !== child);
@@ -176,7 +206,13 @@ const onFollow = (enabled) => followChanges.push(enabled);
 host.initLyricsLayout(viewport, content, runtime, source);
 host.scrollToActiveLine(1500, true, true, onFollow);
 assert.equal(viewport.scrollTop, 150, 'mid-song open uses native portrait anchor');
+host.scrollToActiveLine(2750, true, false, onFollow);
+assert.ok(content.children[1].classList.contains('ks-preactive'), 'short gap highlights the same upcoming row that scrolling targets');
+assert.equal(runtime[1].StartTime, 3000, 'preactivation never changes word/line timestamps');
 host.scrollToActiveLine(3500, true, true, onFollow);
+assert.ok(!content.children[1].classList.contains('ks-preactive'), 'preactivation clears at the actual start');
+clockMs += 500;
+host.scrollToActiveLine(3500, true, false, onFollow);
 assert.equal(viewport.scrollTop, 234, 'seek anchors the correct measured row');
 viewport.scrollTop = 700;
 host.scrollToActiveLine(5500, false, false, onFollow);
@@ -205,3 +241,69 @@ assert.equal(content.children.length, source.length, 'one layout row per source 
 assert.ok(host.lyricScrollEasing(0.5) > 0.8 && host.lyricScrollEasing(0.5) < 1);
 host.destroyLyricsLayout();
 console.log('WebView controller checks passed: measured anchors, seeks, manual scroll, resume, landscape and last-line padding.');
+
+const longSource = Array.from({ length: 1000 }, (_, i) => makeLine(i * 2000, i * 2000 + 1500));
+const longContent = new ElementBox();
+longContent.className = 'content';
+scrollRoot.appendChild(longContent);
+const longRuntime = longSource.map((line, sourceIndex) => ({ sourceIndex, StartTime: line.lineStartTime, EndTime: line.lineEndTime, HTMLElement: new ElementBox() }));
+host.initLyricsLayout(viewport, longContent, longRuntime, longSource);
+host.scrollToActiveLine(1000100, true, true, onFollow);
+const visible = host.getVisibleLyricsLines();
+assert.ok(visible.length > 0 && visible.length < 20, '1000 source rows only animate viewport plus overscan');
+assert.ok(visible.some((line) => line.sourceIndex === 500));
+assert.ok(longContent.children[0].classList.contains('ks-offscreen'), 'offscreen rows retain space without painting');
+host.destroyLyricsLayout();
+
+const { createLyricsFrameLoop } = load('components/lyrics/spicy-frame-loop.ts');
+let nextId = 0, renders = 0, delay = null;
+const frames = new Map(), timers = new Map();
+const loop = createLyricsFrameLoop({
+  requestFrame: (cb) => { frames.set(++nextId, cb); return nextId; },
+  cancelFrame: (id) => frames.delete(id),
+  setTimer: (cb, ms) => { timers.set(++nextId, { cb, ms }); return nextId; },
+  clearTimer: (id) => timers.delete(id),
+  render: () => { renders++; return delay; },
+});
+const flushFrame = () => { const [id, cb] = frames.entries().next().value; frames.delete(id); cb(); };
+loop.wake(); loop.wake();
+assert.equal(frames.size, 1, 'bridge bursts coalesce into one frame');
+flushFrame();
+assert.equal(frames.size + timers.size, 0, 'paused/settled renderer has no outstanding callbacks');
+delay = 0; loop.wake(); flushFrame();
+assert.equal(frames.size, 1, 'animation continues at display refresh rate');
+loop.setSuspended(true);
+assert.equal(frames.size + timers.size, 0, 'backgrounding cancels work immediately');
+loop.wake(); assert.equal(frames.size, 0, 'hidden bridge updates cannot restart rendering');
+delay = 1200; loop.setSuspended(false); flushFrame();
+assert.equal(timers.values().next().value.ms, 1200, 'gaps sleep until the next timeline cue');
+loop.wake(); assert.equal(timers.size, 0, 'seeks cancel obsolete gap timers');
+flushFrame(); loop.setSuspended(true);
+assert.equal(frames.size + timers.size, 0, 'suspension also cancels a sleeping timer');
+assert.ok(renders >= 3);
+
+const spicy = load('components/lyrics/spicy-upstream-runtime.ts');
+let styleWrites = 0;
+const wordElement = new ElementBox();
+wordElement.style.setProperty = (name, value) => { styleWrites++; wordElement.style[name] = value; };
+const animated = { HTMLElement: new ElementBox(), StartTime: 1000, EndTime: 4500, TotalTime: 3500, sourceIndex: 0,
+  Syllables: { Lead: [{ HTMLElement: wordElement, StartTime: 1000, EndTime: 4500, TotalTime: 3500 }] } };
+spicy.resetSpicyAnimatorState();
+spicy.animate([animated], 1500, 'Syllable', 0, true);
+clockMs += 16;
+spicy.animate([animated], 2000, 'Syllable', 0, false);
+let moving = true;
+for (let i = 0; i < 1000 && moving; i++) { clockMs += 16; moving = spicy.animate([animated], 2000, 'Syllable', 0, false); }
+assert.equal(moving, false, 'paused springs eventually sleep');
+const settledWrites = styleWrites;
+for (let i = 0; i < 120; i++) { clockMs += 16; spicy.animate([animated], 2000, 'Syllable', 0, false); }
+assert.equal(styleWrites, settledWrites, 'settled words cause zero repeated style writes');
+clockMs += 16;
+spicy.animate([animated], 500, 'Syllable', 0, false);
+assert.equal(wordElement.style['--gradient-position'], '-20%', 'backward seek resets the reveal before start');
+assert.ok(animated.HTMLElement.classList.contains('NotSung'));
+spicy.animate([], 4000);
+clockMs += 16;
+spicy.animate([animated], 5000, 'Syllable', 0, false);
+assert.equal(wordElement.style['--gradient-position'], '100%', 'offscreen reentry paints the current timestamp');
+console.log('Performance checks passed: bounded visible work, advance highlight, idle/suspended scheduling, spring sleep and seek recovery.');

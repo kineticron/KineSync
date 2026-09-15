@@ -36,5 +36,6 @@ line/background scale and spring parameters, word-fade width, emphasis curves,
 and interlude-dot choreography using React Native and Reanimated primitives.
 KineSync owns font sizes, line wrapping, row spacing, alignment and scrolling.
 Background animation changes only painting, keeping its layout space reserved.
-Native filter blur is restricted to Android: iOS lyric rows avoid the SwiftUI
-filter wrapper and retain a stable Fabric view hierarchy during recycling.
+Native filter blur is retained on both platforms and clears during manual
+scrolling. The filter stays present at zero blur to keep its native hierarchy
+stable while focus moves.
