@@ -1,42 +1,53 @@
 # Lyrics renderers
 
-Both hosts use the original native layout policy from `main`. The pure timing,
-overlap, scroll-range and end-padding functions live in `lib/lyrics-layout.ts`.
-`LYRICS_LAYOUT` defines the common typography. Landscape constants remain in
-`constants/player-layout.ts`.
+The native renderer ports the effects from **AMLL core 0.5.2**, the version
+locked by the AMLL WebView on `main`. The reference is
+[applemusic-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics)
+(AGPL-3.0-only). The algorithms live in `lib/amll-native.ts`; native masks and
+word effects live in `components/lyrics/native-lyric-token.tsx`.
 
-- Base text: 32px / 42px, rasterized at the original 1.05 active scale.
-- Portrait: 88% text lane, 12px list inset plus 16px inner inset, 150px initial
-  top padding, and active rows anchored at the viewport top.
-- Landscape: 90% lane, existing list/inner insets, 168px initial top padding,
-  32px active-row offset, and reversed lead/duet alignment. Only the supplied
-  font scale changes text size.
-- Rows retain an 84px minimum height and the original vertical padding.
-  Background vocals reserve their layout space throughout playback.
-- Scrolling uses the original 440ms easing, overlap ranges, manual-scroll
-  thresholds and credits-aware bottom padding.
+Native typography remains the existing system font: 32px / 42px with the
+existing 1.05 active-size multiplier, weight 700, background scale 0.62 and
+weight 500, plus the user's font scale. Translation sizes stay unchanged.
+Scaling and emphasis are transforms; they never change text layout metrics.
 
-The native `LyricLine` uses one text tree per token. A soft brightness sweep
-advances across grapheme spans using the original timestamps. Joining scripts
-stay in a single attributed run. AMLL word float, background slide/opacity and
-dot effects remain; stacked reveal/glow copies and animated text magnification
-have been removed. Text is rendered at its final font size, including during
-seek preview, so animation cannot change wrapping or enlarge a cached bitmap.
-Native filter blur stays present on both platforms, including at zero blur, and
-clears for manual scrolling.
-When the lyrics route or app is inactive, the native host keeps its FlashList and
-measurements mounted but unsubscribes its playback-window/scroll planners and
-cancels row, background, reveal, pause-dot and list-scroll animations. Returning to
-an auto-following screen resynchronizes from the current playback timestamp; a
-manually scrolled screen keeps its existing position.
-Pause-dot timing runs on the UI thread, without a React render on each playback
-tick. Recycled rows cancel their delayed reveals and presentation animations.
+The native implementation includes:
 
-Worklet helpers must be declared before their callers. Expo's production
-Worklets transform captures closure values eagerly; moving the Bézier solver
-below the text-lift worklets captures `undefined` and crashes on rendering with
-`cubicBezierYForX is not a function`. Regression tests compile with that transform
-before mounting the components. Device-level stability still requires an iOS run.
+- One shaped text pass behind a continuously moving native alpha mask, with
+  the WebView's 0.56-line-height feather. The cursor uses measured token widths,
+  shares its feather across adjacent syllables, and holds during timing gaps.
+- AMLL's 0.97-to-1 line spring, scale-dependent bright/dark alpha, and asymmetric
+  exponential attack/release. Group opacity and distance blur use the reference
+  400ms transitions; manual scrolling clears blur.
+- Normal word float, and 32-keyframe sustained-word emphasis with staggered
+  characters, expansion, horizontal spread, lift, glow, and stronger last words.
+  Joining scripts remain shaped runs rather than disconnected characters.
+- Background-vocal slide, fade, 0.8-to-1 wrapper scale, 0.75-to-1 text scale,
+  40% brightness, and an expanding/collapsing layout slot. Pausing presents all
+  backgrounds, as in AMLL. Translations use the reference opacity.
+- Independent row springs and the decaying 50ms stagger. Spring stiffness
+  adapts to line intervals, with the slower policy for seeks/interludes. The
+  active row anchors at 8% of viewport height, matching `main`'s AMLL settings.
+- The 0.5.2 interlude's breathing, sequential dot fill, entrance and exit curves.
+  These intentionally differ from the newer AMLL interlude implementation.
+
+The FlashList retains gesture handling, virtualization, overlap/timing rules,
+credits and seek controls. Full-width word flow removes the old nested 88%/90%
+width reduction; duet songs reserve an opposing lane. Row spacing and insets
+follow the AMLL host while preserving native font metrics.
+
+Playback clocks, masks, letter effects, blur and row motion run on the UI thread.
+Hidden renderers cancel their clocks/springs, and recycled rows cancel delayed
+motion. Alpha integration stops after settling. Android uses software mask
+invalidation so moving masks repaint. This trades bitmap work for a real
+continuous mask; sustained frame rate still needs profiling on physical devices.
+iOS uses the project's existing experimental React Native release level for
+SwiftUI-backed view blur; the filter remains present at zero to avoid changing
+the view hierarchy during focus transitions.
+
+Worklet helpers must be declared before their callers. The regression runner
+compiles the native modules with Expo's production Worklets transform and
+executes their serialized closures, catching missing captures before deployment.
 
 The WebView uses Spicy's word/letter runtime and effect styles inside KineSync
 rows. Its original center-scroll controller and virtualizer are no longer used.
@@ -57,7 +68,7 @@ Static lyrics use the existing native-sized static host.
 
 Playing packets within 80ms of the projected store clock retain the existing
 anchor. Track changes, play/pause changes and larger corrections update it.
-Native reveal retargeting preserves the current UI value for corrections within
+Native timeline retargeting preserves the current UI value for corrections within
 250ms; larger jumps and paused previews land immediately. The WebView slews
 routine corrections at up to 10% of playback speed and converges even without
 another packet. New lyrics, explicit seeks and preview exit reset it immediately.
@@ -130,7 +141,9 @@ of 120fps on a phone.
 The native regression runner executes production-transformed worklets and effect
 cleanup across 64 visible/hidden scenarios. Browser checks verify zero idle RAF
 callbacks, gap preactivation without early word reveals, and suspension/resume.
-Additional checks cover continuous clocks at simulated 60/90/120/144Hz, source
+AMLL reference checks also cover unequal-width mask boundaries, held-word and
+last-word emphasis, float, asymmetric blur, spring/stagger policies and interlude
+snapshots. Additional checks cover continuous clocks at simulated 60/90/120/144Hz, source
 corrections, seek release/cancellation, UI drag interruption, Android plugin
 idempotence, KRC spacing and settled word spring suppression.
 The Android activity also passed `:app:compileDebugKotlin` with the plugin's

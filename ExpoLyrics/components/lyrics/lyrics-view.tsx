@@ -18,7 +18,6 @@ import {
   isIndexWithinUpdateWindow,
   TOP_LIST_PADDING,
   BOTTOM_LIST_PADDING,
-  ACTIVE_LINE_TOP_OFFSET,
   ACTIVE_RANGE_BOTTOM_PADDING,
   STARTUP_DOTS_WARMUP_MS,
 } from "@/lib/lyrics-layout";
@@ -57,13 +56,13 @@ import Animated, {
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
+  withSpring,
   withTiming,
 } from "react-native-reanimated";
 
 import {
   getLandscapeLyricsCenterUpwardOffset,
   getLyricsViewportCenterUpwardOffset,
-  LANDSCAPE_ACTIVE_LINE_TOP_OFFSET,
   LANDSCAPE_LYRICS_EDGE_BLEED,
   LANDSCAPE_LYRICS_HORIZONTAL_INSET,
   LANDSCAPE_TOP_LIST_PADDING,
@@ -77,6 +76,8 @@ import type {
   LyricsAttributionProfile,
 } from "@/types/bridge";
 
+import { AMLL_POSITION_SPRING, amlPositionSpring, amlBlur } from "@/lib/amll-native";
+import { NativeLyricMotion, type NativeLyricScroll } from "./native-lyric-motion";
 import { LyricLine } from "./lyric-line";
 import { useLyricScrollInterruption } from "./use-lyric-scroll-interruption";
 
@@ -90,15 +91,13 @@ const STATIC_TRANSLATED_FONT_SIZE = 18;
 const STATIC_TRANSLATED_LINE_HEIGHT = 26;
 
 const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
-const LYRIC_SCROLL_ANIMATION_MS = 440;
+const LYRIC_SCROLL_ANIMATION_MS = 1600;
 const PROGRAMMATIC_SCROLL_GUARD_MS = LYRIC_SCROLL_ANIMATION_MS + 40;
 const SCROLL_OFFSET_EPSILON = 2;
 const SCROLL_SETTLE_VERIFY_MS = LYRIC_SCROLL_ANIMATION_MS + 100;
 const PENDING_ANCHOR_RETRY_MS = 96;
 const MAX_PENDING_ANCHOR_RETRIES = 18;
 
-// Fast start, long gentle deceleration — no overshoot (P1 0.22,0.88 → P2 0.34,1)
-const LYRIC_SCROLL_EASING = ReanimatedEasing.bezier(0.22, 0.88, 0.34, 1);
 const AUTO_FOLLOW_DISABLE_GRACE_MS = 2000;
 const AUTO_FOLLOW_DISABLE_DISTANCE_PX = 120;
 const AUTO_FOLLOW_RESUME_DISTANCE_PX = 64;
@@ -391,13 +390,11 @@ export function LyricsView({
   fontScale = 1,
   landscapeMode = false,
 }: LyricsViewProps) {
-  const activeLineTopOffset = landscapeMode
-    ? LANDSCAPE_ACTIVE_LINE_TOP_OFFSET
-    : ACTIVE_LINE_TOP_OFFSET;
   const topListPadding = landscapeMode
     ? LANDSCAPE_TOP_LIST_PADDING
     : TOP_LIST_PADDING;
   const lyrics = usePlaybackStore((s) => s.lyrics);
+  const hasDuetLines = useMemo(() => lyrics.some(line => line.oppositeAligned), [lyrics]);
   const lyricsSource = usePlaybackStore((s) => s.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore((s) => s.lyricsStatusMessage);
   const lyricsMetadata = usePlaybackStore((s) => s.lyricsMetadata);
@@ -432,6 +429,8 @@ export function LyricsView({
   const listRef = useAnimatedRef<FlashListRef<LyricLineType>>();
   const lyricScrollOffset = useSharedValue(0);
   const lyricScrollActive = useSharedValue(false);
+  const staggerEnabled = useSharedValue(false);
+  const scrollCommand = useSharedValue<NativeLyricScroll>({ from: 0, target: 0, revision: 0, firstVisible: 0, focus: 0, spring: AMLL_POSITION_SPRING });
   const activeLineRef = useRef(-1);
   const onAutoFollowChangeRef = useRef(onAutoFollowChange);
   const listHeightRef = useRef(0);
@@ -481,6 +480,8 @@ export function LyricsView({
   const [isSourceAutoScrollCooldown, setIsSourceAutoScrollCooldown] =
     useState(false);
   const [viewportHeight, setViewportHeight] = useState(0);
+  // main's AMLL WebView uses LayoutAlignAnchor.Top at 8% of the viewport.
+  const activeLineTopOffset = viewportHeight * 0.08;
   const [contentLayoutVersion, setContentLayoutVersion] = useState(0);
   // ponytail: batch cell layout bumps — fast scroll fires onLayout per cell,
   // debounce so we only re-render once per frame instead of per-cell
@@ -840,12 +841,24 @@ export function LyricsView({
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
-        lyricScrollOffset.value = withTiming(
+        let firstVisible = 0;
+        for (let i = 0; i < lyrics.length; i++) {
+          const row = listRef.current?.getLayout(i);
+          if (row && normalizeFlashListItemTop(listRef.current, row.y, getFlashListLeadingInset(listRef.current)) >= offset) {
+            firstVisible = i; break;
+          }
+        }
+        const focus = effectiveWindowStateRef.current.focusLineIndex;
+        const previous = lyrics[focus - 1];
+        const interval = previous && lyrics[focus] ? lyrics[focus].lineStartTime - previous.lineStartTime : undefined;
+        const spring = amlPositionSpring(interval, previewPlaybackPosition !== null || Math.abs(focus - scrollCommand.value.focus) > 1,
+          effectiveWindowStateRef.current.isLongPause);
+        scrollCommand.value = { from: startOffset, target: offset, revision: scrollCommand.value.revision + 1,
+          firstVisible, focus, spring };
+        staggerEnabled.value = true;
+        lyricScrollOffset.value = withSpring(
           offset,
-          {
-            duration: LYRIC_SCROLL_ANIMATION_MS,
-            easing: LYRIC_SCROLL_EASING,
-          },
+          spring,
           (finished) => {
             if (finished) {
               lyricScrollActive.value = false;
@@ -856,14 +869,17 @@ export function LyricsView({
       }
 
       cancelAnimation(lyricScrollOffset);
+      staggerEnabled.value = false;
       lyricScrollActive.value = false;
+      staggerEnabled.value = false;
+      lyricScrollOffset.value = offset;
       listRef.current?.scrollToOffset({
         offset,
         animated,
         skipFirstItemOffset: false,
       });
     },
-    [listRef, lyricScrollActive, lyricScrollOffset],
+    [listRef, lyricScrollActive, lyricScrollOffset, lyrics, previewPlaybackPosition, scrollCommand, staggerEnabled],
   );
 
   const syncMeasuredRowLayoutsFromIndex = useCallback(
@@ -1348,7 +1364,7 @@ export function LyricsView({
     }
   }, [onUserInteraction, scheduleUserScrollIdleReset]);
   const handleScrollBeginDrag = useLyricScrollInterruption(
-    lyricScrollOffset, lyricScrollActive, handleUserDragBegin,
+    lyricScrollOffset, lyricScrollActive, handleUserDragBegin, staggerEnabled,
   );
 
   useLayoutEffect(() => {
@@ -1404,6 +1420,7 @@ export function LyricsView({
         scrollSettleTimerRef.current = null;
       }
       cancelAnimation(lyricScrollOffset);
+      staggerEnabled.value = false;
       lyricScrollActive.value = false;
       pendingAnchorRangeRef.current = null;
       pendingAnchorAnimatedRef.current = true;
@@ -1418,7 +1435,7 @@ export function LyricsView({
       }
       programmaticScrollInProgressRef.current = false;
     },
-    [clearUserScrollIdleTimer, lyricScrollActive, lyricScrollOffset],
+    [clearUserScrollIdleTimer, lyricScrollActive, lyricScrollOffset, staggerEnabled],
   );
 
   useEffect(() => {
@@ -1431,6 +1448,7 @@ export function LyricsView({
       }
 
       cancelAnimation(lyricScrollOffset);
+      staggerEnabled.value = false;
       lyricScrollActive.value = false;
       programmaticScrollInProgressRef.current = false;
       userScrollInProgressRef.current = false;
@@ -1445,6 +1463,7 @@ export function LyricsView({
   }, [
     lyricScrollActive,
     lyricScrollOffset,
+    staggerEnabled,
   ]);
 
   useEffect(() => {
@@ -1459,6 +1478,7 @@ export function LyricsView({
     // visible. In particular, cancel the UI-thread scroll timing rather than
     // letting it finish behind another tab/screen.
     cancelAnimation(lyricScrollOffset);
+    staggerEnabled.value = false;
     lyricScrollActive.value = false;
     programmaticScrollInProgressRef.current = false;
     userScrollInProgressRef.current = false;
@@ -1485,7 +1505,7 @@ export function LyricsView({
       clearTimeout(pendingAnchorRetryTimerRef.current);
       pendingAnchorRetryTimerRef.current = null;
     }
-  }, [rendererActive, lyricScrollActive, lyricScrollOffset, clearUserScrollIdleTimer]);
+  }, [rendererActive, lyricScrollActive, lyricScrollOffset, clearUserScrollIdleTimer, staggerEnabled]);
 
   useEffect(() => {
     if (!hasMountedLyricsChangeEffectRef.current) {
@@ -1658,18 +1678,16 @@ export function LyricsView({
         ws.isLongPause && index === ws.pauseBeforeIndex;
 
       return (
+        <NativeLyricMotion index={index} command={scrollCommand} offset={lyricScrollOffset}
+          enabled={staggerEnabled} active={rendererActive}>
         <LyricLine
           rendererActive={rendererActive}
           line={item}
           isActive={isActive}
           isPast={isPast}
           isSelected={Boolean(selectedLineKeys?.has(`${item.lineStartTime}-${item.lineEndTime}`))}
-          blurAmount={
-            isUserTouchScrolling || isActive ||
-            isIndexWithinRange(index, ws.visualActiveLineStartIndex, ws.visualActiveLineEndIndex)
-              ? 0
-              : Math.min(5, (1 + inactiveOpacityDistance) * 0.8)
-          }
+          blurAmount={amlBlur(index, ws.focusLineIndex, ws.visualActiveLineEndIndex,
+            isActive || isIndexWithinRange(index, ws.visualActiveLineStartIndex, ws.visualActiveLineEndIndex), isUserTouchScrolling)}
           inactiveOpacityDistance={inactiveOpacityDistance}
           showPauseDotsAfter={showPauseDotsAfter}
           showPauseDotsBefore={showPauseDotsBefore}
@@ -1690,12 +1708,18 @@ export function LyricsView({
           shouldDrivePlaybackUpdates={shouldDrivePlaybackUpdates}
           fontScale={fontScale}
           landscapeMode={landscapeMode}
+          hasDuetLines={hasDuetLines}
         />
+        </NativeLyricMotion>
       );
     },
     [
       fontScale,
       landscapeMode,
+      hasDuetLines,
+      scrollCommand,
+      staggerEnabled,
+      lyricScrollOffset,
       onLineLongPress,
       onLinePress,
       selectedLineKeys,
@@ -2066,6 +2090,7 @@ export function LyricsView({
           onUserInteraction?.();
           setIsUserTouchScrolling(true);
           cancelAnimation(lyricScrollOffset);
+          staggerEnabled.value = false;
           lyricScrollActive.value = false;
           userScrollInProgressRef.current = true;
           scheduleUserScrollIdleReset();

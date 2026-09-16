@@ -36,7 +36,7 @@ function unpackWorklet(worklet) {
   const unpacked = { __closure: {} };
   for (const [name, value] of Object.entries(worklet.__closure)) {
     if (typeof value === 'function') {
-      if (['cancelAnimation', 'withTiming'].includes(name) || value === easing) {
+      if (['cancelAnimation', 'withTiming', 'withSpring', 'withDelay'].includes(name) || value === easing) {
         unpacked.__closure[name] = value;
         continue;
       }
@@ -68,12 +68,20 @@ const mocks = {
     useSharedValue: (value) => React.useRef({ value }).current,
     useAnimatedStyle: (compute) => unpackWorklet(compute)(),
     useDerivedValue: (compute) => ({ value: unpackWorklet(compute)() }),
+    useFrameCallback: (compute) => {
+      const frame = unpackWorklet(compute);
+      return { setActive: active => { if (active) frame({ timeSincePreviousFrame: 16 }); } };
+    },
+    useAnimatedReaction: (prepare, react) => unpackWorklet(react)(unpackWorklet(prepare)(), null),
     withTiming: (value) => { nativeAnimations++; return value; },
     withSpring: (value) => { nativeAnimations++; return value; },
     withDelay: (_, value) => value,
     cancelAnimation: () => { nativeCancellations++; },
     runOnUI: (worklet) => unpackWorklet(worklet),
   },
+  '@react-native-masked-view/masked-view': { __esModule: true, default: ({ children, maskElement }) =>
+    React.createElement('div', null, maskElement, children) },
+  'expo-linear-gradient': { LinearGradient: primitive('LinearGradient') },
   'zustand/react/shallow': { useShallow: (selector) => selector },
   '@/store/playback-store': {
     usePlaybackStore: Object.assign((selector) => selector(playback), { getState: () => playback }),
@@ -82,8 +90,8 @@ const mocks = {
 function load(file) {
   const resolved = path.resolve(root, file);
   if (cache.has(resolved)) return cache.get(resolved).exports;
-  const source = fs.readFileSync(resolved, 'utf8') + (resolved.endsWith('lyric-line.tsx') ? '\nexport { syncRevealProgress };' : '');
-  const code = resolved.endsWith('lyric-line.tsx') ? babel.transformSync(source, {
+  const source = fs.readFileSync(resolved, 'utf8');
+  const code = /lyric-line\.tsx|native-lyric-.*\.tsx|amll-native\.ts$/.test(resolved) ? babel.transformSync(source, {
     filename: resolved,
     babelrc: false,
     configFile: false,
@@ -98,7 +106,10 @@ function load(file) {
   const localRequire = (name) => {
     if (mocks[name]) return mocks[name];
     if (name.startsWith('@/')) return load(name.slice(2) + '.ts');
-    if (name.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(resolved), name)) + '.ts');
+    if (name.startsWith('.')) {
+      const target = path.resolve(path.dirname(resolved), name);
+      return load(path.relative(root, target) + (fs.existsSync(target + '.tsx') ? '.tsx' : '.ts'));
+    }
     return require(name);
   };
   vm.runInThisContext(`(function(require,module,exports,document,ResizeObserver,performance){${code}\n})`, { filename: resolved })(localRequire, module, module.exports, testDocument, TestResizeObserver, testClock);
@@ -189,18 +200,64 @@ for (platform of ['ios', 'android']) {
 }
 console.log('Lyrics checks passed: timeline, overlap/background ranges, seeks, credits, end padding, and 64 native mount/effect scenarios including hidden rows and unmount cleanup.');
 
-const { syncRevealProgress } = load('components/lyrics/lyric-line.tsx');
-let revealValue = 0.5;
+const { syncNativeTimeline } = load('components/lyrics/native-lyric-token.tsx');
+let revealValue = 500;
 const revealWrites = [];
 const revealProgress = { get value() { return revealValue; }, set value(value) { revealWrites.push(value); revealValue = value; } };
-syncRevealProgress(revealProgress, 550, 0, 1000, true, easing);
-assert.deepEqual(revealWrites, [1], 'small native clock corrections retarget without resetting the reveal value');
+syncNativeTimeline(revealProgress, 550, 1000, true);
+assert.deepEqual(revealWrites, [1000], 'small native clock corrections retarget without resetting the reveal value');
 revealWrites.length = 0;
-syncRevealProgress(revealProgress, 100, 0, 1000, true, easing);
-assert.deepEqual(revealWrites, [0.1, 1], 'large native seeks reset progress immediately before continuing');
+syncNativeTimeline(revealProgress, 100, 1000, true);
+assert.deepEqual(revealWrites, [100, 1000], 'large native seeks reset progress immediately before continuing');
 revealWrites.length = 0;
-syncRevealProgress(revealProgress, 600, 0, 1000, false, easing);
-assert.deepEqual(revealWrites, [0.6], 'paused native previews remain exact');
+syncNativeTimeline(revealProgress, 600, 1000, false);
+assert.deepEqual(revealWrites, [600], 'paused native previews remain exact');
+
+// Golden values from AMLL 0.5.2's line mask, emphasis, interlude and layout
+// algorithms. Run the serialized production worklets, not their JS originals.
+const amll = load('lib/amll-native.ts');
+const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 0.0001, `${label}: ${actual} != ${expected}`);
+const maskCursor = unpackWorklet(amll.amlMaskCursor);
+const maskWords = [{text:'thin',startTime:1000,endTime:2000},{text:'wide',startTime:2500,endTime:4500}];
+near(maskCursor(1000, maskWords, [40, 120], 20), -40, 'first word begins behind a full feather');
+near(maskCursor(1500, maskWords, [40, 120], 20), -5, 'measured first-word sweep');
+near(maskCursor(2000, maskWords, [40, 120], 20), 30, 'feather straddles adjacent words');
+near(maskCursor(2400, maskWords, [40, 120], 20), 30, 'silence holds the cursor');
+near(maskCursor(3500, maskWords, [40, 120], 20), 95, 'wide glyphs use actual width');
+near(maskCursor(4500, maskWords, [40, 120], 20), 160, 'last word finishes the complete sweep');
+near(maskCursor(500, maskWords, [40, 120], 20), -40, 'backward seek clears the highlight');
+assert.equal(amll.shouldEmphasizeAml('shine', 999), false);
+assert.equal(amll.shouldEmphasizeAml('shine', 1000), true);
+assert.equal(amll.shouldEmphasizeAml('I', 2000), false);
+assert.equal(amll.shouldEmphasizeAml('something', 2000), false);
+assert.equal(amll.shouldEmphasizeAml('光', 2000), true);
+const params = amll.amlEmphasisParameters(2000, true);
+near(params.duration, 2400, 'last-word animation extends by 20%');
+near(params.amount, 0.96, 'last-word expansion');
+near(params.blur, 2 / 9, 'last-word glow');
+const emphasisAt = unpackWorklet(amll.amlEmphasis);
+const peak = emphasisAt(2200, 1000, 0, 4, params, 32, false);
+near(peak.scale, 1.096, 'reference midpoint scale');
+near(peak.shadowOpacity, 2 / 9, 'reference midpoint glow');
+near(peak.shadowRadius, 32 / 15, 'reference glow radius');
+near(emphasisAt(10000, 1000, 0, 4, params, 32, false).scale, 1, 'completed emphasis restores geometry');
+const floatAt = unpackWorklet(amll.amlFloat);
+near(floatAt(3000, 1000, 2000, 32, false), -1.6, 'lead floats .05em');
+near(floatAt(3000, 1000, 2000, 32, true), -3.2, 'background floats .1em');
+near(amll.amlBlur(2, 3, 4, false, false), 2.4, 'past lines receive the extra blur step');
+assert.equal(amll.amlBlur(5, 3, 4, false, false), 1.6);
+assert.equal(amll.amlBlur(5, 3, 4, false, true), 0);
+near(amll.amlStagger(4, 2, 3), 100, 'row stagger starts at 50ms');
+near(amll.amlStagger(5, 2, 3), 147.6190476, 'stagger decays after focus');
+near(amll.amlPositionSpring(100, false, false).stiffness, 220, 'rapid lines use a faster spring');
+near(amll.amlPositionSpring(800, false, false).stiffness, 170, 'spaced lines use a softer spring');
+near(amll.amlPositionSpring(100, true, false).stiffness, 90, 'seek uses the reference slow spring');
+const dotsAt = unpackWorklet(amll.amlInterlude);
+near(dotsAt(400, 8000).opacity, 0, 'interlude waits before entering');
+near(dotsAt(750, 8000).opacity, 0.5, 'interlude entry fade');
+near(dotsAt(7900, 8000).opacity, 100 / 375, 'interlude exit fade');
+near(dotsAt(8000, 8000).scale, 0, 'interlude exits completely');
+console.log('AMLL 0.5.2 parity checks passed: measured mask boundaries, held-word emphasis, float, blur, stagger, spring policy and interlude snapshots.');
 
 // Exercise the WebView scroll controller against measured DOM boxes, without a
 // browser or external connector. Visual/CSS checks live in the preview harness.

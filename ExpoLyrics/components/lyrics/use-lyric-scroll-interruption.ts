@@ -6,11 +6,13 @@ export function useLyricScrollInterruption(
   offset: SharedValue<number>,
   active: SharedValue<boolean>,
   onBeginDrag: (offset: number) => void,
+  staggerEnabled?: SharedValue<boolean>,
 ) {
   return useEvent<NativeSyntheticEvent<NativeScrollEvent>>((event) => {
     "worklet";
     cancelAnimation(offset);
     active.value = false;
+    if (staggerEnabled) staggerEnabled.value = false;
     runOnJS(onBeginDrag)(Math.max(0, event.contentOffset.y));
   }, ["onScrollBeginDrag"], true);
 }

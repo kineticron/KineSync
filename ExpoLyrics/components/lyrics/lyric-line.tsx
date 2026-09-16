@@ -11,7 +11,6 @@ import Reanimated, {
   cancelAnimation,
   Easing as ReanimatedEasing,
   FadeOut,
-  runOnUI,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
@@ -20,6 +19,8 @@ import Reanimated, {
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
+import { AMLL_SCALE_SPRING, AMLL_BG_SCALE_SPRING, amlEmphasisParameters, amlInterlude, shouldEmphasizeAml } from "@/lib/amll-native";
+import { NativeLyricToken, nativeAnimationCharacters, useNativeLyricTimeline, type NativeEmphasis } from "./native-lyric-token";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -48,13 +49,10 @@ const OPACITY_MID = 1;
 const OPACITY_FAR = 1;
 // AMLL's mask resolves to ~0.2 alpha for solid/inactive rows and ~0.4 on the
 // unrevealed side of an active gradient at the configured 100% active scale.
-const COLOR_DONE = "rgba(255,255,255,0.20)";
-const COLOR_INACTIVE = "rgba(255,255,255,0.20)";
 const BASE_FONT_SIZE: number = LYRICS_LAYOUT.fontSize;
 const BASE_LINE_HEIGHT: number = LYRICS_LAYOUT.lineHeight;
 const LYRIC_TEXT_LANE_WIDTH = LYRICS_LAYOUT.textLane;
-const LINE_INNER_PADDING_HORIZONTAL = LYRICS_LAYOUT.innerInset;
-const LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE = LYRICS_LAYOUT.landscapeInnerInset;
+const LINE_INNER_PADDING_HORIZONTAL = 30; // 22px WebView margin + 20px padding - 12px list inset
 const BG_FONT_SIZE = BASE_FONT_SIZE * LYRICS_LAYOUT.backgroundScale;
 const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * LYRICS_LAYOUT.backgroundScale;
 type AmlPosYSpringPolicy = {
@@ -69,22 +67,6 @@ const AMLL_DEFAULT_POS_Y_SPRING: AmlPosYSpringPolicy = {
   stiffness: 90,
   overshootClamping: false,
 };
-
-// AMLL deliberately keeps the mask sweep linear so word timestamps stay exact.
-const REVEAL_SWEEP_EASING = ReanimatedEasing.linear;
-
-function getSyllableProgress(
-  positionMs: number,
-  startTime: number,
-  endTime: number,
-) {
-  const duration = Math.max(1, endTime - startTime);
-  return Math.max(0, Math.min(1, (positionMs - startTime) / duration));
-}
-
-function getAmlWordFloatEndTime(startTime: number, endTime: number) {
-  return startTime + Math.max(1000, endTime - startTime);
-}
 
 function getMonotonicNow() {
   if (
@@ -107,76 +89,6 @@ function getProjectedPlaybackPosition(
   return Math.max(0, anchorPositionMs + getMonotonicNow() - anchorMonotonicMs);
 }
 
-function syncRevealProgress(
-  progress: SharedValue<number>,
-  playbackPosition: number,
-  startTime: number,
-  endTime: number,
-  isPlaying: boolean,
-  easing: typeof REVEAL_SWEEP_EASING,
-) {
-  const stop = () => cancelAnimation(progress);
-  const nextProgress = getSyllableProgress(
-    playbackPosition,
-    startTime,
-    endTime,
-  );
-
-  if (!isPlaying || nextProgress >= 1) {
-    cancelAnimation(progress);
-    progress.value = nextProgress;
-    return stop;
-  }
-
-  if (playbackPosition < startTime) {
-    cancelAnimation(progress);
-    progress.value = nextProgress;
-    progress.value = withDelay(
-      Math.max(0, startTime - playbackPosition),
-      withTiming(1, {
-        duration: Math.max(1, endTime - startTime),
-        easing,
-      }),
-    );
-    return stop;
-  }
-
-  // Small source corrections retarget from the current UI value without a
-  // discontinuity. Large seeks and paused previews still land immediately.
-  runOnUI((next: number, remaining: number, duration: number) => {
-    "worklet";
-    cancelAnimation(progress);
-    if (Math.abs(progress.value - next) * duration > 250) progress.value = next;
-    progress.value = withTiming(1, { duration: remaining, easing });
-  })(nextProgress, Math.max(1, endTime - playbackPosition), Math.max(1, endTime - startTime));
-  return stop;
-}
-
-function useAmlWordFloatProgress(
-  playbackPosition: number,
-  startTime: number,
-  endTime: number,
-  isPlaying: boolean,
-) {
-  const floatEndTime = getAmlWordFloatEndTime(startTime, endTime);
-  const progress = useSharedValue(
-    getSyllableProgress(playbackPosition, startTime, floatEndTime),
-  );
-
-  useEffect(() => {
-    return syncRevealProgress(
-      progress,
-      playbackPosition,
-      startTime,
-      floatEndTime,
-      isPlaying,
-      ReanimatedEasing.linear,
-    );
-  }, [floatEndTime, isPlaying, playbackPosition, progress, startTime]);
-
-  return progress;
-}
-
 function getInactiveOpacity(distanceFromActive: number) {
   if (distanceFromActive <= 1) {
     return OPACITY_NEAR;
@@ -185,57 +97,6 @@ function getInactiveOpacity(distanceFromActive: number) {
     return OPACITY_MID;
   }
   return OPACITY_FAR;
-}
-
-function clamp01(value: number) {
-  "worklet";
-  return Math.max(0, Math.min(1, value));
-}
-
-// Worklets captures helper values eagerly when the module loads. Keep this
-// dependency chain above its callers; JS function hoisting does not survive
-// the native Worklets transform.
-function cubicBezierCoordinate(t: number, p1: number, p2: number) {
-  "worklet";
-  const inv = 1 - t;
-  return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
-}
-
-function cubicBezierYForX(
-  x: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-) {
-  "worklet";
-  const target = Math.max(0, Math.min(1, x));
-  if (target === 0 || target === 1) return target;
-  let low = 0;
-  let high = 1;
-  let t = target;
-  for (let i = 0; i < 10; i += 1) {
-    t = (low + high) / 2;
-    const bx = cubicBezierCoordinate(t, x1, x2);
-    if (bx < target) low = t;
-    else high = t;
-  }
-  return cubicBezierCoordinate(t, y1, y2);
-}
-
-function getPrimaryTokenRiseY(progress: number, fontSize = BASE_FONT_SIZE) {
-  "worklet";
-  const p = Math.max(0, Math.min(1, progress));
-  // Web Animations `ease-out` = cubic-bezier(0, 0, .58, 1).
-  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
-  return -0.05 * fontSize * eased;
-}
-
-function getBackgroundTokenRiseY(progress: number, fontSize = BG_FONT_SIZE) {
-  "worklet";
-  const p = Math.max(0, Math.min(1, progress));
-  const eased = cubicBezierYForX(p, 0, 0, 0.58, 1);
-  return -0.1 * fontSize * eased;
 }
 
 function isCensorshipBoundary(currentText: string, nextText: string) {
@@ -750,6 +611,26 @@ function groupNeedsLeadingGap(
   return /\s$/.test(lastText);
 }
 
+function getNativeEmphasis(syllables: LyricSyllable[], groups: SyllableGroup[]) {
+  const result: (NativeEmphasis | undefined)[] = [];
+  for (const group of groups) {
+    const words = group.syllableIndexes.map(i => syllables[i]);
+    const text = words.map(w => w.text).join("");
+    const start = Math.min(...words.map(w => w.startTime));
+    const end = Math.max(...words.map(w => w.endTime));
+    if (!words.some(w => shouldEmphasizeAml(w.text ?? "", w.endTime - w.startTime)) &&
+      !shouldEmphasizeAml(text, end - start)) continue;
+    const count = words.reduce((n, w) => n + nativeAnimationCharacters(w.text ?? "").length, 0);
+    const params = amlEmphasisParameters(end - start, group.syllableIndexes.includes(syllables.length - 1));
+    let index = 0;
+    for (const i of group.syllableIndexes) {
+      result[i] = { start, count, index, params };
+      index += nativeAnimationCharacters(syllables[i].text ?? "").length;
+    }
+  }
+  return result;
+}
+
 type LyricLineProps = {
   rendererActive?: boolean;
   line: LyricLineType;
@@ -883,13 +764,6 @@ export const LyricLine = memo(function LyricLine({
   const resolvedFontScale = fontScale;
   const lineFontSize = BASE_FONT_SIZE * SCALE_ACTIVE * resolvedFontScale;
   const lineLineHeight = BASE_LINE_HEIGHT * SCALE_ACTIVE * resolvedFontScale;
-  const scaledLineTextStyle = useMemo(
-    () => ({
-      fontSize: lineFontSize,
-      lineHeight: lineLineHeight,
-    }),
-    [lineFontSize, lineLineHeight],
-  );
   const bgEnd = line.backgroundSyllables?.length
     ? line.backgroundSyllables[line.backgroundSyllables.length - 1].endTime
     : 0;
@@ -900,10 +774,9 @@ export const LyricLine = memo(function LyricLine({
     !isPast &&
     !isActive &&
     inactiveOpacityDistance <= 1;
-  const shouldUseNativeRevealTree =
-    playbackPositionOverrideMs == null &&
-    !isPast &&
-    (isActive || shouldPrewarmNativeReveal);
+  const shouldUseNativeRevealTree = playbackPositionOverrideMs == null &&
+    (isActive || shouldDrivePlaybackUpdates || shouldPrewarmNativeReveal);
+  const globallyPlaying = usePlaybackStore(state => state.isPlaying);
   const needsPrimaryJsPlayback =
     isActive && playbackPositionOverrideMs != null;
   // Single shallow selector — far/inactive rows stay cold on the 64ms clock.
@@ -935,7 +808,7 @@ export const LyricLine = memo(function LyricLine({
                 : false,
             playbackPosition: needsPrimaryJsPlayback ? position : 0,
             isPlaying:
-              isActive || shouldPrewarmNativeReveal ? state.isPlaying : false,
+              shouldUseNativeRevealTree ? state.isPlaying : false,
             anchorPositionMs: shouldUseNativeRevealTree
               ? state.anchorPositionMs
               : 0,
@@ -947,13 +820,11 @@ export const LyricLine = memo(function LyricLine({
         [
           bgEnd,
           hasBgExtension,
-          isActive,
           line.lineEndTime,
           needsPlaybackSlice,
           needsPrimaryJsPlayback,
           playbackPositionOverrideMs,
           shouldDrivePlaybackUpdates,
-          shouldPrewarmNativeReveal,
           shouldUseNativeRevealTree,
         ],
       ),
@@ -1002,7 +873,16 @@ export const LyricLine = memo(function LyricLine({
     return () => cancelAnimation(blurAnim);
   }, [blurAmount, blurAnim, rendererActive]);
 
-  const textWeight = "700" as const;
+  const scaleAnim = useSharedValue(visuallyActive || !globallyPlaying ? 1 : 0.97);
+  useEffect(() => {
+    if (!rendererActive) { cancelAnimation(scaleAnim); return; }
+    scaleAnim.value = withSpring(visuallyActive || !globallyPlaying ? 1 : 0.97, AMLL_SCALE_SPRING);
+    return () => cancelAnimation(scaleAnim);
+  }, [globallyPlaying, rendererActive, scaleAnim, visuallyActive]);
+  const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scaleAnim.value }] }));
+  const primaryTimeline = useNativeLyricTimeline(line.syllables,
+    playbackPositionOverrideMs ?? (isPast && !shouldUseNativeRevealTree ? line.lineEndTime + 30000 : nativeRevealPlaybackPosition),
+    shouldAnimateRevealSweep, rendererActive, visuallyActive, scaleAnim, lineFontSize, lineLineHeight);
   const translatedText = String(line.translatedText || "").trim();
   const backgroundTranslatedText = String(
     line.backgroundTranslatedText || "",
@@ -1013,19 +893,16 @@ export const LyricLine = memo(function LyricLine({
     ? LANDSCAPE_LYRIC_TEXT_LANE_WIDTH
     : LYRIC_TEXT_LANE_WIDTH;
   const lineInnerPaddingHorizontal = landscapeMode
-    ? LINE_INNER_PADDING_HORIZONTAL_LANDSCAPE
+    ? lineFontSize + 8
     : LINE_INNER_PADDING_HORIZONTAL;
-  const translatedColor = isPast
-    ? "rgba(255,255,255,0.72)"
-    : visuallyActive
-      ? "rgba(255,255,255,0.66)"
-      : "rgba(255,255,255,0.42)";
+  const translatedColor = "rgba(255,255,255,0.3)";
   const onPressLine = tapEnabled ? () => onPress?.(line) : undefined;
   const onLongPressLine = onLongPress ? () => onLongPress(line) : undefined;
   const syllableGroups = useMemo(
     () => groupSyllablesIntoWords(line.syllables),
     [line.syllables],
   );
+  const emphasis = useMemo(() => getNativeEmphasis(line.syllables, syllableGroups), [line.syllables, syllableGroups]);
   const usesTimedSpacingLayout = useMemo(
     () => usesTimedTokenSpacing(line.syllables),
     [line.syllables],
@@ -1050,9 +927,8 @@ export const LyricLine = memo(function LyricLine({
     if (laneWidthPx <= 0) {
       return { width: textLaneWidth as number | `${number}%` };
     }
-    const laneFraction = landscapeMode ? 0.9 : 0.88;
-    return { width: Math.round(laneWidthPx * laneFraction) };
-  }, [laneWidthPx, landscapeMode, textLaneWidth]);
+    return { width: laneWidthPx };
+  }, [laneWidthPx, textLaneWidth]);
   const lineAnimStyle = useAnimatedStyle(
     () => ({
       opacity: opacityAnim.value,
@@ -1070,8 +946,6 @@ export const LyricLine = memo(function LyricLine({
     ] as ViewStyle[],
     [landscapeMode, fontScale],
   );
-  const toneOpacity =
-    pauseTone === "future" ? 0.76 : pauseTone === "past" ? 0.94 : 1;
 
   return (
     <View style={containerStyle}>
@@ -1093,6 +967,7 @@ export const LyricLine = memo(function LyricLine({
           onPress={onPressLine}
           style={({ pressed }) => [
             styles.linePressable as ViewStyle,
+            { paddingVertical: lineFontSize * 0.4 } as ViewStyle,
             isSelected && (styles.lineSelected as ViewStyle),
             pressed && (styles.linePressed as ViewStyle),
           ]}
@@ -1102,29 +977,31 @@ export const LyricLine = memo(function LyricLine({
             styles.lineInner as ViewStyle,
             alignRight && (styles.lineInnerOpposite as ViewStyle),
             {
-              opacity: toneOpacity,
               paddingHorizontal: lineInnerPaddingHorizontal,
             } as ViewStyle,
           ] as ViewStyle[]}
         >
-          <View
+          <Reanimated.View
             onLayout={handleLaneLayout}
             style={[
               styles.lineContentScaleWrap as ViewStyle,
+              scaleStyle,
+              { width: hasDuetLines ? "85%" : "100%" } as ViewStyle,
+              { transformOrigin: alignRight ? "right center" : "left center" } as ViewStyle,
               alignRight && (styles.lineContentScaleWrapRight as ViewStyle),
             ] as ViewStyle[]}
           >
           <View
             style={[
               styles.lineFlowScaleShell as ViewStyle,
-              { width: textLaneWidth } as ViewStyle,
+              { width: "100%" } as ViewStyle,
               alignRight && (styles.lineFlowScaleShellOpposite as ViewStyle),
             ] as ViewStyle[]}
           >
             <View
               style={[
                 styles.lineFlow as ViewStyle,
-                { width: textLaneWidth } as ViewStyle,
+                { width: "100%" } as ViewStyle,
                 alignRight && (styles.lineFlowOpposite as ViewStyle),
               ] as ViewStyle[]}
             >
@@ -1151,13 +1028,9 @@ export const LyricLine = memo(function LyricLine({
                       {cluster.map((idx) => {
                         const syl = line.syllables[idx];
                         const text = alignRight ? getSyllableDisplayText(syl.text ?? "") : (syl.text ?? "");
-                        if (isPast || (!isActive && !shouldPrewarmNativeReveal)) {
-                          return <Text key={idx} style={[styles.lineText, scaledLineTextStyle,
-                            { color: isPast || bgStillActive ? COLOR_DONE : COLOR_INACTIVE, fontWeight: textWeight }]}>{text}</Text>;
-                        }
-                        return <NativeRevealToken key={idx} text={text} startTime={syl.startTime} endTime={syl.endTime}
-                          playbackPosition={playbackPositionOverrideMs ?? nativeRevealPlaybackPosition}
-                          isPlaying={shouldAnimateRevealSweep} fontSize={lineFontSize} lineHeight={lineLineHeight} />;
+                        return <NativeLyricToken key={idx} text={text} word={syl} index={idx}
+                          timeline={primaryTimeline} emphasis={emphasis[idx]}
+                          fontSize={lineFontSize} lineHeight={lineLineHeight} />;
                       })}
                     </View>
                   ))}
@@ -1184,6 +1057,7 @@ export const LyricLine = memo(function LyricLine({
               {translatedText}
             </Text>
           )}
+          </Reanimated.View>
           {!!line.backgroundSyllables?.length && (
             <BackgroundVocals
               rendererActive={rendererActive}
@@ -1203,7 +1077,6 @@ export const LyricLine = memo(function LyricLine({
               groupMotionDelayMs={groupMotionDelayMs}
             />
           )}
-          </View>
         </View>
         </Pressable>
       </Reanimated.View>
@@ -1222,44 +1095,6 @@ export const LyricLine = memo(function LyricLine({
     </View>
   );
 }, areLyricLinePropsEqual);
-
-// One visible text tree. Color spans reveal glyphs without overlaid copies,
-// animated clip widths, font-size changes, or magnifying a cached text bitmap.
-const NativeRevealGlyph = memo(function NativeRevealGlyph({ text, index, count, progress, background }: {
-  text: string; index: number; count: number; progress: SharedValue<number>; background: boolean;
-}) {
-  const colorStyle = useAnimatedStyle(() => {
-    const p = Math.max(0, Math.min(1, progress.value));
-    const reveal = Math.max(0, Math.min(1, (p * (count + 0.8) - index) / 1.8));
-    const alpha = background ? 0.16 + 0.24 * reveal : 0.4 + 0.6 * reveal;
-    return { color: `rgba(255,255,255,${alpha})` };
-  });
-  return <Reanimated.Text style={colorStyle}>{text}</Reanimated.Text>;
-});
-
-const NativeRevealToken = memo(function NativeRevealToken({ text, startTime, endTime, playbackPosition, isPlaying,
-  fontSize, lineHeight, background = false }: {
-  text: string; startTime: number; endTime: number; playbackPosition: number; isPlaying: boolean;
-  fontSize: number; lineHeight: number; background?: boolean;
-}) {
-  const progress = useSharedValue(getSyllableProgress(playbackPosition, startTime, endTime));
-  const floatProgress = useAmlWordFloatProgress(playbackPosition, startTime, endTime, isPlaying);
-  useEffect(() => syncRevealProgress(progress, playbackPosition, startTime, endTime, isPlaying, REVEAL_SWEEP_EASING),
-    [endTime, isPlaying, playbackPosition, progress, startTime]);
-  // Keep joining scripts in a single attributed run so shaping remains intact.
-  const glyphs = useMemo(() => /[\u0590-\u08ff\u0900-\u0dff]/u.test(text) ? [text] : getGraphemes(text), [text]);
-  const motion = useAnimatedStyle(() => ({ transform: [{ translateY: background
-    ? getBackgroundTokenRiseY(floatProgress.value, fontSize) : getPrimaryTokenRiseY(floatProgress.value, fontSize) }] }));
-  return <Reanimated.View style={[styles.tokenWrap, motion]}>
-    <Text style={[background ? styles.bgVocalsText : styles.lineText,
-      { fontSize, lineHeight, fontWeight: background ? "500" : "700" }]}>
-      {glyphs.map((glyph, index) => <NativeRevealGlyph key={index} text={glyph} index={index} count={glyphs.length}
-        progress={progress} background={background} />)}
-    </Text>
-  </Reanimated.View>;
-});
-
-const COLOR_BG_INACTIVE = "rgba(255,255,255,0.08)";
 
 const BackgroundVocals = memo(function BackgroundVocals({
   rendererActive = true,
@@ -1294,13 +1129,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
 }) {
   const bgFontSize = BG_FONT_SIZE * SCALE_ACTIVE * fontScale;
   const bgLineHeight = BG_LINE_HEIGHT * SCALE_ACTIVE * fontScale;
-  const bgTextStyle = useMemo(
-    () => ({
-      fontSize: bgFontSize,
-      lineHeight: bgLineHeight,
-    }),
-    [bgFontSize, bgLineHeight],
-  );
   const bgStart = syllables[0]?.startTime ?? 0;
   const bgEnd = syllables[syllables.length - 1]?.endTime ?? 0;
   const syllableGroups = useMemo(
@@ -1316,7 +1144,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
     playbackPositionOverrideMs != null &&
     (parentIsActive || parentBgStillActive || parentShouldPrewarmNativeReveal);
 
-  const { playbackPosition, isPlaying, anchorPositionMs, anchorMonotonicMs, globallyPlaying } = usePlaybackStore(
+  const { isPlaying, anchorPositionMs, anchorMonotonicMs, globallyPlaying } = usePlaybackStore(
     useShallow(useCallback((state) => {
       const pos = playbackPositionOverrideMs ?? state.playbackPosition;
       return {
@@ -1340,14 +1168,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
       ),
     [anchorMonotonicMs, anchorPositionMs, isPlaying],
   );
-  const effectivePlaybackPosition = needsBackgroundJsPlayback
-    ? playbackPosition
-    : nativeRevealPlaybackPosition >= bgEnd
-      ? bgEnd
-      : nativeRevealPlaybackPosition >= bgStart
-        ? nativeRevealPlaybackPosition
-        : 0;
-  const isBgPast = parentIsPast || effectivePlaybackPosition >= bgEnd;
+  const bgIsHighlighted = parentIsActive || parentBgStillActive;
   const bgPresented = parentIsActive || parentBgStillActive || !globallyPlaying;
   const hiddenSlideY = precedesMain ? 80 : -80;
   const bgSlideY = useSharedValue(bgPresented ? 0 : hiddenSlideY);
@@ -1388,18 +1209,30 @@ const BackgroundVocals = memo(function BackgroundVocals({
     rendererActive,
   ]);
 
-  // Paint-only background effects: reserve the same space before, during and
-  // after playback so the primary line and following rows never jump.
+  const backgroundGap = bgFontSize / LYRICS_LAYOUT.backgroundScale * 0.3;
+  const bgLayoutStyle = useAnimatedStyle(() => ({ height: (bgMeasuredHeight + backgroundGap) * bgOpacity.value }));
   const bgPresentationStyle = useAnimatedStyle(() => ({
-    opacity: 0.5 + bgOpacity.value * 0.5,
+    opacity: bgOpacity.value,
     transform: [
-      { translateY: (bgSlideY.value / 100) * Math.min(bgMeasuredHeight, bgLineHeight) },
+      { translateY: (bgSlideY.value / 100) * bgMeasuredHeight },
+      { scale: 0.8 + Math.max(0, 1 - Math.abs(bgSlideY.value) / 80) * 0.2 },
     ],
   }));
 
+  const bgScale = useSharedValue(bgIsHighlighted || !globallyPlaying ? 1 : 0.75);
+  useEffect(() => {
+    if (!rendererActive) { cancelAnimation(bgScale); return; }
+    bgScale.value = withSpring(bgIsHighlighted || !globallyPlaying ? 1 : 0.75, AMLL_BG_SCALE_SPRING);
+    return () => cancelAnimation(bgScale);
+  }, [bgIsHighlighted, bgScale, globallyPlaying, rendererActive]);
+  const bgScaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: bgScale.value }] }));
+  const timeline = useNativeLyricTimeline(syllables, playbackPositionOverrideMs ?? nativeRevealPlaybackPosition,
+    shouldAnimateRevealSweep, rendererActive, bgIsHighlighted, bgScale, bgFontSize, bgLineHeight);
+  const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
   return (
+    <Reanimated.View style={[{ width: "100%" }, bgLayoutStyle]}>
     <Reanimated.View
       onLayout={(event) => {
         const { height: nextHeight } = event.nativeEvent.layout;
@@ -1412,14 +1245,17 @@ const BackgroundVocals = memo(function BackgroundVocals({
       style={[
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
-        { width: textLaneWidth as number },
+        { width: "100%", position: "absolute", top: backgroundGap },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,
+        { transformOrigin: alignRight ? "right top" : "left top" },
       ]}
     >
-      <View
+      <Reanimated.View
         style={[
           styles.bgVocalsFlow,
+          bgScaleStyle,
+          { transformOrigin: alignRight ? "right center" : "left center" },
           alignRight && styles.bgVocalsFlowOpposite,
         ]}
       >
@@ -1437,12 +1273,8 @@ const BackgroundVocals = memo(function BackgroundVocals({
               {cluster.map((idx) => {
                 const syl = syllables[idx];
                 const text = alignRight ? getSyllableDisplayText(syl.text ?? "") : (syl.text ?? "");
-                if (isBgPast || (!parentIsActive && !parentBgStillActive && !parentShouldPrewarmNativeReveal)) {
-                  return <Text key={idx} style={[styles.bgVocalsText, bgTextStyle, { color: COLOR_BG_INACTIVE }]}>{text}</Text>;
-                }
-                return <NativeRevealToken key={idx} text={text} startTime={syl.startTime} endTime={syl.endTime}
-                  playbackPosition={playbackPositionOverrideMs ?? nativeRevealPlaybackPosition}
-                  isPlaying={shouldAnimateRevealSweep} fontSize={bgFontSize} lineHeight={bgLineHeight} background />;
+                return <NativeLyricToken key={idx} text={text} word={syl} index={idx} timeline={timeline}
+                  emphasis={emphasis[idx]} fontSize={bgFontSize} lineHeight={bgLineHeight} background />;
               })}
             </View>
           ))}
@@ -1451,7 +1283,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
           )}
         </View>
       ))}
-      </View>
+      </Reanimated.View>
       {!!translatedText && (
         <Text
           style={[
@@ -1468,192 +1300,23 @@ const BackgroundVocals = memo(function BackgroundVocals({
         </Text>
       )}
     </Reanimated.View>
+    </Reanimated.View>
   );
 });
 
-const AMLL_DOT3_TRAILING_MS = 750;
-const AMLL_DOTS_EXIT_PHASE1_MS = 750;
-const AMLL_DOTS_EXIT_PHASE2_MS = 250;
-const AMLL_DOTS_EXIT_TOTAL_MS =
-  AMLL_DOTS_EXIT_PHASE1_MS + AMLL_DOTS_EXIT_PHASE2_MS;
-const AMLL_DOTS_EXIT_FADE_MS = 250;
-const AMLL_DOTS_DISMISS_FADE_MS = 150;
-const AMLL_DOTS_ENTER_FADE_MS = 180;
-const AMLL_DOT_ENTER_FADE_MS = 750;
-const AMLL_DOT_ENTER_STAGGER_MS = 80;
-const AMLL_DOT_ENTER_TOTAL_MS =
-  AMLL_DOT_ENTER_STAGGER_MS * 2 + AMLL_DOT_ENTER_FADE_MS;
-const AMLL_DOTS_BREATHE_PERIOD_MS = 4000;
-const AMLL_DOTS_FALLBACK_THRESHOLD_MS = 3000;
-const AMLL_DOTS_MAX_SCALE = 1.25;
-const AMLL_DOTS_MIN_SCALE = 0.4;
-const AMLL_DOT_INACTIVE_OPACITY = 0.2;
-const AMLL_DOT_ACTIVE_OPACITY = 0.9;
-
-function amlDotsBezier(
-  progress: number,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-) {
+const AMLL_DOTS_DISMISS_FADE_MS = 250;
+function resolveAmlPauseDotsSnapshot(elapsedMs: number, durationMs: number, holdMs: number) {
   "worklet";
-  return cubicBezierYForX(clamp01(progress), x1, y1, x2, y2);
+  return amlInterlude(elapsedMs - holdMs, Math.max(0, durationMs - holdMs));
 }
 
-function amlDotOpacity(fraction: number) {
-  "worklet";
-  return (
-    AMLL_DOT_INACTIVE_OPACITY +
-    (AMLL_DOT_ACTIVE_OPACITY - AMLL_DOT_INACTIVE_OPACITY) * clamp01(fraction)
-  );
-}
-
-function amlDotsBreathingProgress(t: number) {
-  "worklet";
-  if (t <= 0) return 0;
-  if (t >= 1) return 1;
-  const angle = 4 * Math.PI * t;
-  const s = Math.sin(angle);
-  const c = Math.cos(angle);
-  return t - 0.084 * s + 0.008 * (1 - c) + 0.0046 * s * (c - s);
-}
-
-function amlDotEnterAlpha(index: number, internalMs: number) {
-  "worklet";
-  const t = clamp01(
-    (internalMs - index * AMLL_DOT_ENTER_STAGGER_MS) / AMLL_DOT_ENTER_FADE_MS,
-  );
-  return t * t;
-}
-
-function amlDotFraction(
-  startDelay: number,
-  duration: number,
-  internalMs: number,
-  target: number,
-) {
-  "worklet";
-  if (internalMs <= startDelay || duration <= 0) return 0;
-  const eased = amlDotsBezier(
-    (internalMs - startDelay) / duration,
-    0.56,
-    0.01,
-    0.45,
-    1,
-  );
-  return eased * target;
-}
-
-function resolveAmlPauseDotsSnapshot(
-  elapsedMs: number,
-  totalDurationMs: number,
-  holdMs: number,
-) {
-  "worklet";
-  const delayEndMs = Math.max(0, holdMs);
-  const bodyMs = totalDurationMs - delayEndMs - AMLL_DOTS_EXIT_TOTAL_MS;
-  if (bodyMs < AMLL_DOT_ENTER_TOTAL_MS || elapsedMs < 0) {
-    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
-  }
-  const bodyEndMs = delayEndMs + bodyMs;
-  const totalEndMs = bodyEndMs + AMLL_DOTS_EXIT_TOTAL_MS;
-  if (elapsedMs >= totalEndMs) {
-    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
-  }
-  if (elapsedMs < delayEndMs) {
-    return { opacity: 0, scale: 1, dots: [0, 0, 0] as const };
-  }
-
-  const internalMs = elapsedMs - delayEndMs;
-  const enterOpacity = amlDotsBezier(
-    internalMs / AMLL_DOTS_ENTER_FADE_MS,
-    0.59,
-    0.02,
-    0.07,
-    1,
-  );
-  const fallback = bodyMs < AMLL_DOTS_FALLBACK_THRESHOLD_MS;
-  const breatheCycles = Math.max(1, Math.floor(bodyMs / AMLL_DOTS_BREATHE_PERIOD_MS));
-  const breathePeriodMs = bodyMs / breatheCycles;
-  const segmentMs = Math.round((bodyMs + AMLL_DOT3_TRAILING_MS) / 3);
-  const dot3DurationMs = bodyMs - segmentMs * 2;
-  const dot3Target = fallback ? 1 : dot3DurationMs / segmentMs;
-  const writeDots = (fractions: readonly [number, number, number]) =>
-    fractions.map(
-      (fraction, index) =>
-        amlDotOpacity(fraction) * amlDotEnterAlpha(index, internalMs),
-    ) as [number, number, number];
-
-  if (elapsedMs >= bodyEndMs) {
-    const exitElapsedMs = elapsedMs - bodyEndMs;
-    const fadeT = clamp01(
-      (exitElapsedMs - (AMLL_DOTS_EXIT_TOTAL_MS - AMLL_DOTS_EXIT_FADE_MS)) /
-        AMLL_DOTS_EXIT_FADE_MS,
-    );
-    const opacity =
-      enterOpacity *
-      (1 - amlDotsBezier(fadeT, 0.43, 0.08, 0.83, 0.31));
-    let scale: number;
-    if (exitElapsedMs < AMLL_DOTS_EXIT_PHASE1_MS) {
-      scale =
-        1 +
-        amlDotsBezier(
-          exitElapsedMs / AMLL_DOTS_EXIT_PHASE1_MS,
-          0.14,
-          0.06,
-          0.25,
-          1,
-        ) *
-          (AMLL_DOTS_MAX_SCALE - 1);
-    } else {
-      const phase2 =
-        (exitElapsedMs - AMLL_DOTS_EXIT_PHASE1_MS) / AMLL_DOTS_EXIT_PHASE2_MS;
-      scale =
-        AMLL_DOTS_MAX_SCALE -
-        amlDotsBezier(phase2, 0.29, 0.03, 1, 0.38) *
-          (AMLL_DOTS_MAX_SCALE - AMLL_DOTS_MIN_SCALE);
-    }
-    const trailing = clamp01(exitElapsedMs / AMLL_DOT3_TRAILING_MS);
-    return {
-      opacity,
-      scale,
-      dots: writeDots([
-        1,
-        1,
-        dot3Target + (1 - dot3Target) * trailing,
-      ]),
-    };
-  }
-
-  if (fallback) {
-    return { opacity: enterOpacity, scale: 1, dots: writeDots([1, 1, 1]) };
-  }
-
-  const cycleT = (internalMs % breathePeriodMs) / breathePeriodMs;
-  const breathe = amlDotsBreathingProgress(cycleT);
-  const scale =
-    breathe <= 0.5
-      ? 1 + (breathe / 0.5) * (AMLL_DOTS_MAX_SCALE - 1)
-      : AMLL_DOTS_MAX_SCALE -
-        ((breathe - 0.5) / 0.5) * (AMLL_DOTS_MAX_SCALE - 1);
-  return {
-    opacity: enterOpacity,
-    scale,
-    dots: writeDots([
-      amlDotFraction(0, segmentMs, internalMs, 1),
-      amlDotFraction(segmentMs, segmentMs, internalMs, 1),
-      amlDotFraction(segmentMs * 2, dot3DurationMs, internalMs, dot3Target),
-    ]),
-  };
-}
-
-const PauseDot = memo(function PauseDot({ index, snapshot }: {
+const PauseDot = memo(function PauseDot({ index, snapshot, size }: {
+  size: number;
   index: number;
   snapshot: Pick<SharedValue<ReturnType<typeof resolveAmlPauseDotsSnapshot>>, "value">;
 }) {
   const animatedStyle = useAnimatedStyle(() => ({ opacity: snapshot.value.dots[index] }));
-  return <Reanimated.View style={[styles.pauseDot, { width: 12, height: 12, borderRadius: 6 }, animatedStyle]} />;
+  return <Reanimated.View style={[styles.pauseDot, { width: size, height: size, borderRadius: size / 2 }, animatedStyle]} />;
 });
 
 const PauseDots = memo(function PauseDots({
@@ -1710,10 +1373,10 @@ const PauseDots = memo(function PauseDots({
     opacity: snapshot.value.opacity,
     transform: [{ scale: snapshot.value.scale }],
   }));
-  const dotGap = 8;
+  const dotGap = fontSize * 0.25 + 4;
   const innerVerticalPad = 0;
   const outerVerticalMargin = 0;
-  const contentHeight = 16;
+  const contentHeight = fontSize * 0.5;
 
   return (
     <Reanimated.View
@@ -1740,7 +1403,7 @@ const PauseDots = memo(function PauseDots({
       ]}
     >
       {[0, 1, 2].map((index) => (
-        <PauseDot key={index} index={index} snapshot={snapshot} />
+        <PauseDot key={index} index={index} snapshot={snapshot} size={fontSize * 0.5} />
       ))}
     </Reanimated.View>
   );
@@ -1750,10 +1413,10 @@ const styles = StyleSheet.create({
   lineOuter: {
     minHeight: 84,
     justifyContent: "center",
-    paddingVertical: 10,
+    paddingVertical: 8,
   } as ViewStyle,
   lineOuterLandscape: {
-    overflow: "visible",
+    paddingVertical: 10,    overflow: "visible",
     marginHorizontal: -LANDSCAPE_LINE_SCALE_BLEED,
     paddingHorizontal: LANDSCAPE_LINE_SCALE_BLEED,
   } as ViewStyle,
@@ -1778,7 +1441,7 @@ const styles = StyleSheet.create({
   } as ViewStyle,
   lineContentScaleWrap: {
     alignSelf: "flex-start",
-    maxWidth: "100%",
+    width: "100%",
   } as ViewStyle,
   lineContentScaleWrapRight: {
     alignSelf: "flex-end",
@@ -1847,7 +1510,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     alignSelf: "flex-start",
     width: "100%",
-    marginTop: 3,
+    marginTop: 0,
   } as ViewStyle,
   bgVocalsGroup: {
     alignSelf: "flex-start",
@@ -1879,9 +1542,6 @@ const styles = StyleSheet.create({
     marginLeft: 2,
     textAlign: "left",
     letterSpacing: 0.05,
-    textShadowColor: "rgba(0,0,0,0.3)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
     fontWeight: "700",
   } as TextStyle,
   translatedText: {
@@ -1892,9 +1552,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     textAlign: "left",
     letterSpacing: 0.05,
-    textShadowColor: "rgba(0,0,0,0.34)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
     fontWeight: "700",
   } as TextStyle,
   translatedTextOpposite: {
