@@ -154,6 +154,32 @@ export function amlMaskCursor(
   return cursor;
 }
 
+// AMLL's calculation-based mask fallback advances a word from its own timing
+// and geometry. The native renderer uses this path so a syllable never depends
+// on preceding siblings having completed their asynchronous RN onLayout pass.
+// `textWidth` is the measured glyph run only; `padding` is the extra mask room
+// on each side used for floating/emphasis without clipping.
+export function amlTokenMaskOffset(
+  position: number,
+  startTime: number,
+  endTime: number,
+  textWidth: number,
+  padding: number,
+  fade: number,
+) {
+  "worklet";
+  const safeTextWidth = Math.max(0, textWidth);
+  const safePadding = Math.max(0, padding);
+  const safeFade = Math.max(0, fade);
+  const totalWordWidth = safeTextWidth + safePadding * 2;
+  const duration = Math.max(Math.abs(endTime - startTime), 1);
+  const speed = safeTextWidth / duration;
+  const startPos = safePadding - totalWordWidth - safeFade / 2;
+  const minOffset = -totalWordWidth - safeFade;
+  const maskPos = startPos + (position - startTime) * speed;
+  return Math.max(minOffset, Math.min(0, maskPos));
+}
+
 export function amlBlur(index: number, focus: number, latest: number, active: boolean, scrolling: boolean) {
   if (active || scrolling) return 0;
   const distance = index < focus ? Math.abs(focus - index) + 1 : Math.abs(index - Math.max(focus, latest));

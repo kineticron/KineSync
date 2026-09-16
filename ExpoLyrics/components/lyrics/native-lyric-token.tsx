@@ -2,10 +2,10 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { memo, useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View, type TextStyle } from "react-native";
-import Animated, { cancelAnimation, Easing, runOnUI, useAnimatedStyle, useDerivedValue,
+import Animated, { cancelAnimation, Easing, runOnUI, useAnimatedStyle,
   useFrameCallback, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 
-import { AMLL_WORD_FADE_WIDTH, amlEmphasis, amlEmphasisParameters, amlFloat, amlMaskCursor, clampAml } from "@/lib/amll-native";
+import { AMLL_WORD_FADE_WIDTH, amlEmphasis, amlEmphasisParameters, amlFloat, amlTokenMaskOffset, clampAml } from "@/lib/amll-native";
 import { getGraphemes } from "@/lib/graphemes";
 import type { LyricSyllable } from "@/types/bridge";
 
@@ -33,10 +33,7 @@ export function syncNativeTimeline(clock: SharedValue<number>, position: number,
 }
 
 export function useNativeLyricTimeline(words: LyricSyllable[], position: number, playing: boolean,
-  enabled: boolean, highlighted: boolean, scale: SharedValue<number>, fontSize: number, lineHeight: number,
-  maskLineStartTime = words[0]?.startTime ?? 0,
-  maskLineEndTime = Math.max(maskLineStartTime, ...words.map((word) => word.endTime))) {
-  const widths = useSharedValue<number[]>([]);
+  enabled: boolean, highlighted: boolean, scale: SharedValue<number>, fontSize: number, lineHeight: number) {
   const clock = useSharedValue(position);
   // Do not sample a shared value during React render. Highlight state already
   // determines the same cold-start alpha target and avoids strict-mode warning
@@ -46,18 +43,18 @@ export function useNativeLyricTimeline(words: LyricSyllable[], position: number,
     bright: 0.2 + initialFactor * (highlighted ? 0.8 : 0.2) });
   const fade = lineHeight * AMLL_WORD_FADE_WIDTH;
   const end = useMemo(() => Math.max(0, ...words.map(w => w.endTime + Math.max(1000, w.endTime - w.startTime) * 2)), [words]);
-  // FlashList recycles mounted lyric rows. Never let the next recycled line use
-  // the previous line's measured syllable widths for even a single reveal
-  // frame; those stale offsets can make several fresh tokens appear to reveal
-  // as one group until their onLayout callbacks arrive.
   useEffect(() => {
-    widths.value = [];
-  }, [widths, words]);
-  useEffect(() => {
-    cancelAnimation(clock);
-    if (!enabled) return;
-    return syncNativeTimeline(clock, position, end, playing);
+    if (!enabled) {
+      cancelAnimation(clock);
+      return;
+    }
+    // syncNativeTimeline already cancels/replaces the current animation. Do not
+    // also return its cancellation as an update cleanup: React would cancel the
+    // same clock once for cleanup and again for the next sync on every anchor
+    // correction. Unmount cleanup is handled by the dedicated effect below.
+    syncNativeTimeline(clock, position, end, playing);
   }, [clock, enabled, end, playing, position]);
+  useEffect(() => () => cancelAnimation(clock), [clock]);
 
   // Port 0.5.2's asymmetric exponential alpha filter, driven by the actual
   // spring scale. Time-based integration stays identical at 60 and 120 Hz.
@@ -81,15 +78,7 @@ export function useNativeLyricTimeline(words: LyricSyllable[], position: number,
     const timer = setTimeout(() => alphaFrame.setActive(false), 2400);
     return () => { clearTimeout(timer); alphaFrame.setActive(false); };
   }, [alphaFrame, enabled, highlighted, playing]);
-  const cursor = useDerivedValue(() => amlMaskCursor(
-    clock.value,
-    words,
-    widths.value,
-    fade,
-    maskLineStartTime,
-    maskLineEndTime,
-  ));
-  return { widths, clock, alpha, cursor, fade };
+  return { clock, alpha, fade };
 }
 
 type Timeline = ReturnType<typeof useNativeLyricTimeline>;
@@ -108,15 +97,17 @@ const EmphasisCharacter = memo(function EmphasisCharacter({ text, index, emphasi
   return <Animated.Text style={[textStyle, { padding: fontSize, margin: -fontSize }, motion]}>{text}</Animated.Text>;
 });
 
-export const NativeLyricToken = memo(function NativeLyricToken({ text, word, index, timeline,
+export const NativeLyricToken = memo(function NativeLyricToken({ text, word, timeline,
   fontSize, lineHeight, background = false, emphasis }: {
-  text: string; word: LyricSyllable; index: number; timeline: Timeline; fontSize: number; lineHeight: number;
+  text: string; word: LyricSyllable; timeline: Timeline; fontSize: number; lineHeight: number;
   background?: boolean; emphasis?: NativeEmphasis;
 }) {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    setWidth(0);
-  }, [background, fontSize, text]);
+  const measurementKey = `${background ? 1 : 0}:${fontSize}:${text}`;
+  const [measurement, setMeasurement] = useState(() => ({ key: measurementKey, width: 0 }));
+  // FlashList may reuse the React subtree for another lyric row before its new
+  // onLayout event arrives. Never paint the new syllable with the old token's
+  // width during that intervening render.
+  const width = measurement.key === measurementKey ? measurement.width : 0;
   const padding = fontSize;
   const boxWidth = width + padding * 2;
   const gradientWidth = boxWidth * 2 + timeline.fade;
@@ -127,19 +118,30 @@ export const NativeLyricToken = memo(function NativeLyricToken({ text, word, ind
     amlFloat(timeline.clock.value, word.startTime, word.endTime, fontSize, background) }] }));
   const baseMask = useAnimatedStyle(() => ({ opacity: timeline.alpha.value.dark }));
   const movingMask = useAnimatedStyle(() => {
-    let before = 0;
-    for (let i = 0; i < index; i++) before += timeline.widths.value[i] || 0;
-    const offset = Math.max(-boxWidth - timeline.fade, Math.min(0, padding + timeline.cursor.value - before - boxWidth));
     const { bright, dark } = timeline.alpha.value;
-    return { opacity: (bright - dark) / Math.max(0.001, 1 - dark), transform: [{ translateX: offset }] };
+    const offset = amlTokenMaskOffset(
+      timeline.clock.value,
+      word.startTime,
+      word.endTime,
+      width,
+      padding,
+      timeline.fade,
+    );
+    return {
+      // Keep the moving highlight dark until this token has its own geometry.
+      // Once measured, the current playback time is applied immediately, so no
+      // sibling layout ordering can make several syllables reveal together.
+      opacity: width > 0 ? (bright - dark) / Math.max(0.001, 1 - dark) : 0,
+      transform: [{ translateX: offset }],
+    };
   });
   const measure = (event: { nativeEvent: { layout: { width: number } } }) => {
     const measured = event.nativeEvent.layout.width;
-    if (Math.abs(measured - width) > 0.01) setWidth(measured);
-    if (Math.abs(measured - (timeline.widths.value[index] || 0)) > 0.01) {
-      const next = [...timeline.widths.value];
-      next[index] = measured;
-      timeline.widths.value = next;
+    if (!Number.isFinite(measured) || measured < 0) {
+      return;
+    }
+    if (measurement.key !== measurementKey || Math.abs(measured - width) > 0.01) {
+      setMeasurement({ key: measurementKey, width: measured });
     }
   };
   return <Animated.View style={floatStyle}>

@@ -242,6 +242,23 @@ near(maskCursor(2250, overlappingMaskWords, [40, 120], 20), 62.5,
 near(maskCursor(2500, overlappingMaskWords, [40, 120], 20), 160,
   'AMLL resolves any remaining overlapping mask movement at the line endpoint');
 assert.equal(amll.AMLL_WORD_FADE_WIDTH, 0.5, 'native mask uses AMLL default word fade width');
+const tokenMaskOffset = unpackWorklet(amll.amlTokenMaskOffset);
+near(tokenMaskOffset(-100, 1000, 2000, 40, 32, 20), -124,
+  'token-local mask clamps fully before the syllable');
+near(tokenMaskOffset(1000, 1000, 2000, 40, 32, 20), -82,
+  'token-local feather is centered on the syllable start');
+near(tokenMaskOffset(1500, 1000, 2000, 40, 32, 20), -62,
+  'token-local reveal follows the syllable midpoint');
+near(tokenMaskOffset(2000, 1000, 2000, 40, 32, 20), -42,
+  'token-local feather reaches the syllable end on its own timing');
+near(tokenMaskOffset(4000, 1000, 2000, 40, 32, 20), 0,
+  'token-local mask completes after its trailing feather clears');
+
+const nativeTokenSource = fs.readFileSync(path.resolve(root, 'components/lyrics/native-lyric-token.tsx'), 'utf8');
+assert.ok(!nativeTokenSource.includes('timeline.widths'),
+  'native reveal never depends on asynchronously measured sibling widths');
+assert.ok(nativeTokenSource.includes('amlTokenMaskOffset('),
+  'native reveal is driven by each syllable timing and its own measured geometry');
 
 const lyricLineSource = fs.readFileSync(path.resolve(root, 'components/lyrics/lyric-line.tsx'), 'utf8');
 assert.ok(!lyricLineSource.includes('height: (bgMeasuredHeight + backgroundGap) * bgOpacity.value'),

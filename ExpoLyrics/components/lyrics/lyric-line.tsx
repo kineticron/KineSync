@@ -888,8 +888,9 @@ export const LyricLine = memo(function LyricLine({
   const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scaleAnim.value }] }));
   const primaryTimeline = useNativeLyricTimeline(line.syllables,
     playbackPositionOverrideMs ?? (isPast && !shouldUseNativeRevealTree ? line.lineEndTime + 30000 : nativeRevealPlaybackPosition),
-    shouldAnimateRevealSweep, rendererActive, visuallyActive, scaleAnim, lineFontSize, lineLineHeight,
-    line.lineStartTime, Math.max(line.lineEndTime, ...line.syllables.map((syl) => syl.endTime)));
+    shouldAnimateRevealSweep,
+    rendererActive && (shouldUseNativeRevealTree || needsPrimaryJsPlayback),
+    visuallyActive, scaleAnim, lineFontSize, lineLineHeight);
   const translatedText = String(line.translatedText || "").trim();
   const backgroundTranslatedText = String(
     line.backgroundTranslatedText || "",
@@ -1035,7 +1036,7 @@ export const LyricLine = memo(function LyricLine({
                       {cluster.map((idx) => {
                         const syl = line.syllables[idx];
                         const text = alignRight ? getSyllableDisplayText(syl.text ?? "") : (syl.text ?? "");
-                        return <NativeLyricToken key={idx} text={text} word={syl} index={idx}
+                        return <NativeLyricToken key={idx} text={text} word={syl}
                           timeline={primaryTimeline} emphasis={emphasis[idx]}
                           fontSize={lineFontSize} lineHeight={lineLineHeight} />;
                       })}
@@ -1233,8 +1234,9 @@ const BackgroundVocals = memo(function BackgroundVocals({
   }, [bgIsHighlighted, bgScale, globallyPlaying, rendererActive]);
   const bgScaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: bgScale.value }] }));
   const timeline = useNativeLyricTimeline(syllables, playbackPositionOverrideMs ?? nativeRevealPlaybackPosition,
-    shouldAnimateRevealSweep, rendererActive, bgIsHighlighted, bgScale, bgFontSize, bgLineHeight,
-    bgStart, bgEnd);
+    shouldAnimateRevealSweep,
+    shouldUseNativeBackgroundReveal || needsBackgroundJsPlayback,
+    bgIsHighlighted, bgScale, bgFontSize, bgLineHeight);
   const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
@@ -1283,7 +1285,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
               {cluster.map((idx) => {
                 const syl = syllables[idx];
                 const text = alignRight ? getSyllableDisplayText(syl.text ?? "") : (syl.text ?? "");
-                return <NativeLyricToken key={idx} text={text} word={syl} index={idx} timeline={timeline}
+                return <NativeLyricToken key={idx} text={text} word={syl} timeline={timeline}
                   emphasis={emphasis[idx]} fontSize={bgFontSize} lineHeight={bgLineHeight} background />;
               })}
             </View>
