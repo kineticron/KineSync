@@ -175,7 +175,13 @@ for (platform of ['ios', 'android']) {
           'native reveal has no overlapping animated clip layers');
         assert.ok(paintedStyles.some((style) => Math.abs(style.fontSize - 32 * 1.05 * 0.9) < 0.001), JSON.stringify({ platform, landscapeMode, position, preview, sizes: paintedStyles.map((s) => s.fontSize).filter(Boolean) }));
         assert.ok(paintedStyles.some((style) => style.alignItems === (landscapeMode ? 'flex-end' : 'flex-start')));
-        assert.ok(paintedStyles.some((style) => style.filter?.[0]?.blur === 4), 'native blur is preserved on both platforms');
+        if (platform === 'android') {
+          assert.ok(paintedStyles.some((style) => style.filter?.[0]?.blur === 4),
+            'Android keeps the native lyric blur effect');
+        } else {
+          assert.ok(!paintedStyles.some((style) => style.filter),
+            'iOS avoids Fabric filter reparenting on recycled native lyric rows');
+        }
         const checkFinite = (value) => {
           if (typeof value === 'number') assert.ok(Number.isFinite(value), 'animated styles stay finite');
           else if (value && typeof value === 'object') Object.values(value).forEach(checkFinite);
@@ -226,6 +232,22 @@ near(maskCursor(2400, maskWords, [40, 120], 20), 30, 'silence holds the cursor')
 near(maskCursor(3500, maskWords, [40, 120], 20), 95, 'wide glyphs use actual width');
 near(maskCursor(4500, maskWords, [40, 120], 20), 160, 'last word finishes the complete sweep');
 near(maskCursor(500, maskWords, [40, 120], 20), -40, 'backward seek clears the highlight');
+const overlappingMaskWords = [{text:'one',startTime:1000,endTime:2000},{text:'two',startTime:1500,endTime:2500}];
+near(maskCursor(1750, overlappingMaskWords, [40, 120], 20), 12.5,
+  'overlapping syllable windows do not reveal two segments concurrently');
+near(maskCursor(2000, overlappingMaskWords, [40, 120], 20), 30,
+  'the second overlapping syllable starts after the first reveal segment finishes');
+near(maskCursor(2250, overlappingMaskWords, [40, 120], 20), 62.5,
+  'serialized overlap timing continues at the second syllable rate');
+near(maskCursor(2500, overlappingMaskWords, [40, 120], 20), 160,
+  'AMLL resolves any remaining overlapping mask movement at the line endpoint');
+assert.equal(amll.AMLL_WORD_FADE_WIDTH, 0.5, 'native mask uses AMLL default word fade width');
+
+const lyricLineSource = fs.readFileSync(path.resolve(root, 'components/lyrics/lyric-line.tsx'), 'utf8');
+assert.ok(!lyricLineSource.includes('height: (bgMeasuredHeight + backgroundGap) * bgOpacity.value'),
+  'background vocal presentation must not animate FlashList row height');
+assert.ok(lyricLineSource.includes('marginTop: backgroundGap'),
+  'background vocals reserve stable layout space while animating paint-only transforms');
 assert.equal(amll.shouldEmphasizeAml('shine', 999), false);
 assert.equal(amll.shouldEmphasizeAml('shine', 1000), true);
 assert.equal(amll.shouldEmphasizeAml('I', 2000), false);

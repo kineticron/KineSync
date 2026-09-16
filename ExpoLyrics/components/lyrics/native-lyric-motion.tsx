@@ -11,7 +11,10 @@ export function NativeLyricMotion({ children, index, command, offset, enabled, a
   children: ReactNode; index: number; command: SharedValue<NativeLyricScroll>;
   offset: SharedValue<number>; enabled: SharedValue<boolean>; active: boolean;
 }) {
-  const rowOffset = useSharedValue(command.value.target);
+  // Never read another shared value during React render. The reaction seeds the
+  // exact command.from value before enabling the row spring, so zero is a safe
+  // cold initial value and avoids per-row strict-mode warnings / JS noise.
+  const rowOffset = useSharedValue(0);
   useAnimatedReaction(() => ({ command: command.value, enabled: enabled.value && active }), (next, previous) => {
     if (!next.enabled) { cancelAnimation(rowOffset); return; }
     if (previous?.enabled && previous.command.revision === next.command.revision) return;

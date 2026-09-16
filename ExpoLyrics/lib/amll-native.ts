@@ -7,7 +7,9 @@ import type { LyricSyllable } from "@/types/bridge";
 export const AMLL_POSITION_SPRING = { mass: 0.9, damping: 15, stiffness: 90, overshootClamping: false } as const;
 export const AMLL_SCALE_SPRING = { mass: 2, damping: 25, stiffness: 100, overshootClamping: false } as const;
 export const AMLL_BG_SCALE_SPRING = { mass: 1, damping: 20, stiffness: 50, overshootClamping: false } as const;
-export const AMLL_WORD_FADE_WIDTH = 0.56;
+// AMLL's default `wordFadeWidth` is 0.5. Keep the native feather tied to the
+// same line-height ratio instead of widening it independently.
+export const AMLL_WORD_FADE_WIDTH = 0.5;
 
 export function amlPositionSpring(interval: number | undefined, seeking: boolean, interlude: boolean) {
   if (seeking || interlude || interval === undefined) return AMLL_POSITION_SPRING;
@@ -93,17 +95,61 @@ export function amlEmphasis(position: number, start: number, index: number, coun
   };
 }
 
-// A single measured cursor crosses the whole line. Adjacent syllables share
-// the fade at their boundary; silence holds it still. No equal-width glyphs.
-export function amlMaskCursor(position: number, words: readonly LyricSyllable[], widths: readonly number[], fade: number) {
+// A single measured cursor crosses the whole line. AMLL's WebMaskAnimator
+// serializes each timed word/syllable on one mask timeline: positive gaps are
+// held, while overlapping source windows do NOT advance two segments at once.
+// That distinction matters for providers whose syllable ranges overlap; using
+// each absolute range independently makes whole groups brighten together.
+export function amlMaskCursor(
+  position: number,
+  words: readonly LyricSyllable[],
+  widths: readonly number[],
+  fade: number,
+  lineStartTime = words[0]?.startTime ?? 0,
+  lineEndTime = Math.max(lineStartTime, ...words.map((word) => word.endTime)),
+) {
   "worklet";
   let cursor = -2 * fade;
+  if (words.length === 0) return cursor;
+
+  // Mirror WebMaskAnimator's generated keyframe timeline. Movement segments
+  // are serialized, positive source gaps become holds, and duplicate keyframes
+  // beyond the line duration resolve to the fully-revealed endpoint at the
+  // line boundary.
+  const totalDuration = Math.max(0, lineEndTime - lineStartTime);
+  const relativePosition = Math.max(0, Math.min(totalDuration, position - lineStartTime));
+  const atLineEnd = position >= lineEndTime;
+  let timelinePosition = 0;
+  let sourceTimestamp = 0;
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
-    const p = word.endTime <= word.startTime
-      ? (position >= word.startTime ? 1 : 0)
-      : clampAml((position - word.startTime) / (word.endTime - word.startTime));
-    cursor += ((widths[i] || 0) + (i === 0 ? fade * 1.5 : 0) + (i === words.length - 1 ? fade * 0.5 : 0)) * p;
+    const duration = Math.max(0, word.endTime - word.startTime);
+    const relativeStart = word.startTime - lineStartTime;
+    const staticDuration = relativeStart - sourceTimestamp;
+    if (staticDuration > 0) {
+      if (!atLineEnd && relativePosition < timelinePosition + staticDuration) {
+        return cursor;
+      }
+      timelinePosition += staticDuration;
+    }
+    sourceTimestamp = relativeStart;
+
+    const move =
+      (widths[i] || 0) +
+      (i === 0 ? fade * 1.5 : 0) +
+      (i === words.length - 1 ? fade * 0.5 : 0);
+    if (!atLineEnd) {
+      if (duration > 0 && relativePosition < timelinePosition + duration) {
+        cursor += move * clampAml((relativePosition - timelinePosition) / duration);
+        return cursor;
+      }
+      if (duration === 0 && relativePosition < timelinePosition) {
+        return cursor;
+      }
+    }
+    cursor += move;
+    timelinePosition += duration;
+    sourceTimestamp += duration;
   }
   return cursor;
 }

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Pressable,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -55,6 +56,11 @@ const LYRIC_TEXT_LANE_WIDTH = LYRICS_LAYOUT.textLane;
 const LINE_INNER_PADDING_HORIZONTAL = 30; // 22px WebView margin + 20px padding - 12px list inset
 const BG_FONT_SIZE = BASE_FONT_SIZE * LYRICS_LAYOUT.backgroundScale;
 const BG_LINE_HEIGHT = BASE_LINE_HEIGHT * LYRICS_LAYOUT.backgroundScale;
+// React Native's iOS `filter: blur()` path wraps Fabric content in a SwiftUI
+// host. FlashList recycles these lyric rows while their Reanimated children are
+// still mounted, which previously caused intermittent native crashes. Android's
+// filter implementation does not use that reparenting path.
+const ENABLE_NATIVE_LYRIC_BLUR = Platform.OS === "android";
 type AmlPosYSpringPolicy = {
   mass: number;
   damping: number;
@@ -882,7 +888,8 @@ export const LyricLine = memo(function LyricLine({
   const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scaleAnim.value }] }));
   const primaryTimeline = useNativeLyricTimeline(line.syllables,
     playbackPositionOverrideMs ?? (isPast && !shouldUseNativeRevealTree ? line.lineEndTime + 30000 : nativeRevealPlaybackPosition),
-    shouldAnimateRevealSweep, rendererActive, visuallyActive, scaleAnim, lineFontSize, lineLineHeight);
+    shouldAnimateRevealSweep, rendererActive, visuallyActive, scaleAnim, lineFontSize, lineLineHeight,
+    line.lineStartTime, Math.max(line.lineEndTime, ...line.syllables.map((syl) => syl.endTime)));
   const translatedText = String(line.translatedText || "").trim();
   const backgroundTranslatedText = String(
     line.backgroundTranslatedText || "",
@@ -932,9 +939,9 @@ export const LyricLine = memo(function LyricLine({
   const lineAnimStyle = useAnimatedStyle(
     () => ({
       opacity: opacityAnim.value,
-      // Keep the filter present even at zero so the native view hierarchy stays
-      // stable while focus moves between rows.
-      filter: [{ blur: blurAnim.value }],
+      ...(ENABLE_NATIVE_LYRIC_BLUR
+        ? { filter: [{ blur: blurAnim.value }] }
+        : {}),
     }),
     [laneWidthPx, alignRight],
   );
@@ -1210,7 +1217,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
   ]);
 
   const backgroundGap = bgFontSize / LYRICS_LAYOUT.backgroundScale * 0.3;
-  const bgLayoutStyle = useAnimatedStyle(() => ({ height: (bgMeasuredHeight + backgroundGap) * bgOpacity.value }));
   const bgPresentationStyle = useAnimatedStyle(() => ({
     opacity: bgOpacity.value,
     transform: [
@@ -1227,12 +1233,12 @@ const BackgroundVocals = memo(function BackgroundVocals({
   }, [bgIsHighlighted, bgScale, globallyPlaying, rendererActive]);
   const bgScaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: bgScale.value }] }));
   const timeline = useNativeLyricTimeline(syllables, playbackPositionOverrideMs ?? nativeRevealPlaybackPosition,
-    shouldAnimateRevealSweep, rendererActive, bgIsHighlighted, bgScale, bgFontSize, bgLineHeight);
+    shouldAnimateRevealSweep, rendererActive, bgIsHighlighted, bgScale, bgFontSize, bgLineHeight,
+    bgStart, bgEnd);
   const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
   return (
-    <Reanimated.View style={[{ width: "100%" }, bgLayoutStyle]}>
     <Reanimated.View
       onLayout={(event) => {
         const { height: nextHeight } = event.nativeEvent.layout;
@@ -1245,7 +1251,11 @@ const BackgroundVocals = memo(function BackgroundVocals({
       style={[
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
-        { width: "100%", position: "absolute", top: backgroundGap },
+        // Keep background vocals in normal flow so their row height is stable.
+        // Animating layout height here makes FlashList remeasure the cell on
+        // every opacity frame, which fights the list scroll and causes visible
+        // hitching whenever a background line enters or leaves.
+        { width: "100%", marginTop: backgroundGap },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,
         { transformOrigin: alignRight ? "right top" : "left top" },
@@ -1299,7 +1309,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
           {translatedText}
         </Text>
       )}
-    </Reanimated.View>
     </Reanimated.View>
   );
 });

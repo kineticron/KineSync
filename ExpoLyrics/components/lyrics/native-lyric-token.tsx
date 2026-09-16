@@ -33,14 +33,26 @@ export function syncNativeTimeline(clock: SharedValue<number>, position: number,
 }
 
 export function useNativeLyricTimeline(words: LyricSyllable[], position: number, playing: boolean,
-  enabled: boolean, highlighted: boolean, scale: SharedValue<number>, fontSize: number, lineHeight: number) {
+  enabled: boolean, highlighted: boolean, scale: SharedValue<number>, fontSize: number, lineHeight: number,
+  maskLineStartTime = words[0]?.startTime ?? 0,
+  maskLineEndTime = Math.max(maskLineStartTime, ...words.map((word) => word.endTime))) {
   const widths = useSharedValue<number[]>([]);
   const clock = useSharedValue(position);
-  const initialFactor = clampAml((scale.value - 0.97) / 0.03);
+  // Do not sample a shared value during React render. Highlight state already
+  // determines the same cold-start alpha target and avoids strict-mode warning
+  // spam for every mounted token row while scrolling.
+  const initialFactor = highlighted ? 1 : 0;
   const alpha = useSharedValue({ dark: 0.2 + initialFactor * 0.2,
     bright: 0.2 + initialFactor * (highlighted ? 0.8 : 0.2) });
   const fade = lineHeight * AMLL_WORD_FADE_WIDTH;
   const end = useMemo(() => Math.max(0, ...words.map(w => w.endTime + Math.max(1000, w.endTime - w.startTime) * 2)), [words]);
+  // FlashList recycles mounted lyric rows. Never let the next recycled line use
+  // the previous line's measured syllable widths for even a single reveal
+  // frame; those stale offsets can make several fresh tokens appear to reveal
+  // as one group until their onLayout callbacks arrive.
+  useEffect(() => {
+    widths.value = [];
+  }, [widths, words]);
   useEffect(() => {
     cancelAnimation(clock);
     if (!enabled) return;
@@ -69,7 +81,14 @@ export function useNativeLyricTimeline(words: LyricSyllable[], position: number,
     const timer = setTimeout(() => alphaFrame.setActive(false), 2400);
     return () => { clearTimeout(timer); alphaFrame.setActive(false); };
   }, [alphaFrame, enabled, highlighted, playing]);
-  const cursor = useDerivedValue(() => amlMaskCursor(clock.value, words, widths.value, fade));
+  const cursor = useDerivedValue(() => amlMaskCursor(
+    clock.value,
+    words,
+    widths.value,
+    fade,
+    maskLineStartTime,
+    maskLineEndTime,
+  ));
   return { widths, clock, alpha, cursor, fade };
 }
 
@@ -95,6 +114,9 @@ export const NativeLyricToken = memo(function NativeLyricToken({ text, word, ind
   background?: boolean; emphasis?: NativeEmphasis;
 }) {
   const [width, setWidth] = useState(0);
+  useEffect(() => {
+    setWidth(0);
+  }, [background, fontSize, text]);
   const padding = fontSize;
   const boxWidth = width + padding * 2;
   const gradientWidth = boxWidth * 2 + timeline.fade;
