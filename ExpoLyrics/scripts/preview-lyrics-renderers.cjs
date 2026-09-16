@@ -7,6 +7,8 @@ const http = require('node:http');
 const vm = require('node:vm');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
+// Optional ignored, locally fetched provider payload for reproducing real songs.
+const fixture = process.argv[2] ? JSON.parse(fs.readFileSync(path.resolve(process.argv[2]), 'utf8')) : null;
 const source = fs.readFileSync(path.join(root, 'components/lyrics/web-lyrics-view.tsx'), 'utf8');
 const bundle = fs.readFileSync(path.join(root, 'components/lyrics/spicy-webview-bundle.ts'), 'utf8');
 const globals = {};
@@ -20,12 +22,17 @@ vm.runInNewContext(ts.transpileModule(helpers + '\nglobalThis.result = createWeb
 // Instrument only the fixture, never the app bundle, to catch idle RAF polling.
 const renderer = globals.result.replace('<script>', `<script>
 window.lyricsTestFrames = 0;
+window.lyricsFrameSamples = [];
 const nativeRaf = window.requestAnimationFrame.bind(window);
-window.requestAnimationFrame = callback => nativeRaf(time => { window.lyricsTestFrames++; callback(time); });
+window.requestAnimationFrame = callback => nativeRaf(time => {
+  window.lyricsTestFrames++;
+  const start = performance.now(); callback(time);
+  if (window.lyricsFrameSamples.length < 7200) window.lyricsFrameSamples.push({time, work: performance.now()-start});
+});
 </script><script>`);
 const harness = `<!doctype html><meta charset="utf-8"><title>Lyrics renderer checks</title>
 <style>body{background:#161c28;color:white;font:15px system-ui;margin:20px}button{font:inherit;padding:8px;margin:4px}iframe{display:block;border:1px solid #566073;background:linear-gradient(#283650,#171c2a);width:390px;height:600px}pre{white-space:pre-wrap} .controls{max-width:1000px;margin-bottom:12px}</style>
-<div class="controls"><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button></div>
+<div class="controls"><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button><button id="fixture">Load local fixture</button><button id="profile">Profile 10 seconds</button></div>
 <iframe id="renderer" src="/renderer"></iframe><pre id="results">Loading renderer…</pre>
 <script>
 const frame=document.getElementById('renderer');
@@ -46,6 +53,24 @@ document.getElementById('seek').onclick=()=>{position=10500;sync()};
 document.getElementById('static').onclick=()=>{send({type:'setLyrics',lines:lines.slice(0,7),timingMode:'static'});sync()};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const waitFor=async(predicate,timeoutMs=1600)=>{const deadline=performance.now()+timeoutMs;while(performance.now()<deadline){if(predicate())return true;await wait(40)}return predicate()};
+document.getElementById('fixture').onclick=async()=>{
+  const payload=await fetch('/fixture').then(response=>response.json());
+  if(!payload?.lyrics?.length){results.textContent='Start the harness with a local provider JSON path to load a real song.';return}
+  options();send({type:'setLyrics',lines:payload.lyrics,timingMode:'karaoke'});
+  position=payload.lyrics[0].lineStartTime;playing=false;sync();
+  results.textContent='Loaded '+payload.source+': '+payload.lyrics.length+' lines from the local fixture.';
+};
+document.getElementById('profile').onclick=async()=>{
+  playing=true;sync();await wait(500);
+  const w=frame.contentWindow;w.lyricsFrameSamples=[];await wait(10000);
+  const samples=w.lyricsFrameSamples.slice();playing=false;sync(false);
+  const intervals=samples.slice(1).map((sample,i)=>sample.time-samples[i].time);
+  const percentile=(values,p)=>values.length?[...values].sort((a,b)=>a-b)[Math.floor((values.length-1)*p)].toFixed(2):'n/a';
+  results.textContent=JSON.stringify({frames:samples.length,callbackWorkP95Ms:percentile(samples.map(s=>s.work),.95),
+    frameIntervalMedianMs:percentile(intervals,.5),frameIntervalP95Ms:percentile(intervals,.95),
+    intervalsOver120HzBudget:intervals.filter(ms=>ms>12.5).length,
+    note:'Browser RAF/callback timings only; verify native presented frames on a physical 120Hz device.'},null,2);
+};
 document.getElementById('checks').onclick=async()=>{
   const messages=[]; const check=(condition,label)=>{if(!condition)throw new Error(label);messages.push('PASS '+label);results.textContent=messages.join('\\n')};
   try {
@@ -102,11 +127,23 @@ document.getElementById('checks').onclick=async()=>{
     check(w.lyricsTestFrames>hiddenFrames,'foreground WebView wakes and resumes playback');
     playing=false;sync();await wait(4500);const finalFrames=w.lyricsTestFrames;await wait(300);
     check(w.lyricsTestFrames===finalFrames,'pause allows springs to settle then returns to zero RAF work');
+    const spacingLine={lineStartTime:1000,lineEndTime:6000,syllables:[{text:'한',startTime:1000,endTime:1500},{text:'글 ',startTime:1500,endTime:2000},{text:'테',startTime:2000,endTime:2500},{text:'스',startTime:2500,endTime:3000},{text:'트',startTime:3000,endTime:3500}]};
+    send({type:'setLyrics',lines:[spacingLine],timingMode:'karaoke'});position=4000;sync();await wait(650);
+    const koreanLine=d.querySelector('.line:not(.musical-line)');
+    check(koreanLine.textContent==='한글 테스트','KRC literal text and word spaces survive rendering');
+    check(koreanLine.querySelectorAll('.word-group').length===2,'KRC syllables group by actual word boundaries');
+    const koreanWords=[...koreanLine.querySelectorAll('.word')];
+    check(koreanWords.every(word=>w.getComputedStyle(word,'::after').content==='none'),'no synthetic gaps are added between KRC syllables');
+    check(w.getComputedStyle(koreanWords[1]).whiteSpace==='pre-wrap','KRC trailing spaces occupy their original width');
     results.textContent=messages.join('\\n')+'\\nAll browser checks passed.';
   } catch(error){results.textContent=messages.join('\\n')+'\\nFAIL '+error.message}
 };
 </script>`;
 http.createServer((request, response) => {
+  if (request.url === '/fixture') {
+    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify(fixture));return;
+  }
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   response.end(request.url === '/renderer' ? renderer : harness);
 }).listen(8766, '127.0.0.1', () => console.log('Lyrics preview: http://127.0.0.1:8766'));

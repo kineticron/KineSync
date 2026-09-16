@@ -279,6 +279,9 @@ function setStyleIfChanged(el: HTMLElement, prop: string, value: string, epsilon
     styleCache.set(el, map);
   }
   const prev = map.get(prop);
+  // Most nearby words have already settled. Avoid parsing identical strings
+  // on every display frame just to discover that no paint is needed.
+  if (prev === value) return;
   if (prev !== undefined) {
     const a = parseFloat(prev);
     const b = parseFloat(value);
@@ -335,6 +338,7 @@ export function resetSpicyAnimatorState(): void {
   lastFrameTime = performance.now();
   styleQueue.clear();
   animationState = new WeakMap();
+  wordAnimationState = new WeakMap();
 }
 
 // Upstream's LyricsVirtualizer mount callback only invalidates the blur-line
@@ -742,10 +746,27 @@ let animationFrame = 0;
 let animationState = new WeakMap<SpicyRuntimeLine, {
   status: SpicyElementStatus; position: number; frame: number; settled: boolean;
 }>();
+let wordAnimationState = new WeakMap<SpicyWord, { status: SpicyElementStatus; settled: boolean }>();
 
 function storeSettled(store?: SpicyAnimatorStore) {
   return !store || (store.Scale.CanSleep() && store.YOffset.CanSleep() &&
     store.Glow.CanSleep() && (!store.Opacity || store.Opacity.CanSleep()));
+}
+
+function animateWordIfNeeded(word: SpicyWord, position: number, deltaTime: number, settle: boolean) {
+  const status = getElementState(position, word.StartTime, word.EndTime);
+  const previous = wordAnimationState.get(word);
+  if (!snapSprings && previous?.settled && previous.status === status && status !== "Active") return;
+  if (settle) settleSungWord(word, deltaTime);
+  else animateActiveWord(word, position, deltaTime);
+  const settled = storeSettled(word.AnimatorStore) &&
+    (!word.Letters || word.Letters.every((letter) => storeSettled(letter.AnimatorStore)));
+  if (previous) {
+    previous.status = status;
+    previous.settled = settled;
+  } else {
+    wordAnimationState.set(word, { status, settled });
+  }
 }
 
 function lineSettled(line: SpicyRuntimeLine) {
@@ -796,8 +817,8 @@ export function animate(
     if (!unchanged) {
       if (lyricsType === "Line") animateLineLyrics([line], position, deltaTime);
       else for (const word of line.Syllables?.Lead ?? []) {
-        if (lineState === "Sung" && previous && !snapSprings) settleSungWord(word, deltaTime);
-        else animateActiveWord(word, position, deltaTime);
+        animateWordIfNeeded(word, position, deltaTime,
+          Boolean(lineState === "Sung" && previous && !snapSprings));
       }
     }
     const settled = unchanged || lineSettled(line);
@@ -806,7 +827,14 @@ export function animate(
       line.HTMLElement.classList.toggle("ks-animating", animating);
     }
     needsFrame ||= !settled;
-    animationState.set(line, { status: lineState, position, frame: animationFrame, settled });
+    if (previous) {
+      previous.status = lineState;
+      previous.position = position;
+      previous.frame = animationFrame;
+      previous.settled = settled;
+    } else {
+      animationState.set(line, { status: lineState, position, frame: animationFrame, settled });
+    }
   }
   snapSprings = false;
   flushStyleBatch();

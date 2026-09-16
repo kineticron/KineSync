@@ -25,7 +25,7 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { selectionAsync } from 'expo-haptics';
 
-import { usePlaybackStore } from '@/store/playback-store';
+import { usePlaybackTimelineClock } from './use-playback-timeline-clock';
 import type { PlaybackMode } from '@/lib/playback-source';
 import type { ConnectionStatus } from '@/types/bridge';
 
@@ -139,7 +139,6 @@ function formatRemainingTime(positionMs: number, durationMs: number) {
   return `-${formatTime(remaining)}`;
 }
 
-const SEEK_CONFIRM_THRESHOLD_MS = 1200;
 const SCRUB_DISPLAY_INTERVAL_MS = 80;
 const SCRUB_LYRIC_PREVIEW_INTERVAL_MS = 220;
 const INTERACTION_KEEP_ALIVE_MS = 1000;
@@ -721,53 +720,15 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 }) {
   const [trackWidth, setTrackWidth] = useState(1);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const [pendingSeekPositionMs, setPendingSeekPositionMs] = useState<number | null>(null);
   const scrubValueRef = useRef(0);
-  const lastScrubDisplayAtRef = useRef(0);
   const lastScrubPreviewAtRef = useRef(0);
-  const pendingSeekRef = useRef(false);
   const scrubProgress = useSharedValue(0);
   const trackScaleY = useSharedValue(1);
   const lastScrubJsCallAt = useSharedValue(0);
   const isScrubbingShared = useSharedValue(false);
   const pendingSeekPositionMsShared = useSharedValue<number | null>(null);
-  const playbackPositionShared = useSharedValue(
-    usePlaybackStore.getState().playbackPosition,
-  );
-
   const maxDuration = Math.max(1, durationMs || 1);
-
-  useEffect(() => {
-    pendingSeekRef.current = pendingSeekPositionMs !== null;
-  }, [pendingSeekPositionMs]);
-
-  useEffect(() => {
-    const syncPlaybackPosition = (positionMs: number) => {
-      playbackPositionShared.value = Math.max(0, Math.min(positionMs, maxDuration));
-    };
-
-    syncPlaybackPosition(usePlaybackStore.getState().playbackPosition);
-
-    let previousPosition = usePlaybackStore.getState().playbackPosition;
-    return usePlaybackStore.subscribe((state) => {
-      const playbackPosition = state.playbackPosition;
-      if (playbackPosition === previousPosition) {
-        return;
-      }
-      previousPosition = playbackPosition;
-      if (!isScrubbingShared.value && pendingSeekPositionMsShared.value === null) {
-        syncPlaybackPosition(playbackPosition);
-      }
-    });
-  }, [isScrubbingShared, maxDuration, pendingSeekPositionMsShared, playbackPositionShared]);
-
-  useEffect(() => {
-    isScrubbingShared.value = isScrubbing;
-  }, [isScrubbing, isScrubbingShared]);
-
-  useEffect(() => {
-    pendingSeekPositionMsShared.value = pendingSeekPositionMs;
-  }, [pendingSeekPositionMs, pendingSeekPositionMsShared]);
+  const playbackPositionShared = usePlaybackTimelineClock(maxDuration);
 
   const displayPositionShared = useDerivedValue(() => {
     if (isScrubbingShared.value) {
@@ -783,12 +744,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
     return displayPositionShared.value / maxDuration;
   }, [maxDuration]);
 
-  useDerivedValue(() => {
-    if (!isScrubbingShared.value) {
-      scrubProgress.value = withTiming(displayValueShared.value, { duration: 120 });
-    }
-  });
-
   const flushScrubPreview = useCallback(
     (ratio: number, forcePreview = false) => {
       scrubValueRef.current = ratio;
@@ -799,12 +754,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           : Date.now();
       if (
         forcePreview ||
-        now - lastScrubDisplayAtRef.current >= SCRUB_DISPLAY_INTERVAL_MS
-      ) {
-        lastScrubDisplayAtRef.current = now;
-      }
-      if (
-        forcePreview ||
         now - lastScrubPreviewAtRef.current >= SCRUB_LYRIC_PREVIEW_INTERVAL_MS
       ) {
         lastScrubPreviewAtRef.current = now;
@@ -813,23 +762,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
     },
     [maxDuration, onScrubPreview],
   );
-
-  useEffect(() => {
-    if (pendingSeekPositionMs === null) {
-      return;
-    }
-    if (pendingSeekPositionMs > maxDuration) {
-      setPendingSeekPositionMs(null);
-      return;
-    }
-    // We need to check if the actual position caught up to the seek position.
-    // Instead of subscribing to playbackPosition, we can just clear it after a timeout
-    // or when anchorPositionMs changes significantly.
-    const timer = setTimeout(() => {
-      setPendingSeekPositionMs(null);
-    }, SEEK_CONFIRM_THRESHOLD_MS);
-    return () => clearTimeout(timer);
-  }, [maxDuration, pendingSeekPositionMs]);
 
   useEffect(() => {
     if (!isScrubbing) {
@@ -851,12 +783,20 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
       }
       setIsScrubbing(false);
       const seekPositionMs = scrubValueRef.current * maxDuration;
-      setPendingSeekPositionMs(seekPositionMs);
       onSeek(seekPositionMs);
+      // The host updates the playback anchor synchronously in onSeek. The UI
+      // clock has now accepted it, so release the temporary gesture hold instead
+      // of freezing the thumb for another 1.2s while playback continues.
+      pendingSeekPositionMsShared.value = null;
       onScrubPreview?.(null);
     },
-    [maxDuration, onScrubPreview, onSeek, onUserInteraction],
+    [maxDuration, onScrubPreview, onSeek, onUserInteraction, pendingSeekPositionMsShared],
   );
+
+  const cancelScrub = useCallback(() => {
+    setIsScrubbing(false);
+    onScrubPreview?.(null);
+  }, [onScrubPreview]);
 
   const scrubGesture = useMemo(
     () =>
@@ -867,10 +807,11 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
             0,
             Math.min(1, event.x / Math.max(1, trackWidth)),
           );
+          isScrubbingShared.value = true;
           scrubProgress.value = ratio;
           trackScaleY.value = 1.65;
           lastScrubJsCallAt.value = Date.now();
-          runOnJS(onUserInteraction ?? (() => undefined))();
+          if (onUserInteraction) runOnJS(onUserInteraction)();
           runOnJS(setIsScrubbing)(true);
           runOnJS(flushScrubPreview)(ratio, true);
         })
@@ -886,15 +827,29 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
             runOnJS(flushScrubPreview)(ratio, false);
           }
         })
-        .onFinalize(() => {
+        .onFinalize((event, success) => {
           trackScaleY.value = withTiming(1, { duration: 160 });
-          runOnJS(finishScrub)();
+          if (success) {
+            // Commit the release coordinate, even when the last JS preview
+            // was throttled. Hold here until JS installs the new playback anchor.
+            const ratio = Math.max(0, Math.min(1, event.x / Math.max(1, trackWidth)));
+            pendingSeekPositionMsShared.value = ratio * maxDuration;
+            isScrubbingShared.value = false;
+            runOnJS(finishScrub)(ratio);
+          } else {
+            isScrubbingShared.value = false;
+            runOnJS(cancelScrub)();
+          }
         }),
     [
+      cancelScrub,
       finishScrub,
       flushScrubPreview,
+      isScrubbingShared,
       lastScrubJsCallAt,
+      maxDuration,
       onUserInteraction,
+      pendingSeekPositionMsShared,
       scrubProgress,
       trackScaleY,
       trackWidth,
@@ -906,18 +861,21 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   }));
 
   const animatedFillStyle = useAnimatedStyle(() => ({
-    width: `${scrubProgress.value * 100}%`,
+    transform: [{ scaleX: Math.max(0, Math.min(1, displayValueShared.value)) }],
   }));
 
+  // Format on the UI thread, but update native text only when the second changes.
+  const elapsedText = useDerivedValue(() => formatTime(displayPositionShared.value));
+  const remainingText = useDerivedValue(() => formatRemainingTime(displayPositionShared.value, maxDuration));
   const animatedTimeProps = useAnimatedProps(() => {
     return {
-      text: formatTime(displayPositionShared.value),
+      text: elapsedText.value,
     } as any;
   });
 
   const animatedRemainingProps = useAnimatedProps(() => {
     return {
-      text: formatRemainingTime(displayPositionShared.value, maxDuration),
+      text: remainingText.value,
     } as any;
   });
 
@@ -1016,6 +974,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   timelineFill: {
+    width: '100%',
+    transformOrigin: 'left center',
     height: 5,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.95)',

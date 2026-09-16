@@ -52,9 +52,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   cancelAnimation,
   Easing as ReanimatedEasing,
-  runOnJS,
   scrollTo,
-  useAnimatedReaction,
   useAnimatedRef,
   useAnimatedStyle,
   useDerivedValue,
@@ -80,6 +78,7 @@ import type {
 } from "@/types/bridge";
 
 import { LyricLine } from "./lyric-line";
+import { useLyricScrollInterruption } from "./use-lyric-scroll-interruption";
 
 const SOURCE_CHANGE_AUTOSCROLL_DELAY_MS = 500;
 
@@ -446,11 +445,13 @@ export function LyricsView({
   const userScrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const lastUserScrollAtRef = useRef(0);
   const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const programmaticScrollInProgressRef = useRef(false);
   const userScrollInProgressRef = useRef(false);
+  const userDragInProgressRef = useRef(false);
   const userScrollSessionRef = useRef(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const rendererActiveRef = useRef(rendererActive);
@@ -514,28 +515,8 @@ export function LyricsView({
     }
   });
 
-  const syncScrollOffsetFromAnimation = useCallback((offset: number) => {
-    scrollOffsetRef.current = Math.max(0, offset);
-  }, []);
-
-  useAnimatedReaction(
-    () => ({
-      offset: lyricScrollOffset.value,
-      active: lyricScrollActive.value,
-    }),
-    (current, previous) => {
-      if (!current.active) {
-        return;
-      }
-      if (
-        previous === null ||
-        Math.abs(current.offset - previous.offset) >= 0.5
-      ) {
-        runOnJS(syncScrollOffsetFromAnimation)(current.offset);
-      }
-    },
-    [syncScrollOffsetFromAnimation],
-  );
+  // FlashList's scroll events already report the native offset. A second
+  // runOnJS callback for every animation frame only duplicates that traffic.
 
   const previewPlaybackPosition =
     Number.isFinite(previewPositionMs) && previewPositionMs !== null
@@ -824,14 +805,25 @@ export function LyricsView({
   }, []);
 
   const scheduleUserScrollIdleReset = useCallback(() => {
-    clearUserScrollIdleTimer();
-    userScrollIdleTimerRef.current = setTimeout(() => {
+    lastUserScrollAtRef.current = Date.now();
+    if (userScrollIdleTimerRef.current !== null) return;
+    const checkIdle = () => {
+      if (userDragInProgressRef.current) {
+        userScrollIdleTimerRef.current = setTimeout(checkIdle, USER_SCROLL_IDLE_RESET_MS);
+        return;
+      }
+      const remaining = USER_SCROLL_IDLE_RESET_MS - (Date.now() - lastUserScrollAtRef.current);
+      if (remaining > 0) {
+        userScrollIdleTimerRef.current = setTimeout(checkIdle, remaining);
+        return;
+      }
       userScrollInProgressRef.current = false;
       userScrollSessionRef.current = false;
       setIsUserTouchScrolling(false);
       userScrollIdleTimerRef.current = null;
-    }, USER_SCROLL_IDLE_RESET_MS);
-  }, [clearUserScrollIdleTimer]);
+    };
+    userScrollIdleTimerRef.current = setTimeout(checkIdle, USER_SCROLL_IDLE_RESET_MS);
+  }, []);
 
   const scrollToOffset = useCallback(
     (
@@ -1333,10 +1325,37 @@ export function LyricsView({
     [scheduleUserScrollIdleReset, updateAutoFollowForUserScroll],
   );
 
+  const handleUserDragBegin = useCallback((offset: number) => {
+    // A real drag always wins over a pending auto-scroll, including its guard
+    // and delayed settle/retry jobs. The UI worklet has already stopped motion.
+    scrollOffsetRef.current = offset;
+    programmaticScrollInProgressRef.current = false;
+    for (const timer of [programmaticScrollTimerRef, scrollSettleTimerRef, pendingAnchorRetryTimerRef]) {
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = null;
+    }
+    onUserInteraction?.();
+    setIsUserTouchScrolling(true);
+    userScrollInProgressRef.current = true;
+    userDragInProgressRef.current = true;
+    userScrollSessionRef.current = true;
+    scheduleUserScrollIdleReset();
+    lastScrollRequestRef.current = "";
+    pendingAnchorRangeRef.current = null;
+    if (pendingScrollFrameRef.current !== null) {
+      cancelAnimationFrame(pendingScrollFrameRef.current);
+      pendingScrollFrameRef.current = null;
+    }
+  }, [onUserInteraction, scheduleUserScrollIdleReset]);
+  const handleScrollBeginDrag = useLyricScrollInterruption(
+    lyricScrollOffset, lyricScrollActive, handleUserDragBegin,
+  );
+
   useLayoutEffect(() => {
     activeLineRef.current = -1;
     scrollOffsetRef.current = 0;
     userScrollInProgressRef.current = false;
+    userDragInProgressRef.current = false;
     userScrollSessionRef.current = false;
     autoFollowDisableGraceUntilRef.current =
       Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
@@ -1415,6 +1434,7 @@ export function LyricsView({
       lyricScrollActive.value = false;
       programmaticScrollInProgressRef.current = false;
       userScrollInProgressRef.current = false;
+      userDragInProgressRef.current = false;
       userScrollSessionRef.current = false;
       autoFollowDisableGraceUntilRef.current =
         Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
@@ -1442,7 +1462,10 @@ export function LyricsView({
     lyricScrollActive.value = false;
     programmaticScrollInProgressRef.current = false;
     userScrollInProgressRef.current = false;
+    userDragInProgressRef.current = false;
     userScrollSessionRef.current = false;
+    clearUserScrollIdleTimer();
+    setIsUserTouchScrolling(false);
     if (
       pendingScrollFrameRef.current !== null &&
       typeof cancelAnimationFrame === "function"
@@ -1462,7 +1485,7 @@ export function LyricsView({
       clearTimeout(pendingAnchorRetryTimerRef.current);
       pendingAnchorRetryTimerRef.current = null;
     }
-  }, [rendererActive, lyricScrollActive, lyricScrollOffset]);
+  }, [rendererActive, lyricScrollActive, lyricScrollOffset, clearUserScrollIdleTimer]);
 
   useEffect(() => {
     if (!hasMountedLyricsChangeEffectRef.current) {
@@ -2027,30 +2050,10 @@ export function LyricsView({
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
         scrollEventThrottle={10}
-        onScrollBeginDrag={() => {
-          if (programmaticScrollInProgressRef.current) {
-            return;
-          }
-          onUserInteraction?.();
-          setIsUserTouchScrolling(true);
-          cancelAnimation(lyricScrollOffset);
-          lyricScrollActive.value = false;
-          userScrollInProgressRef.current = true;
-          userScrollSessionRef.current = true;
-          scheduleUserScrollIdleReset();
-          lastScrollRequestRef.current = "";
-          pendingAnchorRangeRef.current = null;
-          if (
-            pendingScrollFrameRef.current !== null &&
-            typeof cancelAnimationFrame === "function"
-          ) {
-            cancelAnimationFrame(pendingScrollFrameRef.current);
-            pendingScrollFrameRef.current = null;
-          }
-        }}
+        onScrollBeginDrag={handleScrollBeginDrag}
         onScrollEndDrag={() => {
+          userDragInProgressRef.current = false;
           userScrollInProgressRef.current = false;
-          setIsUserTouchScrolling(false);
           scheduleUserScrollIdleReset();
         }}
         onMomentumScrollBegin={() => {
@@ -2077,6 +2080,7 @@ export function LyricsView({
           }
         }}
         onMomentumScrollEnd={() => {
+          userDragInProgressRef.current = false;
           setIsUserTouchScrolling(false);
           clearUserScrollIdleTimer();
           programmaticScrollInProgressRef.current = false;

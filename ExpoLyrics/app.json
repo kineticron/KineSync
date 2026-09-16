@@ -58,6 +58,7 @@
       "./plugins/with-network-security-config.js",
       "./plugins/with-release-signing.js",
       "./plugins/with-live-activity.js",
+      "./plugins/with-high-refresh-rate.js",
       [
         "expo-build-properties",
         {

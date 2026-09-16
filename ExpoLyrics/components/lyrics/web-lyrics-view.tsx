@@ -347,6 +347,7 @@ export const WebLyricsView = memo(function WebLyricsView({
     .toLowerCase()
     .includes("spicy-lyrics-syllable");
   const anchorPositionMs = usePlaybackStore((state) => state.anchorPositionMs);
+  const anchorMonotonicMs = usePlaybackStore((state) => state.anchorMonotonicMs);
   const isPlaying = usePlaybackStore((state) => state.isPlaying);
 
   const selectedKeyMap = useMemo(() => {
@@ -441,16 +442,23 @@ export const WebLyricsView = memo(function WebLyricsView({
   ]);
 
   useEffect(() => {
+    const state = usePlaybackStore.getState();
+    // Bridge events (ready/focus/preview changes) can arrive between server
+    // anchors. Project that anchor before restarting the WebView's own clock.
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const currentPosition = state.anchorPositionMs +
+      (state.isPlaying ? Math.max(0, now - state.anchorMonotonicMs) : 0);
     inject({
       type: "sync",
       active: active && appStateRef.current === "active",
-      positionMs: previewPositionMs ?? anchorPositionMs,
+      positionMs: previewPositionMs ?? currentPosition,
       previewPositionMs,
       isPlaying: active && previewPositionMs === null ? isPlaying : false,
       durationMs: currentTrack?.durationMs ?? 0,
       force: previewPositionMs !== null,
     });
-  }, [active, anchorPositionMs, currentTrack?.durationMs, inject, isPlaying, previewPositionMs]);
+  }, [active, anchorMonotonicMs, anchorPositionMs, currentTrack?.id, currentTrack?.durationMs,
+    inject, isPlaying, lyrics, previewPositionMs, resumeAutoFollowSignal]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     let payload: {
@@ -477,6 +485,10 @@ export const WebLyricsView = memo(function WebLyricsView({
     }
     if (payload.type === "autoFollowChange") {
       onAutoFollowChange?.(Boolean(payload.enabled));
+      return;
+    }
+    if (payload.type === "userInteraction") {
+      onUserInteraction?.();
       return;
     }
     if (payload.type === "creditsPress") {

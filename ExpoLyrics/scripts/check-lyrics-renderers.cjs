@@ -13,6 +13,9 @@ const cache = new Map();
 let platform = 'ios';
 let playback = {};
 let paintedStyles = [];
+let nativeEffects = [];
+let nativeAnimations = 0;
+let nativeCancellations = 0;
 let testDocument;
 let TestResizeObserver;
 let testClock = performance;
@@ -33,6 +36,10 @@ function unpackWorklet(worklet) {
   const unpacked = { __closure: {} };
   for (const [name, value] of Object.entries(worklet.__closure)) {
     if (typeof value === 'function') {
+      if (['cancelAnimation', 'withTiming'].includes(name) || value === easing) {
+        unpacked.__closure[name] = value;
+        continue;
+      }
       assert.ok(value.__workletHash, `UI callback captured non-worklet helper ${name}`);
       unpacked.__closure[name] = unpackWorklet(value);
     } else {
@@ -46,7 +53,7 @@ function unpackWorklet(worklet) {
   return fn;
 }
 const mocks = {
-  react: React,
+  react: { ...React, useEffect: (effect) => { nativeEffects.push(effect); } },
   'react-native': {
     View, Text, Pressable: primitive('Pressable'),
     Animated: { View, Text },
@@ -61,10 +68,11 @@ const mocks = {
     useSharedValue: (value) => React.useRef({ value }).current,
     useAnimatedStyle: (compute) => unpackWorklet(compute)(),
     useDerivedValue: (compute) => ({ value: unpackWorklet(compute)() }),
-    withTiming: (value) => value,
-    withSpring: (value) => value,
+    withTiming: (value) => { nativeAnimations++; return value; },
+    withSpring: (value) => { nativeAnimations++; return value; },
     withDelay: (_, value) => value,
-    cancelAnimation: () => {},
+    cancelAnimation: () => { nativeCancellations++; },
+    runOnUI: (worklet) => unpackWorklet(worklet),
   },
   'zustand/react/shallow': { useShallow: (selector) => selector },
   '@/store/playback-store': {
@@ -74,7 +82,7 @@ const mocks = {
 function load(file) {
   const resolved = path.resolve(root, file);
   if (cache.has(resolved)) return cache.get(resolved).exports;
-  const source = fs.readFileSync(resolved, 'utf8');
+  const source = fs.readFileSync(resolved, 'utf8') + (resolved.endsWith('lyric-line.tsx') ? '\nexport { syncRevealProgress };' : '');
   const code = resolved.endsWith('lyric-line.tsx') ? babel.transformSync(source, {
     filename: resolved,
     babelrc: false,
@@ -127,6 +135,7 @@ assert.equal(layout.getCreditsAwareScrollOffset({ range: { startIndex: 3, endInd
 for (platform of ['ios', 'android']) {
   cache.delete(path.resolve(root, 'components/lyrics/lyric-line.tsx'));
   const { LyricLine } = load('components/lyrics/lyric-line.tsx');
+  for (const rendererActive of [true, false]) {
   for (const landscapeMode of [false, true]) {
     for (const position of [0, 1500, 3000, 5000]) {
       for (const preview of [null, position]) {
@@ -136,7 +145,10 @@ for (platform of ['ios', 'android']) {
         line.backgroundTranslatedText = 'Echo translation';
         playback = { playbackPosition: position, anchorPositionMs: position, anchorMonotonicMs: performance.now(), isPlaying: position > 0 && position < 5000 };
         paintedStyles = [];
+        nativeEffects = [];
+        nativeAnimations = nativeCancellations = 0;
         const html = renderToStaticMarkup(React.createElement(LyricLine, {
+          rendererActive,
           line, isActive: position >= 1000 && position < 4500,
           isPast: position >= 4500, inactiveOpacityDistance: 1,
           shouldDrivePlaybackUpdates: true, showTranslatedText: true,
@@ -146,6 +158,10 @@ for (platform of ['ios', 'android']) {
           pauseVisualDurationMs: 7000, pauseHoldMs: 0,
         }));
         assert.ok(html.includes('Translation') && html.includes('Echo translation'));
+        assert.equal(html.replace(/<[^>]*>/g, '').split('Shining').length - 1, 1,
+          'the native lead paints a single text copy during playback and preview');
+        assert.ok(!paintedStyles.some(style => style.overflow === 'hidden' && style.position === 'absolute'),
+          'native reveal has no overlapping animated clip layers');
         assert.ok(paintedStyles.some((style) => Math.abs(style.fontSize - 32 * 1.05 * 0.9) < 0.001), JSON.stringify({ platform, landscapeMode, position, preview, sizes: paintedStyles.map((s) => s.fontSize).filter(Boolean) }));
         assert.ok(paintedStyles.some((style) => style.alignItems === (landscapeMode ? 'flex-end' : 'flex-start')));
         assert.ok(paintedStyles.some((style) => style.filter?.[0]?.blur === 4), 'native blur is preserved on both platforms');
@@ -154,11 +170,37 @@ for (platform of ['ios', 'android']) {
           else if (value && typeof value === 'object') Object.values(value).forEach(checkFinite);
         };
         paintedStyles.forEach(checkFinite);
+        const cleanups = nativeEffects.map((effect) => effect()).filter((cleanup) => typeof cleanup === 'function');
+        if (!rendererActive) {
+          assert.equal(nativeAnimations, 0, 'hidden native rows, backgrounds and dots start no animations');
+        } else {
+          assert.ok(nativeAnimations > 0, 'visible native rows retain their animation effects');
+        }
+        const cancellationsBeforeUnmount = nativeCancellations;
+        cleanups.forEach((cleanup) => cleanup());
+        if (nativeAnimations > 0) {
+          assert.ok(nativeCancellations - cancellationsBeforeUnmount >= nativeAnimations,
+            'unmounted/recycled rows cancel every animation they started');
+        }
       }
     }
   }
+  }
 }
-console.log('Lyrics checks passed: timeline, overlap/background ranges, seeks, credits, end padding, and 32 native mount scenarios.');
+console.log('Lyrics checks passed: timeline, overlap/background ranges, seeks, credits, end padding, and 64 native mount/effect scenarios including hidden rows and unmount cleanup.');
+
+const { syncRevealProgress } = load('components/lyrics/lyric-line.tsx');
+let revealValue = 0.5;
+const revealWrites = [];
+const revealProgress = { get value() { return revealValue; }, set value(value) { revealWrites.push(value); revealValue = value; } };
+syncRevealProgress(revealProgress, 550, 0, 1000, true, easing);
+assert.deepEqual(revealWrites, [1], 'small native clock corrections retarget without resetting the reveal value');
+revealWrites.length = 0;
+syncRevealProgress(revealProgress, 100, 0, 1000, true, easing);
+assert.deepEqual(revealWrites, [0.1, 1], 'large native seeks reset progress immediately before continuing');
+revealWrites.length = 0;
+syncRevealProgress(revealProgress, 600, 0, 1000, false, easing);
+assert.deepEqual(revealWrites, [0.6], 'paused native previews remain exact');
 
 // Exercise the WebView scroll controller against measured DOM boxes, without a
 // browser or external connector. Visual/CSS checks live in the preview harness.
@@ -242,6 +284,62 @@ assert.ok(host.lyricScrollEasing(0.5) > 0.8 && host.lyricScrollEasing(0.5) < 1);
 host.destroyLyricsLayout();
 console.log('WebView controller checks passed: measured anchors, seeks, manual scroll, resume, landscape and last-line padding.');
 
+const touchContent = new ElementBox();
+touchContent.className = 'content';
+scrollRoot.appendChild(touchContent);
+host.initLyricsLayout(viewport, touchContent, runtime, source);
+host.scrollToActiveLine(1500, true, true, () => {});
+host.scrollToActiveLine(3500, true, true, () => {});
+host.setLyricsUserTouching(true);
+viewport.scrollTop = 600;
+clockMs += 1500;
+host.scrollToActiveLine(3500, true, false, () => {});
+assert.equal(viewport.scrollTop, 600, 'a held touch wins over auto-follow after the idle interval');
+host.setLyricsUserTouching(false);
+for (let i = 0; i < 8; i++) {
+  clockMs += 200;
+  viewport.scrollTop += 10;
+  host.noteLyricsViewportScroll();
+  const manualOffset = viewport.scrollTop;
+  host.scrollToActiveLine(3500, true, false, () => {});
+  assert.equal(viewport.scrollTop, manualOffset, 'momentum keeps ownership beyond 700ms');
+}
+host.releaseLyricsUserScroll();
+host.scrollToActiveLine(9500, true, true, () => {});
+assert.notEqual(viewport.scrollTop, 680, 'an explicit seek releases manual ownership immediately');
+host.destroyLyricsLayout();
+
+const { getSpicyWordJoins } = load('components/lyrics/spicy-word-spacing.ts');
+assert.deepEqual(getSpicyWordJoins([{ text: '한' }, { text: '글 ' }, { text: '가' }, { text: '사' }]),
+  [true, false, true, false], 'KRC Korean syllables join only within source words');
+assert.deepEqual(getSpicyWordJoins([{ text: 'some', isPartOfWord: true }, { text: 'thing', isPartOfWord: false }, { text: 'new', isPartOfWord: false }]),
+  [true, false, false], 'explicit Spicy join flags remain authoritative');
+assert.deepEqual(getSpicyWordJoins([{ text: 'one' }, { text: ' two' }, { text: ' ' }, { text: 'three' }]),
+  [false, false, false, false], 'leading/standalone spaces are boundaries too');
+
+const { createSpicyPlaybackClock } = load('components/lyrics/spicy-playback-clock.ts');
+for (const hz of [60, 90, 120, 144]) {
+  const clock = createSpicyPlaybackClock();
+  clock.sync(1000, true, 0);
+  clock.sync(1950, true, 1000);
+  assert.equal(clock.position(1000), 2000, 'a small backward packet never snaps the displayed clock');
+  let previous = 2000;
+  for (let i = 1; i <= hz; i++) {
+    const value = clock.position(1000 + i * 1000 / hz);
+    assert.ok(value > previous && value - previous <= 1.1 * 1000 / hz + 0.001, 'sync slews smoothly at every refresh rate');
+    previous = value;
+  }
+  assert.equal(previous, 2950, 'correction converges without requiring another packet');
+  clock.sync(3100, true, 2000);
+  assert.equal(clock.position(2000), previous, 'forward corrections also preserve phase');
+  clock.sync(3000, true, 2000, true);
+  assert.equal(clock.position(2000), 3000, 'even a short explicit seek bypasses smoothing');
+  clock.sync(400, true, 2100, true);
+  assert.equal(clock.position(2100), 400, 'explicit backward seeks remain immediate');
+  clock.sync(500, false, 2200);
+  assert.equal(clock.position(4000), 500, 'pause never drifts');
+}
+
 const longSource = Array.from({ length: 1000 }, (_, i) => makeLine(i * 2000, i * 2000 + 1500));
 const longContent = new ElementBox();
 longContent.className = 'content';
@@ -307,3 +405,19 @@ clockMs += 16;
 spicy.animate([animated], 5000, 'Syllable', 0, false);
 assert.equal(wordElement.style['--gradient-position'], '100%', 'offscreen reentry paints the current timestamp');
 console.log('Performance checks passed: bounded visible work, advance highlight, idle/suspended scheduling, spring sleep and seek recovery.');
+
+const futureWords = Array.from({ length: 100 }, (_, i) => ({ HTMLElement: new ElementBox(), StartTime: 5000 + i * 100, EndTime: 5100 + i * 100, TotalTime: 100 }));
+const sparseLine = { HTMLElement: new ElementBox(), StartTime: 1000, EndTime: 20000, TotalTime: 19000, sourceIndex: 0, Syllables: { Lead: futureWords } };
+spicy.resetSpicyAnimatorState();
+spicy.animate([sparseLine], 1000);
+let springSteps = 0;
+for (const word of futureWords) for (const spring of Object.values(word.AnimatorStore)) {
+  const step = spring.Step.bind(spring);
+  spring.Step = (dt) => { springSteps++; return step(dt); };
+}
+for (let i = 1; i <= 120; i++) { clockMs += 1000 / 120; spicy.animate([sparseLine], 1000 + i * 1000 / 120); }
+assert.equal(springSteps, 0, '120Hz active lines do not step springs for 100 settled future words');
+clockMs += 1000 / 120;
+spicy.animate([sparseLine], 5050);
+assert.ok(springSteps > 0, 'the same words wake on their real timestamps');
+console.log('Additional checks passed: touch/momentum ownership, KRC spacing, continuous 60/90/120/144Hz clocks and settled-word spring suppression.');

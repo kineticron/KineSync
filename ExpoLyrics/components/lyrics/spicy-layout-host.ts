@@ -25,6 +25,7 @@ let rowHeights: number[] = [];
 let lastTarget: number | null = null;
 let animation: { from: number; to: number; start: number } | null = null;
 let userScrollingUntil = 0;
+let userTouching = false;
 let graceUntil = 0;
 let wasFollowing = true;
 let lastPosition = 0;
@@ -51,7 +52,7 @@ export function getLyricsPlaybackState(position: number) {
 }
 
 export function isLyricsScrollAnimating() {
-  return animation !== null || performance.now() < userScrollingUntil;
+  return animation !== null || (!userTouching && performance.now() < userScrollingUntil);
 }
 
 // Keep measured rows in the flow, but only animate/paint the viewport and a
@@ -101,6 +102,7 @@ export function destroyLyricsLayout() {
   statePosition = NaN;
   onLayoutChange = () => {};
   userScrollingUntil = 0;
+  userTouching = false;
   resetLyricsScroll();
 }
 
@@ -192,8 +194,24 @@ export function lyricScrollEasing(progress: number) {
 
 export function noteLyricsUserScroll() {
   animation = null;
-  lastTarget = null;
   userScrollingUntil = performance.now() + 700;
+}
+
+export function setLyricsUserTouching(touching: boolean) {
+  userTouching = touching;
+  noteLyricsUserScroll();
+}
+
+/** Momentum keeps ownership until 700ms after the last native scroll event. */
+export function noteLyricsViewportScroll() {
+  if (!animation && (userTouching || performance.now() < userScrollingUntil)) {
+    userScrollingUntil = performance.now() + 700;
+  }
+}
+
+export function releaseLyricsUserScroll() {
+  userTouching = false;
+  userScrollingUntil = 0;
 }
 
 export function scrollToActiveLine(
@@ -262,13 +280,18 @@ export function scrollToActiveLine(
       creditsActive: true, hasCredits: true, activeLineTopOffset: topOffset,
     }) ?? target;
   }
-  const userScrolling = now < userScrollingUntil;
+  const userScrolling = userTouching || now < userScrollingUntil;
   if (userScrolling) {
     if (autoFollow && now >= graceUntil && Math.abs(viewport.scrollTop - target) > 120) {
       onAutoFollowChange(false);
     } else if (!autoFollow && Math.abs(viewport.scrollTop - target) <= 64) {
       onAutoFollowChange(true);
     }
+    // Remember that the current scroll position now belongs to the user so a
+    // later follow resumes with easing rather than snapping to a stale target.
+    lastTarget = null;
+    wasFollowing = false;
+    lastPosition = position;
     return;
   }
   if (!autoFollow) {

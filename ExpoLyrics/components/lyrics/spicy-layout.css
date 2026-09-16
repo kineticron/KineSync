@@ -26,6 +26,19 @@
   justify-content: center;
 }
 .ks-lyric-inner { padding: 0 var(--ks-inner-inset); }
+/* Provider text already contains KRC/QRC/YRC word boundaries. Preserve those
+   spaces, including trailing spaces, without adding Spicy's synthetic gap
+   after every timed Korean syllable or an extra duet column gap. */
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line {
+  column-gap: 0;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .ks-literal-spacing {
+  white-space: pre-wrap;
+}
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .ks-literal-spacing::after {
+  content: none !important;
+  margin: 0 !important;
+}
 /* Preserve every layout box without painting offscreen text or retaining a
    compositor layer for every word in the song. */
 .ks-offscreen { visibility: hidden; }

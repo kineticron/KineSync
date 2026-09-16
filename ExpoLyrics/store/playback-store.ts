@@ -297,6 +297,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const seekDetected =
       !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
     const playStateChanged = prev.isPlaying !== packet.isPlaying;
+    // Keep a stable render anchor through ordinary source/transport jitter.
+    // Restarting every token's UI animation for a few milliseconds of noise
+    // produces visible bumps, even when the source is otherwise in sync.
+    const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
+      Math.abs(projected - correctedPosition) <= 80;
     const metadataChanged =
       trackChanged ||
       prev.currentTrack?.title !== incomingTrack.title ||
@@ -324,10 +329,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // A new song must never publish the previous song's lyrics to ActivityKit
       // (or render them while its own lyrics request is still pending).
       ...(trackChanged ? { lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '' } : {}),
-      anchorPositionMs: correctedPosition,
-      anchorTimestampMs: nowWall,
-      anchorMonotonicMs: nowMono,
-      playbackPosition: correctedPosition,
+      anchorPositionMs: preserveAnchor ? prev.anchorPositionMs : correctedPosition,
+      anchorTimestampMs: preserveAnchor ? prev.anchorTimestampMs : nowWall,
+      anchorMonotonicMs: preserveAnchor ? prev.anchorMonotonicMs : nowMono,
+      playbackPosition: preserveAnchor ? projected : correctedPosition,
       isPlaying: packet.isPlaying,
       driftOffset: Math.round(latency),
       bridgeTiming:

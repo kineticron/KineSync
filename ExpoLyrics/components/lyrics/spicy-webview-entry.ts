@@ -20,6 +20,9 @@ import {
   initLyricsLayout,
   remeasureLyricsLayout,
   noteLyricsUserScroll,
+  noteLyricsViewportScroll,
+  setLyricsUserTouching,
+  releaseLyricsUserScroll,
   resetLyricsScroll,
   scrollToActiveLine,
   getLyricsPlaybackState,
@@ -27,6 +30,8 @@ import {
   isLyricsScrollAnimating,
 } from "./spicy-layout-host";
 import { createLyricsFrameLoop } from "./spicy-frame-loop";
+import { getSpicyWordJoins } from "./spicy-word-spacing";
+import { createSpicyPlaybackClock } from "./spicy-playback-clock";
 import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING } from "../../lib/lyrics-layout";
 import { LANDSCAPE_TOP_LIST_PADDING, LANDSCAPE_LYRICS_HORIZONTAL_INSET, LANDSCAPE_LYRICS_EDGE_BLEED, LANDSCAPE_LYRIC_TEXT_LANE_WIDTH } from "../../constants/player-layout";
 import type { LyricLine } from "../../types/bridge";
@@ -105,8 +110,7 @@ let sourceLines: KineSyncLine[] = [];
 let runtimeLines: SpicyRuntimeLine[] = [];
 let sourceElements = new Map<number, HTMLElement[]>();
 let selectedKeys: Record<string, boolean> = {};
-let anchorPositionMs = 0;
-let anchorClientMs = performance.now();
+const playbackClock = createSpicyPlaybackClock();
 let isPlaying = false;
 let previewPositionMs: number | null = null;
 let durationMs = 0;
@@ -126,10 +130,12 @@ let rendererActive = true;
 let animationCues: number[] = [];
 let longPressTimer = 0;
 let pressedTimer = 0;
+let pressedElements: HTMLElement[] = [];
 let touchStartIndex = -1;
 let touchMoved = false;
 let longPressTriggered = false;
 let pendingForceScroll = true;
+let pendingClockReset = true;
 
 function post(payload: unknown) {
   bridgeWindow.ReactNativeWebView?.postMessage(JSON.stringify(payload));
@@ -148,8 +154,7 @@ function projectedPosition() {
   if (previewPositionMs !== null && Number.isFinite(previewPositionMs)) {
     return Math.max(0, previewPositionMs);
   }
-  const elapsed = isPlaying ? performance.now() - anchorClientMs : 0;
-  const next = Math.max(0, anchorPositionMs + elapsed);
+  const next = playbackClock.position(performance.now());
   return durationMs > 0 ? Math.min(durationMs, next) : next;
 }
 
@@ -271,17 +276,18 @@ function renderWords(
 ): SpicyWord[] {
   const words: SpicyWord[] = [];
   let currentWordGroup: HTMLSpanElement | null = null;
+  const joins = getSpicyWordJoins(syllables);
   syllables.forEach((syllable, index, all) => {
-    const built = createSpicyWord(lineElement, syllable, index, all, isBackground);
-    const previous = all[index - 1];
-    if (syllable.isPartOfWord || (previous?.isPartOfWord && currentWordGroup)) {
+    const built = createSpicyWord(lineElement, { ...syllable, isPartOfWord: joins[index] }, index, all, isBackground);
+    if (typeof syllable.isPartOfWord !== "boolean") built.element.classList.add("ks-literal-spacing");
+    if (joins[index] || (joins[index - 1] && currentWordGroup)) {
       if (!currentWordGroup) {
         currentWordGroup = document.createElement("span");
         currentWordGroup.classList.add("word-group");
         lineElement.appendChild(currentWordGroup);
       }
       currentWordGroup.appendChild(built.element);
-      if (!syllable.isPartOfWord && previous?.isPartOfWord) currentWordGroup = null;
+      if (!joins[index]) currentWordGroup = null;
     } else {
       currentWordGroup = null;
       lineElement.appendChild(built.element);
@@ -705,6 +711,7 @@ function computeActiveSource(position: number) {
 }
 
 function setLyrics(message: IncomingMessage) {
+  pendingClockReset = true;
   sourceLines = Array.isArray(message.lines) ? message.lines : [];
   staticLyricsMode = message.timingMode === "static";
   // KineSync intentionally keeps interpolated/line-synced sources on the
@@ -745,8 +752,10 @@ function applyOptions(message: IncomingMessage) {
     message.resumeAutoFollowSignal !== resumeAutoFollowSignal
   ) {
     resumeAutoFollowSignal = message.resumeAutoFollowSignal;
+    releaseLyricsUserScroll();
     autoFollowEnabled = true;
     pendingForceScroll = true;
+    pendingClockReset = true;
   }
   applyPageOptions();
   if ((translationsChanged || layoutChanged) && sourceLines.length) {
@@ -761,9 +770,9 @@ function applyOptions(message: IncomingMessage) {
 
 function sync(message: IncomingMessage) {
   const next = finiteMs(message.positionMs);
-  const force = Boolean(message.force) || Math.abs(projectedPosition() - next) > 1000;
-  anchorPositionMs = next;
-  anchorClientMs = performance.now();
+  const force = pendingClockReset || Boolean(message.force) || Math.abs(projectedPosition() - next) > 1000;
+  playbackClock.sync(next, Boolean(message.isPlaying), performance.now(), force || previewPositionMs !== null);
+  pendingClockReset = false;
   isPlaying = Boolean(message.isPlaying);
   durationMs = finiteMs(message.durationMs);
   previewPositionMs = message.previewPositionMs == null ? null : finiteMs(message.previewPositionMs);
@@ -788,11 +797,12 @@ function sourceIndexFromTarget(target: EventTarget | null) {
 
 function setPressed(index: number) {
   window.clearTimeout(pressedTimer);
-  sourceElements.forEach((elements, sourceIndex) => {
-    elements.forEach((element) => element.classList.toggle("ks-pressed", sourceIndex === index));
-  });
+  pressedElements.forEach((element) => element.classList.remove("ks-pressed"));
+  pressedElements = sourceElements.get(index) ?? [];
+  pressedElements.forEach((element) => element.classList.add("ks-pressed"));
   pressedTimer = window.setTimeout(() => {
-    document.querySelectorAll(".ks-pressed").forEach((node) => node.classList.remove("ks-pressed"));
+    pressedElements.forEach((element) => element.classList.remove("ks-pressed"));
+    pressedElements = [];
   }, 420);
 }
 
@@ -806,6 +816,7 @@ scrollViewport?.addEventListener("click", (event) => {
   if (index < 0 || index >= sourceLines.length) return;
   setPressed(index);
   if (tapToSeekEnabled) {
+    releaseLyricsUserScroll();
     setAutoFollow(true);
     post({ type: "linePress", index });
   }
@@ -822,6 +833,9 @@ scrollViewport?.addEventListener("contextmenu", (event) => {
 
 scrollViewport?.addEventListener("touchstart", (event) => {
   if (staticLyricsMode) return;
+  setLyricsUserTouching(true);
+  post({ type: "userInteraction" });
+  scheduleFrame();
   touchMoved = false;
   longPressTriggered = false;
   touchStartIndex = sourceIndexFromTarget(event.target);
@@ -846,16 +860,24 @@ function noteUserScroll() {
 }
 
 scrollViewport?.addEventListener("touchmove", noteUserScroll, { passive: true });
-scrollViewport?.addEventListener("touchend", () => {
+function endLyricsTouch() {
   window.clearTimeout(longPressTimer);
   touchStartIndex = -1;
-}, { passive: true });
+  setLyricsUserTouching(false);
+  scheduleFrame();
+}
+scrollViewport?.addEventListener("touchend", endLyricsTouch, { passive: true });
+scrollViewport?.addEventListener("touchcancel", endLyricsTouch, { passive: true });
 scrollViewport?.addEventListener("wheel", noteUserScroll, { passive: true });
 // Scroll also wakes a paused renderer during touch momentum/programmatic seeks.
-scrollViewport?.addEventListener("scroll", scheduleFrame, { passive: true });
+scrollViewport?.addEventListener("scroll", () => {
+  noteLyricsViewportScroll();
+  scheduleFrame();
+}, { passive: true });
 
 creditsRoot?.addEventListener("click", () => {
   if (lastLyricEndTime <= 0) return;
+  releaseLyricsUserScroll();
   setAutoFollow(true);
   post({ type: "creditsPress", positionMs: lastLyricEndTime });
 });
@@ -909,7 +931,13 @@ const frameLoop = createLyricsFrameLoop({
 });
 
 function updateSuspension() {
-  frameLoop.setSuspended(!rendererActive || document.visibilityState === "hidden");
+  const suspended = !rendererActive || document.visibilityState === "hidden";
+  if (suspended) {
+    window.clearTimeout(longPressTimer);
+    touchStartIndex = -1;
+    releaseLyricsUserScroll();
+  }
+  frameLoop.setSuspended(suspended);
 }
 
 document.addEventListener("visibilitychange", () => {
