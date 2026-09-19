@@ -1248,6 +1248,13 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
+  // Mirror AMLL: an inactive background while playing contributes zero layout
+  // height instead of an opacity-0 placeholder that reserves vertical space.
+  // Paused playback presents all backgrounds, so they keep their slot.
+  if (!bgPresented) {
+    return null;
+  }
+
   return (
     <Reanimated.View
       onLayout={(event) => {
@@ -1263,10 +1270,8 @@ const BackgroundVocals = memo(function BackgroundVocals({
       style={[
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
-        // Keep background vocals in normal flow so their row height is stable.
-        // Animating layout height here makes FlashList remeasure the cell on
-        // every opacity frame, which fights the list scroll and causes visible
-        // hitching whenever a background line enters or leaves.
+        // Collapsed (null) while hidden so inactive backgrounds reserve no
+        // vertical space, matching AMLL's zero-height inactive BG slot.
         { width: "100%", marginTop: backgroundGap },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,
@@ -1408,7 +1413,7 @@ const PauseDots = memo(function PauseDots({
         styles.pauseDotsRow,
         alignRight
           ? { alignSelf: "flex-end", marginLeft: 0, marginRight: edgeInset }
-          : { marginLeft: edgeInset },
+          : { alignSelf: "flex-start", marginRight: 0, marginLeft: edgeInset },
         {
           gap: dotGap,
           height: contentHeight + innerVerticalPad * 2,
@@ -1419,6 +1424,9 @@ const PauseDots = memo(function PauseDots({
           paddingVertical: innerVerticalPad,
           marginTop: 15,
           marginBottom: outerVerticalMargin,
+          // Pulse from the lyric edge like AMLL's edge-anchored dots, not
+          // from the center of the viewport.
+          transformOrigin: alignRight ? "right center" : "left center",
         },
         presentation,
       ]}

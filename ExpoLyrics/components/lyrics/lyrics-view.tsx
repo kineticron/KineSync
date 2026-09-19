@@ -313,6 +313,23 @@ const CreditsFooter = memo(function CreditsFooter({
   );
 });
 
+function getProjectedStorePosition(state: {
+  anchorPositionMs: number;
+  anchorMonotonicMs: number;
+  isPlaying: boolean;
+  playbackPosition: number;
+}) {
+  if (!state.isPlaying) {
+    return Math.max(0, state.anchorPositionMs);
+  }
+  const now =
+    typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  return Math.max(0, state.anchorPositionMs + Math.max(0, now - state.anchorMonotonicMs));
+}
+
 function usePlaybackWindowState(
   lyrics: LyricLineType[],
   backgroundActiveLines: BackgroundActiveLine[],
@@ -321,7 +338,7 @@ function usePlaybackWindowState(
 ) {
   const [windowState, setWindowState] = useState(() =>
     getPlaybackWindowState(
-      usePlaybackStore.getState().playbackPosition,
+      getProjectedStorePosition(usePlaybackStore.getState()),
       lyrics,
       backgroundActiveLines,
       timingIndex,
@@ -334,7 +351,7 @@ function usePlaybackWindowState(
     }
     const computeWindowState = () =>
       getPlaybackWindowState(
-        usePlaybackStore.getState().playbackPosition,
+        getProjectedStorePosition(usePlaybackStore.getState()),
         lyrics,
         backgroundActiveLines,
         timingIndex,
@@ -345,23 +362,47 @@ function usePlaybackWindowState(
       return arePlaybackWindowStatesEqual(prev, next) ? prev : next;
     });
 
-    let previousPosition = usePlaybackStore.getState().playbackPosition;
-    return usePlaybackStore.subscribe((state) => {
-      const playbackPosition = state.playbackPosition;
-      if (playbackPosition === previousPosition) {
-        return;
-      }
-      previousPosition = playbackPosition;
-      const next = getPlaybackWindowState(
-        playbackPosition,
-        lyrics,
-        backgroundActiveLines,
-        timingIndex,
-      );
+    const refresh = () => {
+      const next = computeWindowState();
       setWindowState((prev) =>
         arePlaybackWindowStatesEqual(prev, next) ? prev : next,
       );
+    };
+
+    let previousPosition = usePlaybackStore.getState().playbackPosition;
+    let previousAnchor = usePlaybackStore.getState().anchorPositionMs;
+    let previousAnchorMono = usePlaybackStore.getState().anchorMonotonicMs;
+    let previousPlaying = usePlaybackStore.getState().isPlaying;
+    const unsubscribe = usePlaybackStore.subscribe((state) => {
+      // Anchor packets retarget the projected clock immediately; don't wait
+      // for the next 100ms playbackPosition tick or highlights lag behind the
+      // word masks (and short overlaps can be missed entirely).
+      if (
+        state.playbackPosition === previousPosition &&
+        state.anchorPositionMs === previousAnchor &&
+        state.anchorMonotonicMs === previousAnchorMono &&
+        state.isPlaying === previousPlaying
+      ) {
+        return;
+      }
+      previousPosition = state.playbackPosition;
+      previousAnchor = state.anchorPositionMs;
+      previousAnchorMono = state.anchorMonotonicMs;
+      previousPlaying = state.isPlaying;
+      refresh();
     });
+    // Between store ticks the projected clock keeps advancing. Poll while
+    // playing so active boundaries flip on time, like main's per-frame
+    // projection, instead of lagging up to a full tick behind.
+    const poller = setInterval(() => {
+      if (usePlaybackStore.getState().isPlaying) {
+        refresh();
+      }
+    }, 50);
+    return () => {
+      unsubscribe();
+      clearInterval(poller);
+    };
   }, [active, backgroundActiveLines, lyrics, timingIndex]);
 
   if (lyrics.length === 0) {
@@ -668,16 +709,12 @@ export function LyricsView({
     if (!rendererActive) {
       return;
     }
-    let previousPosition = usePlaybackStore.getState().playbackPosition;
+    const projected = () => getProjectedStorePosition(usePlaybackStore.getState());
+    let previousPosition = projected();
     playbackPositionRef.current = previousPosition;
-    return usePlaybackStore.subscribe((state) => {
-      const playbackPosition = state.playbackPosition;
-      if (playbackPosition === previousPosition) {
-        return;
-      }
-      playbackPositionRef.current = playbackPosition;
+    const checkRangeChange = (nextPosition: number) => {
+      playbackPositionRef.current = nextPosition;
       if (previewPlaybackPosition !== null) {
-        previousPosition = playbackPosition;
         return;
       }
       const prevRange = getAutoScrollTargetRange(
@@ -687,14 +724,33 @@ export function LyricsView({
       );
       const nextRange = getAutoScrollTargetRange(
         effectiveWindowStateRef.current,
-        playbackPosition,
+        nextPosition,
         lyrics,
       );
-      previousPosition = playbackPosition;
+      previousPosition = nextPosition;
       if (!areLyricLineRangesEqual(prevRange, nextRange)) {
         bumpScrollPlanner();
       }
+    };
+    const unsubscribe = usePlaybackStore.subscribe((state) => {
+      const nextPosition = getProjectedStorePosition(state);
+      if (nextPosition === previousPosition) {
+        return;
+      }
+      checkRangeChange(nextPosition);
     });
+    const poller = setInterval(() => {
+      if (usePlaybackStore.getState().isPlaying) {
+        const nextPosition = projected();
+        if (nextPosition !== previousPosition) {
+          checkRangeChange(nextPosition);
+        }
+      }
+    }, 50);
+    return () => {
+      unsubscribe();
+      clearInterval(poller);
+    };
   }, [lyrics, previewPlaybackPosition, rendererActive]);
   useEffect(() => {
     onAutoFollowChangeRef.current = onAutoFollowChange;
@@ -843,33 +899,15 @@ export function LyricsView({
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
-        // Cached row tops instead of a getLayout() per row: native layout
-        // queries on every auto-scroll stall the JS thread and hitch the start.
-        let firstVisible = 0;
-        const cachedOffsets = rowOffsetsRef.current;
-        if (cachedOffsets.size > 0) {
-          for (let i = 0; i < lyrics.length; i++) {
-            const top = cachedOffsets.get(i);
-            if (top === undefined) break;
-            if (top >= offset) {
-              firstVisible = i;
-              break;
-            }
-            firstVisible = i;
-          }
-        } else {
-          const focusIndex = effectiveWindowStateRef.current.focusLineIndex;
-          firstVisible =
-            focusIndex >= 0 ? Math.max(0, focusIndex - 3) : 0;
-        }
         const focus = effectiveWindowStateRef.current.focusLineIndex;
         const previous = lyrics[focus - 1];
         const interval = previous && lyrics[focus] ? lyrics[focus].lineStartTime - previous.lineStartTime : undefined;
         const spring = amlPositionSpring(interval, previewPlaybackPosition !== null || Math.abs(focus - scrollCommand.value.focus) > 1,
           effectiveWindowStateRef.current.isLongPause);
         scrollCommand.value = { from: startOffset, target: offset, revision: scrollCommand.value.revision + 1,
-          firstVisible, focus, spring };
-        staggerEnabled.value = true;
+          firstVisible: 0, focus, spring };
+        // Single unified motion: rows ride the list together, no per-row stagger.
+        staggerEnabled.value = false;
         lyricScrollOffset.value = withSpring(
           offset,
           spring,
@@ -1334,12 +1372,15 @@ export function LyricsView({
         rangeToRescroll &&
         rowOffsetsRef.current.has(rangeToRescroll.startIndex)
       ) {
+        // Non-forced: the anchor/visibility guard inside scheduleScrollToRange
+        // decides. Forcing here restarted the position spring on every cell
+        // remeasure mid-scroll, which read as staggered shifting.
         scheduleScrollToRangeRef.current(rangeToRescroll, {
           animated: pendingRange
             ? pendingAnchorAnimatedRef.current
             : true,
           animationStyle: "lyric",
-          force: true,
+          force: false,
         });
       }
     },
