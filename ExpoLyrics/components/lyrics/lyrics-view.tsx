@@ -391,18 +391,7 @@ function usePlaybackWindowState(
       previousPlaying = state.isPlaying;
       refresh();
     });
-    // Between store ticks the projected clock keeps advancing. Poll while
-    // playing so active boundaries flip on time, like main's per-frame
-    // projection, instead of lagging up to a full tick behind.
-    const poller = setInterval(() => {
-      if (usePlaybackStore.getState().isPlaying) {
-        refresh();
-      }
-    }, 50);
-    return () => {
-      unsubscribe();
-      clearInterval(poller);
-    };
+    return unsubscribe;
   }, [active, backgroundActiveLines, lyrics, timingIndex]);
 
   if (lyrics.length === 0) {
@@ -739,18 +728,7 @@ export function LyricsView({
       }
       checkRangeChange(nextPosition);
     });
-    const poller = setInterval(() => {
-      if (usePlaybackStore.getState().isPlaying) {
-        const nextPosition = projected();
-        if (nextPosition !== previousPosition) {
-          checkRangeChange(nextPosition);
-        }
-      }
-    }, 50);
-    return () => {
-      unsubscribe();
-      clearInterval(poller);
-    };
+    return unsubscribe;
   }, [lyrics, previewPlaybackPosition, rendererActive]);
   useEffect(() => {
     onAutoFollowChangeRef.current = onAutoFollowChange;
@@ -1335,6 +1313,14 @@ export function LyricsView({
 
   // ponytail: track whether all cells are measured so we can skip onLayout entirely
   const [allCellsMeasured, setAllCellsMeasured] = useState(false);
+  // Background vocals collapse to zero height while inactive, so row heights
+  // change whenever the visual range moves. Re-arm onLayout then so the new
+  // heights refresh the caches; rows whose height didn't change no-op in the
+  // handler, and the flag re-engages once everything is remeasured.
+  const visualRangeKey = `${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}`;
+  useEffect(() => {
+    setAllCellsMeasured(false);
+  }, [visualRangeKey]);
   const handleCellLayout = useCallback(
     (index: number, event: LayoutChangeEvent) => {
       const height = event.nativeEvent.layout.height;
@@ -1360,25 +1346,17 @@ export function LyricsView({
         setAllCellsMeasured(true);
       }
       const pendingRange = pendingAnchorRangeRef.current;
-      const currentScrollTarget = scrollTargetRangeRef.current;
-      const rangeToRescroll =
-        pendingRange ??
-        (currentScrollTarget &&
-        index >= currentScrollTarget.startIndex &&
-        index <= currentScrollTarget.endIndex
-          ? currentScrollTarget
-          : null);
+      // Only rescroll while an anchor is still pending (initial layout or
+      // unknown geometry). Rescrolling on every steady-state remeasure
+      // restarts the position spring on each background collapse/expand and
+      // never lets the list settle; drift after a scroll is corrected once
+      // by the settle check instead.
       if (
-        rangeToRescroll &&
-        rowOffsetsRef.current.has(rangeToRescroll.startIndex)
+        pendingRange &&
+        rowOffsetsRef.current.has(pendingRange.startIndex)
       ) {
-        // Non-forced: the anchor/visibility guard inside scheduleScrollToRange
-        // decides. Forcing here restarted the position spring on every cell
-        // remeasure mid-scroll, which read as staggered shifting.
-        scheduleScrollToRangeRef.current(rangeToRescroll, {
-          animated: pendingRange
-            ? pendingAnchorAnimatedRef.current
-            : true,
+        scheduleScrollToRangeRef.current(pendingRange, {
+          animated: pendingAnchorAnimatedRef.current,
           animationStyle: "lyric",
           force: false,
         });
