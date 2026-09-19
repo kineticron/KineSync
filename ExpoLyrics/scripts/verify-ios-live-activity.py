@@ -21,11 +21,17 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def has_arm64(data):
+def has_arm64(data, filetypes=(2,)):
+    """True for an arm64 iOS binary of one of the given Mach-O file types.
+
+    The default accepts only MH_EXECUTE (2). The Swift descriptor reader
+    also accepts MH_DYLIB (6) so Debug split layouts (stub executable plus
+    `<exe>.debug.dylib`) validate.
+    """
     if len(data) < 32:
         return False
     if data[:4] == b'\xcf\xfa\xed\xfe':
-        if struct.unpack_from('<I', data, 4)[0] != ARM64 or struct.unpack_from('<I', data, 12)[0] != 2:
+        if struct.unpack_from('<I', data, 4)[0] != ARM64 or struct.unpack_from('<I', data, 12)[0] not in filetypes:
             return False
         count, size = struct.unpack_from('<II', data, 16)
         if count > 4096 or size > len(data) - 32:
@@ -96,7 +102,7 @@ def activity_attributes_module(data):
     Swift's __swift5_types section points to nominal context descriptors. The
     attributes descriptor's parent identifies its actual defining module.
     """
-    require(has_arm64(data), 'Expected an arm64 iOS executable')
+    require(has_arm64(data, filetypes=(2, 6)), 'Expected an arm64 iOS executable or library')
     if data[:4] != b'\xcf\xfa\xed\xfe':
         formats = {b'\xca\xfe\xba\xbe': ('>', 20), b'\xca\xfe\xba\xbf': ('>', 32),
                    b'\xbe\xba\xfe\xca': ('<', 20), b'\xbf\xba\xfe\xca': ('<', 32)}
