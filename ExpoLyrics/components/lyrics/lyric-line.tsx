@@ -1248,12 +1248,12 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
-  // Mirror AMLL: an inactive background while playing contributes zero layout
-  // height instead of an opacity-0 placeholder that reserves vertical space.
-  // Paused playback presents all backgrounds, so they keep their slot.
-  if (!bgPresented) {
-    return null;
-  }
+  // Mirror AMLL's bgWrapperHidden: the node stays mounted while hidden so
+  // showing it never rebuilds the subtree mid-scroll. display:none drops it
+  // from layout, so the measured row height collapses to the lead vocal and
+  // inactive backgrounds reserve no vertical space. The slide/opacity springs
+  // persist across toggles, animating the re-entry.
+  const hiddenStyle = bgPresented ? null : { display: "none" as const };
 
   return (
     <Reanimated.View
@@ -1268,6 +1268,7 @@ const BackgroundVocals = memo(function BackgroundVocals({
         }
       }}
       style={[
+        hiddenStyle,
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
         // Collapsed (null) while hidden so inactive backgrounds reserve no

@@ -935,8 +935,13 @@ export function LyricsView({
       if (!listHeight || rowCount === 0) {
         return;
       }
-      const lo = scrollY - ROW_OVERSCAN_PX;
-      const hi = scrollY + listHeight + ROW_OVERSCAN_PX;
+      // AMLL's isInRenderRange tests the CURRENT (visual) position: layout
+      // tops shifted by the commanded glide target, plus overscan and a 40%
+      // motion buffer so rows gliding through stay mounted mid-motion.
+      const shift = shiftMirrorRef.current;
+      const motionBuffer = listHeight * 0.4;
+      const lo = scrollY - shift - ROW_OVERSCAN_PX - motionBuffer;
+      const hi = scrollY - shift + listHeight + ROW_OVERSCAN_PX + motionBuffer;
       let start = 0;
       while (
         start < rowCount - 1 &&
