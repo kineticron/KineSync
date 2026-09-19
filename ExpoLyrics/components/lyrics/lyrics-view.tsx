@@ -433,7 +433,6 @@ export function LyricsView({
     Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS,
   );
   const lastResumeAutoFollowSignalRef = useRef(0);
-  const lastCommandedPositionRef = useRef<number | null>(null);
   const sourceAutoScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -753,18 +752,69 @@ export function LyricsView({
   );
 
   // Position jumps (mount, seeks, source changes, resume) snap; line
-  // advances glide natively. Steady playback never restarts motion because
-  // the driver effect below only commands when the target range changes.
+  // advances glide natively. A seek is a line jump or position movement far
+  // beyond wall-clock Elapsed playback — never mere time passing between
+  // lines, which previously misread every advance as a seek and snapped.
+  // Repeat commands for the same row and layout are skipped outright.
+  type FollowCommandState = {
+    positionMs: number;
+    wallMs: number;
+    wasPlaying: boolean;
+    index: number;
+    layoutVersion: number;
+  };
+  const lastFollowRef = useRef<FollowCommandState | null>(null);
+  const contentLayoutVersionRef = useRef(contentLayoutVersion);
+  contentLayoutVersionRef.current = contentLayoutVersion;
+  const getMonotonicMs = () =>
+    typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
   const followRange = useCallback(
     (range: LyricLineRange, positionMs: number) => {
-      const lastCommanded = lastCommandedPositionRef.current;
-      const seeking =
-        lastCommanded === null ||
-        Math.abs(positionMs - lastCommanded) > SEEK_JUMP_MS;
-      lastCommandedPositionRef.current = positionMs;
-      doAutoScroll(range, !seeking && !initialAutoScrollPendingRef.current);
+      const startIndex = Math.max(
+        0,
+        Math.min(range.startIndex, lyrics.length - 1),
+      );
+      const prev = lastFollowRef.current;
+      const now = getMonotonicMs();
+      const playing = usePlaybackStore.getState().isPlaying;
+      let seeking =
+        prev === null || initialAutoScrollPendingRef.current;
+      if (!seeking && prev) {
+        if (Math.abs(startIndex - prev.index) > 2) {
+          seeking = true;
+        } else {
+          const expectedAdvance = prev.wasPlaying
+            ? Math.max(0, now - prev.wallMs)
+            : 0;
+          if (
+            Math.abs(positionMs - prev.positionMs - expectedAdvance) >
+            SEEK_JUMP_MS
+          ) {
+            seeking = true;
+          }
+        }
+      }
+      if (
+        !seeking &&
+        prev &&
+        prev.index === startIndex &&
+        prev.layoutVersion === contentLayoutVersionRef.current
+      ) {
+        return;
+      }
+      lastFollowRef.current = {
+        positionMs,
+        wallMs: now,
+        wasPlaying: playing,
+        index: startIndex,
+        layoutVersion: contentLayoutVersionRef.current,
+      };
+      doAutoScroll(range, !seeking);
     },
-    [doAutoScroll],
+    [doAutoScroll, lyrics.length],
   );
 
   const clearUserScrollIdleTimer = useCallback(() => {
@@ -951,7 +1001,7 @@ export function LyricsView({
     activeLineRef.current = -1;
     scrollOffsetRef.current = 0;
     settledOffsetRef.current = 0;
-    lastCommandedPositionRef.current = null;
+    lastFollowRef.current = null;
     userScrollInProgressRef.current = false;
     userDragInProgressRef.current = false;
     userScrollSessionRef.current = false;

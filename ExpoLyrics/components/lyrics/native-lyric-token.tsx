@@ -92,8 +92,11 @@ const EmphasisCharacter = memo(function EmphasisCharacter({ text, index, emphasi
   const motion = useAnimatedStyle(() => {
     const value = amlEmphasis(timeline.clock.value, emphasis.start, emphasis.index + index,
       emphasis.count, emphasis.params, fontSize, background);
+    // Clamp and fix the precision: near-zero glow formats with an exponent
+    // (e.g. 5.4e-7), which Reanimated's color parser rejects as invalid.
+    const glowAlpha = Math.min(1, Math.max(0, value.shadowOpacity)).toFixed(4);
     return { transform: [{ translateX: value.x }, { translateY: value.y }, { scale: value.scale }],
-      textShadowColor: `rgba(255,255,255,${value.shadowOpacity})`,
+      textShadowColor: `rgba(255,255,255,${glowAlpha})`,
       textShadowOffset: { width: 0, height: 0 }, textShadowRadius: value.shadowRadius };
   });
   return <Animated.Text style={[textStyle, { padding: fontSize, margin: -fontSize }, motion]}>{text}</Animated.Text>;
