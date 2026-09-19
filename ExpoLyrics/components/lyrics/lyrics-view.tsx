@@ -2,14 +2,12 @@ import {
   type LyricLineRange,
   type BackgroundActiveLine,
   type LyricTimingIndex,
-  type CreditsLayout,
   EMPTY_WINDOW_STATE,
   LYRICS_LAYOUT,
   arePlaybackWindowStatesEqual,
   getBackgroundActiveLines,
   getLyricTimingIndex,
   getPlaybackWindowState,
-  getBottomListPadding,
   getFocusIndexAtPosition,
   getAutoScrollTargetRange,
   areLyricLineRangesEqual,
@@ -20,6 +18,7 @@ import {
   ACTIVE_RANGE_BOTTOM_PADDING,
   STARTUP_DOTS_WARMUP_MS,
 } from "@/lib/lyrics-layout";
+import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import {
   memo,
   useCallback,
@@ -50,13 +49,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   cancelAnimation,
   Easing as ReanimatedEasing,
-  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
-  withSpring,
   withTiming,
-  type SharedValue,
 } from "react-native-reanimated";
 
 import {
@@ -75,7 +70,7 @@ import type {
   LyricsAttributionProfile,
 } from "@/types/bridge";
 
-import { AMLL_POSITION_SPRING, amlPositionSpring, amlBlur } from "@/lib/amll-native";
+import { amlBlur } from "@/lib/amll-native";
 import { LyricLine } from "./lyric-line";
 
 const SOURCE_CHANGE_AUTOSCROLL_DELAY_MS = 500;
@@ -87,83 +82,16 @@ const STATIC_LYRIC_MAX_WIDTH = 300;
 const STATIC_TRANSLATED_FONT_SIZE = 18;
 const STATIC_TRANSLATED_LINE_HEIGHT = 26;
 
-const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
 const SEEK_JUMP_MS = 1000;
-// Overscan around the viewport for the AMLL-style windowed list, matching
-// AMLL's own render range (overscanPx). Only these rows mount: every mounted
-// row carries dozens of masked views and gradients, so a tight window is the
-// main lever on memory and scroll hitches. Glide distance per line change is
-// far smaller than the overscan, so rows stay mounted through motion.
-const ROW_OVERSCAN_PX = 400;
-// Fallback slot height for rows not yet measured, mirroring AMLL's
-// LINE_HEIGHT_FALLBACK so windowing works before first measure.
-const UNMEASURED_ROW_HEIGHT = 84;
-const UNMEASURED_CREDITS_HEIGHT = 120;
+// Anchor expressed as a FlashList viewPosition (fraction of the viewport).
+const ACTIVE_LINE_VIEW_POSITION = 0.08;
+const ESTIMATED_ROW_HEIGHT = 90;
 
 const AUTO_FOLLOW_DISABLE_GRACE_MS = 2000;
 const AUTO_FOLLOW_DISABLE_DISTANCE_PX = 120;
 const AUTO_FOLLOW_RESUME_DISTANCE_PX = 64;
 const USER_SCROLL_IDLE_RESET_MS = 700;
 
-export type NativeLyricScroll = {
-  shift: number;
-  revision: number;
-  snap: boolean;
-  delays: number[];
-  spring: ReturnType<typeof amlPositionSpring>;
-};
-
-/**
- * One AMLL-style row spring. Rows live in normal flow; auto-follow never
- * moves the scroll position itself. Instead every visible row glides with its
- * own delayed position spring toward the shared shift target, exactly like
- * AMLL core's per-line posY springs. All motion is transform-only, so
- * scrolling never triggers layout, recycling, or per-frame scroll events.
- */
-function RowShift({
-  index,
-  command,
-  frozen,
-  children,
-}: {
-  index: number;
-  command: SharedValue<NativeLyricScroll>;
-  frozen: SharedValue<boolean>;
-  children: React.ReactNode;
-}) {
-  const shift = useSharedValue(0);
-  useAnimatedReaction(
-    () => ({ cmd: command.value, held: frozen.value }),
-    (next, previous) => {
-      if (next.held) {
-        cancelAnimation(shift);
-        return;
-      }
-      if (
-        previous &&
-        previous.cmd.revision === next.cmd.revision &&
-        previous.held === next.held
-      ) {
-        return;
-      }
-      cancelAnimation(shift);
-      if (!previous || next.cmd.snap) {
-        shift.value = next.cmd.shift;
-        return;
-      }
-      const delay = next.cmd.delays?.[index] ?? 0;
-      shift.value =
-        delay > 0
-          ? withDelay(delay, withSpring(next.cmd.shift, next.cmd.spring))
-          : withSpring(next.cmd.shift, next.cmd.spring);
-    },
-  );
-  useEffect(() => () => cancelAnimation(shift), [shift]);
-  const style = useAnimatedStyle(() => ({
-    transform: [{ translateY: shift.value }],
-  }));
-  return <Animated.View style={style}>{children}</Animated.View>;
-}
 
 type LyricsViewProps = {
   active?: boolean;
@@ -478,23 +406,18 @@ export function LyricsView({
   );
   const [listReady, setListReady] = useState(false);
   const [isUserTouchScrolling, setIsUserTouchScrolling] = useState(false);
-  const scrollRef = useRef<ScrollView | null>(null);
-  // AMLL scroll model: the scroll position only moves via instant jumps and
-  // the user's finger. Auto-follow glides rows with per-row UI-thread
-  // springs (RowShift) toward a shared shift target, so scrolling is
-  // transform-only and never drives layout, recycling, or scroll events.
-  const shiftCommand = useSharedValue<NativeLyricScroll>({
-    shift: 0,
-    revision: 0,
-    snap: true,
-    delays: [],
-    spring: AMLL_POSITION_SPRING,
-  });
-  const shiftFrozen = useSharedValue(false);
+  const listRef = useRef<FlashListRef<LyricLineType> | null>(null);
+  // Standard virtualized-list scrolling: FlashList owns layout,
+  // recycling and gestures. Auto-follow drives it with native animated
+  // scrolls only, so the JS and UI threads do no per-frame scroll work.
   const activeLineRef = useRef(-1);
   const onAutoFollowChangeRef = useRef(onAutoFollowChange);
   const listHeightRef = useRef(0);
   const scrollOffsetRef = useRef(0);
+  // Last resting offset of the list (programmatic glides excluded): the
+  // reference point for follow disable/resume distances.
+  const settledOffsetRef = useRef(0);
+  const lastCommandAtRef = useRef(0);
   const rowHeightsRef = useRef(new Map<number, number>());
   const userScrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -503,7 +426,6 @@ export function LyricsView({
   const userScrollInProgressRef = useRef(false);
   const userDragInProgressRef = useRef(false);
   const userScrollSessionRef = useRef(false);
-  const dragStartOffsetRef = useRef(0);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const rendererActiveRef = useRef(rendererActive);
   rendererActiveRef.current = rendererActive;
@@ -512,7 +434,6 @@ export function LyricsView({
   );
   const lastResumeAutoFollowSignalRef = useRef(0);
   const lastCommandedPositionRef = useRef<number | null>(null);
-  const shiftMirrorRef = useRef(0);
   const sourceAutoScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -528,7 +449,7 @@ export function LyricsView({
     useState(false);
   const [viewportHeight, setViewportHeight] = useState(0);
   // main's AMLL WebView uses LayoutAlignAnchor.Top at 8% of the viewport.
-  const activeLineTopOffset = viewportHeight * 0.08;
+  const activeLineTopOffset = viewportHeight * ACTIVE_LINE_VIEW_POSITION;
   const [contentLayoutVersion, setContentLayoutVersion] = useState(0);
   // ponytail: batch cell layout bumps — fast scroll fires onLayout per cell,
   // debounce so we only re-render once per frame instead of per-cell
@@ -759,116 +680,91 @@ export function LyricsView({
   // Like AMLL core's calcLayout, row geometry is prefix sums of measured
   // heights, never FlashList getLayout queries. Unmeasured rows use a
   // fallback slot so windowing and targets work before first measure.
-  const rowCount = lyrics.length + (hasCredits ? 1 : 0);
+  // Row geometry is only ever an estimate here (real layout belongs to
+  // FlashList): it feeds the bottom padding and the scrollToIndex fallback.
+  // Positioning itself always goes through scrollToIndex, which uses the
+  // list's own measured layout.
   const estimatedRowHeight = useCallback(
     (index: number) =>
-      rowHeightsRef.current.get(index) ??
-      (hasCredits && index === lyrics.length
-        ? UNMEASURED_CREDITS_HEIGHT
-        : UNMEASURED_ROW_HEIGHT),
-    [hasCredits, lyrics.length],
+      rowHeightsRef.current.get(index) ?? ESTIMATED_ROW_HEIGHT,
+    [],
   );
-  const getRowTop = useCallback(
+  const getEstimatedOffset = useCallback(
     (index: number) => {
-      const safeIndex = Math.max(0, Math.min(index, Math.max(0, rowCount - 1)));
+      const safeIndex = Math.max(0, Math.min(index, lyrics.length - 1));
       let top = topListPadding;
       for (let i = 0; i < safeIndex; i += 1) {
         top += estimatedRowHeight(i);
       }
-      return top;
+      return Math.max(0, top - activeLineTopOffset);
     },
-    [estimatedRowHeight, rowCount, topListPadding],
-  );
-  const getContentHeight = useCallback(() => {
-    let total = topListPadding;
-    for (let i = 0; i < rowCount; i += 1) {
-      total += estimatedRowHeight(i);
-    }
-    return total;
-  }, [estimatedRowHeight, rowCount, topListPadding]);
-
-  // True content offset that would anchor the range exactly, using the same
-  // top/bottom policy as before (top-anchor when the range fits, bottom
-  // pinning for tall ranges and the credits block).
-  const getTrueOffsetForRange = useCallback(
-    (range: LyricLineRange) => {
-      const listHeight = listHeightRef.current;
-      if (!listHeight || lyrics.length === 0) {
-        return null;
-      }
-      const startIndex = Math.max(0, Math.min(range.startIndex, lyrics.length - 1));
-      const endIndex = Math.max(startIndex, Math.min(range.endIndex, lyrics.length - 1));
-      const top = getRowTop(startIndex);
-      const rowBottom =
-        getRowTop(endIndex) + estimatedRowHeight(endIndex);
-      const isLastLineRange =
-        range.endIndex >= lyrics.length - 1 &&
-        range.startIndex >= lyrics.length - 1;
-      if (creditsActive && hasCredits && isLastLineRange) {
-        const creditsTop = getRowTop(lyrics.length);
-        const creditsBottom = creditsTop + estimatedRowHeight(lyrics.length);
-        const blockHeight = creditsBottom - getRowTop(lyrics.length - 1);
-        const availableHeight =
-          listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING;
-        if (blockHeight > availableHeight) {
-          return Math.max(
-            0,
-            creditsBottom - listHeight + ACTIVE_RANGE_BOTTOM_PADDING,
-          );
-        }
-        return Math.max(0, top - activeLineTopOffset);
-      }
-      const activeRangeHeight = rowBottom - top;
-      if (
-        activeRangeHeight <=
-        listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING
-      ) {
-        return Math.max(0, top - activeLineTopOffset);
-      }
-      return Math.max(0, rowBottom - listHeight + ACTIVE_RANGE_BOTTOM_PADDING);
-    },
-    [
-      activeLineTopOffset,
-      creditsActive,
-      estimatedRowHeight,
-      getRowTop,
-      lyrics.length,
-      hasCredits,
-    ],
+    [activeLineTopOffset, estimatedRowHeight, lyrics.length, topListPadding],
   );
 
-  // Commanded anchor error: how far the focus row sits from its anchor given
-  // the last commanded shift and the current scroll position.
-  const getAnchorErrorForRange = useCallback(
-    (range: LyricLineRange) => {
-      const listHeight = listHeightRef.current;
-      if (!listHeight || lyrics.length === 0) {
-        return null;
+  // The single place that commands motion. Everything runs natively inside
+  // the list (Core Animation scroll); JS only picks the target row.
+  const doAutoScroll = useCallback(
+    (range: LyricLineRange, animated: boolean) => {
+      const list = listRef.current;
+      if (!rendererActiveRef.current || !listReady || lyrics.length === 0 || !list) {
+        return;
       }
-      const startIndex = Math.max(0, Math.min(range.startIndex, lyrics.length - 1));
-      const endIndex = Math.max(startIndex, Math.min(range.endIndex, lyrics.length - 1));
-      const top = getRowTop(startIndex);
-      const rowBottom =
-        getRowTop(endIndex) + estimatedRowHeight(endIndex);
-      const shift = shiftMirrorRef.current;
-      const scroll = scrollOffsetRef.current;
-      const activeRangeHeight = rowBottom - top;
-      if (
-        activeRangeHeight <=
-        listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING
-      ) {
-        return Math.abs(top + shift - scroll - activeLineTopOffset);
-      }
-      return Math.abs(
-        rowBottom + shift - scroll - (listHeight - ACTIVE_RANGE_BOTTOM_PADDING),
+      const index = Math.max(
+        0,
+        Math.min(range.startIndex, lyrics.length - 1),
       );
+      const commandedAt = Date.now();
+      lastCommandAtRef.current = commandedAt;
+      list
+        .scrollToIndex({
+          index,
+          animated,
+          viewPosition: ACTIVE_LINE_VIEW_POSITION,
+        })
+        .catch(() => {
+          listRef.current?.scrollToOffset({
+            offset: getEstimatedOffset(index),
+            animated: false,
+          });
+        });
+      // Native animated scrolls emit no completion callback; once the glide
+      // has landed, adopt the resting offset (unless the user grabbed the
+      // list meanwhile) so follow distances compare against reality.
+      setTimeout(() => {
+        if (
+          lastCommandAtRef.current === commandedAt &&
+          !userScrollSessionRef.current &&
+          !userScrollInProgressRef.current
+        ) {
+          settledOffsetRef.current = scrollOffsetRef.current;
+        }
+      }, 800);
+      if (initialAutoScrollPendingRef.current && autoFollowEnabled) {
+        markInitialAutoScrollSettled();
+      }
     },
     [
-      activeLineTopOffset,
-      estimatedRowHeight,
-      getRowTop,
+      autoFollowEnabled,
+      getEstimatedOffset,
+      listReady,
       lyrics.length,
+      markInitialAutoScrollSettled,
     ],
+  );
+
+  // Position jumps (mount, seeks, source changes, resume) snap; line
+  // advances glide natively. Steady playback never restarts motion because
+  // the driver effect below only commands when the target range changes.
+  const followRange = useCallback(
+    (range: LyricLineRange, positionMs: number) => {
+      const lastCommanded = lastCommandedPositionRef.current;
+      const seeking =
+        lastCommanded === null ||
+        Math.abs(positionMs - lastCommanded) > SEEK_JUMP_MS;
+      lastCommandedPositionRef.current = positionMs;
+      doAutoScroll(range, !seeking && !initialAutoScrollPendingRef.current);
+    },
+    [doAutoScroll],
   );
 
   const clearUserScrollIdleTimer = useCallback(() => {
@@ -899,276 +795,6 @@ export function LyricsView({
     userScrollIdleTimerRef.current = setTimeout(checkIdle, USER_SCROLL_IDLE_RESET_MS);
   }, []);
 
-  // AMLL's decaying per-row delay: rows at/after the first visible row accrue
-  // 50ms each, decaying past the focus row. Rows above the viewport glide
-  // with no delay. Only rendered (windowed) rows need entries.
-  const buildStaggerDelays = useCallback(
-    (firstVisible: number, focus: number, rendered: number[]) => {
-      const delays = new Array<number>(rowCount).fill(0);
-      let delay = 0;
-      let step = 50;
-      const ordered = [...rendered].sort((a, b) => a - b);
-      for (const index of ordered) {
-        if (index < firstVisible) {
-          delays[index] = 0;
-          continue;
-        }
-        delays[index] = delay;
-        delay += step;
-        if (index >= focus) {
-          step /= 1.05;
-        }
-      }
-      return delays;
-    },
-    [rowCount],
-  );
-
-  // ---- AMLL follow engine ---------------------------------------------------
-  // Windowed rendering: only rows near the viewport (or the follow target)
-  // mount. Unmounted rows release their native views, gradients and mask
-  // bitmaps instead of sitting in a recycle pool.
-  const [window, setWindow] = useState({ start: 0, end: 0 });
-  const windowRef = useRef(window);
-  const lastFocusRef = useRef(-1);
-
-  const updateWindow = useCallback(
-    (scrollY: number, targetIndex: number) => {
-      const listHeight = listHeightRef.current;
-      if (!listHeight || rowCount === 0) {
-        return;
-      }
-      // AMLL's isInRenderRange tests the CURRENT (visual) position: layout
-      // tops shifted by the commanded glide target, plus overscan so rows
-      // gliding through stay mounted mid-motion.
-      const shift = shiftMirrorRef.current;
-      const lo = scrollY - shift - ROW_OVERSCAN_PX;
-      const hi = scrollY - shift + listHeight + ROW_OVERSCAN_PX;
-      let start = 0;
-      while (
-        start < rowCount - 1 &&
-        getRowTop(start + 1) < lo
-      ) {
-        start += 1;
-      }
-      let end = start;
-      while (end < rowCount && getRowTop(end) <= hi) {
-        end += 1;
-      }
-      start = Math.max(0, Math.min(start, targetIndex - 4));
-      end = Math.min(rowCount, Math.max(end, targetIndex + 5));
-      if (end <= start) {
-        end = Math.min(rowCount, start + 1);
-      }
-      const prev = windowRef.current;
-      if (prev.start !== start || prev.end !== end) {
-        windowRef.current = { start, end };
-        setWindow({ start, end });
-      }
-    },
-    [getRowTop, rowCount],
-  );
-
-  // Drive one follow update. Snaps move the native scroll position instantly
-  // with zero shift; glides keep the scroll position fixed and animate the
-  // shared shift target that every visible row springs toward on the UI
-  // thread (AMLL core's per-line posY springs).
-  const commandFollow = useCallback(
-    (
-      range: LyricLineRange,
-      {
-        snap = false,
-        preview = false,
-        seeking = false,
-      }: { snap?: boolean; preview?: boolean; seeking?: boolean } = {},
-    ) => {
-      if (!rendererActiveRef.current || !listReady || lyrics.length === 0) {
-        return;
-      }
-      const trueOffset = getTrueOffsetForRange(range);
-      if (trueOffset === null) {
-        return;
-      }
-      const focus =
-        preview && previewFocusIndex >= 0
-          ? previewFocusIndex
-          : effectiveWindowStateRef.current.focusLineIndex;
-      const safeFocus = focus >= 0 ? focus : range.startIndex;
-      if (!snap && previewPlaybackPosition === null) {
-        const anchorError = getAnchorErrorForRange(range);
-        if (anchorError !== null && anchorError <= ACTIVE_LINE_ALIGNMENT_EPSILON) {
-          if (initialAutoScrollPendingRef.current && autoFollowEnabled) {
-            markInitialAutoScrollSettled();
-          }
-          return;
-        }
-      }
-      const previous = safeFocus > 0 ? lyrics[safeFocus - 1] : undefined;
-      const current = lyrics[safeFocus];
-      const interval =
-        previous && current
-          ? current.lineStartTime - previous.lineStartTime
-          : undefined;
-      const jumpSeeking =
-        seeking ||
-        preview ||
-        Math.abs(safeFocus - lastFocusRef.current) > 1;
-      const spring = amlPositionSpring(
-        interval,
-        jumpSeeking,
-        effectiveWindowStateRef.current.isLongPause,
-      );
-      lastFocusRef.current = safeFocus;
-      if (snap) {
-        scrollRef.current?.scrollTo({ y: trueOffset, animated: false });
-        scrollOffsetRef.current = trueOffset;
-        shiftMirrorRef.current = 0;
-        shiftFrozen.value = false;
-        shiftCommand.value = {
-          shift: 0,
-          revision: shiftCommand.value.revision + 1,
-          snap: true,
-          delays: [],
-          spring,
-        };
-        updateWindow(trueOffset, safeFocus);
-      } else {
-        const shift = scrollOffsetRef.current - trueOffset;
-        const win = windowRef.current;
-        const rendered: number[] = [];
-        for (
-          let i = Math.max(0, win.start);
-          i < Math.min(rowCount, win.end);
-          i += 1
-        ) {
-          rendered.push(i);
-        }
-        if (safeFocus >= 0 && safeFocus < rowCount && !rendered.includes(safeFocus)) {
-          rendered.push(safeFocus);
-        }
-        const firstVisible = (() => {
-          const scroll = scrollOffsetRef.current;
-          for (const index of [...rendered].sort((a, b) => a - b)) {
-            if (getRowTop(index) + shift - scroll >= 0) {
-              return index;
-            }
-          }
-          return rendered.length ? Math.min(...rendered) : safeFocus;
-        })();
-        shiftMirrorRef.current = shift;
-        shiftFrozen.value = false;
-        shiftCommand.value = {
-          shift,
-          revision: shiftCommand.value.revision + 1,
-          snap: false,
-          delays: buildStaggerDelays(firstVisible, safeFocus, rendered),
-          spring,
-        };
-        updateWindow(scrollOffsetRef.current, safeFocus);
-      }
-      lastCommandedPositionRef.current = playbackPositionRef.current;
-      if (initialAutoScrollPendingRef.current && autoFollowEnabled) {
-        markInitialAutoScrollSettled();
-      }
-    },
-    [
-      autoFollowEnabled,
-      buildStaggerDelays,
-      effectiveWindowStateRef,
-      getAnchorErrorForRange,
-      getRowTop,
-      getTrueOffsetForRange,
-      listReady,
-      lyrics,
-      markInitialAutoScrollSettled,
-      previewFocusIndex,
-      previewPlaybackPosition,
-      rowCount,
-      shiftCommand,
-      shiftFrozen,
-      updateWindow,
-    ],
-  );
-  // During a user drag, follow ownership is decided from drag distance alone
-  // (robust without reading live spring values): dragging farther than the
-  // disable threshold from the grab point releases follow; scrolling back
-  // within the resume threshold of the commanded anchor re-engages it.
-  const getResumeAnchorOffset = useCallback(() => {
-    const range = scrollTargetRangeRef.current;
-    const listHeight = listHeightRef.current;
-    if (!range || lyrics.length === 0 || !listHeight) {
-      return null;
-    }
-    const startIndex = Math.max(0, Math.min(range.startIndex, lyrics.length - 1));
-    const endIndex = Math.max(startIndex, Math.min(range.endIndex, lyrics.length - 1));
-    const top = getRowTop(startIndex);
-    const bottom = getRowTop(endIndex) + estimatedRowHeight(endIndex);
-    const shift = shiftMirrorRef.current;
-    if (
-      bottom - top <=
-      listHeight - activeLineTopOffset - ACTIVE_RANGE_BOTTOM_PADDING
-    ) {
-      return top + shift - activeLineTopOffset;
-    }
-    return bottom + shift - (listHeight - ACTIVE_RANGE_BOTTOM_PADDING);
-  }, [activeLineTopOffset, estimatedRowHeight, getRowTop, lyrics.length]);
-
-  const noteUserScrollDistance = useCallback(() => {
-    const currentScrollTarget = scrollTargetRangeRef.current;
-    if (
-      !currentScrollTarget ||
-      previewPlaybackPosition !== null ||
-      startupDotsWarmupActive ||
-      isSourceAutoScrollCooldown ||
-      (!userScrollSessionRef.current && !userScrollInProgressRef.current)
-    ) {
-      return;
-    }
-    const dragged = Math.abs(scrollOffsetRef.current - dragStartOffsetRef.current);
-    if (autoFollowEnabled) {
-      if (Date.now() < autoFollowDisableGraceUntilRef.current) {
-        return;
-      }
-      if (dragged > AUTO_FOLLOW_DISABLE_DISTANCE_PX) {
-        onAutoFollowChangeRef.current?.(false);
-      }
-      return;
-    }
-    const resumeAnchor = getResumeAnchorOffset();
-    if (resumeAnchor === null) {
-      return;
-    }
-    if (Math.abs(scrollOffsetRef.current - resumeAnchor) <= AUTO_FOLLOW_RESUME_DISTANCE_PX) {
-      onAutoFollowChangeRef.current?.(true);
-    }
-  }, [autoFollowEnabled, getResumeAnchorOffset, isSourceAutoScrollCooldown, previewPlaybackPosition, startupDotsWarmupActive]);
-
-  // Follow driver: the single place that commands motion. Position jumps
-  // (mount, seeks, source changes, resume) snap the native scroll position;
-  // line advances glide the row springs. The commanded-position check keeps
-  // snaps for real jumps only, so steady playback never restarts motion.
-  const followRange = useCallback(
-    (range: LyricLineRange, positionMs: number) => {
-      if (!rendererActiveRef.current || !listReady || lyrics.length === 0) {
-        return;
-      }
-      const lastCommanded = lastCommandedPositionRef.current;
-      const seeking =
-        lastCommanded === null ||
-        Math.abs(positionMs - lastCommanded) > SEEK_JUMP_MS;
-      commandFollow(range, {
-        snap: seeking || initialAutoScrollPendingRef.current,
-        preview: previewPlaybackPosition !== null,
-        seeking,
-      });
-    },
-    [
-      commandFollow,
-      listReady,
-      lyrics.length,
-      previewPlaybackPosition,
-    ],
-  );
 
   useEffect(() => {
     if (
@@ -1183,7 +809,7 @@ export function LyricsView({
       return;
     }
     if (previewPlaybackPosition !== null) {
-      commandFollow(scrollTargetRange, { preview: true });
+      doAutoScroll(scrollTargetRange, true);
       return;
     }
     if (autoFollowActive) {
@@ -1193,9 +819,8 @@ export function LyricsView({
     }
   }, [
     autoFollowActive,
-    autoFollowEnabled,
-    commandFollow,
     creditsActive,
+    doAutoScroll,
     followRange,
     isSourceAutoScrollCooldown,
     listReady,
@@ -1211,9 +836,9 @@ export function LyricsView({
   ]);
 
 
-  // Row heights feed the arithmetic layout, so onLayout stays attached:
-  // it only fires on real changes (mount, background collapse/expand), and
-  // unchanged rows no-op in the handler below.
+  // Row heights feed the bottom padding and the scrollToIndex fallback, so
+  // onLayout stays attached: it only fires on real changes, and unchanged
+  // rows no-op below. Measurement never commands motion.
   const handleCellLayout = useCallback(
     (index: number, event: LayoutChangeEvent) => {
       const height = event.nativeEvent.layout.height;
@@ -1235,7 +860,15 @@ export function LyricsView({
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const offset = Math.max(0, event.nativeEvent.contentOffset.y);
       scrollOffsetRef.current = offset;
-      updateWindow(offset, scrollTargetRangeRef.current?.startIndex ?? 0);
+      // Track the resting offset outside user sessions and recent commands so
+      // follow distances compare against where the list actually sits.
+      if (
+        !userScrollSessionRef.current &&
+        !userScrollInProgressRef.current &&
+        Date.now() - lastCommandAtRef.current > 800
+      ) {
+        settledOffsetRef.current = offset;
+      }
       if (
         !userScrollSessionRef.current &&
         !userScrollInProgressRef.current
@@ -1243,34 +876,45 @@ export function LyricsView({
         return;
       }
       scheduleUserScrollIdleReset();
-      noteUserScrollDistance();
+      const settled = settledOffsetRef.current;
+      if (previewPlaybackPosition !== null || startupDotsWarmupActive || isSourceAutoScrollCooldown) {
+        return;
+      }
+      const distance = Math.abs(offset - settled);
+      if (autoFollowEnabled) {
+        if (Date.now() < autoFollowDisableGraceUntilRef.current) {
+          return;
+        }
+        if (distance > AUTO_FOLLOW_DISABLE_DISTANCE_PX) {
+          onAutoFollowChangeRef.current?.(false);
+        }
+        return;
+      }
+      if (distance <= AUTO_FOLLOW_RESUME_DISTANCE_PX) {
+        onAutoFollowChangeRef.current?.(true);
+      }
     },
-    [noteUserScrollDistance, scheduleUserScrollIdleReset, updateWindow],
+    [
+      autoFollowEnabled,
+      isSourceAutoScrollCooldown,
+      previewPlaybackPosition,
+      scheduleUserScrollIdleReset,
+      startupDotsWarmupActive,
+    ],
   );
 
   const handleScrollBeginDrag = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      // A real drag freezes the row springs on the UI thread and hands the
-      // scroll position to the finger. Distances are measured from the grab
-      // point, so no live spring values are needed on the JS thread.
       const offset = Math.max(0, event.nativeEvent.contentOffset.y);
       scrollOffsetRef.current = offset;
-      dragStartOffsetRef.current = offset;
-      shiftFrozen.value = true;
       onUserInteraction?.();
       setIsUserTouchScrolling(true);
       userScrollInProgressRef.current = true;
       userDragInProgressRef.current = true;
       userScrollSessionRef.current = true;
       scheduleUserScrollIdleReset();
-      updateWindow(offset, scrollTargetRangeRef.current?.startIndex ?? 0);
     },
-    [
-      onUserInteraction,
-      scheduleUserScrollIdleReset,
-      shiftFrozen,
-      updateWindow,
-    ],
+    [onUserInteraction, scheduleUserScrollIdleReset],
   );
 
   const handleScrollEndDrag = useCallback(
@@ -1280,72 +924,30 @@ export function LyricsView({
       userDragInProgressRef.current = false;
       userScrollInProgressRef.current = false;
       scheduleUserScrollIdleReset();
-      updateWindow(offset, scrollTargetRangeRef.current?.startIndex ?? 0);
-      noteUserScrollDistance();
-      if (autoFollowEnabled) {
-        // Still following: release was a nudge, so glide back to the anchor
-        // instead of sitting frozen off-target until the next line change.
-        const range = scrollTargetRangeRef.current;
-        if (range) {
-          commandFollow(range, {});
-        }
-        return;
-      }
-      // Released near the commanded anchor: resume gliding instead of
-      // sitting frozen off-target.
-      const resumeAnchor = getResumeAnchorOffset();
-      if (
-        resumeAnchor !== null &&
-        Math.abs(offset - resumeAnchor) <= AUTO_FOLLOW_RESUME_DISTANCE_PX
-      ) {
-        onAutoFollowChangeRef.current?.(true);
-      }
     },
-    [
-      autoFollowEnabled,
-      commandFollow,
-      getResumeAnchorOffset,
-      noteUserScrollDistance,
-      scheduleUserScrollIdleReset,
-      updateWindow,
-    ],
+    [scheduleUserScrollIdleReset],
   );
 
   const handleMomentumScrollEnd = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const offset = Math.max(0, event.nativeEvent.contentOffset.y);
       scrollOffsetRef.current = offset;
+      settledOffsetRef.current = offset;
       userDragInProgressRef.current = false;
       setIsUserTouchScrolling(false);
       clearUserScrollIdleTimer();
       userScrollInProgressRef.current = false;
       userScrollSessionRef.current = false;
-      updateWindow(offset, scrollTargetRangeRef.current?.startIndex ?? 0);
-      if (autoFollowEnabled) {
-        const range = scrollTargetRangeRef.current;
-        if (range) {
-          commandFollow(range, {});
-        }
-        return;
-      }
-      const resumeAnchor = getResumeAnchorOffset();
-      if (
-        resumeAnchor !== null &&
-        Math.abs(offset - resumeAnchor) <= AUTO_FOLLOW_RESUME_DISTANCE_PX
-      ) {
-        onAutoFollowChangeRef.current?.(true);
-      }
     },
-    [autoFollowEnabled, clearUserScrollIdleTimer, commandFollow, getResumeAnchorOffset, updateWindow],
+    [clearUserScrollIdleTimer],
   );
 
 
   useLayoutEffect(() => {
     activeLineRef.current = -1;
     scrollOffsetRef.current = 0;
-    shiftMirrorRef.current = 0;
+    settledOffsetRef.current = 0;
     lastCommandedPositionRef.current = null;
-    lastFocusRef.current = -1;
     userScrollInProgressRef.current = false;
     userDragInProgressRef.current = false;
     userScrollSessionRef.current = false;
@@ -1353,18 +955,8 @@ export function LyricsView({
       Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
     onAutoFollowChangeRef.current?.(true);
     rowHeightsRef.current.clear();
-    windowRef.current = { start: 0, end: 0 };
-    setWindow({ start: 0, end: 0 });
-    shiftFrozen.value = false;
-    shiftCommand.value = {
-      shift: 0,
-      revision: shiftCommand.value.revision + 1,
-      snap: true,
-      delays: [],
-      spring: AMLL_POSITION_SPRING,
-    };
     setContentLayoutVersion(0);
-  }, [lyrics, shiftCommand, shiftFrozen]);
+  }, [lyrics]);
 
   // Reset measurement state when layout-affecting props change
   useEffect(() => {
@@ -1412,16 +1004,14 @@ export function LyricsView({
       return;
     }
 
-    // While the renderer is hidden, freeze row motion and touch state. The
-    // rows stay mounted so reactivation is instant; springs simply stop
-    // retargeting until the follow driver commands again.
-    shiftFrozen.value = true;
+    // While the renderer is hidden, reset touch state; the memory gate below
+    // unmounts the row tree, so motion simply restarts on return.
     userScrollInProgressRef.current = false;
     userDragInProgressRef.current = false;
     userScrollSessionRef.current = false;
     clearUserScrollIdleTimer();
     setIsUserTouchScrolling(false);
-  }, [rendererActive, clearUserScrollIdleTimer, shiftFrozen]);
+  }, [rendererActive, clearUserScrollIdleTimer]);
 
   useEffect(() => {
     if (!hasMountedLyricsChangeEffectRef.current) {
@@ -1471,10 +1061,10 @@ export function LyricsView({
     if (isSourceAutoScrollCooldown || !scrollTargetRange) {
       return;
     }
-    commandFollow(scrollTargetRange, {});
+    followRange(scrollTargetRange, playbackPositionRef.current);
   }, [
     autoFollowEnabled,
-    commandFollow,
+    followRange,
     isSourceAutoScrollCooldown,
     listReady,
     onAutoFollowChange,
@@ -1510,42 +1100,74 @@ export function LyricsView({
     onActiveLineChange?.(activeLineIndex);
   }, [activeLineIndex, onActiveLineChange]);
 
-  // Rows read the live window state directly; LyricLine's memo props bail out
-  // for unchanged rows, so boundary updates only re-render what changed.
-  const renderLyricRow = (item: LyricLineType, index: number) => {
-    const ws = effectiveWindowState;
-    const hasActiveLines = ws.activeLineStartIndex >= 0;
-    const isActive =
-      hasActiveLines &&
-      isIndexWithinRange(
-        index,
-        ws.activeLineStartIndex,
-        ws.activeLineEndIndex,
-      );
-    const shouldDrivePlaybackUpdates = isIndexWithinUpdateWindow(
-      index,
-      ws,
-    );
-    const isPast =
-      ws.focusLineIndex >= 0
-        ? hasActiveLines
-          ? index < ws.focusLineIndex
-          : index <= ws.focusLineIndex
-        : false;
-    const inactiveOpacityDistance = Math.abs(
-      ws.focusLineIndex - index,
-    );
-    const showPauseDotsAfter =
-      ws.isLongPause && index === ws.pauseAfterIndex;
-    const showPauseDotsBefore =
-      ws.isLongPause && index === ws.pauseBeforeIndex;
+  const listInsets = useMemo(() => {
+    void contentLayoutVersion;
+    const lastHeight =
+      rowHeightsRef.current.get(Math.max(0, lyrics.length - 1)) ??
+      ESTIMATED_ROW_HEIGHT;
+    return {
+      paddingTop: topListPadding,
+      // Enough room below so the last line (and credits) can reach the
+      // anchor; measured from the last known row height.
+      paddingBottom: Math.max(
+        ACTIVE_RANGE_BOTTOM_PADDING,
+        viewportHeight - activeLineTopOffset - lastHeight,
+      ),
+    };
+  }, [
+    activeLineTopOffset,
+    contentLayoutVersion,
+    lyrics.length,
+    topListPadding,
+    viewportHeight,
+  ]);
 
-    return (
-      <View
-        style={landscapeMode ? styles.flashListCellLandscape : undefined}
-        onLayout={(event) => handleCellLayout(index, event)}
-      >
-        <RowShift index={index} command={shiftCommand} frozen={shiftFrozen}>
+  const renderCreditsRow = () => (
+    <View onLayout={(event) => handleCellLayout(lyrics.length, event)}>
+      <CreditsFooter
+        rendererActive={rendererActive}
+        songwriters={songwriters}
+        attribution={attribution}
+        lastLyricEndTime={lastLyricEndTime}
+        onPress={onCreditsTimestampPress}
+      />
+    </View>
+  );
+
+  const flashListRenderItem = useCallback(
+    ({ item, index }: { item: LyricLineType; index: number }) => {
+      const ws = effectiveWindowState;
+      const hasActiveLines = ws.activeLineStartIndex >= 0;
+      const isActive =
+        hasActiveLines &&
+        isIndexWithinRange(
+          index,
+          ws.activeLineStartIndex,
+          ws.activeLineEndIndex,
+        );
+      const shouldDrivePlaybackUpdates = isIndexWithinUpdateWindow(
+        index,
+        ws,
+      );
+      const isPast =
+        ws.focusLineIndex >= 0
+          ? hasActiveLines
+            ? index < ws.focusLineIndex
+            : index <= ws.focusLineIndex
+          : false;
+      const inactiveOpacityDistance = Math.abs(
+        ws.focusLineIndex - index,
+      );
+      const showPauseDotsAfter =
+        ws.isLongPause && index === ws.pauseAfterIndex;
+      const showPauseDotsBefore =
+        ws.isLongPause && index === ws.pauseBeforeIndex;
+
+      return (
+        <View
+          style={landscapeMode ? styles.flashListCellLandscape : undefined}
+          onLayout={(event) => handleCellLayout(index, event)}
+        >
           <LyricLine
             rendererActive={rendererActive}
             line={item}
@@ -1576,81 +1198,66 @@ export function LyricsView({
             landscapeMode={landscapeMode}
             hasDuetLines={hasDuetLines}
           />
-        </RowShift>
-      </View>
-    );
-  };
+        </View>
+      );
+    },
+    [
+      fontScale,
+      landscapeMode,
+      hasDuetLines,
+      onLineLongPress,
+      onLinePress,
+      selectedLineKeys,
+      isUserTouchScrolling,
+      showTranslatedText,
+      tapToSeekEnabled,
+      previewPlaybackPosition,
+      rendererActive,
+      effectiveWindowState,
+      handleCellLayout,
+    ],
+  );
 
-  const listInsets = useMemo(() => {
-    void contentLayoutVersion;
-    const lastLineIndex = Math.max(0, lyrics.length - 1);
-    const lastLineTop = getRowTop(lastLineIndex);
-    const lastLineHeight = estimatedRowHeight(lastLineIndex);
-    const creditsLayout: CreditsLayout | null = hasCredits
-      ? {
-          top: getRowTop(lyrics.length),
-          bottom:
-            getRowTop(lyrics.length) + estimatedRowHeight(lyrics.length),
-        }
-      : null;
-    return {
-      // The top inset lives in the top spacer (so windowing accounts for it);
-      // only the bottom inset pads the container.
-      paddingTop: 0,
-      // Bottom inset is sized so max scroll stops once the last line (and credits)
-      // reach their anchor positions, without extra empty scroll room.
-      paddingBottom: getBottomListPadding({
-        viewportHeight,
-        lyricsLength: lyrics.length,
-        lastLineTop,
-        lastLineHeight,
-        creditsLayout,
-        hasCredits,
-        activeLineTopOffset,
-      }),
-    };
+  const keyExtractor = useCallback(
+    (item: LyricLineType, index: number) =>
+      `${index}-${item.lineStartTime}-${item.lineEndTime}`,
+    [],
+  );
+
+  const listFooter = useMemo(() => {
+    if (!hasCredits) {
+      return null;
+    }
+    return renderCreditsRow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    activeLineTopOffset,
-    contentLayoutVersion,
-    estimatedRowHeight,
-    getRowTop,
-    lyrics.length,
+    attribution,
+    handleCellLayout,
     hasCredits,
-    viewportHeight,
+    lastLyricEndTime,
+    onCreditsTimestampPress,
+    rendererActive,
+    songwriters,
   ]);
 
-  const renderCreditsRow = () => (
-    <View onLayout={(event) => handleCellLayout(lyrics.length, event)}>
-      <RowShift index={lyrics.length} command={shiftCommand} frozen={shiftFrozen}>
-        <CreditsFooter
-          rendererActive={rendererActive}
-          songwriters={songwriters}
-          attribution={attribution}
-          lastLyricEndTime={lastLyricEndTime}
-          onPress={onCreditsTimestampPress}
-        />
-      </RowShift>
-    </View>
+  // Coarse fingerprint: only changes when cell rendering actually differs,
+  // so recycled rows re-render on line changes but not on clock ticks.
+  const extraDataFingerprint = useMemo(
+    () =>
+      `${effectiveWindowState.activeLineStartIndex}:${effectiveWindowState.activeLineEndIndex}:${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}:${effectiveWindowState.pauseAfterIndex}:${effectiveWindowState.pauseBeforeIndex}:${effectiveWindowState.isLongPause ? 1 : 0}:${isUserTouchScrolling ? 1 : 0}:${rendererActive ? 1 : 0}`,
+    [
+      effectiveWindowState.activeLineStartIndex,
+      effectiveWindowState.activeLineEndIndex,
+      effectiveWindowState.visualActiveLineStartIndex,
+      effectiveWindowState.visualActiveLineEndIndex,
+      effectiveWindowState.focusLineIndex,
+      effectiveWindowState.pauseAfterIndex,
+      effectiveWindowState.pauseBeforeIndex,
+      effectiveWindowState.isLongPause,
+      isUserTouchScrolling,
+      rendererActive,
+    ],
   );
-
-  // Windowed rows: spacers preserve the scroll extent while unmounted rows
-  // release their native views, gradients and mask bitmaps.
-  const topSpacerHeight = Math.max(0, getRowTop(window.start));
-  const bottomSpacerHeight = Math.max(
-    0,
-    getContentHeight() - getRowTop(Math.min(window.end, rowCount)),
-  );
-  const renderedRowIndices = useMemo(() => {
-    const indices: number[] = [];
-    for (
-      let i = Math.max(0, window.start);
-      i < Math.min(window.end, rowCount);
-      i += 1
-    ) {
-      indices.push(i);
-    }
-    return indices;
-  }, [rowCount, window.end, window.start]);
 
   // Memory gate: when the renderer is hidden (other tab, background), drop
   // the heavy row tree entirely instead of idling hundreds of masked views
@@ -1833,8 +1440,14 @@ export function LyricsView({
 
   return (
     <View style={[styles.container, landscapeMode && styles.containerLandscape]}>
-      <ScrollView
-        ref={scrollRef}
+      <FlashList
+        ref={listRef}
+        data={lyrics}
+        renderItem={flashListRenderItem}
+        keyExtractor={keyExtractor}
+        extraData={extraDataFingerprint}
+        drawDistance={400}
+        ListFooterComponent={listFooter}
         onLayout={(event) => {
           const height = event.nativeEvent.layout.height;
           listHeightRef.current = height;
@@ -1864,25 +1477,7 @@ export function LyricsView({
           scheduleUserScrollIdleReset();
         }}
         onMomentumScrollEnd={handleMomentumScrollEnd}
-      >
-        {topSpacerHeight > 0 ? (
-          <View style={{ height: topSpacerHeight }} />
-        ) : null}
-        {renderedRowIndices.map((index) =>
-          index < lyrics.length ? (
-            <View
-              key={`${index}-${lyrics[index].lineStartTime}-${lyrics[index].lineEndTime}`}
-            >
-              {renderLyricRow(lyrics[index], index)}
-            </View>
-          ) : hasCredits ? (
-            <View key="credits">{renderCreditsRow()}</View>
-          ) : null,
-        )}
-        {bottomSpacerHeight > 0 ? (
-          <View style={{ height: bottomSpacerHeight }} />
-        ) : null}
-      </ScrollView>
+      />
     </View>
   );
 }
