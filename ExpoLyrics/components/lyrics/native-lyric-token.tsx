@@ -78,7 +78,9 @@ export function useNativeLyricTimeline(words: LyricSyllable[], position: number,
     const timer = setTimeout(() => alphaFrame.setActive(false), 2400);
     return () => { clearTimeout(timer); alphaFrame.setActive(false); };
   }, [alphaFrame, enabled, highlighted, playing]);
-  return { clock, alpha, fade };
+  // Stable identity: fresh object literals here would defeat the token memo
+  // on every parent render, re-rendering every syllable for unrelated updates.
+  return useMemo(() => ({ clock, alpha, fade }), [alpha, clock, fade]);
 }
 
 type Timeline = ReturnType<typeof useNativeLyricTimeline>;
@@ -112,8 +114,16 @@ export const NativeLyricToken = memo(function NativeLyricToken({ text, word, tim
   const boxWidth = width + padding * 2;
   const gradientWidth = boxWidth * 2 + timeline.fade;
   const characters = useMemo(() => nativeAnimationCharacters(text), [text]);
-  const textStyle: TextStyle = { fontSize, lineHeight, fontWeight: background ? "500" : "700",
-    letterSpacing: 0.1, color: "white" };
+  const textStyle: TextStyle = useMemo(
+    () => ({
+      fontSize,
+      lineHeight,
+      fontWeight: (background ? "500" : "700") as TextStyle["fontWeight"],
+      letterSpacing: 0.1,
+      color: "white",
+    }),
+    [background, fontSize, lineHeight],
+  );
   const floatStyle = useAnimatedStyle(() => ({ transform: [{ translateY:
     amlFloat(timeline.clock.value, word.startTime, word.endTime, fontSize, background) }] }));
   const baseMask = useAnimatedStyle(() => ({ opacity: timeline.alpha.value.dark }));
