@@ -89,9 +89,12 @@ const STATIC_TRANSLATED_LINE_HEIGHT = 26;
 
 const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
 const SEEK_JUMP_MS = 1000;
-// Overscan around the viewport for the AMLL-style windowed list. Rows outside
-// this window unmount; rows inside keep stable identities (no recycling).
-const ROW_OVERSCAN_PX = 1000;
+// Overscan around the viewport for the AMLL-style windowed list, matching
+// AMLL's own render range (overscanPx). Only these rows mount: every mounted
+// row carries dozens of masked views and gradients, so a tight window is the
+// main lever on memory and scroll hitches. Glide distance per line change is
+// far smaller than the overscan, so rows stay mounted through motion.
+const ROW_OVERSCAN_PX = 400;
 // Fallback slot height for rows not yet measured, mirroring AMLL's
 // LINE_HEIGHT_FALLBACK so windowing works before first measure.
 const UNMEASURED_ROW_HEIGHT = 84;
@@ -936,12 +939,11 @@ export function LyricsView({
         return;
       }
       // AMLL's isInRenderRange tests the CURRENT (visual) position: layout
-      // tops shifted by the commanded glide target, plus overscan and a 40%
-      // motion buffer so rows gliding through stay mounted mid-motion.
+      // tops shifted by the commanded glide target, plus overscan so rows
+      // gliding through stay mounted mid-motion.
       const shift = shiftMirrorRef.current;
-      const motionBuffer = listHeight * 0.4;
-      const lo = scrollY - shift - ROW_OVERSCAN_PX - motionBuffer;
-      const hi = scrollY - shift + listHeight + ROW_OVERSCAN_PX + motionBuffer;
+      const lo = scrollY - shift - ROW_OVERSCAN_PX;
+      const hi = scrollY - shift + listHeight + ROW_OVERSCAN_PX;
       let start = 0;
       while (
         start < rowCount - 1 &&
@@ -1209,16 +1211,9 @@ export function LyricsView({
   ]);
 
 
-  // ponytail: track whether all cells are measured so we can skip onLayout entirely
-  const [allCellsMeasured, setAllCellsMeasured] = useState(false);
-  // Background vocals collapse to zero height while inactive, so row heights
-  // change whenever the visual range moves. Re-arm onLayout then so the new
-  // heights refresh the caches; rows whose height didn't change no-op in the
-  // handler, and the flag re-engages once everything is remeasured.
-  const visualRangeKey = `${effectiveWindowState.visualActiveLineStartIndex}:${effectiveWindowState.visualActiveLineEndIndex}:${effectiveWindowState.focusLineIndex}`;
-  useEffect(() => {
-    setAllCellsMeasured(false);
-  }, [visualRangeKey]);
+  // Row heights feed the arithmetic layout, so onLayout stays attached:
+  // it only fires on real changes (mount, background collapse/expand), and
+  // unchanged rows no-op in the handler below.
   const handleCellLayout = useCallback(
     (index: number, event: LayoutChangeEvent) => {
       const height = event.nativeEvent.layout.height;
@@ -1232,12 +1227,8 @@ export function LyricsView({
       }
       rowHeights.set(index, height);
       bumpContentLayoutVersion();
-      // Once every line has been measured, disable onLayout to stop bridge chatter
-      if (rowHeights.size >= rowCount && !allCellsMeasured) {
-        setAllCellsMeasured(true);
-      }
     },
-    [allCellsMeasured, bumpContentLayoutVersion, rowCount],
+    [bumpContentLayoutVersion],
   );
 
   const handleScroll = useCallback(
@@ -1361,7 +1352,6 @@ export function LyricsView({
     autoFollowDisableGraceUntilRef.current =
       Date.now() + AUTO_FOLLOW_DISABLE_GRACE_MS;
     onAutoFollowChangeRef.current?.(true);
-    setAllCellsMeasured(false);
     rowHeightsRef.current.clear();
     windowRef.current = { start: 0, end: 0 };
     setWindow({ start: 0, end: 0 });
@@ -1378,7 +1368,6 @@ export function LyricsView({
 
   // Reset measurement state when layout-affecting props change
   useEffect(() => {
-    setAllCellsMeasured(false);
     rowHeightsRef.current.clear();
   }, [fontScale, landscapeMode]);
 
@@ -1554,11 +1543,7 @@ export function LyricsView({
     return (
       <View
         style={landscapeMode ? styles.flashListCellLandscape : undefined}
-        onLayout={
-          allCellsMeasured
-            ? undefined
-            : (event) => handleCellLayout(index, event)
-        }
+        onLayout={(event) => handleCellLayout(index, event)}
       >
         <RowShift index={index} command={shiftCommand} frozen={shiftFrozen}>
           <LyricLine
@@ -1635,13 +1620,7 @@ export function LyricsView({
   ]);
 
   const renderCreditsRow = () => (
-    <View
-      onLayout={
-        allCellsMeasured
-          ? undefined
-          : (event) => handleCellLayout(lyrics.length, event)
-      }
-    >
+    <View onLayout={(event) => handleCellLayout(lyrics.length, event)}>
       <RowShift index={lyrics.length} command={shiftCommand} frozen={shiftFrozen}>
         <CreditsFooter
           rendererActive={rendererActive}
