@@ -61,6 +61,35 @@ def has_arm64(data):
     return False
 
 
+def bundle_executables(archive, base, executable):
+    """Primary executable plus split siblings.
+
+    Debug development clients link app code into `<exe>.debug.dylib` and
+    leave a stub executable behind, while Release links everything into the
+    executable itself. Search both so the marker/descriptor checks work for
+    either layout.
+    """
+    names = archive.namelist()
+    candidates = []
+    primary = f'{base}/{executable}'
+    if primary in names:
+        candidates.append(primary)
+    dylib = f'{primary}.debug.dylib'
+    if dylib in names and dylib not in candidates:
+        candidates.append(dylib)
+    return candidates
+
+
+def find_module(candidates, archive):
+    """Return (name, module) for the first candidate with a Swift descriptor."""
+    for name in candidates:
+        try:
+            return name, activity_attributes_module(archive.read(name))
+        except ValueError:
+            continue
+    raise ValueError('Missing compiled LyricsActivityAttributes descriptor')
+
+
 def activity_attributes_module(data):
     """Read the compiled Swift type descriptor, not a coincidental string.
 
@@ -151,12 +180,14 @@ def verify(ipa, expected_app=None):
         for base, info, marker in [(host_path, host, b'KineSyncLiveActivity'), (widget_path, widget, b'LyricsActivityAttributes')]:
             executable = info.get('CFBundleExecutable', '')
             require(executable and '/' not in executable, 'Invalid bundle executable')
-            name = f'{base}/{executable}'
-            require(name in names, f'Missing compiled executable: {name}')
-            binary = archive.read(name)
-            require(has_arm64(binary), f'Not an arm64 device executable: {name}')
-            require(marker in binary, f'Native lyrics code is missing: {name}')
-            modules.append(activity_attributes_module(binary))
+            candidates = bundle_executables(archive, base, executable)
+            require(candidates, f'Missing compiled executable: {base}/{executable}')
+            primary = archive.read(candidates[0])
+            require(has_arm64(primary), f'Not an arm64 device executable: {candidates[0]}')
+            binaries = [archive.read(name) for name in candidates]
+            require(any(marker in binary for binary in binaries),
+                    f'Native lyrics code is missing: {candidates[0]}')
+            modules.append(find_module(candidates, archive)[1])
         require(modules[0] == HOST_ACTIVITY_MODULE,
                 f'Unexpected host ActivityAttributes module: {modules[0]}')
         require(modules[1] == WIDGET_ACTIVITY_MODULE,

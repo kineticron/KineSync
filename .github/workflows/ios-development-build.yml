@@ -26,14 +26,28 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: ExpoLyrics/package-lock.json
+
+      - name: Install ccache
+        run: |
+          set -euo pipefail
+          if ! command -v ccache >/dev/null 2>&1; then
+            brew install ccache
+          fi
+          ccache --version
+          {
+            echo "KINESYNC_USE_CCACHE=1"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_MAXSIZE=2G"
+            echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
+          } >> "${GITHUB_ENV}"
 
       - name: Install JS dependencies
         working-directory: ExpoLyrics
@@ -43,6 +57,23 @@ jobs:
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
+      # Prebuild wipes ios/ on every run, so pod downloads, cached
+      # compilation and DerivedData restart from zero without these.
+      # DerivedData lives outside ios/ at a Debug-only path that is stable
+      # across fresh runner VMs (separate from the unsigned workflow's
+      # Release cache), which is what makes the restore reusable.
+      - name: Restore DerivedData, ccache and CocoaPods caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}/../kinesync-ios-derived-debug
+            ${{ env.HOME }}/Library/Caches/ccache
+            ${{ env.HOME }}/.cocoapods
+            ${{ env.HOME }}/Library/Caches/CocoaPods
+          key: ios-debug-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
+          restore-keys: |
+            ios-debug-caches-${{ runner.os }}-
+
       - name: Verify Live Activity native target
         working-directory: ExpoLyrics
         run: |
@@ -51,15 +82,21 @@ jobs:
           node scripts/verify-live-activity-project.js
 
       - name: Build Debug development client and locate .app
+        env:
+          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-debug
         run: |
           set -euo pipefail
+          if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+            ccache --zero-stats
+          fi
           node <<'NODE'
           const { execSync, spawnSync } = require("child_process");
           const fs = require("fs");
           const path = require("path");
 
           const iosDir = path.join(process.env.GITHUB_WORKSPACE, "ExpoLyrics", "ios");
-          const derived = path.join(iosDir, "build");
+          const derived =
+            process.env.DERIVED_DATA_PATH || path.join(iosDir, "build");
           const marker = path.join(iosDir, ".ci_built_app");
 
           const ws = fs
@@ -98,6 +135,14 @@ jobs:
             "COMPILER_INDEX_STORE_ENABLE=NO",
           ];
 
+          // Route C-family compilation through ccache when available. The
+          // cache is content-addressed, so it stays valid across fresh
+          // checkouts (unlike mtime-based DerivedData reuse) and covers the
+          // React Native C++/ObjC bulk that dominates Debug build time.
+          // Swift compilation is unaffected and still runs every build.
+          const ccache =
+            process.env.KINESYNC_USE_CCACHE === "1" ? ["CC=ccache clang"] : [];
+
           const common = [
             "-workspace",
             path.join(iosDir, ws),
@@ -112,6 +157,7 @@ jobs:
             "-derivedDataPath",
             derived,
             ...signing,
+            ...ccache,
           ];
 
           function skipPath(p) {
@@ -197,6 +243,9 @@ jobs:
           console.log("Selected .app:", chosen);
           fs.writeFileSync(marker, chosen, "utf8");
           NODE
+          if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats
+          fi
 
       - name: Package IPA (Payload + zip)
         run: |
