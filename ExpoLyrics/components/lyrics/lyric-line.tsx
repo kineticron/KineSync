@@ -1248,13 +1248,6 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const emphasis = useMemo(() => getNativeEmphasis(syllables, syllableGroups), [syllables, syllableGroups]);
   const translationColor = "rgba(255,255,255,0.12)";
 
-  // Mirror AMLL's bgWrapperHidden: the node stays mounted while hidden so
-  // showing it never rebuilds the subtree mid-scroll. display:none drops it
-  // from layout, so the measured row height collapses to the lead vocal and
-  // inactive backgrounds reserve no vertical space. The slide/opacity springs
-  // persist across toggles, animating the re-entry.
-  const hiddenStyle = bgPresented ? null : { display: "none" as const };
-
   return (
     <Reanimated.View
       onLayout={(event) => {
@@ -1268,11 +1261,12 @@ const BackgroundVocals = memo(function BackgroundVocals({
         }
       }}
       style={[
-        hiddenStyle,
         styles.bgVocalsGroup,
         precedesMain && styles.bgVocalsGroupPrecedes,
-        // Collapsed (null) while hidden so inactive backgrounds reserve no
-        // vertical space, matching AMLL's zero-height inactive BG slot.
+        // Keep background vocals in normal flow so their row height is stable.
+        // Animating layout height here makes FlashList remeasure the cell on
+        // every opacity frame, which fights the list scroll and causes visible
+        // hitching whenever a background line enters or leaves.
         { width: "100%", marginTop: backgroundGap },
         alignRight && styles.bgVocalsGroupOpposite,
         bgPresentationStyle,

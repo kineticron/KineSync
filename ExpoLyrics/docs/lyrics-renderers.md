@@ -28,18 +28,11 @@ The native implementation includes:
 - Independent row springs and the decaying 50ms stagger. Spring stiffness
   adapts to line intervals, with the slower policy for seeks/interludes. The
   active row anchors at 8% of viewport height, matching `main`'s AMLL settings.
-  The native list scrolls with the platform instead of springs: FlashList owns
-  layout, recycling and gestures, and auto-follow drives it with native
-  animated `scrollToIndex` calls only (instant snaps for mounts, seeks and
-  source changes). Neither thread does per-frame scroll work.
 - The 0.5.2 interlude's breathing, sequential dot fill, entrance and exit curves.
   These intentionally differ from the newer AMLL interlude implementation.
 
-The native list is virtualized with recycled rows: only the viewport window
-mounts, and scrolling reuses cells instead of inflating views. When the
-renderer is hidden, the row tree unmounts entirely and remounts on return.
-Gesture handling, overlap/timing rules, credits and seek controls are
-preserved. Full-width word flow removes the old nested 88%/90%
+The FlashList retains gesture handling, virtualization, overlap/timing rules,
+credits and seek controls. Full-width word flow removes the old nested 88%/90%
 width reduction; duet songs reserve an opposing lane. Row spacing and insets
 follow the AMLL host while preserving native font metrics.
 
