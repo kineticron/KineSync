@@ -42,8 +42,19 @@ jobs:
             brew install ccache
           fi
           ccache --version
+          # Xcode spawns CC as a literal binary path (no shell splitting),
+          # so `CC="ccache clang"` fails with "unable to spawn process".
+          # Instead install a wrapper named `clang` that forwards to the real
+          # toolchain compiler through ccache; module scanners still see clang.
+          REAL_CLANG="$(xcrun --sdk iphoneos -f clang)"
+          WRAP_DIR="${RUNNER_TEMP}/ccache-wrap"
+          mkdir -p "${WRAP_DIR}"
+          printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "${REAL_CLANG}" > "${WRAP_DIR}/clang"
+          chmod +x "${WRAP_DIR}/clang"
+          "${WRAP_DIR}/clang" --version
           {
             echo "KINESYNC_USE_CCACHE=1"
+            echo "KINESYNC_CC_WRAPPER=${WRAP_DIR}/clang"
             echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
             echo "CCACHE_MAXSIZE=2G"
             echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
@@ -135,13 +146,17 @@ jobs:
             "COMPILER_INDEX_STORE_ENABLE=NO",
           ];
 
-          // Route C-family compilation through ccache when available. The
-          // cache is content-addressed, so it stays valid across fresh
-          // checkouts (unlike mtime-based DerivedData reuse) and covers the
-          // React Native C++/ObjC bulk that dominates Debug build time.
-          // Swift compilation is unaffected and still runs every build.
+          // Route C-family compilation through a ccache wrapper (a real
+          // executable named `clang`, since Xcode spawns CC without shell
+          // splitting). The cache is content-addressed, so it stays valid
+          // across fresh checkouts (unlike mtime-based DerivedData reuse) and
+          // covers the React Native C++/ObjC bulk that dominates Debug build
+          // time. Swift compilation is unaffected and still runs every build.
           const ccache =
-            process.env.KINESYNC_USE_CCACHE === "1" ? ["CC=ccache clang"] : [];
+            process.env.KINESYNC_USE_CCACHE === "1" &&
+            process.env.KINESYNC_CC_WRAPPER
+              ? [`CC=${process.env.KINESYNC_CC_WRAPPER}`]
+              : [];
 
           const common = [
             "-workspace",
