@@ -8,24 +8,38 @@ type IntlSegmenterConstructor = new (
 const graphemeCache = new Map<string, string[]>();
 const MAX_GRAPHEME_CACHE_ENTRIES = 2_000;
 
-export function getGraphemes(text: string) {
-  const cached = graphemeCache.get(text);
-  if (cached) {
-    graphemeCache.delete(text);
-    graphemeCache.set(text, cached);
-    return cached;
-  }
+// One shared segmenter: constructing Intl.Segmenter loads ICU break data
+// (~ms on mobile) and row grouping calls into this per syllable, so a fresh
+// instance per cache miss freezes the JS thread while scrolling.
+let sharedSegmenter:
+  | { segment(input: string): Iterable<{ segment: string }> }
+  | null
+  | undefined;
 
+function getSegmenter() {
+  if (sharedSegmenter !== undefined) {
+    return sharedSegmenter;
+  }
   const Segmenter = (
     Intl as typeof Intl & {
       Segmenter?: IntlSegmenterConstructor;
     }
   ).Segmenter;
-  const graphemes = Segmenter
-    ? Array.from(
-        new Segmenter(undefined, { granularity: "grapheme" }).segment(text),
-        (part) => part.segment,
-      )
+  sharedSegmenter = Segmenter
+    ? new Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+  return sharedSegmenter;
+}
+
+export function getGraphemes(text: string) {
+  const cached = graphemeCache.get(text);
+  if (cached) {
+    return cached;
+  }
+
+  const segmenter = getSegmenter();
+  const graphemes = segmenter
+    ? Array.from(segmenter.segment(text), (part) => part.segment)
     : Array.from(text);
 
   graphemeCache.set(text, graphemes);

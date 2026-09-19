@@ -838,7 +838,9 @@ export function LyricsView({
 
   // Row heights feed the bottom padding and the scrollToIndex fallback, so
   // onLayout stays attached: it only fires on real changes, and unchanged
-  // rows no-op below. Measurement never commands motion.
+  // rows no-op below. Measurement never commands motion, and only the last
+  // row can change the bottom padding — every other row writes the cache
+  // silently so recycling rows mid-fling does zero React work.
   const handleCellLayout = useCallback(
     (index: number, event: LayoutChangeEvent) => {
       const height = event.nativeEvent.layout.height;
@@ -851,9 +853,11 @@ export function LyricsView({
         return;
       }
       rowHeights.set(index, height);
-      bumpContentLayoutVersion();
+      if (index === lyrics.length - 1) {
+        bumpContentLayoutVersion();
+      }
     },
-    [bumpContentLayoutVersion],
+    [bumpContentLayoutVersion, lyrics.length],
   );
 
   const handleScroll = useCallback(
