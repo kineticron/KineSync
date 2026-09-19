@@ -94,6 +94,8 @@ const ACTIVE_LINE_ALIGNMENT_EPSILON = 3;
 const LYRIC_SCROLL_ANIMATION_MS = 1600;
 const PROGRAMMATIC_SCROLL_GUARD_MS = LYRIC_SCROLL_ANIMATION_MS + 40;
 const SCROLL_OFFSET_EPSILON = 2;
+// Drifts at/below this size snap without a visible jump; larger drifts re-ease.
+const SETTLE_SMOOTH_THRESHOLD_PX = 12;
 const SCROLL_SETTLE_VERIFY_MS = LYRIC_SCROLL_ANIMATION_MS + 100;
 const PENDING_ANCHOR_RETRY_MS = 96;
 const MAX_PENDING_ANCHOR_RETRIES = 18;
@@ -841,12 +843,24 @@ export function LyricsView({
         cancelAnimation(lyricScrollOffset);
         lyricScrollActive.value = true;
         lyricScrollOffset.value = startOffset;
+        // Cached row tops instead of a getLayout() per row: native layout
+        // queries on every auto-scroll stall the JS thread and hitch the start.
         let firstVisible = 0;
-        for (let i = 0; i < lyrics.length; i++) {
-          const row = listRef.current?.getLayout(i);
-          if (row && normalizeFlashListItemTop(listRef.current, row.y, getFlashListLeadingInset(listRef.current)) >= offset) {
-            firstVisible = i; break;
+        const cachedOffsets = rowOffsetsRef.current;
+        if (cachedOffsets.size > 0) {
+          for (let i = 0; i < lyrics.length; i++) {
+            const top = cachedOffsets.get(i);
+            if (top === undefined) break;
+            if (top >= offset) {
+              firstVisible = i;
+              break;
+            }
+            firstVisible = i;
           }
+        } else {
+          const focusIndex = effectiveWindowStateRef.current.focusLineIndex;
+          firstVisible =
+            focusIndex >= 0 ? Math.max(0, focusIndex - 3) : 0;
         }
         const focus = effectiveWindowStateRef.current.focusLineIndex;
         const previous = lyrics[focus - 1];
@@ -1231,16 +1245,28 @@ export function LyricsView({
               pendingAnchorRangeRef.current = range;
               return;
             }
-            if (
-              Math.abs(settledOffset - scrollOffsetRef.current) <=
-              SCROLL_OFFSET_EPSILON
-            ) {
+            const settleDrift = Math.abs(
+              settledOffset - scrollOffsetRef.current,
+            );
+            if (settleDrift <= SCROLL_OFFSET_EPSILON) {
               return;
             }
-            markProgrammaticScroll(false);
-            const startOffset = scrollOffsetRef.current;
-            scrollToOffset(settledOffset, false, "native", startOffset);
-            scrollOffsetRef.current = settledOffset;
+            // Small drifts snap invisibly; larger ones (e.g. a row remeasured
+            // mid-scroll) re-ease instead of jumping.
+            if (settleDrift <= SETTLE_SMOOTH_THRESHOLD_PX) {
+              markProgrammaticScroll(false);
+              const startOffset = scrollOffsetRef.current;
+              scrollToOffset(settledOffset, false, "native", startOffset);
+              scrollOffsetRef.current = settledOffset;
+              return;
+            }
+            markProgrammaticScroll(true);
+            scrollToOffset(
+              settledOffset,
+              true,
+              "lyric",
+              scrollOffsetRef.current,
+            );
           },
           shouldAnimate ? SCROLL_SETTLE_VERIFY_MS : 80,
         );

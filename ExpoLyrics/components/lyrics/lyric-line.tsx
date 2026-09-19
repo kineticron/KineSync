@@ -20,7 +20,7 @@ import Reanimated, {
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
-import { AMLL_SCALE_SPRING, AMLL_BG_SCALE_SPRING, amlEmphasisParameters, amlInterlude, shouldEmphasizeAml } from "@/lib/amll-native";
+import { AMLL_SCALE_SPRING, amlEmphasisParameters, amlInterlude, shouldEmphasizeAml } from "@/lib/amll-native";
 import { NativeLyricToken, nativeAnimationCharacters, useNativeLyricTimeline, type NativeEmphasis } from "./native-lyric-token";
 import { useShallow } from "zustand/react/shallow";
 
@@ -868,15 +868,13 @@ export const LyricLine = memo(function LyricLine({
   }, [inactiveOpacity, rendererActive, visuallyActive, opacityAnim]);
 
   useEffect(() => {
+    cancelAnimation(blurAnim);
     if (!rendererActive) {
-      cancelAnimation(blurAnim);
       return;
     }
-    blurAnim.value = withTiming(Math.max(0, Math.min(5, blurAmount)), {
-      duration: 400,
-      easing: ReanimatedEasing.ease,
-    });
-    return () => cancelAnimation(blurAnim);
+    // Snap blur instead of animating the filter on every visible row per line
+    // change; the concurrent filter animations race the list scroll spring.
+    blurAnim.value = Math.max(0, Math.min(5, blurAmount));
   }, [blurAmount, blurAnim, rendererActive]);
 
   const scaleAnim = useSharedValue(visuallyActive || !globallyPlaying ? 1 : 0.97);
@@ -1188,16 +1186,22 @@ const BackgroundVocals = memo(function BackgroundVocals({
       cancelAnimation(bgOpacity);
       return;
     }
-    const slideAnimation = withSpring(
-      bgPresented ? 0 : hiddenSlideY,
-      posYSpringPolicy,
+    // Timing instead of an underdamped spring: a bouncing slide keeps
+    // oscillating after the list settles. Duration follows the row policy.
+    const slideDuration = Math.min(
+      420,
+      Math.max(220, Math.round(320 * (90 / Math.max(50, posYSpringPolicy.stiffness)))),
     );
+    const slideAnimation = withTiming(bgPresented ? 0 : hiddenSlideY, {
+      duration: slideDuration,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
     bgSlideY.value =
       groupMotionDelayMs > 0
         ? withDelay(groupMotionDelayMs, slideAnimation)
         : slideAnimation;
     bgOpacity.value = withTiming(bgPresented ? 1 : 0, {
-      duration: 300,
+      duration: Math.min(slideDuration, 320),
       easing: ReanimatedEasing.ease,
     });
     return () => {
@@ -1229,7 +1233,11 @@ const BackgroundVocals = memo(function BackgroundVocals({
   const bgScale = useSharedValue(bgIsHighlighted || !globallyPlaying ? 1 : 0.75);
   useEffect(() => {
     if (!rendererActive) { cancelAnimation(bgScale); return; }
-    bgScale.value = withSpring(bgIsHighlighted || !globallyPlaying ? 1 : 0.75, AMLL_BG_SCALE_SPRING);
+    // Timing like the slide above: settle with the fade instead of bouncing.
+    bgScale.value = withTiming(bgIsHighlighted || !globallyPlaying ? 1 : 0.75, {
+      duration: 300,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
     return () => cancelAnimation(bgScale);
   }, [bgIsHighlighted, bgScale, globallyPlaying, rendererActive]);
   const bgScaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: bgScale.value }] }));
@@ -1245,8 +1253,10 @@ const BackgroundVocals = memo(function BackgroundVocals({
       onLayout={(event) => {
         const { height: nextHeight } = event.nativeEvent.layout;
         if (Number.isFinite(nextHeight) && nextHeight > 0) {
+          // Coarse threshold: sub-pixel rounding refires onLayout mid-scroll,
+          // and each setState rebuilds the row's animated styles.
           setBgMeasuredHeight((previous) =>
-            Math.abs(previous - nextHeight) < 0.5 ? previous : nextHeight,
+            Math.abs(previous - nextHeight) < 1.5 ? previous : nextHeight,
           );
         }
       }}

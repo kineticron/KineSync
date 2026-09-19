@@ -377,6 +377,17 @@ assert.equal(viewport.scrollTop, 168 + 9 * 84 - 32, 'last line reaches landscape
 assert.equal(parseFloat(scrollRoot.style['padding-bottom']), 400 - 84 - 32, 'bottom padding has no excess blank region');
 assert.equal(content.children.length, source.length, 'one layout row per source line');
 assert.ok(host.lyricScrollEasing(0.5) > 0.8 && host.lyricScrollEasing(0.5) < 1);
+assert.ok([
+  host.lyricScrollDuration(undefined, false, false, 84),
+  host.lyricScrollDuration(300, true, false, 84),
+  host.lyricScrollDuration(300, false, true, 84),
+].every((duration) => duration === 440), 'unknown intervals, seeks and interludes keep the base scroll pace');
+const rapidScroll = host.lyricScrollDuration(100, false, false, 84);
+const spacedScroll = host.lyricScrollDuration(800, false, false, 84);
+const farScroll = host.lyricScrollDuration(800, false, false, 600);
+assert.ok(rapidScroll < spacedScroll && rapidScroll >= 240 && spacedScroll <= 440,
+  `rapid lines snap quicker than spaced lines (${rapidScroll} < ${spacedScroll})`);
+assert.ok(farScroll >= spacedScroll && farScroll <= 440, 'longer glides take longer without exceeding the base');
 host.destroyLyricsLayout();
 console.log('WebView controller checks passed: measured anchors, seeks, manual scroll, resume, landscape and last-line padding.');
 
@@ -404,6 +415,17 @@ host.releaseLyricsUserScroll();
 host.scrollToActiveLine(9500, true, true, () => {});
 assert.notEqual(viewport.scrollTop, 680, 'an explicit seek releases manual ownership immediately');
 host.destroyLyricsLayout();
+
+// Opposite lines rely on upstream's column-gap (their ::after margins are
+// zeroed upstream); only all-literal lines may zero it.
+const spicyLayoutCss = fs.readFileSync(path.resolve(root, 'components/lyrics/spicy-layout.css'), 'utf8');
+assert.ok(spicyLayoutCss.includes('.KineSyncLyricsRows .line.ks-literal-line'),
+  'column-gap zeroing must be scoped to literal-spaced lines');
+assert.ok(!/\.KineSyncLyricsRows \.line\s*\{[^}]*column-gap/.test(spicyLayoutCss),
+  'no blanket column-gap override may shadow upstream opposite-line gaps');
+const spicyEntrySource = fs.readFileSync(path.resolve(root, 'components/lyrics/spicy-webview-entry.ts'), 'utf8');
+assert.ok(spicyEntrySource.includes('ks-literal-line'),
+  'the WebView entry must mark all-literal lines for the scoped gap rule');
 
 const { getSpicyWordJoins } = load('components/lyrics/spicy-word-spacing.ts');
 assert.deepEqual(getSpicyWordJoins([{ text: '한' }, { text: '글 ' }, { text: '가' }, { text: '사' }]),

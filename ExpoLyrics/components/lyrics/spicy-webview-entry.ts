@@ -277,6 +277,11 @@ function renderWords(
   const words: SpicyWord[] = [];
   let currentWordGroup: HTMLSpanElement | null = null;
   const joins = getSpicyWordJoins(syllables);
+  // All-literal lines (KRC/QRC/YRC trailing spaces) keep the zeroed column
+  // gap; flagged lines use upstream gaps, including column-gap when opposite.
+  if (syllables.every((syllable) => typeof syllable.isPartOfWord !== "boolean")) {
+    lineElement.classList.add("ks-literal-line");
+  }
   syllables.forEach((syllable, index, all) => {
     const built = createSpicyWord(lineElement, { ...syllable, isPartOfWord: joins[index] }, index, all, isBackground);
     if (typeof syllable.isPartOfWord !== "boolean") built.element.classList.add("ks-literal-spacing");

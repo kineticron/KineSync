@@ -26,10 +26,12 @@
   justify-content: center;
 }
 .ks-lyric-inner { padding: 0 var(--ks-inner-inset); }
-/* Provider text already contains KRC/QRC/YRC word boundaries. Preserve those
-   spaces, including trailing spaces, without adding Spicy's synthetic gap
-   after every timed Korean syllable or an extra duet column gap. */
-#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line {
+/* Literal-spaced lines (KRC/QRC/YRC trailing spaces, marked ks-literal-line)
+   already contain their word boundaries: keep the zeroed column gap so no
+   synthetic gap is added per timed syllable. Flagged lines keep upstream's
+   own gaps, including column-gap on opposite lines (their ::after margins
+   are zeroed upstream). */
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line.ks-literal-line {
   column-gap: 0;
 }
 #SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .line .ks-literal-spacing {

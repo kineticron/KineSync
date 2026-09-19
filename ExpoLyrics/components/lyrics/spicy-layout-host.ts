@@ -23,7 +23,7 @@ let layoutDirty = true;
 let rowTops: number[] = [];
 let rowHeights: number[] = [];
 let lastTarget: number | null = null;
-let animation: { from: number; to: number; start: number } | null = null;
+let animation: { from: number; to: number; start: number; duration: number } | null = null;
 let userScrollingUntil = 0;
 let userTouching = false;
 let graceUntil = 0;
@@ -177,6 +177,36 @@ export function initLyricsLayout(
   if (credits) observer.observe(credits);
 }
 
+// Dynamic scroll pacing mirroring the native AMLL position spring: rapid
+// lines snap, spaced lines glide. Range 240-440ms.
+export const LYRIC_SCROLL_BASE_DURATION_MS = 440;
+const LYRIC_SCROLL_MIN_DURATION_MS = 240;
+
+export function lyricScrollDuration(
+  intervalMs: number | undefined,
+  seeking: boolean,
+  interlude: boolean,
+  distancePx: number,
+): number {
+  if (seeking || interlude || intervalMs === undefined) return LYRIC_SCROLL_BASE_DURATION_MS;
+  const clamped = Math.min(800, Math.max(100, intervalMs));
+  // Same curve as the native amlPositionSpring stiffness mapping: the ratio
+  // approaches 1 for rapid lines and 0 for spaced lines.
+  const ratio = (1 - (clamped - 100) / 700) ** 0.2;
+  const intervalPart = LYRIC_SCROLL_BASE_DURATION_MS - ratio * 120;
+  // Short hops settle quicker than full-screen glides.
+  const distanceFactor = Math.max(0, Math.min(1, distancePx / 600));
+  return Math.round(
+    Math.max(
+      LYRIC_SCROLL_MIN_DURATION_MS,
+      Math.min(
+        LYRIC_SCROLL_BASE_DURATION_MS,
+        intervalPart * (0.7 + 0.3 * distanceFactor),
+      ),
+    ),
+  );
+}
+
 // CSS ease-out used by the original native scroll: cubic-bezier(.22,.88,.34,1).
 export function lyricScrollEasing(progress: number) {
   const x = Math.max(0, Math.min(1, progress));
@@ -304,13 +334,34 @@ export function scrollToActiveLine(
   lastPosition = position;
   if (lastTarget === null || Math.abs(lastTarget - target) > 2 || force || !wasFollowing) {
     const instant = (lastTarget === null && wasFollowing) || seek;
-    animation = instant ? null : { from: viewport.scrollTop, to: target, start: now };
-    if (instant) viewport.scrollTop = target;
+    if (instant) {
+      animation = null;
+      viewport.scrollTop = target;
+    } else {
+      // Dynamic AMLL-style pacing: the interval between the focused line and
+      // its predecessor picks the speed, interludes keep the slow default.
+      const focusIndex = state.focusLineIndex;
+      const interval =
+        focusIndex > 0 && focusIndex < lyrics.length
+          ? lyrics[focusIndex].lineStartTime - lyrics[focusIndex - 1].lineStartTime
+          : undefined;
+      animation = {
+        from: viewport.scrollTop,
+        to: target,
+        start: now,
+        duration: lyricScrollDuration(
+          Number.isFinite(interval) ? interval : undefined,
+          seek,
+          state.isLongPause,
+          Math.abs(target - viewport.scrollTop),
+        ),
+      };
+    }
     lastTarget = target;
   }
   wasFollowing = true;
   if (animation) {
-    const progress = Math.min(1, (now - animation.start) / 440);
+    const progress = Math.min(1, (now - animation.start) / animation.duration);
     viewport.scrollTop = animation.from + (animation.to - animation.from) * lyricScrollEasing(progress);
     if (progress >= 1) animation = null;
   }

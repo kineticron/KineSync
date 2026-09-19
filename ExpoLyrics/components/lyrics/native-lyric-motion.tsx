@@ -6,6 +6,11 @@ import { type amlPositionSpring } from "@/lib/amll-native";
 export type NativeLyricScroll = { from: number; target: number; revision: number; firstVisible: number; focus: number;
   spring: ReturnType<typeof amlPositionSpring> };
 
+// Capped stagger window: distant rows snap instead of queueing delayed
+// springs that outlive the list scroll.
+const MAX_STAGGER_DELAY_MS = 280;
+const STAGGER_SNAP_DISTANCE = 10;
+
 /** The list owns gestures/virtualization; each painted row owns its AMLL spring. */
 export function NativeLyricMotion({ children, index, command, offset, enabled, active }: {
   children: ReactNode; index: number; command: SharedValue<NativeLyricScroll>;
@@ -19,10 +24,18 @@ export function NativeLyricMotion({ children, index, command, offset, enabled, a
     if (!next.enabled) { cancelAnimation(rowOffset); return; }
     if (previous?.enabled && previous.command.revision === next.command.revision) return;
     if (!previous?.enabled) rowOffset.value = next.command.from;
+    // Far rows snap: unbounded delays keep springs queued on the UI thread
+    // long after the list settles, overlapping the next scroll.
+    if (Math.abs(index - next.command.focus) > STAGGER_SNAP_DISTANCE) {
+      cancelAnimation(rowOffset);
+      rowOffset.value = next.command.target;
+      return;
+    }
     let delay = 0;
     let step = 50;
     for (let i = next.command.firstVisible; i < index; i++) {
       delay += step;
+      if (delay >= MAX_STAGGER_DELAY_MS) { delay = MAX_STAGGER_DELAY_MS; break; }
       if (i >= next.command.focus) step /= 1.05;
     }
     rowOffset.value = withDelay(delay, withSpring(next.command.target, next.command.spring));
