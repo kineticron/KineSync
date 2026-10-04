@@ -9,18 +9,31 @@ const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 // Optional ignored, locally fetched provider payload for reproducing real songs.
 const fixture = process.argv[2] ? JSON.parse(fs.readFileSync(path.resolve(process.argv[2]), 'utf8')) : null;
-const source = fs.readFileSync(path.join(root, 'components/lyrics/web-lyrics-view.tsx'), 'utf8');
-const bundle = fs.readFileSync(path.join(root, 'components/lyrics/spicy-webview-bundle.ts'), 'utf8');
-const globals = {};
-for (const name of ['SPICY_WEBVIEW_JS', 'SPICY_WEBVIEW_CSS']) {
-  globals[name] = JSON.parse(bundle.match(new RegExp('export const ' + name + ' = (.+);'))[1]);
+const spicySource = fs.readFileSync(path.join(root, 'components/lyrics/spicy-lyrics-view.tsx'), 'utf8');
+const amllSource = fs.readFileSync(path.join(root, 'components/lyrics/amll-lyrics-view.tsx'), 'utf8');
+const spicyBundle = fs.readFileSync(path.join(root, 'components/lyrics/spicy-webview-bundle.ts'), 'utf8');
+const amllBundle = fs.readFileSync(path.join(root, 'components/lyrics/amll-webview-bundle.ts'), 'utf8');
+function bundleGlobals(bundle, names) {
+  const globals = {};
+  for (const name of names) {
+    globals[name] = JSON.parse(bundle.match(new RegExp('export const ' + name + ' = (.+);'))[1]);
+  }
+  return globals;
 }
+function buildHtml(source, globals) {
 // Only these two pure helpers are needed; avoid importing react-native-webview in Node.
 const ast = ts.createSourceFile('host.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const helpers = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && ['escapeScript', 'createWebLyricsHtml'].includes(node.name?.text)).map((node) => node.getText(ast)).join('\n');
 vm.runInNewContext(ts.transpileModule(helpers + '\nglobalThis.result = createWebLyricsHtml();', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, globals);
+return globals.result;
+}
+const spicyGlobals = bundleGlobals(spicyBundle, ['SPICY_WEBVIEW_JS', 'SPICY_WEBVIEW_CSS']);
+const amllGlobals = bundleGlobals(amllBundle, ['AMLL_WEBVIEW_JS', 'AMLL_WEBVIEW_CSS']);
+const spicyHtml = buildHtml(spicySource, spicyGlobals);
+const amllHtml = buildHtml(amllSource, amllGlobals);
 // Instrument only the fixture, never the app bundle, to catch idle RAF polling.
-const renderer = globals.result.replace('<script>', `<script>
+function instrument(html) {
+return html.replace('<script>', `<script>
 window.lyricsTestFrames = 0;
 window.lyricsFrameSamples = [];
 const nativeRaf = window.requestAnimationFrame.bind(window);
@@ -30,12 +43,20 @@ window.requestAnimationFrame = callback => nativeRaf(time => {
   if (window.lyricsFrameSamples.length < 7200) window.lyricsFrameSamples.push({time, work: performance.now()-start});
 });
 </script><script>`);
+}
+const renderers = {
+  spicy: instrument(spicyHtml),
+  amll: instrument(amllHtml),
+};
+const renderer = renderers.spicy;
 const harness = `<!doctype html><meta charset="utf-8"><title>Lyrics renderer checks</title>
 <style>body{background:#161c28;color:white;font:15px system-ui;margin:20px}button{font:inherit;padding:8px;margin:4px}iframe{display:block;border:1px solid #566073;background:linear-gradient(#283650,#171c2a);width:390px;height:600px}pre{white-space:pre-wrap} .controls{max-width:1000px;margin-bottom:12px}</style>
-<div class="controls"><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button><button id="fixture">Load local fixture</button><button id="profile">Profile 10 seconds</button></div>
-<iframe id="renderer" src="/renderer"></iframe><pre id="results">Loading renderer…</pre>
+<div class="controls"><button id="styleSpicy">Spicy</button><button id="styleAmll">AMLL</button><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button><button id="fixture">Load local fixture</button><button id="profile">Profile 10 seconds</button></div>
+<iframe id="renderer" src="/renderer?style=spicy"></iframe><pre id="results">Loading renderer…</pre>
 <script>
 const frame=document.getElementById('renderer');
+document.getElementById('styleSpicy').onclick=()=>{frame.src='/renderer?style=spicy'};
+document.getElementById('styleAmll').onclick=()=>{frame.src='/renderer?style=amll'};
 const results=document.getElementById('results');
 const sentences=['A quiet light across the sky','We hold a note together','An answering voice','A line with enough words to wrap naturally across several rows','光の中で歌う','The rhythm carries on','A final shining word'];
 const lines=Array.from({length:70},(_,i)=>{const start=1000+i*4000;const words=sentences[i%sentences.length].split(' ');return {lineStartTime:start,lineEndTime:start+3500,syllables:words.map((text,j)=>({text:text+(j===words.length-1?'':' '),startTime:start+j*3500/words.length,endTime:start+(j+1)*3500/words.length})),...(i===1?{backgroundSyllables:[{text:'echo',startTime:start+1000,endTime:start+4700}],translatedText:'A translated line',backgroundTranslatedText:'Echo translation'}:{}),...(i===2?{oppositeAligned:true}:{})}});
@@ -144,6 +165,12 @@ http.createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify(fixture));return;
   }
+  const rendererUrl = new URL(request.url, 'http://127.0.0.1:8766');
+  if (rendererUrl.pathname === '/renderer') {
+    const style = rendererUrl.searchParams.get('style') === 'amll' ? 'amll' : 'spicy';
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(renderers[style]);return;
+  }
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  response.end(request.url === '/renderer' ? renderer : harness);
+  response.end(harness);
 }).listen(8766, '127.0.0.1', () => console.log('Lyrics preview: http://127.0.0.1:8766'));

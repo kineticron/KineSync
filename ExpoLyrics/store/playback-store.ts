@@ -26,7 +26,9 @@ const PLAYBACK_POSITION_UPDATE_EPSILON_MS = 32;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
 
-export type LyricsRendererMode = 'native' | 'webview';
+export type LyricsStyle = 'spicy' | 'amll';
+/** @deprecated Use LyricsStyle. Kept for migration of persisted settings. */
+export type LyricsRendererMode = LyricsStyle | 'native' | 'webview';
 
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
@@ -122,7 +124,7 @@ type PlaybackState = {
   hidePlaybackStatusBar: boolean;
   autoHidePlaybackControls: boolean;
   showTranslatedText: boolean;
-  lyricsRendererMode: LyricsRendererMode;
+  lyricsStyle: LyricsStyle;
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
@@ -148,6 +150,8 @@ type PlaybackState = {
   setHidePlaybackStatusBar: (value: boolean) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
   setShowTranslatedText: (value: boolean) => void;
+  setLyricsStyle: (mode: LyricsStyle) => void;
+  /** @deprecated Use setLyricsStyle. Migrates legacy native/webview values. */
   setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
@@ -233,7 +237,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   hidePlaybackStatusBar: true,
   autoHidePlaybackControls: true,
   showTranslatedText: true,
-  lyricsRendererMode: 'webview',
+  lyricsStyle: 'spicy',
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
@@ -394,8 +398,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   setHidePlaybackStatusBar: (value) => set({ hidePlaybackStatusBar: Boolean(value) }),
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
   setShowTranslatedText: (value) => set({ showTranslatedText: Boolean(value) }),
+  setLyricsStyle: (mode) =>
+    set({ lyricsStyle: mode === 'amll' ? 'amll' : 'spicy' }),
   setLyricsRendererMode: (mode) =>
-    set({ lyricsRendererMode: mode === 'webview' ? 'webview' : 'native' }),
+    set({
+      lyricsStyle:
+        mode === 'amll'
+          ? 'amll'
+          : mode === 'spicy'
+            ? 'spicy'
+            : mode === 'native'
+              ? 'amll'
+              : 'spicy',
+    }),
 }));
 
 export function startPlaybackClock() {

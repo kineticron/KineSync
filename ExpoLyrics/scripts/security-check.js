@@ -13,7 +13,8 @@ const fallback = read('components/lyrics/spotify-browser-fallback.tsx');
 const bridgeSettings = read('lib/bridge-settings.ts');
 const explore = read('app/(tabs)/explore.tsx');
 const onboarding = read('components/onboarding/onboarding-screen.tsx');
-const webLyrics = read('components/lyrics/web-lyrics-view.tsx');
+const spicyLyrics = read('components/lyrics/spicy-lyrics-view.tsx');
+const amllLyrics = read('components/lyrics/amll-lyrics-view.tsx');
 const signingPlugin = read('plugins/with-release-signing.js');
 
 assert.equal(pkg.dependencies['expo-secure-store'], '~57.0.1');
@@ -96,17 +97,25 @@ assert(
   'invalid form input must not clear a previously working bridge URL',
 );
 assert(
-  webLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
-  'refocusing must remount the suspended lyrics WebView',
+  spicyLyrics.includes('key={`spicy-lyrics-${webViewGeneration}`}') ||
+    spicyLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
+  'refocusing must remount the suspended Spicy lyrics WebView',
 );
 assert(
-  webLyrics.includes('readyGeneration === webViewGeneration'),
-  'lyrics WebView readiness must belong to the active generation',
+  amllLyrics.includes('key={`amll-lyrics-${webViewGeneration}`}') ||
+    amllLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
+  'refocusing must remount the suspended AMLL lyrics WebView',
 );
-assert(
-  !webLyrics.includes('webViewRef.current?.reload()'),
-  'refocusing must not rely on reloading a suspended lyrics WebView',
-);
+for (const webLyrics of [spicyLyrics, amllLyrics]) {
+  assert(
+    webLyrics.includes('readyGeneration === webViewGeneration'),
+    'lyrics WebView readiness must belong to the active generation',
+  );
+  assert(
+    !webLyrics.includes('webViewRef.current?.reload()'),
+    'refocusing must not rely on reloading a suspended lyrics WebView',
+  );
+}
 assert(app.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
 assert(app.plugins.includes('./plugins/with-release-signing.js'));
 assert(signingPlugin.includes('signingConfigs\\.debug'));

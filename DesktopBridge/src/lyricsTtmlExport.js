@@ -38,7 +38,7 @@ function nextSyllableLeadsWithAttachPunctuation(nextText) {
     return true;
   }
   // Apostrophe-led contractions (e.g. 'm, 's) stay tight with the previous syllable.
-  if (/^['’‘](m|re|s|d|ll|ve|t|n|clock|all)\b/i.test(trimmed)) {
+  if (/^(['’‘](?:[mtsd]|re|ve|ll|clock|all)\b|n['’]t\b)/i.test(trimmed)) {
     return true;
   }
   // Standalone closing quote syllables attach to the previous word.
@@ -63,8 +63,18 @@ function shouldInsertSyllableBoundarySpace(leftText, rightText) {
   }
   const leftChar = leftText[leftText.length - 1];
   const rightChar = rightText[0];
-  const latinOrDigit = /[A-Za-z0-9]/;
-  return latinOrDigit.test(leftChar) && latinOrDigit.test(rightChar);
+  // Prefix elisions (e.g. c', d', l', o', y') cling to the following word.
+  if (/^(?:[cdjlnst]|qu|[ouy]|all|dell|nell|sant)['’]$/i.test(String(leftText || "").trim())) {
+    return false;
+  }
+  const leftIsWord =
+    /[A-Za-z0-9]/.test(leftChar) ||
+    (/[A-Za-z0-9]['’]$/u.test(String(leftText || "").trim()) || /^['’][A-Za-z0-9]['’]$/u.test(String(leftText || "").trim()));
+  const rightIsWord =
+    /[A-Za-z0-9]/.test(rightChar) ||
+    (/^['’][A-Za-z0-9]/u.test(String(rightText || "").trim()) && !nextSyllableLeadsWithAttachPunctuation(rightText));
+
+  return leftIsWord && rightIsWord;
 }
 
 function getLyricLineText(line) {

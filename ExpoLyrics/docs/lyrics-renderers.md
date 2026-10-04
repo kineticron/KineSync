@@ -1,55 +1,22 @@
 # Lyrics renderers
 
-The native renderer ports the effects from **AMLL core 0.5.2**, the version
-locked by the AMLL WebView on `main`. The reference is
-[applemusic-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics)
-(AGPL-3.0-only). The algorithms live in `lib/amll-native.ts`; native masks and
-word effects live in `components/lyrics/native-lyric-token.tsx`.
+Both lyrics styles are WebViews now. The poor-performing AMLL native port
+(`lib/amll-native.ts`, `lyric-line.tsx`, `lyrics-view.tsx`, `native-lyric-*`)
+was removed. The settings panel switches style between **Spicy** and **AMLL**,
+stored as `lyricsStyle: 'spicy' | 'amll'` (legacy `native` maps to `amll`,
+legacy `webview` maps to `spicy`).
 
-Native typography remains the existing system font: 32px / 42px with the
-existing 1.05 active-size multiplier, weight 700, background scale 0.62 and
-weight 500, plus the user's font scale. Translation sizes stay unchanged.
-Scaling and emphasis are transforms; they never change text layout metrics.
+- **Spicy** (`components/lyrics/spicy-lyrics-view.tsx`, `spicy-webview-entry.ts`,
+  `spicy-webview-bundle.ts`): replicates Spicy Lyrics word/letter runtime and
+  effect styles. Built with `npm run build:spicy-webview
+npm run build:amll-webview`.
+- **AMLL** (`components/lyrics/amll-lyrics-view.tsx`, `amll-webview-entry.ts`,
+  `amll-webview-bundle.ts`): the AMLL WebView restored verbatim from `main`.
+  It wraps **AMLL core 0.5.2**. The reference is
+  [applemusic-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics)
+  (AGPL-3.0-only). Built with `npm run build:amll-webview`.
 
-The native implementation includes:
-
-- One shaped text pass behind a continuously moving native alpha mask, with
-  the WebView's 0.56-line-height feather. The cursor uses measured token widths,
-  shares its feather across adjacent syllables, and holds during timing gaps.
-- AMLL's 0.97-to-1 line spring, scale-dependent bright/dark alpha, and asymmetric
-  exponential attack/release. Group opacity and distance blur use the reference
-  400ms transitions; manual scrolling clears blur.
-- Normal word float, and 32-keyframe sustained-word emphasis with staggered
-  characters, expansion, horizontal spread, lift, glow, and stronger last words.
-  Joining scripts remain shaped runs rather than disconnected characters.
-- Background-vocal slide, fade, 0.8-to-1 wrapper scale, 0.75-to-1 text scale,
-  40% brightness, and an expanding/collapsing layout slot. Pausing presents all
-  backgrounds, as in AMLL. Translations use the reference opacity.
-- Independent row springs and the decaying 50ms stagger. Spring stiffness
-  adapts to line intervals, with the slower policy for seeks/interludes. The
-  active row anchors at 8% of viewport height, matching `main`'s AMLL settings.
-- The 0.5.2 interlude's breathing, sequential dot fill, entrance and exit curves.
-  These intentionally differ from the newer AMLL interlude implementation.
-
-The FlashList retains gesture handling, virtualization, overlap/timing rules,
-credits and seek controls. Full-width word flow removes the old nested 88%/90%
-width reduction; duet songs reserve an opposing lane. Row spacing and insets
-follow the AMLL host while preserving native font metrics.
-
-Playback clocks, masks, letter effects, blur and row motion run on the UI thread.
-Hidden renderers cancel their clocks/springs, and recycled rows cancel delayed
-motion. Alpha integration stops after settling. Android uses software mask
-invalidation so moving masks repaint. This trades bitmap work for a real
-continuous mask; sustained frame rate still needs profiling on physical devices.
-iOS uses the project's existing experimental React Native release level for
-SwiftUI-backed view blur; the filter remains present at zero to avoid changing
-the view hierarchy during focus transitions.
-
-Worklet helpers must be declared before their callers. The regression runner
-compiles the native modules with Expo's production Worklets transform and
-executes their serialized closures, catching missing captures before deployment.
-
-The WebView uses Spicy's word/letter runtime and effect styles inside KineSync
+The Spicy WebView uses Spicy's word/letter runtime and effect styles inside KineSync
 rows. Its original center-scroll controller and virtualizer are no longer used.
 The host keeps source rows mounted to make their measured geometry independent
 of animation, but only paints/animates nearby rows. During a short lyric gap, the
@@ -117,6 +84,7 @@ From `ExpoLyrics`:
 ```sh
 npm run test:lyrics
 npm run build:spicy-webview
+npm run build:amll-webview
 npx tsc --noEmit
 npm run lint
 npx expo export --platform ios --output-dir .expo/lyrics-ios-check
@@ -138,12 +106,9 @@ node scripts/preview-lyrics-renderers.cjs .expo/xibal-krc.json
 It does not measure native frames presented by the GPU. A local desktop XIBAL
 run measured 0.20ms p95 callback work; this is a host-work measurement, not proof
 of 120fps on a phone.
-The native regression runner executes production-transformed worklets and effect
-cleanup across 64 visible/hidden scenarios. Browser checks verify zero idle RAF
+Browser checks verify zero idle RAF
 callbacks, gap preactivation without early word reveals, and suspension/resume.
-AMLL reference checks also cover unequal-width mask boundaries, held-word and
-last-word emphasis, float, asymmetric blur, spring/stagger policies and interlude
-snapshots. Additional checks cover continuous clocks at simulated 60/90/120/144Hz, source
+Additional checks cover continuous clocks at simulated 60/90/120/144Hz, source
 corrections, seek release/cancellation, UI drag interruption, Android plugin
 idempotence, KRC spacing and settled word spring suppression.
 The Android activity also passed `:app:compileDebugKotlin` with the plugin's
@@ -167,7 +132,7 @@ time percentiles and dropped-frame counts for both renderers. Include:
   switching routes/renderers. Hidden views should stop their animation work.
 - A sustained warm-device run, plus 60Hz and low-power fallback checks.
 
-On iOS, switch to the native renderer during playback, seek in both directions,
+On iOS, switch between Spicy and AMLL styles during playback, seek in both directions,
 pause/resume, rotate, and change the font scale. Include sustained words,
 background vocals and interludes. Verify that the app remains open and that
 word animation does not move neighboring rows. Repeat with the WebView renderer.

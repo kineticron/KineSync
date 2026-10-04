@@ -35,7 +35,7 @@ type WebLyricsLine = {
   oppositeAligned?: boolean;
 };
 
-type WebLyricsViewProps = {
+type SpicyLyricsViewProps = {
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
   previewPositionMs?: number | null;
@@ -303,7 +303,7 @@ function serializeForInjection(payload: unknown) {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export const WebLyricsView = memo(function WebLyricsView({
+export const SpicyLyricsView = memo(function SpicyLyricsView({
   tapToSeekEnabled,
   showTranslatedText = true,
   previewPositionMs = null,
@@ -319,7 +319,7 @@ export const WebLyricsView = memo(function WebLyricsView({
   fontScale = 1,
   landscapeMode = false,
   active = true,
-}: WebLyricsViewProps) {
+}: SpicyLyricsViewProps) {
   const webViewRef = useRef<{
     injectJavaScript: (script: string) => void;
   } | null>(null);
@@ -526,7 +526,7 @@ export const WebLyricsView = memo(function WebLyricsView({
   return (
     <View style={styles.container}>
       <TransparentWebView
-        key={`web-lyrics-${webViewGeneration}`}
+        key={`spicy-lyrics-${webViewGeneration}`}
         ref={webViewRef}
         source={{ html: WEB_LYRICS_HTML }}
         originWhitelist={["*"]}

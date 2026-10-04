@@ -139,164 +139,44 @@ for (const anchor of [0, 32]) {
 }
 assert.equal(layout.getCreditsAwareScrollOffset({ range: { startIndex: 3, endIndex: 3 }, lyricsLength: 4, listHeight: 400, creditsLayout: { top: 700, bottom: 1200 }, getAbsoluteLineTop: () => 600, creditsActive: true, hasCredits: true }), 824);
 
-// Compile with Expo's production Babel/Worklets transform, then mount the actual
-// native component and execute the animated-style callbacks. Plain TypeScript
-// transpilation misses eager worklet closures capturing uninitialized helpers.
-// Host primitives are mocked; this does not replace an iOS device test.
-for (platform of ['ios', 'android']) {
-  cache.delete(path.resolve(root, 'components/lyrics/lyric-line.tsx'));
-  const { LyricLine } = load('components/lyrics/lyric-line.tsx');
-  for (const rendererActive of [true, false]) {
-  for (const landscapeMode of [false, true]) {
-    for (const position of [0, 1500, 3000, 5000]) {
-      for (const preview of [null, position]) {
-        const line = makeLine(1000, 4500, 'Shining');
-        line.backgroundSyllables = [{ text: 'echo', startTime: 800, endTime: 5500 }];
-        line.translatedText = 'Translation';
-        line.backgroundTranslatedText = 'Echo translation';
-        playback = { playbackPosition: position, anchorPositionMs: position, anchorMonotonicMs: performance.now(), isPlaying: position > 0 && position < 5000 };
-        paintedStyles = [];
-        nativeEffects = [];
-        nativeAnimations = nativeCancellations = 0;
-        const html = renderToStaticMarkup(React.createElement(LyricLine, {
-          rendererActive,
-          line, isActive: position >= 1000 && position < 4500,
-          isPast: position >= 4500, inactiveOpacityDistance: 1,
-          shouldDrivePlaybackUpdates: true, showTranslatedText: true,
-          tapEnabled: true, landscapeMode, fontScale: 0.9,
-          playbackPositionOverrideMs: preview, blurAmount: 4,
-          showPauseDotsBefore: true, pauseStartMs: 0,
-          pauseVisualDurationMs: 7000, pauseHoldMs: 0,
-        }));
-        assert.ok(html.includes('Translation') && html.includes('Echo translation'));
-        assert.equal(html.replace(/<[^>]*>/g, '').split('Shining').length - 1, 1,
-          'the native lead paints a single text copy during playback and preview');
-        assert.ok(!paintedStyles.some(style => style.overflow === 'hidden' && style.position === 'absolute'),
-          'native reveal has no overlapping animated clip layers');
-        assert.ok(paintedStyles.some((style) => Math.abs(style.fontSize - 32 * 1.05 * 0.9) < 0.001), JSON.stringify({ platform, landscapeMode, position, preview, sizes: paintedStyles.map((s) => s.fontSize).filter(Boolean) }));
-        assert.ok(paintedStyles.some((style) => style.alignItems === (landscapeMode ? 'flex-end' : 'flex-start')));
-        if (platform === 'android') {
-          assert.ok(paintedStyles.some((style) => style.filter?.[0]?.blur === 4),
-            'Android keeps the native lyric blur effect');
-        } else {
-          assert.ok(!paintedStyles.some((style) => style.filter),
-            'iOS avoids Fabric filter reparenting on recycled native lyric rows');
-        }
-        const checkFinite = (value) => {
-          if (typeof value === 'number') assert.ok(Number.isFinite(value), 'animated styles stay finite');
-          else if (value && typeof value === 'object') Object.values(value).forEach(checkFinite);
-        };
-        paintedStyles.forEach(checkFinite);
-        const cleanups = nativeEffects.map((effect) => effect()).filter((cleanup) => typeof cleanup === 'function');
-        if (!rendererActive) {
-          assert.equal(nativeAnimations, 0, 'hidden native rows, backgrounds and dots start no animations');
-        } else {
-          assert.ok(nativeAnimations > 0, 'visible native rows retain their animation effects');
-        }
-        const cancellationsBeforeUnmount = nativeCancellations;
-        cleanups.forEach((cleanup) => cleanup());
-        if (nativeAnimations > 0) {
-          assert.ok(nativeCancellations - cancellationsBeforeUnmount >= nativeAnimations,
-            'unmounted/recycled rows cancel every animation they started');
-        }
-      }
-    }
-  }
-  }
+// Both lyrics styles are WebViews now: Spicy and AMLL (restored from main).
+// The poor-performing AMLL native port (lyric-line, lyrics-view, native-*, amll-native)
+// was removed. Verify both bundles, both view components, the style store, and wiring.
+const spicyBundleSource = fs.readFileSync(path.resolve(root, 'components/lyrics/spicy-webview-bundle.ts'), 'utf8');
+assert.ok(spicyBundleSource.includes('SPICY_WEBVIEW_JS'), 'Spicy WebView bundle exports JS');
+assert.ok(spicyBundleSource.includes('SPICY_WEBVIEW_CSS'), 'Spicy WebView bundle exports CSS');
+const amllBundleSource = fs.readFileSync(path.resolve(root, 'components/lyrics/amll-webview-bundle.ts'), 'utf8');
+assert.ok(amllBundleSource.includes('AMLL_WEBVIEW_JS'), 'AMLL WebView bundle exports JS');
+assert.ok(amllBundleSource.includes('AMLL_WEBVIEW_CSS'), 'AMLL WebView bundle exports CSS');
+const spicyViewSource = fs.readFileSync(path.resolve(root, 'components/lyrics/spicy-lyrics-view.tsx'), 'utf8');
+assert.ok(spicyViewSource.includes('SpicyLyricsView'), 'Spicy view component exists');
+assert.ok(spicyViewSource.includes('spicy-webview-bundle'), 'Spicy view uses the Spicy bundle');
+assert.ok(spicyViewSource.includes('spicy-lyrics-'), 'Spicy view remount key is style-scoped');
+const amllViewSource = fs.readFileSync(path.resolve(root, 'components/lyrics/amll-lyrics-view.tsx'), 'utf8');
+assert.ok(amllViewSource.includes('AmllLyricsView'), 'AMLL view component exists');
+assert.ok(amllViewSource.includes('amll-webview-bundle'), 'AMLL view uses the AMLL bundle');
+assert.ok(amllViewSource.includes('amll-lyrics-'), 'AMLL view remount key is style-scoped');
+assert.ok(amllViewSource.includes('anchorMonotonicMs'), 'AMLL view projects the anchor clock like Spicy');
+assert.ok(amllViewSource.includes('isPartOfWord'), 'AMLL view forwards join flags for Spicy sources');
+const amllEntrySource = fs.readFileSync(path.resolve(root, 'components/lyrics/amll-webview-entry.ts'), 'utf8');
+assert.ok(amllEntrySource.includes('buildAmllWords'), 'AMLL entry groups flagged fragments into words');
+for (const removed of ['components/lyrics/lyric-line.tsx', 'components/lyrics/lyrics-view.tsx', 'components/lyrics/native-lyric-token.tsx', 'components/lyrics/native-lyric-motion.tsx', 'lib/amll-native.ts', 'app/amll-native-preview.tsx', 'components/lyrics/web-lyrics-view.tsx']) {
+  assert.ok(!fs.existsSync(path.resolve(root, removed)), `native implementation removed: ${removed}`);
 }
-console.log('Lyrics checks passed: timeline, overlap/background ranges, seeks, credits, end padding, and 64 native mount/effect scenarios including hidden rows and unmount cleanup.');
+const storeSource = fs.readFileSync(path.resolve(root, 'store/playback-store.ts'), 'utf8');
+assert.ok(storeSource.includes("LyricsStyle = 'spicy' | 'amll'") || storeSource.includes('spicy'), 'store defines Spicy/AMLL style');
+assert.ok(storeSource.includes('lyricsStyle'), 'store exposes lyricsStyle');
+assert.ok(!storeSource.includes("lyricsRendererMode: 'webview'"), 'legacy native/webview default is gone');
+const settingsSource = fs.readFileSync(path.resolve(root, 'components/lyrics/settings-menu.tsx'), 'utf8');
+assert.ok(!settingsSource.includes('Use WebView lyrics'), 'settings no longer toggles WebView vs native');
+assert.ok(settingsSource.includes('lyricsStyle'), 'settings exposes lyrics style');
+assert.ok(settingsSource.includes('Lyrics renderer'), 'renderer switch lives in its own labeled section');
+assert.ok(settingsSource.includes('RendererOption'), 'renderer switch uses a dedicated picker, not source chips');
+const homeSource = fs.readFileSync(path.resolve(root, 'app/(tabs)/index.tsx'), 'utf8');
+assert.ok(homeSource.includes('SpicyLyricsView') && homeSource.includes('AmllLyricsView'), 'home renders both WebView styles');
+assert.ok(!homeSource.includes('from "@/components/lyrics/lyrics-view"'), 'home no longer mounts the native renderer');
+console.log('Lyrics checks passed: timeline, overlap/background ranges, seeks, credits, end padding, and Spicy/AMLL dual-WebView wiring.');
 
-const { syncNativeTimeline } = load('components/lyrics/native-lyric-token.tsx');
-let revealValue = 500;
-const revealWrites = [];
-const revealProgress = { get value() { return revealValue; }, set value(value) { revealWrites.push(value); revealValue = value; } };
-syncNativeTimeline(revealProgress, 550, 1000, true);
-assert.deepEqual(revealWrites, [1000], 'small native clock corrections retarget without resetting the reveal value');
-revealWrites.length = 0;
-syncNativeTimeline(revealProgress, 100, 1000, true);
-assert.deepEqual(revealWrites, [100, 1000], 'large native seeks reset progress immediately before continuing');
-revealWrites.length = 0;
-syncNativeTimeline(revealProgress, 600, 1000, false);
-assert.deepEqual(revealWrites, [600], 'paused native previews remain exact');
-
-// Golden values from AMLL 0.5.2's line mask, emphasis, interlude and layout
-// algorithms. Run the serialized production worklets, not their JS originals.
-const amll = load('lib/amll-native.ts');
-const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 0.0001, `${label}: ${actual} != ${expected}`);
-const maskCursor = unpackWorklet(amll.amlMaskCursor);
-const maskWords = [{text:'thin',startTime:1000,endTime:2000},{text:'wide',startTime:2500,endTime:4500}];
-near(maskCursor(1000, maskWords, [40, 120], 20), -40, 'first word begins behind a full feather');
-near(maskCursor(1500, maskWords, [40, 120], 20), -5, 'measured first-word sweep');
-near(maskCursor(2000, maskWords, [40, 120], 20), 30, 'feather straddles adjacent words');
-near(maskCursor(2400, maskWords, [40, 120], 20), 30, 'silence holds the cursor');
-near(maskCursor(3500, maskWords, [40, 120], 20), 95, 'wide glyphs use actual width');
-near(maskCursor(4500, maskWords, [40, 120], 20), 160, 'last word finishes the complete sweep');
-near(maskCursor(500, maskWords, [40, 120], 20), -40, 'backward seek clears the highlight');
-const overlappingMaskWords = [{text:'one',startTime:1000,endTime:2000},{text:'two',startTime:1500,endTime:2500}];
-near(maskCursor(1750, overlappingMaskWords, [40, 120], 20), 12.5,
-  'overlapping syllable windows do not reveal two segments concurrently');
-near(maskCursor(2000, overlappingMaskWords, [40, 120], 20), 30,
-  'the second overlapping syllable starts after the first reveal segment finishes');
-near(maskCursor(2250, overlappingMaskWords, [40, 120], 20), 62.5,
-  'serialized overlap timing continues at the second syllable rate');
-near(maskCursor(2500, overlappingMaskWords, [40, 120], 20), 160,
-  'AMLL resolves any remaining overlapping mask movement at the line endpoint');
-assert.equal(amll.AMLL_WORD_FADE_WIDTH, 0.5, 'native mask uses AMLL default word fade width');
-const tokenMaskOffset = unpackWorklet(amll.amlTokenMaskOffset);
-near(tokenMaskOffset(-100, 1000, 2000, 40, 32, 20), -124,
-  'token-local mask clamps fully before the syllable');
-near(tokenMaskOffset(1000, 1000, 2000, 40, 32, 20), -82,
-  'token-local feather is centered on the syllable start');
-near(tokenMaskOffset(1500, 1000, 2000, 40, 32, 20), -62,
-  'token-local reveal follows the syllable midpoint');
-near(tokenMaskOffset(2000, 1000, 2000, 40, 32, 20), -42,
-  'token-local feather reaches the syllable end on its own timing');
-near(tokenMaskOffset(4000, 1000, 2000, 40, 32, 20), 0,
-  'token-local mask completes after its trailing feather clears');
-
-const nativeTokenSource = fs.readFileSync(path.resolve(root, 'components/lyrics/native-lyric-token.tsx'), 'utf8');
-assert.ok(!nativeTokenSource.includes('timeline.widths'),
-  'native reveal never depends on asynchronously measured sibling widths');
-assert.ok(nativeTokenSource.includes('amlTokenMaskOffset('),
-  'native reveal is driven by each syllable timing and its own measured geometry');
-
-const lyricLineSource = fs.readFileSync(path.resolve(root, 'components/lyrics/lyric-line.tsx'), 'utf8');
-assert.ok(!lyricLineSource.includes('height: (bgMeasuredHeight + backgroundGap) * bgOpacity.value'),
-  'background vocal presentation must not animate FlashList row height');
-assert.ok(lyricLineSource.includes('marginTop: backgroundGap'),
-  'background vocals reserve stable layout space while animating paint-only transforms');
-assert.equal(amll.shouldEmphasizeAml('shine', 999), false);
-assert.equal(amll.shouldEmphasizeAml('shine', 1000), true);
-assert.equal(amll.shouldEmphasizeAml('I', 2000), false);
-assert.equal(amll.shouldEmphasizeAml('something', 2000), false);
-assert.equal(amll.shouldEmphasizeAml('光', 2000), true);
-const params = amll.amlEmphasisParameters(2000, true);
-near(params.duration, 2400, 'last-word animation extends by 20%');
-near(params.amount, 0.96, 'last-word expansion');
-near(params.blur, 2 / 9, 'last-word glow');
-const emphasisAt = unpackWorklet(amll.amlEmphasis);
-const peak = emphasisAt(2200, 1000, 0, 4, params, 32, false);
-near(peak.scale, 1.096, 'reference midpoint scale');
-near(peak.shadowOpacity, 2 / 9, 'reference midpoint glow');
-near(peak.shadowRadius, 32 / 15, 'reference glow radius');
-near(emphasisAt(10000, 1000, 0, 4, params, 32, false).scale, 1, 'completed emphasis restores geometry');
-const floatAt = unpackWorklet(amll.amlFloat);
-near(floatAt(3000, 1000, 2000, 32, false), -1.6, 'lead floats .05em');
-near(floatAt(3000, 1000, 2000, 32, true), -3.2, 'background floats .1em');
-near(amll.amlBlur(2, 3, 4, false, false), 2.4, 'past lines receive the extra blur step');
-assert.equal(amll.amlBlur(5, 3, 4, false, false), 1.6);
-assert.equal(amll.amlBlur(5, 3, 4, false, true), 0);
-near(amll.amlStagger(4, 2, 3), 100, 'row stagger starts at 50ms');
-near(amll.amlStagger(5, 2, 3), 147.6190476, 'stagger decays after focus');
-near(amll.amlPositionSpring(100, false, false).stiffness, 220, 'rapid lines use a faster spring');
-near(amll.amlPositionSpring(800, false, false).stiffness, 170, 'spaced lines use a softer spring');
-near(amll.amlPositionSpring(100, true, false).stiffness, 90, 'seek uses the reference slow spring');
-const dotsAt = unpackWorklet(amll.amlInterlude);
-near(dotsAt(400, 8000).opacity, 0, 'interlude waits before entering');
-near(dotsAt(750, 8000).opacity, 0.5, 'interlude entry fade');
-near(dotsAt(7900, 8000).opacity, 100 / 375, 'interlude exit fade');
-near(dotsAt(8000, 8000).scale, 0, 'interlude exits completely');
-console.log('AMLL 0.5.2 parity checks passed: measured mask boundaries, held-word emphasis, float, blur, stagger, spring policy and interlude snapshots.');
 
 // Exercise the WebView scroll controller against measured DOM boxes, without a
 // browser or external connector. Visual/CSS checks live in the preview harness.
@@ -434,6 +314,87 @@ assert.deepEqual(getSpicyWordJoins([{ text: 'some', isPartOfWord: true }, { text
   [true, false, false], 'explicit Spicy join flags remain authoritative');
 assert.deepEqual(getSpicyWordJoins([{ text: 'one' }, { text: ' two' }, { text: ' ' }, { text: 'three' }]),
   [false, false, false, false], 'leading/standalone spaces are boundaries too');
+
+const { buildAmllWords } = load('components/lyrics/amll-word-spacing.ts');
+const amllFlagged = buildAmllWords([
+  { text: 'Hel', startTime: 1000, endTime: 1200, isPartOfWord: true },
+  { text: 'lo', startTime: 1200, endTime: 1500, isPartOfWord: false },
+  { text: 'wor', startTime: 1600, endTime: 1800, isPartOfWord: true },
+  { text: 'ld', startTime: 1800, endTime: 2100, isPartOfWord: false },
+], 1000, 2100);
+assert.deepEqual(amllFlagged.map((w) => w.word), ['Hello ', 'world'],
+  'Spicy fragments group into whole words with a synthesized separator');
+assert.equal(amllFlagged[0].startTime, 1000, 'grouped word starts at its first fragment');
+assert.equal(amllFlagged[0].endTime, 1500, 'grouped word ends at its last fragment');
+assert.equal(amllFlagged.map((w) => w.word).join(''), 'Hello world',
+  'AMLL joins grouped words into the correct line text');
+const amllPunct = buildAmllWords([
+  { text: 'Hello', startTime: 1000, endTime: 1500, isPartOfWord: false },
+  { text: ',', startTime: 1500, endTime: 1600, isPartOfWord: false },
+  { text: 'world', startTime: 1600, endTime: 2100, isPartOfWord: false },
+], 1000, 2100);
+assert.equal(amllPunct.map((w) => w.word).join(''), 'Hello, world',
+  'closing punctuation clings without a synthesized gap');
+const amllCjk = buildAmllWords([
+  { text: '光', startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: 'の', startTime: 1200, endTime: 1400, isPartOfWord: false },
+], 1000, 1400);
+assert.equal(amllCjk.map((w) => w.word).join(''), '光の',
+  'CJK word boundaries take no space');
+const amllLiteral = buildAmllWords([
+  { text: '한', startTime: 1000, endTime: 1500 },
+  { text: '글 ', startTime: 1500, endTime: 2000 },
+  { text: '테', startTime: 2000, endTime: 2500 },
+], 1000, 2500);
+assert.deepEqual(amllLiteral.map((w) => w.word), ['한', '글 ', '테'],
+  'unflagged syllables pass through 1:1 with literal spacing intact');
+assert.equal(amllLiteral.map((w) => w.word).join(''), '한글 테',
+  'literal trailing spaces survive the AMLL bridge');
+
+const amllAposEnding = buildAmllWords([
+  { text: "lil'", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: "pose", startTime: 1200, endTime: 1500, isPartOfWord: false },
+], 1000, 1500);
+assert.equal(amllAposEnding.map((w) => w.word).join(''), "lil' pose",
+  'words ending in apostrophes separate properly from the next word');
+
+const amllAposLeading = buildAmllWords([
+  { text: "sing", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: "'cause", startTime: 1200, endTime: 1500, isPartOfWord: false },
+], 1000, 1500);
+assert.equal(amllAposLeading.map((w) => w.word).join(''), "sing 'cause",
+  'words starting with apostrophes separate properly from the previous word');
+
+const amllTellEm = buildAmllWords([
+  { text: "tell", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: "'em", startTime: 1200, endTime: 1500, isPartOfWord: false },
+], 1000, 1500);
+assert.equal(amllTellEm.map((w) => w.word).join(''), "tell 'em",
+  "'em does not merge into the preceding verb");
+
+const amllRockNRoll = buildAmllWords([
+  { text: "rock", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: "'n'", startTime: 1200, endTime: 1400, isPartOfWord: false },
+  { text: "roll", startTime: 1400, endTime: 1600, isPartOfWord: false },
+], 1000, 1600);
+assert.equal(amllRockNRoll.map((w) => w.word).join(''), "rock 'n' roll",
+  "rock 'n' roll preserves spaces around 'n'");
+
+const amllContraction = buildAmllWords([
+  { text: "It", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: "'s", startTime: 1200, endTime: 1400, isPartOfWord: false },
+  { text: "fine", startTime: 1400, endTime: 1600, isPartOfWord: false },
+], 1000, 1600);
+assert.equal(amllContraction.map((w) => w.word).join(''), "It's fine",
+  "apostrophe contractions attach without space and separate from next word");
+
+const amllQuotes = buildAmllWords([
+  { text: "said,", startTime: 1000, endTime: 1200, isPartOfWord: false },
+  { text: '"Hello"', startTime: 1200, endTime: 1500, isPartOfWord: false },
+  { text: "world", startTime: 1500, endTime: 1800, isPartOfWord: false },
+], 1000, 1800);
+assert.equal(amllQuotes.map((w) => w.word).join(''), 'said, "Hello" world',
+  'quoted words maintain spaces on both sides');
 
 const { createSpicyPlaybackClock } = load('components/lyrics/spicy-playback-clock.ts');
 for (const hz of [60, 90, 120, 144]) {

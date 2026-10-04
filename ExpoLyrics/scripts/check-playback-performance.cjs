@@ -94,22 +94,8 @@ function load(relative) {
   return module.exports;
 }
 
-const { useLyricScrollInterruption } = load('components/lyrics/use-lyric-scroll-interruption.ts');
-const offset = { value: 400 }, active = { value: true };
-let reportedOffset;
-let interrupt;
-renderToStaticMarkup(React.createElement(() => {
-  interrupt = useLyricScrollInterruption(offset, active, (value) => { reportedOffset = value; });
-  return null;
-}));
-const beforeCancel = cancellations;
-interrupt({ contentOffset: { y: 317 } });
-assert.equal(active.value, false, 'drag stops auto-follow while JS is still blocked');
-assert.equal(cancellations, beforeCancel + 1);
-assert.equal(reportedOffset, undefined, 'JS bookkeeping is asynchronous');
-flushJS();
-assert.equal(reportedOffset, 317, 'drag reports the actual native offset');
-
+// Native scroll interruption hook was removed with the AMLL native port;
+// both lyrics styles are WebViews now and own their scroll natively.
 const { usePlaybackTimelineClock } = load('components/lyrics/use-playback-timeline-clock.ts');
 let position;
 renderToStaticMarkup(React.createElement(() => { position = usePlaybackTimelineClock(100000); return null; }));
@@ -213,4 +199,4 @@ assert.equal(actualStore.getState().anchorPositionMs, 60030, 'resume creates a f
 assert.equal(ingest({ trackId: 'song-b', positionMs: 60040 }).trackChanged, true);
 assert.equal(actualStore.getState().anchorPositionMs, 60040, 'new tracks bypass the old clock deadband');
 storeModule.exports.stopPlaybackClock();
-console.log('Playback performance checks passed: UI drag interruption, anchor-only clock, focus/background cleanup, immediate scrub feedback, exact release seek, cancellation, transform fill, Android prebuild, and real packet jitter/seek/track changes.');
+console.log('Playback performance checks passed: anchor-only clock, focus/background cleanup, immediate scrub feedback, exact release seek, cancellation, transform fill, Android prebuild, and real packet jitter/seek/track changes.');

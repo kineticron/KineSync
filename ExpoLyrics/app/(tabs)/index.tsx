@@ -65,8 +65,8 @@ import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
 import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
-import { LyricsView } from "@/components/lyrics/lyrics-view";
-import { WebLyricsView } from "@/components/lyrics/web-lyrics-view";
+import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
+import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
 import {
   PlaybackControls,
   type PlaybackControlsLayout,
@@ -484,8 +484,8 @@ export default function HomeScreen() {
   const setAutoHidePlaybackControls = usePlaybackStore((s) => s.setAutoHidePlaybackControls);
   const showTranslatedText = usePlaybackStore((s) => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore((s) => s.setShowTranslatedText);
-  const lyricsRendererMode = usePlaybackStore((s) => s.lyricsRendererMode);
-  const setLyricsRendererMode = usePlaybackStore((s) => s.setLyricsRendererMode);
+  const lyricsStyle = usePlaybackStore((s) => s.lyricsStyle);
+  const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
   const [controlsDockHeight, setControlsDockHeight] = useState(0);
@@ -691,15 +691,6 @@ export default function HomeScreen() {
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
   );
-  const fadeLyricsBackIn = useCallback(() => {
-    if (fullscreenAlbumMode || albumArtworkMorphingRef.current) {
-      return;
-    }
-    lyricsRestoreOpacity.value = withTiming(1, {
-      duration: 420,
-      easing: PLAYER_MODE_EASE,
-    });
-  }, [fullscreenAlbumMode, lyricsRestoreOpacity]);
 
   const finishLyricsModeTransition = useCallback(() => {
     albumArtworkMorphingRef.current = false;
@@ -1468,8 +1459,8 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
-              ) : lyricsRendererMode === "webview" ? (
-                <WebLyricsView
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
@@ -1487,7 +1478,7 @@ export default function HomeScreen() {
                   landscapeMode
                 />
               ) : (
-                <LyricsView
+                <SpicyLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
@@ -1497,9 +1488,9 @@ export default function HomeScreen() {
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onCreditsTimestampPress={handleSeek}
                   onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                   fontScale={LANDSCAPE_FONT_SCALE}
                   landscapeMode
@@ -1717,8 +1708,8 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} onOpenPlayer={() => spotifyBrowserRef.current?.openBrowser()} />
-              ) : lyricsRendererMode === "webview" ? (
-                <WebLyricsView
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
@@ -1734,7 +1725,7 @@ export default function HomeScreen() {
                   onUserInteraction={handleControlsInteraction}
                 />
               ) : (
-                <LyricsView
+                <SpicyLyricsView
                   active={isScreenFocused}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
@@ -1744,13 +1735,10 @@ export default function HomeScreen() {
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onCreditsTimestampPress={handleSeek}
                   onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
-                  suppressInitialAutoScrollAnimation
-                  suspendViewportScrollAdjustments={albumArtworkMorphing}
-                  onInitialAutoScrollSettled={fadeLyricsBackIn}
                 />
               )}
             </Reanimated.View>
@@ -1881,8 +1869,8 @@ export default function HomeScreen() {
         onToggleAutoHidePlaybackControls={handleAutoHidePlaybackControlsChange}
         showTranslatedText={showTranslatedText}
         onToggleShowTranslatedText={setShowTranslatedText}
-        lyricsRendererMode={lyricsRendererMode}
-        onChangeLyricsRendererMode={setLyricsRendererMode}
+        lyricsStyle={lyricsStyle}
+        onChangeLyricsStyle={setLyricsStyle}
         connectionStatus={connectionStatus}
         playbackMode={playbackMode}
         latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}

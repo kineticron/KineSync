@@ -18,14 +18,18 @@ import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { saveCurrentTrackToVault } from "@/lib/lyrics-sync";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
-import { usePlaybackStore, type LyricsRendererMode } from "@/store/playback-store";
+import { usePlaybackStore, type LyricsStyle } from "@/store/playback-store";
 import type { ConnectionStatus } from "@/types/bridge";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { bridgeClient } from "@/lib/bridge-client";
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
-import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
-import Animated, { FadeInDown, ReduceMotion, useReducedMotion } from 'react-native-reanimated';
+import { MotionPressable as Pressable } from "@/components/ui/motion-pressable";
+import Animated, {
+  FadeInDown,
+  ReduceMotion,
+  useReducedMotion,
+} from "react-native-reanimated";
 
 const menuEntrance = FadeInDown.duration(240).reduceMotion(ReduceMotion.System);
 
@@ -37,7 +41,13 @@ const MODAL_SUPPORTED_ORIENTATIONS = [
   "landscape",
   "landscape-left",
   "landscape-right",
-] as ("portrait" | "portrait-upside-down" | "landscape" | "landscape-left" | "landscape-right")[];
+] as (
+  | "portrait"
+  | "portrait-upside-down"
+  | "landscape"
+  | "landscape-left"
+  | "landscape-right"
+)[];
 
 type SettingsMenuProps = {
   open: boolean;
@@ -57,8 +67,8 @@ type SettingsMenuProps = {
   onToggleAutoHidePlaybackControls: (value: boolean) => void;
   showTranslatedText: boolean;
   onToggleShowTranslatedText: (value: boolean) => void;
-  lyricsRendererMode: LyricsRendererMode;
-  onChangeLyricsRendererMode: (mode: LyricsRendererMode) => void;
+  lyricsStyle: LyricsStyle;
+  onChangeLyricsStyle: (style: LyricsStyle) => void;
   connectionStatus: ConnectionStatus;
   playbackMode: PlaybackMode;
   latencyMs: number;
@@ -80,6 +90,28 @@ const SOURCE_OPTIONS: SourceOption[] = [
   { id: "musixmatch", label: "Musixmatch", icon: "key" },
   { id: "lrclib", label: "LrcLib", icon: "library" },
   { id: "spicy-lyrics", label: "Spicy", icon: "flame" },
+];
+
+type RendererOptionDef = {
+  id: LyricsStyle;
+  title: string;
+  description: string;
+  icon: IoniconName;
+};
+
+const RENDERER_OPTIONS: RendererOptionDef[] = [
+  {
+    id: "spicy",
+    title: "Spicy Lyrics",
+    description: "Full Spicy Lyrics Rendering Style",
+    icon: "flame",
+  },
+  {
+    id: "amll",
+    title: "AMLL",
+    description: "Apple-Music Style Lyrics (AMLL)",
+    icon: "musical-note",
+  },
 ];
 
 function inferActiveSource(lyricsSource: string): LyricsSourcePreference {
@@ -204,7 +236,10 @@ function ToggleRow({
       <Switch
         value={value}
         onValueChange={onChange}
-        trackColor={{ false: "rgba(255,255,255,0.16)", true: "rgba(143,240,196,0.42)" }}
+        trackColor={{
+          false: "rgba(255,255,255,0.16)",
+          true: "rgba(143,240,196,0.42)",
+        }}
         thumbColor="#F8F8FE"
       />
     </View>
@@ -239,9 +274,69 @@ function SourceChip({
         size={15}
         color={active ? "#8FF0C4" : "rgba(248,248,254,0.72)"}
       />
-      <Text style={[styles.sourceChipLabel, active && styles.sourceChipLabelActive]}>
+      <Text
+        style={[styles.sourceChipLabel, active && styles.sourceChipLabelActive]}
+      >
         {label}
       </Text>
+    </Pressable>
+  );
+}
+
+function RendererOption({
+  icon,
+  title,
+  description,
+  active,
+  onPress,
+}: {
+  icon: IoniconName;
+  title: string;
+  description: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={`${title} lyrics renderer${active ? ", selected" : ""}`}
+      style={({ pressed }) => [
+        styles.rendererOption,
+        active && styles.rendererOptionActive,
+        pressed && !active && styles.rendererOptionPressed,
+      ]}
+      onPress={() => {
+        if (!active) {
+          onPress();
+        }
+      }}
+    >
+      <View
+        style={[
+          styles.rendererIconWrap,
+          active && styles.rendererIconWrapActive,
+        ]}
+      >
+        <Ionicons
+          name={icon}
+          size={17}
+          color={active ? "#8FF0C4" : "rgba(248,248,254,0.72)"}
+        />
+      </View>
+      <View style={styles.rendererTexts}>
+        <Text
+          style={[styles.rendererTitle, active && styles.rendererTitleActive]}
+        >
+          {title}
+        </Text>
+        <Text style={styles.rendererDescription}>{description}</Text>
+      </View>
+      <View
+        style={[styles.rendererRadio, active && styles.rendererRadioActive]}
+      >
+        {active && <Ionicons name="checkmark" size={13} color="#06281A" />}
+      </View>
     </Pressable>
   );
 }
@@ -281,7 +376,9 @@ function StatusPanel({
     <View style={styles.statusPanel}>
       <View style={styles.statusTopRow}>
         <View style={styles.statusConnection}>
-          <View style={[styles.statusDot, { backgroundColor: connection.color }]} />
+          <View
+            style={[styles.statusDot, { backgroundColor: connection.color }]}
+          />
           <Text style={styles.statusConnectionText}>{connection.label}</Text>
         </View>
         <View style={styles.statusPing}>
@@ -345,8 +442,8 @@ export const SettingsMenu = memo(function SettingsMenu({
   onToggleAutoHidePlaybackControls,
   showTranslatedText,
   onToggleShowTranslatedText,
-  lyricsRendererMode,
-  onChangeLyricsRendererMode,
+  lyricsStyle,
+  onChangeLyricsStyle,
   connectionStatus,
   playbackMode,
   latencyMs,
@@ -367,11 +464,12 @@ export const SettingsMenu = memo(function SettingsMenu({
     () => inferActiveSource(lyricsSource),
     [lyricsSource],
   );
-  const [vaultIncludeTranslations, setVaultIncludeTranslations] = useState(false);
+  const [vaultIncludeTranslations, setVaultIncludeTranslations] =
+    useState(false);
   const [vaultSaving, setVaultSaving] = useState(false);
   const hasLyrics = lyrics.length > 0;
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanError, setScanError] = useState('');
+  const [scanError, setScanError] = useState("");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const scanFailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -382,30 +480,39 @@ export const SettingsMenu = memo(function SettingsMenu({
     try {
       const parsed = JSON.parse(data);
       const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
-      const bridgeKey = String(parsed?.k || '').trim();
+      const bridgeKey = String(parsed?.k || "").trim();
       if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
         scanHandled.current = true;
-        if (scanFailTimer.current) { clearTimeout(scanFailTimer.current); scanFailTimer.current = null; }
-        setScanError('');
+        if (scanFailTimer.current) {
+          clearTimeout(scanFailTimer.current);
+          scanFailTimer.current = null;
+        }
+        setScanError("");
         void saveBridgeSettings({
           serverUrl: bridgeUrl,
           handshakeKey: bridgeKey,
           playbackMode: "desktop",
-        }).then((saved) => {
-          usePlaybackStore.getState().setServerUrl(saved.serverUrl);
-          usePlaybackStore.getState().setHandshakeKey(saved.handshakeKey);
-          setScannerOpen(false);
-          bridgeClient.reconnectNow();
-        }).catch((error) => {
-          scanHandled.current = false;
-          setScanError(error instanceof Error ? error.message : 'Could not save bridge settings.');
-        });
+        })
+          .then((saved) => {
+            usePlaybackStore.getState().setServerUrl(saved.serverUrl);
+            usePlaybackStore.getState().setHandshakeKey(saved.handshakeKey);
+            setScannerOpen(false);
+            bridgeClient.reconnectNow();
+          })
+          .catch((error) => {
+            scanHandled.current = false;
+            setScanError(
+              error instanceof Error
+                ? error.message
+                : "Could not save bridge settings.",
+            );
+          });
         return;
       }
     } catch {}
     if (!scanFailTimer.current) {
       scanFailTimer.current = setTimeout(() => {
-        setScanError('No valid KineSync QR code found');
+        setScanError("No valid KineSync QR code found");
         scanFailTimer.current = null;
       }, 5000);
     }
@@ -419,12 +526,12 @@ export const SettingsMenu = memo(function SettingsMenu({
       return;
     }
     const { status } = await requestCameraPermission();
-    if (status === 'granted') {
+    if (status === "granted") {
       onClose();
       setTimeout(() => setScannerOpen(true), 350);
     } else {
-      setScanError('Camera permission required to scan QR codes');
-      setTimeout(() => setScanError(''), 3000);
+      setScanError("Camera permission required to scan QR codes");
+      setTimeout(() => setScanError(""), 3000);
     }
   };
 
@@ -458,231 +565,275 @@ export const SettingsMenu = memo(function SettingsMenu({
 
   return (
     <>
-    <Modal
-      transparent
-      animationType={reduceMotion ? 'none' : 'fade'}
-      visible={open}
-      onRequestClose={onClose}
-      supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
-    >
-      <GestureHandlerRootView
-        style={[
-          styles.overlay,
-          !isLandscape && { paddingTop: insets.top + 68, paddingBottom: Math.max(insets.bottom, 16) },
-          isLandscape && styles.overlayLandscape,
-          landscapeOverlayStyle,
-        ]}
+      <Modal
+        transparent
+        animationType={reduceMotion ? "none" : "fade"}
+        visible={open}
+        onRequestClose={onClose}
+        supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
       >
-        <Pressable accessibilityLabel="Dismiss player menu" style={StyleSheet.absoluteFill} onPress={onClose} />
-        <Animated.View
-          entering={menuEntrance}
-          style={[styles.card, { width: Math.min(width - 28, 306) }, isLandscape && styles.cardLandscape]}
+        <GestureHandlerRootView
+          style={[
+            styles.overlay,
+            !isLandscape && {
+              paddingTop: insets.top + 68,
+              paddingBottom: Math.max(insets.bottom, 16),
+            },
+            isLandscape && styles.overlayLandscape,
+            landscapeOverlayStyle,
+          ]}
         >
-          <BlurView pointerEvents="none" intensity={34} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={styles.header}>
-            <Text style={styles.headerTitle}>Settings</Text>
-            <Pressable
-              onPress={onClose}
-              accessibilityLabel="Close player menu"
-              hitSlop={10}
-              style={({ pressed }) => [
-                styles.headerClose,
-                pressed && styles.headerClosePressed,
-              ]}
-            >
-              <Ionicons name="close" size={18} color="rgba(248,248,254,0.78)" />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
+          <Pressable
+            accessibilityLabel="Dismiss player menu"
+            style={StyleSheet.absoluteFill}
+            onPress={onClose}
+          />
+          <Animated.View
+            entering={menuEntrance}
+            style={[
+              styles.card,
+              { width: Math.min(width - 28, 306) },
+              isLandscape && styles.cardLandscape,
+            ]}
           >
-            <MenuSection title="Display">
-              <ToggleRow
-                icon="hand-left"
-                label="Tap line to seek"
-                value={playbackTapToSeek}
-                onChange={onTogglePlaybackTapToSeek}
-              />
-              <ToggleRow
-                icon="eye-off"
-                label="Hide status bar"
-                value={hidePlaybackStatusBar}
-                onChange={onToggleHidePlaybackStatusBar}
-              />
-              <ToggleRow
-                icon="eye"
-                label="Auto-hide controls"
-                value={autoHidePlaybackControls}
-                onChange={onToggleAutoHidePlaybackControls}
-              />
-              <ToggleRow
-                icon="language"
-                label="Show translations"
-                value={showTranslatedText}
-                onChange={onToggleShowTranslatedText}
-              />
-              <ToggleRow
-                icon="globe-outline"
-                label="Use WebView lyrics"
-                value={lyricsRendererMode === "webview"}
-                onChange={(value) =>
-                  onChangeLyricsRendererMode(value ? "webview" : "native")
-                }
-              />
-            </MenuSection>
-
-            <MenuSection title="Lyrics">
-              <MenuAction
-                icon="refresh"
-                label="Fetch new lyrics"
-                onPress={onRefetchLyrics}
-              />
-              <ToggleRow
-                icon="language"
-                label="Include translations when saving to vault"
-                value={vaultIncludeTranslations}
-                onChange={setVaultIncludeTranslations}
-              />
-              <MenuAction
-                icon="archive"
-                label={vaultSaving ? "Saving to local vault..." : "Save to local vault"}
-                onPress={() => {
-                  if (vaultSaving || !hasLyrics) {
-                    return;
-                  }
-                  setVaultSaving(true);
-                  void (async () => {
-                    try {
-                      await saveCurrentTrackToVault({
-                        includeTranslations: vaultIncludeTranslations,
-                      });
-                      onClose();
-                    } catch (error) {
-                      usePlaybackStore
-                        .getState()
-                        .setLyricsStatusMessage(
-                          error instanceof Error
-                            ? error.message
-                            : String(error),
-                        );
-                    } finally {
-                      setVaultSaving(false);
-                    }
-                  })();
-                }}
-                disabled={!hasLyrics || vaultSaving}
-              />
-              <View
-                style={[
-                  styles.sourceGrid,
-                  isLandscape && styles.sourceGridLandscape,
+            <BlurView
+              pointerEvents="none"
+              intensity={34}
+              tint="dark"
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.header}>
+              <Text style={styles.headerTitle}>Settings</Text>
+              <Pressable
+                onPress={onClose}
+                accessibilityLabel="Close player menu"
+                hitSlop={10}
+                style={({ pressed }) => [
+                  styles.headerClose,
+                  pressed && styles.headerClosePressed,
                 ]}
               >
-                {SOURCE_OPTIONS.map((option) => (
-                  <SourceChip
+                <Ionicons
+                  name="close"
+                  size={18}
+                  color="rgba(248,248,254,0.78)"
+                />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <MenuSection title="Display">
+                <ToggleRow
+                  icon="hand-left"
+                  label="Tap line to seek"
+                  value={playbackTapToSeek}
+                  onChange={onTogglePlaybackTapToSeek}
+                />
+                <ToggleRow
+                  icon="eye-off"
+                  label="Hide status bar"
+                  value={hidePlaybackStatusBar}
+                  onChange={onToggleHidePlaybackStatusBar}
+                />
+                <ToggleRow
+                  icon="eye"
+                  label="Auto-hide controls"
+                  value={autoHidePlaybackControls}
+                  onChange={onToggleAutoHidePlaybackControls}
+                />
+                <ToggleRow
+                  icon="language"
+                  label="Show translations"
+                  value={showTranslatedText}
+                  onChange={onToggleShowTranslatedText}
+                />
+              </MenuSection>
+
+              <MenuSection title="Lyrics renderer">
+                {RENDERER_OPTIONS.map((option) => (
+                  <RendererOption
                     key={option.id}
                     icon={option.icon}
-                    label={option.label}
-                    active={activeSource === option.id}
-                    onPress={() => onRefetchLyricsFromSource(option.id)}
-                    compact={isLandscape}
+                    title={option.title}
+                    description={option.description}
+                    active={lyricsStyle === option.id}
+                    onPress={() => onChangeLyricsStyle(option.id)}
                   />
                 ))}
-              </View>
-            </MenuSection>
+              </MenuSection>
 
-            <MenuSection title="Bridge">
-              <MenuAction
-                icon="sync"
-                label="Reconnect"
-                onPress={onReconnectBridge}
-              />
-              <MenuAction
-                icon="musical-notes"
-                label={spotifySignedIn ? "Spotify player" : "Sign in with Spotify"}
-                onPress={onOpenSpotifyBrowser}
-                showChevron
-              />
-              <MenuAction
-                icon="settings-outline"
-                label="Settings"
-                onPress={onOpenBridgeSettings}
-                showChevron
-              />
-              <MenuAction
-                icon="qr-code-outline"
-                label="Scan QR code"
-                onPress={openScanner}
-                showChevron
-              />
-            </MenuSection>
+              <MenuSection title="Lyrics">
+                <MenuAction
+                  icon="refresh"
+                  label="Fetch new lyrics"
+                  onPress={onRefetchLyrics}
+                />
+                <ToggleRow
+                  icon="language"
+                  label="Include translations when saving to vault"
+                  value={vaultIncludeTranslations}
+                  onChange={setVaultIncludeTranslations}
+                />
+                <MenuAction
+                  icon="archive"
+                  label={
+                    vaultSaving
+                      ? "Saving to local vault..."
+                      : "Save to local vault"
+                  }
+                  onPress={() => {
+                    if (vaultSaving || !hasLyrics) {
+                      return;
+                    }
+                    setVaultSaving(true);
+                    void (async () => {
+                      try {
+                        await saveCurrentTrackToVault({
+                          includeTranslations: vaultIncludeTranslations,
+                        });
+                        onClose();
+                      } catch (error) {
+                        usePlaybackStore
+                          .getState()
+                          .setLyricsStatusMessage(
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                          );
+                      } finally {
+                        setVaultSaving(false);
+                      }
+                    })();
+                  }}
+                  disabled={!hasLyrics || vaultSaving}
+                />
+                <View
+                  style={[
+                    styles.sourceGrid,
+                    isLandscape && styles.sourceGridLandscape,
+                  ]}
+                >
+                  {SOURCE_OPTIONS.map((option) => (
+                    <SourceChip
+                      key={option.id}
+                      icon={option.icon}
+                      label={option.label}
+                      active={activeSource === option.id}
+                      onPress={() => onRefetchLyricsFromSource(option.id)}
+                      compact={isLandscape}
+                    />
+                  ))}
+                </View>
+              </MenuSection>
 
-            <MenuSection title="Help">
-              <MenuAction
-                icon="help-circle-outline"
-                label="Button tutorial"
-                onPress={onOpenButtonTutorial}
-                showChevron
-              />
-            </MenuSection>
+              <MenuSection title="Bridge">
+                <MenuAction
+                  icon="sync"
+                  label="Reconnect"
+                  onPress={onReconnectBridge}
+                />
+                <MenuAction
+                  icon="musical-notes"
+                  label={
+                    spotifySignedIn ? "Spotify player" : "Sign in with Spotify"
+                  }
+                  onPress={onOpenSpotifyBrowser}
+                  showChevron
+                />
+                <MenuAction
+                  icon="settings-outline"
+                  label="Settings"
+                  onPress={onOpenBridgeSettings}
+                  showChevron
+                />
+                <MenuAction
+                  icon="qr-code-outline"
+                  label="Scan QR code"
+                  onPress={openScanner}
+                  showChevron
+                />
+              </MenuSection>
 
-            <MenuSection title="Status">
-              <StatusPanel
-                playbackMode={playbackMode}
-                connectionStatus={connectionStatus}
-                latencyMs={latencyMs}
-                timingLabel={lyricsTimingLabel}
-                sourceLabel={lyricsSource}
-                statusMessage={lyricsStatusMessage}
-                errorMessage={errorMessage}
-                bridgePipelineMs={Number(bridgeTiming.measuredPipelineMs || 0)}
-                bridgeForwardBiasMs={Number(bridgeTiming.estimatedForwardBiasMs || 0)}
-                bridgeNativeExtrapolation={Boolean(bridgeTiming.nativeExtrapolationEnabled)}
-              />
-            </MenuSection>
-          </ScrollView>
-        </Animated.View>
-      </GestureHandlerRootView>
-    </Modal>
+              <MenuSection title="Help">
+                <MenuAction
+                  icon="help-circle-outline"
+                  label="Button tutorial"
+                  onPress={onOpenButtonTutorial}
+                  showChevron
+                />
+              </MenuSection>
 
-    {/* QR Code Scanner Modal */}
-    <Modal
-      animationType="slide"
-      visible={scannerOpen}
-      onRequestClose={() => setScannerOpen(false)}
-      supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
-    >
-      <GestureHandlerRootView style={styles.scannerModalRoot}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={() => setScannerOpen(false)} />
-        <View style={styles.scannerModalContainer}>
-          <CameraView
-            style={styles.scannerCamera}
-            onBarcodeScanned={handleBarcodeScanned}
-          />
-          <View style={styles.scannerOverlay}>
-            <View style={styles.scannerFrame} />
-            <Text style={styles.scannerInstruction}>
-              Point camera at the QR code on your Desktop Bridge app
-            </Text>
-          </View>
-          {scanError && (
-            <View style={styles.scannerError}>
-              <Text style={styles.scannerErrorText}>{scanError}</Text>
-            </View>
-          )}
+              <MenuSection title="Status">
+                <StatusPanel
+                  playbackMode={playbackMode}
+                  connectionStatus={connectionStatus}
+                  latencyMs={latencyMs}
+                  timingLabel={lyricsTimingLabel}
+                  sourceLabel={lyricsSource}
+                  statusMessage={lyricsStatusMessage}
+                  errorMessage={errorMessage}
+                  bridgePipelineMs={Number(
+                    bridgeTiming.measuredPipelineMs || 0,
+                  )}
+                  bridgeForwardBiasMs={Number(
+                    bridgeTiming.estimatedForwardBiasMs || 0,
+                  )}
+                  bridgeNativeExtrapolation={Boolean(
+                    bridgeTiming.nativeExtrapolationEnabled,
+                  )}
+                />
+              </MenuSection>
+            </ScrollView>
+          </Animated.View>
+        </GestureHandlerRootView>
+      </Modal>
+
+      {/* QR Code Scanner Modal */}
+      <Modal
+        animationType="slide"
+        visible={scannerOpen}
+        onRequestClose={() => setScannerOpen(false)}
+        supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
+      >
+        <GestureHandlerRootView style={styles.scannerModalRoot}>
           <Pressable
+            style={StyleSheet.absoluteFill}
             onPress={() => setScannerOpen(false)}
-            style={styles.scannerCloseButton}
-          >
-            <BlurView intensity={34} tint="dark" style={styles.scannerCloseBlur}>
-              <Ionicons name="close" size={20} color="#F8F8FE" />
-            </BlurView>
-          </Pressable>
-        </View>
-      </GestureHandlerRootView>
-    </Modal>
+          />
+          <View style={styles.scannerModalContainer}>
+            <CameraView
+              style={styles.scannerCamera}
+              onBarcodeScanned={handleBarcodeScanned}
+            />
+            <View style={styles.scannerOverlay}>
+              <View style={styles.scannerFrame} />
+              <Text style={styles.scannerInstruction}>
+                Point camera at the QR code on your Desktop Bridge app
+              </Text>
+            </View>
+            {scanError && (
+              <View style={styles.scannerError}>
+                <Text style={styles.scannerErrorText}>{scanError}</Text>
+              </View>
+            )}
+            <Pressable
+              onPress={() => setScannerOpen(false)}
+              style={styles.scannerCloseButton}
+            >
+              <BlurView
+                intensity={34}
+                tint="dark"
+                style={styles.scannerCloseBlur}
+              >
+                <Ionicons name="close" size={20} color="#F8F8FE" />
+              </BlurView>
+            </Pressable>
+          </View>
+        </GestureHandlerRootView>
+      </Modal>
     </>
   );
 });
@@ -835,6 +986,69 @@ const styles = StyleSheet.create({
   sourceChipLabelActive: {
     color: "#D9FBEA",
   },
+  rendererOption: {
+    minHeight: 56,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginHorizontal: 4,
+    marginTop: 6,
+    gap: 10,
+  },
+  rendererOptionActive: {
+    borderColor: "rgba(143,240,196,0.42)",
+    backgroundColor: "rgba(143,240,196,0.08)",
+  },
+  rendererOptionPressed: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  rendererIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  rendererIconWrapActive: {
+    backgroundColor: "rgba(143,240,196,0.14)",
+  },
+  rendererTexts: {
+    flex: 1,
+    gap: 2,
+  },
+  rendererTitle: {
+    color: "rgba(248,248,254,0.82)",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  rendererTitleActive: {
+    color: "#F8F8FE",
+  },
+  rendererDescription: {
+    color: "rgba(248,248,254,0.52)",
+    fontSize: 12,
+    fontWeight: "500",
+    lineHeight: 16,
+  },
+  rendererRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: "rgba(248,248,254,0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rendererRadioActive: {
+    borderColor: "#8FF0C4",
+    backgroundColor: "#8FF0C4",
+  },
   statusPanel: {
     marginHorizontal: 4,
     borderRadius: 12,
@@ -904,77 +1118,77 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   statusError: {
-      color: "#FFD1D8",
-      fontSize: 11,
-      lineHeight: 15,
-    },
-    scannerModalRoot: {
-      flex: 1,
-      backgroundColor: "#000",
-    },
-    scannerModalContainer: {
-      flex: 1,
-    },
-    scannerCamera: {
-      flex: 1,
-    },
-    scannerOverlay: {
-      ...StyleSheet.absoluteFill,
-      alignItems: "center",
-      justifyContent: "center",
-      paddingHorizontal: 40,
-    },
-    scannerFrame: {
-      width: 240,
-      height: 240,
-      borderWidth: 2,
-      borderColor: "#8FF0C4",
-      borderRadius: 16,
-      position: "relative",
-    },
-    scannerCorner: {
-      position: "absolute",
-      width: 24,
-      height: 24,
-      borderWidth: 3,
-      borderColor: "#8FF0C4",
-    },
-    scannerInstruction: {
-      marginTop: 24,
-      color: "rgba(248,248,254,0.78)",
-      fontSize: 15,
-      fontWeight: "500",
-      textAlign: "center",
-    },
-    scannerError: {
-      position: "absolute",
-      bottom: 100,
-      left: 20,
-      right: 20,
-      backgroundColor: "rgba(255,147,164,0.9)",
-      padding: 12,
-      borderRadius: 12,
-      alignItems: "center",
-    },
-    scannerErrorText: {
-      color: "#FFFFFF",
-      fontSize: 14,
-      fontWeight: "600",
-    },
-    scannerCloseButton: {
-      position: "absolute",
-      top: 50,
-      right: 24,
-      zIndex: 10,
-    },
-    scannerCloseBlur: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      alignItems: "center",
-      justifyContent: "center",
-      borderWidth: 1,
-      borderColor: "rgba(255,255,255,0.14)",
-      backgroundColor: "rgba(255,255,255,0.09)",
-    },
-  });
+    color: "#FFD1D8",
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  scannerModalRoot: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  scannerModalContainer: {
+    flex: 1,
+  },
+  scannerCamera: {
+    flex: 1,
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 40,
+  },
+  scannerFrame: {
+    width: 240,
+    height: 240,
+    borderWidth: 2,
+    borderColor: "#8FF0C4",
+    borderRadius: 16,
+    position: "relative",
+  },
+  scannerCorner: {
+    position: "absolute",
+    width: 24,
+    height: 24,
+    borderWidth: 3,
+    borderColor: "#8FF0C4",
+  },
+  scannerInstruction: {
+    marginTop: 24,
+    color: "rgba(248,248,254,0.78)",
+    fontSize: 15,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  scannerError: {
+    position: "absolute",
+    bottom: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: "rgba(255,147,164,0.9)",
+    padding: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  scannerErrorText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  scannerCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 24,
+    zIndex: 10,
+  },
+  scannerCloseBlur: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.09)",
+  },
+});
