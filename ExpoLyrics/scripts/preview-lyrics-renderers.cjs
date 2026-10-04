@@ -6,9 +6,12 @@ const path = require('node:path');
 const http = require('node:http');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { clusterCheckHtml } = require('./cluster-browser-checks.cjs');
 const root = path.resolve(__dirname, '..');
 // Optional ignored, locally fetched provider payload for reproducing real songs.
-const fixture = process.argv[2] ? JSON.parse(fs.readFileSync(path.resolve(process.argv[2]), 'utf8')) : null;
+const fixturePath = process.argv[2] ? path.resolve(process.argv[2]) : null;
+const fixtureDirectory = fixturePath && fs.statSync(fixturePath).isDirectory() ? fixturePath : null;
+const fixture = fixturePath && !fixtureDirectory ? JSON.parse(fs.readFileSync(fixturePath, 'utf8')) : null;
 const spicySource = fs.readFileSync(path.join(root, 'components/lyrics/spicy-lyrics-view.tsx'), 'utf8');
 const amllSource = fs.readFileSync(path.join(root, 'components/lyrics/amll-lyrics-view.tsx'), 'utf8');
 const spicyBundle = fs.readFileSync(path.join(root, 'components/lyrics/spicy-webview-bundle.ts'), 'utf8');
@@ -166,10 +169,17 @@ http.createServer((request, response) => {
     response.end(JSON.stringify(fixture));return;
   }
   const rendererUrl = new URL(request.url, 'http://127.0.0.1:8766');
+  if (rendererUrl.pathname === '/cluster-checks' && fixtureDirectory) {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(clusterCheckHtml(fixtureDirectory));return;
+  }
   if (rendererUrl.pathname === '/renderer') {
     const style = rendererUrl.searchParams.get('style') === 'amll' ? 'amll' : 'spicy';
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(renderers[style]);return;
+    const html = rendererUrl.searchParams.has('noIntl')
+      ? renderers[style].replace('<script>', '<script>Intl.Segmenter=undefined;</script><script>')
+      : renderers[style];
+    response.end(html);return;
   }
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   response.end(harness);

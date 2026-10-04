@@ -12,7 +12,7 @@
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:security": "node ./scripts/security-check.js",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
-    "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs",
+    "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-amll-clusters.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs"
   },
@@ -67,6 +67,7 @@
     "react-native-web": "~0.21.0",
     "react-native-webview": "13.16.1",
     "react-native-worklets": "0.10.1",
+    "unicode-segmenter": "0.17.3",
     "zustand": "^5.0.11"
   },
   "license": "AGPL-3.0-only",

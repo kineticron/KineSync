@@ -31,6 +31,8 @@ import {
 } from "./spicy-layout-host";
 import { createLyricsFrameLoop } from "./spicy-frame-loop";
 import { getSpicyWordJoins } from "./spicy-word-spacing";
+import { repairSyllableClusters } from "./cluster-safe-syllables";
+import { getGraphemes } from "../../lib/graphemes";
 import { createSpicyPlaybackClock } from "./spicy-playback-clock";
 import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING } from "../../lib/lyrics-layout";
 import { LANDSCAPE_TOP_LIST_PADDING, LANDSCAPE_LYRICS_HORIZONTAL_INSET, LANDSCAPE_LYRICS_EDGE_BLEED, LANDSCAPE_LYRIC_TEXT_LANE_WIDTH } from "../../constants/player-layout";
@@ -200,13 +202,13 @@ function createSpicyWord(
   const startTime = finiteMs(syllable.startTime);
   const endTime = Math.max(startTime + 1, finiteMs(syllable.endTime, startTime + 1));
   const totalTime = endTime - startTime;
-  const letterCapable = text.split("").length > 0 && totalTime >= 1000 && !isRtl(text);
+  const letters = getGraphemes(text);
+  const letterCapable = letters.length > 0 && totalTime >= 1000 && !isRtl(text);
   let word = document.createElement("span");
   let runtimeWord: SpicyWord;
 
   if (letterCapable) {
     word = document.createElement("div");
-    const letters = text.split("");
     const emphasizedEndTime = endTime - 250;
     const letterDuration = (emphasizedEndTime - startTime) / letters.length;
     const runtimeLetters: SpicyLetter[] = [];
@@ -274,6 +276,10 @@ function renderWords(
   syllables: KineSyncSyllable[],
   isBackground = false,
 ): SpicyWord[] {
+  syllables = repairSyllableClusters(syllables.map((syllable) => ({
+    ...syllable,
+    text: stripZeroWidth(String(syllable.text || "")),
+  })));
   const words: SpicyWord[] = [];
   let currentWordGroup: HTMLSpanElement | null = null;
   const joins = getSpicyWordJoins(syllables);

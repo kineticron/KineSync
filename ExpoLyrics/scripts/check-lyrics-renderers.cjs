@@ -316,6 +316,41 @@ assert.deepEqual(getSpicyWordJoins([{ text: 'one' }, { text: ' two' }, { text: '
   [false, false, false, false], 'leading/standalone spaces are boundaries too');
 
 const { buildAmllWords } = load('components/lyrics/amll-word-spacing.ts');
+const { getGraphemes } = load('lib/graphemes.ts');
+const { repairSyllableClusters } = load('components/lyrics/cluster-safe-syllables.ts');
+for (const [text, expected] of [
+  ['कि', ['कि']], ['क्षि', ['क्षि']], ['కై', ['కై']], ['క్షి', ['క్షి']],
+  ['น้ำ', ['น้ำ']], ['กิ้', ['กิ้']], ['👩🏽‍💻', ['👩🏽‍💻']], ['e\u0301', ['e\u0301']],
+]) {
+  assert.deepEqual(getGraphemes(text), expected, `complete clusters: ${text}`);
+  const input = Array.from(text, (char, index) => ({ text: char, startTime: index * 300,
+    endTime: (index + 1) * 300, isPartOfWord: index < Array.from(text).length - 1 }));
+  const snapshot = JSON.stringify(input);
+  const repaired = repairSyllableClusters(input);
+  assert.deepEqual(repaired.map(part => part.text), expected, `repair timed fragments: ${text}`);
+  assert.equal(repaired[0].startTime, 0);
+  assert.equal(repaired.at(-1).endTime, input.at(-1).endTime);
+  assert.equal(repaired.at(-1).isPartOfWord, false);
+  assert.equal(JSON.stringify(input), snapshot, 'provider timing input stays immutable');
+  assert.deepEqual(repairSyllableClusters(repaired), repaired, 'repair is idempotent');
+  assert.equal(buildAmllWords(input, 0, 5000).map(part => part.word).join(''), text,
+    'AMLL adds no spaces inside a repaired cluster');
+}
+const safeTokens = [{ text: 'Hello ', startTime: 100, endTime: 200 }, { text: 'world', startTime: 200, endTime: 500 }];
+assert.deepEqual(repairSyllableClusters(safeTokens), safeTokens, 'safe text and timestamps stay intact');
+assert.equal(repairSyllableClusters(safeTokens)[0], safeTokens[0], 'safe tokens retain identity');
+const indicFragments = ['क', 'ि', 'ता', 'ब ', 'నీ', 'కు'].map((text, index) => ({
+  text, startTime: index * 200, endTime: (index + 1) * 200,
+}));
+assert.equal(buildAmllWords(indicFragments, 0, 1200).map(word => word.word).join(''), 'किताब నీకు',
+  'literal Indic fragments keep safe clusters together without invented word spaces');
+const oldIntlSegmenter = Intl.Segmenter;
+try {
+  Intl.Segmenter = undefined;
+  assert.deepEqual(getGraphemes('श्री'), ['श्री'], 'no Intl.Segmenter required');
+} finally {
+  Intl.Segmenter = oldIntlSegmenter;
+}
 const amllFlagged = buildAmllWords([
   { text: 'Hel', startTime: 1000, endTime: 1200, isPartOfWord: true },
   { text: 'lo', startTime: 1200, endTime: 1500, isPartOfWord: false },

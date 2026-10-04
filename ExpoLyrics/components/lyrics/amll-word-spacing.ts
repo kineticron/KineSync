@@ -13,6 +13,8 @@
  * timing are preserved exactly as before.
  */
 
+import { repairSyllableClusters } from "./cluster-safe-syllables";
+
 export type AmllSyllable = {
   text?: string;
   startTime?: number;
@@ -176,7 +178,8 @@ export function buildAmllWords(
   fallbackStart: number,
   fallbackEnd: number,
 ): AmllWord[] {
-  const groups = groupAmllSyllables(syllables);
+  const hasFlags = syllables.some((syllable) => typeof syllable.isPartOfWord === "boolean");
+  const groups = groupAmllSyllables(repairSyllableClusters(syllables));
   const words: AmllWord[] = [];
   groups.forEach((group, groupIndex) => {
     const text = group
@@ -198,7 +201,7 @@ export function buildAmllWords(
       toFiniteMs(last?.endTime, fallbackEnd),
     );
     let word = text;
-    if (groupIndex < groups.length - 1) {
+    if (hasFlags && groupIndex < groups.length - 1) {
       const nextText = groups[groupIndex + 1]
         .map((syllable) => String(syllable.text || ""))
         .join("");

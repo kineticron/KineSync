@@ -11,7 +11,7 @@ legacy `webview` maps to `spicy`).
   effect styles. Built with `npm run build:spicy-webview
 npm run build:amll-webview`.
 - **AMLL** (`components/lyrics/amll-lyrics-view.tsx`, `amll-webview-entry.ts`,
-  `amll-webview-bundle.ts`): the AMLL WebView restored verbatim from `main`.
+  `amll-webview-bundle.ts`): the AMLL WebView host.
   It wraps **AMLL core 0.5.2**. The reference is
   [applemusic-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics)
   (AGPL-3.0-only). Built with `npm run build:amll-webview`.
@@ -65,6 +65,22 @@ The plugin needs a new native build; an OTA JavaScript update cannot install it.
 
 ## Provider spacing
 
+Both WebViews use the bundled `unicode-segmenter` grapheme rules, independent
+of the device's `Intl.Segmenter` availability or Unicode version. Spicy's
+emphasized letters are complete character clusters. AMLL's build plugin patches
+both its emphasis segmenter and its earlier CJK splitting pass (whose upstream
+range includes Thai and Indic scripts), retaining the original timing span.
+The plugin fails the build if upstream source changes no longer match.
+
+Before either renderer builds words, `repairSyllableClusters` combines only
+provider tokens whose boundary falls inside a cluster. Repaired tokens retain
+the earliest start, latest end and final word-boundary flag. Safe tokens remain
+unchanged; provider input is never mutated. A split cluster therefore shares one
+animation timing window instead of moving its character parts independently.
+Glow, lift, scaling and karaoke gradients/masks continue to animate complete
+clusters. Unflagged AMLL fragments preserve literal spacing without synthesizing
+spaces inside Thai or Indic words.
+
 Spicy's explicit `isPartOfWord` flags remain authoritative. KRC/QRC/YRC tokens
 without these flags use literal whitespace to determine word boundaries. Their
 trailing spaces are preserved and Spicy's synthetic word spacing is disabled,
@@ -101,6 +117,30 @@ passed to load a local fixture with **Load local fixture**:
 ```sh
 node scripts/preview-lyrics-renderers.cjs .expo/xibal-krc.json
 ```
+
+Real API typography checks can be reproduced with:
+
+```sh
+node scripts/fetch-cluster-lyrics.cjs
+node scripts/preview-lyrics-renderers.cjs .expo/cluster-lyrics
+```
+
+Open `http://127.0.0.1:8766/cluster-checks` and run all cluster checks. The
+fixtures cover NONT TANONT's **โต๊ะริม** (Kugou KRC), Arijit Singh's **Tum Hi Ho**
+(a Devanagari LRCLIB upload), and Sid Sriram's **Inkem Inkem Inkem Kaavaale**
+(Telugu LRCLIB). LRCLIB has line timing; the bridge interpolates token timing.
+Fetched lyrics remain in ignored `.expo` files. The harness checks every lead
+line in both embedded renderers, original timing and forced code-point token
+splits, with and without `Intl.Segmenter`. Sustained words exercise emphasis
+and karaoke effects. AMLL rows are checked individually because it virtualizes
+distant rows. On Windows hosts needing system certificate roots, configure
+`NODE_EXTRA_CA_CERTS` with trusted roots; keep HTTPS verification enabled.
+
+For iPhone acceptance, reload the existing development build from Metro after
+rebuilding the bundles; these changes require no native rebuild. Test both
+styles on Thai, Hindi and Telugu songs, including sustained words, pause/resume,
+seeks, background vocals, translation, rotation and larger text. Verify attached
+vowel/tone marks and conjuncts, plus glow, lift, scale and progressive highlighting.
 
 **Profile 10 seconds** records browser RAF intervals and callback CPU time.
 It does not measure native frames presented by the GPU. A local desktop XIBAL
