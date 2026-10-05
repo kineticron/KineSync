@@ -22,6 +22,7 @@ const {
   lyricsToTtml,
 } = require("./lyricsTtmlExport");
 const { initLyricsVaultStore, getLyricsVaultStore, defaultExportPath } = require("./lyricsVault");
+const { attachBridgeVault } = require("./bridgeVault");
 
 
 
@@ -948,6 +949,7 @@ app.whenReady().then(() => {
       force = false,
       preferredSource = "auto",
       immediateTranslation = false,
+      translationLanguage = "English",
     } = {},
   ) => {
     if (!snapshot?.trackId) {
@@ -980,7 +982,7 @@ app.whenReady().then(() => {
       activeLyricsRequest?.inFlight &&
       activeLyricsRequest.trackId === snapshot.trackId &&
       activeLyricsRequest.preferredSource === normalizedPreferredSource &&
-      (!immediateTranslation || activeLyricsRequest.immediateTranslation)
+      (!immediateTranslation || (activeLyricsRequest.immediateTranslation && activeLyricsRequest.translationLanguage === translationLanguage))
     ) {
       console.log(
         `[bridge-lyrics] reusing in-flight request track=${String(snapshot.trackId || "")} source=${normalizedPreferredSource}`,
@@ -1007,6 +1009,7 @@ app.whenReady().then(() => {
       trackId: snapshot.trackId,
       preferredSource: normalizedPreferredSource,
       immediateTranslation: Boolean(immediateTranslation),
+      translationLanguage,
       inFlight: true,
       latestPacket: null,
       promise: Promise.resolve(null),
@@ -1027,6 +1030,7 @@ app.whenReady().then(() => {
         force,
         preferredSource: normalizedPreferredSource,
         immediateTranslation: Boolean(immediateTranslation),
+        translationLanguage,
         onSyncedLyrics: (lyricsPacket) => {
           if (
             requestVersion !== lyricsRequestVersion ||
@@ -1088,7 +1092,7 @@ app.whenReady().then(() => {
     return requestState.promise;
   };
 
-  const runLyricsTranslateOnly = (snapshot) => {
+  const runLyricsTranslateOnly = (snapshot, translationLanguage = "English") => {
     if (!snapshot?.trackId) {
       return Promise.resolve(null);
     }
@@ -1098,6 +1102,7 @@ app.whenReady().then(() => {
     if (
       activeLyricsRequest?.inFlight &&
       activeLyricsRequest.translateOnly &&
+      activeLyricsRequest.translationLanguage === translationLanguage &&
       activeLyricsRequest.trackId === snapshot.trackId
     ) {
       console.log(
@@ -1124,6 +1129,7 @@ app.whenReady().then(() => {
       requestVersion,
       trackId: snapshot.trackId,
       translateOnly: true,
+      translationLanguage,
       inFlight: true,
       latestPacket: null,
       promise: Promise.resolve(null),
@@ -1144,6 +1150,7 @@ app.whenReady().then(() => {
 
     requestState.promise = lyricsService
       .translatePublishedLyrics(snapshot, {
+        translationLanguage,
         onSyncedLyrics: (lyricsPacket) => {
           if (
             requestVersion !== lyricsRequestVersion ||
@@ -1303,7 +1310,7 @@ app.whenReady().then(() => {
           published = lyricsService.getPublishedLyrics(latestSnapshot.trackId);
         }
         if (published?.lyrics?.length) {
-          runLyricsTranslateOnly(latestSnapshot);
+          runLyricsTranslateOnly(latestSnapshot, request.translationLanguage);
           return;
         }
         console.log(
@@ -1317,8 +1324,10 @@ app.whenReady().then(() => {
             ? request.preferredSource
             : "auto",
         immediateTranslation,
+        translationLanguage: request.translationLanguage,
       });
     });
+    attachBridgeVault(transport, getLyricsVaultStore);
     transport.on("vaultSaveRequested", ({ includeTranslations, reply } = {}) => {
       void saveCurrentTrackToVault({
         includeTranslations,

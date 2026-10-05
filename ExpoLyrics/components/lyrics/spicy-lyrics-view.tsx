@@ -36,6 +36,9 @@ type WebLyricsLine = {
 };
 
 type SpicyLyricsViewProps = {
+  demoLyrics?: LyricLineType[];
+  demoLayout?: 'preview' | 'player';
+  demoIsPlaying?: boolean;
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
   previewPositionMs?: number | null;
@@ -239,7 +242,13 @@ body {
 </html>`;
 }
 
+const DEMO_METADATA: import("@/types/bridge").LyricsMetadata = {};
 const WEB_LYRICS_HTML = createWebLyricsHtml();
+const DEMO_LYRICS_HTML = WEB_LYRICS_HTML.replace('</style>', `
+#SpicyLyricsPage { --ks-top-padding: 12px !important; --ks-font-size: 26px !important; --ks-line-height: 36px !important; }
+#SpicyLyricsPage .LyricsContent { mask-image: none !important; -webkit-mask-image: none !important; }
+.kinesync-amll-player { font-size: 25px !important; }
+</style>`);
 
 function toFiniteMs(value: unknown, fallback = 0) {
   const numberValue = Number(value);
@@ -306,6 +315,9 @@ function serializeForInjection(payload: unknown) {
 export const SpicyLyricsView = memo(function SpicyLyricsView({
   tapToSeekEnabled,
   showTranslatedText = true,
+  demoLyrics,
+  demoLayout = 'preview',
+  demoIsPlaying,
   previewPositionMs = null,
   autoFollowEnabled = true,
   resumeAutoFollowSignal = 0,
@@ -325,13 +337,19 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
   } | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const [webViewGeneration, setWebViewGeneration] = useState(0);
-  const [readyGeneration, setReadyGeneration] = useState(-1);
-  const ready = readyGeneration === webViewGeneration;
-  const lyrics = usePlaybackStore((state) => state.lyrics);
-  const lyricsMetadata = usePlaybackStore((state) => state.lyricsMetadata);
-  const lyricsSource = usePlaybackStore((state) => state.lyricsSource);
-  const lyricsStatusMessage = usePlaybackStore((state) => state.lyricsStatusMessage);
-  const currentTrack = usePlaybackStore((state) => state.currentTrack);
+  const sourceKey = `${demoLyrics ? `demo-${demoLayout}` : 'live'}:${webViewGeneration}`;
+  const currentSourceKey = useRef(sourceKey);
+  currentSourceKey.current = sourceKey;
+  const [readySourceKey, setReadySourceKey] = useState<string | null>(null);
+  const ready = readySourceKey === sourceKey;
+  const liveLyrics = usePlaybackStore((state) => demoLyrics ?? state.lyrics);
+  const lyrics = demoLyrics ?? liveLyrics;
+  const liveMetadata = usePlaybackStore((state) => demoLyrics ? DEMO_METADATA : state.lyricsMetadata);
+  const lyricsMetadata = demoLyrics ? DEMO_METADATA : liveMetadata;
+  const liveSource = usePlaybackStore((state) => demoLyrics ? "demo-syllable" : state.lyricsSource);
+  const lyricsSource = demoLyrics ? "demo-syllable" : liveSource;
+  const lyricsStatusMessage = usePlaybackStore((state) => demoLyrics ? "" : state.lyricsStatusMessage);
+  const currentTrack = usePlaybackStore((state) => demoLyrics ? null : state.currentTrack);
   const songwriters = useMemo(
     () => lyricsMetadata.credits?.songwriters || [],
     [lyricsMetadata.credits?.songwriters],
@@ -346,9 +364,9 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
   const preserveExactSpicySyllables = String(lyricsSource || "")
     .toLowerCase()
     .includes("spicy-lyrics-syllable");
-  const anchorPositionMs = usePlaybackStore((state) => state.anchorPositionMs);
-  const anchorMonotonicMs = usePlaybackStore((state) => state.anchorMonotonicMs);
-  const isPlaying = usePlaybackStore((state) => state.isPlaying);
+  const anchorPositionMs = usePlaybackStore((state) => demoLyrics ? 0 : state.anchorPositionMs);
+  const anchorMonotonicMs = usePlaybackStore((state) => demoLyrics ? 0 : state.anchorMonotonicMs);
+  const isPlaying = usePlaybackStore((state) => demoLyrics ? false : state.isPlaying);
 
   const selectedKeyMap = useMemo(() => {
     const result: Record<string, boolean> = {};
@@ -452,15 +470,17 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
       type: "sync",
       active: active && appStateRef.current === "active",
       positionMs: previewPositionMs ?? currentPosition,
-      previewPositionMs,
-      isPlaying: active && previewPositionMs === null ? isPlaying : false,
-      durationMs: currentTrack?.durationMs ?? 0,
-      force: previewPositionMs !== null,
+      previewPositionMs: demoLyrics ? null : previewPositionMs,
+      isPlaying: demoLyrics ? active && (demoIsPlaying ?? true) : active && previewPositionMs === null ? isPlaying : false,
+      durationMs: demoLyrics ? 25000 : currentTrack?.durationMs ?? 0,
+      // Demo clock ticks are ordinary anchors, not repeated seeks.
+      force: !demoLyrics && previewPositionMs !== null,
     });
   }, [active, anchorMonotonicMs, anchorPositionMs, currentTrack?.id, currentTrack?.durationMs,
-    inject, isPlaying, lyrics, previewPositionMs, resumeAutoFollowSignal]);
+    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, previewPositionMs, resumeAutoFollowSignal]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
+    if (currentSourceKey.current !== sourceKey) return;
     let payload: {
       type?: string;
       index?: number;
@@ -476,7 +496,7 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
       return;
     }
     if (payload.type === "ready") {
-      setReadyGeneration(webViewGeneration);
+      setReadySourceKey(sourceKey);
       return;
     }
     if (payload.type === "activeLineChange") {
@@ -520,15 +540,15 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
     onLineLongPress,
     onLinePress,
     onUserInteraction,
-    webViewGeneration,
+    sourceKey,
   ]);
 
   return (
     <View style={styles.container}>
       <TransparentWebView
-        key={`spicy-lyrics-${webViewGeneration}`}
+        key={`spicy-lyrics-${sourceKey}`}
         ref={webViewRef}
-        source={{ html: WEB_LYRICS_HTML }}
+        source={{ html: demoLyrics && demoLayout === 'preview' ? DEMO_LYRICS_HTML : WEB_LYRICS_HTML }}
         originWhitelist={["*"]}
         javaScriptEnabled
         domStorageEnabled={false}
@@ -542,7 +562,7 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
         textInteractionEnabled={false}
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         onMessage={handleMessage}
-        onLoadEnd={() => setReadyGeneration(webViewGeneration)}
+        onLoadEnd={() => { if (currentSourceKey.current === sourceKey) setReadySourceKey(sourceKey); }}
         style={styles.webView}
         containerStyle={styles.webViewContainer}
       />

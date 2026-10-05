@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { patchAmllScroll } from './amll-scroll-patch.mjs';
 
 // AMLL 0.5.2 creates its own grapheme segmenter. Patch the build input rather
 // than node_modules or global Intl: its word segmenter must remain untouched.
@@ -31,7 +32,7 @@ export const amllClusterPlugin = {
     let applied = false;
     build.onStart(() => { applied = false; });
     build.onLoad({ filter: /[/\\]@applemusic-like-lyrics[/\\]core[/\\]dist[/\\]amll-core\.mjs$/ }, async ({ path }) => {
-      const contents = patchAmllClusters(await readFile(path, "utf8"));
+      const contents = patchAmllScroll(patchAmllClusters(await readFile(path, "utf8")));
       applied = true;
       return { contents, loader: "js", resolveDir: dirname(path) };
     });

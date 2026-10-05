@@ -459,9 +459,9 @@ function applyOptions(message: IncomingMessage) {
     resumeAutoFollowSignal = message.resumeAutoFollowSignal;
     autoFollowEnabled = true;
     player.resetScroll();
-    void relayout(true);
+    void relayout();
+    scheduleFrame(1500);
   }
-  player.setIsSeeking(!autoFollowEnabled);
   updatePlayerClass();
   if (staticLyricsMode && (translationsChanged || landscapeChanged)) {
     renderStaticLyrics();
@@ -486,7 +486,9 @@ function sync(message: IncomingMessage) {
   if (staticLyricsMode) {
     return;
   }
-  player.setCurrentTime(getProjectedPosition(), wasFar || Boolean(message.force));
+  // Upstream treats a seek as an unconditional scroll reset. A remote anchor
+  // correction must preserve the reader's manual position until they resume.
+  player.setCurrentTime(getProjectedPosition(), autoFollowEnabled && (wasFar || Boolean(message.force)));
   if (isPlaying && previewPositionMs === null) {
     player.resume();
   } else {
@@ -544,7 +546,6 @@ function setAutoFollow(nextEnabled: boolean) {
     return;
   }
   autoFollowEnabled = nextEnabled;
-  player.setIsSeeking(!autoFollowEnabled);
   scheduleFrame(IDLE_ANIMATION_GRACE_MS);
   post({ type: "autoFollowChange", enabled: autoFollowEnabled });
 }
@@ -575,6 +576,8 @@ playerElement.addEventListener(
   "touchstart",
   (event) => {
     touchMoved = false;
+    post({ type: 'userInteraction' });
+    scheduleFrame(IDLE_ANIMATION_GRACE_MS);
     touchStartSourceIndex = getSourceIndexFromTarget(event.target);
     window.clearTimeout(longPressTimer);
     if (touchStartSourceIndex >= 0) {
@@ -598,6 +601,13 @@ playerElement.addEventListener(
   },
   { passive: true },
 );
+
+// Core drag/inertia updates need frames even while playback is paused.
+playerElement.addEventListener('kinesync-scroll', () => scheduleFrame(IDLE_ANIMATION_GRACE_MS));
+playerElement.addEventListener('touchcancel', () => {
+  window.clearTimeout(longPressTimer);
+  touchStartSourceIndex = -1;
+});
 
 playerElement.addEventListener(
   "touchend",

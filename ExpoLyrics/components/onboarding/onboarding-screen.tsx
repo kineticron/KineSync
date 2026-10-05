@@ -1,3 +1,6 @@
+import { RendererPreview } from "./renderer-preview";
+import { GradientWord } from './gradient-word';
+import { BEAUTIFUL_GRADIENT, LyricReveal, MODERN_GRADIENT, SetupBackground } from './setup-motion';
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
@@ -11,7 +14,6 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
   useWindowDimensions,
@@ -20,7 +22,8 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, {
   Extrapolation,
   interpolate,
-  interpolateColor,
+  FadeInUp,
+  ReduceMotion,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
@@ -32,7 +35,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
 import { bridgeClient } from "@/lib/bridge-client";
-import { extractHost, isPrivateIpv4, isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
+import {
+  extractHost,
+  isPrivateIpv4,
+  isValidBridgeKey,
+  parseBridgeWebSocketUrl,
+} from "@/lib/network";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { usePlaybackStore } from "@/store/playback-store";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
@@ -45,10 +53,7 @@ import {
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from "@/lib/spotify-browser";
-import {
-  requestOpenSpotifyBrowser,
-  requestReloadSpotifyBrowser,
-} from "@/components/lyrics/spotify-browser-fallback";
+import { requestReloadSpotifyBrowser } from "@/components/lyrics/spotify-browser-fallback";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MotionPressable as Pressable } from "@/components/ui/motion-pressable";
 import { Design } from "@/constants/design";
@@ -58,8 +63,7 @@ const SPOTIFY_LOGIN_URL =
 
 function inferDefaultBridgeUrl() {
   const configuredBridgeUrl =
-    process.env.EXPO_PUBLIC_BRIDGE_WS_URL?.trim() ||
-    ""; // Set EXPO_PUBLIC_BRIDGE_WS_URL or configure in Bridge Settings
+    process.env.EXPO_PUBLIC_BRIDGE_WS_URL?.trim() || ""; // Set EXPO_PUBLIC_BRIDGE_WS_URL or configure in Bridge Settings
 
   if (configuredBridgeUrl) {
     return configuredBridgeUrl;
@@ -114,19 +118,17 @@ const ONBOARDING_STEPS: {
     icon: "musical-notes-outline",
     title: "KineSync",
     description:
-      "Synced lyrics for Spotify.",
+      "A modern, beautiful mobile app for rendering syllable-synced lyrics synced with your Spotify playback.",
   },
   {
     icon: "color-palette-outline",
-    title: "Display",
-    description:
-      "Change these anytime in Settings.",
+    title: "Adjust the Appearance",
+    description: "Choose how your lyrics look.",
   },
   {
-    icon: "scan-outline",
+    icon: "link-outline",
     title: "Connect",
-    description:
-      "Choose a playback source.",
+    description: "Choose a playback source.",
   },
 ];
 
@@ -136,13 +138,15 @@ function GlassIcon({ icon, active }: { icon: IoniconName; active?: boolean }) {
       <LinearGradient
         colors={[
           "rgba(255,255,255,0.24)",
-          active ? "rgba(143,240,196,0.16)" : "rgba(255,255,255,0.06)",
+          active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
         ]}
         start={{ x: 0.15, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={styles.iconGlassInner}
       >
-        <Ionicons name={icon} size={42} color="#F8F8FE" />
+        <View style={styles.iconCutout}>
+          <Ionicons name={icon} size={30} color="#232733" />
+        </View>
       </LinearGradient>
     </BlurView>
   );
@@ -153,18 +157,21 @@ function StepPage({
   itemWidth,
   scrollX,
   active,
+  landscape,
   children,
 }: {
   index: number;
   itemWidth: number;
   scrollX: SharedValue<number>;
   active: boolean;
+  landscape: boolean;
   children: ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const animatedStyle = useAnimatedStyle(() => {
-    if (reduceMotion) return { opacity: 1, transform: [{ translateX: 0 }, { scale: 1 }] };
+    if (reduceMotion)
+      return { opacity: 1, transform: [{ translateX: 0 }] };
     const progress = itemWidth > 0 ? scrollX.value / itemWidth : 0;
     const inputRange = [index - 1, index, index + 1];
     return {
@@ -183,79 +190,32 @@ function StepPage({
             Extrapolation.CLAMP,
           ),
         },
-        {
-          scale: interpolate(
-            progress,
-            inputRange,
-            [0.94, 1, 0.94],
-            Extrapolation.CLAMP,
-          ),
-        },
       ],
     };
   }, [index, itemWidth]);
 
   return (
-    <ScrollView style={{ width: itemWidth }} aria-hidden={!active} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} contentContainerStyle={[styles.page, { paddingTop: insets.top + 96, paddingBottom: insets.bottom + 166 }]} showsVerticalScrollIndicator={false} nestedScrollEnabled>
-      <Reanimated.View style={[styles.pageInner, animatedStyle]}>
+    <ScrollView
+      style={{ width: itemWidth }}
+      aria-hidden={!active}
+      accessibilityElementsHidden={!active}
+      importantForAccessibility={active ? "auto" : "no-hide-descendants"}
+      contentContainerStyle={[
+        styles.page,
+        {
+          paddingTop: insets.top + (landscape ? 20 : index === 1 ? 32 : 64),
+          paddingBottom: insets.bottom + (landscape ? 94 : 110),
+          paddingLeft: Math.max(22, insets.left + 22),
+          paddingRight: Math.max(22, insets.right + 22),
+        },
+      ]}
+      showsVerticalScrollIndicator={false}
+      nestedScrollEnabled
+    >
+      <Reanimated.View style={[styles.pageInner, landscape && styles.pageInnerLandscape, animatedStyle]}>
         {children}
       </Reanimated.View>
     </ScrollView>
-  );
-}
-
-function Dot({
-  index,
-  itemWidth,
-  scrollX,
-}: {
-  index: number;
-  itemWidth: number;
-  scrollX: SharedValue<number>;
-}) {
-  const animatedStyle = useAnimatedStyle(() => {
-    const progress = itemWidth > 0 ? scrollX.value / itemWidth : 0;
-    const inputRange = [index - 1, index, index + 1];
-    return {
-      width: interpolate(progress, inputRange, [7, 24, 7], Extrapolation.CLAMP),
-      backgroundColor: interpolateColor(progress, inputRange, [
-        "rgba(255,255,255,0.24)",
-        "rgba(143,240,196,0.92)",
-        "rgba(255,255,255,0.24)",
-      ]),
-    };
-  }, [index, itemWidth]);
-
-  return <Reanimated.View style={[styles.dot, animatedStyle]} />;
-}
-
-function ToggleRow({
-  icon,
-  label,
-  value,
-  onChange,
-}: {
-  icon: IoniconName;
-  label: string;
-  value: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <View style={styles.toggleRow}>
-      <View style={styles.rowIconWrap}>
-        <Ionicons name={icon} size={17} color="rgba(248,248,254,0.88)" />
-      </View>
-      <Text style={styles.toggleLabel}>{label}</Text>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        trackColor={{
-          false: "rgba(255,255,255,0.16)",
-          true: "rgba(143,240,196,0.42)",
-        }}
-        thumbColor="#F8F8FE"
-      />
-    </View>
   );
 }
 
@@ -279,7 +239,7 @@ function ChoiceRow({
       ]}
     >
       <View style={styles.rowIconWrap}>
-        <Ionicons name={icon} size={18} color="rgba(248,248,254,0.9)" />
+        <Ionicons name={icon} size={18} color="#232733" />
       </View>
       <View style={styles.choiceCopy}>
         <Text style={styles.choiceLabel}>{label}</Text>
@@ -297,14 +257,25 @@ function ChoiceRow({
 function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const landscape = windowWidth > windowHeight;
+  const contentWidth = Math.min(1040, Math.max(1, windowWidth - insets.left - insets.right - 44));
+  const columnLayout = landscape && contentWidth >= 520;
+  // Reserve only the space needed by the two-line heading so both previews
+  // can sit beside it even on narrower landscape phones.
+  const threeColumns = columnLayout;
+  const appearanceTitleWidth = columnLayout
+    ? 180
+    : Math.min(430, contentWidth) - 44;
   const itemWidth = Math.max(1, windowWidth);
   const scrollX = useSharedValue(0);
   const [step, setStep] = useState(0);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState("");
   const [scanCompleted, setScanCompleted] = useState(false);
-  const [playbackMode, setPlaybackMode] = useState<"unset" | "desktop" | "phone">("unset");
+  const [playbackMode, setPlaybackMode] = useState<
+    "unset" | "desktop" | "phone"
+  >("unset");
   const [loginOpen, setLoginOpen] = useState(false);
   const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
   const setSpotifySignedIn = useSpotifySessionStore((s) => s.setSignedIn);
@@ -324,25 +295,6 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const setServerUrlStore = usePlaybackStore((s) => s.setServerUrl);
   const setHandshakeKeyStore = usePlaybackStore((s) => s.setHandshakeKey);
   const setPlaybackModeStore = usePlaybackStore((s) => s.setPlaybackMode);
-  const playbackTapToSeek = usePlaybackStore((s) => s.playbackTapToSeek);
-  const setPlaybackTapToSeek = usePlaybackStore((s) => s.setPlaybackTapToSeek);
-  const hidePlaybackStatusBar = usePlaybackStore(
-    (s) => s.hidePlaybackStatusBar,
-  );
-  const setHidePlaybackStatusBar = usePlaybackStore(
-    (s) => s.setHidePlaybackStatusBar,
-  );
-  const autoHidePlaybackControls = usePlaybackStore(
-    (s) => s.autoHidePlaybackControls,
-  );
-  const setAutoHidePlaybackControls = usePlaybackStore(
-    (s) => s.setAutoHidePlaybackControls,
-  );
-  const showTranslatedText = usePlaybackStore((s) => s.showTranslatedText);
-  const setShowTranslatedText = usePlaybackStore(
-    (s) => s.setShowTranslatedText,
-  );
-
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const completeSpotifySignIn = useCallback(() => {
@@ -369,7 +321,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       try {
         const parsed = JSON.parse(data);
         const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
-        const bridgeKey = String(parsed?.k || '').trim();
+        const bridgeKey = String(parsed?.k || "").trim();
         if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
           scanHandled.current = true;
           if (scanFailTimer.current) {
@@ -382,17 +334,23 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             handshakeKey: bridgeKey,
             playbackMode: "desktop",
             onboardingCompleted: true,
-          }).then((saved) => {
-            setServerUrlStore(saved.serverUrl);
-            setHandshakeKeyStore(saved.handshakeKey);
-            setPlaybackModeStore("desktop");
-            setScanCompleted(true);
-            setScannerOpen(false);
-            bridgeClient.reconnectNow();
-          }).catch((error) => {
-            scanHandled.current = false;
-            setScanError(error instanceof Error ? error.message : "Could not save bridge settings.");
-          });
+          })
+            .then((saved) => {
+              setServerUrlStore(saved.serverUrl);
+              setHandshakeKeyStore(saved.handshakeKey);
+              setPlaybackModeStore("desktop");
+              setScanCompleted(true);
+              setScannerOpen(false);
+              bridgeClient.reconnectNow();
+            })
+            .catch((error) => {
+              scanHandled.current = false;
+              setScanError(
+                error instanceof Error
+                  ? error.message
+                  : "Could not save bridge settings.",
+              );
+            });
           return;
         }
       } catch {}
@@ -427,17 +385,15 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     },
   });
 
-  const backgroundAnimatedStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(
-      scrollX.value / itemWidth,
-      [0, 1, 2],
-      ["rgba(9,10,17,0.94)", "rgba(8,12,18,0.94)", "rgba(10,9,17,0.94)"],
-    ),
+  const skipAnimatedStyle = useAnimatedStyle(() => ({
+    width: interpolate(scrollX.value / itemWidth, [0, 0.2, 1], [86, 86, 0], Extrapolation.CLAMP),
+    marginRight: interpolate(scrollX.value / itemWidth, [0, 0.2, 1], [12, 12, 0], Extrapolation.CLAMP),
+    opacity: interpolate(scrollX.value / itemWidth, [0, 0.18], [1, 0], Extrapolation.CLAMP),
   }));
 
   const footerLabel = useMemo(
-    () => (isLastStep ? "Done" : "Continue"),
-    [isLastStep],
+    () => (isLastStep ? "Done" : step === 0 ? "Start Setup" : "Continue"),
+    [isLastStep, step],
   );
 
   const persistBridgeSettings = useCallback(() => {
@@ -453,7 +409,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         playbackMode: "mobile",
         onboardingCompleted: true,
       });
-      if (useSpotifySessionStore.getState().signedIn) setTimeout(requestOpenSpotifyBrowser, 320);
+
       return;
     }
     setPlaybackModeStore("desktop");
@@ -462,8 +418,16 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       setServerUrlStore(inferDefaultBridgeUrl());
     }
     bridgeClient.reconnectNow();
-    void saveBridgeSettings({ playbackMode: "desktop", onboardingCompleted: true });
-  }, [playbackMode, setHandshakeKeyStore, setPlaybackModeStore, setServerUrlStore]);
+    void saveBridgeSettings({
+      playbackMode: "desktop",
+      onboardingCompleted: true,
+    });
+  }, [
+    playbackMode,
+    setHandshakeKeyStore,
+    setPlaybackModeStore,
+    setServerUrlStore,
+  ]);
 
   const handleNext = useCallback(() => {
     if (isLastStep) {
@@ -474,8 +438,18 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     const nextStep = Math.min(step + 1, ONBOARDING_STEPS.length - 1);
     setStep(nextStep);
     // Scroll events are the single source of truth for the page animation.
-    scrollRef.current?.scrollTo({ x: nextStep * itemWidth, animated: !reduceMotion });
-  }, [isLastStep, itemWidth, onDismiss, persistBridgeSettings, reduceMotion, step]);
+    scrollRef.current?.scrollTo({
+      x: nextStep * itemWidth,
+      animated: !reduceMotion,
+    });
+  }, [
+    isLastStep,
+    itemWidth,
+    onDismiss,
+    persistBridgeSettings,
+    reduceMotion,
+    step,
+  ]);
 
   const handleSkip = useCallback(() => {
     persistBridgeSettings();
@@ -499,45 +473,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   return (
     <GestureHandlerRootView style={styles.root}>
       <View style={styles.container}>
-        <Reanimated.View
-          style={[StyleSheet.absoluteFill, backgroundAnimatedStyle]}
-        />
-        <LinearGradient
-          pointerEvents="none"
-          colors={[
-            "rgba(90,109,255,0.28)",
-            "rgba(143,240,196,0.10)",
-            "rgba(182,104,242,0.22)",
-          ]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.backdropWash}
-        />
-        <View
-          pointerEvents="none"
-          style={[styles.ambientGlow, styles.ambientGlowA]}
-        />
-        <View
-          pointerEvents="none"
-          style={[styles.ambientGlow, styles.ambientGlowB]}
-        />
-
-        <LinearGradient pointerEvents="none" colors={[Design.background, 'rgba(9,12,19,0)']} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top + 88, zIndex: 15 }} />
-        <View style={[styles.topBar, { paddingTop: insets.top + 10 }]}>
-          <Text style={styles.brandName}>KineSync<Text style={styles.brandDot}> /</Text></Text>
-          <Pressable
-            onPress={handleSkip}
-            hitSlop={12}
-            style={({ pressed }) => [
-              styles.skipButton,
-              pressed && styles.topActionPressed,
-            ]}
-          >
-            <BlurView intensity={28} tint="dark" style={styles.skipBlur}>
-              <Text style={styles.skipText}>Skip</Text>
-            </BlurView>
-          </Pressable>
-        </View>
+        <SetupBackground />
 
         <Reanimated.ScrollView
           ref={scrollRef}
@@ -564,47 +500,41 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               itemWidth={itemWidth}
               scrollX={scrollX}
               active={index === step}
+              landscape={landscape}
             >
+              <View style={[index === 0 ? styles.welcomeRow : styles.stepLayout, columnLayout && styles.stepLandscape, index === 1 && threeColumns && styles.appearanceLayoutLandscape]}>
+              <View style={[index === 0 ? styles.welcomeArtColumn : styles.stepHeading, columnLayout && styles.headingLandscape, index === 1 && threeColumns && styles.appearanceHeadingLandscape]}>
               {index === 0 ? (
-                <View style={styles.welcomeLogoWrap}>
-                  <Image source={require('@/assets/images/R.png')} style={styles.welcomeLogo} accessibilityLabel="KineSync logo" />
-                  <View style={styles.sparkle}><Ionicons name="sparkles" size={22} color={Design.accent} /></View>
+                  <Image source={require("@/assets/images/R.png")} style={[styles.welcomeLogo, landscape && styles.welcomeLogoLandscape]} accessibilityLabel="KineSync logo" />
+              ) : (
+                <>
+                  {index === 2 && <GlassIcon icon={stepData.icon} active={index === step} />}
+                  <View style={index === 1 ? [styles.appearanceHeading, columnLayout && styles.appearanceHeadingStacked] : undefined}>
+                    {index === 1 && <View style={styles.appearanceIcon}><Ionicons name="color-palette" size={21} color="#232733" /></View>}
+                    <LyricReveal text={index === 1 && columnLayout ? 'Adjust the\nAppearance' : stepData.title} active={index === step} style={[styles.title, index === 1 && styles.appearanceTitle, index === 1 && { maxWidth: Math.max(1, appearanceTitleWidth) }]} />
+                  </View>
+                  <Text style={[styles.description, index === 1 && styles.appearanceDescription]}>{stepData.description}</Text>
+                </>
+              )}
+              </View>
+              <View style={[styles.stepBody, index === 0 && styles.welcomeCopy, columnLayout && styles.bodyLandscape, index === 1 && threeColumns && styles.appearanceBodyLandscape]}>
+              {index === 0 && <>
+                <LyricReveal text={stepData.title} active={step === 0} style={styles.welcomeTitle} />
+                <View accessible accessibilityLabel={stepData.description} style={styles.welcomeDescription}>
+                  {stepData.description.split(' ').map((word, wordIndex) => (
+                    <View key={wordIndex} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                      {word === 'modern,' || word === 'beautiful' ? (
+                        <GradientWord text={word} active={step === 0} colors={word === 'modern,' ? MODERN_GRADIENT : BEAUTIFUL_GRADIENT} style={styles.descriptionWord} />
+                      ) : <Text style={styles.descriptionWord}>{word}</Text>}
+                    </View>
+                  ))}
                 </View>
-              ) : <GlassIcon icon={stepData.icon} active={index === step} />}
-              <Text style={styles.title}>{stepData.title}</Text>
-              <Text style={styles.description}>{stepData.description}</Text>
+              </>}
 
-              {index === 1 ? (
-                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
-                  <ToggleRow
-                    icon="hand-left-outline"
-                    label="Tap a lyric to jump there"
-                    value={playbackTapToSeek}
-                    onChange={setPlaybackTapToSeek}
-                  />
-                  <ToggleRow
-                    icon="eye-off-outline"
-                    label="Minimal — hide status bar"
-                    value={hidePlaybackStatusBar}
-                    onChange={setHidePlaybackStatusBar}
-                  />
-                  <ToggleRow
-                    icon="timer-outline"
-                    label="Fade controls after a moment"
-                    value={autoHidePlaybackControls}
-                    onChange={setAutoHidePlaybackControls}
-                  />
-                  <ToggleRow
-                    icon="language-outline"
-                    label="Show line translations"
-                    value={showTranslatedText}
-                    onChange={setShowTranslatedText}
-                  />
-                </BlurView>
-              ) : null}
+              {index === 1 ? <RendererPreview active={step === 1} sideBySide={threeColumns} /> : null}
 
               {index === 2 && playbackMode === "unset" ? (
-                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
+                <BlurView intensity={30} tint="dark" style={[styles.inlinePanel, landscape && styles.inlinePanelLandscape]}>
                   <ChoiceRow
                     icon="desktop-outline"
                     label="Use a Desktop Bridge"
@@ -621,7 +551,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               ) : null}
 
               {index === 2 && playbackMode === "phone" ? (
-                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
+                <BlurView intensity={30} tint="dark" style={[styles.inlinePanel, landscape && styles.inlinePanelLandscape]}>
                   {spotifySignedIn ? (
                     <View style={styles.connectionStatusRow}>
                       <Ionicons
@@ -658,8 +588,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                         </BlurView>
                       </Pressable>
                       <Text style={styles.inlinePanelHint}>
-                        Use your email and password — Google and Apple sign-in are
-                        blocked inside embedded browsers.
+                        Use your email and password — Google and Apple sign-in
+                        are blocked inside embedded browsers.
                       </Text>
                     </>
                   )}
@@ -675,7 +605,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               ) : null}
 
               {index === 2 && playbackMode === "desktop" ? (
-                <BlurView intensity={30} tint="dark" style={styles.inlinePanel}>
+                <BlurView intensity={30} tint="dark" style={[styles.inlinePanel, landscape && styles.inlinePanelLandscape]}>
                   {scanCompleted ? (
                     <View style={styles.connectionStatusRow}>
                       <Ionicons
@@ -750,45 +680,34 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   </Pressable>
                 </BlurView>
               ) : null}
+              </View>
+              </View>
             </StepPage>
           ))}
         </Reanimated.ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 16 }]}>
-          <LinearGradient pointerEvents="none" colors={['rgba(9,12,19,0)', Design.background, Design.background]} locations={[0, 0.3, 1]} style={StyleSheet.absoluteFill} />
-          <Text style={styles.stepLabel}>STEP {step + 1} OF {ONBOARDING_STEPS.length}</Text>
-          <View style={styles.dots}>
-            {ONBOARDING_STEPS.map((stepData, index) => (
-              <Dot
-                key={stepData.title}
-                index={index}
-                itemWidth={itemWidth}
-                scrollX={scrollX}
-              />
-            ))}
-          </View>
-
-          <View style={styles.nextWrap}>
-            <Pressable
-              onPress={handleNext}
-              style={({ pressed }) => [
-                styles.nextButton,
-                pressed && styles.buttonPressed,
-              ]}
-            >
-              <BlurView intensity={30} tint="light" style={styles.nextBlur}>
-                <LinearGradient
-                  colors={["#BDF6DD", "#8CDEBA"]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.nextGradient}
-                >
-                  <Text style={styles.nextText}>{footerLabel}</Text>
-                  <Ionicons
-                    name={isLastStep ? "checkmark" : "arrow-forward"}
-                    size={18}
-                    color={Design.accentInk}
-                  />
+        <View style={[styles.footer, { paddingBottom: insets.bottom + (landscape ? 10 : 16), paddingLeft: insets.left + 22, paddingRight: insets.right + 22 }]}>
+          <LinearGradient
+            pointerEvents="none"
+            colors={["rgba(9,12,19,0)", Design.background, Design.background]}
+            locations={[0, 0.3, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={[styles.nextWrap, landscape && styles.nextWrapLandscape]}>
+            <Reanimated.View style={[styles.footerSkip, skipAnimatedStyle]} pointerEvents={step === 0 ? 'auto' : 'none'} accessibilityElementsHidden={step !== 0} importantForAccessibility={step === 0 ? 'auto' : 'no-hide-descendants'}>
+              <Pressable onPress={handleSkip} style={styles.skipButton}>
+                <BlurView intensity={24} tint="light" style={styles.skipBlur}>
+                  <Text numberOfLines={1} style={styles.skipText}>Skip</Text>
+                </BlurView>
+              </Pressable>
+            </Reanimated.View>
+            <Pressable onPress={handleNext} style={styles.nextButton}>
+              <BlurView intensity={36} tint="light" style={styles.nextBlur}>
+                <LinearGradient colors={["rgba(168,240,207,0.23)", "rgba(168,240,207,0.09)"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.nextGradient}>
+                  <Reanimated.View key={footerLabel} entering={FadeInUp.springify().damping(18).stiffness(240).reduceMotion(ReduceMotion.System)} style={styles.nextLabel}>
+                    <Text style={styles.nextText}>{footerLabel}</Text>
+                    <Ionicons name={isLastStep ? "checkmark-circle" : "arrow-forward-circle"} size={23} color={Design.accent} />
+                  </Reanimated.View>
                 </LinearGradient>
               </BlurView>
             </Pressable>
@@ -816,7 +735,16 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               source={{ uri: SPOTIFY_LOGIN_URL }}
               originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
               injectedJavaScript={spotifyAuthProbeScript}
+              userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
               onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+                if (
+                  isTopFrame !== false &&
+                  url.startsWith("https://open.spotify.com/")
+                ) {
+                  setLoginOpen(false);
+                  requestReloadSpotifyBrowser();
+                  return false;
+                }
                 if (!isSpotifyNativeAppRedirect(url)) {
                   return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
                 }
@@ -829,7 +757,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               setSupportMultipleWindows={false}
               style={styles.loginWebView}
               onMessage={({ nativeEvent }) => {
-                if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || '')) return;
+                if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || ""))
+                  return;
                 const event = parseBrowserEvent(nativeEvent.data);
                 if (event?.type === "spotifyToken" && event.token) {
                   void saveMobileLyricsSettings({
@@ -903,61 +832,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#090A11",
     overflow: "hidden",
   },
-  backdropWash: {
-    ...StyleSheet.absoluteFill,
-    opacity: 0.9,
-  },
-  ambientGlow: {
-    position: "absolute",
-    width: 290,
-    height: 290,
-    borderRadius: 145,
-    opacity: 0.08,
-  },
-  ambientGlowA: {
-    top: 58,
-    left: -96,
-    backgroundColor: "#5A6DFF",
-  },
-  ambientGlowB: {
-    right: -94,
-    bottom: 136,
-    backgroundColor: "#8FF0C4",
-  },
-  topBar: {
-    position: "absolute",
-    left: 20,
-    right: 20,
-    zIndex: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  topAction: {
-    borderRadius: 18,
-    overflow: "hidden",
-  },
-  topActionPressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.97 }],
-  },
-  topActionBlur: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-    backgroundColor: "rgba(255,255,255,0.09)",
-    overflow: "hidden",
-  },
   skipButton: {
+    width: 86,
     borderRadius: 18,
     overflow: "hidden",
   },
   skipBlur: {
-    minHeight: 38,
+    minHeight: 58,
     paddingHorizontal: 15,
     alignItems: "center",
     justifyContent: "center",
@@ -990,10 +871,24 @@ const styles = StyleSheet.create({
     maxWidth: 430,
     alignItems: "center",
   },
+  pageInnerLandscape: { maxWidth: 1040 },
+  stepLayout: { width: '100%', alignItems: 'center' },
+  stepLandscape: { flexDirection: 'row', alignItems: 'center', gap: 32 },
+  stepHeading: { alignItems: 'center', width: '100%' },
+  welcomeArtColumn: { alignItems: 'center' },
+  headingLandscape: { flex: 0.85, width: undefined, minWidth: 0 },
+  appearanceLayoutLandscape: { gap: 20 },
+  appearanceHeadingLandscape: { flex: 0, flexShrink: 0, width: 180 },
+  appearanceBodyLandscape: { flex: 1 },
+  stepBody: { width: '100%' },
+  bodyLandscape: { flex: 1.15, width: undefined, minWidth: 0 },
+  inlinePanelLandscape: { marginTop: 0 },
+  welcomeLogoLandscape: { width: 120, height: 120, borderRadius: 32 },
+  nextWrapLandscape: { maxWidth: 1040 },
   iconGlassOuter: {
     width: 80,
     height: 80,
-    borderRadius: 26,
+    borderRadius: 40,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
@@ -1005,14 +900,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  eyebrow: {
-    color: "rgba(143,240,196,0.88)",
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    marginBottom: 10,
-  },
+  iconCutout: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(245,247,252,0.9)', alignItems: 'center', justifyContent: 'center' },
   title: {
     color: "#FFFFFF",
     fontSize: 38,
@@ -1030,6 +918,18 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     textAlign: "center",
     maxWidth: 350,
+  },
+  appearanceHeading: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  appearanceHeadingStacked: { flexDirection: 'column', gap: 10 },
+  appearanceIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(245,247,252,0.9)', alignItems: 'center', justifyContent: 'center' },
+  appearanceTitle: {
+    fontSize: 24,
+    lineHeight: 30,
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  appearanceDescription: {
+    marginBottom: 20,
   },
   inlinePanel: {
     width: "100%",
@@ -1081,19 +981,8 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     zIndex: 12,
   },
-  dots: {
-    height: 18,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 7,
-    marginBottom: 14,
-  },
-  dot: {
-    height: 7,
-    borderRadius: 999,
-  },
   nextButton: {
+    flex: 1,
     borderRadius: 18,
     overflow: "hidden",
   },
@@ -1101,31 +990,39 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderColor: "rgba(196,244,219,0.3)",
     backgroundColor: "rgba(255,255,255,0.08)",
   },
   nextGradient: {
-    minHeight: 56,
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
   },
   nextText: {
-    color: Design.accentInk,
+    color: '#E4F8EE',
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   buttonPressed: {
     opacity: 0.86,
   },
-  brandName: { color: Design.text, fontSize: 20, fontWeight: '800', letterSpacing: -0.7 },
-  brandDot: { color: Design.accent },
-  welcomeLogoWrap: { marginBottom: 36, width: 120, height: 120 },
-  welcomeLogo: { width: 120, height: 120, borderRadius: 32, borderWidth: 1, borderColor: Design.border },
-  sparkle: { position: 'absolute', right: -15, top: -14, backgroundColor: Design.surface, borderRadius: 18, padding: 10, transform: [{ rotate: '12deg' }] },
-  stepLabel: { color: Design.muted, textAlign: 'center', fontSize: 10, fontWeight: '700', letterSpacing: 1.8, marginBottom: 5 },
-  nextWrap: { width: '100%', maxWidth: 440, alignSelf: 'center' },
+  welcomeLogo: {
+    width: 88,
+    height: 88,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Design.border,
+  },
+  nextWrap: { width: "100%", maxWidth: 440, alignSelf: "center", flexDirection: 'row', alignItems: 'center' },
+  nextLabel: { flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center' },
+  footerSkip: { overflow: 'hidden' },
+  welcomeRow: { width: '100%', flexDirection: 'row', gap: 20, alignItems: 'center' },
+  welcomeCopy: { flex: 1, minWidth: 0, gap: 12 },
+  welcomeTitle: { color: '#FFFFFF', fontSize: 34, lineHeight: 42, letterSpacing: -1.1, fontWeight: '800' },
+  welcomeDescription: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 4 },
+  descriptionWord: { color: 'rgba(248,248,254,0.72)', fontSize: 15, lineHeight: 23 },
   fieldGroup: {
     gap: 7,
   },
@@ -1176,10 +1073,10 @@ const styles = StyleSheet.create({
   rowIconWrap: {
     width: 30,
     height: 30,
-    borderRadius: 9,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.07)",
+    backgroundColor: "rgba(245,247,252,0.88)",
   },
   toggleLabel: {
     flex: 1,

@@ -56,7 +56,7 @@ function buildTranslationSystemPrompt(targetLanguage) {
     "Use title/artist only to disambiguate meaning—never output them.",
     "One input line maps to exactly one output entry; keep order, register, slang, and profanity.",
     "Do not merge, split, skip, or reorder lines.",
-    "Already-English or non-lexical lines (sounds, names, ad-libs): copy the source text into t unchanged.",
+    `Lines already in ${targetLanguage}, or non-lexical lines (sounds, names, ad-libs): copy the source text into t unchanged.`,
     'Return JSON only: {"lineCount":N,"translations":[{"i":0,"t":"..."},...]}.',
     "lineCount must equal the input lineCount.",
     "translations must contain exactly lineCount objects with i from startIndex through startIndex+lineCount-1, each i once.",
@@ -302,12 +302,13 @@ async function mapWithConcurrency(items, limit, mapper) {
 async function enrichLyricsWithGeminiTranslations(
   track,
   lyrics,
-  { geminiApiKey = "", geminiCache = null } = {},
+  { geminiApiKey = "", geminiCache = null, targetLanguage = "English" } = {},
 ) {
   if (!Array.isArray(lyrics) || !lyrics.length) {
     return lyrics || [];
   }
 
+  targetLanguage = ["English","Arabic","Bengali","Chinese (Simplified)","Chinese (Traditional)","Czech","Danish","Dutch","Finnish","French","German","Greek","Hebrew","Hindi","Hungarian","Indonesian","Italian","Japanese","Korean","Malay","Norwegian","Persian","Polish","Portuguese","Romanian","Russian","Spanish","Swedish","Tamil","Telugu","Thai","Turkish","Ukrainian","Urdu","Vietnamese"].includes(targetLanguage) ? targetLanguage : "English";
   const apiKey = String(geminiApiKey || "").trim();
   if (!apiKey) {
     console.log(
@@ -390,6 +391,7 @@ async function enrichLyricsWithGeminiTranslations(
         title: String(track?.title || ""),
         artist: String(track?.artist || ""),
         durationMs: Number(track?.durationMs || 0),
+        targetLanguage,
         lines: [...uniqueLineMap.keys()],
       }),
     )
@@ -589,12 +591,12 @@ async function enrichLyricsWithGeminiTranslations(
           )
         : lines;
     const systemPrompt = buildTranslationSystemPrompt(
-      GEMINI_TRANSLATION_TARGET_LANGUAGE,
+      targetLanguage,
     );
     const userPayload = buildIndexedTranslationUserPayload({
       lines: allLines,
       startIndex,
-      targetLanguage: GEMINI_TRANSLATION_TARGET_LANGUAGE,
+      targetLanguage,
       title: trackTitle,
       artist: trackArtist,
     });

@@ -275,7 +275,7 @@ function createLyricsService({
     rememberPublishedLyrics,
     getPublishedLyrics,
     getCachedSourceLyricsPacket,
-    async translatePublishedLyrics(track, { onSyncedLyrics = null } = {}) {
+    async translatePublishedLyrics(track, { onSyncedLyrics = null, translationLanguage = "English" } = {}) {
       if (!track?.trackId || !track?.title) {
         const empty = {
           trackId: "",
@@ -341,6 +341,7 @@ function createLyricsService({
         {
           geminiApiKey: String(getGeminiApiKey() || "").trim(),
           geminiCache: geminiTranslationCache,
+          targetLanguage: translationLanguage,
         },
       );
 
@@ -363,6 +364,7 @@ function createLyricsService({
         preferredSource = "auto",
         onSyncedLyrics = null,
         immediateTranslation = false,
+        translationLanguage = "English",
       } = {},
     ) {
       if (!track?.trackId || !track?.title) {
@@ -610,6 +612,7 @@ function createLyricsService({
             {
               geminiApiKey: String(getGeminiApiKey() || "").trim(),
               geminiCache: geminiTranslationCache,
+              targetLanguage: translationLanguage,
             },
           );
           const translatedBase = {
@@ -843,6 +846,7 @@ function createLyricsService({
           {
             geminiApiKey: String(getGeminiApiKey() || "").trim(),
             geminiCache: geminiTranslationCache,
+          targetLanguage: translationLanguage,
           },
         );
 

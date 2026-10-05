@@ -107,6 +107,40 @@ export type LyricsCreditsMetadata = {
   songwriters?: string[];
 };
 
+export type DesktopVaultSummary = {
+  vaultId: string;
+  title: string;
+  artist: string;
+  lineCount: number;
+  translatedLineCount: number;
+};
+
+export type DesktopVaultEntry = {
+  vaultId: string;
+  track: Track;
+  lyrics: LyricLine[];
+  originalSource?: string;
+  metadata?: LyricsMetadata;
+};
+
+export type VaultBrowseResultPacket = {
+  type: 'vault:list:result';
+  requestId: string;
+  ok: boolean;
+  entries?: DesktopVaultSummary[];
+  nextOffset?: number | null;
+  total?: number;
+  error?: string;
+};
+
+export type VaultGetResultPacket = {
+  type: 'vault:get:result';
+  requestId: string;
+  ok: boolean;
+  entry?: DesktopVaultEntry;
+  error?: string;
+};
+
 export type LyricsAttributionProfile = {
   id?: string;
   username?: string;

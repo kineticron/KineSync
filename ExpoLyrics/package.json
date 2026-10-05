@@ -10,11 +10,14 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
+    "test:launch": "node ./scripts/check-launch-transition.cjs",
     "test:security": "node ./scripts/security-check.js",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
-    "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-amll-clusters.mjs",
+    "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
-    "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs"
+    "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
+    "test:vault": "node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs",
+    "test:tour": "node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.5.2",

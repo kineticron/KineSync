@@ -1,11 +1,11 @@
+import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   Modal,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   useWindowDimensions,
   View,
@@ -16,8 +16,6 @@ import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
 import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
-import { saveCurrentTrackToVault } from "@/lib/lyrics-sync";
-import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { usePlaybackStore, type LyricsStyle } from "@/store/playback-store";
 import type { ConnectionStatus } from "@/types/bridge";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -56,17 +54,8 @@ type SettingsMenuProps = {
   onReconnectBridge: () => void;
   onRefetchLyrics: () => void;
   onRefetchLyricsFromSource: (source: LyricsSourcePreference) => void;
-  onOpenSpotifyBrowser: () => void;
   onOpenBridgeSettings: () => void;
   onOpenButtonTutorial: () => void;
-  playbackTapToSeek: boolean;
-  onTogglePlaybackTapToSeek: (value: boolean) => void;
-  hidePlaybackStatusBar: boolean;
-  onToggleHidePlaybackStatusBar: (value: boolean) => void;
-  autoHidePlaybackControls: boolean;
-  onToggleAutoHidePlaybackControls: (value: boolean) => void;
-  showTranslatedText: boolean;
-  onToggleShowTranslatedText: (value: boolean) => void;
   lyricsStyle: LyricsStyle;
   onChangeLyricsStyle: (style: LyricsStyle) => void;
   connectionStatus: ConnectionStatus;
@@ -213,36 +202,6 @@ function MenuAction({
         />
       )}
     </Pressable>
-  );
-}
-
-function ToggleRow({
-  icon,
-  label,
-  value,
-  onChange,
-}: {
-  icon: IoniconName;
-  label: string;
-  value: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <View style={styles.row}>
-      <View style={styles.rowIconWrap}>
-        <Ionicons name={icon} size={17} color="rgba(248,248,254,0.88)" />
-      </View>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        trackColor={{
-          false: "rgba(255,255,255,0.16)",
-          true: "rgba(143,240,196,0.42)",
-        }}
-        thumbColor="#F8F8FE"
-      />
-    </View>
   );
 }
 
@@ -431,17 +390,8 @@ export const SettingsMenu = memo(function SettingsMenu({
   onReconnectBridge,
   onRefetchLyrics,
   onRefetchLyricsFromSource,
-  onOpenSpotifyBrowser,
   onOpenBridgeSettings,
   onOpenButtonTutorial,
-  playbackTapToSeek,
-  onTogglePlaybackTapToSeek,
-  hidePlaybackStatusBar,
-  onToggleHidePlaybackStatusBar,
-  autoHidePlaybackControls,
-  onToggleAutoHidePlaybackControls,
-  showTranslatedText,
-  onToggleShowTranslatedText,
   lyricsStyle,
   onChangeLyricsStyle,
   connectionStatus,
@@ -449,7 +399,6 @@ export const SettingsMenu = memo(function SettingsMenu({
   latencyMs,
   errorMessage,
 }: SettingsMenuProps) {
-  const spotifySignedIn = useSpotifySessionStore((state) => state.signedIn);
   const lyrics = usePlaybackStore((state) => state.lyrics);
   const lyricsSource = usePlaybackStore((state) => state.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore(
@@ -464,10 +413,6 @@ export const SettingsMenu = memo(function SettingsMenu({
     () => inferActiveSource(lyricsSource),
     [lyricsSource],
   );
-  const [vaultIncludeTranslations, setVaultIncludeTranslations] =
-    useState(false);
-  const [vaultSaving, setVaultSaving] = useState(false);
-  const hasLyrics = lyrics.length > 0;
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState("");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -534,21 +479,6 @@ export const SettingsMenu = memo(function SettingsMenu({
       setTimeout(() => setScanError(""), 3000);
     }
   };
-
-  useEffect(() => {
-    if (!open) {
-      setVaultSaving(false);
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (
-      vaultSaving &&
-      /saved \\d+ lines to local vault/i.test(lyricsStatusMessage)
-    ) {
-      setVaultSaving(false);
-    }
-  }, [vaultSaving, lyricsStatusMessage]);
 
   const { width, height } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
@@ -625,34 +555,7 @@ export const SettingsMenu = memo(function SettingsMenu({
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
             >
-              <MenuSection title="Display">
-                <ToggleRow
-                  icon="hand-left"
-                  label="Tap line to seek"
-                  value={playbackTapToSeek}
-                  onChange={onTogglePlaybackTapToSeek}
-                />
-                <ToggleRow
-                  icon="eye-off"
-                  label="Hide status bar"
-                  value={hidePlaybackStatusBar}
-                  onChange={onToggleHidePlaybackStatusBar}
-                />
-                <ToggleRow
-                  icon="eye"
-                  label="Auto-hide controls"
-                  value={autoHidePlaybackControls}
-                  onChange={onToggleAutoHidePlaybackControls}
-                />
-                <ToggleRow
-                  icon="language"
-                  label="Show translations"
-                  value={showTranslatedText}
-                  onChange={onToggleShowTranslatedText}
-                />
-              </MenuSection>
-
-              <MenuSection title="Lyrics renderer">
+<MenuSection title="Lyrics renderer">
                 {RENDERER_OPTIONS.map((option) => (
                   <RendererOption
                     key={option.id}
@@ -671,45 +574,7 @@ export const SettingsMenu = memo(function SettingsMenu({
                   label="Fetch new lyrics"
                   onPress={onRefetchLyrics}
                 />
-                <ToggleRow
-                  icon="language"
-                  label="Include translations when saving to vault"
-                  value={vaultIncludeTranslations}
-                  onChange={setVaultIncludeTranslations}
-                />
-                <MenuAction
-                  icon="archive"
-                  label={
-                    vaultSaving
-                      ? "Saving to local vault..."
-                      : "Save to local vault"
-                  }
-                  onPress={() => {
-                    if (vaultSaving || !hasLyrics) {
-                      return;
-                    }
-                    setVaultSaving(true);
-                    void (async () => {
-                      try {
-                        await saveCurrentTrackToVault({
-                          includeTranslations: vaultIncludeTranslations,
-                        });
-                        onClose();
-                      } catch (error) {
-                        usePlaybackStore
-                          .getState()
-                          .setLyricsStatusMessage(
-                            error instanceof Error
-                              ? error.message
-                              : String(error),
-                          );
-                      } finally {
-                        setVaultSaving(false);
-                      }
-                    })();
-                  }}
-                  disabled={!hasLyrics || vaultSaving}
-                />
+                <MenuAction icon="archive-outline" label="Local vault" onPress={() => { onClose(); router.push("/vault"); }} showChevron />
                 <View
                   style={[
                     styles.sourceGrid,
@@ -729,38 +594,19 @@ export const SettingsMenu = memo(function SettingsMenu({
                 </View>
               </MenuSection>
 
-              <MenuSection title="Bridge">
-                <MenuAction
-                  icon="sync"
-                  label="Reconnect"
-                  onPress={onReconnectBridge}
-                />
-                <MenuAction
-                  icon="musical-notes"
-                  label={
-                    spotifySignedIn ? "Spotify player" : "Sign in with Spotify"
-                  }
-                  onPress={onOpenSpotifyBrowser}
-                  showChevron
-                />
-                <MenuAction
-                  icon="settings-outline"
-                  label="Settings"
-                  onPress={onOpenBridgeSettings}
-                  showChevron
-                />
-                <MenuAction
-                  icon="qr-code-outline"
-                  label="Scan QR code"
-                  onPress={openScanner}
-                  showChevron
-                />
+              <MenuSection title="Connection">
+                {playbackMode === "desktop" && <>
+                  <MenuAction icon="sync" label="Reconnect" onPress={onReconnectBridge} />
+                  <MenuAction icon="qr-code-outline" label="Scan QR code" onPress={openScanner} showChevron />
+                </>}
+                {playbackMode === "mobile" && <MenuAction icon="desktop-outline" label="Switch to Desktop Bridge" onPress={() => { onClose(); router.push({ pathname: "/explore", params: { action: "desktop" } }); }} showChevron />}
+                <MenuAction icon="settings-outline" label="Settings" onPress={onOpenBridgeSettings} showChevron />
               </MenuSection>
 
               <MenuSection title="Help">
                 <MenuAction
                   icon="help-circle-outline"
-                  label="Button tutorial"
+                  label="Player tour"
                   onPress={onOpenButtonTutorial}
                   showChevron
                 />

@@ -9,6 +9,8 @@ import type {
   ShareGifRequestPacket,
   ShareGifResultPacket,
   VaultSaveResultPacket,
+  VaultBrowseResultPacket,
+  VaultGetResultPacket,
 } from "@/types/bridge";
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
 import { validateInboundBridgePacket } from "@/lib/bridge-validation";
@@ -54,6 +56,12 @@ const TRACK_CHANGE_REFETCH_DELAY_MS = 1_000;
 const AUTH_TIMEOUT_MS = 10_000;
 
 class BridgeClient {
+  private vaultRequests = new Map<string, {
+    type: 'vault:list:result' | 'vault:get:result';
+    resolve: (packet: VaultBrowseResultPacket | VaultGetResultPacket) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
@@ -142,6 +150,15 @@ class BridgeClient {
           return;
         }
         if (!this.authenticated) return;
+        if (packet.type === 'vault:list:result' || packet.type === 'vault:get:result') {
+          const request = this.vaultRequests.get(packet.requestId);
+          if (!request || request.type !== packet.type) return;
+          clearTimeout(request.timer);
+          this.vaultRequests.delete(packet.requestId);
+          if (packet.ok) request.resolve(packet);
+          else request.reject(new Error(packet.error || 'Desktop Bridge vault request failed.'));
+          return;
+        }
         if (packet.type === "vault:save:result") {
           this.applyVaultSaveResult(packet);
           return;
@@ -187,6 +204,7 @@ class BridgeClient {
     };
 
     this.ws.onclose = () => {
+      this.rejectVaultRequests();
       this.clearAuthTimer();
       this.authenticated = false;
       usePlaybackStore.getState().setConnectionStatus("disconnected");
@@ -195,6 +213,7 @@ class BridgeClient {
     };
 
     this.ws.onerror = () => {
+      this.rejectVaultRequests();
       this.clearAuthTimer();
       this.authenticated = false;
       usePlaybackStore.getState().setErrorMessage("Bridge connection failed.");
@@ -225,7 +244,7 @@ class BridgeClient {
 
   requestLyricsRefresh(
     preferredSource: string = "auto",
-    { immediateTranslation = false }: { immediateTranslation?: boolean } = {},
+    { immediateTranslation = false, translationLanguage = "English" }: { immediateTranslation?: boolean; translationLanguage?: string } = {},
   ) {
     const ws = this.getAuthenticatedSocket();
     if (ws) {
@@ -234,6 +253,7 @@ class BridgeClient {
           type: "lyrics:refresh",
           preferredSource,
           immediateTranslation: Boolean(immediateTranslation),
+          translationLanguage,
         }),
       );
     }
@@ -333,6 +353,42 @@ class BridgeClient {
     });
   }
 
+  async browseDesktopVault(query = '', offset = 0) {
+    return await this.requestDesktopVault('vault:list', { query, offset }) as VaultBrowseResultPacket;
+  }
+
+  async getDesktopVaultEntry(vaultId: string) {
+    const result = await this.requestDesktopVault('vault:get', { vaultId }) as VaultGetResultPacket;
+    if (!result.entry) throw new Error('Desktop Bridge returned no lyrics.');
+    return result.entry;
+  }
+
+  private requestDesktopVault(type: 'vault:list' | 'vault:get', payload: Record<string, unknown>) {
+    return new Promise<VaultBrowseResultPacket | VaultGetResultPacket>((resolve, reject) => {
+      const ws = this.getAuthenticatedSocket();
+      if (!ws) { reject(new Error('Desktop Bridge is not connected.')); return; }
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+      const timer = setTimeout(() => {
+        this.vaultRequests.delete(requestId);
+        reject(new Error('Desktop Bridge vault request timed out. Check the connection and update the Desktop Bridge if needed.'));
+      }, 20_000);
+      this.vaultRequests.set(requestId, { type: type === 'vault:list' ? 'vault:list:result' : 'vault:get:result', resolve, reject, timer });
+      try { ws.send(JSON.stringify({ type, requestId, ...payload })); }
+      catch (error) {
+        clearTimeout(timer); this.vaultRequests.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private rejectVaultRequests() {
+    for (const request of this.vaultRequests.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error('Desktop Bridge disconnected during vault request.'));
+    }
+    this.vaultRequests.clear();
+  }
+
   saveCurrentTrackToVault(
     { includeTranslations = false }: { includeTranslations?: boolean } = {},
     timeoutMs = 120_000,
@@ -392,6 +448,7 @@ class BridgeClient {
   }
 
   private cleanupSocket() {
+    this.rejectVaultRequests();
     this.authenticated = false;
     this.clearAuthTimer();
     this.clearTrackChangeRefetchTimer();

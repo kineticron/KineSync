@@ -51,11 +51,10 @@ const renderers = {
   spicy: instrument(spicyHtml),
   amll: instrument(amllHtml),
 };
-const renderer = renderers.spicy;
 const harness = `<!doctype html><meta charset="utf-8"><title>Lyrics renderer checks</title>
 <style>body{background:#161c28;color:white;font:15px system-ui;margin:20px}button{font:inherit;padding:8px;margin:4px}iframe{display:block;border:1px solid #566073;background:linear-gradient(#283650,#171c2a);width:390px;height:600px}pre{white-space:pre-wrap} .controls{max-width:1000px;margin-bottom:12px}</style>
 <div class="controls"><button id="styleSpicy">Spicy</button><button id="styleAmll">AMLL</button><button id="portrait">Portrait</button><button id="landscape">Landscape</button><button id="play">Play</button><button id="pause">Pause</button><button id="seek">Seek to duet</button><button id="static">Static lyrics</button><button id="checks">Run browser checks</button><button id="fixture">Load local fixture</button><button id="profile">Profile 10 seconds</button></div>
-<iframe id="renderer" src="/renderer?style=spicy"></iframe><pre id="results">Loading renderer…</pre>
+<button id="scrollChecks">Run scroll checks</button><iframe id="renderer" src="/renderer?style=spicy"></iframe><pre id="results">Loading renderer…</pre>
 <script>
 const frame=document.getElementById('renderer');
 document.getElementById('styleSpicy').onclick=()=>{frame.src='/renderer?style=spicy'};
@@ -68,6 +67,38 @@ const send=m=>frame.contentWindow.KineSyncLyrics.receive(m);
 const options=()=>send({type:'options',fontScale:scale,landscapeMode:landscape,showTranslatedText:true,tapToSeekEnabled:true,autoFollowEnabled:true});
 const sync=(force=true)=>send({type:'sync',positionMs:position,isPlaying:playing,durationMs:300000,force});
 const load=()=>{options();send({type:'setLyrics',lines,timingMode:'karaoke',lastLyricEndTime:lines.at(-1).lineEndTime,songwriters:['Sample writer']});sync()};
+document.getElementById('scrollChecks').onclick=async()=>{
+  const output=[];const check=(ok,label)=>{if(!ok)throw new Error(label);output.push('PASS '+label);results.textContent=output.join('\\n')};
+  try{
+    const w=frame.contentWindow,d=frame.contentDocument;
+    const amll=Boolean(d.querySelector('.kinesync-amll-player'));
+    const element=d.querySelector(amll?'.kinesync-amll-player':'.LyricsContent');
+    const first=()=>d.querySelector(amll?'[class*="lyricLineWrapper"]':'.ks-lyric-row');
+    const touch=(type,y)=>{const event=new w.Event(type,{bubbles:true,cancelable:true});const points=[{screenX:100,screenY:y,clientX:100,clientY:y}];Object.defineProperties(event,{touches:{value:type==='touchend'?[]:points},changedTouches:{value:points}});element.dispatchEvent(event)};
+    position=1500;playing=false;load();await wait(900);const baseline=first().getBoundingClientRect().top;
+    touch('touchstart',450);await wait(18);touch('touchmove',350);await wait(18);touch('touchmove',250);touch('touchend',250);
+    if(!amll)element.scrollTop=900;
+    await wait(70);const before=first().getBoundingClientRect().top;
+    check(Math.abs(before-baseline)>50,'gesture moved away from the active lyric');
+    send({type:'options',fontScale:scale,landscapeMode:landscape,showTranslatedText:true,tapToSeekEnabled:true,autoFollowEnabled:true,resumeAutoFollowSignal:1});
+    const immediate=first().getBoundingClientRect().top;
+    check(Math.abs(immediate-before)<30,'auto-follow starts without an instant jump');
+    await wait(1800);const returned=first().getBoundingClientRect().top;
+    check(Math.abs(returned-baseline)<3,'paused renderer eases back to the active lyric');
+    await wait(350);check(Math.abs(first().getBoundingClientRect().top-returned)<1,'cancelled momentum cannot bounce back after return');
+    if(amll){
+      touch('touchstart',450);await wait(18);touch('touchmove',250);touch('touchend',250);await wait(70);
+      touch('touchstart',300);await wait(80);const held=first().getBoundingClientRect().top;await wait(120);
+      check(Math.abs(first().getBoundingClientRect().top-held)<1,'new touch stops the previous inertia loop');
+      touch('touchcancel',300);
+      position=1500;send({type:'sync',positionMs:position,isPlaying:false,durationMs:300000,force:false});
+      await wait(200);const manualTop=first().getBoundingClientRect().top;
+      position=5500;send({type:'sync',positionMs:position,isPlaying:false,durationMs:300000,force:false});await wait(200);
+      check(Math.abs(first().getBoundingClientRect().top-manualTop)<3,'manual scrolling stays anchored when the active lyric changes');
+    }
+    results.textContent=output.join('\\n')+'\\nAll scroll checks passed.';
+  }catch(error){results.textContent=output.join('\\n')+'\\nFAIL '+error.message}
+};
 frame.onload=()=>{load();results.textContent='Ready: actual bundled WebView renderer, 70 fixture lines.'};
 document.getElementById('portrait').onclick=()=>{landscape=false;frame.style.width='390px';frame.style.height='600px';options();sync()};
 document.getElementById('landscape').onclick=()=>{landscape=true;frame.style.width='620px';frame.style.height='350px';options();sync()};

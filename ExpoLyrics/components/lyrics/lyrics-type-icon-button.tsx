@@ -14,6 +14,7 @@ type LyricsTypeIconButtonProps = {
   lyricsSource: string;
   size?: number;
   color?: string;
+  compact?: boolean;
 };
 
 export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
@@ -21,6 +22,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
   lyricsSource,
   size = 20,
   color = "#F9FAFC",
+  compact = false,
 }: LyricsTypeIconButtonProps) {
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,7 +52,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
 
   useEffect(() => clearHideTimer, [clearHideTimer]);
 
-  if (mode === "unknown") {
+  if (mode === "unknown" && !compact) {
     return null;
   }
 
@@ -64,6 +66,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
         accessibilityRole="button"
         style={({ pressed }) => [
           styles.iconButton,
+          compact && styles.compactIconButton,
           pressed && styles.iconButtonPressed,
         ]}
         onPress={toggleTooltip}
@@ -75,7 +78,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
         <Reanimated.View
           entering={FadeIn.duration(160)}
           exiting={FadeOut.duration(180)}
-          style={styles.tooltipAnchor}
+          style={[styles.tooltipAnchor, compact && styles.tooltipAbove]}
           pointerEvents="none"
         >
           <BlurView intensity={34} tint="light" style={styles.tooltip}>
@@ -92,6 +95,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
 });
 
 function lyricsTimingModeLabel(mode: LyricsTimingMode) {
+  if (mode === "unknown") return "Lyrics source";
   if (mode === "karaoke") {
     return "Karaoke lyrics";
   }
@@ -112,6 +116,14 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: "center",
     justifyContent: "center",
+  },
+  compactIconButton: {
+    width: 42,
+    height: 42,
+  },
+  tooltipAbove: {
+    top: undefined,
+    bottom: 46,
   },
   iconButtonPressed: {
     opacity: 0.78,

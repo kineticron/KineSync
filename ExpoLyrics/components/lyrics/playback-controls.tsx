@@ -1,3 +1,4 @@
+import { usePlaybackStore } from '@/store/playback-store';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import {
   memo,
@@ -8,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Pressable, StyleSheet, View, TextInput, Text } from 'react-native';
+import { Pressable, StyleSheet, View, TextInput } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   Easing,
@@ -25,105 +26,11 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { selectionAsync } from 'expo-haptics';
 
-import { usePlaybackTimelineClock } from './use-playback-timeline-clock';
+import { usePlaybackTimelineClock, type PreviewPlaybackAnchor } from './use-playback-timeline-clock';
+import type { PlayerTourStep } from '@/store/player-tour-store';
 import type { PlaybackMode } from '@/lib/playback-source';
-import type { ConnectionStatus } from '@/types/bridge';
 
 const ReanimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
-
-function getStatusDescriptor(
-  playbackMode: PlaybackMode,
-  status: ConnectionStatus,
-  latencyMs: number,
-) {
-  if (playbackMode === 'mobile') {
-    return {
-      tint: 'rgba(111,232,179,0.07)',
-      border: 'rgba(111,232,179,0.16)',
-      signalColor: '#8FF0C4',
-    };
-  }
-  if (status === 'connecting') {
-    return {
-      tint: 'rgba(255,173,94,0.07)',
-      border: 'rgba(255,173,94,0.16)',
-      signalColor: '#FFD287',
-    };
-  }
-  if (status !== 'connected') {
-    return {
-      tint: 'rgba(255,89,115,0.08)',
-      border: 'rgba(255,89,115,0.16)',
-      signalColor: '#FF93A4',
-    };
-  }
-  if (latencyMs > 210) {
-    return {
-      tint: 'rgba(255,173,94,0.07)',
-      border: 'rgba(255,173,94,0.16)',
-      signalColor: '#FFD287',
-    };
-  }
-  if (latencyMs > 120) {
-    return {
-      tint: 'rgba(255,255,255,0.05)',
-      border: 'rgba(255,255,255,0.14)',
-      signalColor: '#FFFFFF',
-    };
-  }
-  return {
-    tint: 'rgba(111,232,179,0.07)',
-    border: 'rgba(111,232,179,0.16)',
-    signalColor: '#8FF0C4',
-  };
-}
-
-const ConnectivityStatusView = memo(function ConnectivityStatusView({
-  playbackMode,
-  connectionStatus,
-  latencyMs,
-  actionText,
-  sourceText,
-}: {
-  playbackMode: PlaybackMode;
-  connectionStatus: ConnectionStatus;
-  latencyMs: number;
-  actionText: string;
-  sourceText: string;
-}) {
-  const status = getStatusDescriptor(playbackMode, connectionStatus, latencyMs);
-  const mobileOnly = playbackMode === 'mobile';
-
-  return (
-    <View
-      style={[
-        styles.capsule,
-        {
-          backgroundColor: 'transparent',
-          borderColor: 'transparent',
-        },
-      ]}>
-      <View style={styles.left}>
-        <View style={styles.labelRow}>
-          <View style={[styles.dot, { backgroundColor: status.signalColor }]} />
-          <Text style={styles.label} numberOfLines={1} ellipsizeMode="tail">
-            {actionText}
-          </Text>
-        </View>
-        <Text style={styles.value} numberOfLines={1} ellipsizeMode="tail">
-          {sourceText}
-        </Text>
-      </View>
-
-      <View style={styles.right}>
-        <Text style={styles.pingLabel}>{mobileOnly ? 'Mode' : 'Ping'}</Text>
-        <Text style={styles.pingValue}>
-          {mobileOnly ? 'Mobile-Only' : `${Math.max(0, Math.round(latencyMs))} ms`}
-        </Text>
-      </View>
-    </View>
-  );
-});
 
 function formatTime(ms: number) {
   "worklet";
@@ -142,9 +49,7 @@ function formatRemainingTime(positionMs: number, durationMs: number) {
 const SCRUB_DISPLAY_INTERVAL_MS = 80;
 const SCRUB_LYRIC_PREVIEW_INTERVAL_MS = 220;
 const INTERACTION_KEEP_ALIVE_MS = 1000;
-const FULLSCREEN_CONTROLS_TRANSITION_MS = 320;
 const UTILITY_ROW_HEIGHT = 44;
-const STATUS_ROW_HEIGHT = 56;
 
 export type PlaybackControlsLayout =
   | 'default'
@@ -168,22 +73,19 @@ type PlaybackControlsProps = {
   onSeek: (positionMs: number) => void;
   onRequestTranslate?: () => void;
   translationLoading?: boolean;
-  showTranslatedText?: boolean;
-  onToggleShowTranslatedText?: (value: boolean) => void;
   autoHidePlaybackControls?: boolean;
   onToggleAutoHidePlaybackControls?: () => void;
-  hideStatusBar?: boolean;
-  onToggleHideStatusBar?: (value: boolean) => void;
-  connectionStatus?: ConnectionStatus;
   playbackMode?: PlaybackMode;
   latencyMs?: number;
-  statusActionText?: string;
-  statusSourceText?: string;
   onUserInteraction?: () => void;
   fullscreenAlbumMode?: boolean;
+  fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
   layout?: PlaybackControlsLayout;
+  previewPlayback?: PreviewPlaybackAnchor;
+  tourStep?: PlayerTourStep;
+  previewTranslated?: boolean;
 };
 
 type TransportButtonProps = {
@@ -350,28 +252,27 @@ export const PlaybackControls = memo(function PlaybackControls({
   onSeek,
   onRequestTranslate,
   translationLoading = false,
-  showTranslatedText = true,
-  onToggleShowTranslatedText,
   autoHidePlaybackControls = false,
   onToggleAutoHidePlaybackControls,
-  hideStatusBar = false,
-  onToggleHideStatusBar,
-  connectionStatus = 'disconnected',
   playbackMode = 'desktop',
   latencyMs = 0,
-  statusActionText = 'Connecting to bridge...',
-  statusSourceText = 'Bridge offline',
   onUserInteraction,
   fullscreenAlbumMode = false,
+  fullscreenActions,
   controlsModeTransitioning = false,
   fullscreenAlbumProgress,
   layout = 'default',
+  previewPlayback,
+  tourStep,
+  previewTranslated,
 }: PlaybackControlsProps) {
+  const liveTranslated = usePlaybackStore(s => s.lyrics.some(line => Boolean(line.translatedText || line.backgroundTranslatedText)));
+  const translated = previewTranslated ?? liveTranslated;
   const isOverlay = layout === 'overlay';
   const isLandscapeUtilities = layout === 'landscape-utilities';
+  // Worklets must capture this primitive, never the React elements and their Fiber owners.
+  const hasFullscreenActions = Boolean(fullscreenActions);
   const playPauseProgress = useSharedValue(isPlaying ? 1 : 0);
-  const statusPreferenceProgress = useSharedValue(hideStatusBar ? 0 : 1);
-  const statusLongPressTriggeredRef = useRef(false);
 
   useEffect(() => {
     playPauseProgress.value = withTiming(isPlaying ? 1 : 0, {
@@ -379,13 +280,6 @@ export const PlaybackControls = memo(function PlaybackControls({
       easing: Easing.out(Easing.ease),
     });
   }, [isPlaying, playPauseProgress]);
-
-  useEffect(() => {
-    statusPreferenceProgress.value = withTiming(hideStatusBar ? 0 : 1, {
-      duration: FULLSCREEN_CONTROLS_TRANSITION_MS,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [hideStatusBar, statusPreferenceProgress]);
 
   const playIconStyle = useAnimatedStyle(() => {
     const progress = playPauseProgress.value;
@@ -404,13 +298,10 @@ export const PlaybackControls = memo(function PlaybackControls({
   });
 
   const bottomSlotStyle = useAnimatedStyle(() => {
-    const preference = statusPreferenceProgress.value;
     const fullscreen = fullscreenAlbumProgress.value;
 
     return {
-      height:
-        UTILITY_ROW_HEIGHT * (1 - fullscreen) +
-        STATUS_ROW_HEIGHT * Math.max(preference, fullscreen),
+      height: hasFullscreenActions ? UTILITY_ROW_HEIGHT : UTILITY_ROW_HEIGHT * (1 - fullscreen),
     };
   });
 
@@ -422,63 +313,48 @@ export const PlaybackControls = memo(function PlaybackControls({
     };
   });
 
-  const statusLayerStyle = useAnimatedStyle(() => {
-    const preference = statusPreferenceProgress.value;
-    const fullscreen = fullscreenAlbumProgress.value;
-    const layoutBlend = 1 - preference;
-    const slotHeight =
-      UTILITY_ROW_HEIGHT * (1 - fullscreen) +
-      STATUS_ROW_HEIGHT * Math.max(preference, fullscreen);
-    const statusOpacity = preference + (1 - preference) * fullscreen;
-
-    return {
-      opacity: statusOpacity,
-      top:
-        layoutBlend * Math.max(0, slotHeight - STATUS_ROW_HEIGHT) +
-        (1 - layoutBlend) * UTILITY_ROW_HEIGHT * (1 - fullscreen),
-    };
-  });
+  const fullscreenLayerStyle = useAnimatedStyle(() => ({
+    opacity: fullscreenAlbumProgress.value,
+  }));
 
   const utilityButtons = (
     <>
       {!isLandscapeUtilities ? (
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={autoHidePlaybackControls ? "Keep playback controls visible" : "Auto hide playback controls"}
+          accessibilityState={{ selected: !autoHidePlaybackControls }}
           style={({ pressed }) => [
             styles.utilityButton,
-            autoHidePlaybackControls && styles.utilityButtonActive,
+            tourStep === 'autoHide' && styles.tourHighlight,
             pressed && styles.utilityButtonPressed,
           ]}
           onPress={() => {
             onUserInteraction?.();
-            if (statusLongPressTriggeredRef.current) {
-              statusLongPressTriggeredRef.current = false;
-              return;
-            }
             onToggleAutoHidePlaybackControls?.();
           }}
-          onLongPress={() => {
-            statusLongPressTriggeredRef.current = true;
-            onUserInteraction?.();
-            onToggleHideStatusBar?.(!hideStatusBar);
-          }}
-          onPressIn={onUserInteraction}
+onPressIn={onUserInteraction}
           onPressOut={onUserInteraction}
           delayLongPress={280}
           hitSlop={8}>
-          <View style={styles.statusButtonInner}>
+          <View style={[styles.statusButtonInner, !autoHidePlaybackControls && styles.utilityButtonActive]}>
             <Ionicons
               name={autoHidePlaybackControls ? 'eye-off' : 'eye'}
               size={19}
-              color={autoHidePlaybackControls ? '#FFFFFF' : 'rgba(255,255,255,0.62)'}
+              color={autoHidePlaybackControls ? '#FFFFFF' : '#18201E'}
             />
-            {!hideStatusBar && <View style={styles.statusVisibleMark} />}
+
           </View>
         </Pressable>
       ) : null}
 
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Auto scroll to current lyric"
+        accessibilityState={{ disabled: !showResumeAutoFollow }}
         style={({ pressed }) => [
           styles.utilityButton,
+          tourStep === 'autoScroll' && styles.tourHighlight,
           !showResumeAutoFollow && styles.utilityButtonDisabled,
           pressed && showResumeAutoFollow && styles.utilityButtonPressed,
         ]}
@@ -498,10 +374,13 @@ export const PlaybackControls = memo(function PlaybackControls({
       </Pressable>
 
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={translationLoading ? "Translating lyrics" : translated ? "Lyrics translated" : "Translate lyrics"}
+        accessibilityState={{ selected: translated, busy: translationLoading, disabled: translationLoading }}
         style={({ pressed }) => [
           styles.utilityButton,
-          showTranslatedText && styles.utilityButtonActive,
           translationLoading && styles.utilityButtonDisabled,
+          tourStep === 'translate' && styles.tourHighlight,
           pressed && !translationLoading && styles.utilityButtonPressed,
         ]}
         onPress={() => {
@@ -510,24 +389,18 @@ export const PlaybackControls = memo(function PlaybackControls({
         }}
         onPressIn={onUserInteraction}
         onPressOut={onUserInteraction}
-        onLongPress={() => {
-          onUserInteraction?.();
-          onToggleShowTranslatedText?.(!showTranslatedText);
-        }}
         delayLongPress={280}
         disabled={translationLoading}
         hitSlop={8}>
-        <View style={styles.translateButtonInner}>
-          <Ionicons name="language" size={18} color="#FFFFFF" />
+        <View style={[styles.translateButtonInner, translated && !translationLoading && styles.utilityButtonActive]}>
+          <Ionicons name="language" size={18} color={translated && !translationLoading ? "#18201E" : "#FFFFFF"} />
           {translationLoading ? (
             <View style={styles.translateLoadingDots}>
               <View style={styles.translateLoadingDot} />
               <View style={styles.translateLoadingDot} />
               <View style={styles.translateLoadingDot} />
             </View>
-          ) : (
-            showTranslatedText && <View style={styles.translateActiveMark} />
-          )}
+          ) : null}
         </View>
       </Pressable>
     </>
@@ -538,8 +411,12 @@ export const PlaybackControls = memo(function PlaybackControls({
       <>
         <View style={styles.landscapeActionSlot}>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Auto scroll to current lyric"
+            accessibilityState={{ disabled: !showResumeAutoFollow }}
             style={({ pressed }) => [
               styles.landscapeUtilityButton,
+              tourStep === 'autoScroll' && styles.tourHighlight,
               !showResumeAutoFollow && styles.utilityButtonDisabled,
               pressed && showResumeAutoFollow && styles.utilityButtonPressed,
             ]}
@@ -561,10 +438,13 @@ export const PlaybackControls = memo(function PlaybackControls({
 
         <View style={styles.landscapeActionSlot}>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={translationLoading ? "Translating lyrics" : translated ? "Lyrics translated" : "Translate lyrics"}
+            accessibilityState={{ selected: translated, busy: translationLoading, disabled: translationLoading }}
             style={({ pressed }) => [
               styles.landscapeUtilityButton,
-              showTranslatedText && styles.utilityButtonActive,
               translationLoading && styles.utilityButtonDisabled,
+              tourStep === 'translate' && styles.tourHighlight,
               pressed && !translationLoading && styles.utilityButtonPressed,
             ]}
             onPress={() => {
@@ -573,24 +453,18 @@ export const PlaybackControls = memo(function PlaybackControls({
             }}
             onPressIn={onUserInteraction}
             onPressOut={onUserInteraction}
-            onLongPress={() => {
-              onUserInteraction?.();
-              onToggleShowTranslatedText?.(!showTranslatedText);
-            }}
             delayLongPress={280}
             disabled={translationLoading}
             hitSlop={8}>
-            <View style={styles.translateButtonInner}>
-              <Ionicons name="language" size={18} color="#FFFFFF" />
+            <View style={[styles.translateButtonInner, translated && !translationLoading && styles.utilityButtonActive]}>
+              <Ionicons name="language" size={18} color={translated && !translationLoading ? "#18201E" : "#FFFFFF"} />
               {translationLoading ? (
                 <View style={styles.translateLoadingDots}>
                   <View style={styles.translateLoadingDot} />
                   <View style={styles.translateLoadingDot} />
                   <View style={styles.translateLoadingDot} />
                 </View>
-              ) : (
-                showTranslatedText && <View style={styles.translateActiveMark} />
-              )}
+              ) : null}
             </View>
           </Pressable>
         </View>
@@ -605,6 +479,7 @@ export const PlaybackControls = memo(function PlaybackControls({
         isOverlay && styles.cardOverlay,
       ]}>
       <PlaybackTimeline
+        previewPlayback={previewPlayback}
         durationMs={durationMs}
         onScrubPreview={onScrubPreview}
         onSeek={onSeek}
@@ -633,7 +508,7 @@ export const PlaybackControls = memo(function PlaybackControls({
             isPlaying && onPlayPauseResync ? onPlayPauseResync : undefined
           }
           onUserInteraction={onUserInteraction}
-          style={isOverlay ? styles.playButtonShellOverlay : styles.playButtonShell}>
+          style={[isOverlay ? styles.playButtonShellOverlay : styles.playButtonShell, tourStep === 'playback' && styles.tourHighlight]}>
           <View style={isOverlay ? styles.playIconFrameOverlay : styles.playIconFrame}>
             <Reanimated.View
               pointerEvents="none"
@@ -680,27 +555,25 @@ export const PlaybackControls = memo(function PlaybackControls({
 
       {!isOverlay ? (
         <Reanimated.View
-          style={[styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle]}>
+          style={[!fullscreenActions && styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle]}>
           <Reanimated.View
-            pointerEvents={controlsModeTransitioning ? 'none' : 'auto'}
+            pointerEvents={controlsModeTransitioning || fullscreenAlbumMode ? 'none' : 'auto'}
+            accessibilityElementsHidden={fullscreenAlbumMode}
+            importantForAccessibility={fullscreenAlbumMode ? 'no-hide-descendants' : 'auto'}
             style={[styles.bottomLayer, styles.bottomUtilityLayer, utilityLayerStyle]}>
             <View style={styles.utilityRow}>{utilityButtons}</View>
           </Reanimated.View>
+          {fullscreenActions ? (
+            <Reanimated.View
+              pointerEvents={fullscreenAlbumMode && !controlsModeTransitioning ? 'auto' : 'none'}
+              accessibilityElementsHidden={!fullscreenAlbumMode}
+              importantForAccessibility={fullscreenAlbumMode ? 'auto' : 'no-hide-descendants'}
+              style={[styles.bottomLayer, styles.bottomUtilityLayer, fullscreenLayerStyle]}>
+              <View style={styles.utilityRow}>{fullscreenActions}</View>
+            </Reanimated.View>
+          ) : null}
 
-          <Reanimated.View
-            pointerEvents={
-              controlsModeTransitioning || !hideStatusBar ? 'auto' : 'none'
-            }
-            style={[styles.bottomLayer, statusLayerStyle]}>
-            <ConnectivityStatusView
-              playbackMode={playbackMode}
-              connectionStatus={connectionStatus}
-              latencyMs={latencyMs}
-              actionText={statusActionText}
-              sourceText={statusSourceText}
-            />
-          </Reanimated.View>
-        </Reanimated.View>
+  </Reanimated.View>
       ) : null}
     </Reanimated.View>
   );
@@ -712,9 +585,10 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   onSeek,
   onUserInteraction,
   compact = false,
+  previewPlayback,
 }: Pick<
   PlaybackControlsProps,
-  'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction'
+  'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlayback'
 > & {
   compact?: boolean;
 }) {
@@ -728,7 +602,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   const isScrubbingShared = useSharedValue(false);
   const pendingSeekPositionMsShared = useSharedValue<number | null>(null);
   const maxDuration = Math.max(1, durationMs || 1);
-  const playbackPositionShared = usePlaybackTimelineClock(maxDuration);
+  const playbackPositionShared = usePlaybackTimelineClock(maxDuration, previewPlayback);
 
   const displayPositionShared = useDerivedValue(() => {
     if (isScrubbingShared.value) {
@@ -922,6 +796,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 });
 
 const styles = StyleSheet.create({
+  tourHighlight: { borderWidth: 2, borderColor: '#A8F0CF', backgroundColor: 'rgba(168,240,207,0.12)' },
   card: {
     paddingHorizontal: 20,
     paddingTop: 16,
@@ -1083,17 +958,23 @@ const styles = StyleSheet.create({
   },
   utilityButtonActive: {
     opacity: 1,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 7,
   },
   utilityButtonPressed: {
     transform: [{ scale: 0.94 }],
     opacity: 0.82,
   },
   translateButtonInner: {
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
     minWidth: 20,
   },
   statusButtonInner: {
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
     minWidth: 20,

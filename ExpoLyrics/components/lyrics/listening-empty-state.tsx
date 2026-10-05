@@ -8,13 +8,12 @@ import { MotionPressable } from '@/components/ui/motion-pressable';
 
 const entrance = FadeInDown.duration(380).reduceMotion(ReduceMotion.System);
 
-export const ListeningEmptyState = memo(function ListeningEmptyState({ mobile, connected, signedIn, onConnect, onSignIn, onOpenPlayer }: {
+export const ListeningEmptyState = memo(function ListeningEmptyState({ mobile, connected, signedIn, onConnect, onSignIn }: {
   mobile: boolean;
   connected: boolean;
   signedIn: boolean;
   onConnect: () => void;
   onSignIn: () => void;
-  onOpenPlayer: () => void;
 }) {
   const needsLogin = mobile && !signedIn;
   const needsBridge = !mobile && !connected;
@@ -26,13 +25,13 @@ export const ListeningEmptyState = memo(function ListeningEmptyState({ mobile, c
         <Text style={styles.title}>
           {needsBridge ? 'Desktop Bridge is not connected' : needsLogin ? 'No Spotify Login' : 'Play a song on Spotify'}
         </Text>
-        {(mobile || needsBridge) && (
+        {(needsLogin || needsBridge) && (
           <MotionPressable
             accessibilityLabel={needsLogin ? 'Sign in with Spotify' : undefined}
-            onPress={needsBridge ? onConnect : needsLogin ? onSignIn : onOpenPlayer}
+            onPress={needsBridge ? onConnect : onSignIn}
             style={styles.button}>
-            <Ionicons name={needsBridge ? 'qr-code-outline' : needsLogin ? 'log-in-outline' : 'play'} size={18} color="#FFFFFF" />
-            <Text style={styles.buttonText}>{needsBridge ? 'Scan QR code' : needsLogin ? 'Log In' : 'Open Spotify'}</Text>
+            <Ionicons name={needsBridge ? 'qr-code-outline' : 'log-in-outline'} size={18} color="#FFFFFF" />
+            <Text style={styles.buttonText}>{needsBridge ? 'Scan QR code' : 'Log In'}</Text>
           </MotionPressable>
         )}
       </Animated.View>

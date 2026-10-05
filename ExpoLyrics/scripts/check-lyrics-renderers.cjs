@@ -272,6 +272,7 @@ host.destroyLyricsLayout();
 console.log('WebView controller checks passed: measured anchors, seeks, manual scroll, resume, landscape and last-line padding.');
 
 const touchContent = new ElementBox();
+landscape = false;
 touchContent.className = 'content';
 scrollRoot.appendChild(touchContent);
 host.initLyricsLayout(viewport, touchContent, runtime, source);
@@ -291,8 +292,27 @@ for (let i = 0; i < 8; i++) {
   host.scrollToActiveLine(3500, true, false, () => {});
   assert.equal(viewport.scrollTop, manualOffset, 'momentum keeps ownership beyond 700ms');
 }
-host.releaseLyricsUserScroll();
+host.releaseLyricsUserScroll(true, true);
+assert.equal(viewport.style.overflowY, 'hidden', 'resume cancels native momentum before returning');
+const resumeFrom = viewport.scrollTop;
+host.scrollToActiveLine(3500, true, true, () => {});
+assert.equal(viewport.scrollTop, resumeFrom, 'resume starts at the current offset without a snap');
+clockMs += 220;
+host.scrollToActiveLine(3500, true, false, () => {});
+assert.ok(viewport.scrollTop < resumeFrom && viewport.scrollTop > 234, 'resume glides monotonically to the active row');
+clockMs += 500;
+host.scrollToActiveLine(3500, true, false, () => {});
+assert.equal(viewport.scrollTop, 234);
+assert.notEqual(viewport.style.overflowY, 'hidden', 'native scrolling restores after the return completes');
+viewport.scrollTop = 680;
+host.releaseLyricsUserScroll(true, true);
 host.scrollToActiveLine(9500, true, true, () => {});
+assert.equal(viewport.scrollTop, 680, 'return remains smooth after the clock advanced while browsing');
+host.releaseLyricsUserScroll();
+host.setLyricsUserTouching(true);
+assert.notEqual(viewport.style.overflowY, 'hidden', 'a fresh gesture can interrupt the return');
+host.releaseLyricsUserScroll();
+host.scrollToActiveLine(15500, true, true, () => {});
 assert.notEqual(viewport.scrollTop, 680, 'an explicit seek releases manual ownership immediately');
 host.destroyLyricsLayout();
 

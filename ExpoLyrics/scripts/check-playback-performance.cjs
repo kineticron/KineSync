@@ -78,10 +78,22 @@ function load(relative) {
   if (cache.has(filename)) return cache.get(filename).exports;
   let source = fs.readFileSync(filename, 'utf8');
   if (relative.endsWith('playback-controls.tsx')) source += '\nexport { PlaybackTimeline };';
-  const code = babel.transformSync(source, {
+  const transformed = babel.transformSync(source, {
+    ast: true,
     filename, babelrc: false, configFile: false, presets: ['babel-preset-expo'],
     caller: { name: 'metro', platform: 'ios', supportsStaticESM: false }, envName: 'production',
-  }).code;
+  });
+  if (relative.endsWith('playback-controls.tsx')) {
+    babel.traverse(transformed.ast, {
+      AssignmentExpression({ node }) {
+        if (node.left.type !== 'MemberExpression' || node.left.property.name !== '__closure' || node.right.type !== 'ObjectExpression') return;
+        for (const property of node.right.properties) {
+          assert.notEqual(property.key?.name, 'fullscreenActions', 'UI worklets must not serialize React elements or their Fiber owners');
+        }
+      },
+    });
+  }
+  const code = transformed.code;
   const module = { exports: {} };
   cache.set(filename, module);
   const localRequire = (name) => {

@@ -1,4 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
+import { normalizeTranslationLanguage, type TranslationLanguage } from '@/lib/translation-settings';
 import { AppState, Platform } from 'react-native';
 
 import { enrichLyrics } from '@/lib/lyrics-enrich';
@@ -120,10 +122,11 @@ type PlaybackState = {
   simulatedLatencyMs: number;
   packetDropRate: number;
   playbackCompensationMs: number;
-  playbackTapToSeek: boolean;
-  hidePlaybackStatusBar: boolean;
-  autoHidePlaybackControls: boolean;
   showTranslatedText: boolean;
+  translationLanguage: TranslationLanguage;
+  setShowTranslatedText: (value: boolean) => void;
+  setTranslationLanguage: (value: TranslationLanguage) => void;
+  autoHidePlaybackControls: boolean;
   lyricsStyle: LyricsStyle;
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
@@ -146,15 +149,18 @@ type PlaybackState = {
   setSimulatedLatencyMs: (ms: number) => void;
   setPacketDropRate: (rate: number) => void;
   setPlaybackCompensationMs: (ms: number) => void;
-  setPlaybackTapToSeek: (value: boolean) => void;
-  setHidePlaybackStatusBar: (value: boolean) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
-  setShowTranslatedText: (value: boolean) => void;
   setLyricsStyle: (mode: LyricsStyle) => void;
   /** @deprecated Use setLyricsStyle. Migrates legacy native/webview values. */
   setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
+let rendererChanged = false;
+let translationSettingsChanged = false;
+function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
+  translationSettingsChanged = true;
+  void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
+}
 let playbackClockTimer: ReturnType<typeof setInterval> | null = null;
 let playbackClockEnabled = AppState.currentState === 'active';
 
@@ -233,10 +239,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   simulatedLatencyMs: 0,
   packetDropRate: 0,
   playbackCompensationMs: 0,
-  playbackTapToSeek: true,
-  hidePlaybackStatusBar: true,
-  autoHidePlaybackControls: true,
   showTranslatedText: true,
+  translationLanguage: 'English',
+  autoHidePlaybackControls: true,
   lyricsStyle: 'spicy',
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
@@ -394,12 +399,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ playbackCompensationMs: Math.max(-2000, Math.min(4000, Math.floor(safe))) });
   },
-  setPlaybackTapToSeek: (value) => set({ playbackTapToSeek: Boolean(value) }),
-  setHidePlaybackStatusBar: (value) => set({ hidePlaybackStatusBar: Boolean(value) }),
+  setShowTranslatedText: (value) => {
+    const showTranslatedText = Boolean(value);
+    set({ showTranslatedText });
+    persistTranslationSettings(showTranslatedText, usePlaybackStore.getState().translationLanguage);
+  },
+  setTranslationLanguage: (value) => {
+    const translationLanguage = normalizeTranslationLanguage(value);
+    set({ translationLanguage });
+    persistTranslationSettings(usePlaybackStore.getState().showTranslatedText, translationLanguage);
+  },
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
-  setShowTranslatedText: (value) => set({ showTranslatedText: Boolean(value) }),
-  setLyricsStyle: (mode) =>
-    set({ lyricsStyle: mode === 'amll' ? 'amll' : 'spicy' }),
+  setLyricsStyle: (mode) => {
+    rendererChanged = true;
+    const lyricsStyle = mode === 'amll' ? 'amll' : 'spicy';
+    set({ lyricsStyle });
+    void AsyncStorage.setItem('kinesync_lyrics_style', lyricsStyle).catch(() => {});
+  },
   setLyricsRendererMode: (mode) =>
     set({
       lyricsStyle:
@@ -426,3 +442,16 @@ export function stopPlaybackClock() {
   playbackClockEnabled = false;
   clearPlaybackClockHandle();
 }
+
+void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
+  if (!rendererChanged && (style === 'amll' || style === 'spicy')) usePlaybackStore.setState({ lyricsStyle: style });
+}).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
+  if (!raw || translationSettingsChanged) return;
+  const saved = JSON.parse(raw);
+  usePlaybackStore.setState({
+    showTranslatedText: typeof saved?.showTranslatedText === 'boolean' ? saved.showTranslatedText : true,
+    translationLanguage: normalizeTranslationLanguage(saved?.translationLanguage),
+  });
+}).catch(() => {});

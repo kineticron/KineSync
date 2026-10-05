@@ -5,13 +5,15 @@ import { cancelAnimation, Easing, useSharedValue, withTiming } from "react-nativ
 import { usePlaybackStore } from "@/store/playback-store";
 
 /** One UI-thread clock per anchor, instead of restarting a tween every store tick. */
-export function usePlaybackTimelineClock(durationMs: number) {
+export type PreviewPlaybackAnchor = { anchorPositionMs: number; anchorMonotonicMs: number; isPlaying: boolean };
+
+export function usePlaybackTimelineClock(durationMs: number, preview?: PreviewPlaybackAnchor) {
   const position = useSharedValue(usePlaybackStore.getState().playbackPosition);
   useFocusEffect(useCallback(() => {
     const sync = () => {
       cancelAnimation(position);
       if (AppState.currentState !== "active") return;
-      const state = usePlaybackStore.getState();
+      const state = preview ?? usePlaybackStore.getState();
       const elapsed = state.isPlaying ? Math.max(0, performance.now() - state.anchorMonotonicMs) : 0;
       const current = Math.max(0, Math.min(durationMs, state.anchorPositionMs + elapsed));
       position.value = current;
@@ -23,7 +25,7 @@ export function usePlaybackTimelineClock(durationMs: number) {
       }
     };
     sync();
-    const unsubscribe = usePlaybackStore.subscribe((state, previous) => {
+    const unsubscribe = preview ? () => {} : usePlaybackStore.subscribe((state, previous) => {
       if (state.anchorPositionMs !== previous.anchorPositionMs ||
           state.anchorMonotonicMs !== previous.anchorMonotonicMs ||
           state.isPlaying !== previous.isPlaying) sync();
@@ -34,6 +36,6 @@ export function usePlaybackTimelineClock(durationMs: number) {
       subscription.remove();
       cancelAnimation(position);
     };
-  }, [durationMs, position]));
+  }, [durationMs, position, preview]));
   return position;
 }

@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { memo } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import Reanimated, {
   interpolate,
@@ -31,6 +31,8 @@ type TopBarProps = {
   lyricsTimingMode?: LyricsTimingMode;
   lyricsSource?: string;
   onMenuPress: () => void;
+  tourHighlight?: boolean;
+  fitTitle?: boolean;
 };
 
 export const TopBar = memo(function TopBar({
@@ -44,6 +46,8 @@ export const TopBar = memo(function TopBar({
   lyricsTimingMode = "unknown",
   lyricsSource = "",
   onMenuPress,
+  tourHighlight = false,
+  fitTitle = false,
 }: TopBarProps) {
   const menuScale = useSharedValue(1);
   const menuAnimatedStyle = useAnimatedStyle(() => ({
@@ -68,6 +72,7 @@ export const TopBar = memo(function TopBar({
         onPressIn={onTrackPressIn}
         onPressOut={onTrackPressOut}
         disabled={!onTrackPress}>
+        {tourHighlight && <View pointerEvents="none" style={styles.tourHighlight} />}
         {hideArtwork ? (
           <View style={styles.coverArtSlot} />
         ) : artworkUrl ? (
@@ -81,9 +86,14 @@ export const TopBar = memo(function TopBar({
           <Image source={require('@/assets/images/R.png')} style={styles.coverArt} />
         )}
 
-        <View style={styles.titleWrap}>
-          <MarqueeText style={styles.title}>{title}</MarqueeText>
-          <MarqueeText style={styles.artist}>{artist}</MarqueeText>
+        <View collapsable={false} style={styles.titleWrap}>
+          {fitTitle ? <>
+            <Text style={[styles.title, styles.fittedTitle]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{title}</Text>
+            <Text style={[styles.artist, styles.fittedArtist]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{artist}</Text>
+          </> : <>
+            <MarqueeText style={styles.title}>{title}</MarqueeText>
+            <MarqueeText style={styles.artist}>{artist}</MarqueeText>
+          </>}
         </View>
       </Pressable>
 
@@ -124,6 +134,10 @@ export const TopBar = memo(function TopBar({
 });
 
 const styles = StyleSheet.create({
+  fittedTitle: { lineHeight: 25, paddingVertical: 1 },
+  fittedArtist: { lineHeight: 20 },
+  // Draw outside the measured artwork slot: borders must not shift the parent morph layer.
+  tourHighlight: { position: 'absolute', top: -6, bottom: -6, left: -6, right: -6, borderWidth: 2, borderColor: '#A8F0CF', borderRadius: 17 },
   container: {
     flexDirection: "row",
     alignItems: "center",
@@ -146,10 +160,12 @@ const styles = StyleSheet.create({
   coverArtSlot: {
     width: 56,
     height: 56,
+    flexShrink: 0,
   },
   coverArt: {
     width: 56,
     height: 56,
+    flexShrink: 0,
     borderRadius: 11,
     backgroundColor: "rgba(255,255,255,0.12)",
     overflow: "hidden",
@@ -161,6 +177,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     paddingRight: 6,
+    overflow: "hidden",
   },
   title: {
     color: "#FFFFFF",

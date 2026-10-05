@@ -7,6 +7,7 @@ import {
   getCachedMobileLyricsSettings,
   getMobileLyricsSettings,
 } from "@/lib/mobile-lyrics-settings";
+import { usePlaybackStore } from '@/store/playback-store';
 import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import {
@@ -177,6 +178,22 @@ export async function fetchMobileLyricsForTrack(
     onSyncedLyrics?: (packet: LyricsPacket) => void;
   } = {},
 ): Promise<LyricsPacket> {
+  const translationLanguage = usePlaybackStore.getState().translationLanguage;
+  const current = usePlaybackStore.getState();
+  if (immediateTranslation && current.currentTrack?.id === track.id && current.lyrics.length) {
+    const mobileTrack = toMobileTrack(track);
+    mobileLyricsService.rememberPublishedLyrics(mobileTrack.trackId, {
+      trackId: mobileTrack.trackId,
+      lyrics: current.lyrics,
+      source: current.lyricsSource,
+      metadata: current.lyricsMetadata,
+    });
+    const translated = await mobileLyricsService.translatePublishedLyrics(mobileTrack, {
+      translationLanguage,
+      onSyncedLyrics: packet => onSyncedLyrics?.(toActiveLyricsPacket(track, packet)),
+    });
+    return toActiveLyricsPacket(track, translated);
+  }
   const vaultPacket = await lookupMobileVaultLyrics(track);
   if (vaultPacket && (preferredSource === "auto" || preferredSource === "local-vault")) {
     const packet = { type: "lyrics" as const, ...vaultPacket };
@@ -198,6 +215,7 @@ export async function fetchMobileLyricsForTrack(
     force: true,
     preferredSource,
     immediateTranslation,
+    translationLanguage,
     onSyncedLyrics: onSyncedLyrics
       ? (packet) => onSyncedLyrics(toActiveLyricsPacket(track, packet))
       : undefined,

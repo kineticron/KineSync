@@ -12,6 +12,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -41,10 +42,11 @@ import {
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
-import { requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+import { requestOpenSpotifyBrowser, requestLogoutSpotifyBrowser, requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
 import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
 import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
 import { Design } from '@/constants/design';
+import { TranslationLanguagePicker } from '@/components/lyrics/translation-language-picker';
 import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 const settingsEntrance = FadeInDown.duration(320).reduceMotion(ReduceMotion.System);
@@ -163,6 +165,11 @@ async function resetOnboardingCompleted(): Promise<void> {
 export default function BridgeSettingsScreen() {
   const liveActivityMessage = useLiveActivityStatus((state) => state.message);
   const router = useRouter();
+  const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
+  const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
+  const translationLanguage = usePlaybackStore(s => s.translationLanguage);
+  const setTranslationLanguage = usePlaybackStore(s => s.setTranslationLanguage);
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const { action } = useLocalSearchParams<{ action?: string }>();
   const serverUrl = usePlaybackStore((s) => s.serverUrl);
   const handshakeKey = usePlaybackStore((s) => s.handshakeKey);
@@ -381,9 +388,14 @@ export default function BridgeSettingsScreen() {
   useEffect(() => {
     if (!action) return;
     router.setParams({ action: undefined });
-    if (action === 'login') setLoginOpen(true);
+    if (action === 'login' && !useSpotifySessionStore.getState().signedIn) { useSpotifySessionStore.getState().setLoggedOut(false); setLoginOpen(true); }
+    if (action === 'desktop') void selectPlaybackMode('desktop');
     if (action === 'scan') void openScanner();
-  }, [action, openScanner, router]);
+  }, [action, openScanner, router, selectPlaybackMode]);
+
+  useEffect(() => {
+    if (spotifySignedIn) setLoginOpen(false);
+  }, [spotifySignedIn]);
 
   const completeSpotifySignIn = useCallback(() => {
     setSpotifySignedIn(true);
@@ -560,19 +572,66 @@ export default function BridgeSettingsScreen() {
               {playbackMode === 'desktop' ? <View style={styles.divider} /> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Mobile-Only">
+                <View style={spotifySignedIn ? styles.spotifySessionRow : undefined}>
+                {spotifySignedIn ? (
+                  <View style={styles.spotifySignedInStatus} accessible accessibilityLabel="Spotify is logged in">
+                    <Ionicons name="checkmark-circle" size={21} color={Design.accent} />
+                    <Text style={styles.spotifySignedInText}>Spotify is logged in</Text>
+                  </View>
+                ) : null}
                 <Pressable
-                  style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-                  onPress={() => setLoginOpen(true)}>
-                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" />
-                  <Text style={styles.primaryButtonText}>
-                    {spotifySignedIn ? 'Spotify signed in' : 'Sign in with Spotify'}
+                  accessibilityRole="button"
+                  accessibilityLabel={spotifySignedIn ? 'Log out of Spotify' : 'Sign in with Spotify'}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    spotifySignedIn && styles.spotifyLogoutButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    if (spotifySignedIn) {
+                      useSpotifySessionStore.getState().setLoggedOut(true);
+                      requestLogoutSpotifyBrowser();
+                      setSpotifyTokenInput('');
+                      void saveMobileLyricsSettings({ spotifyWebToken: '', spotifyWebTokenExpiresAt: 0 });
+                      usePlaybackStore.setState({ currentTrack: null, lyrics: [], isPlaying: false });
+                    } else {
+                      useSpotifySessionStore.getState().setLoggedOut(false);
+                      setLoginOpen(true);
+                    }
+                  }}>
+                  <Ionicons name={spotifySignedIn ? 'log-out-outline' : 'log-in-outline'} size={18} color={spotifySignedIn ? '#FF93A4' : '#FFFFFF'} />
+                  <Text style={[styles.primaryButtonText, spotifySignedIn && styles.spotifyLogoutText]}>
+                    {spotifySignedIn ? 'Log out' : 'Sign in with Spotify'}
                   </Text>
                 </Pressable>
+                </View>
               </SettingSection> : null}
 
               {playbackMode === 'mobile' ? <View style={styles.divider} /> : null}
 
+              <SettingSection title="Translations">
+                <View style={styles.sectionToggle}>
+                  <Text style={styles.fieldLabel}>Show translations</Text>
+                  <Switch accessibilityLabel="Show translations" value={showTranslatedText} onValueChange={setShowTranslatedText} trackColor={{ false: '#47534F', true: Design.accent }} thumbColor="#FFFFFF" />
+                </View>
+                <Pressable style={({ pressed, hovered }) => [styles.languageButton, (pressed || hovered) && styles.languageButtonHover]}
+                  accessibilityRole="button" accessibilityLabel={`Translation language: ${translationLanguage}`}
+                  accessibilityHint="Opens the language picker" accessibilityState={{ expanded: languagePickerOpen }}
+                  onPress={() => setLanguagePickerOpen(true)}>
+                  <BlurView pointerEvents="none" intensity={34} tint="light" style={StyleSheet.absoluteFill} />
+                  <Ionicons name="language-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.languageButtonText}>Language: {translationLanguage}</Text>
+                  <Ionicons name="chevron-down" size={16} color="rgba(255,255,255,0.72)" />
+                </Pressable>
+                <Text style={styles.fieldLabel}>Language applies the next time you translate lyrics. Use the translation button in playback to translate the current song.</Text>
+              </SettingSection>
+              <View style={styles.divider} />
+
               {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
+                {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
+                  <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>Spotify player</Text>
+                </Pressable>}
                 <FieldRow
                   label="Spotify Bearer Token"
                   value={spotifyTokenInput}
@@ -711,6 +770,13 @@ export default function BridgeSettingsScreen() {
         </KeyboardAvoidingView>
       </SafeAreaView>
 
+      <TranslationLanguagePicker
+        open={languagePickerOpen}
+        selected={translationLanguage}
+        onSelect={setTranslationLanguage}
+        onClose={() => setLanguagePickerOpen(false)}
+      />
+
       <Modal
         animationType="slide"
         visible={scannerOpen}
@@ -751,7 +817,13 @@ export default function BridgeSettingsScreen() {
             source={{ uri: SPOTIFY_LOGIN_URL }}
             originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
             injectedJavaScript={spotifyAuthProbeScript}
+            userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+              if (isTopFrame !== false && url.startsWith('https://open.spotify.com/')) {
+                setLoginOpen(false);
+                requestReloadSpotifyBrowser();
+                return false;
+              }
               if (!isSpotifyNativeAppRedirect(url)) {
                 return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
               }
@@ -937,6 +1009,60 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  languageButton: {
+    minHeight: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  languageButtonHover: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  languageButtonText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  spotifySessionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  spotifySignedInStatus: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  spotifySignedInText: {
+    flexShrink: 1,
+    color: Design.accent,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  spotifyLogoutButton: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    gap: 6,
+    backgroundColor: 'rgba(255,93,117,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,93,117,0.24)',
+  },
+  spotifyLogoutText: {
+    color: '#FF93A4',
   },
   buttonPressed: {
     opacity: 0.76,

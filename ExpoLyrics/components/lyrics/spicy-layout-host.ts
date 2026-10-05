@@ -24,6 +24,8 @@ let rowTops: number[] = [];
 let rowHeights: number[] = [];
 let lastTarget: number | null = null;
 let animation: { from: number; to: number; start: number; duration: number } | null = null;
+let restoreNativeScroll: (() => void) | null = null;
+let smoothReturnPending = false;
 let userScrollingUntil = 0;
 let userTouching = false;
 let graceUntil = 0;
@@ -87,6 +89,8 @@ export function getVisibleLyricsLines() {
 }
 
 export function destroyLyricsLayout() {
+  restoreNativeScroll?.();
+  restoreNativeScroll = null;
   observer?.disconnect();
   observer = null;
   viewport = null;
@@ -107,6 +111,7 @@ export function destroyLyricsLayout() {
 }
 
 export function resetLyricsScroll() {
+  smoothReturnPending = false;
   animation = null;
   lastTarget = null;
   lastPosition = 0;
@@ -210,6 +215,7 @@ export function lyricScrollDuration(
 // CSS ease-out used by the original native scroll: cubic-bezier(.22,.88,.34,1).
 export function lyricScrollEasing(progress: number) {
   const x = Math.max(0, Math.min(1, progress));
+  if (x === 0 || x === 1) return x;
   const bezier = (t: number, a: number, b: number) =>
     3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t * t * b + t ** 3;
   let low = 0;
@@ -223,6 +229,9 @@ export function lyricScrollEasing(progress: number) {
 }
 
 export function noteLyricsUserScroll() {
+  smoothReturnPending = false;
+  restoreNativeScroll?.();
+  restoreNativeScroll = null;
   animation = null;
   userScrollingUntil = performance.now() + 700;
 }
@@ -239,7 +248,29 @@ export function noteLyricsViewportScroll() {
   }
 }
 
-export function releaseLyricsUserScroll() {
+export function releaseLyricsUserScroll(cancelMomentum = true, smoothReturn = false) {
+  smoothReturnPending = smoothReturn;
+  if (cancelMomentum && viewport) {
+    restoreNativeScroll?.();
+    const element = viewport;
+    const top = element.scrollTop;
+    const overflowY = element.style.overflowY;
+    const behavior = element.style.scrollBehavior;
+    // Stop WKWebView's native pan/deceleration before our eased return owns
+    // scrollTop. Keep it disabled for the glide so late native frames cannot
+    // race the animation. A new touch restores native scrolling immediately.
+    element.style.overflowY = 'hidden';
+    element.style.scrollBehavior = 'auto';
+    void element.clientHeight;
+    element.scrollTop = top;
+    restoreNativeScroll = () => {
+      element.style.overflowY = overflowY;
+      element.style.scrollBehavior = behavior;
+    };
+    animation = null;
+    lastTarget = null;
+    wasFollowing = false;
+  }
   userTouching = false;
   userScrollingUntil = 0;
 }
@@ -328,12 +359,14 @@ export function scrollToActiveLine(
     wasFollowing = false;
     animation = null;
     lastTarget = null;
+    lastPosition = position;
     return;
   }
   const seek = Math.abs(position - lastPosition) > 1000;
   lastPosition = position;
   if (lastTarget === null || Math.abs(lastTarget - target) > 2 || force || !wasFollowing) {
-    const instant = (lastTarget === null && wasFollowing) || seek;
+    const instant = !smoothReturnPending && ((lastTarget === null && wasFollowing) || seek);
+    smoothReturnPending = false;
     if (instant) {
       animation = null;
       viewport.scrollTop = target;
@@ -364,5 +397,9 @@ export function scrollToActiveLine(
     const progress = Math.min(1, (now - animation.start) / animation.duration);
     viewport.scrollTop = animation.from + (animation.to - animation.from) * lyricScrollEasing(progress);
     if (progress >= 1) animation = null;
+  }
+  if (!animation) {
+    restoreNativeScroll?.();
+    restoreNativeScroll = null;
   }
 }

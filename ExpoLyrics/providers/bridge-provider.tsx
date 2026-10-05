@@ -14,6 +14,8 @@ import {
 import { Onboarding } from '@/components/onboarding/onboarding-screen';
 import { startLiveActivitySync } from '@/lib/live-activity';
 import { LaunchTransition } from '@/components/ui/launch-transition';
+import { usePlayerTourStore } from '@/store/player-tour-store';
+import { router, usePathname } from 'expo-router';
 
 const ONBOARDING_COMPLETED_KEY = 'kinesync_onboarding_completed';
 
@@ -89,10 +91,16 @@ function inferDefaultBridgeUrl() {
 }
 
 export function BridgeProvider({ children }: PropsWithChildren) {
+  const pathname = usePathname();
   useEffect(startLiveActivitySync, []);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
   const [initialized, setInitialized] = useState(false);
+
+  // Keep setup portrait-only, including the handoff from onboarding to the tour.
+  useEffect(() => {
+    usePlayerTourStore.setState({ onboardingVisible: !onboardingChecked || showOnboarding });
+  }, [onboardingChecked, showOnboarding]);
 
   useEffect(() => {
     if (!showOnboarding) return;
@@ -181,6 +189,8 @@ export function BridgeProvider({ children }: PropsWithChildren) {
 
   const handleOnboardingDismiss = async () => {
     await setOnboardingCompleted(true);
+    usePlayerTourStore.getState().requestStart();
+    if (pathname !== '/') router.replace('/');
     setShowOnboarding(false);
   };
 

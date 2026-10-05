@@ -123,6 +123,7 @@ let fontScale = 1;
 let activeSourceIndex = -1;
 let autoFollowEnabled = true;
 let resumeAutoFollowSignal = 0;
+let ignoreTouchUntilNextStart = false;
 let lastLyricEndTime = 0;
 let staticLyricsMode = false;
 let currentLyricsType: SpicyLyricsType = "Syllable";
@@ -763,10 +764,10 @@ function applyOptions(message: IncomingMessage) {
     message.resumeAutoFollowSignal !== resumeAutoFollowSignal
   ) {
     resumeAutoFollowSignal = message.resumeAutoFollowSignal;
-    releaseLyricsUserScroll();
+    ignoreTouchUntilNextStart = true;
+    releaseLyricsUserScroll(true, true);
     autoFollowEnabled = true;
     pendingForceScroll = true;
-    pendingClockReset = true;
   }
   applyPageOptions();
   if ((translationsChanged || layoutChanged) && sourceLines.length) {
@@ -844,6 +845,7 @@ scrollViewport?.addEventListener("contextmenu", (event) => {
 
 scrollViewport?.addEventListener("touchstart", (event) => {
   if (staticLyricsMode) return;
+  ignoreTouchUntilNextStart = false;
   setLyricsUserTouching(true);
   post({ type: "userInteraction" });
   scheduleFrame();
@@ -863,6 +865,7 @@ scrollViewport?.addEventListener("touchstart", (event) => {
 }, { passive: true });
 
 function noteUserScroll() {
+  if (ignoreTouchUntilNextStart) return;
   touchMoved = true;
   window.clearTimeout(longPressTimer);
   if (staticLyricsMode) return;
@@ -879,7 +882,10 @@ function endLyricsTouch() {
 }
 scrollViewport?.addEventListener("touchend", endLyricsTouch, { passive: true });
 scrollViewport?.addEventListener("touchcancel", endLyricsTouch, { passive: true });
-scrollViewport?.addEventListener("wheel", noteUserScroll, { passive: true });
+scrollViewport?.addEventListener("wheel", () => {
+  ignoreTouchUntilNextStart = false;
+  noteUserScroll();
+}, { passive: true });
 // Scroll also wakes a paused renderer during touch momentum/programmatic seeks.
 scrollViewport?.addEventListener("scroll", () => {
   noteLyricsViewportScroll();
@@ -946,7 +952,7 @@ function updateSuspension() {
   if (suspended) {
     window.clearTimeout(longPressTimer);
     touchStartIndex = -1;
-    releaseLyricsUserScroll();
+    releaseLyricsUserScroll(false);
   }
   frameLoop.setSuspended(suspended);
 }

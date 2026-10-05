@@ -1,5 +1,6 @@
 import { router } from "expo-router";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
+import { usePlayerTourStore } from "@/store/player-tour-store";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import {
   forwardRef,
@@ -81,6 +82,11 @@ export function requestReloadSpotifyBrowser() {
   reloadBrowserCallback?.();
 }
 
+export function requestLogoutSpotifyBrowser() {
+  logoutBrowserCallback?.();
+}
+let logoutBrowserCallback: (() => void) | null = null;
+
 export function requestOpenSpotifyBrowser() {
   openBrowserCallback?.();
 }
@@ -120,6 +126,11 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
 
 export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
   function SpotifyBrowserFallback(_props, ref) {
+    const disposedRef = useRef(false);
+    const trackingAllowed = useCallback(() => {
+      const tour = usePlayerTourStore.getState();
+      return !disposedRef.current && !tour.active && !tour.pending;
+    }, []);
     const webViewRefs = useRef<Record<"primary", WebView<object> | null>>({
       primary: null,
     });
@@ -168,12 +179,20 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       () => webViewRefs.current.primary,
       [],
     );
+    useEffect(() => {
+      disposedRef.current = false;
+      return () => {
+        disposedRef.current = true;
+        getActiveWebView()?.injectJavaScript(makeBrowserCommandScript({ type: 'setMonitoring', enabled: false }));
+      };
+    }, [getActiveWebView]);
 
     // Remount instead of calling reload(): iOS can retain a suspended WKWebView
     // process and its stale Spotify Connect session across a normal reload.
     // Forced refreshes are used for genuine app resumes and explicit user actions.
     const refreshBrowser = useCallback((force = false, automatic = false) => {
       if (
+        !trackingAllowed() ||
         appStateRef.current !== "active" ||
         playbackModeRef.current !== "mobile" ||
         (!force && connectionStatusRef.current === "connected")
@@ -198,7 +217,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       const nextGeneration = browserGenerationRef.current + 1;
       browserGenerationRef.current = nextGeneration;
       setBrowserGeneration(nextGeneration);
-    }, []);
+    }, [trackingAllowed]);
 
     const syncBrowserMonitoring = useCallback(() => {
       if (!browserReadyRef.current) return;
@@ -206,12 +225,13 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         makeBrowserCommandScript({
           type: "setMonitoring",
           enabled:
+            trackingAllowed() &&
             appStateRef.current === "active" &&
             playbackModeRef.current === "mobile" &&
             connectionStatusRef.current !== "connected",
         }),
       );
-    }, [getActiveWebView]);
+    }, [getActiveWebView, trackingAllowed]);
 
     useEffect(() =>
       usePlaybackStore.subscribe((state) => {
@@ -236,23 +256,28 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       }), [refreshBrowser, syncBrowserMonitoring]);
 
     useEffect(() => {
+      logoutBrowserCallback = () => {
+        setBrowserOpen(false);
+        getActiveWebView()?.injectJavaScript('window.location.href="https://accounts.spotify.com/logout"; true;');
+      };
       reloadBrowserCallback = () => refreshBrowser(true, true);
       openBrowserCallback = openBrowser;
       return () => {
+        logoutBrowserCallback = null;
         reloadBrowserCallback = null;
         openBrowserCallback = null;
         if (lyricsRefreshTimerRef.current) {
           clearTimeout(lyricsRefreshTimerRef.current);
         }
       };
-    }, [openBrowser, refreshBrowser]);
+    }, [openBrowser, refreshBrowser, getActiveWebView]);
 
     // A locally advancing WebView clock does not prove that Spotify Connect is
     // still authoritative after suspension. Recreate the player after a genuine
     // background transition and let its ready/playback events repopulate the store.
     useEffect(() => {
       const requestSnapshot = () => {
-        if (!browserReadyRef.current) return;
+        if (!trackingAllowed() || !browserReadyRef.current) return;
         getActiveWebView()?.injectJavaScript(
           makeBrowserCommandScript({ type: "readMetadata" }),
         );
@@ -344,12 +369,13 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           resumeRefreshTimerRef.current = null;
         }
       };
-    }, [getActiveWebView, refreshBrowser, syncBrowserMonitoring]);
+    }, [getActiveWebView, refreshBrowser, syncBrowserMonitoring, trackingAllowed]);
 
     // Mirrors DesktopBridge spotifyDetector.requestCatalogEnrichment(): native
     // metadata gets a stable track id first, then a single catalog enrichment
     // request adds spotifyTrackId/album/artist and re-emits the same track.
     const requestCatalogEnrichment = useCallback(() => {
+      if (!trackingAllowed()) return;
       const metadata = metadataRef.current;
       if (!metadata?.title || !metadata.artist) {
         return;
@@ -382,6 +408,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
             durationMs,
             spotifyTrackId: metadata.spotifyTrackId,
           });
+          if (!trackingAllowed()) return;
           const current = metadataRef.current;
           const currentDurationMs =
             playbackRef.current?.durationMs || current?.catalogDurationMs || 0;
@@ -412,6 +439,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
             ingestRef.current(playbackRef.current);
           }
         } catch (error) {
+          if (!trackingAllowed()) return;
           setStatus(
             `Spotify catalog enrichment failed: ${error instanceof Error ? error.message : String(error)}`,
           );
@@ -424,13 +452,14 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           }
         }
       })();
-    }, []);
+    }, [trackingAllowed]);
     const scheduleLyricsRefresh = useCallback(
       (packetTrackId: string, attempt = 0) => {
         if (lyricsRefreshTimerRef.current) {
           clearTimeout(lyricsRefreshTimerRef.current);
         }
         lyricsRefreshTimerRef.current = setTimeout(() => {
+          if (!trackingAllowed()) return;
           const activeStore = usePlaybackStore.getState();
           if (
             activeStore.playbackMode !== "mobile" ||
@@ -448,10 +477,11 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           void refreshLyricsForCurrentTrack("auto");
         }, attempt === 0 ? 350 : 300);
       },
-      [],
+      [trackingAllowed],
     );
 
     const ingestBrowserPlayback = useCallback((sample: PlaybackSample) => {
+      if (!trackingAllowed()) return;
       playbackRef.current = sample;
       if (
         playbackModeRef.current !== "mobile" ||
@@ -524,7 +554,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         ? ` Spotify ID ${metadata.spotifyTrackId.slice(0, 7)}… (${metadata.catalogResolved ? "catalog" : "browser"}).`
         : " No Spotify ID yet.";
       setStatus(`Browser fallback timing active via ${sample.source}.${spotifyIdStatus}`);
-    }, [requestCatalogEnrichment, scheduleLyricsRefresh]);
+    }, [requestCatalogEnrichment, scheduleLyricsRefresh, trackingAllowed]);
 
     ingestRef.current = ingestBrowserPlayback;
 
@@ -590,6 +620,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     );
 
     const sendCommand = useCallback((command: BrowserCommand) => {
+      if (!trackingAllowed()) return;
       if (!useSpotifySessionStore.getState().signedIn) {
         openBrowser();
         return;
@@ -600,12 +631,13 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           setStatus("Reconnecting Spotify player…");
           return;
         }
-        openBrowser();
-        setStatus("Open Spotify browser and wait for it to finish loading.");
+        refreshBrowser(true, true);
+        pendingRecoveryCommandRef.current = command;
+        setStatus("Reconnecting Spotify player…");
         return;
       }
       getActiveWebView()?.injectJavaScript(makeBrowserCommandScript(command));
-    }, [browserReady, getActiveWebView, openBrowser]);
+    }, [browserReady, getActiveWebView, openBrowser, refreshBrowser, trackingAllowed]);
 
     useImperativeHandle(
       ref,
@@ -722,7 +754,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     <BrowserMessage message={description} />
                   )}
                   onLoadStart={() => {
-                    if (browserGeneration !== browserGenerationRef.current) return;
+                    if (browserGeneration !== browserGenerationRef.current || useSpotifySessionStore.getState().loggedOut) return;
                     setBrowserLoading(true);
                     setBrowserReady(false);
                     browserReadyRef.current = false;
@@ -751,6 +783,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     setStatus(`Spotify browser error: ${nativeEvent.description}`);
                   }}
                   onMessage={({ nativeEvent }: WebViewMessageEvent) => {
+                    if (!trackingAllowed()) return;
                     if (browserGeneration !== browserGenerationRef.current) return;
                     if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || "")) return;
                     const event = parseBrowserEvent(nativeEvent.data);
