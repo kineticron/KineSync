@@ -76,7 +76,10 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" && \
       libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 \
       libgtk-3-0t64 libnotify4 libnss3 libnss3-tools libxkbcommon0 libxss1 \
       libxtst6 playerctl procps tini unzip xauth xdg-utils xdotool \
-      "xpra=${XPRA_VERSION}" "xpra-x11=${XPRA_VERSION}" \
+      "xpra=${XPRA_VERSION}" "xpra-common=${XPRA_VERSION}" \
+      "xpra-client=${XPRA_VERSION}" "xpra-client-gtk3=${XPRA_VERSION}" \
+      "xpra-server=${XPRA_VERSION}" "xpra-codecs=${XPRA_VERSION}" \
+      "xpra-x11=${XPRA_VERSION}" \
       /tmp/spotify-client.deb && \
     groupadd --gid 568 abc && \
     useradd --uid 568 --gid 568 --create-home --home-dir /config --shell /bin/bash abc && \
