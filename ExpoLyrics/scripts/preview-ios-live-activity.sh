@@ -5,11 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 output="$PWD/.expo/live-activity-preview"
 mkdir -p "$output"
-project=$(find "$PWD/ios" -maxdepth 1 -name '*.xcodeproj' -print -quit)
+workspace=$(find "$PWD/ios" -maxdepth 1 -name '*.xcworkspace' -print -quit)
 arch=$(uname -m)
 sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
 
-xcodebuild -project "$project" -target KineSyncLyricsWidget \
+xcodebuild -workspace "$workspace" -scheme KineSyncLyricsWidget \
   -configuration Release -sdk iphonesimulator \
   ARCHS="$arch" ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO \
   SYMROOT="$output/products" OBJROOT="$output/objects" \
@@ -19,10 +19,17 @@ app="$output/KineSyncPreview.app"
 mkdir -p "$app/PlugIns"
 ditto "$output/products/Release-iphonesimulator/KineSyncLyricsWidget.appex" \
   "$app/PlugIns/KineSyncLyricsWidget.appex"
+mkdir -p "$output/types"
+xcrun --sdk iphonesimulator swiftc -parse-as-library -O -emit-library -static -emit-module \
+  -target "$arch-apple-ios16.4-simulator" -sdk "$sdk" \
+  -module-name KineSyncActivityTypes \
+  -emit-module-path "$output/types/KineSyncActivityTypes.swiftmodule" \
+  modules/kinesync-live-activity/ios/types/LyricsActivityAttributes.swift \
+  -o "$output/types/libKineSyncActivityTypes.a"
 xcrun --sdk iphonesimulator swiftc -parse-as-library -O \
   -target "$arch-apple-ios16.4-simulator" -sdk "$sdk" \
   -module-name KineSyncLiveActivity \
-  modules/kinesync-live-activity/ios/LyricsActivityAttributes.swift \
+  -I "$output/types" "$output/types/libKineSyncActivityTypes.a" \
   scripts/live-activity-preview/PreviewApp.swift -o "$app/KineSyncPreview"
 
 python3 - "$app" <<'PY'
@@ -68,4 +75,4 @@ sleep 5
 xcrun simctl launch "$device" com.apple.Preferences
 sleep 5
 xcrun simctl io "$device" screenshot "$output/compact-island.png"
-printf 'Preview device: %s\nHost module: KineSyncLiveActivity\n' "$device" > "$output/preview.txt"
+printf 'Preview device: %s\nAttributes module: KineSyncActivityTypes (host and widget)\n' "$device" > "$output/preview.txt"

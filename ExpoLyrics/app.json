@@ -2,7 +2,7 @@
   "expo": {
     "name": "KineSync",
     "slug": "KineSync",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "orientation": "default",
     "icon": "./assets/images/R.png",
     "scheme": "expolyrics",

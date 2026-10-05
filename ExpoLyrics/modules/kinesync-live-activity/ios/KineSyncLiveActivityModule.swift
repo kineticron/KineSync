@@ -1,4 +1,5 @@
 import ActivityKit
+import KineSyncActivityTypes
 import ExpoModulesCore
 import Foundation
 import UIKit
@@ -47,7 +48,7 @@ private struct LyricsSnapshot: Decodable {
 private final class LyricsActivityController {
   static let shared = LyricsActivityController()
   private let logger = Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "host")
-  private let sessionVersion = "lyrics-v2"
+  private let sessionVersion = "lyrics-v3"
   private var activity: Activity<LyricsActivityAttributes>?
   private var snapshot: LyricsSnapshot?
   private var lines: [LyricsSnapshot.Line] = []

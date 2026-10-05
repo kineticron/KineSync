@@ -62,6 +62,9 @@ ios/
 !ExpoLyrics/modules/kinesync-live-activity/ios/
 !ExpoLyrics/modules/kinesync-live-activity/ios/*.swift
 !ExpoLyrics/modules/kinesync-live-activity/ios/*.podspec
+!ExpoLyrics/modules/kinesync-live-activity/ios/types/
+!ExpoLyrics/modules/kinesync-live-activity/ios/types/*.swift
+!ExpoLyrics/modules/kinesync-live-activity/ios/types/*.podspec
 android/
 app-example/
 

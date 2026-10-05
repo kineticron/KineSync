@@ -42,6 +42,14 @@ then
 - Improved player startup and connection recovery.
 CHANGELOG
   )
+elif [[ "${version}" == "1.1.2" ]]
+then
+  changelog=$(cat <<'CHANGELOG'
+- Fixed Live Activities that started successfully but displayed an empty Dynamic Island or Lock Screen surface.
+- Shared the native lyrics activity data type between the app and widget while preserving Expo module linking.
+- Added native simulator previews to iOS release builds and tightened IPA checks to reject the previous type mismatch.
+CHANGELOG
+  )
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

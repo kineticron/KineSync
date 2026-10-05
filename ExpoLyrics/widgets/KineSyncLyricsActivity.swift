@@ -1,4 +1,5 @@
 import ActivityKit
+import KineSyncActivityTypes
 import SwiftUI
 import WidgetKit
 import os

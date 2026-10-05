@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-for (const source of ['KineSyncLiveActivityModule.swift', 'LyricsActivityAttributes.swift', 'KineSyncLiveActivity.podspec']) {
+for (const source of ['KineSyncLiveActivityModule.swift', 'types/LyricsActivityAttributes.swift', 'KineSyncLiveActivity.podspec', 'types/KineSyncActivityTypes.podspec']) {
   const result = spawnSync('git', ['check-ignore', '--no-index', '--quiet', '--', `modules/kinesync-live-activity/ios/${source}`], { cwd: root });
   assert.equal(result.status, 1, `Native source must survive a clean Git checkout: ${source}`);
 }
@@ -64,7 +64,11 @@ try {
   fs.writeFileSync(pbxPath, execFileSync('tar', ['-xOf', template, 'package/ios/HelloWorld.xcodeproj/project.pbxproj']));
   const project = require('xcode').project(pbxPath);
   project.parseSync();
-  const { configureProject, TARGET } = require('../plugins/with-live-activity');
+  const { configureProject, configurePodfile, TARGET } = require('../plugins/with-live-activity');
+  const templatePodfile = execFileSync('tar', ['-xOf', template, 'package/ios/Podfile'], { encoding: 'utf8' });
+  const podfile = configurePodfile(templatePodfile);
+  assert.equal(configurePodfile(podfile), podfile, 'Repeat prebuild must not duplicate the widget Podfile target');
+  fs.writeFileSync(path.join(fixture, 'Podfile'), podfile);
   const { verifyProject, verifyWidgetSource } = require('./verify-live-activity-project');
   const host = project.getFirstTarget().firstTarget;
   const objects = project.hash.project.objects;
@@ -80,6 +84,18 @@ try {
     'A widget bundle that omits the Live Activity must fail verification',
   );
   const first = project.writeSync();
+  // A separately compiled attributes copy recreates the empty Island regression.
+  const extensionTarget = Object.entries(objects.PBXNativeTarget).find(([, target]) => typeof target === 'object' && String(target.name).replace(/^"|"$/g, '') === TARGET);
+  const sourcePhase = objects.PBXSourcesBuildPhase[extensionTarget[1].buildPhases.find(({ value }) => objects.PBXSourcesBuildPhase[value]).value];
+  const sourceFiles = sourcePhase.files;
+  objects.PBXBuildFile.BAD_ATTRIBUTES = { fileRef: 'BAD_ATTRIBUTES_REF' };
+  objects.PBXFileReference.BAD_ATTRIBUTES_REF = { path: 'LyricsActivityAttributes.swift' };
+  sourcePhase.files = [...sourceFiles, { value: 'BAD_ATTRIBUTES' }];
+  assert.throws(() => verifyProject(project, fixture, root), /not define its own module-scoped copy/);
+  configureProject(project, options);
+  assert.deepEqual(sourcePhase.files, sourceFiles, 'Prebuild must remove the old copied attributes from an existing target');
+  delete objects.PBXBuildFile.BAD_ATTRIBUTES;
+  delete objects.PBXFileReference.BAD_ATTRIBUTES_REF;
   configureProject(project, options);
   assert.equal(project.writeSync(), first, 'Repeated prebuild must not duplicate targets, sources, or embed phases');
   fs.writeFileSync(pbxPath, first);
@@ -113,4 +129,7 @@ try {
 const autolinkingBin = path.join(path.dirname(require.resolve('expo-modules-autolinking/package.json')), 'bin/expo-modules-autolinking.js');
 const linked = JSON.parse(execFileSync(process.execPath, [autolinkingBin, 'resolve', '--platform', 'apple', '--json'], { cwd: root, encoding: 'utf8' }));
 assert(linked.modules.some((module) => module.packageName === 'kinesync-live-activity' && module.modules.some((entry) => entry.class === 'KineSyncLiveActivityModule')), 'Expo must discover the native module');
+const liveModule = linked.modules.find((module) => module.packageName === 'kinesync-live-activity');
+assert(liveModule.pods.some((pod) => pod.podName === 'KineSyncActivityTypes'), 'Expo must autolink shared activity types into the host');
+assert.deepEqual(liveModule.swiftModuleNames, ['KineSyncLiveActivity'], 'Expo provider must import the host module without any widget collision');
 console.log('Live Activity checks passed: timing, lyrics/source payloads, Expo autolinking, generated widget target, repeat prebuild, and missing-extension detection.');

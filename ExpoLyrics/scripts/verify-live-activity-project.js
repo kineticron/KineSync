@@ -11,6 +11,7 @@ function verifyWidgetSource(widgetSource) {
   assert.match(widgetSource, /@main\s+struct\s+KineSyncLyricsWidgetBundle\s*:\s*WidgetBundle/, 'Lyrics widget must have a @main WidgetBundle entry point');
   assert.match(widgetSource, /var\s+body\s*:\s*some\s+Widget\s*\{\s*KineSyncLyricsActivity\(\)\s*\}/, 'WidgetBundle must register KineSyncLyricsActivity');
   assert.match(widgetSource, /ActivityConfiguration\(for:\s*LyricsActivityAttributes\.self\)/, 'Lyrics widget must register an ActivityConfiguration for LyricsActivityAttributes');
+  assert.match(widgetSource, /import KineSyncActivityTypes/, 'Widget must import the shared attributes module');
 }
 
 function verifyProject(project, iosDir, projectRoot) {
@@ -28,11 +29,14 @@ function verifyProject(project, iosDir, projectRoot) {
     objects.PBXBuildFile[value]?.fileRef === extension.productReference)), 'Host must embed the extension in PlugIns');
   const sources = extension.buildPhases.flatMap(({ value }) => objects.PBXSourcesBuildPhase?.[value]?.files || []);
   const compiled = sources.map(({ value }) => unquote(objects.PBXFileReference[objects.PBXBuildFile[value].fileRef].path));
-  for (const file of ['LyricsActivityAttributes.swift', 'KineSyncLyricsActivity.swift']) {
+  for (const file of ['KineSyncLyricsActivity.swift']) {
     assert.equal(compiled.filter((name) => name === file).length, 1, `Missing or duplicate widget source: ${file}`);
   }
-  const shared = 'modules/kinesync-live-activity/ios/LyricsActivityAttributes.swift';
-  assert.equal(fs.readFileSync(path.join(iosDir, TARGET, 'LyricsActivityAttributes.swift'), 'utf8'), fs.readFileSync(path.join(projectRoot, shared), 'utf8'), 'Host and widget ActivityAttributes must match');
+  assert(!compiled.includes('LyricsActivityAttributes.swift'), 'Widget must link shared attributes, not define its own module-scoped copy');
+  const hostSource = fs.readFileSync(path.join(projectRoot, 'modules/kinesync-live-activity/ios/KineSyncLiveActivityModule.swift'), 'utf8');
+  assert.match(hostSource, /import KineSyncActivityTypes/, 'Host must import the shared attributes module');
+  const podfile = fs.readFileSync(path.join(iosDir, 'Podfile'), 'utf8');
+  assert.match(podfile, /target 'KineSyncLyricsWidget' do\s+use_frameworks! :linkage => :static\s+pod 'KineSyncActivityTypes', :path => '\.\.\/modules\/kinesync-live-activity\/ios\/types'/, 'Widget must link the shared types pod');
   const widgetSourcePath = path.join(projectRoot, 'widgets/KineSyncLyricsActivity.swift');
   const widgetSource = fs.readFileSync(widgetSourcePath, 'utf8');
   verifyWidgetSource(widgetSource);
@@ -63,6 +67,7 @@ if (require.main === module) {
   const hostInfo = path.join(iosDir, path.basename(name, '.xcodeproj'), 'Info.plist');
   assert.equal(plist.parse(fs.readFileSync(hostInfo, 'utf8')).NSSupportsLiveActivities, true, 'Host is missing NSSupportsLiveActivities');
   assert.match(fs.readFileSync(path.join(iosDir, 'Podfile.lock'), 'utf8'), /KineSyncLiveActivity/, 'Native ActivityKit module is not linked by CocoaPods');
+  assert.match(fs.readFileSync(path.join(iosDir, 'Podfile.lock'), 'utf8'), /KineSyncActivityTypes/, 'Shared ActivityKit types pod is not linked by CocoaPods');
   console.log('Verified host ActivityKit support, native pod, widget sources, dependency, and PlugIns embedding.');
 }
 

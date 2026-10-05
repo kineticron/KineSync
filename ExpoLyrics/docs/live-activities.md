@@ -15,21 +15,31 @@ versions, correct extension point and host support flag. Its system frameworks
 and Swift runpaths are present. It was compiled with Xcode 26.6 / iOS 26.5 SDK.
 There is no evidence in that artifact that Sideloadly support is the problem.
 
-Reading Swift's compiled type descriptors revealed separate module identities:
-`KineSyncLiveActivity.LyricsActivityAttributes` in the host and
-`KineSyncLyricsWidget.LyricsActivityAttributes` in the extension. That is the
-normal shape for a shared `ActivityAttributes` source compiled into separate app
-and widget targets. Forcing those module names to match caused the widget target
-to collide with the Expo host pod, so Expo's generated `ExpoModulesProvider`
-could no longer resolve `KineSyncLiveActivityModule`. The plugin now explicitly
-keeps the widget module name distinct while continuing to copy the exact same
-attributes source into both targets. The IPA verifier reads the compiled type
-descriptors and checks the expected host and widget modules separately.
+The October 5 report confirmed an active but empty Island on iPhone 16 Pro,
+iOS 27, installed with Sideloadly. Comparing the actual simulator artifacts
+provided a reproduction independent of that phone and signer:
+
+- [Run 34755165244](https://github.com/kineticron/KineSync/actions/runs/34755165244),
+  commit `459d684`: matching attributes module names; microphone and lyric visible.
+  The host build failed because the widget's Swift module shadowed the Expo pod.
+- [Run 34756296771](https://github.com/kineticron/KineSync/actions/runs/34756296771),
+  commit `9b14951`: host and widget modules separated; native build passes,
+  extension registration logged, but the screenshot shows an empty Island.
+
+The earlier assertion that these distinct module identities were safe was not
+supported by visual verification. The fix links the small static
+`KineSyncActivityTypes` pod into both targets, giving the attributes and content
+state the same defining module without sharing the widget and Expo module names.
+The actual IPA verifier now rejects the previous separately defined types.
+Native build and rendering verification of this fix are required; passing the
+synthetic IPA and project-generation checks alone does not establish rendering.
 
 The widget also uses an intrinsic 24-point icon without a geometry-dependent
 scale and nonempty text fallbacks in each presentation. Restart previously
 reused the active session; it now ends it and requests a new one. Old `lyrics`
-sessions are retired on first playback after upgrading to `lyrics-v2`.
+sessions of the current attributes type are retired on first playback after
+upgrading to `lyrics-v3`. Activities created with the old attributes type may
+need to be dismissed on the Lock Screen after installing the fix.
 
 A successful ActivityKit request is not a renderer acknowledgement. For device
 investigation, collect Console logs for subsystem
@@ -105,10 +115,12 @@ Tracked sources live in `modules/kinesync-live-activity/ios`, `widgets`, and
 explicitly includes this module's Swift files and podspec; its general `ios/`
 rule would otherwise omit them from a clean checkout. Expo Autolinking links
 the local module. The config plugin recreates the extension, copies the exact
-shared `LyricsActivityAttributes.swift`, enables `NSSupportsLiveActivities` in
+widget implementation, enables `NSSupportsLiveActivities` in
 the host, adds the host target dependency and `PlugIns` copy phase, and aligns
 extension bundle ID and versions while keeping its Swift module distinct from
-the Expo host pod. It also declares the extension to EAS for
+the Expo host pod. Both import `KineSyncActivityTypes`; the widget Podfile target
+links this small pod without pulling React Native or Expo into the extension.
+It also declares the extension to EAS for
 credential provisioning if signed EAS builds are used. It is safe to rerun and
 survives `expo prebuild --clean`.
 
@@ -125,7 +137,7 @@ Both `.github/workflows/ios-unsigned-ipa.yml` and `ios-development-build.yml`:
    disabled for all targets.
 3. Copy the complete `.app` with `ditto`, preserving `PlugIns`, then zip Payload.
 4. Validate the **actual IPA** before uploading: host flag, extension point,
-   bundle IDs/versions, compiled native code, expected host/widget Swift modules,
+   bundle IDs/versions, compiled native code, matching shared attributes modules,
    arm64 iOS device binaries, and
    byte-for-byte preservation of every extension file from the built `.app`.
 
@@ -158,7 +170,8 @@ node scripts/verify-live-activity-project.js
 The JS suite uses the installed Expo SDK's real Xcode template to check target
 generation and repeat runs, source/clock behavior, and module autolinking. IPA
 regressions use synthetic binaries and test missing extensions, broken IDs,
-version mismatch, absent flags, simulator binaries, missing type descriptors, and mismatched Swift module identities. These checks do not
+version mismatch, absent flags, simulator binaries, missing type descriptors, and
+the prior module identity mismatch. These checks do not
 replace Xcode compilation or a physical-device rendering test.
 
 Before releasing, test a freshly built, Sideloadly-installed IPA:

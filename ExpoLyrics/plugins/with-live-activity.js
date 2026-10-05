@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { withInfoPlist, withXcodeProject } = require('expo/config-plugins');
+const { withInfoPlist, withXcodeProject, withPodfile } = require('expo/config-plugins');
 const plist = require('@expo/plist');
 
 const TARGET = 'KineSyncLyricsWidget';
@@ -10,7 +10,6 @@ function configureProject(project, { projectRoot, platformProjectRoot, bundleIde
   const directory = path.join(platformProjectRoot, TARGET);
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(path.join(projectRoot, 'widgets/KineSyncLyricsActivity.swift'), path.join(directory, 'KineSyncLyricsActivity.swift'));
-  fs.copyFileSync(path.join(projectRoot, 'modules/kinesync-live-activity/ios/LyricsActivityAttributes.swift'), path.join(directory, 'LyricsActivityAttributes.swift'));
   fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build({
     CFBundleDisplayName: 'KineSync Lyrics',
     CFBundleExecutable: '$(EXECUTABLE_NAME)',
@@ -37,19 +36,28 @@ function configureProject(project, { projectRoot, platformProjectRoot, bundleIde
     project.addBuildPhase([], 'PBXSourcesBuildPhase', 'Sources', added.uuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', added.uuid);
     project.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', added.uuid);
-    for (const file of ['LyricsActivityAttributes.swift', 'KineSyncLyricsActivity.swift']) {
+    for (const file of ['KineSyncLyricsActivity.swift']) {
       project.addSourceFile(file, { target: added.uuid }, group.uuid);
     }
   }
   const [, target] = entry;
+  // Remove the old copied declaration when prebuild reuses an existing project.
+  for (const { value } of target.buildPhases) {
+    const phase = objects.PBXSourcesBuildPhase?.[value];
+    if (!phase) continue;
+    phase.files = phase.files.filter(({ value: buildId }) => {
+      const ref = objects.PBXBuildFile[buildId]?.fileRef;
+      return unquote(objects.PBXFileReference[ref]?.path) !== 'LyricsActivityAttributes.swift';
+    });
+  }
   const configurations = objects.XCConfigurationList[target.buildConfigurationList].buildConfigurations;
   for (const { value } of configurations) {
     Object.assign(objects.XCBuildConfiguration[value].buildSettings, {
       PRODUCT_BUNDLE_IDENTIFIER: `"${bundleIdentifier}.${TARGET}"`,
       PRODUCT_NAME: `"${TARGET}"`,
       // Keep the widget module distinct from the Expo host pod. ActivityKit
-      // shares the attributes declaration across targets; the Swift module
-      // names do not need to match, and colliding names break Expo autolinking.
+      // imports KineSyncActivityTypes in both targets for matching attributes
+      // identity without shadowing Expo's KineSyncLiveActivity host module.
       PRODUCT_MODULE_NAME: TARGET,
       INFOPLIST_FILE: `"${TARGET}/Info.plist"`,
       GENERATE_INFOPLIST_FILE: 'NO',
@@ -82,6 +90,10 @@ function withLiveActivity(config) {
     mod.modResults.NSSupportsLiveActivities = true;
     return mod;
   });
+  config = withPodfile(config, (mod) => {
+    mod.modResults.contents = configurePodfile(mod.modResults.contents);
+    return mod;
+  });
   // Let EAS provision the extension too, if a signed EAS build is used later.
   const iosBuild = (((config.extra ||= {}).eas ||= {}).build ||= {}).experimental ||= {};
   const ios = iosBuild.ios ||= {};
@@ -101,3 +113,12 @@ function withLiveActivity(config) {
 module.exports = withLiveActivity;
 module.exports.configureProject = configureProject;
 module.exports.TARGET = TARGET;
+
+function configurePodfile(contents) {
+  const start = '# BEGIN KineSync lyrics widget pods';
+  const end = '# END KineSync lyrics widget pods';
+  const block = `${start}\ntarget '${TARGET}' do\n  use_frameworks! :linkage => :static\n  pod 'KineSyncActivityTypes', :path => '../modules/kinesync-live-activity/ios/types'\nend\n${end}`;
+  const previous = /# BEGIN KineSync lyrics widget pods[\s\S]*?# END KineSync lyrics widget pods/;
+  return previous.test(contents) ? contents.replace(previous, block) : `${contents.trimEnd()}\n\n${block}\n`;
+}
+module.exports.configurePodfile = configurePodfile;

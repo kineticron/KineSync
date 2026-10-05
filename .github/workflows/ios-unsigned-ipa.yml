@@ -80,13 +80,11 @@ jobs:
           node scripts/verify-live-activity-project.js
 
       - name: Capture native Live Activity preview
-        if: github.event_name == 'workflow_dispatch'
         timeout-minutes: 10
-        continue-on-error: true
         run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
 
       - name: Upload Live Activity preview
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Live-Activity-preview

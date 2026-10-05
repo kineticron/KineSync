@@ -1,4 +1,5 @@
 import ActivityKit
+import KineSyncActivityTypes
 import SwiftUI
 import os
 
@@ -21,7 +22,7 @@ struct PreviewApp: App {
               timingMode: "karaoke", isPlaying: true
             )
             let activity = try Activity.request(
-              attributes: LyricsActivityAttributes(session: "lyrics-v2"),
+              attributes: LyricsActivityAttributes(session: "lyrics-v3"),
               content: ActivityContent(state: state, staleDate: nil), pushType: nil
             )
             Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "preview")

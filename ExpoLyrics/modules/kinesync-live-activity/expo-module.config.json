@@ -1,4 +1,8 @@
 {
   "platforms": ["apple"],
-  "apple": { "modules": ["KineSyncLiveActivityModule"] }
+  "apple": {
+    "modules": ["KineSyncLiveActivityModule"],
+    "podspecPath": ["ios/KineSyncLiveActivity.podspec", "ios/types/KineSyncActivityTypes.podspec"],
+    "swiftModuleName": "KineSyncLiveActivity"
+  }
 }

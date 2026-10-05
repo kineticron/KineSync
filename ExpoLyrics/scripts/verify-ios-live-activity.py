@@ -12,8 +12,8 @@ from pathlib import Path
 
 TARGET = 'KineSyncLyricsWidget'
 ARM64 = 0x0100000C
-HOST_ACTIVITY_MODULE = 'KineSyncLiveActivity'
-WIDGET_ACTIVITY_MODULE = TARGET
+HOST_ACTIVITY_MODULE = 'KineSyncActivityTypes'
+WIDGET_ACTIVITY_MODULE = HOST_ACTIVITY_MODULE
 
 
 def require(condition, message):

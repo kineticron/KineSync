@@ -102,8 +102,13 @@ class IpaChecks(unittest.TestCase):
             self.verify()
 
     def test_wrong_widget_swift_module_is_rejected(self):
-        self.widget_binary = executable(check.HOST_ACTIVITY_MODULE)
+        self.widget_binary = executable('KineSyncLyricsWidget')
         with self.assertRaisesRegex(ValueError, 'Unexpected widget'):
+            self.verify()
+
+    def test_previous_host_module_is_rejected(self):
+        self.binary = executable('KineSyncLiveActivity')
+        with self.assertRaisesRegex(ValueError, 'Unexpected host'):
             self.verify()
 
     def test_marker_strings_without_type_descriptors_are_rejected(self):
