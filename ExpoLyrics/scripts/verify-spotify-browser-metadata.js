@@ -43,7 +43,7 @@ function element({ text = "", href = "", children = {} } = {}) {
   return node;
 }
 
-function run({ mediaTitle, domTitle, linkTrackId }) {
+function run({ mediaTitle, domTitle, linkTrackId, visibilityState = "visible", exerciseLifecycle = false }) {
   const link = element({ text: domTitle, href: `https://open.spotify.com/track/${linkTrackId}` });
   const widget = element({
     children: {
@@ -53,10 +53,14 @@ function run({ mediaTitle, domTitle, linkTrackId }) {
   });
 
   const posted = [];
+  const timers = new Map();
+  const listeners = {};
+  let timerId = 0;
+  let mutationCallback;
   const document = {
-    body: null,
-    visibilityState: "visible",
-    addEventListener: () => {},
+    visibilityState,
+    body: {},
+    addEventListener: (name, callback) => { listeners[name] = callback; },
     querySelector: (selector) => (selector.includes("now-playing-bar") ? widget : null),
     querySelectorAll: () => [],
   };
@@ -76,26 +80,59 @@ function run({ mediaTitle, domTitle, linkTrackId }) {
   };
   const win = {
     navigator,
+    __spotifyBrowserLabEnableConnectObserver: exerciseLifecycle,
     ReactNativeWebView: { postMessage: (payload) => posted.push(JSON.parse(payload)) },
     setInterval: () => 0,
-    setTimeout: () => 0,
-    clearTimeout: () => {},
+    setTimeout: (callback) => { timers.set(++timerId, callback); return timerId; },
+    clearTimeout: (id) => timers.delete(id),
     __spotifyBrowserLabKnownMedia: [],
-    __spotifyBrowserLabPositionState: null,
+    __spotifyBrowserLabPositionState: { positionMs: 1000, durationMs: 180000, sampledAtPerfMs: 1000 },
   };
 
   class MutationObserver {
+    constructor(callback) { mutationCallback = callback; }
     observe() {}
   }
 
-  // eslint-disable-next-line no-new-func
-  new Function("window", "document", "navigator", "performance", "MutationObserver", script)(
+  const install = new Function("window", "document", "navigator", "performance", "MutationObserver", script);
+  const execute = () => install(
     win,
     document,
     navigator,
     { now: () => 1000 },
     MutationObserver,
   );
+  if (exerciseLifecycle) {
+    const bridge = win.ReactNativeWebView;
+    delete win.ReactNativeWebView;
+    execute();
+    assert.equal(win.__spotifyBrowserLabInstalled, undefined, "early injection must remain retryable when the bridge is unavailable");
+    win.ReactNativeWebView = bridge;
+  }
+  execute();
+
+  if (exerciseLifecycle) {
+    assert.ok(posted.some(event => event.type === "playback" && event.isPlaying), "hidden Android player must report playback without a tap");
+    navigator.mediaSession.metadata.title = "Remote device song";
+    navigator.mediaSession.playbackState = "paused";
+    // A Spotify DOM update must reach the bridge even with the overlay closed.
+    mutationCallback();
+    for (const [id, callback] of [...timers]) { timers.delete(id); callback(); }
+    assert.ok(posted.some(event => event.type === "metadata" && event.title === "Remote device song"), "remote track changes must be detected without interaction");
+    assert.equal(posted.filter(event => event.type === "playback").at(-1).isPlaying, false);
+    win.__spotifyBrowserControl({ type: "setMonitoring", enabled: false });
+    assert.equal(timers.size, 0, "backgrounding or desktop mode must stop polling");
+    const stoppedCount = posted.length;
+    mutationCallback(); listeners.visibilitychange();
+    assert.equal(posted.length, stoppedCount, "hidden document events must not re-enable native-disabled monitoring");
+    assert.equal(timers.size, 0);
+    win.__spotifyBrowserControl({ type: "setMonitoring", enabled: true });
+    assert.ok(timers.size > 0, "native foreground monitoring must resume while the overlay is hidden");
+    const timerCount = timers.size;
+    execute();
+    assert.equal(posted.at(-1).type, "ready", "reinstallation must acknowledge a missed ready message");
+    assert.equal(timers.size, timerCount, "reinstallation must not duplicate timers");
+  }
 
   return posted.find((event) => event.type === "metadata") || null;
 }
@@ -123,4 +160,6 @@ assert.strictEqual(stale.title, "Real Song");
 // and left to catalog search instead of poisoning every lyrics source.
 assert.strictEqual(stale.spotifyTrackId, "");
 
-console.log("spotify-browser metadata reader OK");
+run({ mediaTitle: "Real Song", domTitle: "Real Song", linkTrackId: "1111111111111111111111", visibilityState: "hidden", exerciseLifecycle: true });
+
+console.log("spotify-browser metadata and hidden-player lifecycle OK");

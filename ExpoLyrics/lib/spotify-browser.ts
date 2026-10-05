@@ -8,6 +8,7 @@ export type BrowserCommand =
   | { type: "setMonitoring"; enabled: boolean };
 
 type PlaybackSource =
+  | "spotify-connect"
   | "media-element"
   | "media-session"
   | "playback-duration-position"
@@ -84,6 +85,7 @@ export type BrowserEvent =
         precisionMs: number;
         source: PlaybackSource;
       }>;
+      connectObserver?: { found: boolean; registered: boolean; error: string };
       safeWindowGlobals: string[];
     }
   | { type: "error"; message: string };
@@ -430,8 +432,14 @@ export const installBrowserControlPreludeScript = String.raw`
 
     installMediaSessionProbe();
     installAllMediaProbes();
+    var probesEnabled = function () {
+      // AppState owns monitoring once the native bridge is ready. Android can
+      // report a closed browser overlay as hidden while the app stays active.
+      var enabled = window.__spotifyBrowserLabMonitoringEnabled;
+      return typeof enabled === 'boolean' ? enabled : document.visibilityState !== 'hidden';
+    };
     var mediaObserver = new MutationObserver(function (mutations) {
-      if (document.visibilityState === 'hidden') return;
+      if (!probesEnabled()) return;
       mutations.forEach(function (mutation) {
         Array.prototype.slice.call(mutation.addedNodes || []).forEach(function (node) {
           if (!node || node.nodeType !== 1) return;
@@ -446,16 +454,16 @@ export const installBrowserControlPreludeScript = String.raw`
       mediaObserver.observe(document.documentElement, { childList: true, subtree: true });
     }
     window.setInterval(function () {
-      if (document.visibilityState !== 'hidden') installMediaSessionProbe();
+      if (probesEnabled()) installMediaSessionProbe();
     }, 5000);
     window.setInterval(function () {
       if (
-        document.visibilityState !== 'hidden' &&
+        probesEnabled() &&
         (window.__spotifyBrowserLabKnownMedia || []).length === 0
       ) installAllMediaProbes();
     }, 10000);
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'hidden') return;
+      if (!probesEnabled()) return;
       installMediaSessionProbe();
       if ((window.__spotifyBrowserLabKnownMedia || []).length === 0) installAllMediaProbes();
     });
@@ -466,7 +474,13 @@ export const installBrowserControlPreludeScript = String.raw`
 
 export const installBrowserControlScript = String.raw`
   (function () {
-    if (window.__spotifyBrowserLabInstalled) return true;
+    if (!window.ReactNativeWebView || typeof window.ReactNativeWebView.postMessage !== 'function') return true;
+    if (window.__spotifyBrowserLabInstalled) {
+      // Re-acknowledge installation after native load events or a missed ready
+      // message, without adding another observer or polling loop.
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+      return true;
+    }
     window.__spotifyBrowserLabInstalled = true;
 
     var send = function (payload) {
@@ -798,6 +812,87 @@ export const installBrowserControlScript = String.raw`
       return data;
     };
     var lastMetadata = '';
+    var connectController = null;
+    var connectRegistered = false;
+    var connectRegisterAfterMs = 0;
+    var connectReadPending = false;
+    var connectSample = null;
+    var connectMonitoringGeneration = 0;
+    var connectError = '';
+    var connectSampleIsFresh = function () {
+      return connectSample && perfNow() - connectSample.sampledAtPerfMs < 5000;
+    };
+    var findConnectController = function () {
+      if (!window.__spotifyBrowserLabEnableConnectObserver) return;
+      // Spotify provides its SDK through a React context container. Resolve
+      // only the already-created instance; do not instantiate services or
+      // transfer playback. This bounded walk runs only until it is found.
+      var root = nowPlayingRoot();
+      if (!root) return;
+      var fiberKey = Object.keys(root).find(function (key) { return key.indexOf('__reactFiber') === 0; });
+      var fiber = fiberKey && root[fiberKey];
+      for (var depth = 0; fiber && depth < 220; depth += 1, fiber = fiber.return) {
+        var container = fiber.memoizedProps && fiber.memoizedProps.value;
+        if (!container || !(container._map instanceof Map)) continue;
+        container._map.forEach(function (entry, key) {
+          if (String(key) !== 'Symbol(PlayerSDK)') return;
+          var controller = entry && entry.instance && entry.instance.harmony && entry.instance.harmony._controller;
+          if (controller && typeof controller.register === 'function' && typeof controller.getCurrentState === 'function') connectController = controller;
+        });
+        if (connectController) return;
+      }
+    };
+    var requestConnectState = function () {
+      if (!monitoringEnabled || !connectController || connectReadPending || now() < connectRegisterAfterMs) return;
+      connectReadPending = true;
+      var generation = connectMonitoringGeneration;
+      Promise.resolve().then(function () {
+        if (!monitoringEnabled || generation !== connectMonitoringGeneration) return null;
+        if (connectRegistered) return null;
+        // Android defers registration until local playback. Register the
+        // existing remote observer so other devices update before any tap.
+        return Promise.resolve(connectController.register()).then(function () { connectRegistered = true; });
+      }).then(function () {
+        if (!monitoringEnabled || generation !== connectMonitoringGeneration) return null;
+        // Include paused/orphaned state as well as an active Connect device.
+        return connectController.getCurrentState();
+      }).then(function (state) {
+        if (!monitoringEnabled || generation !== connectMonitoringGeneration) return;
+        var track = state && state.track_window && state.track_window.current_track;
+        if (!track) { connectSample = null; return; }
+        var metadata = track.metadata || {};
+        var title = cleanMetadataText(track.name || metadata.title);
+        var artist = cleanMetadataText((track.artists || []).map(function (item) { return item.name || ''; }).filter(Boolean).join(', ') || metadata.artist_name);
+        if (!title || !artist || !finite(Number(state.position)) || !finite(Number(state.duration))) return;
+        var images = track.album && track.album.images || [];
+        var artwork = images.slice().sort(function (left, right) { return Number(right.width || 0) - Number(left.width || 0); })[0];
+        var artworkUrl = artwork && artwork.url || metadata.image_xlarge_url || metadata.image_large_url || '';
+        artworkUrl = String(artworkUrl).replace(/^spotify:image:/, 'https://i.scdn.co/image/');
+        var album = cleanMetadataText(track.album && track.album.name || metadata.album_title);
+        var idMatch = String(track.uri || '').match(/^spotify:track:([a-zA-Z0-9]{22})$/);
+        var spotifyTrackId = idMatch ? idMatch[1] : '';
+        var metadataKey = [title, artist, album, artworkUrl, spotifyTrackId].join('\\u0000');
+        if (metadataKey !== lastMetadata) {
+          lastMetadata = metadataKey;
+          send({ type: 'metadata', title: title, artist: artist, album: album, artworkUrl: artworkUrl, spotifyTrackId: spotifyTrackId });
+        }
+        connectSample = {
+          positionMs: Math.max(0, Number(state.position)),
+          durationMs: Math.max(0, Number(state.duration)),
+          isPlaying: state.paused === false && !state.loading,
+          playbackRate: Number(state.playback_speed) > 0 ? Number(state.playback_speed) : 1,
+          sampledAtPerfMs: perfNow(),
+          precisionMs: 25
+        };
+        connectError = '';
+        // The pending guard stays set while emitting, avoiding recursive reads.
+        readPlayback(true);
+      }).catch(function (error) {
+        connectError = String(error && error.message || error);
+        connectRegisterAfterMs = now() + 10000;
+        connectRegistered = false;
+      }).then(function () { connectReadPending = false; });
+    };
     var cleanMetadataText = function (value) {
       var text = String(value || '')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -919,6 +1014,11 @@ export const installBrowserControlScript = String.raw`
       return '';
     };
     var readMetadata = function () {
+      if (!connectController) {
+        try { findConnectController(); } catch (error) {}
+      }
+      requestConnectState();
+      if (connectSampleIsFresh()) return;
       var widget = nowPlayingRoot();
       var titleElement = widget && widget.querySelector('[data-testid="context-item-info-title"], [data-testid="context-item-link"], a[href*="/track/"]');
       var artistElement = widget && widget.querySelector('[data-testid="context-item-info-artist"], a[href*="/artist/"]');
@@ -948,7 +1048,8 @@ export const installBrowserControlScript = String.raw`
     };
     var lastPlaybackKey = '';
     var readPlayback = function (force) {
-      var data = progressData();
+      requestConnectState();
+      var data = connectSampleIsFresh() ? estimateSample(connectSample, 'spotify-connect', 0) : progressData();
       if (!data) return null;
       var key = data.positionMs + ':' + data.durationMs + ':' + data.isPlaying + ':' + data.playbackRate + ':' + data.source;
       if (force || key !== lastPlaybackKey) {
@@ -1002,7 +1103,7 @@ export const installBrowserControlScript = String.raw`
       var mediaSession = window.navigator && window.navigator.mediaSession;
       var mediaProbe = window.__spotifyBrowserLabMediaSessionProbe || { setPositionStateCalls: 0, lastSetPositionStateAtMs: 0 };
       var slider = progressSlider();
-      var data = progressData();
+      var data = connectSampleIsFresh() ? estimateSample(connectSample, 'spotify-connect', 0) : progressData();
       var ui = updateUiInterpolationClock();
       var fallbackDurationMs = ui ? ui.durationMs : sliderDurationMs();
       var media = mediaClock(fallbackDurationMs);
@@ -1014,6 +1115,7 @@ export const installBrowserControlScript = String.raw`
       });
       send({
         type: 'diagnostics',
+        connectObserver: { found: Boolean(connectController), registered: connectRegistered, error: connectError },
         mediaSession: {
           available: Boolean(mediaSession),
           playbackState: mediaSession ? String(mediaSession.playbackState || 'none') : 'unavailable',
@@ -1048,6 +1150,7 @@ export const installBrowserControlScript = String.raw`
     };
 
     var monitoringEnabled = true;
+    window.__spotifyBrowserLabMonitoringEnabled = monitoringEnabled;
     var metadataPollTimer = 0;
     var playbackPollTimer = 0;
     var mutationReadTimer = 0;
@@ -1061,18 +1164,18 @@ export const installBrowserControlScript = String.raw`
       mutationReadTimer = 0;
     };
     var pollMetadata = function () {
-      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      if (!monitoringEnabled) return;
       readMetadata();
       metadataPollTimer = window.setTimeout(pollMetadata, 5000);
     };
     var pollPlayback = function () {
-      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      if (!monitoringEnabled) return;
       var sample = readPlayback(false);
       playbackPollTimer = window.setTimeout(pollPlayback, sample && sample.isPlaying ? 250 : 1000);
     };
     var startMonitoringTimers = function () {
       stopMonitoringTimers();
-      if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+      if (!monitoringEnabled) return;
       readMetadata();
       readPlayback(true);
       metadataPollTimer = window.setTimeout(pollMetadata, 5000);
@@ -1082,7 +1185,12 @@ export const installBrowserControlScript = String.raw`
     window.__spotifyBrowserControl = function (command) {
       try {
         if (command.type === 'setMonitoring') {
+          if (monitoringEnabled !== Boolean(command.enabled)) {
+            connectMonitoringGeneration += 1;
+            connectSample = null;
+          }
           monitoringEnabled = Boolean(command.enabled);
+          window.__spotifyBrowserLabMonitoringEnabled = monitoringEnabled;
           startMonitoringTimers();
         }
         if (command.type === 'toggle') clickPlayerButton('toggle', 'Play/pause');
@@ -1101,12 +1209,11 @@ export const installBrowserControlScript = String.raw`
     var observer = new MutationObserver(function () {
       if (
         !monitoringEnabled ||
-        document.visibilityState === 'hidden' ||
         mutationReadTimer
       ) return;
       mutationReadTimer = window.setTimeout(function () {
         mutationReadTimer = 0;
-        if (!monitoringEnabled || document.visibilityState === 'hidden') return;
+        if (!monitoringEnabled) return;
         readMetadata();
         readPlayback(true);
       }, 200);

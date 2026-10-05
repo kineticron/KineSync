@@ -34,6 +34,14 @@ This release brings a UI rehaul with a refreshed player, simpler setup, and more
 - Fixed the Docker image build so the setup bundle can be included in the release.
 CHANGELOG
   )
+elif [[ "${version}" == "1.1.1" ]]
+then
+  changelog=$(cat <<'CHANGELOG'
+- Fixed Android Mobile Only mode so Spotify connects without first playing a song in the browser.
+- Song changes from other devices now update the player and lyrics while the Spotify browser is closed.
+- Improved player startup and connection recovery.
+CHANGELOG
+  )
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

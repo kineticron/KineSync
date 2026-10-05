@@ -9,7 +9,8 @@ const React = require('react');
 // Exercise the real fallback's message, recovery and asynchronous callbacks.
 (async () => {
   let tour = { active: false, pending: false }, ingested = 0, catalogCalls = 0, resolveCatalog;
-  const effects = [], cleanups = [], commands = [], timers = new Map();
+  const effects = [], cleanups = [], commands = [], timers = new Map(), heartbeats = [];
+  let bootstraps = 0;
   const playback = { playbackMode: 'mobile', connectionStatus: 'disconnected', currentTrack: null,
     ingestPacket(packet) { ingested++; this.currentTrack = { id: packet.trackId }; return { trackChanged: true }; },
     clearLyrics() {}, setLyricsStatusMessage() {} };
@@ -17,7 +18,7 @@ const React = require('react');
     react: { ...React, forwardRef: component => component, useRef: value => ({ current: value }), useCallback: value => value,
       useState: value => [value, () => {}], useEffect: effect => effects.push(effect), useImperativeHandle() {} },
     'react/jsx-runtime': require('react/jsx-runtime'),
-    'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', ActivityIndicator: 'Spinner', Platform: { OS: 'ios', select: options => options.ios ?? options.default },
+    'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', ActivityIndicator: 'Spinner', Platform: { OS: 'android', select: options => options.android ?? options.default },
       StyleSheet: { create: value => value, absoluteFill: {} }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
     'react-native-webview': { WebView: 'WebView' }, 'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
     '@react-native-vector-icons/ionicons': { __esModule: true, default: 'Icon' }, 'expo-router': { router: { push() {} } },
@@ -27,12 +28,12 @@ const React = require('react');
     '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack() {} }, '@/lib/mobile-lyrics-settings': { saveMobileLyricsSettings() {} },
     '@/lib/mobile-lyrics-client': { resolveSpotifyCatalogMatch: () => { catalogCalls++; return new Promise(resolve => { resolveCatalog = resolve; }); } },
     '@/lib/spotify-browser': { parseBrowserEvent: JSON.parse, isTrustedSpotifyWebViewMessageUrl: () => true, makeBrowserCommandScript: JSON.stringify,
-      installBrowserControlPreludeScript: '', installBrowserControlScript: '', spotifyAuthProbeScript: '' },
+      installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth' },
   };
   let timerId = 0;
   const context = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, Date,
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; }, clearTimeout: id => timers.delete(id),
-    setInterval: () => ++timerId, clearInterval() {} };
+    setInterval: callback => { heartbeats.push(callback); return ++timerId; }, clearInterval() {} };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../components/lyrics/spotify-browser-fallback.tsx'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText, context);
@@ -40,8 +41,20 @@ const React = require('react');
   const find = node => !node || typeof node !== 'object' ? null : node.type === 'WebView' ? node :
     React.Children.toArray(node.props?.children).map(find).find(Boolean);
   const webview = find(tree); assert.ok(webview);
-  webview.props.ref({ injectJavaScript: command => commands.push(JSON.parse(command)) });
+  assert.equal(webview.props.allowsProtectedMedia, true, 'Android must allow Spotify DRM playback');
+  assert.equal(webview.props.mediaPlaybackRequiresUserAction, false);
+  const closedStyle = tree.props.style.at(-1);
+  assert.equal(closedStyle.transform, undefined, 'Android player must stay in the viewport when closed');
+  assert.equal(closedStyle.zIndex, -1);
+  webview.props.ref({ injectJavaScript: command => {
+    if (command === webview.props.injectedJavaScript) bootstraps++;
+    else commands.push(JSON.parse(command));
+  } });
   effects.forEach(effect => { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); });
+  webview.props.onLoad();
+  assert.equal(bootstraps, 1, 'page completion retries bridge installation');
+  heartbeats.forEach(callback => callback());
+  assert.equal(bootstraps, 2, 'heartbeat retries missing ready without a player tap');
   const send = data => webview.props.onMessage({ nativeEvent: { data: JSON.stringify(data), url: 'https://open.spotify.com' } });
   send({ type: 'ready' }); assert.equal(commands.at(-1).enabled, true);
   send({ type: 'metadata', title: 'Background song', artist: 'Artist', album: '', spotifyTrackId: '' });

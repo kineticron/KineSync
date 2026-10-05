@@ -55,6 +55,7 @@ const BROWSER_RELOAD_COOLDOWN_MS = 30_000;
 const NATIVE_HANDOFF_REFRESH_SUPPRESSION_MS = 4_000;
 
 const BROWSER_URL = "https://open.spotify.com/";
+const BROWSER_BOOTSTRAP_SCRIPT = `window.__spotifyBrowserLabEnableConnectObserver = ${Platform.OS === "android"};\n${installBrowserControlPreludeScript}\n${spotifyAuthProbeScript}\n${installBrowserControlScript}`;
 
 type PlaybackSample = Extract<BrowserEvent, { type: "playback" }>;
 type DiagnosticEvent = Extract<BrowserEvent, { type: "diagnostics" }>;
@@ -121,6 +122,9 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
     `slider: ${diagnostics.slider.found ? "found" : "missing"}`,
     `clock: ${diagnostics.playback?.source ?? "none"}`,
     `position: ${diagnostics.playback?.positionMs ?? "n/a"} ms`,
+    ...(diagnostics.connectObserver ? [
+      `Connect observer: ${diagnostics.connectObserver.registered ? "registered" : diagnostics.connectObserver.found ? "pending" : "missing"}${diagnostics.connectObserver.error ? ` (${diagnostics.connectObserver.error})` : ""}`,
+    ] : []),
   ].join("\n");
 }
 
@@ -349,11 +353,16 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           playbackModeRef.current !== "mobile" ||
           connectionStatusRef.current === "connected"
         ) return;
+        // Android can miss document-start injection, and SPA navigation can
+        // emit load-start without another load-end. Recover the bridge even
+        // when no ready event has arrived; a player tap must not be required.
+        if (trackingAllowed() && !browserReadyRef.current) {
+          getActiveWebView()?.injectJavaScript(BROWSER_BOOTSTRAP_SCRIPT);
+        }
         requestSnapshot();
         const now = Date.now();
         if (
           appStateRef.current === "active" &&
-          browserReadyRef.current &&
           now - lastBrowserEventAtRef.current > BROWSER_STALE_MS &&
           now - lastBrowserReloadAtRef.current >= BROWSER_RELOAD_COOLDOWN_MS
         ) {
@@ -745,7 +754,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     return false;
                   }}
                   injectedJavaScriptBeforeContentLoaded={installBrowserControlPreludeScript}
-                  injectedJavaScript={`${installBrowserControlPreludeScript}\n${spotifyAuthProbeScript}\n${installBrowserControlScript}`}
+                  injectedJavaScript={BROWSER_BOOTSTRAP_SCRIPT}
                   startInLoadingState
                   renderLoading={() => (
                     <BrowserMessage loading message="Loading Spotify in desktop mode..." />
@@ -763,6 +772,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   }}
                   onLoad={() => {
                     if (browserGeneration !== browserGenerationRef.current) return;
+                    getActiveWebView()?.injectJavaScript(BROWSER_BOOTSTRAP_SCRIPT);
                     setBrowserLoading(false);
                     setStatus("Spotify page loaded. Sign in and start a track.");
                   }}
@@ -798,6 +808,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
                     lastBrowserEventAtRef.current = Date.now();
                     if (event.type === "ready") {
+                      setBrowserLoading(false);
                       setBrowserReady(true);
                       browserReadyRef.current = true;
                       automaticRecoveryRef.current = false;
@@ -845,6 +856,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   domStorageEnabled
                   allowsInlineMediaPlayback
                   mediaPlaybackRequiresUserAction={false}
+                  allowsProtectedMedia
                   allowsAirPlayForMediaPlayback
                   setSupportMultipleWindows={false}
                   androidLayerType="hardware"
@@ -890,7 +902,11 @@ const styles = StyleSheet.create({
     transform: [{ translateX: 0 }],
   },
   browserOverlayClosed: {
-    transform: [{ translateX: -10000 }],
+    // Keep Android's Chromium surface in the viewport while the lyrics screen
+    // owns interaction. Moving it offscreen can suspend Spotify's rendering.
+    ...(Platform.OS === "android"
+      ? { opacity: 0.01, elevation: 0, zIndex: -1 }
+      : { transform: [{ translateX: -10000 }] }),
   },
   header: {
     minHeight: Platform.OS === "ios" ? 82 : 68,
