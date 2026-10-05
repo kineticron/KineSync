@@ -117,7 +117,7 @@ module.exports.TARGET = TARGET;
 function configurePodfile(contents) {
   const start = '# BEGIN KineSync lyrics widget pods';
   const end = '# END KineSync lyrics widget pods';
-  const block = `${start}\ntarget '${TARGET}' do\n  use_frameworks! :linkage => :static\n  pod 'KineSyncActivityTypes', :path => '../modules/kinesync-live-activity/ios/types'\nend\n${end}`;
+  const block = `${start}\ntarget '${TARGET}' do\n  use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']\n  use_frameworks! :linkage => ENV['USE_FRAMEWORKS'].to_sym if ENV['USE_FRAMEWORKS']\n  pod 'KineSyncActivityTypes', :path => '../modules/kinesync-live-activity/ios/types', :modular_headers => true\nend\n${end}`;
   const previous = /# BEGIN KineSync lyrics widget pods[\s\S]*?# END KineSync lyrics widget pods/;
   return previous.test(contents) ? contents.replace(previous, block) : `${contents.trimEnd()}\n\n${block}\n`;
 }

@@ -11,5 +11,5 @@ Pod::Spec.new do |s|
   s.static_framework = true
   s.frameworks = 'ActivityKit'
   s.source_files = 'LyricsActivityAttributes.swift'
-  s.pod_target_xcconfig = { 'APPLICATION_EXTENSION_API_ONLY' => 'YES' }
+  s.pod_target_xcconfig = { 'APPLICATION_EXTENSION_API_ONLY' => 'YES', 'DEFINES_MODULE' => 'YES' }
 end

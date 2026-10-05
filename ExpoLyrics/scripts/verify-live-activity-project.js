@@ -36,7 +36,7 @@ function verifyProject(project, iosDir, projectRoot) {
   const hostSource = fs.readFileSync(path.join(projectRoot, 'modules/kinesync-live-activity/ios/KineSyncLiveActivityModule.swift'), 'utf8');
   assert.match(hostSource, /import KineSyncActivityTypes/, 'Host must import the shared attributes module');
   const podfile = fs.readFileSync(path.join(iosDir, 'Podfile'), 'utf8');
-  assert.match(podfile, /target 'KineSyncLyricsWidget' do\s+use_frameworks! :linkage => :static\s+pod 'KineSyncActivityTypes', :path => '\.\.\/modules\/kinesync-live-activity\/ios\/types'/, 'Widget must link the shared types pod');
+  assert.match(podfile, /target 'KineSyncLyricsWidget' do[\s\S]*?pod 'KineSyncActivityTypes', :path => '\.\.\/modules\/kinesync-live-activity\/ios\/types', :modular_headers => true/, 'Widget must link the shared types pod');
   const widgetSourcePath = path.join(projectRoot, 'widgets/KineSyncLyricsActivity.swift');
   const widgetSource = fs.readFileSync(widgetSourcePath, 'utf8');
   verifyWidgetSource(widgetSource);
