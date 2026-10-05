@@ -17,14 +17,23 @@ version=$(node scripts/release-version.js)
 release_tag="v${version}"
 commit_message=$(git log -1 --pretty=%s)
 changelog="${commit_message}"
-if [[ -f CHANGELOG.md ]]; then
-  release_changes=$(awk -v version="${version}" '
-    /^## / { if (found) exit; found = ($2 == version); next }
-    found { print }
-  ' CHANGELOG.md)
-  if [[ -n "${release_changes//[[:space:]]/}" ]]; then
-    changelog="${release_changes}"
-  fi
+if [[ "${version}" == "1.1.0" ]]; then
+  changelog=$(cat <<'CHANGELOG'
+### UI rehaul
+
+This release brings a UI rehaul with a refreshed player, simpler setup, and more ways to manage your lyrics.
+
+- Updated the player, menus, settings, and empty screens with a cleaner layout and new animations.
+- Added a guided player tour with sample lyrics to try the controls before you start listening.
+- Improved fullscreen and landscape layouts, with controls that can hide to give lyrics more room.
+- Improved lyric scrolling, word highlighting, duet spacing, and text display across languages.
+- Added a Local Vault screen to browse saved lyrics, import and export TTML files, and copy lyrics from the Desktop Bridge.
+- Added a searchable language picker for lyric translations.
+- Added iOS Live Activities to show lyrics on the Lock Screen and Dynamic Island.
+- Improved startup transitions, artwork loading, and playback timing.
+- Fixed the Docker image build so the setup bundle can be included in the release.
+CHANGELOG
+  )
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

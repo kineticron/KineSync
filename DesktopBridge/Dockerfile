@@ -62,7 +62,7 @@ ADD --checksum=sha256:4df3209ea4b759f0b5838b60baedb6893ec62df7abad9046462176a6e6
     https://xpra.org/xpra.asc /usr/share/keyrings/xpra.asc
 
 ADD --checksum=sha256:43307ca6b67ebeeeafbb02f543643a4cfc94548da17e26b0ac07bfdd335e4158 \
-    https://raw.githubusercontent.com/Xpra-org/xpra/master/packaging/repos/noble/xpra.sources \
+    https://raw.githubusercontent.com/Xpra-org/xpra/44af22e9239985e4b41b4b315b76bd490f733808/packaging/repos/noble/xpra.sources \
     /etc/apt/sources.list.d/xpra.sources
 
 RUN gpg --dearmor --yes --output /usr/share/keyrings/xpra.gpg /usr/share/keyrings/xpra.asc && \
