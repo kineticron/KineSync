@@ -31,8 +31,14 @@ supported by visual verification. The fix links the small static
 `KineSyncActivityTypes` pod into both targets, giving the attributes and content
 state the same defining module without sharing the widget and Expo module names.
 The actual IPA verifier now rejects the previous separately defined types.
-Native build and rendering verification of this fix are required; passing the
-synthetic IPA and project-generation checks alone does not establish rendering.
+[Run 37354859460](https://github.com/kineticron/KineSync/actions/runs/37354859460)
+compiled the actual widget with its shared CocoaPods dependency. Its captured
+compact Island shows both the microphone and lyric text; the widget log reports
+`KineSyncActivityTypes.LyricsActivityAttributes`. This restores the content that
+was absent from run 34756296771. Cold simulator startup consumed most of the
+preview timeout and the job timed out immediately after capturing its artifacts;
+the limit is now twenty minutes. Production device IPA compilation and integrity
+checks remain required. Physical-device confirmation on iOS 27 is still needed.
 
 The widget also uses an intrinsic 24-point icon without a geometry-dependent
 scale and nonempty text fallbacks in each presentation. Restart previously

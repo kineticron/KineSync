@@ -80,7 +80,7 @@ jobs:
           node scripts/verify-live-activity-project.js
 
       - name: Capture native Live Activity preview
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
 
       - name: Upload Live Activity preview
