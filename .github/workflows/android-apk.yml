@@ -143,7 +143,10 @@ jobs:
           # Gradle must run with android/ as its project directory. Calling the
           # wrapper from ExpoLyrics/ alone leaves Gradle looking for settings
           # files in the wrong directory.
-          (cd android && ./gradlew --no-daemon --stacktrace assembleRelease)
+          # Packaging the universal APK needs more than Expo's default 2 GB heap.
+          # Limit workers so native compilation leaves memory for the JVM.
+          (cd android && ./gradlew --no-daemon --stacktrace --max-workers=2 \
+            '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' assembleRelease)
           cp android/app/build/outputs/apk/release/app-release.apk KineSync-Android.apk
           if [[ ! -s KineSync-Android.apk ]]; then
             echo "Gradle did not produce an APK." >&2
