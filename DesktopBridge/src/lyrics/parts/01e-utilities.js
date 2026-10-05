@@ -861,8 +861,10 @@ function nextSyllableLeadsWithAttachPunctuation(nextText) {
   if (/^[,;.!?)\]\}%\-–—]/.test(trimmed)) {
     return true;
   }
-  // Apostrophe-led contractions (e.g. 'm, 's) stay tight with the previous syllable.
-  if (/^['’‘](m|re|s|d|ll|ve|t|n|clock|all)\b/i.test(trimmed)) {
+
+  // Apostrophe-led contractions (e.g. 'm, 's, 're, 've, 'll, 'd, 't, n't) stay tight with the previous syllable.
+  // Note: 'n' (as in rock 'n' roll) is a standalone word, so it must not be treated as a suffix contraction.
+  if (/^(['’‘](?:[mtsd]|re|ve|ll|clock|all)\b|n['’]t\b)/i.test(trimmed)) {
     return true;
   }
   // Standalone closing quote syllables attach to the previous word.
@@ -1619,8 +1621,18 @@ function shouldInsertSyllableBoundarySpace(leftText, rightText) {
     return true;
   }
 
-  const latinOrDigit = /[A-Za-z0-9]/;
-  return latinOrDigit.test(leftChar) && latinOrDigit.test(rightChar);
+  // Prefix elisions (e.g. c', d', l', o', y') cling to the following word.
+  if (/^(?:[cdjlnst]|qu|[ouy]|all|dell|nell|sant)['’]$/i.test(left.trim())) {
+    return false;
+  }
+  const leftIsWord =
+    /[A-Za-z0-9]/.test(leftChar) ||
+    (/[A-Za-z0-9]['’]$/u.test(left.trim()) || /^['’][A-Za-z0-9]['’]$/u.test(left.trim()));
+  const rightIsWord =
+    /[A-Za-z0-9]/.test(rightChar) ||
+    (/^['’][A-Za-z0-9]/u.test(right.trim()) && !nextSyllableLeadsWithAttachPunctuation(right));
+
+  return leftIsWord && rightIsWord;
 }
 
 function getLineText(line) {

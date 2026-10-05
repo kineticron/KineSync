@@ -11,6 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "dev.kineticron.KineSync",
       "infoPlist": {
+        "UIViewControllerBasedStatusBarAppearance": true,
+        "UIStatusBarHidden": false,
         "ITSAppUsesNonExemptEncryption": false,
         "CADisableMinimumFrameDurationOnPhone": true,
         "NSLocalNetworkUsageDescription": "KineSync connects to your Desktop Bridge to stream synchronized lyrics and playback updates.",
@@ -46,10 +48,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/R.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#000000",
+          "android": {
+            "drawable": {
+              "icon": "./assets/images/splash-blank.xml"
+            }
+          },
           "dark": {
             "backgroundColor": "#000000"
           }
@@ -57,11 +61,14 @@
       ],
       "./plugins/with-network-security-config.js",
       "./plugins/with-release-signing.js",
+      "./plugins/with-live-activity.js",
+      "./plugins/with-high-refresh-rate.js",
       [
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "16.4"
+            "deploymentTarget": "16.4",
+            "reactNativeReleaseLevel": "experimental"
           },
           "android": {
             "usesCleartextTraffic": true
@@ -72,7 +79,27 @@
       "expo-font",
       "@react-native-vector-icons/ionicons",
       "expo-image",
-      "expo-sharing",
+      [
+        "expo-sharing",
+        {
+          "ios": {
+            "enabled": true,
+            "activationRule": {
+              "supportsFileWithMaxCount": 1
+            }
+          },
+          "android": {
+            "enabled": true,
+            "singleShareMimeTypes": [
+              "application/ttml+xml",
+              "application/xml",
+              "text/xml",
+              "application/octet-stream",
+              "text/plain"
+            ]
+          }
+        }
+      ],
       "expo-status-bar"
     ],
     "experiments": {

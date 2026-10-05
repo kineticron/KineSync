@@ -812,7 +812,9 @@ export const installBrowserControlScript = String.raw`
         if (left && left.toLowerCase() === right.toLowerCase()) return left;
       }
       var words = text.split(' ').filter(Boolean);
-      if (words.length > 1 && words.length % 2 === 0) {
+      // Only collapse longer duplications (e.g. marquee-doubled DOM text).
+      // Genuine two-word repeated titles such as "Dai Dai" must survive.
+      if (words.length > 3 && words.length % 2 === 0) {
         var wordHalf = words.length / 2;
         var leftWords = words.slice(0, wordHalf).join(' ');
         var rightWords = words.slice(wordHalf).join(' ');

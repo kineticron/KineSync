@@ -1,15 +1,18 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
+import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
-import { useRouter } from 'expo-router';
+import { PromotionalBackdrop } from '@/components/ui/promotional-backdrop';
+import { useSpotifySessionStore } from '@/store/spotify-session-store';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -39,7 +42,14 @@ import {
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
-import { requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+import { requestOpenSpotifyBrowser, requestLogoutSpotifyBrowser, requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
+import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
+import { Design } from '@/constants/design';
+import { TranslationLanguagePicker } from '@/components/lyrics/translation-language-picker';
+import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
+
+const settingsEntrance = FadeInDown.duration(320).reduceMotion(ReduceMotion.System);
 
 const SPOTIFY_LOGIN_URL =
   'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
@@ -59,6 +69,7 @@ type FieldRowProps = {
 type SettingSectionProps = {
   title: string;
   children: ReactNode;
+  collapsible?: boolean;
 };
 
 function getConnectionTone(status: ConnectionStatus) {
@@ -93,11 +104,18 @@ function sanitizeNumberInput(value: string, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function SettingSection({ title, children }: SettingSectionProps) {
+function SettingSection({ title, children, collapsible = false }: SettingSectionProps) {
+  const [expanded, setExpanded] = useState(false);
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.sectionBody}>{children}</View>
+      <BlurView pointerEvents="none" intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+      {collapsible ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded }} onPress={() => setExpanded(!expanded)} style={styles.sectionToggle}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#FFFFFF" />
+        </Pressable>
+      ) : <Text style={styles.sectionTitle}>{title}</Text>}
+      {(!collapsible || expanded) && <Animated.View entering={collapsible ? settingsEntrance : undefined} style={styles.sectionBody}>{children}</Animated.View>}
     </View>
   );
 }
@@ -111,19 +129,23 @@ function FieldRow({
   autoCapitalize = 'none',
   secureTextEntry = false,
 }: FieldRowProps) {
+  const [focused, setFocused] = useState(false);
   return (
     <View style={styles.fieldRow}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        style={styles.input}
+        style={[styles.input, focused && styles.inputFocused]}
+        accessibilityLabel={label}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         autoCapitalize={autoCapitalize}
         autoCorrect={false}
         keyboardType={keyboardType}
         placeholder={placeholder}
         placeholderTextColor="rgba(255,255,255,0.36)"
-        selectionColor="#FFFFFF"
+        selectionColor={Design.accent}
         secureTextEntry={secureTextEntry}
       />
     </View>
@@ -141,7 +163,14 @@ async function resetOnboardingCompleted(): Promise<void> {
 }
 
 export default function BridgeSettingsScreen() {
+  const liveActivityMessage = useLiveActivityStatus((state) => state.message);
   const router = useRouter();
+  const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
+  const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
+  const translationLanguage = usePlaybackStore(s => s.translationLanguage);
+  const setTranslationLanguage = usePlaybackStore(s => s.setTranslationLanguage);
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const { action } = useLocalSearchParams<{ action?: string }>();
   const serverUrl = usePlaybackStore((s) => s.serverUrl);
   const handshakeKey = usePlaybackStore((s) => s.handshakeKey);
   const setServerUrl = usePlaybackStore((s) => s.setServerUrl);
@@ -164,7 +193,7 @@ export default function BridgeSettingsScreen() {
   const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
   const [musixmatchTokenInput, setMusixmatchTokenInput] = useState('');
   const [musixmatchTokenStatus, setMusixmatchTokenStatus] = useState(
-    'Anonymous token will be created automatically when first needed.',
+    'Automatic token',
   );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
@@ -175,7 +204,8 @@ export default function BridgeSettingsScreen() {
   const [scanError, setScanError] = useState('');
   const [bridgeSaveError, setBridgeSaveError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
-  const [spotifySignedIn, setSpotifySignedIn] = useState(false);
+  const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const setSpotifySignedIn = useSpotifySessionStore((s) => s.setSignedIn);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const scanHandledRef = useRef(false);
   const connectionTone = useMemo(
@@ -267,10 +297,10 @@ export default function BridgeSettingsScreen() {
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using the saved manual override.'
+          ? 'Using manual token'
           : status.automaticConfigured
-            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
-            : 'Anonymous token will be created automatically when first needed.',
+            ? 'Automatic token ready'
+            : 'Automatic token',
       );
       setGeminiKeyInput(settings.geminiApiKey);
     });
@@ -291,10 +321,10 @@ export default function BridgeSettingsScreen() {
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using the saved manual override.'
+          ? 'Using manual token'
           : status.automaticConfigured
-            ? `Anonymous token managed automatically${status.automaticAppId ? ` (${status.automaticAppId})` : ''}.`
-            : 'Anonymous token will be created automatically when first needed.',
+            ? 'Automatic token ready'
+            : 'Automatic token',
       );
       setGeminiKeyInput(settings.geminiApiKey);
       setMobileLyricsSaved(true);
@@ -355,11 +385,23 @@ export default function BridgeSettingsScreen() {
     }
   }, [cameraPermission?.granted, requestCameraPermission]);
 
+  useEffect(() => {
+    if (!action) return;
+    router.setParams({ action: undefined });
+    if (action === 'login' && !useSpotifySessionStore.getState().signedIn) { useSpotifySessionStore.getState().setLoggedOut(false); setLoginOpen(true); }
+    if (action === 'desktop') void selectPlaybackMode('desktop');
+    if (action === 'scan') void openScanner();
+  }, [action, openScanner, router, selectPlaybackMode]);
+
+  useEffect(() => {
+    if (spotifySignedIn) setLoginOpen(false);
+  }, [spotifySignedIn]);
+
   const completeSpotifySignIn = useCallback(() => {
     setSpotifySignedIn(true);
     setLoginOpen(false);
     requestReloadSpotifyBrowser();
-  }, []);
+  }, [setSpotifySignedIn]);
 
   const returnToLyrics = useCallback(() => {
     if (router.canGoBack()) {
@@ -408,9 +450,7 @@ export default function BridgeSettingsScreen() {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.ambientShapeA} />
-      <View style={styles.ambientShapeB} />
-      <View style={styles.backgroundTint} />
+      <PromotionalBackdrop />
 
       <SafeAreaView style={styles.safeArea}>
         <KeyboardAvoidingView
@@ -433,9 +473,11 @@ export default function BridgeSettingsScreen() {
                 <Ionicons name="chevron-back" size={23} color="#FFFFFF" />
               </Pressable>
               <View style={styles.headerCopy}>
-                <Text style={styles.eyebrow}>Sync</Text>
                 <Text style={styles.title}>Settings</Text>
               </View>
+              <Image source={require('@/assets/images/R.png')} style={styles.headerLogo} accessibilityLabel="KineSync" />
+            </View>
+            <View style={styles.summary}>
               <View
                 style={[
                   styles.statusChip,
@@ -452,13 +494,13 @@ export default function BridgeSettingsScreen() {
               </View>
             </View>
 
-            <BlurView intensity={36} tint="dark" style={styles.card}>
+            <Animated.View entering={settingsEntrance} style={styles.card}>
               <SettingSection title="Playback source">
-                <Text style={styles.onboardingHint}>
-                  Choose how KineSync gets Spotify playback. Only settings for the selected mode are shown below.
-                </Text>
-                <View style={styles.modeChoices}>
+                <View style={styles.modeChoices} accessibilityRole="radiogroup" accessibilityLabel="Playback source">
                   <Pressable
+                    accessibilityRole="radio"
+                    aria-checked={playbackMode === 'desktop'}
+                    accessibilityState={{ checked: playbackMode === 'desktop' }}
                     style={({ pressed }) => [
                       styles.modeChoice,
                       playbackMode === 'desktop' && styles.modeChoiceActive,
@@ -470,8 +512,12 @@ export default function BridgeSettingsScreen() {
                       <Text style={styles.modeChoiceTitle}>Desktop Bridge</Text>
                       <Text style={styles.modeChoiceHint}>Best sync; requires the bridge app.</Text>
                     </View>
+                    <Ionicons name={playbackMode === 'desktop' ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={playbackMode === 'desktop' ? Design.accent : Design.muted} />
                   </Pressable>
                   <Pressable
+                    accessibilityRole="radio"
+                    aria-checked={playbackMode === 'mobile'}
+                    accessibilityState={{ checked: playbackMode === 'mobile' }}
                     style={({ pressed }) => [
                       styles.modeChoice,
                       playbackMode === 'mobile' && styles.modeChoiceActive,
@@ -483,6 +529,7 @@ export default function BridgeSettingsScreen() {
                       <Text style={styles.modeChoiceTitle}>Mobile-Only</Text>
                       <Text style={styles.modeChoiceHint}>Play Spotify inside KineSync.</Text>
                     </View>
+                    <Ionicons name={playbackMode === 'mobile' ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={playbackMode === 'mobile' ? Design.accent : Design.muted} />
                   </Pressable>
                 </View>
               </SettingSection>
@@ -518,29 +565,73 @@ export default function BridgeSettingsScreen() {
                   style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
                   onPress={openScanner}>
                   <Ionicons name="qr-code-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Scan QR code from Desktop Bridge</Text>
+                  <Text style={styles.secondaryButtonText}>Scan QR code</Text>
                 </Pressable>
               </SettingSection> : null}
 
               {playbackMode === 'desktop' ? <View style={styles.divider} /> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Mobile-Only">
-                <Text style={styles.onboardingHint}>
-                  Spotify runs in KineSync on this phone. Sign in to refresh your Spotify session.
-                </Text>
+                <View style={spotifySignedIn ? styles.spotifySessionRow : undefined}>
+                {spotifySignedIn ? (
+                  <View style={styles.spotifySignedInStatus} accessible accessibilityLabel="Spotify is logged in">
+                    <Ionicons name="checkmark-circle" size={21} color={Design.accent} />
+                    <Text style={styles.spotifySignedInText}>Spotify is logged in</Text>
+                  </View>
+                ) : null}
                 <Pressable
-                  style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-                  onPress={() => setLoginOpen(true)}>
-                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" />
-                  <Text style={styles.primaryButtonText}>
-                    {spotifySignedIn ? 'Spotify signed in' : 'Log in to Spotify'}
+                  accessibilityRole="button"
+                  accessibilityLabel={spotifySignedIn ? 'Log out of Spotify' : 'Sign in with Spotify'}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    spotifySignedIn && styles.spotifyLogoutButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    if (spotifySignedIn) {
+                      useSpotifySessionStore.getState().setLoggedOut(true);
+                      requestLogoutSpotifyBrowser();
+                      setSpotifyTokenInput('');
+                      void saveMobileLyricsSettings({ spotifyWebToken: '', spotifyWebTokenExpiresAt: 0 });
+                      usePlaybackStore.setState({ currentTrack: null, lyrics: [], isPlaying: false });
+                    } else {
+                      useSpotifySessionStore.getState().setLoggedOut(false);
+                      setLoginOpen(true);
+                    }
+                  }}>
+                  <Ionicons name={spotifySignedIn ? 'log-out-outline' : 'log-in-outline'} size={18} color={spotifySignedIn ? '#FF93A4' : '#FFFFFF'} />
+                  <Text style={[styles.primaryButtonText, spotifySignedIn && styles.spotifyLogoutText]}>
+                    {spotifySignedIn ? 'Log out' : 'Sign in with Spotify'}
                   </Text>
                 </Pressable>
+                </View>
               </SettingSection> : null}
 
               {playbackMode === 'mobile' ? <View style={styles.divider} /> : null}
 
-              {playbackMode === 'mobile' ? <SettingSection title="Mobile Lyrics APIs">
+              <SettingSection title="Translations">
+                <View style={styles.sectionToggle}>
+                  <Text style={styles.fieldLabel}>Show translations</Text>
+                  <Switch accessibilityLabel="Show translations" value={showTranslatedText} onValueChange={setShowTranslatedText} trackColor={{ false: '#47534F', true: Design.accent }} thumbColor="#FFFFFF" />
+                </View>
+                <Pressable style={({ pressed, hovered }) => [styles.languageButton, (pressed || hovered) && styles.languageButtonHover]}
+                  accessibilityRole="button" accessibilityLabel={`Translation language: ${translationLanguage}`}
+                  accessibilityHint="Opens the language picker" accessibilityState={{ expanded: languagePickerOpen }}
+                  onPress={() => setLanguagePickerOpen(true)}>
+                  <BlurView pointerEvents="none" intensity={34} tint="light" style={StyleSheet.absoluteFill} />
+                  <Ionicons name="language-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.languageButtonText}>Language: {translationLanguage}</Text>
+                  <Ionicons name="chevron-down" size={16} color="rgba(255,255,255,0.72)" />
+                </Pressable>
+                <Text style={styles.fieldLabel}>Language applies the next time you translate lyrics. Use the translation button in playback to translate the current song.</Text>
+              </SettingSection>
+              <View style={styles.divider} />
+
+              {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
+                {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
+                  <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>Spotify player</Text>
+                </Pressable>}
                 <FieldRow
                   label="Spotify Bearer Token"
                   value={spotifyTokenInput}
@@ -555,10 +646,6 @@ export default function BridgeSettingsScreen() {
                   placeholder="Optional; anonymous access is automatic"
                   secureTextEntry
                 />
-                <Text style={styles.onboardingHint}>
-                  KineSync creates and reuses an anonymous Musixmatch token automatically.
-                  A token entered here takes precedence as a manual override.
-                </Text>
                 <Text style={styles.onboardingHint}>{musixmatchTokenStatus}</Text>
                 <FieldRow
                   label="Gemini API Key"
@@ -582,7 +669,7 @@ export default function BridgeSettingsScreen() {
 
               <View style={styles.divider} />
 
-              {playbackMode === 'desktop' ? <SettingSection title="Timing">
+              {playbackMode === 'desktop' ? <SettingSection title="Timing diagnostics" collapsible>
                 <View style={styles.timingDiagnostics}>
                   <Text style={styles.timingDiagnosticsTitle}>Bridge timing (live)</Text>
                   <Text style={styles.timingDiagnosticsLine}>
@@ -602,12 +689,6 @@ export default function BridgeSettingsScreen() {
                   </Text>
                   <Text style={styles.timingDiagnosticsLine}>
                     Phone network latency: {Math.max(0, Number(driftOffset || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsHint}>
-                    With native extrapolation on, keep playback compensation at 0 —
-                    the bridge already advances position. If lyrics run ahead, lower
-                    compensation. If native extrap is no, rebuild the addon
-                    (npm run build:native-media) and restart DesktopBridge.
                   </Text>
                 </View>
                 <Pressable
@@ -654,9 +735,16 @@ export default function BridgeSettingsScreen() {
                   <Text style={styles.secondaryButtonText}>Apply timing</Text>
                 </Pressable>
               </SettingSection> : null}
-            </BlurView>
+            </Animated.View>
 
-            <BlurView intensity={36} tint="dark" style={styles.card}>
+            <View style={styles.card}>
+              {Platform.OS === 'ios' ? <SettingSection title="Live lyrics">
+                <Text style={styles.onboardingHint}>{liveActivityMessage}</Text>
+                <Pressable style={styles.secondaryButton} onPress={restartLiveActivity}>
+                  <Ionicons name="mic-outline" size={17} color="#FFFFFF" />
+                  <Text style={styles.secondaryButtonText}>Restart live lyrics</Text>
+                </Pressable>
+              </SettingSection> : null}
               <SettingSection title="Onboarding">
                 <Pressable
                   style={({ pressed }) => [
@@ -665,25 +753,29 @@ export default function BridgeSettingsScreen() {
                   ]}
                   onPress={handleShowOnboarding}>
                   <Ionicons name="school-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Show onboarding again</Text>
+                  <Text style={styles.secondaryButtonText}>Setup guide</Text>
                 </Pressable>
-                <Text style={styles.onboardingHint}>
-                  Reset the onboarding flow to see the setup guide again
-                </Text>
               </SettingSection>
-            </BlurView>
+            </View>
 
-            <View style={styles.footerCard}>
+            {playbackMode === 'desktop' && <View style={styles.footerCard}>
               <View style={styles.footerIconWrap}>
                 <Ionicons name="wifi" size={18} color="rgba(255,255,255,0.74)" />
               </View>
               <Text style={styles.footerText}>
                 {serverUrl || 'No bridge URL saved'}
               </Text>
-            </View>
+            </View>}
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+
+      <TranslationLanguagePicker
+        open={languagePickerOpen}
+        selected={translationLanguage}
+        onSelect={setTranslationLanguage}
+        onClose={() => setLanguagePickerOpen(false)}
+      />
 
       <Modal
         animationType="slide"
@@ -713,7 +805,7 @@ export default function BridgeSettingsScreen() {
         onRequestClose={() => setLoginOpen(false)}>
         <View style={styles.loginModal}>
           <SafeAreaView style={styles.loginHeader}>
-            <Text style={styles.loginTitle}>Log in to Spotify</Text>
+            <Text style={styles.loginTitle}>Sign in with Spotify</Text>
             <Pressable
               hitSlop={10}
               onPress={() => setLoginOpen(false)}
@@ -725,11 +817,16 @@ export default function BridgeSettingsScreen() {
             source={{ uri: SPOTIFY_LOGIN_URL }}
             originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
             injectedJavaScript={spotifyAuthProbeScript}
+            userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+              if (isTopFrame !== false && url.startsWith('https://open.spotify.com/')) {
+                setLoginOpen(false);
+                requestReloadSpotifyBrowser();
+                return false;
+              }
               if (!isSpotifyNativeAppRedirect(url)) {
                 return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
               }
-              completeSpotifySignIn();
               return false;
             }}
             sharedCookiesEnabled
@@ -761,32 +858,8 @@ export default function BridgeSettingsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#0A0B11',
+    backgroundColor: Design.background,
     overflow: 'hidden',
-  },
-  ambientShapeA: {
-    position: 'absolute',
-    top: 52,
-    left: -92,
-    width: 280,
-    height: 280,
-    borderRadius: 140,
-    backgroundColor: '#5A6DFF',
-    opacity: 0.24,
-  },
-  ambientShapeB: {
-    position: 'absolute',
-    right: -108,
-    bottom: 132,
-    width: 310,
-    height: 310,
-    borderRadius: 155,
-    backgroundColor: '#B668F2',
-    opacity: 0.2,
-  },
-  backgroundTint: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(8, 9, 14, 0.76)',
   },
   safeArea: {
     flex: 1,
@@ -795,10 +868,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 34,
-    gap: 16,
+    gap: 20,
   },
   header: {
     flexDirection: 'row',
@@ -808,9 +884,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.1)',
@@ -819,16 +895,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  eyebrow: {
-    color: 'rgba(255,255,255,0.54)',
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
   title: {
     color: '#FFFFFF',
-    fontSize: 28,
+    fontSize: 32,
+    letterSpacing: -1,
     fontWeight: '700',
     marginTop: 2,
   },
@@ -845,21 +915,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   card: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    paddingVertical: 16,
-    overflow: 'hidden',
+    gap: 14,
   },
   section: {
-    paddingHorizontal: 16,
-    gap: 12,
+    padding: 18,
+    gap: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Design.border,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    overflow: 'hidden',
   },
+  sectionToggle: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: {
-    color: 'rgba(248,248,254,0.72)',
+    color: 'rgba(255,255,255,0.65)',
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.3,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
   },
   sectionBody: {
     gap: 12,
@@ -880,8 +953,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
   },
   modeChoiceActive: {
-    backgroundColor: 'rgba(143,240,196,0.13)',
-    borderColor: 'rgba(143,240,196,0.5)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.4)',
   },
   modeChoiceCopy: {
     flex: 1,
@@ -893,8 +966,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   modeChoiceHint: {
-    color: 'rgba(255,255,255,0.52)',
-    fontSize: 11,
+    color: Design.muted,
+    fontSize: 12,
+    lineHeight: 17,
   },
   fieldRow: {
     gap: 7,
@@ -905,10 +979,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   input: {
-    minHeight: 46,
+    minHeight: 50,
     borderRadius: 12,
     paddingHorizontal: 13,
-    backgroundColor: 'rgba(255,255,255,0.09)',
+    backgroundColor: 'rgba(3,8,15,0.4)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
     color: '#FFFFFF',
@@ -916,24 +990,79 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   primaryButton: {
-    minHeight: 46,
-    borderRadius: 999,
+    minHeight: 50,
+    borderRadius: 16,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.15)',
   },
   secondaryButton: {
-    minHeight: 42,
-    borderRadius: 999,
+    minHeight: 48,
+    borderRadius: 16,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  languageButton: {
+    minHeight: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  languageButtonHover: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  languageButtonText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  spotifySessionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  spotifySignedInStatus: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  spotifySignedInText: {
+    flexShrink: 1,
+    color: Design.accent,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  spotifyLogoutButton: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    gap: 6,
+    backgroundColor: 'rgba(255,93,117,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,93,117,0.24)',
+  },
+  spotifyLogoutText: {
+    color: '#FF93A4',
   },
   buttonPressed: {
     opacity: 0.76,
@@ -945,14 +1074,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   secondaryButtonText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
   },
   divider: {
-    height: 1,
-    marginVertical: 16,
-    backgroundColor: 'rgba(255,255,255,0.09)',
+    display: 'none',
   },
   footerCard: {
     minHeight: 54,
@@ -1007,11 +1136,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   onboardingHint: {
-    color: 'rgba(255,255,255,0.48)',
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 8,
-    marginLeft: 4,
+    color: Design.muted,
+    fontSize: 13,
+    lineHeight: 20,
   },
   validationError: {
     color: '#FF93A4',
@@ -1019,6 +1146,10 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 8,
   },
+  inputFocused: { borderColor: Design.accent, backgroundColor: 'rgba(168,240,207,0.04)' },
+  headerLogo: { width: 44, height: 44, borderRadius: 14 },
+  summary: { gap: 12, alignItems: 'flex-start', paddingHorizontal: 4 },
+  summaryText: { color: Design.muted, fontSize: 15, lineHeight: 22 },
   scannerModal: {
     flex: 1,
     backgroundColor: '#090A11',

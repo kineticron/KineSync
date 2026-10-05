@@ -1,4 +1,6 @@
 import { BlurView } from "expo-blur";
+import { Asset } from "expo-asset";
+import { LyricsTypeIcon } from "@/components/lyrics/lyrics-type-icon";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
@@ -12,30 +14,23 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentProps,
+  type ReactNode,
 } from "react";
 import {
   Alert,
   AppState,
-  type AppStateStatus,
-  Modal,
   Platform,
   Pressable,
-  ScrollView,
   Share,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from "react-native";
 import Reanimated, {
   useSharedValue,
   withTiming,
-  withRepeat,
-  withSequence,
   useAnimatedStyle,
   Easing as ReanimatedEasing,
-  cancelAnimation,
   interpolate,
   interpolateColor,
   Extrapolation,
@@ -68,8 +63,8 @@ import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
 import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
-import { LyricsView } from "@/components/lyrics/lyrics-view";
-import { WebLyricsView } from "@/components/lyrics/web-lyrics-view";
+import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
+import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
 import {
   PlaybackControls,
   type PlaybackControlsLayout,
@@ -80,6 +75,9 @@ import {
   type SpotifyBrowserFallbackHandle,
 } from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
+import { PromotionalBackdrop } from "@/components/ui/promotional-backdrop";
+import { useSpotifySessionStore } from "@/store/spotify-session-store";
+import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
 import {
@@ -95,8 +93,11 @@ import {
 } from "@/lib/icon-button-press-animation";
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
-
-type TutorialIconName = ComponentProps<typeof Ionicons>["name"];
+import { usePlayerTour } from "@/hooks/use-player-tour";
+import { TOUR_TRACK, usePlayerTourStore, type PlayerTourStep } from "@/store/player-tour-store";
+import { DEMO_LYRICS } from "@/components/onboarding/renderer-preview";
+import { PlayerTourOverlay } from "@/components/onboarding/player-tour-overlay";
+import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 const LYRICS_PLAYBACK_WAKE_LOCK_TAG = "kinesync-lyrics-playback";
 const CONTROLS_IDLE_TIMEOUT_MS = 2500;
 const PLAYER_MODE_TRANSITION_MS = 420;
@@ -112,38 +113,6 @@ const FULLSCREEN_ALBUM_LABEL_OFFSET = -8;
 const FULLSCREEN_META_OFFSET = 30;
 const FULLSCREEN_META_ESTIMATED_HEIGHT = 50;
 const FULLSCREEN_ACTION_BUTTON_SIZE = 36;
-const BUTTON_TUTORIAL_ITEMS: {
-  title: string;
-  detail: string;
-  icons: TutorialIconName[];
-}[] = [
-  {
-    title: "Back, play, forward",
-    detail: "Skip back, pause or resume, and skip to the next track.",
-    icons: ["play-skip-back", "play", "play-skip-forward"],
-  },
-  {
-    title: "Auto-scroll",
-    detail: "Return lyrics to the current line when auto-scroll was paused.",
-    icons: ["navigate-circle"],
-  },
-  {
-    title: "Eye",
-    detail:
-      "Tap to toggle auto-hide controls. Hold to show or hide the status bar.",
-    icons: ["eye"],
-  },
-  {
-    title: "Translate",
-    detail: "Tap to request translation. Hold to show or hide translated text.",
-    icons: ["language"],
-  },
-  {
-    title: "Status bar",
-    detail: "Shows bridge status, lyrics source, and ping when visible.",
-    icons: ["pulse"],
-  },
-];
 
 function getLineKey(line: LyricLine) {
   return `${line.lineStartTime}-${line.lineEndTime}`;
@@ -199,60 +168,6 @@ function getPrimaryLineText(line: LyricLine) {
     text += currentText;
   }
   return text.trim();
-}
-
-function trimTrailingSourceFromAction(actionText: string, sourceText: string) {
-  const action = String(actionText || "").trim();
-  const source = String(sourceText || "").trim();
-  if (!action || !source) {
-    return action;
-  }
-
-  const escapedSource = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const trailingSourcePatterns = [
-    new RegExp(`\\s*\\(${escapedSource}\\)\\s*[.!…]*$`, "i"),
-    new RegExp(
-      `\\s+from\\s+${escapedSource}(?:\\s+on\\s+desktop)?\\s*[.!…]*$`,
-      "i",
-    ),
-    new RegExp(`\\s+source\\s+${escapedSource}\\s*[.!…]*$`, "i"),
-  ];
-
-  for (const pattern of trailingSourcePatterns) {
-    if (pattern.test(action)) {
-      return action.replace(pattern, (match) =>
-        match.toLowerCase().includes(" from ") ? " from" : "",
-      );
-    }
-  }
-
-  return action;
-}
-
-function extractSourceFromStatusMessage(statusMessage: string) {
-  const message = String(statusMessage || "").trim();
-  if (!message) {
-    return "";
-  }
-
-  const parentheticalMatch = message.match(/\(([^()]+)\)\s*[.!…]*$/);
-  if (parentheticalMatch) {
-    return parentheticalMatch[1]?.trim() || "";
-  }
-
-  const fromMatch = message.match(
-    /\bfrom\s+(.+?)(?:\s+on\s+desktop)?\s*[.!…]*$/i,
-  );
-  if (fromMatch) {
-    return fromMatch[1]?.trim() || "";
-  }
-
-  const sourceMatch = message.match(/\bsource\s+(.+?)\s*[.!…]*$/i);
-  if (sourceMatch) {
-    return sourceMatch[1]?.trim() || "";
-  }
-
-  return "";
 }
 
 function base64ToUint8Array(base64: string) {
@@ -350,22 +265,19 @@ type PlaybackControlsDockProps = {
   onSeek: (positionMs: number) => void;
   onRequestTranslate?: () => void;
   translationLoading?: boolean;
-  showTranslatedText?: boolean;
-  onToggleShowTranslatedText?: (value: boolean) => void;
   autoHidePlaybackControls?: boolean;
   onToggleAutoHidePlaybackControls?: () => void;
-  connectionStatus?: "connected" | "disconnected" | "connecting";
   playbackMode?: PlaybackMode;
   latencyMs?: number;
-  statusActionText?: string;
-  statusSourceText?: string;
-  hideStatusBar?: boolean;
-  onToggleHideStatusBar?: (value: boolean) => void;
   onUserInteraction?: () => void;
   fullscreenAlbumMode?: boolean;
+  fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
   layout?: PlaybackControlsLayout;
+  previewPlayback?: PreviewPlaybackAnchor;
+  tourStep?: PlayerTourStep;
+  previewTranslated?: boolean;
 };
 
 const PlaybackControlsDock = memo(function PlaybackControlsDock({
@@ -385,25 +297,25 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   onSeek,
   onRequestTranslate,
   translationLoading,
-  showTranslatedText,
-  onToggleShowTranslatedText,
   autoHidePlaybackControls,
   onToggleAutoHidePlaybackControls,
-  connectionStatus = "disconnected",
   playbackMode = "desktop",
   latencyMs = 0,
-  statusActionText = "",
-  statusSourceText = "",
-  hideStatusBar,
-  onToggleHideStatusBar,
   onUserInteraction,
   fullscreenAlbumMode,
+  fullscreenActions,
   controlsModeTransitioning,
   fullscreenAlbumProgress,
   layout,
+  previewPlayback,
+  tourStep,
+  previewTranslated,
 }: PlaybackControlsDockProps) {
   return (
     <PlaybackControls
+      previewPlayback={previewPlayback}
+      tourStep={tourStep}
+      previewTranslated={previewTranslated}
       isPlaying={isPlaying}
       durationMs={durationMs}
       shareSelectionCount={shareSelectionCount}
@@ -420,19 +332,13 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       onSeek={onSeek}
       onRequestTranslate={onRequestTranslate}
       translationLoading={translationLoading}
-      showTranslatedText={showTranslatedText}
-      onToggleShowTranslatedText={onToggleShowTranslatedText}
       autoHidePlaybackControls={autoHidePlaybackControls}
       onToggleAutoHidePlaybackControls={onToggleAutoHidePlaybackControls}
-      hideStatusBar={hideStatusBar}
-      onToggleHideStatusBar={onToggleHideStatusBar}
-      connectionStatus={connectionStatus}
       playbackMode={playbackMode}
       latencyMs={latencyMs}
-      statusActionText={statusActionText}
-      statusSourceText={statusSourceText}
       onUserInteraction={onUserInteraction}
       fullscreenAlbumMode={fullscreenAlbumMode}
+      fullscreenActions={fullscreenActions}
       controlsModeTransitioning={controlsModeTransitioning}
       fullscreenAlbumProgress={fullscreenAlbumProgress}
       layout={layout}
@@ -440,104 +346,57 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   );
 });
 
-function ButtonTutorialModal({
-  visible,
-  onClose,
-}: {
-  visible: boolean;
-  onClose: () => void;
-}) {
-  return (
-    <Modal
-      transparent
-      animationType="fade"
-      visible={visible}
-      onRequestClose={onClose}
-    >
-      <View style={styles.tutorialOverlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <BlurView intensity={38} tint="dark" style={styles.tutorialCard}>
-          <View style={styles.tutorialHeader}>
-            <Text style={styles.tutorialTitle}>Button tutorial</Text>
-            <Pressable
-              onPress={onClose}
-              hitSlop={10}
-              style={({ pressed }) => [
-                styles.tutorialCloseButton,
-                pressed && styles.tutorialCloseButtonPressed,
-              ]}
-            >
-              <Text style={styles.tutorialCloseText}>Done</Text>
-            </Pressable>
-          </View>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.tutorialList}
-          >
-            {BUTTON_TUTORIAL_ITEMS.map((item) => (
-              <View key={item.title} style={styles.tutorialRow}>
-                <View style={styles.tutorialIconWrap}>
-                  {item.icons.map((icon) => (
-                    <Ionicons
-                      key={`${item.title}-${icon}`}
-                      name={icon}
-                      size={17}
-                      color="#FFFFFF"
-                    />
-                  ))}
-                </View>
-                <View style={styles.tutorialCopy}>
-                  <Text style={styles.tutorialItemTitle}>{item.title}</Text>
-                  <Text style={styles.tutorialItemDetail}>{item.detail}</Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        </BlurView>
-      </View>
-    </Modal>
-  );
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const [isScreenFocused, setIsScreenFocused] = useState(true);
   useFocusEffect(
     useCallback(() => {
       setIsScreenFocused(true);
-      return () => setIsScreenFocused(false);
+      return () => {
+        setIsScreenFocused(false);
+        if (usePlayerTourStore.getState().active) usePlayerTourStore.getState().finish();
+      };
     }, []),
   );
   const spotifyBrowserRef = useRef<SpotifyBrowserFallbackHandle>(null);
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
-  const currentTrack = usePlaybackStore((s) => s.currentTrack);
+  const tour = usePlayerTour(isScreenFocused);
+  const liveTrack = usePlaybackStore((s) => s.currentTrack);
+  const currentTrack = tour.active ? TOUR_TRACK : liveTrack;
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const playbackMode = usePlaybackStore((s) => s.playbackMode);
+  const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const showEmptyState = !tour.active && (!currentTrack || (playbackMode === 'mobile' && !spotifySignedIn) || (playbackMode === 'desktop' && connectionStatus !== 'connected'));
   const driftOffset = usePlaybackStore((s) => s.driftOffset);
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
-  const isPlaying = usePlaybackStore((s) => s.isPlaying);
-  const lyricsSource = usePlaybackStore((s) => s.lyricsSource);
-  const lyrics = usePlaybackStore((s) => s.lyrics);
+  const liveIsPlaying = usePlaybackStore((s) => s.isPlaying);
+  const isPlaying = tour.active ? tour.isPlaying : liveIsPlaying;
+  const liveLyricsSource = usePlaybackStore((s) => s.lyricsSource);
+  const lyricsSource = tour.active ? 'demo-syllable' : liveLyricsSource;
+  const liveLyrics = usePlaybackStore((s) => s.lyrics);
+  const lyrics = tour.active ? DEMO_LYRICS : liveLyrics;
   const lyricsMetadata = usePlaybackStore((s) => s.lyricsMetadata);
-  const lyricsStatusMessage = usePlaybackStore((s) => s.lyricsStatusMessage);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [buttonTutorialOpen, setButtonTutorialOpen] = useState(false);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
   const [topBarMounted, setTopBarMounted] = useState(true);
   const [albumArtworkMorphing, setAlbumArtworkMorphing] = useState(false);
   const hasHandledFullscreenTransitionRef = useRef(false);
-  const tapToSeekEnabled = usePlaybackStore((s) => s.playbackTapToSeek);
-  const setTapToSeekEnabled = usePlaybackStore((s) => s.setPlaybackTapToSeek);
-  const hidePlaybackStatusBar = usePlaybackStore((s) => s.hidePlaybackStatusBar);
-  const setHidePlaybackStatusBar = usePlaybackStore((s) => s.setHidePlaybackStatusBar);
-  const autoHidePlaybackControls = usePlaybackStore((s) => s.autoHidePlaybackControls);
+  const tapToSeekEnabled = true;
+  const liveAutoHidePlaybackControls = usePlaybackStore((s) => s.autoHidePlaybackControls);
+  const tourAutoHideDemo = tour.active && tour.step === 'autoHide';
+  const autoHidePlaybackControls = tour.active ? tourAutoHideDemo && tour.autoHideControls : liveAutoHidePlaybackControls;
   const setAutoHidePlaybackControls = usePlaybackStore((s) => s.setAutoHidePlaybackControls);
-  const showTranslatedText = usePlaybackStore((s) => s.showTranslatedText);
-  const setShowTranslatedText = usePlaybackStore((s) => s.setShowTranslatedText);
-  const lyricsRendererMode = usePlaybackStore((s) => s.lyricsRendererMode);
-  const setLyricsRendererMode = usePlaybackStore((s) => s.setLyricsRendererMode);
+  const liveShowTranslatedText = usePlaybackStore((s) => s.showTranslatedText);
+  const showTranslatedText = tour.active ? tour.translated : liveShowTranslatedText;
+  const previewPlayback = useMemo(() => tour.active ? {
+    anchorPositionMs: tour.anchorPositionMs,
+    anchorMonotonicMs: tour.anchorMonotonicMs,
+    isPlaying: tour.isPlaying && tour.foreground && isScreenFocused,
+  } : undefined, [tour.active, tour.anchorPositionMs, tour.anchorMonotonicMs, tour.isPlaying, tour.foreground, isScreenFocused]);
+  const lyricsStyle = usePlaybackStore((s) => s.lyricsStyle);
+  const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
   const [controlsDockHeight, setControlsDockHeight] = useState(0);
@@ -573,11 +432,17 @@ export default function HomeScreen() {
     () => new Set(),
   );
   const [shareBusy, setShareBusy] = useState(false);
-  const ambientPhaseA = useSharedValue(0);
-  const ambientPhaseB = useSharedValue(0);
+  useEffect(() => {
+    setFullscreenAlbumMode(false);
+    setAlbumArtworkMorphing(false);
+    setLyricsMounted(true);
+    setTopBarMounted(true);
+    setScrubPreviewPositionMs(null);
+    setAutoFollowEnabled(true);
+    setSelectedLineKeys(new Set());
+  }, [tour.active]);
   const fullscreenAlbumProgress = useSharedValue(0);
   const topBarTrackPress = useSharedValue(0);
-  const fullscreenLyricsButtonScale = useSharedValue(1);
   const fullscreenMenuButtonScale = useSharedValue(1);
   const lyricsRestoreOpacity = useSharedValue(1);
   const controlsOpacity = useSharedValue(1);
@@ -588,7 +453,6 @@ export default function HomeScreen() {
   const autoHidePlaybackControlsRef = useRef(autoHidePlaybackControls);
   const fullscreenAlbumModeRef = useRef(fullscreenAlbumMode);
   const albumArtworkMorphingRef = useRef(albumArtworkMorphing);
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const trackArtworkUrl = currentTrack?.artworkUrl ?? "";
   const trackAlbumTitle = String(currentTrack?.album || "").trim();
   const [resolvedAnimatedSquareUrl, setResolvedAnimatedSquareUrl] = useState("");
@@ -601,6 +465,9 @@ export default function HomeScreen() {
     windowDimensions.height,
   );
   const isLandscapeRef = useRef(isLandscape);
+  useEffect(() => {
+    if (tour.active && isLandscape && tour.step === 'lyrics') usePlayerTourStore.getState().advance('lyrics');
+  }, [tour.active, tour.step, isLandscape]);
   const landscapeLayout = useMemo(
     () =>
       getLandscapeLayoutMetrics({
@@ -624,14 +491,14 @@ export default function HomeScreen() {
   const landscapeLeftPaneWidth = landscapeLayout.leftPaneWidth;
 
   const resolvedArtworkUrl = useMemo(
-    () => normalizeBridgeArtworkUri(trackArtworkUrl),
-    [trackArtworkUrl],
+    () => tour.active ? Asset.fromModule(require('@/assets/images/R.png')).uri : normalizeBridgeArtworkUri(trackArtworkUrl),
+    [trackArtworkUrl, tour.active],
   );
   const hasResolvedArtwork = resolvedArtworkUrl.length > 0;
 
   useEffect(() => {
     setResolvedAnimatedSquareUrl("");
-    if (!currentTrack) {
+    if (!currentTrack || tour.active) {
       return;
     }
     let cancelled = false;
@@ -644,11 +511,11 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [currentTrack]);
+  }, [currentTrack, tour.active]);
 
   useEffect(() => {
     if (
-      playbackMode !== "mobile" ||
+      tour.active || playbackMode !== "mobile" ||
       connectionStatus === "connected" ||
       !currentTrack ||
       Boolean(normalizeBridgeArtworkUri(currentTrack.artworkUrl))
@@ -674,6 +541,7 @@ export default function HomeScreen() {
     };
   }, [
     currentTrack,
+    tour.active,
     connectionStatus,
     playbackMode,
     currentTrack?.id,
@@ -715,46 +583,11 @@ export default function HomeScreen() {
   const fullscreenArtworkImageTop =
     fullscreenArtworkTop + fullscreenAlbumLabelBlockHeight;
   const bridgeConnected = connectionStatus === "connected";
-  const derivedStatusSource = useMemo(
-    () => extractSourceFromStatusMessage(lyricsStatusMessage),
-    [lyricsStatusMessage],
-  );
-  const footerSourceText = useMemo(() => {
-    if (derivedStatusSource) {
-      return derivedStatusSource;
-    }
-    if (lyricsSource) {
-      return lyricsSource;
-    }
-    if (playbackMode === "mobile") {
-      return "On-device playback";
-    }
-    return bridgeConnected ? "Waiting for source" : "Bridge offline";
-  }, [bridgeConnected, derivedStatusSource, lyricsSource, playbackMode]);
-  const footerActionText = useMemo(() => {
-    const baseAction =
-      lyricsStatusMessage ||
-      (playbackMode === "mobile"
-        ? "Mobile-Only"
-        : bridgeConnected
-          ? "Waiting for lyrics"
-          : "Connecting to bridge...");
-    return trimTrailingSourceFromAction(baseAction, footerSourceText);
-  }, [bridgeConnected, footerSourceText, lyricsStatusMessage, playbackMode]);
-  const translationLoading = Boolean(lyricsMetadata.translation?.isLoading);
+  const translationLoading = !tour.active && Boolean(lyricsMetadata.translation?.isLoading);
   const lyricsTimingMode = useMemo(
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
   );
-  const fadeLyricsBackIn = useCallback(() => {
-    if (fullscreenAlbumMode || albumArtworkMorphingRef.current) {
-      return;
-    }
-    lyricsRestoreOpacity.value = withTiming(1, {
-      duration: 420,
-      easing: PLAYER_MODE_EASE,
-    });
-  }, [fullscreenAlbumMode, lyricsRestoreOpacity]);
 
   const finishLyricsModeTransition = useCallback(() => {
     albumArtworkMorphingRef.current = false;
@@ -879,7 +712,7 @@ export default function HomeScreen() {
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
 
-    if (isLandscapeRef.current) {
+    if (isLandscapeRef.current && !tourAutoHideDemo) {
       if (!landscapeArtControlsVisibleRef.current) {
         return;
       }
@@ -911,10 +744,10 @@ export default function HomeScreen() {
       }
       hideControls();
     }, CONTROLS_IDLE_TIMEOUT_MS);
-  }, [clearControlsIdleTimer, hideControls, showControls]);
+  }, [clearControlsIdleTimer, hideControls, showControls, tourAutoHideDemo]);
 
   const handleControlsInteraction = useCallback(() => {
-    if (isLandscapeRef.current) {
+    if (isLandscapeRef.current && !tourAutoHideDemo) {
       scheduleControlsHide();
       return;
     }
@@ -922,12 +755,12 @@ export default function HomeScreen() {
       showControls();
     }
     scheduleControlsHide();
-  }, [controlsVisible, scheduleControlsHide, showControls]);
+  }, [controlsVisible, scheduleControlsHide, showControls, tourAutoHideDemo]);
 
   useEffect(() => {
     clearControlsIdleTimer();
 
-    if (isLandscape) {
+    if (isLandscape && !tourAutoHideDemo) {
       if (landscapeArtControlsVisible) {
         scheduleControlsHide();
       }
@@ -949,54 +782,13 @@ export default function HomeScreen() {
     landscapeArtControlsVisible,
     scheduleControlsHide,
     showControls,
+    tourAutoHideDemo,
   ]);
 
   useEffect(() => {
-    const stopAmbientAnimations = () => {
-      cancelAnimation(ambientPhaseA);
-      cancelAnimation(ambientPhaseB);
-    };
-
-    const startAmbientAnimations = () => {
-      ambientPhaseA.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 18000 }),
-          withTiming(0, { duration: 18000 }),
-        ),
-        -1,
-        false,
-      );
-      ambientPhaseB.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 22000 }),
-          withTiming(0, { duration: 22000 }),
-        ),
-        -1,
-        false,
-      );
-    };
-
-    // ponytail: skip blobs when covered by fullscreen album art or backgrounded — saves CPU on older devices
-    if (appStateRef.current === "active" && isScreenFocused && !fullscreenAlbumMode) {
-      startAmbientAnimations();
-    }
-
-    const subscription = AppState.addEventListener("change", (nextState) => {
-      appStateRef.current = nextState;
-      if (nextState === "active") {
-        setScrubPreviewPositionMs(null);
-        if (isScreenFocused && !fullscreenAlbumMode) startAmbientAnimations();
-        return;
-      }
-      setScrubPreviewPositionMs(null);
-      stopAmbientAnimations();
-    });
-
-    return () => {
-      subscription.remove();
-      stopAmbientAnimations();
-    };
-  }, [ambientPhaseA, ambientPhaseB, fullscreenAlbumMode, isScreenFocused]);
+    const subscription = AppState.addEventListener('change', () => setScrubPreviewPositionMs(null));
+    return () => subscription.remove();
+  }, []);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
     if (usePlaybackStore.getState().connectionStatus === "connected") {
@@ -1007,6 +799,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackPlayPause = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().togglePlayback(); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.togglePlayPause();
       return;
@@ -1015,6 +808,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackResync = useCallback(() => {
+    if (usePlayerTourStore.getState().active) return;
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.resyncPlayback();
       return;
@@ -1023,6 +817,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackPrevious = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipPrevious();
       return;
@@ -1031,6 +826,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackNext = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipNext();
       return;
@@ -1038,6 +834,14 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.skipNext();
   }, []);
   const handleLyricLinePress = useCallback((line: LyricLine) => {
+    if (usePlayerTourStore.getState().active) {
+      usePlayerTourStore.getState().seek(line.lineStartTime);
+      usePlayerTourStore.getState().advance('seek');
+      setScrubPreviewPositionMs(null);
+      setAutoFollowEnabled(true);
+      setResumeAutoFollowSignal(value => value + 1);
+      return;
+    }
     const nowWall = Date.now();
     const nowMono =
       typeof performance !== "undefined" &&
@@ -1058,6 +862,14 @@ export default function HomeScreen() {
 
   const handleSeek = useCallback(
     (positionMs: number) => {
+      if (usePlayerTourStore.getState().active) {
+        usePlayerTourStore.getState().seek(positionMs);
+        usePlayerTourStore.getState().advance('seek');
+        setScrubPreviewPositionMs(null);
+        setAutoFollowEnabled(true);
+        setResumeAutoFollowSignal(value => value + 1);
+        return;
+      }
       const clamped = Math.max(
         0,
         Math.min(positionMs, currentTrack?.durationMs ?? positionMs),
@@ -1090,6 +902,7 @@ export default function HomeScreen() {
   }, []);
 
   const handleLineLongPress = useCallback((line: LyricLine) => {
+    if (usePlayerTourStore.getState().active) return;
     const key = getLineKey(line);
     setSelectedLineKeys((current) => {
       const next = new Set(current);
@@ -1253,23 +1066,18 @@ export default function HomeScreen() {
     setScrubPreviewPositionMs(null);
     setAutoFollowEnabled(true);
     setResumeAutoFollowSignal((value) => value + 1);
+    usePlayerTourStore.getState().advance('autoScroll');
   }, []);
 
-  const handleAutoHidePlaybackControlsChange = useCallback(
-    (enabled: boolean) => {
-      autoHidePlaybackControlsRef.current = enabled;
-      setAutoHidePlaybackControls(enabled);
-    },
-    [setAutoHidePlaybackControls],
-  );
-
   const handleToggleAutoHidePlaybackControls = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().toggleAutoHide(); return; }
     const next = !autoHidePlaybackControlsRef.current;
     autoHidePlaybackControlsRef.current = next;
     setAutoHidePlaybackControls(next);
   }, [setAutoHidePlaybackControls]);
 
   const handleShowFullscreenAlbum = useCallback(() => {
+    usePlayerTourStore.getState().advance('artwork');
     albumArtworkMorphingRef.current = true;
     setAlbumArtworkMorphing(true);
     fullscreenAlbumModeRef.current = true;
@@ -1279,6 +1087,8 @@ export default function HomeScreen() {
   }, [showControls]);
 
   const handleLandscapeArtworkPress = useCallback(() => {
+    usePlayerTourStore.getState().advance('artwork');
+    usePlayerTourStore.getState().advance('lyrics');
     setLandscapeArtControlsVisible((visible) => {
       const next = !visible;
       landscapeArtControlsVisibleRef.current = next;
@@ -1293,6 +1103,7 @@ export default function HomeScreen() {
   }, [clearControlsIdleTimer, handleControlsInteraction, scheduleControlsHide]);
 
   const handleShowLyrics = useCallback(() => {
+    usePlayerTourStore.getState().advance('lyrics');
     albumArtworkMorphingRef.current = true;
     setAlbumArtworkMorphing(true);
     fullscreenAlbumModeRef.current = false;
@@ -1312,26 +1123,6 @@ export default function HomeScreen() {
     },
     [handleControlsInteraction],
   );
-
-  const ambientBlobAStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: interpolate(ambientPhaseA.value, [0, 1], [-36, 36]) },
-        { translateY: interpolate(ambientPhaseA.value, [0, 1], [-20, 30]) },
-      ],
-      opacity: interpolate(ambientPhaseA.value, [0, 1], [0.22, 0.32]),
-    };
-  });
-
-  const ambientBlobBStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateX: interpolate(ambientPhaseB.value, [0, 1], [26, -28]) },
-        { translateY: interpolate(ambientPhaseB.value, [0, 1], [26, -18]) },
-      ],
-      opacity: interpolate(ambientPhaseB.value, [0, 1], [0.2, 0.3]),
-    };
-  });
 
   const controlsStyle = useAnimatedStyle(() => {
     return {
@@ -1355,14 +1146,6 @@ export default function HomeScreen() {
     };
   });
 
-  const fullscreenLyricsButtonAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: fullscreenLyricsButtonScale.value }],
-    opacity: interpolate(
-      fullscreenLyricsButtonScale.value,
-      [1, ICON_BUTTON_PRESS_SCALE],
-      [1, 0.86],
-    ),
-  }));
 
   const fullscreenMenuButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: fullscreenMenuButtonScale.value }],
@@ -1483,6 +1266,18 @@ export default function HomeScreen() {
     setControlsDockHeight(height);
   }, []);
 
+  const handleTranslate = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().translate(); return; }
+    void requestImmediateTranslationForCurrentSource();
+  }, []);
+  const handleOpenMenu = useCallback(() => {
+    if (usePlayerTourStore.getState().active) {
+      Alert.alert('Player menu', 'When you’re listening, this menu lets you change lyrics style, refresh lyrics, and open more player options.');
+      return;
+    }
+    setMenuOpen(true);
+  }, []);
+
   return (
     <View style={styles.screen}>
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
@@ -1498,19 +1293,10 @@ export default function HomeScreen() {
           recyclingKey={`background-blur-${resolvedArtworkUrl}`}
         />
       ) : null}
-      {!hasResolvedArtwork && (
-        <>
-          <Reanimated.View
-            style={[styles.ambientBlob, styles.ambientBlobA, ambientBlobAStyle]}
-          />
-          <Reanimated.View
-            style={[styles.ambientBlob, styles.ambientBlobB, ambientBlobBStyle]}
-          />
-        </>
-      )}
+      {!hasResolvedArtwork && <PromotionalBackdrop />}
       <View
         style={[
-          styles.backgroundTint,
+          hasResolvedArtwork && styles.backgroundTint,
           hasResolvedArtwork && styles.backgroundTintWithArtwork,
         ]}
       />
@@ -1526,9 +1312,9 @@ export default function HomeScreen() {
               ]}
             >
               <HorizontalPlayerPanel
-                title={currentTrack?.title || "Waiting for Spotify"}
+                title={currentTrack?.title || "KineSync"}
                 artist={
-                  currentTrack?.artist || "Desktop bridge not detected yet"
+                  currentTrack?.artist || ""
                 }
                 artworkUrl={resolvedArtworkUrl}
                 animatedArtworkUrl={resolvedAnimatedSquareUrl}
@@ -1536,11 +1322,14 @@ export default function HomeScreen() {
                 artworkSize={landscapeArtworkSize}
                 lyricsTimingMode={lyricsTimingMode}
                 lyricsSource={lyricsSource}
-                onMenuPress={() => setMenuOpen(true)}
+                onMenuPress={handleOpenMenu}
                 onArtworkPress={handleLandscapeArtworkPress}
                 controlsOverlayVisible={landscapeArtControlsVisible}
                 controlsOverlay={
                   <PlaybackControlsDock
+                    previewPlayback={previewPlayback}
+                    tourStep={tour.active ? tour.step : undefined}
+                    previewTranslated={tour.active ? tour.translated : undefined}
                     layout="overlay"
                     isPlaying={isPlaying}
                     durationMs={currentTrack?.durationMs ?? 0}
@@ -1550,13 +1339,15 @@ export default function HomeScreen() {
                     onPrevious={handlePlaybackPrevious}
                     onNext={handlePlaybackNext}
                     onSeek={handleSeek}
-                    hideStatusBar
                     onUserInteraction={handleControlsInteraction}
                     fullscreenAlbumProgress={fullscreenAlbumProgress}
                   />
                 }
                 utilityRow={
                   <PlaybackControlsDock
+                    previewPlayback={previewPlayback}
+                    tourStep={tour.active ? tour.step : undefined}
+                    previewTranslated={tour.active ? tour.translated : undefined}
                     layout="landscape-utilities"
                     isPlaying={isPlaying}
                     durationMs={currentTrack?.durationMs ?? 0}
@@ -1570,12 +1361,8 @@ export default function HomeScreen() {
                     onPrevious={handlePlaybackPrevious}
                     onNext={handlePlaybackNext}
                     onSeek={handleSeek}
-                    onRequestTranslate={() =>
-                      requestImmediateTranslationForCurrentSource()
-                    }
+                    onRequestTranslate={handleTranslate}
                     translationLoading={translationLoading}
-                    showTranslatedText={showTranslatedText}
-                    onToggleShowTranslatedText={setShowTranslatedText}
                     onUserInteraction={handleControlsInteraction}
                     fullscreenAlbumProgress={fullscreenAlbumProgress}
                   />
@@ -1592,13 +1379,18 @@ export default function HomeScreen() {
                 { paddingLeft: LANDSCAPE_LYRICS_PADDING },
               ]}
             >
-              {lyricsRendererMode === "webview" ? (
-                <WebLyricsView
-                  active={isScreenFocused}
+              {showEmptyState ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
-                  selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
+                        selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1611,18 +1403,22 @@ export default function HomeScreen() {
                   landscapeMode
                 />
               ) : (
-                <LyricsView
+                <SpicyLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
-                  selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
+                        selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onCreditsTimestampPress={handleSeek}
                   onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                   fontScale={LANDSCAPE_FONT_SCALE}
                   landscapeMode
@@ -1674,23 +1470,25 @@ export default function HomeScreen() {
               style={styles.topSafeArea}
             >
               <Reanimated.View style={lyricsChromeOpacityStyle}>
-                <TopBar
-                  title={currentTrack?.title || "Waiting for Spotify"}
+                  <TopBar
+                  tourHighlight={tour.active && tour.step === 'artwork'}
+                  fitTitle={tour.active}
+                  title={currentTrack?.title || "KineSync"}
                   artist={
-                    currentTrack?.artist || "Desktop bridge not detected yet"
+                    currentTrack?.artist || ""
                   }
                   artworkUrl={resolvedArtworkUrl}
-                  onTrackPress={handleShowFullscreenAlbum}
+                  onTrackPress={currentTrack ? handleShowFullscreenAlbum : undefined}
                   onTrackPressIn={() => {
                     topBarTrackPress.value = 1;
                   }}
                   onTrackPressOut={() => {
                     topBarTrackPress.value = 0;
                   }}
-                  hideArtwork
+                  hideArtwork={Boolean(currentTrack)}
                   lyricsTimingMode={lyricsTimingMode}
                   lyricsSource={lyricsSource}
-                  onMenuPress={() => setMenuOpen(true)}
+                  onMenuPress={handleOpenMenu}
                 />
               </Reanimated.View>
             </SafeAreaView>
@@ -1750,36 +1548,6 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.fullscreenAlbumActionRow}>
-                  <Reanimated.View style={fullscreenLyricsButtonAnimatedStyle}>
-                    <BlurView
-                      intensity={34}
-                      tint="light"
-                      style={styles.fullscreenAlbumIconCapsule}
-                    >
-                      <Pressable
-                        accessibilityLabel="Show lyrics"
-                        style={({ pressed }) => [
-                          styles.fullscreenAlbumIconButton,
-                          pressed && styles.fullscreenAlbumIconButtonPressed,
-                        ]}
-                        onPressIn={() => {
-                          animateIconButtonPressIn(fullscreenLyricsButtonScale);
-                        }}
-                        onPressOut={() => {
-                          animateIconButtonPressOut(
-                            fullscreenLyricsButtonScale,
-                          );
-                        }}
-                        onPress={handleShowLyrics}
-                      >
-                        <Ionicons
-                          name="chatbubble-ellipses-outline"
-                          size={20}
-                          color="#F9FAFC"
-                        />
-                      </Pressable>
-                    </BlurView>
-                  </Reanimated.View>
 
                   <Reanimated.View style={fullscreenMenuButtonAnimatedStyle}>
                     <BlurView
@@ -1799,7 +1567,7 @@ export default function HomeScreen() {
                         onPressOut={() => {
                           animateIconButtonPressOut(fullscreenMenuButtonScale);
                         }}
-                        onPress={() => setMenuOpen(true)}
+                        onPress={handleOpenMenu}
                       >
                         <Ionicons
                           name="ellipsis-horizontal"
@@ -1828,18 +1596,28 @@ export default function HomeScreen() {
               PLAYER_MODE_EASE,
             )}
             exiting={FadeOut.duration(300).easing(PLAYER_MODE_EASE)}
-            style={styles.lyricsContentWrap}
+            style={[
+              styles.lyricsContentWrap,
+              showEmptyState && {
+                paddingBottom: Math.max(controlsDockHeight + 12, 210),
+              },
+            ]}
           >
             <Reanimated.View
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}
             >
-              {lyricsRendererMode === "webview" ? (
-                <WebLyricsView
-                  active={isScreenFocused}
+              {showEmptyState ? (
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
+                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1850,22 +1628,23 @@ export default function HomeScreen() {
                   onUserInteraction={handleControlsInteraction}
                 />
               ) : (
-                <LyricsView
+                <SpicyLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
+                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onCreditsTimestampPress={handleSeek}
                   onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
-                  suppressInitialAutoScrollAnimation
-                  suspendViewportScrollAdjustments={albumArtworkMorphing}
-                  onInitialAutoScrollSettled={fadeLyricsBackIn}
                 />
               )}
             </Reanimated.View>
@@ -1913,6 +1692,9 @@ export default function HomeScreen() {
           }}
         >
           <PlaybackControlsDock
+                    previewPlayback={previewPlayback}
+                    tourStep={tour.active ? tour.step : undefined}
+                    previewTranslated={tour.active ? tour.translated : undefined}
             isPlaying={isPlaying}
             durationMs={currentTrack?.durationMs ?? 0}
             shareSelectionCount={selectedLineKeys.size}
@@ -1929,27 +1711,31 @@ export default function HomeScreen() {
             onPrevious={handlePlaybackPrevious}
             onNext={handlePlaybackNext}
             onSeek={handleSeek}
-            onRequestTranslate={() =>
-              requestImmediateTranslationForCurrentSource()
-            }
+            onRequestTranslate={handleTranslate}
             translationLoading={translationLoading}
-            showTranslatedText={showTranslatedText}
-            onToggleShowTranslatedText={setShowTranslatedText}
             autoHidePlaybackControls={autoHidePlaybackControls}
             onToggleAutoHidePlaybackControls={
               handleToggleAutoHidePlaybackControls
             }
-            onToggleHideStatusBar={setHidePlaybackStatusBar}
-            connectionStatus={connectionStatus}
             playbackMode={playbackMode}
             latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
-            statusActionText={footerActionText}
-            statusSourceText={footerSourceText}
-            hideStatusBar={hidePlaybackStatusBar}
             onUserInteraction={handleControlsInteraction}
+            fullscreenActions={
+              <>
+                <Pressable accessibilityRole="button" accessibilityLabel="Open local vault" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/vault")}>
+                  <Ionicons name="library-outline" size={20} color="#FFFFFF" />
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Show lyrics" hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, tour.active && tour.step === 'lyrics' && styles.tourHighlight, pressed && styles.fullscreenBottomButtonPressed]} onPress={handleShowLyrics}>
+                  <LyricsTypeIcon mode={lyricsTimingMode === "unknown" ? "interpolated" : lyricsTimingMode} size={17} color="#FFFFFF" />
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Open settings" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/explore")}>
+                  <Ionicons name="settings-outline" size={20} color="#FFFFFF" />
+                </Pressable>
+              </>
+            }
             fullscreenAlbumMode={fullscreenAlbumMode}
             controlsModeTransitioning={
-              fullscreenAlbumMode || albumArtworkMorphing
+              albumArtworkMorphing
             }
             fullscreenAlbumProgress={fullscreenAlbumProgress}
           />
@@ -1958,7 +1744,7 @@ export default function HomeScreen() {
       </>
       ) : null}
 
-      <SpotifyBrowserFallback ref={spotifyBrowserRef} />
+      {!tour.active && !tour.pending && <SpotifyBrowserFallback ref={spotifyBrowserRef} />}
 
       <SettingsMenu
         open={menuOpen}
@@ -1976,43 +1762,28 @@ export default function HomeScreen() {
           setMenuOpen(false);
           void refreshLyricsForCurrentTrack(source);
         }}
-        onOpenSpotifyBrowser={() => {
-          setMenuOpen(false);
-          setTimeout(() => spotifyBrowserRef.current?.openBrowser(), 250);
-        }}
         onOpenBridgeSettings={() => {
           setMenuOpen(false);
           router.push("/(tabs)/explore");
         }}
         onOpenButtonTutorial={() => {
           setMenuOpen(false);
-          setButtonTutorialOpen(true);
+          usePlayerTourStore.getState().start();
         }}
-        playbackTapToSeek={tapToSeekEnabled}
-        onTogglePlaybackTapToSeek={setTapToSeekEnabled}
-        hidePlaybackStatusBar={hidePlaybackStatusBar}
-        onToggleHidePlaybackStatusBar={setHidePlaybackStatusBar}
-        autoHidePlaybackControls={autoHidePlaybackControls}
-        onToggleAutoHidePlaybackControls={handleAutoHidePlaybackControlsChange}
-        showTranslatedText={showTranslatedText}
-        onToggleShowTranslatedText={setShowTranslatedText}
-        lyricsRendererMode={lyricsRendererMode}
-        onChangeLyricsRendererMode={setLyricsRendererMode}
+        lyricsStyle={lyricsStyle}
+        onChangeLyricsStyle={setLyricsStyle}
         connectionStatus={connectionStatus}
         playbackMode={playbackMode}
         latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
         errorMessage={errorMessage}
       />
-
-      <ButtonTutorialModal
-        visible={buttonTutorialOpen}
-        onClose={() => setButtonTutorialOpen(false)}
-      />
+      {tour.active && isScreenFocused && <PlayerTourOverlay controlsHeight={controlsDockHeight} transitioning={albumArtworkMorphing} landscape={isLandscape} fullscreen={fullscreenAlbumMode} />}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  tourHighlight: { borderWidth: 2, borderColor: '#A8F0CF', borderRadius: 22, backgroundColor: 'rgba(168,240,207,0.12)' },
   screen: {
     flex: 1,
     backgroundColor: "#0A0B11",
@@ -2040,22 +1811,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     opacity: 0.96,
   },
-  ambientBlob: {
-    position: "absolute",
-    width: 320,
-    height: 320,
-    borderRadius: 160,
-  },
-  ambientBlobA: {
-    top: 72,
-    left: -40,
-    backgroundColor: "#5A6DFF",
-  },
-  ambientBlobB: {
-    right: -76,
-    bottom: 160,
-    backgroundColor: "#B668F2",
-  },
   backgroundTint: {
     ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(8, 9, 14, 0.68)",
@@ -2066,6 +1821,16 @@ const styles = StyleSheet.create({
   topSafeArea: {
     zIndex: 5,
     backgroundColor: "transparent",
+  },
+  fullscreenBottomButton: {
+    width: 42,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fullscreenBottomButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.94 }],
   },
   fullscreenTopSafeArea: {
     zIndex: 5,
@@ -2198,87 +1963,5 @@ const styles = StyleSheet.create({
     width: "100%",
     position: "relative",
     backgroundColor: "transparent",
-  },
-  tutorialOverlay: {
-    flex: 1,
-    justifyContent: "center",
-    paddingHorizontal: 20,
-    backgroundColor: "rgba(3,4,10,0.44)",
-  },
-  tutorialCard: {
-    maxHeight: "72%",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 12,
-    overflow: "hidden",
-  },
-  tutorialHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 12,
-  },
-  tutorialTitle: {
-    color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  tutorialCloseButton: {
-    minHeight: 34,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.12)",
-  },
-  tutorialCloseButtonPressed: {
-    opacity: 0.76,
-    transform: [{ scale: 0.96 }],
-  },
-  tutorialCloseText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  tutorialList: {
-    paddingBottom: 4,
-    gap: 10,
-  },
-  tutorialRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.08)",
-    gap: 12,
-  },
-  tutorialIconWrap: {
-    minWidth: 44,
-    minHeight: 34,
-    paddingTop: 1,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 2,
-  },
-  tutorialCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  tutorialItemTitle: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  tutorialItemDetail: {
-    color: "rgba(255,255,255,0.68)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
   },
 });

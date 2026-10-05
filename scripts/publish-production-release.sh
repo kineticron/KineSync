@@ -16,13 +16,23 @@ version=$(node scripts/release-version.js)
 
 release_tag="v${version}"
 commit_message=$(git log -1 --pretty=%s)
+changelog="${commit_message}"
+if [[ -f CHANGELOG.md ]]; then
+  release_changes=$(awk -v version="${version}" '
+    /^## / { if (found) exit; found = ($2 == version); next }
+    found { print }
+  ' CHANGELOG.md)
+  if [[ -n "${release_changes//[[:space:]]/}" ]]; then
+    changelog="${release_changes}"
+  fi
+fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT
 
 cat > "${notes_file}" <<EOF
 ## Changelog
 
-${commit_message}
+${changelog}
 
 ## Artifacts
 

@@ -57,7 +57,49 @@ jobs:
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
+      # Prebuild wipes ios/ on every run, so pod downloads and the full native
+      # compile restart from zero without these. DerivedData lives outside ios/
+      # (see DERIVED_DATA_PATH below) at a path that is stable across fresh
+      # runner VMs, which is what makes the restore reusable.
+      - name: Restore DerivedData and CocoaPods caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}/../kinesync-ios-derived
+            ${{ env.HOME }}/.cocoapods
+            ${{ env.HOME }}/Library/Caches/CocoaPods
+          key: ios-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
+          restore-keys: |
+            ios-caches-${{ runner.os }}-
+
+      - name: Verify Live Activity native target
+        working-directory: ExpoLyrics
+        run: |
+          npm run test:live-activity
+          python3 scripts/check-ios-live-activity.py
+          node scripts/verify-live-activity-project.js
+
+      - name: Capture native Live Activity preview
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 10
+        continue-on-error: true
+        run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
+
+      - name: Upload Live Activity preview
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Live-Activity-preview
+          path: |
+            ExpoLyrics/.expo/live-activity-preview/*.png
+            ExpoLyrics/.expo/live-activity-preview/*.log
+            ExpoLyrics/.expo/live-activity-preview/*.txt
+            ExpoLyrics/.expo/live-activity-preview/devices.json
+          if-no-files-found: ignore
+
       - name: Build Release and locate .app
+        env:
+          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -66,7 +108,8 @@ jobs:
           const path = require("path");
 
           const iosDir = path.join(process.env.GITHUB_WORKSPACE, "ExpoLyrics", "ios");
-          const derived = path.join(iosDir, "build");
+          const derived =
+            process.env.DERIVED_DATA_PATH || path.join(iosDir, "build");
           const marker = path.join(iosDir, ".ci_built_app");
 
           const ws = fs
@@ -224,6 +267,7 @@ jobs:
           IPA="${GITHUB_WORKSPACE}/ExpoLyrics/KineSync-iOS-unsigned.ipa"
           rm -f "${IPA}"
           ditto -c -k --sequesterRsrc --keepParent "${STAGE}/Payload" "${IPA}"
+          python3 ExpoLyrics/scripts/verify-ios-live-activity.py "${IPA}" --expected-app "${APP}"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -233,6 +277,8 @@ jobs:
             ExpoLyrics/KineSync-iOS-unsigned.ipa
             ExpoLyrics/ios-release-version.txt
           if-no-files-found: error
+          # The IPA is already a zip; recompressing only burns minutes.
+          compression-level: 0
 
   publish-ios-release:
     name: Publish iOS assets

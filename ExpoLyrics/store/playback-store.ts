@@ -1,4 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
+import { normalizeTranslationLanguage, type TranslationLanguage } from '@/lib/translation-settings';
 import { AppState, Platform } from 'react-native';
 
 import { enrichLyrics } from '@/lib/lyrics-enrich';
@@ -26,7 +28,9 @@ const PLAYBACK_POSITION_UPDATE_EPSILON_MS = 32;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
 
-export type LyricsRendererMode = 'native' | 'webview';
+export type LyricsStyle = 'spicy' | 'amll';
+/** @deprecated Use LyricsStyle. Kept for migration of persisted settings. */
+export type LyricsRendererMode = LyricsStyle | 'native' | 'webview';
 
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
@@ -118,11 +122,12 @@ type PlaybackState = {
   simulatedLatencyMs: number;
   packetDropRate: number;
   playbackCompensationMs: number;
-  playbackTapToSeek: boolean;
-  hidePlaybackStatusBar: boolean;
-  autoHidePlaybackControls: boolean;
   showTranslatedText: boolean;
-  lyricsRendererMode: LyricsRendererMode;
+  translationLanguage: TranslationLanguage;
+  setShowTranslatedText: (value: boolean) => void;
+  setTranslationLanguage: (value: TranslationLanguage) => void;
+  autoHidePlaybackControls: boolean;
+  lyricsStyle: LyricsStyle;
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
@@ -144,13 +149,18 @@ type PlaybackState = {
   setSimulatedLatencyMs: (ms: number) => void;
   setPacketDropRate: (rate: number) => void;
   setPlaybackCompensationMs: (ms: number) => void;
-  setPlaybackTapToSeek: (value: boolean) => void;
-  setHidePlaybackStatusBar: (value: boolean) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
-  setShowTranslatedText: (value: boolean) => void;
+  setLyricsStyle: (mode: LyricsStyle) => void;
+  /** @deprecated Use setLyricsStyle. Migrates legacy native/webview values. */
   setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
+let rendererChanged = false;
+let translationSettingsChanged = false;
+function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
+  translationSettingsChanged = true;
+  void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
+}
 let playbackClockTimer: ReturnType<typeof setInterval> | null = null;
 let playbackClockEnabled = AppState.currentState === 'active';
 
@@ -229,11 +239,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   simulatedLatencyMs: 0,
   packetDropRate: 0,
   playbackCompensationMs: 0,
-  playbackTapToSeek: true,
-  hidePlaybackStatusBar: true,
-  autoHidePlaybackControls: true,
   showTranslatedText: true,
-  lyricsRendererMode: 'webview',
+  translationLanguage: 'English',
+  autoHidePlaybackControls: true,
+  lyricsStyle: 'spicy',
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
@@ -297,6 +306,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const seekDetected =
       !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
     const playStateChanged = prev.isPlaying !== packet.isPlaying;
+    // Keep a stable render anchor through ordinary source/transport jitter.
+    // Restarting every token's UI animation for a few milliseconds of noise
+    // produces visible bumps, even when the source is otherwise in sync.
+    const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
+      Math.abs(projected - correctedPosition) <= 80;
     const metadataChanged =
       trackChanged ||
       prev.currentTrack?.title !== incomingTrack.title ||
@@ -321,10 +335,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     set({
       currentTrack: metadataChanged ? incomingTrack : prev.currentTrack,
-      anchorPositionMs: correctedPosition,
-      anchorTimestampMs: nowWall,
-      anchorMonotonicMs: nowMono,
-      playbackPosition: correctedPosition,
+      // A new song must never publish the previous song's lyrics to ActivityKit
+      // (or render them while its own lyrics request is still pending).
+      ...(trackChanged ? { lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '' } : {}),
+      anchorPositionMs: preserveAnchor ? prev.anchorPositionMs : correctedPosition,
+      anchorTimestampMs: preserveAnchor ? prev.anchorTimestampMs : nowWall,
+      anchorMonotonicMs: preserveAnchor ? prev.anchorMonotonicMs : nowMono,
+      playbackPosition: preserveAnchor ? projected : correctedPosition,
       isPlaying: packet.isPlaying,
       driftOffset: Math.round(latency),
       bridgeTiming:
@@ -382,12 +399,34 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ playbackCompensationMs: Math.max(-2000, Math.min(4000, Math.floor(safe))) });
   },
-  setPlaybackTapToSeek: (value) => set({ playbackTapToSeek: Boolean(value) }),
-  setHidePlaybackStatusBar: (value) => set({ hidePlaybackStatusBar: Boolean(value) }),
+  setShowTranslatedText: (value) => {
+    const showTranslatedText = Boolean(value);
+    set({ showTranslatedText });
+    persistTranslationSettings(showTranslatedText, usePlaybackStore.getState().translationLanguage);
+  },
+  setTranslationLanguage: (value) => {
+    const translationLanguage = normalizeTranslationLanguage(value);
+    set({ translationLanguage });
+    persistTranslationSettings(usePlaybackStore.getState().showTranslatedText, translationLanguage);
+  },
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
-  setShowTranslatedText: (value) => set({ showTranslatedText: Boolean(value) }),
+  setLyricsStyle: (mode) => {
+    rendererChanged = true;
+    const lyricsStyle = mode === 'amll' ? 'amll' : 'spicy';
+    set({ lyricsStyle });
+    void AsyncStorage.setItem('kinesync_lyrics_style', lyricsStyle).catch(() => {});
+  },
   setLyricsRendererMode: (mode) =>
-    set({ lyricsRendererMode: mode === 'webview' ? 'webview' : 'native' }),
+    set({
+      lyricsStyle:
+        mode === 'amll'
+          ? 'amll'
+          : mode === 'spicy'
+            ? 'spicy'
+            : mode === 'native'
+              ? 'amll'
+              : 'spicy',
+    }),
 }));
 
 export function startPlaybackClock() {
@@ -403,3 +442,16 @@ export function stopPlaybackClock() {
   playbackClockEnabled = false;
   clearPlaybackClockHandle();
 }
+
+void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
+  if (!rendererChanged && (style === 'amll' || style === 'spicy')) usePlaybackStore.setState({ lyricsStyle: style });
+}).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
+  if (!raw || translationSettingsChanged) return;
+  const saved = JSON.parse(raw);
+  usePlaybackStore.setState({
+    showTranslatedText: typeof saved?.showTranslatedText === 'boolean' ? saved.showTranslatedText : true,
+    translationLanguage: normalizeTranslationLanguage(saved?.translationLanguage),
+  });
+}).catch(() => {});

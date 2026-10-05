@@ -4,6 +4,8 @@ import type {
   PlaybackPacket,
   ShareGifResultPacket,
   VaultSaveResultPacket,
+  VaultBrowseResultPacket,
+  VaultGetResultPacket,
 } from '@/types/bridge';
 
 export const MAX_BRIDGE_PACKET_BYTES = 8 * 1024 * 1024;
@@ -78,6 +80,8 @@ export function validateInboundBridgePacket(data: unknown):
   | LyricsPacket
   | ShareGifResultPacket
   | VaultSaveResultPacket
+  | VaultBrowseResultPacket
+  | VaultGetResultPacket
   | null {
   const raw = typeof data === 'string' ? data : '';
   if (!raw || raw.length > MAX_BRIDGE_PACKET_BYTES) return null;
@@ -90,6 +94,25 @@ export function validateInboundBridgePacket(data: unknown):
   if (packet.type === 'hello:ack') return typeof packet.ok === 'boolean' ? packet as { type: 'hello:ack'; ok: boolean } : null;
   if (packet.type === 'playback') return validatePlayback(packet);
   if (packet.type === 'lyrics') return validateLyrics(packet);
+  if (packet.type === 'vault:list:result' || packet.type === 'vault:get:result') {
+    if (!boundedString(packet.requestId, 256) || typeof packet.ok !== 'boolean' || (packet.error !== undefined && boundedString(packet.error, 2_000) === null)) return null;
+    if (!packet.ok) return packet as unknown as VaultBrowseResultPacket | VaultGetResultPacket;
+    if (packet.type === 'vault:list:result') {
+      if (!Array.isArray(packet.entries) || packet.entries.length > 50 || finiteNumber(packet.total, 0) === null || (packet.nextOffset !== null && finiteNumber(packet.nextOffset, 0) === null)) return null;
+      for (const entry of packet.entries) {
+        if (!entry || typeof entry !== 'object' || !boundedString(entry.vaultId, 256) || boundedString(entry.title, 2_000) === null || boundedString(entry.artist, 2_000) === null || finiteNumber(entry.lineCount, 0) === null || finiteNumber(entry.translatedLineCount, 0) === null) return null;
+      }
+      return packet as unknown as VaultBrowseResultPacket;
+    }
+    const entry = packet.entry as Record<string, unknown> | undefined;
+    if (!entry || !boundedString(entry.vaultId, 256) || !entry.track || typeof entry.track !== 'object') return null;
+    const track = entry.track as Record<string, unknown>;
+    if (boundedString(track.id, 512) === null || boundedString(track.title, 2_000) === null || boundedString(track.artist, 2_000) === null || finiteNumber(track.durationMs, 0, 24 * 60 * 60 * 1000) === null) return null;
+    if (!Array.isArray(entry.lyrics) || !entry.lyrics.length || entry.lyrics.length > MAX_LYRICS_LINES || !entry.lyrics.every(validLyricLine)) return null;
+    if (entry.originalSource !== undefined && boundedString(entry.originalSource, 256) === null) return null;
+    if (entry.metadata !== undefined && (!entry.metadata || typeof entry.metadata !== 'object' || Array.isArray(entry.metadata))) return null;
+    return packet as unknown as VaultGetResultPacket;
+  }
   if (packet.type === 'vault:save:result') {
     if (typeof packet.ok !== 'boolean' || (packet.error !== undefined && boundedString(packet.error, 2_000) === null)) return null;
     return packet as unknown as VaultSaveResultPacket;

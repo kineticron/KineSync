@@ -107,6 +107,40 @@ export type LyricsCreditsMetadata = {
   songwriters?: string[];
 };
 
+export type DesktopVaultSummary = {
+  vaultId: string;
+  title: string;
+  artist: string;
+  lineCount: number;
+  translatedLineCount: number;
+};
+
+export type DesktopVaultEntry = {
+  vaultId: string;
+  track: Track;
+  lyrics: LyricLine[];
+  originalSource?: string;
+  metadata?: LyricsMetadata;
+};
+
+export type VaultBrowseResultPacket = {
+  type: 'vault:list:result';
+  requestId: string;
+  ok: boolean;
+  entries?: DesktopVaultSummary[];
+  nextOffset?: number | null;
+  total?: number;
+  error?: string;
+};
+
+export type VaultGetResultPacket = {
+  type: 'vault:get:result';
+  requestId: string;
+  ok: boolean;
+  entry?: DesktopVaultEntry;
+  error?: string;
+};
+
 export type LyricsAttributionProfile = {
   id?: string;
   username?: string;
@@ -137,11 +171,24 @@ export type LyricSyllable = {
   graphemes?: string[];
 };
 
+export type SpicyBackgroundSyllableBlock = {
+  /** Exact upstream Background.StartTime converted from seconds to milliseconds. */
+  lineStartTime: number;
+  /** Exact upstream Background.EndTime converted from seconds to milliseconds. */
+  lineEndTime: number;
+  /** Exact upstream Background.Syllables entries, in their original block. */
+  syllables: LyricSyllable[];
+};
+
 export type LyricLine = {
   lineStartTime: number;
   lineEndTime: number;
   syllables: LyricSyllable[];
   backgroundSyllables?: LyricSyllable[];
+  /** Exact Spicy Background[] blocks for the WebView renderer. */
+  spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
+  /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
+  spicyLyricsStartTime?: number;
   translatedText?: string;
   backgroundTranslatedText?: string;
   oppositeAligned?: boolean;

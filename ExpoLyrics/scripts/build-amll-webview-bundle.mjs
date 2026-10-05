@@ -1,6 +1,7 @@
 import * as esbuild from "esbuild";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { amllClusterPlugin } from "./amll-cluster-patch.mjs";
 
 const root = process.cwd();
 const entry = resolve(root, "components/lyrics/amll-webview-entry.ts");
@@ -9,6 +10,7 @@ const outFile = resolve(root, "components/lyrics/amll-webview-bundle.ts");
 const result = await esbuild.build({
   entryPoints: [entry],
   bundle: true,
+  plugins: [amllClusterPlugin],
   write: false,
   outdir: "amll-webview-bundle",
   minify: true,

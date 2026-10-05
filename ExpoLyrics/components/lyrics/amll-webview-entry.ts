@@ -5,11 +5,13 @@ import {
   type LyricLineMouseEvent,
 } from "@applemusic-like-lyrics/core";
 import "@applemusic-like-lyrics/core/style.css";
+import { buildAmllWords } from "./amll-word-spacing";
 
 type KineSyncSyllable = {
   text?: string;
   startTime?: number;
   endTime?: number;
+  isPartOfWord?: boolean;
 };
 
 type KineSyncLine = {
@@ -130,17 +132,11 @@ function syllablesToWords(
   fallbackStart: number,
   fallbackEnd: number,
 ) {
-  const words = (Array.isArray(syllables) ? syllables : [])
-    .map((syllable) => ({
-      word: String(syllable?.text || ""),
-      startTime: toFiniteMs(syllable?.startTime, fallbackStart),
-      endTime: Math.max(
-        toFiniteMs(syllable?.startTime, fallbackStart) + 1,
-        toFiniteMs(syllable?.endTime, fallbackEnd),
-      ),
-    }))
-    .filter((word) => word.word.length > 0);
-
+  const words = buildAmllWords(
+    Array.isArray(syllables) ? syllables : [],
+    fallbackStart,
+    fallbackEnd,
+  );
   if (words.length) {
     return words;
   }
@@ -246,15 +242,23 @@ function updatePlayerClass() {
 }
 
 function getStaticLineText(line: KineSyncLine) {
-  return (Array.isArray(line.syllables) ? line.syllables : [])
-    .map((syllable) => String(syllable?.text || ""))
+  return syllablesToWords(
+    line.syllables,
+    toFiniteMs(line.lineStartTime),
+    toFiniteMs(line.lineEndTime),
+  )
+    .map((word) => word.word)
     .join("")
     .trim();
 }
 
 function getStaticBackgroundText(line: KineSyncLine) {
-  return getBackgroundSyllables(line)
-    .map((syllable) => String(syllable?.text || ""))
+  return syllablesToWords(
+    getBackgroundSyllables(line),
+    toFiniteMs(line.lineStartTime),
+    toFiniteMs(line.lineEndTime),
+  )
+    .map((word) => word.word)
     .join("")
     .trim();
 }
@@ -455,9 +459,9 @@ function applyOptions(message: IncomingMessage) {
     resumeAutoFollowSignal = message.resumeAutoFollowSignal;
     autoFollowEnabled = true;
     player.resetScroll();
-    void relayout(true);
+    void relayout();
+    scheduleFrame(1500);
   }
-  player.setIsSeeking(!autoFollowEnabled);
   updatePlayerClass();
   if (staticLyricsMode && (translationsChanged || landscapeChanged)) {
     renderStaticLyrics();
@@ -482,7 +486,9 @@ function sync(message: IncomingMessage) {
   if (staticLyricsMode) {
     return;
   }
-  player.setCurrentTime(getProjectedPosition(), wasFar || Boolean(message.force));
+  // Upstream treats a seek as an unconditional scroll reset. A remote anchor
+  // correction must preserve the reader's manual position until they resume.
+  player.setCurrentTime(getProjectedPosition(), autoFollowEnabled && (wasFar || Boolean(message.force)));
   if (isPlaying && previewPositionMs === null) {
     player.resume();
   } else {
@@ -540,7 +546,6 @@ function setAutoFollow(nextEnabled: boolean) {
     return;
   }
   autoFollowEnabled = nextEnabled;
-  player.setIsSeeking(!autoFollowEnabled);
   scheduleFrame(IDLE_ANIMATION_GRACE_MS);
   post({ type: "autoFollowChange", enabled: autoFollowEnabled });
 }
@@ -571,6 +576,8 @@ playerElement.addEventListener(
   "touchstart",
   (event) => {
     touchMoved = false;
+    post({ type: 'userInteraction' });
+    scheduleFrame(IDLE_ANIMATION_GRACE_MS);
     touchStartSourceIndex = getSourceIndexFromTarget(event.target);
     window.clearTimeout(longPressTimer);
     if (touchStartSourceIndex >= 0) {
@@ -594,6 +601,13 @@ playerElement.addEventListener(
   },
   { passive: true },
 );
+
+// Core drag/inertia updates need frames even while playback is paused.
+playerElement.addEventListener('kinesync-scroll', () => scheduleFrame(IDLE_ANIMATION_GRACE_MS));
+playerElement.addEventListener('touchcancel', () => {
+  window.clearTimeout(longPressTimer);
+  touchStartSourceIndex = -1;
+});
 
 playerElement.addEventListener(
   "touchend",

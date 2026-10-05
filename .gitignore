@@ -59,6 +59,9 @@ expo-env.d.ts
 .metro-health-check*
 .kotlin/
 ios/
+!ExpoLyrics/modules/kinesync-live-activity/ios/
+!ExpoLyrics/modules/kinesync-live-activity/ios/*.swift
+!ExpoLyrics/modules/kinesync-live-activity/ios/*.podspec
 android/
 app-example/
 

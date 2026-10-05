@@ -1,5 +1,5 @@
 import { type PropsWithChildren, useEffect, useState } from 'react';
-import { AppState, Modal, Platform } from 'react-native';
+import { AppState, BackHandler, Platform, StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { bridgeClient } from '@/lib/bridge-client';
@@ -12,6 +12,10 @@ import {
   initPlaybackStoreDefaults,
 } from '@/store/playback-store';
 import { Onboarding } from '@/components/onboarding/onboarding-screen';
+import { startLiveActivitySync } from '@/lib/live-activity';
+import { LaunchTransition } from '@/components/ui/launch-transition';
+import { usePlayerTourStore } from '@/store/player-tour-store';
+import { router, usePathname } from 'expo-router';
 
 const ONBOARDING_COMPLETED_KEY = 'kinesync_onboarding_completed';
 
@@ -87,9 +91,22 @@ function inferDefaultBridgeUrl() {
 }
 
 export function BridgeProvider({ children }: PropsWithChildren) {
+  const pathname = usePathname();
+  useEffect(startLiveActivitySync, []);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
   const [initialized, setInitialized] = useState(false);
+
+  // Keep setup portrait-only, including the handoff from onboarding to the tour.
+  useEffect(() => {
+    usePlayerTourStore.setState({ onboardingVisible: !onboardingChecked || showOnboarding });
+  }, [onboardingChecked, showOnboarding]);
+
+  useEffect(() => {
+    if (!showOnboarding) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => subscription.remove();
+  }, [showOnboarding]);
 
   // Register callback so external code can trigger onboarding
   useEffect(() => {
@@ -101,7 +118,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
     // Initialize store with persisted settings
     (async () => {
       try {
-        const defaults = await initPlaybackStoreDefaults();
+        await initPlaybackStoreDefaults();
         // Store defaults are already loaded into the store via initPlaybackStoreDefaults
       } catch (error) {
         console.warn('[BridgeProvider] Failed to load persisted settings:', error);
@@ -132,59 +149,61 @@ export function BridgeProvider({ children }: PropsWithChildren) {
 
     // Check if onboarding was completed before, then connect only when desktop mode is configured.
     (async () => {
-      const completed = await getOnboardingCompleted();
-      const bridgeSettings = await getBridgeSettings();
-      let state = usePlaybackStore.getState();
-      const defaultBridgeUrl = inferDefaultBridgeUrl();
+      try {
+        const completed = await getOnboardingCompleted();
+        const bridgeSettings = await getBridgeSettings();
+        let state = usePlaybackStore.getState();
+        const defaultBridgeUrl = inferDefaultBridgeUrl();
 
-      if (
-        completed &&
-        bridgeSettings.playbackMode === 'desktop' &&
-        !bridgeSettings.serverUrl &&
-        state.serverUrl === defaultBridgeUrl
-      ) {
-        state.setServerUrl("");
-        state.setHandshakeKey("");
-        await saveBridgeSettings({
-          serverUrl: "",
-          handshakeKey: "",
-          onboardingCompleted: true,
-        });
-        state = usePlaybackStore.getState();
-      }
+        if (
+          completed &&
+          bridgeSettings.playbackMode === 'desktop' &&
+          !bridgeSettings.serverUrl &&
+          state.serverUrl === defaultBridgeUrl
+        ) {
+          state.setServerUrl("");
+          state.setHandshakeKey("");
+          await saveBridgeSettings({
+            serverUrl: "",
+            handshakeKey: "",
+            onboardingCompleted: true,
+          });
+          state = usePlaybackStore.getState();
+        }
 
-      if (!completed && (!state.serverUrl || state.serverUrl === defaultBridgeUrl)) {
+        if (!completed && (!state.serverUrl || state.serverUrl === defaultBridgeUrl)) {
+          setShowOnboarding(true);
+        }
+
+        if (bridgeSettings.playbackMode === 'desktop' && state.serverUrl) {
+          bridgeClient.connect();
+        }
+      } catch (error) {
+        console.warn('[BridgeProvider] Failed to restore setup:', error);
         setShowOnboarding(true);
+      } finally {
+        setOnboardingChecked(true);
       }
-
-      if (bridgeSettings.playbackMode === 'desktop' && state.serverUrl) {
-        bridgeClient.connect();
-      }
-      setOnboardingChecked(true);
     })();
   }, [initialized]);
 
-  // Wait for onboarding check to complete before rendering
-  if (!onboardingChecked) {
-    return <>{children}</>;
-  }
-
   const handleOnboardingDismiss = async () => {
     await setOnboardingCompleted(true);
+    usePlayerTourStore.getState().requestStart();
+    if (pathname !== '/') router.replace('/');
     setShowOnboarding(false);
   };
 
   return (
-    <>
-      {children}
-      <Modal
-        visible={showOnboarding}
-        animationType="fade"
-        presentationStyle="fullScreen"
-        statusBarTranslucent
-      >
-        <Onboarding onDismiss={handleOnboardingDismiss} />
-      </Modal>
-    </>
+    <LaunchTransition ready={onboardingChecked}>
+      <View style={{ flex: 1, overflow: 'hidden' }} aria-hidden={showOnboarding} accessibilityElementsHidden={showOnboarding} importantForAccessibility={showOnboarding ? 'no-hide-descendants' : 'auto'}>
+        {children}
+      </View>
+      {showOnboarding && (
+        <View style={StyleSheet.absoluteFill} accessibilityViewIsModal>
+          <Onboarding onDismiss={handleOnboardingDismiss} />
+        </View>
+      )}
+    </LaunchTransition>
   );
 }

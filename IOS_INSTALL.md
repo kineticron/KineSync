@@ -40,13 +40,37 @@ limit.
    [KineSync-iOS-unsigned.ipa](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa)
    to the computer.
 3. Connect and trust the iPhone or iPad, then drag the IPA into Sideloadly.
-4. Select the device, enter the Apple Account used for sideloading, and click
-   **Start**.
+4. Select the device and enter the Apple Account used for sideloading.
+   Keep **Remove Extensions** disabled (or preserve
+   **KineSyncLyricsWidget** if choosing extensions individually). The Live
+   Activity is an embedded widget extension; removing it prevents Lock Screen
+   lyrics and Dynamic Island content from rendering. Then click **Start**.
 5. On iOS 16 or newer, enable **Settings > Privacy & Security > Developer Mode**
    if prompted. Trust the developer profile under
    **Settings > General > VPN & Device Management**.
 6. Open KineSync and choose Mobile-Only or the optional Desktop Bridge during
    onboarding. Allow Local Network access if you choose the bridge.
+
+## Live lyrics and Dynamic Island
+
+Start a song while KineSync is open, then go to the Home Screen or lock the
+device. On supported iPhones, hold the Dynamic Island to see the active lyric,
+song/artist/album, and lyrics source/status. The compact Island shows a shortened
+lyric and the same outlined/filled microphone distinction as the app. Devices
+without Dynamic Island use the Lock Screen presentation.
+
+Allow Live Activities for KineSync in iOS Settings. If nothing appears, open
+KineSync's Settings and check **Live lyrics**; **Restart live lyrics** retries
+starting the activity and shows any native error. A build with a missing
+extension reports that explicitly. This feature requires a newly built IPA;
+Expo Go and JavaScript-only updates cannot add the native extension.
+
+iOS controls presentation and background runtime. Native lyric scheduling can
+continue while the app has runtime, including during permitted background
+playback. If iOS suspends the app, the current line expires and the activity
+asks you to reopen KineSync. Free-account sideloading does not provide APNs
+updates to keep lyrics advancing in a suspended app. See the
+[implementation and device checks](ExpoLyrics/docs/live-activities.md).
 
 ## Choose a playback setup
 

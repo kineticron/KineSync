@@ -16,6 +16,7 @@ type WebLyricsSyllable = {
   text: string;
   startTime: number;
   endTime: number;
+  isPartOfWord?: boolean;
 };
 
 type WebLyricsLine = {
@@ -28,7 +29,10 @@ type WebLyricsLine = {
   oppositeAligned?: boolean;
 };
 
-type WebLyricsViewProps = {
+type AmllLyricsViewProps = {
+  demoLyrics?: LyricLineType[];
+  demoLayout?: 'preview' | 'player';
+  demoIsPlaying?: boolean;
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
   previewPositionMs?: number | null;
@@ -148,6 +152,7 @@ body {
   text-align: right;
 }
 .kinesync-amll-player {
+  touch-action: none;
   background: transparent;
   --amll-lp-color: #fff;
   --amll-lp-font-size: calc(36px * var(--ks-font-scale, 1));
@@ -277,19 +282,30 @@ body {
 </html>`;
 }
 
+const DEMO_METADATA: import("@/types/bridge").LyricsMetadata = {};
 const WEB_LYRICS_HTML = createWebLyricsHtml();
+const DEMO_LYRICS_HTML = WEB_LYRICS_HTML.replace('</style>', `
+#SpicyLyricsPage { --ks-top-padding: 12px !important; --ks-font-size: 26px !important; --ks-line-height: 36px !important; }
+#SpicyLyricsPage .LyricsContent { mask-image: none !important; -webkit-mask-image: none !important; }
+.kinesync-amll-player { font-size: 25px !important; }
+</style>`);
 
 function toFiniteMs(value: unknown, fallback = 0) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? Math.max(0, numberValue) : fallback;
 }
 
-function toWebSyllable(syllable: { text: string; startTime: number; endTime: number }): WebLyricsSyllable {
+function toWebSyllable(syllable: { text: string; startTime: number; endTime: number; isPartOfWord?: boolean }): WebLyricsSyllable {
   const startTime = toFiniteMs(syllable.startTime);
   return {
     text: String(syllable.text || ""),
     startTime,
     endTime: Math.max(startTime + 1, toFiniteMs(syllable.endTime, startTime + 1)),
+    // Spicy-sourced lyrics carry explicit join flags with no whitespace in the
+    // text; the AMLL entry groups fragments into words from these flags.
+    ...(typeof syllable.isPartOfWord === "boolean"
+      ? { isPartOfWord: syllable.isPartOfWord }
+      : {}),
   };
 }
 
@@ -318,9 +334,12 @@ function serializeForInjection(payload: unknown) {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export const WebLyricsView = memo(function WebLyricsView({
+export const AmllLyricsView = memo(function AmllLyricsView({
   tapToSeekEnabled,
   showTranslatedText = true,
+  demoLyrics,
+  demoLayout = 'preview',
+  demoIsPlaying,
   previewPositionMs = null,
   autoFollowEnabled = true,
   resumeAutoFollowSignal = 0,
@@ -334,19 +353,25 @@ export const WebLyricsView = memo(function WebLyricsView({
   fontScale = 1,
   landscapeMode = false,
   active = true,
-}: WebLyricsViewProps) {
+}: AmllLyricsViewProps) {
   const webViewRef = useRef<{
     injectJavaScript: (script: string) => void;
   } | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const [webViewGeneration, setWebViewGeneration] = useState(0);
-  const [readyGeneration, setReadyGeneration] = useState(-1);
-  const ready = readyGeneration === webViewGeneration;
-  const lyrics = usePlaybackStore((state) => state.lyrics);
-  const lyricsMetadata = usePlaybackStore((state) => state.lyricsMetadata);
-  const lyricsSource = usePlaybackStore((state) => state.lyricsSource);
-  const lyricsStatusMessage = usePlaybackStore((state) => state.lyricsStatusMessage);
-  const currentTrack = usePlaybackStore((state) => state.currentTrack);
+  const sourceKey = `${demoLyrics ? `demo-${demoLayout}` : 'live'}:${webViewGeneration}`;
+  const currentSourceKey = useRef(sourceKey);
+  currentSourceKey.current = sourceKey;
+  const [readySourceKey, setReadySourceKey] = useState<string | null>(null);
+  const ready = readySourceKey === sourceKey;
+  const liveLyrics = usePlaybackStore((state) => demoLyrics ?? state.lyrics);
+  const lyrics = demoLyrics ?? liveLyrics;
+  const liveMetadata = usePlaybackStore((state) => demoLyrics ? DEMO_METADATA : state.lyricsMetadata);
+  const lyricsMetadata = demoLyrics ? DEMO_METADATA : liveMetadata;
+  const liveSource = usePlaybackStore((state) => demoLyrics ? "demo-syllable" : state.lyricsSource);
+  const lyricsSource = demoLyrics ? "demo-syllable" : liveSource;
+  const lyricsStatusMessage = usePlaybackStore((state) => demoLyrics ? "" : state.lyricsStatusMessage);
+  const currentTrack = usePlaybackStore((state) => demoLyrics ? null : state.currentTrack);
   const songwriters = useMemo(
     () => lyricsMetadata.credits?.songwriters || [],
     [lyricsMetadata.credits?.songwriters],
@@ -358,8 +383,9 @@ export const WebLyricsView = memo(function WebLyricsView({
     () => detectLyricsTimingMode(lyrics, lyricsSource),
     [lyrics, lyricsSource],
   );
-  const anchorPositionMs = usePlaybackStore((state) => state.anchorPositionMs);
-  const isPlaying = usePlaybackStore((state) => state.isPlaying);
+  const anchorPositionMs = usePlaybackStore((state) => demoLyrics ? 0 : state.anchorPositionMs);
+  const anchorMonotonicMs = usePlaybackStore((state) => demoLyrics ? 0 : state.anchorMonotonicMs);
+  const isPlaying = usePlaybackStore((state) => demoLyrics ? false : state.isPlaying);
 
   const selectedKeyMap = useMemo(() => {
     const result: Record<string, boolean> = {};
@@ -446,17 +472,28 @@ export const WebLyricsView = memo(function WebLyricsView({
   ]);
 
   useEffect(() => {
+    const state = usePlaybackStore.getState();
+    // Project the anchor forward: bridge packets arrive between renders, and a
+    // freshly mounted AMLL view would otherwise start from the stale anchor
+    // and visibly snap forward when the next packet lands. Mirrors Spicy view.
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const currentPosition =
+      state.anchorPositionMs +
+      (state.isPlaying ? Math.max(0, now - state.anchorMonotonicMs) : 0);
     inject({
       type: "sync",
-      positionMs: previewPositionMs ?? anchorPositionMs,
-      previewPositionMs,
-      isPlaying: active && previewPositionMs === null ? isPlaying : false,
-      durationMs: currentTrack?.durationMs ?? 0,
-      force: previewPositionMs !== null,
+      positionMs: previewPositionMs ?? currentPosition,
+      previewPositionMs: demoLyrics ? null : previewPositionMs,
+      isPlaying: demoLyrics ? active && (demoIsPlaying ?? true) : active && previewPositionMs === null ? isPlaying : false,
+      durationMs: demoLyrics ? 25000 : currentTrack?.durationMs ?? 0,
+      // Demo clock ticks are ordinary anchors, not repeated seeks.
+      force: !demoLyrics && previewPositionMs !== null,
     });
-  }, [active, anchorPositionMs, currentTrack?.durationMs, inject, isPlaying, previewPositionMs]);
+  }, [active, anchorMonotonicMs, anchorPositionMs, currentTrack?.id, currentTrack?.durationMs,
+    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, previewPositionMs, resumeAutoFollowSignal]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
+    if (currentSourceKey.current !== sourceKey) return;
     let payload: {
       type?: string;
       index?: number;
@@ -472,7 +509,7 @@ export const WebLyricsView = memo(function WebLyricsView({
       return;
     }
     if (payload.type === "ready") {
-      setReadyGeneration(webViewGeneration);
+      setReadySourceKey(sourceKey);
       return;
     }
     if (payload.type === "activeLineChange") {
@@ -481,6 +518,10 @@ export const WebLyricsView = memo(function WebLyricsView({
     }
     if (payload.type === "autoFollowChange") {
       onAutoFollowChange?.(Boolean(payload.enabled));
+      return;
+    }
+    if (payload.type === 'userInteraction') {
+      onUserInteraction?.();
       return;
     }
     if (payload.type === "creditsPress") {
@@ -512,15 +553,15 @@ export const WebLyricsView = memo(function WebLyricsView({
     onLineLongPress,
     onLinePress,
     onUserInteraction,
-    webViewGeneration,
+    sourceKey,
   ]);
 
   return (
     <View style={styles.container}>
       <TransparentWebView
-        key={`web-lyrics-${webViewGeneration}`}
+        key={`amll-lyrics-${sourceKey}`}
         ref={webViewRef}
-        source={{ html: WEB_LYRICS_HTML }}
+        source={{ html: demoLyrics && demoLayout === 'preview' ? DEMO_LYRICS_HTML : WEB_LYRICS_HTML }}
         originWhitelist={["*"]}
         javaScriptEnabled
         domStorageEnabled={false}
@@ -534,7 +575,7 @@ export const WebLyricsView = memo(function WebLyricsView({
         textInteractionEnabled={false}
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         onMessage={handleMessage}
-        onLoadEnd={() => setReadyGeneration(webViewGeneration)}
+        onLoadEnd={() => { if (currentSourceKey.current === sourceKey) setReadySourceKey(sourceKey); }}
         style={styles.webView}
         containerStyle={styles.webViewContainer}
       />

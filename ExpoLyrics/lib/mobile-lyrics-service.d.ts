@@ -49,9 +49,12 @@ export function createLyricsService(options?: {
       force?: boolean;
       preferredSource?: MobileLyricsSourcePreference;
       immediateTranslation?: boolean;
+      translationLanguage?: string;
       onSyncedLyrics?: (packet: MobileLyricsPacket) => void;
     },
   ): Promise<MobileLyricsPacket>;
+  rememberPublishedLyrics(trackId: string, packet: MobileLyricsPacket): void;
+  translatePublishedLyrics(track: MobileLyricsTrack, options?: { translationLanguage?: string; onSyncedLyrics?: (packet: MobileLyricsPacket) => void }): Promise<MobileLyricsPacket>;
   getCachedLyrics(trackId: string): MobileLyricsPacket | null;
   clearCache(): void;
   resolveSpotifyCatalogTrackById(

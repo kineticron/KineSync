@@ -3720,7 +3720,7 @@ function nextSyllableLeadsWithAttachPunctuation(nextText) {
     return true;
   }
   // Apostrophe-led contractions (e.g. 'm, 's) stay tight with the previous syllable.
-  if (/^['’‘](m|re|s|d|ll|ve|t|n|clock|all)\b/i.test(trimmed)) {
+  if (/^(['’‘](?:[mtsd]|re|ve|ll|clock|all)\b|n['’]t\b)/i.test(trimmed)) {
     return true;
   }
   // Standalone closing quote syllables attach to the previous word.
@@ -3995,6 +3995,34 @@ function parseSpicyLineLyrics(payload = {}) {
   return parsed.filter((line) => line?.syllables?.length);
 }
 
+function spicyCopyExactTimedSyllable(syllable = {}) {
+  const copied = {
+    text: String(syllable?.Text ?? ""),
+    startTime: spicyApiSecondsToMs(syllable?.StartTime),
+    endTime: spicyApiSecondsToMs(syllable?.EndTime),
+  };
+  if (Object.prototype.hasOwnProperty.call(syllable, "IsPartOfWord")) {
+    copied.isPartOfWord = syllable.IsPartOfWord;
+  }
+  return copied;
+}
+
+function spicyCopyExactSyllableBlock(block) {
+  if (!block || !Array.isArray(block.Syllables)) {
+    return null;
+  }
+  const lineStartTime = spicyApiSecondsToMs(block.StartTime);
+  const lineEndTime = spicyApiSecondsToMs(block.EndTime);
+  if (!Number.isFinite(lineStartTime) || !Number.isFinite(lineEndTime)) {
+    return null;
+  }
+  return {
+    lineStartTime,
+    lineEndTime,
+    syllables: block.Syllables.map(spicyCopyExactTimedSyllable),
+  };
+}
+
 function spicyBuildKaraokeLineFromWordSyllables(vocal, block) {
   const words = block?.Syllables;
   if (!Array.isArray(words) || !words.length) {
@@ -4144,41 +4172,17 @@ function mergeSpicyBackgroundLineIntoLeadLine(leadLine, backgroundLine) {
 }
 
 function parseSpicySyllableLyrics(content = []) {
-  const vocals = (Array.isArray(content) ? content : []).filter((item) =>
-    isSpicyVocalEntry(item),
-  );
+  const vocals = Array.isArray(content) ? content : [];
   const parsed = [];
-  const pendingBackgroundLines = [];
-
-  const attachBackgroundLine = (backgroundLine, preferredLeadLine = null) => {
-    if (!backgroundLine?.syllables?.length) {
-      return;
-    }
-    if (preferredLeadLine) {
-      mergeSpicyBackgroundLineIntoLeadLine(preferredLeadLine, backgroundLine);
-      return;
-    }
-    const fallbackLeadLine = parsed.length ? parsed[parsed.length - 1] : null;
-    if (fallbackLeadLine) {
-      mergeSpicyBackgroundLineIntoLeadLine(fallbackLeadLine, backgroundLine);
-      return;
-    }
-    pendingBackgroundLines.push(backgroundLine);
-  };
-
-  const flushPendingBackgroundLines = (leadLine) => {
-    if (!leadLine || !pendingBackgroundLines.length) {
-      return;
-    }
-    while (pendingBackgroundLines.length) {
-      const pending = pendingBackgroundLines.shift();
-      mergeSpicyBackgroundLineIntoLeadLine(leadLine, pending);
-    }
-  };
 
   for (const vocal of vocals) {
-    const leadLine = vocal?.Lead?.Syllables?.length
-      ? spicyBuildKaraokeLineFromWordSyllables(vocal, vocal.Lead)
+    const exactLead = spicyCopyExactSyllableBlock(vocal?.Lead);
+    const leadLine = exactLead?.syllables?.length
+      ? {
+          lineStartTime: exactLead.lineStartTime,
+          lineEndTime: exactLead.lineEndTime,
+          syllables: exactLead.syllables,
+        }
       : null;
     const fallbackText = String(vocal?.Text || "").trim();
     const fallbackLine = fallbackText
@@ -4198,48 +4202,23 @@ function parseSpicySyllableLyrics(content = []) {
     if (lineCandidate && readSpicyOppositeAligned(vocal)) {
       lineCandidate.oppositeAligned = true;
     }
-    const backgroundTagged = isSpicyBackgroundTaggedVocal(vocal);
-
-    let currentLeadLine = null;
-    if (!backgroundTagged && lineCandidate) {
-      parsed.push(lineCandidate);
-      currentLeadLine = lineCandidate;
-      flushPendingBackgroundLines(currentLeadLine);
-    } else if (backgroundTagged && lineCandidate) {
-      attachBackgroundLine(
-        lineCandidate,
-        parsed.length ? parsed[parsed.length - 1] : null,
-      );
-    }
-
-    const backgrounds = vocal?.Background;
-    if (!Array.isArray(backgrounds)) {
+    if (!lineCandidate) {
       continue;
     }
-    for (const bg of backgrounds) {
-      const bgLine = spicyBuildKaraokeLineFromWordSyllables(vocal, bg);
-      if (bgLine) {
-        attachBackgroundLine(bgLine, currentLeadLine);
-      }
-    }
-  }
 
-  if (pendingBackgroundLines.length) {
-    if (parsed.length) {
-      const fallbackLeadLine = parsed[parsed.length - 1];
-      for (const pendingBackgroundLine of pendingBackgroundLines) {
-        mergeSpicyBackgroundLineIntoLeadLine(
-          fallbackLeadLine,
-          pendingBackgroundLine,
-        );
-      }
-    } else {
-      for (const pendingBackgroundLine of pendingBackgroundLines) {
-        if (pendingBackgroundLine?.syllables?.length) {
-          parsed.push(pendingBackgroundLine);
-        }
-      }
+    const spicyBackgrounds = (Array.isArray(vocal?.Background)
+      ? vocal.Background
+      : []
+    )
+      .map(spicyCopyExactSyllableBlock)
+      .filter(Boolean);
+    if (spicyBackgrounds.length) {
+      lineCandidate.spicyBackgrounds = spicyBackgrounds;
+      lineCandidate.backgroundSyllables = spicyBackgrounds.flatMap((background) =>
+        background.syllables.map((syllable) => ({ ...syllable })),
+      );
     }
+    parsed.push(lineCandidate);
   }
 
   return parsed.filter((line) => line?.syllables?.length);
@@ -4314,16 +4293,23 @@ function parseSpicyLyrics(payload, durationMs = 0) {
     return [];
   }
   const payloadType = resolveSpicyPayloadType(payload);
+  let parsed = [];
   if (payloadType === "syllable") {
-    return parseSpicySyllableLyrics(payload.Content);
+    parsed = parseSpicySyllableLyrics(payload.Content);
+  } else if (payloadType === "line") {
+    parsed = parseSpicyLineLyrics(payload);
+  } else if (payloadType === "static") {
+    parsed = parseSpicyStaticLyrics(payload.Lines, durationMs);
+  } else {
+    return [];
   }
-  if (payloadType === "line") {
-    return parseSpicyLineLyrics(payload);
+  const spicyLyricsStartTime = spicyApiSecondsToMs(payload.StartTime);
+  if (Number.isFinite(spicyLyricsStartTime)) {
+    for (const line of parsed) {
+      line.spicyLyricsStartTime = spicyLyricsStartTime;
+    }
   }
-  if (payloadType === "static") {
-    return parseSpicyStaticLyrics(payload.Lines, durationMs);
-  }
-  return [];
+  return parsed;
 }
 
 function normalizeCreditNameParts(value, output = []) {
@@ -4477,8 +4463,18 @@ function shouldInsertSyllableBoundarySpace(leftText, rightText) {
     return true;
   }
 
-  const latinOrDigit = /[A-Za-z0-9]/;
-  return latinOrDigit.test(leftChar) && latinOrDigit.test(rightChar);
+  // Prefix elisions (e.g. c', d', l', o', y') cling to the following word.
+  if (/^(?:[cdjlnst]|qu|[ouy]|all|dell|nell|sant)['’]$/i.test(left.trim())) {
+    return false;
+  }
+  const leftIsWord =
+    /[A-Za-z0-9]/.test(leftChar) ||
+    (/[A-Za-z0-9]['’]$/u.test(left.trim()) || /^['’][A-Za-z0-9]['’]$/u.test(left.trim()));
+  const rightIsWord =
+    /[A-Za-z0-9]/.test(rightChar) ||
+    (/^['’][A-Za-z0-9]/u.test(right.trim()) && !nextSyllableLeadsWithAttachPunctuation(right));
+
+  return leftIsWord && rightIsWord;
 }
 
 function getLineText(line) {
@@ -12101,7 +12097,7 @@ function buildTranslationSystemPrompt(targetLanguage) {
     "Use title/artist only to disambiguate meaning—never output them.",
     "One input line maps to exactly one output entry; keep order, register, slang, and profanity.",
     "Do not merge, split, skip, or reorder lines.",
-    "Already-English or non-lexical lines (sounds, names, ad-libs): copy the source text into t unchanged.",
+    `Lines already in ${targetLanguage}, or non-lexical lines (sounds, names, ad-libs): copy the source text into t unchanged.`,
     'Return JSON only: {"lineCount":N,"translations":[{"i":0,"t":"..."},...]}.',
     "lineCount must equal the input lineCount.",
     "translations must contain exactly lineCount objects with i from startIndex through startIndex+lineCount-1, each i once.",
@@ -12347,12 +12343,13 @@ async function mapTranslationChunksWithConcurrency(items, limit, mapper) {
 async function enrichLyricsWithGeminiTranslations(
   track,
   lyrics,
-  { geminiApiKey = "", geminiCache = null } = {},
+  { geminiApiKey = "", geminiCache = null, targetLanguage = "English" } = {},
 ) {
   if (!Array.isArray(lyrics) || !lyrics.length) {
     return lyrics || [];
   }
 
+  targetLanguage = ["English","Arabic","Bengali","Chinese (Simplified)","Chinese (Traditional)","Czech","Danish","Dutch","Finnish","French","German","Greek","Hebrew","Hindi","Hungarian","Indonesian","Italian","Japanese","Korean","Malay","Norwegian","Persian","Polish","Portuguese","Romanian","Russian","Spanish","Swedish","Tamil","Telugu","Thai","Turkish","Ukrainian","Urdu","Vietnamese"].includes(targetLanguage) ? targetLanguage : "English";
   const apiKey = String(geminiApiKey || "").trim();
   if (!apiKey) {
     console.log(
@@ -12435,6 +12432,7 @@ async function enrichLyricsWithGeminiTranslations(
         title: String(track?.title || ""),
         artist: String(track?.artist || ""),
         durationMs: Number(track?.durationMs || 0),
+        targetLanguage,
         lines: [...uniqueLineMap.keys()],
       }),
     )
@@ -12634,12 +12632,12 @@ async function enrichLyricsWithGeminiTranslations(
           )
         : lines;
     const systemPrompt = buildTranslationSystemPrompt(
-      GEMINI_TRANSLATION_TARGET_LANGUAGE,
+      targetLanguage,
     );
     const userPayload = buildIndexedTranslationUserPayload({
       lines: allLines,
       startIndex,
-      targetLanguage: GEMINI_TRANSLATION_TARGET_LANGUAGE,
+      targetLanguage,
       title: trackTitle,
       artist: trackArtist,
     });
@@ -13503,8 +13501,10 @@ async function finalizeFetchedLyricsResult(result) {
   }
 
   if (result.lyrics?.length) {
-    mergeCensorshipSyllablesInLyrics(result.lyrics);
     const source = String(result.source || "").toLowerCase();
+    if (!isSpicyKaraokeSource(result.source)) {
+      mergeCensorshipSyllablesInLyrics(result.lyrics);
+    }
     if (!isSpicyKaraokeSource(result.source) && !source.includes("local-vault")) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
@@ -14584,7 +14584,7 @@ function createLyricsService({
     buildLyricsMatchTrack,
     mergeNativePlaybackArtist,
     applySpotifyCatalogOverlay,
-    async translatePublishedLyrics(track, { onSyncedLyrics = null } = {}) {
+    async translatePublishedLyrics(track, { onSyncedLyrics = null, translationLanguage = "English" } = {}) {
       if (!track?.trackId || !track?.title) {
         const empty = {
           trackId: "",
@@ -14650,6 +14650,7 @@ function createLyricsService({
         {
           geminiApiKey: String(getGeminiApiKey() || "").trim(),
           geminiCache: geminiTranslationCache,
+          targetLanguage: translationLanguage,
         },
       );
 
@@ -14672,6 +14673,7 @@ function createLyricsService({
         preferredSource = "auto",
         onSyncedLyrics = null,
         immediateTranslation = false,
+        translationLanguage = "English",
       } = {},
     ) {
       if (!track?.trackId || !track?.title) {
@@ -14919,6 +14921,7 @@ function createLyricsService({
             {
               geminiApiKey: String(getGeminiApiKey() || "").trim(),
               geminiCache: geminiTranslationCache,
+              targetLanguage: translationLanguage,
             },
           );
           const translatedBase = {
@@ -15152,6 +15155,7 @@ function createLyricsService({
           {
             geminiApiKey: String(getGeminiApiKey() || "").trim(),
             geminiCache: geminiTranslationCache,
+          targetLanguage: translationLanguage,
           },
         );
 

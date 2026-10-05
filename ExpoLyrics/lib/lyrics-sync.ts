@@ -186,7 +186,7 @@ export function requestImmediateTranslationForCurrentSource() {
     latestLyricsRequestId += 1;
     setLyricsStatusMessage("Translating on-screen lyrics on desktop...");
     beginTranslationRequest();
-    bridgeClient.requestLyricsRefresh("auto", { immediateTranslation: true });
+    bridgeClient.requestLyricsRefresh("auto", { immediateTranslation: true, translationLanguage: usePlaybackStore.getState().translationLanguage });
     return;
   }
 

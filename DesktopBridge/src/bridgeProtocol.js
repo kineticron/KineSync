@@ -8,6 +8,8 @@ const CLIENT_TYPES = new Set([
   "lyrics:refresh",
   "lyrics:refetch",
   "vault:save",
+  "vault:list",
+  "vault:get",
   "artwork:refetch",
   "share:gif:request",
   "playback:playPause",
@@ -17,7 +19,7 @@ const CLIENT_TYPES = new Set([
   "playback:seek",
 ]);
 
-const DESKTOP_TYPES = new Set(["playback", "lyrics", "share:gif:result", "vault:save:result"]);
+const DESKTOP_TYPES = new Set(["playback", "lyrics", "share:gif:result", "vault:save:result", "vault:list:result", "vault:get:result"]);
 
 function parseJsonMessage(message, maxBytes = CLIENT_MAX_MESSAGE_BYTES) {
   const byteLength = Buffer.byteLength(String(message || ""));
@@ -48,6 +50,14 @@ function createRateLimiter({ windowMs = RATE_LIMIT_WINDOW_MS, maxMessages = RATE
 
 function sanitizeClientPacket(packet) {
   if (!packet || typeof packet.type !== "string" || !CLIENT_TYPES.has(packet.type)) return null;
+  if (packet.type === "vault:list" || packet.type === "vault:get") {
+    if (typeof packet.requestId !== "string" || !packet.requestId || packet.requestId.length > 256) return null;
+    if (packet.type === "vault:get") {
+      if (typeof packet.vaultId !== "string" || !/^(?:spotify_[A-Za-z0-9._-]{1,128}|fp_[a-f0-9]{20,64})$/.test(packet.vaultId)) return null;
+      return { type: packet.type, requestId: packet.requestId, vaultId: packet.vaultId };
+    }
+    return { type: packet.type, requestId: packet.requestId, query: typeof packet.query === "string" ? packet.query.slice(0, 200) : "", offset: Math.max(0, Math.floor(Number(packet.offset) || 0)) };
+  }
   if (packet.type === "playback:seek") {
     return { type: packet.type, positionMs: Math.max(0, Math.floor(Number(packet.positionMs) || 0)) };
   }
@@ -60,9 +70,11 @@ function isDesktopPacket(packet) {
 
 const handlers = {
   hello: () => true,
-  "lyrics:refresh": (e, p) => e.emit("lyricsRefreshRequested", { preferredSource: typeof p.preferredSource === "string" ? p.preferredSource : "auto", immediateTranslation: Boolean(p.immediateTranslation) }) || true,
+  "lyrics:refresh": (e, p) => e.emit("lyricsRefreshRequested", { preferredSource: typeof p.preferredSource === "string" ? p.preferredSource : "auto", immediateTranslation: Boolean(p.immediateTranslation), translationLanguage: typeof p.translationLanguage === "string" && p.translationLanguage.length <= 64 ? p.translationLanguage : "English" }) || true,
   "lyrics:refetch": (e) => e.emit("lyricsRefetchRequested") || true,
   "vault:save": (e, p, r) => e.emit("vaultSaveRequested", { includeTranslations: Boolean(p.includeTranslations), reply: r }) || true,
+  "vault:list": (e, p, r) => e.emit("vaultListRequested", { ...p, reply: r }) || true,
+  "vault:get": (e, p, r) => e.emit("vaultGetRequested", { ...p, reply: r }) || true,
   "artwork:refetch": (e) => e.emit("artworkRefetchRequested") || true,
   "share:gif:request": (e, p) =>
     e.emit("shareGifRequested", {
