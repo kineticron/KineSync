@@ -79,13 +79,20 @@ codesign --force --sign - "$app"
 bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
 xcrun simctl list devices available -j > "$output/devices.json"
 device=$(python3 - "$output/devices.json" <<'PY'
-import json, sys
+import json, subprocess, sys
 devices = json.load(open(sys.argv[1]))['devices']
 for runtime in sorted(devices, reverse=True):
+    if 'iOS-27-' not in runtime:
+        continue
     for device in devices[runtime]:
-        if 'iOS-27-' in runtime and 'iPhone' in device['name'] and 'Pro' in device['name'] and device['isAvailable']:
+        if device['deviceTypeIdentifier'].endswith('.iPhone-16-Pro') and device['isAvailable']:
             print(device['udid'])
             sys.exit(0)
+    types = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devicetypes', '-j']))['devicetypes']
+    kind = next((item['identifier'] for item in types if item['name'] == 'iPhone 16 Pro'), None)
+    if kind:
+        print(subprocess.check_output(['xcrun', 'simctl', 'create', 'KineSync iPhone 16 Pro', kind, runtime], text=True).strip())
+        sys.exit(0)
 raise SystemExit('No iOS 27 Dynamic Island iPhone simulator available')
 PY
 )
@@ -102,6 +109,16 @@ sleep 5
 # Another app exposes the compact Island, as it would appear during playback.
 xcrun simctl launch "$device" com.apple.Preferences
 sleep 5
-xcrun simctl io "$device" screenshot "$output/compact-island.png"
-python3 scripts/check-live-activity-preview.py "$output/compact-island.png"
+# A cold simulator can launch Preferences before its UI and Island are ready.
+# Wait for real foreground content, rather than accepting a blank screenshot.
+visible=false
+for attempt in $(seq 1 24); do
+  xcrun simctl io "$device" screenshot "$output/compact-island.png"
+  if python3 scripts/check-live-activity-preview.py "$output/compact-island.png"; then
+    visible=true
+    break
+  fi
+  sleep 5
+done
+[[ "$visible" == true ]]
 printf 'Preview device: %s\nAttributes module: KineSyncActivityTypes (host and widget)\n' "$device" > "$output/preview.txt"
