@@ -7,9 +7,10 @@ import os
 // Spotify, pairing credentials, or a network-dependent playback fixture.
 @main
 struct PreviewApp: App {
+  @State private var status = "Starting Live Activity"
   var body: some Scene {
     WindowGroup {
-      Text("KineSync Live Activity preview")
+      Text(status)
         .task {
           do {
             try await Task.sleep(nanoseconds: 1_000_000_000)
@@ -25,9 +26,11 @@ struct PreviewApp: App {
               attributes: LyricsActivityAttributes(session: "lyrics-v3"),
               content: ActivityContent(state: state, staleDate: nil), pushType: nil
             )
+            status = "Started Live Activity: \(activity.id)"
             Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "preview")
               .info("Started preview \(activity.id, privacy: .public)")
           } catch {
+            status = "Live Activity failed: \(error.localizedDescription)"
             Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "preview")
               .error("Preview failed: \(error.localizedDescription, privacy: .public)")
           }

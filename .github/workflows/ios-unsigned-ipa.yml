@@ -88,8 +88,20 @@ jobs:
           node scripts/verify-live-activity-project.js
 
       - name: Capture native Live Activity preview
+        id: live-activity-preview
+        # The SDK 58 experiment must still produce a device IPA when the
+        # new simulator fails to render. Keep its failure visible separately.
+        continue-on-error: ${{ github.ref == 'refs/heads/SDK-58-live-activity' }}
         timeout-minutes: 20
         run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
+
+      - name: Report Live Activity preview result
+        if: always()
+        run: |
+          echo "Live Activity preview outcome: ${{ steps.live-activity-preview.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          if [[ '${{ steps.live-activity-preview.outcome }}' == 'failure' ]]; then
+            echo '::warning::Live Activity preview failed; this IPA is a device experiment, not a verified rendering fix.'
+          fi
 
       - name: Upload Live Activity preview
         if: always()

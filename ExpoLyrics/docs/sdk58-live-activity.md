@@ -4,7 +4,8 @@ The `SDK-58-live-activity` branch uses Expo 58.0.5 and Expo's recommended
 React Native 0.88 release candidate. The unsigned IPA workflow runs on
 GitHub's `xcode-27` preview runner, checks the iOS SDK version, and captures
 the real lyrics widget in a small native host on an iOS simulator. The
-preview rejects an empty compact Island. This does not test device signing
+preview rejects an empty compact Island. Preview failure is reported separately
+on this experiment branch so device IPA packaging can continue. This does not test device signing
 or the full React Native app's playback on an iPhone.
 
 The app checks active scenes before starting an activity and validates the

@@ -101,11 +101,19 @@ xcrun simctl bootstatus "$device" -b
 xcrun simctl ui "$device" appearance light
 xcrun simctl install "$device" "$app"
 xcrun simctl spawn "$device" log stream --level info --style compact \
-  --predicate 'subsystem == "dev.kineticron.KineSync.live-activity"' > "$output/runtime.log" 2>&1 &
+  --predicate 'subsystem == "dev.kineticron.KineSync.live-activity" OR process == "liveactivitiesd" OR process == "chronod"' > "$output/runtime.log" 2>&1 &
 log_pid=$!
-trap 'kill "$log_pid" 2>/dev/null || true; xcrun simctl shutdown "$device" || true' EXIT
+cleanup() {
+  result=$?
+  trap - EXIT
+  kill "$log_pid" 2>/dev/null || true
+  xcrun simctl shutdown "$device" || true
+  exit "$result"
+}
+trap cleanup EXIT
 xcrun simctl launch "$device" "$bundle"
-sleep 5
+sleep 15
+xcrun simctl io "$device" screenshot "$output/host-status.png"
 # Another app exposes the compact Island, as it would appear during playback.
 xcrun simctl launch "$device" com.apple.Preferences
 sleep 5
@@ -120,5 +128,8 @@ for attempt in $(seq 1 24); do
   fi
   sleep 5
 done
-[[ "$visible" == true ]]
+if [[ "$visible" != true ]]; then
+  echo 'No visible compact Island; inspect host-status.png and runtime.log.' > "$output/preview.txt"
+  exit 1
+fi
 printf 'Preview device: %s\nAttributes module: KineSyncActivityTypes (host and widget)\n' "$device" > "$output/preview.txt"
