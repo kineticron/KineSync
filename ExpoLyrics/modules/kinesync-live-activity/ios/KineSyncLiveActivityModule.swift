@@ -105,6 +105,20 @@ private final class LyricsActivityController {
       return status
     }
 
+    // Inspect the installed extension after sideloading, since a signer can
+    // rewrite identifiers independently of the original IPA's packaging.
+    let widgetURL = plugins.appendingPathComponent("KineSyncLyricsWidget.appex")
+    guard let widget = Bundle(url: widgetURL),
+          let hostID = Bundle.main.bundleIdentifier,
+          let widgetID = widget.bundleIdentifier,
+          widgetID.hasPrefix(hostID + "."),
+          (widget.infoDictionary?["NSExtension"] as? [String: Any])?["NSExtensionPointIdentifier"] as? String == "com.apple.widgetkit-extension" else {
+      await stop()
+      setStatus("error", "Installed lyrics extension has an invalid bundle ID or extension type. Check Sideloadly's extension signing settings.")
+      return status
+    }
+    logger.info("Installed host \(hostID, privacy: .public), widget \(widgetID, privacy: .public), iOS \(UIDevice.current.systemVersion, privacy: .public)")
+
     // Restart really creates a fresh presentation. A .active ActivityKit state
     // only acknowledges the session; it does not confirm a widget was rendered.
     if retry {
@@ -240,7 +254,13 @@ private final class LyricsActivityController {
         setStatus("idle", "Start a song to show live lyrics.")
         return
       }
-      guard UIApplication.shared.applicationState == .active else {
+      // SDK 58 uses UIScene on iOS 27. Check foreground scenes directly;
+      // retain the application fallback for older lifecycle configurations.
+      let scenes = UIApplication.shared.connectedScenes
+      let isForeground = scenes.isEmpty
+        ? UIApplication.shared.applicationState == .active
+        : scenes.contains { $0.activationState == .foregroundActive }
+      guard isForeground else {
         setStatus("waiting", "Open KineSync to start live lyrics.")
         return
       }

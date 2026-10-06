@@ -79,7 +79,7 @@ function configureProject(project, { projectRoot, platformProjectRoot, bundleIde
   // signed builds. CI's CODE_SIGNING_ALLOWED=NO also applies to the extension.
   for (const buildFile of Object.values(objects.PBXBuildFile)) {
     if (typeof buildFile === 'object' && buildFile.fileRef === target.productReference) {
-      buildFile.settings = { ATTRIBUTES: ['RemoveHeadersOnCopy'] };
+        buildFile.settings = { ATTRIBUTES: ['CodeSignOnCopy', 'RemoveHeadersOnCopy'] };
     }
   }
   return project;

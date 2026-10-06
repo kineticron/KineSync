@@ -70,6 +70,7 @@ host = {
     'CFBundleShortVersionString': widget['CFBundleShortVersionString'],
     'CFBundleSupportedPlatforms': ['iPhoneSimulator'], 'MinimumOSVersion': '16.4',
     'NSSupportsLiveActivities': True, 'UIDeviceFamily': [1], 'UILaunchScreen': {},
+    'UIApplicationSceneManifest': {'UIApplicationSupportsMultipleScenes': False},
 }
 (app / 'Info.plist').write_bytes(plistlib.dumps(host))
 PY
@@ -82,23 +83,25 @@ import json, sys
 devices = json.load(open(sys.argv[1]))['devices']
 for runtime in sorted(devices, reverse=True):
     for device in devices[runtime]:
-        if 'iOS' in runtime and 'iPhone' in device['name'] and 'Pro' in device['name'] and device['isAvailable']:
+        if 'iOS-27-' in runtime and 'iPhone' in device['name'] and 'Pro' in device['name'] and device['isAvailable']:
             print(device['udid'])
             sys.exit(0)
-raise SystemExit('No Dynamic Island iPhone simulator available')
+raise SystemExit('No iOS 27 Dynamic Island iPhone simulator available')
 PY
 )
 xcrun simctl boot "$device" || true
 xcrun simctl bootstatus "$device" -b
+xcrun simctl ui "$device" appearance light
 xcrun simctl install "$device" "$app"
 xcrun simctl spawn "$device" log stream --level info --style compact \
   --predicate 'subsystem == "dev.kineticron.KineSync.live-activity"' > "$output/runtime.log" 2>&1 &
 log_pid=$!
-trap 'kill "$log_pid" 2>/dev/null || true' EXIT
+trap 'kill "$log_pid" 2>/dev/null || true; xcrun simctl shutdown "$device" || true' EXIT
 xcrun simctl launch "$device" "$bundle"
 sleep 5
 # Another app exposes the compact Island, as it would appear during playback.
 xcrun simctl launch "$device" com.apple.Preferences
 sleep 5
 xcrun simctl io "$device" screenshot "$output/compact-island.png"
+python3 scripts/check-live-activity-preview.py "$output/compact-island.png"
 printf 'Preview device: %s\nAttributes module: KineSyncActivityTypes (host and widget)\n' "$device" > "$output/preview.txt"

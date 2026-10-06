@@ -27,7 +27,7 @@ defaults:
 
 jobs:
   ios-unsigned-ipa:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 120
 
     steps:
@@ -46,6 +46,14 @@ jobs:
       - name: Install JS dependencies
         working-directory: ExpoLyrics
         run: npm ci
+
+      - name: Verify iOS 27 toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+          [[ $(xcrun --sdk iphoneos --show-sdk-version) == 27.* ]]
+          xcrun simctl list runtimes
 
       - name: Set shared release version
         working-directory: ExpoLyrics
