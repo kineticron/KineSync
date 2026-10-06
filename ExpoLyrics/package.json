@@ -12,7 +12,7 @@
     "test:artwork": "node ./scripts/artwork-packet-check.mjs",
     "test:launch": "node ./scripts/check-launch-transition.cjs",
     "test:security": "node ./scripts/security-check.js",
-    "test:spotify-browser": "node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-tour-tracker.cjs",
+    "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-tour-tracker.cjs",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
     "test:lyrics": "node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",

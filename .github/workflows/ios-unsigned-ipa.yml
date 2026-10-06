@@ -87,6 +87,13 @@ jobs:
           python3 scripts/check-ios-live-activity.py
           node scripts/verify-live-activity-project.js
 
+      - name: Verify Spotify login and app types
+        working-directory: ExpoLyrics
+        run: |
+          npm run test:spotify-browser
+          npm run test:security
+          npx tsc --noEmit
+
       - name: Capture native Live Activity preview
         id: live-activity-preview
         # The SDK 58 experiment must still produce a device IPA when the

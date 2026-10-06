@@ -13,11 +13,12 @@ const fallback = read('components/lyrics/spotify-browser-fallback.tsx');
 const bridgeSettings = read('lib/bridge-settings.ts');
 const explore = read('app/(tabs)/explore.tsx');
 const onboarding = read('components/onboarding/onboarding-screen.tsx');
+const login = read('components/spotify-login-webview.tsx');
 const spicyLyrics = read('components/lyrics/spicy-lyrics-view.tsx');
 const amllLyrics = read('components/lyrics/amll-lyrics-view.tsx');
 const signingPlugin = read('plugins/with-release-signing.js');
 
-assert.equal(pkg.dependencies['expo-secure-store'], '~57.0.1');
+assert.equal(pkg.dependencies['expo-secure-store'], require('expo/bundledNativeModules.json')['expo-secure-store']);
 assert(!/http:\/\/(?!localhost|127\.0\.0\.1)/i.test(lyricsService), 'public HTTP lyrics endpoint found');
 assert(network.includes("parsed.protocol === 'ws:' && !privateHost"), 'public ws:// must be rejected');
 assert(network.includes('key.length >= 16'), 'weak bridge keys must be rejected');
@@ -59,11 +60,14 @@ assert(
   spotify.includes("if (!isTopFrame) return true"),
   'HTTPS CAPTCHA frames must remain inside the Spotify WebView',
 );
-for (const webView of [fallback, explore, onboarding]) {
+for (const webView of [fallback, login]) {
   assert(
     webView.includes('isAllowedSpotifyWebViewNavigation(url, isTopFrame)'),
     'Spotify WebViews must distinguish CAPTCHA frames from top-level redirects',
   );
+}
+for (const screen of [explore, onboarding]) {
+  assert(screen.includes('<SpotifyLoginWebView'), 'Both login entry points must use the guarded native login WebView');
 }
 assert(
   fallback.includes('resumedFromBackground &&') &&
@@ -98,17 +102,19 @@ assert(
 );
 assert(
   spicyLyrics.includes('key={`spicy-lyrics-${webViewGeneration}`}') ||
+    spicyLyrics.includes('key={`spicy-lyrics-${sourceKey}`}') ||
     spicyLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
   'refocusing must remount the suspended Spicy lyrics WebView',
 );
 assert(
   amllLyrics.includes('key={`amll-lyrics-${webViewGeneration}`}') ||
+    amllLyrics.includes('key={`amll-lyrics-${sourceKey}`}') ||
     amllLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
   'refocusing must remount the suspended AMLL lyrics WebView',
 );
 for (const webLyrics of [spicyLyrics, amllLyrics]) {
   assert(
-    webLyrics.includes('readyGeneration === webViewGeneration'),
+    webLyrics.includes('readyGeneration === webViewGeneration') || webLyrics.includes('readySourceKey === sourceKey'),
     'lyrics WebView readiness must belong to the active generation',
   );
   assert(

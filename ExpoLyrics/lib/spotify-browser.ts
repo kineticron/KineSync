@@ -155,6 +155,9 @@ export function isAllowedSpotifyWebViewNavigation(
   isTopFrame = true,
 ): boolean {
   if (isSpotifyNativeAppRedirect(rawUrl)) return false;
+  // Challenges can create an empty child frame before navigating it to HTTPS.
+  // Never admit a blank top-level document or other non-HTTPS frame schemes.
+  if (isTopFrame === false && String(rawUrl || '').trim() === 'about:blank') return true;
   try {
     const parsed = new URL(String(rawUrl || '').trim());
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return false;
@@ -180,6 +183,9 @@ export function isTrustedSpotifyWebViewMessageUrl(rawUrl: string): boolean {
 // session is anonymous, so it doubles as the sign-in probe for onboarding.
 export const spotifyAuthProbeScript = String.raw`
   (function () {
+    // Accounts owns the login form. Only the web player exposes /api/token;
+    // do not inject polling requests into the email/password/challenge flow.
+    if (window.location.origin !== 'https://open.spotify.com') return true;
     if (window.__kineSyncAuthProbeInstalled) return true;
     window.__kineSyncAuthProbeInstalled = true;
 

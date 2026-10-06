@@ -32,15 +32,11 @@ import { requestShowOnboarding } from '@/providers/bridge-provider';
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from '@/lib/network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { WebView } from 'react-native-webview';
+import { SpotifyLoginWebView } from '@/components/spotify-login-webview';
 
 import {
-  isSpotifyNativeAppRedirect,
-  isAllowedSpotifyWebViewNavigation,
   isTrustedSpotifyWebViewMessageUrl,
   parseBrowserEvent,
-  spotifyAuthProbeScript,
-  SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
 import { requestOpenSpotifyBrowser, requestLogoutSpotifyBrowser, requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
 import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
@@ -50,9 +46,6 @@ import { TranslationLanguagePicker } from '@/components/lyrics/translation-langu
 import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 const settingsEntrance = FadeInDown.duration(320).reduceMotion(ReduceMotion.System);
-
-const SPOTIFY_LOGIN_URL =
-  'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
 
 type PlaybackMode = 'desktop' | 'mobile';
 
@@ -813,28 +806,7 @@ export default function BridgeSettingsScreen() {
               <Ionicons name="close" size={21} color="#FFFFFF" />
             </Pressable>
           </SafeAreaView>
-          <WebView
-            source={{ uri: SPOTIFY_LOGIN_URL }}
-            originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
-            injectedJavaScript={spotifyAuthProbeScript}
-            userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
-              if (isTopFrame !== false && url.startsWith('https://open.spotify.com/')) {
-                setLoginOpen(false);
-                requestReloadSpotifyBrowser();
-                return false;
-              }
-              if (!isSpotifyNativeAppRedirect(url)) {
-                return isAllowedSpotifyWebViewNavigation(url, isTopFrame);
-              }
-              return false;
-            }}
-            sharedCookiesEnabled
-            thirdPartyCookiesEnabled
-            domStorageEnabled
-            javaScriptEnabled
-            setSupportMultipleWindows={false}
-            style={styles.loginWebView}
+          <SpotifyLoginWebView
             onMessage={({ nativeEvent }) => {
               if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || '')) return;
               const event = parseBrowserEvent(nativeEvent.data);
@@ -1206,9 +1178,5 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  loginWebView: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
   },
 });
