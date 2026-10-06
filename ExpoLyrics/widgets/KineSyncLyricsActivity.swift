@@ -40,9 +40,9 @@ struct KineSyncLyricsActivity: Widget {
         }
       } compactLeading: {
         // Apple's smaller reference device offers 52.33 x 36.67 pt per side.
-        LyricsMicrophone(mode: context.state.timingMode).frame(width: 22, height: 22)
+        Text("KS").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
       } compactTrailing: {
-        Text(context.isStale ? "Open" : context.state.isPlaying ? (context.state.lyric.isEmpty ? "Lyrics" : context.state.lyric) : "Paused")
+        Text(context.isStale ? "Open" : context.state.isPlaying ? (context.state.lyric.isEmpty ? "Lyrics" : context.state.lyric) : context.state.artist.isEmpty ? "Ready" : "Paused")
           .font(.system(size: 12, weight: .semibold))
           .foregroundColor(.white)
           .lineLimit(1)
@@ -50,7 +50,7 @@ struct KineSyncLyricsActivity: Widget {
           .frame(width: 48, height: 28)
           .clipped()
       } minimal: {
-        LyricsMicrophone(mode: context.state.timingMode).frame(width: 22, height: 22)
+        Text("KS").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
       }
       .widgetURL(URL(string: "expolyrics://"))
       .keylineTint(.white)
@@ -79,7 +79,7 @@ private struct LyricsDetails: View {
   let stale: Bool
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text(state.title.isEmpty ? "KineSync" : "\(state.title) · \(state.artist)")
+      Text(state.title.isEmpty ? "KineSync" : state.artist.isEmpty ? state.title : "\(state.title) · \(state.artist)")
         .font(.system(size: 12, weight: .semibold))
         .lineLimit(1)
         .frame(height: 15, alignment: .leading)
@@ -92,7 +92,7 @@ private struct LyricsDetails: View {
         .lineLimit(2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 42, alignment: .leading)
-      Text("\(state.isPlaying ? "" : "Paused · ")\(state.source)")
+      Text("\(state.isPlaying || state.artist.isEmpty ? "" : "Paused · ")\(state.source)")
         .font(.system(size: 10, weight: .medium)).lineLimit(1)
         .foregroundColor(.white.opacity(0.8))
         .frame(height: 13, alignment: .leading)

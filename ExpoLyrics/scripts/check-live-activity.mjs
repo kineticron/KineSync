@@ -46,7 +46,24 @@ assert.equal(makeLiveActivitySnapshot({ ...base, lyricsSource: 'spicy-lyrics-lin
 assert.equal(makeLiveActivitySnapshot({ ...base, lyrics: [{ lineStartTime: 0, lineEndTime: 0, syllables: [{ text: 'Plain lyrics', startTime: 0, endTime: 0 }] }] }, 0, 0).timingMode, 'static');
 assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }, 0, 0).trackId, '');
 assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }, 0, 0).isPlaying, false);
-assert.equal(makeLiveActivitySnapshot({ ...base, playbackMode: 'desktop' }, 0, 0).trackId, '', 'End activities on desktop disconnect');
+assert.equal(makeLiveActivitySnapshot({ ...base, playbackMode: 'desktop' }, 0, 0).trackId, '', 'Switch to static content on desktop disconnect');
+// Clear stale track/lyrics even when the native queue omits unchanged timelines.
+for (const input of [{ ...base, currentTrack: null }, { ...base, playbackMode: 'desktop' }]) {
+  for (const includeLines of [true, false]) {
+    const idle = makeLiveActivitySnapshot(input, 11250, 100000, includeLines);
+    assert.equal(idle.title, 'KineSync');
+    assert.equal(idle.artist, '');
+    assert.equal(idle.status, 'Waiting for a song');
+    assert.equal(idle.timingMode, 'unknown');
+    assert.equal(idle.instrumental, false);
+    assert.equal(idle.isPlaying, false);
+    assert.equal(idle.positionMs, 0);
+    assert.equal(idle.durationMs, 0);
+    assert.deepEqual(idle.lines, []);
+  }
+}
+assert.equal(makeLiveActivitySnapshot({ ...base, isPlaying: false }, 11250, 100000).title, 'Song', 'Pauses retain the song');
+assert.equal(makeLiveActivitySnapshot(base, 11250, 100000).title, 'Song', 'Playback replaces the static title');
 assert.equal(makeLiveActivitySnapshot(base, 0, 0, false).lines, undefined, 'Clock corrections must not resend the entire timeline');
 assert.deepEqual(makeLiveActivitySnapshot({ ...base, lyrics: [{ ...base.lyrics[0], lineStartTime: NaN }] }, 0, 0).lines, []);
 const unicode = makeLiveActivitySnapshot({ ...base, currentTrack: { ...base.currentTrack, title: '👨‍👩‍👧‍👦日本語\\"'.repeat(500) } }, 0, 0);

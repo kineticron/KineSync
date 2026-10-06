@@ -14,7 +14,7 @@ declare class LyricsModule extends NativeModule<{ onStatus: (status: Status) => 
 const native = Platform.OS === 'ios' ? requireOptionalNativeModule<LyricsModule>('KineSyncLiveActivity') : null;
 export const useLiveActivityStatus = create<Status>(() => ({
   state: native ? 'idle' : 'unavailable',
-  message: native ? 'Start a song to show live lyrics.' : 'Live lyrics require an iOS build with the KineSync widget extension. Expo Go is not supported.',
+  message: native ? 'Open KineSync to show live lyrics.' : 'Live lyrics require an iOS build with the KineSync widget extension. Expo Go is not supported.',
 }));
 
 let running = false;
@@ -77,6 +77,6 @@ export function startLiveActivitySync() {
     lifecycle.remove();
     statusListener.remove();
     // Native scheduling survives React screen changes and Fast Refresh. Only an
-    // empty playback session or native end-of-track/paused timeout ends it.
+    // an explicit stop, system timeout, or user dismissal ends it.
   };
 }

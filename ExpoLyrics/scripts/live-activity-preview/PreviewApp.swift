@@ -18,12 +18,12 @@ struct PreviewApp: App {
               await activity.end(nil, dismissalPolicy: .immediate)
             }
             let state = LyricsActivityAttributes.ContentState(
-              title: "KineSync", artist: "Widget preview", album: "",
-              source: "Preview", status: "", lyric: "Live lyrics are ready",
-              timingMode: "karaoke", isPlaying: true
+              title: "KineSync", artist: "", album: "",
+              source: "Preview", status: "Waiting for a song", lyric: "Ready for music",
+              timingMode: "unknown", isPlaying: false
             )
             let activity = try Activity.request(
-              attributes: LyricsActivityAttributes(session: "lyrics-v3"),
+              attributes: LyricsActivityAttributes(session: "lyrics-v4"),
               content: ActivityContent(state: state, staleDate: nil), pushType: nil
             )
             status = "Started Live Activity: \(activity.id)"

@@ -49,3 +49,20 @@ Sideloadly re-signing and physical-device rendering still require device testing
 References: [SDK 58 migration notes](https://expo.dev/changelog/sdk-58-beta),
 [Xcode 27 runner](https://github.com/actions/runner-images/issues/14404),
 [Sideloadly settings](https://sideloadly.io/).
+
+## Static waiting presentation
+
+The next device experiment starts an activity in the foreground even without
+a detected song. Empty playback and disconnected desktop feeds now show
+`KineSync`, `Ready for music`, and `Waiting for a song`, clearing old track
+metadata and lyrics. Pauses and song completion keep the activity instead of
+ending it after a timeout; waiting and paused states have no timer or stale
+deadline. iOS still controls its maximum lifetime and user dismissal.
+
+The compact and minimal Island have a constant `KS` text label independent
+of playback data. Compact waiting content says `Ready`. Session `lyrics-v4`
+retires earlier presentations; Restart also explicitly replaces the session.
+The simulator fixture requests this same idle state with playback disabled.
+These changes address the missing fallback but do not establish that a widget
+will render after Sideloadly re-signing. Test before playback as well as during
+a song, including the Lock Screen and expanded Island.

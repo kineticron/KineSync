@@ -23,27 +23,27 @@ const cleanText = (text: string, length = 240) => Array.from(String(text || '').
 const finite = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
 
 export function makeLiveActivitySnapshot(input: LiveActivityInput, monotonicMs: number, wallMs: number, includeLines = true) {
-  const track = input.currentTrack;
-  const source = extractSourceFromStatusMessage(input.lyricsStatusMessage) || input.lyricsSource ||
+  // A disconnected bridge must not display its stale track or lyrics.
+  const track = input.playbackMode === 'desktop' && input.connectionStatus !== 'connected' ? null : input.currentTrack;
+  const source = (track ? extractSourceFromStatusMessage(input.lyricsStatusMessage) || input.lyricsSource : '') ||
     (input.playbackMode === 'mobile' ? 'On-device playback' : input.connectionStatus === 'connected' ? 'Waiting for source' : 'Bridge offline');
   const durationMs = finite(track?.durationMs ?? 0);
   const projected = finite(input.anchorPositionMs) + (input.isPlaying ? finite(monotonicMs - input.anchorMonotonicMs) : 0);
   return {
-    // Stop when the desktop feed disconnects; its old playing flag is no longer
-    // authoritative. Mobile playback is independent of the bridge connection.
-    trackId: input.playbackMode === 'desktop' && input.connectionStatus !== 'connected' ? '' : track?.id || '',
-    title: cleanText(track?.title || 'Unknown song'),
-    artist: cleanText(track?.artist || 'Unknown artist'),
+    // Empty track IDs select the native static waiting presentation.
+    trackId: track?.id || '',
+    title: cleanText(track?.title || 'KineSync'),
+    artist: cleanText(track ? track.artist || 'Unknown artist' : ''),
     album: cleanText(track?.album || '', 120),
     source: cleanText(formatLyricsSourceLabel(source), 120),
-    status: cleanText(trimTrailingSourceFromAction(input.lyricsStatusMessage, source).replace(/\s+from\s*$/i, '')),
-    timingMode: detectLyricsTimingMode(input.lyrics, input.lyricsSource),
-    instrumental: Boolean(input.lyricsMetadata.instrumental),
+    status: track ? cleanText(trimTrailingSourceFromAction(input.lyricsStatusMessage, source).replace(/\s+from\s*$/i, '')) : 'Waiting for a song',
+    timingMode: track ? detectLyricsTimingMode(input.lyrics, input.lyricsSource) : 'unknown',
+    instrumental: Boolean(track && input.lyricsMetadata.instrumental),
     isPlaying: Boolean(track && input.isPlaying),
-    positionMs: durationMs > 0 ? Math.min(durationMs, projected) : projected,
+    positionMs: track ? (durationMs > 0 ? Math.min(durationMs, projected) : projected) : 0,
     durationMs,
     sampledAtMs: wallMs,
-    lines: includeLines ? input.lyrics.slice(0, 5000).filter((line) =>
+    lines: !track ? [] : includeLines ? input.lyrics.slice(0, 5000).filter((line) =>
       Number.isFinite(line.lineStartTime) && Number.isFinite(line.lineEndTime) &&
       line.lineStartTime >= 0 && line.lineEndTime > line.lineStartTime,
     ).map((line) => ({

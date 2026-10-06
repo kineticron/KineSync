@@ -48,7 +48,7 @@ private struct LyricsSnapshot: Decodable {
 private final class LyricsActivityController {
   static let shared = LyricsActivityController()
   private let logger = Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "host")
-  private let sessionVersion = "lyrics-v3"
+  private let sessionVersion = "lyrics-v4"
   private var activity: Activity<LyricsActivityAttributes>?
   private var snapshot: LyricsSnapshot?
   private var lines: [LyricsSnapshot.Line] = []
@@ -62,9 +62,8 @@ private final class LyricsActivityController {
   private var endingIDs = Set<String>()
   private var revision = 0
   private var suppressedTrack: String?
-  private var pausedAt: Date?
   private var report: (([String: String]) -> Void)?
-  private var status = ["state": "idle", "message": "Start a song to show live lyrics."]
+  private var status = ["state": "idle", "message": "Open KineSync to show live lyrics."]
 
   private func setStatus(_ state: String, _ message: String) {
     let next = ["state": state, "message": message]
@@ -82,17 +81,11 @@ private final class LyricsActivityController {
     if let timeline = next.lines { lines = timeline }
     else if snapshot?.trackId != next.trackId { lines = [] }
     if retry || snapshot?.trackId != next.trackId { suppressedTrack = nil }
-    if next.isPlaying { pausedAt = nil }
-    else if snapshot?.isPlaying != false { pausedAt = Date() }
     snapshot = next
     anchorUptime = ProcessInfo.processInfo.systemUptime
     let deliveryMs = max(0, min(5000, Date().timeIntervalSince1970 * 1000 - next.sampledAtMs))
     anchorPositionMs = max(0, next.positionMs + (next.isPlaying ? deliveryMs : 0))
 
-    if next.trackId.isEmpty {
-      await stop()
-      return status
-    }
     guard let plugins = Bundle.main.builtInPlugInsURL,
           FileManager.default.fileExists(atPath: plugins.appendingPathComponent("KineSyncLyricsWidget.appex").path) else {
       await stop()
@@ -190,29 +183,27 @@ private final class LyricsActivityController {
   private func publish(generation: Int, mayStart: Bool) async {
     guard generation == revision, let value = snapshot else { return }
     let current = position(value)
-    // Keep the session across the small gap between songs. Once ended, iOS
-    // cannot locally start its replacement until the host returns to foreground.
+    // Keep the existing session when playback disappears or pauses. A local
+    // replacement cannot start while the host is in the background.
+    let idle = value.trackId.isEmpty
     let finished = value.durationMs > 0 && current >= value.durationMs
-    if (value.durationMs > 0 && current >= value.durationMs + 15000) ||
-       (!value.isPlaying && pausedAt.map { Date().timeIntervalSince($0) >= 300 } == true) {
-      await stop()
-      return
-    }
     if let activity, activity.activityState == .dismissed || activity.activityState == .ended {
       suppressedTrack = value.trackId
       self.activity = nil
     }
     if suppressedTrack == value.trackId { return }
 
-    let line = value.timingMode == "static" ? nil : lines.first {
+    let line = idle || value.timingMode == "static" ? nil : lines.first {
       current >= $0.startMs && current < $0.endMs
     }
-    let fallback = finished ? "Waiting for next song" : value.instrumental ? "Instrumental" : value.timingMode == "static"
+    let fallback = idle ? "Ready for music" : finished ? "Waiting for next song" : value.instrumental ? "Instrumental" : value.timingMode == "static"
       ? "Lyrics are not timed" : lines.isEmpty ? "Waiting for lyrics" : "Instrumental break"
     var state = LyricsActivityAttributes.ContentState(
-      title: value.title, artist: value.artist, album: value.album, source: value.source,
-      status: value.status, lyric: finished ? fallback : line?.text ?? fallback,
-      timingMode: value.timingMode, isPlaying: value.isPlaying
+      title: idle ? "KineSync" : value.title, artist: idle ? "" : value.artist,
+      album: idle ? "" : value.album, source: value.source,
+      status: idle ? "Waiting for a song" : value.status,
+      lyric: idle || finished ? fallback : line?.text ?? fallback,
+      timingMode: idle ? "unknown" : value.timingMode, isPlaying: !idle && value.isPlaying && !finished
     )
     // Budget the actual Swift Codable JSON, including escaping and multibyte text.
     // Leave >1 KB for immutable attributes and ActivityKit encoding overhead.
@@ -230,9 +221,9 @@ private final class LyricsActivityController {
       setStatus("error", "Live lyrics exceeded the iOS content limit.")
       return
     }
-    let staleDate = value.isPlaying
+    let staleDate: Date? = !idle && value.isPlaying && !finished
       ? Date(timeIntervalSinceNow: max(0.1, (nextBoundary(value, position: current) - current) / 1000) + 1)
-      : pausedAt?.addingTimeInterval(300)
+      : nil
     // Small clock corrections should not trigger an otherwise identical render.
     let deadlineChanged = abs((staleDate?.timeIntervalSince1970 ?? 0) - (lastStaleDate?.timeIntervalSince1970 ?? 0)) > 1
     let content = ActivityContent(state: state, staleDate: staleDate, relevanceScore: 100)
@@ -250,8 +241,8 @@ private final class LyricsActivityController {
         await update.value
       }
     } else {
-      guard mayStart, value.isPlaying else {
-        setStatus("idle", "Start a song to show live lyrics.")
+      guard mayStart else {
+        setStatus("idle", "Open KineSync to show live lyrics.")
         return
       }
       // SDK 58 uses UIScene on iOS 27. Check foreground scenes directly;
@@ -279,15 +270,16 @@ private final class LyricsActivityController {
     guard generation == revision else { return }
     lastState = state
     lastStaleDate = staleDate
-    setStatus("active", value.isPlaying ? "Live Activity started" : "Live Activity paused")
+    setStatus("active", idle ? "Live Activity started - waiting for a song" : state.isPlaying ? "Live Activity started" : "Live Activity paused")
   }
 
   private func schedule(generation: Int) {
-    guard activity != nil, let value = snapshot, generation == revision else { return }
+    guard activity != nil, let value = snapshot, generation == revision,
+          !value.trackId.isEmpty, value.isPlaying else { return }
     let current = position(value)
-    let seconds = value.isPlaying
-      ? max(0.1, min(30, (nextBoundary(value, position: current) - current) / 1000))
-      : max(0.1, min(30, 300 - Date().timeIntervalSince(pausedAt ?? Date())))
+    // Idle, paused and finished presentations have no timers or stale deadline.
+    guard value.durationMs <= 0 || current < value.durationMs else { return }
+    let seconds = max(0.1, min(30, (nextBoundary(value, position: current) - current) / 1000))
     timer = Task { [weak self] in
       do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
       catch { return }
@@ -317,6 +309,6 @@ private final class LyricsActivityController {
     let generation = revision
     await endCurrentActivities()
     guard generation == revision else { return }
-    setStatus("idle", "Start a song to show live lyrics.")
+    setStatus("idle", "Open KineSync to show live lyrics.")
   }
 }
