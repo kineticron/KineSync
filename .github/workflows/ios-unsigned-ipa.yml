@@ -13,6 +13,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      capture_live_activity_preview:
+        description: Capture the iOS simulator Live Activity preview
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -96,6 +101,7 @@ jobs:
 
       - name: Capture native Live Activity preview
         id: live-activity-preview
+        if: github.event_name != 'workflow_dispatch' || inputs.capture_live_activity_preview
         # The SDK 58 experiment must still produce a device IPA when the
         # new simulator fails to render. Keep its failure visible separately.
         continue-on-error: ${{ github.ref == 'refs/heads/SDK-58-live-activity' }}
