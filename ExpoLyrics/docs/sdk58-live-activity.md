@@ -27,6 +27,25 @@ peer range; TypeScript uses Expo's documented legacy RN type condition
 while dependencies such as MaskedView still use removed `NativeMethods`
 types. Revisit both with stable RN 0.88 / SDK 58.
 
+## Build evidence
+
+[Run 37396941306](https://github.com/kineticron/KineSync/actions/runs/37396941306)
+compiled the SDK 58 device app at `303cb80` using the iOS 27 SDK. Build 59
+contains both extensions with matching version numbers and the correct host
+bundle ID prefix. The downloaded IPA passed the arm64 device, WidgetKit,
+and shared attributes module verifier. SHA-256:
+`900d8ba8db842807b139a48c55f920900c825e5fcadd4e09685faac7680e710e`.
+TypeScript, the iOS JS export, app-source lint, Live Activity checks, and
+launch, lyrics, and incoming-share regressions passed locally.
+
+Rendering remains unverified: the iPhone 16 Pro / iOS 27 simulator screenshot
+had no visible Island. Its preview step incorrectly reported success despite
+all 24 content checks failing. Subsequent commits make the failure exit
+explicit, preserve the exit status during cleanup, capture host request
+status, and include ActivityKit system logs. These later changes affect the
+CI fixture and reporting; the device app's native code is unchanged.
+Sideloadly re-signing and physical-device rendering still require device testing.
+
 References: [SDK 58 migration notes](https://expo.dev/changelog/sdk-58-beta),
 [Xcode 27 runner](https://github.com/actions/runner-images/issues/14404),
 [Sideloadly settings](https://sideloadly.io/).
