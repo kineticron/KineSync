@@ -1,13 +1,17 @@
 import { useState } from 'react';
-import { Pressable, type PressableProps } from 'react-native';
+import { Pressable, type PressableProps, type PressableStateCallbackType, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { Motion } from '@/constants/design';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+type MotionPressableProps = Omit<PressableProps, 'style'> & {
+  style?: StyleProp<ViewStyle> | ((state: PressableStateCallbackType & { hovered: boolean }) => StyleProp<ViewStyle>);
+};
+
 /** A small, interruptible spring. Preserves native press/long-press semantics. */
-export function MotionPressable({ style, onPressIn, onPressOut, onHoverIn, onHoverOut, disabled, accessibilityRole = 'button', ...props }: PressableProps) {
+export function MotionPressable({ style, onPressIn, onPressOut, onHoverIn, onHoverOut, disabled, accessibilityRole = 'button', ...props }: MotionPressableProps) {
   const [pressed, setPressed] = useState(false);
   const [hovered, setHovered] = useState(false);
   const reduceMotion = useReducedMotion();

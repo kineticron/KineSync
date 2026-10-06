@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 import ts from 'typescript';
 
 const bundled = await build({ entryPoints: ['lib/spotify-browser.ts'], bundle: true, format: 'esm', platform: 'node', write: false });
-const { isAllowedSpotifyWebViewNavigation: allowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript } =
+const { isAllowedSpotifyWebViewNavigation: allowed, isAllowedSpotifyLoginNavigation: loginAllowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript } =
   await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 assert(allowed('about:blank', false), 'An empty challenge child frame must initialize');
 assert(!allowed('about:blank', true), 'Blank documents must not replace the login page');
@@ -18,6 +18,11 @@ assert(!allowed('https://accounts.spotify.com.evil.test/login', true));
 assert(!allowed('spotify:login', false));
 assert(allowed('https://accounts.spotify.com/en/login/password', true));
 assert(allowed('https://open.spotify.com/', true), 'The player must load before confirming sign-in');
+assert(loginAllowed('https://challenge.spotify.com/c/www/verify', true), 'A Spotify challenge redirect must continue after email entry');
+assert(!trusted('https://challenge.spotify.com/c/www/verify'), 'Challenge pages cannot report auth tokens');
+assert(!loginAllowed('https://challenge.spotify.com.evil.test/c/www/verify', true));
+assert(!loginAllowed('http://challenge.spotify.com/c/www/verify', true));
+assert(!loginAllowed('https://user:password@challenge.spotify.com/c/www/verify', true));
 
 let requests = 0;
 vm.runInNewContext(spotifyAuthProbeScript, {
@@ -51,7 +56,7 @@ const modules = {
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
   'react-native-webview': { WebView: 'WebView' },
-  '@/lib/spotify-browser': { isAllowedSpotifyWebViewNavigation: allowed, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
+  '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
 };
 const context = { exports: {}, require: name => { assert(name in modules, name); return modules[name]; } };
 vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);

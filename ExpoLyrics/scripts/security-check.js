@@ -60,12 +60,13 @@ assert(
   spotify.includes("if (!isTopFrame) return true"),
   'HTTPS CAPTCHA frames must remain inside the Spotify WebView',
 );
-for (const webView of [fallback, login]) {
+for (const webView of [fallback]) {
   assert(
     webView.includes('isAllowedSpotifyWebViewNavigation(url, isTopFrame)'),
     'Spotify WebViews must distinguish CAPTCHA frames from top-level redirects',
   );
 }
+assert(login.includes('isAllowedSpotifyLoginNavigation(url, isTopFrame)'), 'Login must retain its exact challenge host filter');
 for (const screen of [explore, onboarding]) {
   assert(screen.includes('<SpotifyLoginWebView'), 'Both login entry points must use the guarded native login WebView');
 }

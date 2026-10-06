@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 
 import {
-  isAllowedSpotifyWebViewNavigation,
+  isAllowedSpotifyLoginNavigation,
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
@@ -32,7 +32,7 @@ export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage
         // Use the real browser identity for Accounts and its security challenges.
         // Desktop emulation belongs to the playback WebView, not sign-in.
         injectedJavaScript={spotifyAuthProbeScript}
-        onShouldStartLoadWithRequest={({ url, isTopFrame }) => isAllowedSpotifyWebViewNavigation(url, isTopFrame)}
+        onShouldStartLoadWithRequest={({ url, isTopFrame }) => isAllowedSpotifyLoginNavigation(url, isTopFrame)}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         domStorageEnabled

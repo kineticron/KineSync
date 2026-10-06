@@ -178,6 +178,17 @@ export function isTrustedSpotifyWebViewMessageUrl(rawUrl: string): boolean {
   return !url || isAllowedSpotifyWebViewNavigation(url);
 }
 
+/** Login may visit Spotify's challenge service; it must not send auth messages. */
+export function isAllowedSpotifyLoginNavigation(rawUrl: string, isTopFrame = true): boolean {
+  if (isAllowedSpotifyWebViewNavigation(rawUrl, isTopFrame)) return true;
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    return parsed.origin === 'https://challenge.spotify.com' && !parsed.username && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
 // Runs on any open.spotify.com / accounts.spotify.com page. The web player's own
 // token endpoint is the only place that reports both the expiry and whether the
 // session is anonymous, so it doubles as the sign-in probe for onboarding.
