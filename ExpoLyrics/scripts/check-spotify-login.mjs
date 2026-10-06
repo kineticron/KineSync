@@ -52,15 +52,16 @@ let index = 0;
 const jsx = (type, props, key) => ({ type, props, key });
 const source = fs.readFileSync('components/spotify-login-webview.tsx', 'utf8');
 const modules = {
-  react: { useState: initial => { const id = index++; return [initial, value => changes.push({ id, value })]; } },
+  react: { useRef: current => ({ current }), useState: initial => { const id = index++; return [initial, value => changes.push({ id, value })]; } },
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
   'react-native-webview': { WebView: 'WebView' },
-  '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
+  '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
 };
 const context = { exports: {}, require: name => { assert(name in modules, name); return modules[name]; } };
 vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
-const handler = () => {};
+let delivered = 0;
+const handler = () => { delivered++; };
 const tree = context.exports.SpotifyLoginWebView({ onMessage: handler });
 const flatten = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat().flatMap(flatten)];
 const nodes = flatten(tree);
@@ -68,7 +69,14 @@ const webview = nodes.find(node => node.type === 'WebView');
 assert(webview);
 assert.equal(webview.props.userAgent, undefined, 'Login must use its actual browser identity');
 assert.equal(webview.props.sharedCookiesEnabled, true);
-assert.equal(webview.props.onMessage, handler);
+webview.props.onMessage({ nativeEvent: { url: 'https://open.spotify.com/' } });
+assert.equal(delivered, 1);
+assert(webview.props.onShouldStartLoadWithRequest({ url: 'https://challenge.spotify.com/c/www/verify', isTopFrame: true }));
+webview.props.onMessage({ nativeEvent: { url: '' } });
+assert.equal(delivered, 1, 'Challenge pages must not post tokens even when iOS omits the URL');
+webview.props.onNavigationStateChange({ url: 'https://open.spotify.com/' });
+webview.props.onMessage({ nativeEvent: { url: '' } });
+assert.equal(delivered, 2, 'Trusted player messages with an omitted URL must still work');
 webview.props.onContentProcessDidTerminate();
 assert(changes.some(change => change.id === 1 && change.value === true));
 const retry = nodes.find(node => node.type === 'Pressable');

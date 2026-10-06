@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 
 import {
   isAllowedSpotifyLoginNavigation,
+  isTrustedSpotifyWebViewMessageUrl,
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
@@ -13,7 +14,9 @@ const LOGIN_URL = 'https://accounts.spotify.com/login?continue=https%3A%2F%2Fope
 export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage'>) {
   const [generation, setGeneration] = useState(0);
   const [error, setError] = useState(false);
+  const documentUrl = useRef(LOGIN_URL);
   const retry = () => {
+    documentUrl.current = LOGIN_URL;
     setError(false);
     setGeneration(value => value + 1);
   };
@@ -32,7 +35,12 @@ export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage
         // Use the real browser identity for Accounts and its security challenges.
         // Desktop emulation belongs to the playback WebView, not sign-in.
         injectedJavaScript={spotifyAuthProbeScript}
-        onShouldStartLoadWithRequest={({ url, isTopFrame }) => isAllowedSpotifyLoginNavigation(url, isTopFrame)}
+        onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
+          const allowed = isAllowedSpotifyLoginNavigation(url, isTopFrame);
+          if (allowed && isTopFrame !== false) documentUrl.current = url;
+          return allowed;
+        }}
+        onNavigationStateChange={({ url }) => { documentUrl.current = url; }}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         domStorageEnabled
@@ -44,7 +52,12 @@ export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage
         }}
         onContentProcessDidTerminate={() => setError(true)}
         onRenderProcessGone={() => setError(true)}
-        onMessage={onMessage}
+        onMessage={event => {
+          // iOS may omit the message URL. Challenge pages may navigate here,
+          // but only Accounts/the player may report a session or token.
+          const url = event.nativeEvent.url || documentUrl.current;
+          if (url && isTrustedSpotifyWebViewMessageUrl(url)) onMessage?.(event);
+        }}
         style={styles.container}
       />
       <View style={styles.error}>
