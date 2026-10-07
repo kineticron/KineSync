@@ -137,6 +137,12 @@ function pickVaultPersistedMetadata(metadata) {
       songwriters: [...new Set(songwriters)],
     };
   }
+  if (typeof metadata?.ttml?.content === "string" && metadata.ttml.content) {
+    if (Buffer.byteLength(metadata.ttml.content, "utf8") > MAX_IMPORT_BYTES) {
+      throw new Error("Original TTML document is too large to preserve.");
+    }
+    persisted.ttml = { content: metadata.ttml.content };
+  }
   return persisted;
 }
 
@@ -202,6 +208,9 @@ function compactLyricsForStorage(lyrics) {
       if (translatedText) {
         compact.t = translatedText;
       }
+      if (line?.backgroundTranslatedText) {
+        compact.bt = String(line.backgroundTranslatedText);
+      }
       const backgroundSyllables = (
         Array.isArray(line?.backgroundSyllables) ? line.backgroundSyllables : []
       )
@@ -243,6 +252,9 @@ function expandLyricsFromStorage(payload) {
         const translatedText = String(line?.t || "").trim();
         if (translatedText) {
           expanded.translatedText = translatedText;
+        }
+        if (line?.bt) {
+          expanded.backgroundTranslatedText = String(line.bt);
         }
         const backgroundSyllables = (Array.isArray(line?.b) ? line.b : [])
           .map(expandSyllableFromStorage)
@@ -413,7 +425,8 @@ function parseTtmlLyricsImport(content) {
     lyrics: parsed.lyrics,
     title: ttmlMeta.title,
     artist: ttmlMeta.artist,
-    album: "",
+    album: ttmlMeta.album || "",
+    metadata: parsed.metadata,
     durationMs: parsed.durationMs,
     spotifyTrackId: "",
     sourceLabel: parsed.useKaraokeTiming
@@ -747,7 +760,7 @@ function createLyricsVaultStore({ userDataPath }) {
       const mergedTrack = {
         title: String(track?.title || ttmlMeta.title || "").trim(),
         artist: String(track?.artist || ttmlMeta.artist || "").trim(),
-        album: String(track?.album || "").trim(),
+        album: String(track?.album || ttmlMeta.album || "").trim(),
         durationMs: Number(track?.durationMs || parsed.durationMs || 0),
         spotifyTrackId: String(track?.spotifyTrackId || "").trim(),
         trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
@@ -765,6 +778,7 @@ function createLyricsVaultStore({ userDataPath }) {
       return this.save({
         track: mergedTrack,
         lyrics: parsed.lyrics,
+        metadata: parsed.metadata,
         sourceLabel: label,
         includeTranslations,
         originalSource: "ttml-import",
@@ -799,6 +813,7 @@ function createLyricsVaultStore({ userDataPath }) {
       return this.save({
         track: mergedTrack,
         lyrics: parsed.lyrics,
+        metadata: parsed.metadata,
         sourceLabel: label,
         includeTranslations: Boolean(options.includeTranslations),
         originalSource: "file-import",

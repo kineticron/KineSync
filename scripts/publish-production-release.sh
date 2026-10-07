@@ -62,6 +62,9 @@ then
 elif [[ "${version}" == "1.1.6" ]]
 then
   changelog="Fixed opposite-aligned lines when importing TTML lyrics."
+elif [[ "${version}" == "1.1.7" ]]
+then
+  changelog="Preserved original TTML files, metadata, alignment, and background vocals in vault imports and exports."
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

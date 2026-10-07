@@ -16,9 +16,9 @@ import { deleteMobileVaultEntry, readVaultEntries, renameMobileVaultEntry, saveM
 import { extractTtmlMetadata, parseTtmlToLyrics } from '@/lib/lyrics-ttml-import';
 import { buildDefaultTtmlFilename, lyricsToTtml } from '@/lib/lyrics-ttml-export';
 import { usePlaybackStore } from '@/store/playback-store';
-import type { LyricLine } from '@/types/bridge';
+import type { LyricLine, LyricsMetadata } from '@/types/bridge';
 
-type ImportDraft = { lyrics: LyricLine[]; durationMs: number; shared: boolean };
+type ImportDraft = { lyrics: LyricLine[]; durationMs: number; album?: string; metadata?: LyricsMetadata; shared: boolean };
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
 export default function VaultScreen() {
@@ -51,14 +51,14 @@ export default function VaultScreen() {
     const metadata = extractTtmlMetadata(content);
     setEditing(null);
     if (metadata.title && metadata.artist) {
-      await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: metadata.title, artist: metadata.artist, durationMs: 0 }, lyrics: parsed.lyrics, originalSource: 'ttml-import' });
+      await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: metadata.title, artist: metadata.artist, album: metadata.album, durationMs: parsed.durationMs }, lyrics: parsed.lyrics, metadata: parsed.metadata, originalSource: 'ttml-import' });
       setMessage(`Imported ${metadata.title} into your local vault.`);
       if (shared) clearSharedPayloads();
       await reload();
     } else {
       setTitle(metadata.title || name.replace(/\.ttml$/i, ''));
       setArtist(metadata.artist);
-      setDraft({ lyrics: parsed.lyrics, durationMs: parsed.durationMs, shared });
+      setDraft({ lyrics: parsed.lyrics, durationMs: parsed.durationMs, album: metadata.album, metadata: parsed.metadata, shared });
     }
   }, [clearSharedPayloads, reload]);
 
@@ -146,7 +146,7 @@ export default function VaultScreen() {
           <Button disabled={busy} style={[styles.primaryButton, styles.editorButton, busy && styles.disabled]} onPress={() => void run(async () => {
             if (!title.trim() || !artist.trim()) throw new Error('Enter a song name and artist.');
             if (editing) await renameMobileVaultEntry(editing, title, artist);
-            else if (draft) await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: title.trim(), artist: artist.trim(), durationMs: 0 }, lyrics: draft.lyrics, originalSource: 'ttml-import' });
+            else if (draft) await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: title.trim(), artist: artist.trim(), album: draft.album, durationMs: draft.durationMs }, lyrics: draft.lyrics, metadata: draft.metadata, originalSource: 'ttml-import' });
             closeEditor(); setMessage('Saved to local vault.');
           })}><Ionicons name="checkmark" size={19} color={Design.accentInk} /><Text style={styles.primaryButtonText}>Save</Text></Button>
           <Button disabled={busy} style={[styles.secondaryButton, styles.editorButton, busy && styles.disabled]} onPress={closeEditor}><Text style={styles.buttonText}>Cancel</Text></Button>
@@ -186,7 +186,7 @@ export default function VaultScreen() {
           <Button accessibilityLabel={`Export ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => void run(async () => {
             const file = new File(Paths.cache, buildDefaultTtmlFilename(entry.track));
             file.create({ overwrite: true });
-            file.write(lyricsToTtml({ lyrics: entry.lyrics, ...entry.track, source: entry.originalSource }));
+            file.write(lyricsToTtml({ lyrics: entry.lyrics, ...entry.track, source: entry.originalSource, metadata: entry.metadata }));
             await shareAsync(file.uri, { mimeType: 'application/ttml+xml', UTI: 'public.xml' });
           })}><Ionicons name="share-outline" size={17} color={Design.text} /><Text style={styles.actionText}>Export</Text></Button>
           <Button accessibilityLabel={`Delete ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => Alert.alert('Delete saved lyrics?', `${entry.track.title} will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void run(async () => { await deleteMobileVaultEntry(entry.vaultId); }) }])}><Ionicons name="trash-outline" size={17} color="#FF93A4" /><Text style={[styles.actionText, styles.deleteText]}>Delete</Text></Button>

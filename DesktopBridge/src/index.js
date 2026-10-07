@@ -628,7 +628,9 @@ app.whenReady().then(() => {
         lyrics,
         title: latestSnapshot?.title || "",
         artist: latestSnapshot?.artist || "",
+        album: latestSnapshot?.album || "",
         source: latestLyricsPacket?.source || "",
+        metadata: latestLyricsPacket?.metadata,
         durationMs: latestSnapshot?.durationMs || 0,
       });
     } catch (error) {
@@ -852,7 +854,9 @@ app.whenReady().then(() => {
             lyrics: entry.lyrics,
             title: manifest.title || "",
             artist: manifest.artist || "",
+            album: manifest.album || "",
             source: entry.sourceLabel || "",
+            metadata: entry.metadata,
             durationMs: Number(manifest.durationMs || 0),
           });
         } catch (error) {

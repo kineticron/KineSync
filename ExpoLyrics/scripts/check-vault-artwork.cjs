@@ -32,6 +32,15 @@ async function main() {
   await vault.saveMobileVaultLyrics({ track: { ...track, title: 'New song' }, lyrics });
   assert.equal(JSON.parse(raw)[0].track.title, 'New song');
   assert.ok(!raw.includes('data:image'));
+  const originalTtml = '<tt custom="keep"><head><metadata><!-- Preserve comments --></metadata></head><body><p begin="0" end="5">Sample</p></body></tt>';
+  await vault.saveMobileVaultLyrics({ track, lyrics, metadata: { ttml: { content: originalTtml } } });
+  const imported = (await vault.readVaultEntries()).find(entry => entry.track.id === track.id);
+  assert.equal(imported.metadata.ttml.content, originalTtml);
+  const { lyricsToTtml } = require('../lib/lyrics-ttml-export');
+  assert.equal(lyricsToTtml({ lyrics: imported.lyrics, metadata: imported.metadata }), originalTtml);
+  await vault.renameMobileVaultEntry(imported.vaultId, 'New display name', 'New display artist');
+  assert.equal((await vault.readVaultEntries()).find(entry => entry.vaultId === imported.vaultId).metadata.ttml.content, originalTtml,
+    'Renaming a vault entry must not modify its original document');
   console.log('Vault artwork checks passed: URL-only storage, no image bytes/local files, bounded song size, and safe migration alongside saves.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

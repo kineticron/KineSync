@@ -156,6 +156,8 @@ export type LyricsAttributionMetadata = {
 };
 
 export type LyricsMetadata = {
+  /** Original imported XML, retained for lossless TTML export. */
+  ttml?: { content: string };
   instrumental?: boolean;
   credits?: LyricsCreditsMetadata;
   attribution?: LyricsAttributionMetadata;

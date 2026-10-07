@@ -321,8 +321,9 @@ function buildBackgroundVocalMarkup(backgroundSyllables, lineStart, lineEnd) {
   if (!Number.isFinite(bgEnd) || bgEnd <= bgStart) {
     bgEnd = lineEnd;
   }
-  bgStart = clampSyllableTime(bgStart, lineStart, lineEnd - 1);
-  bgEnd = clampSyllableTime(bgEnd, bgStart + 1, lineEnd);
+  // Background vocals can extend beyond the lead paragraph (Geronimo).
+  bgStart = Math.max(0, Math.min(...usable.map(part => Number(part.startTime)).filter(Number.isFinite), bgStart));
+  bgEnd = Math.max(bgStart + 1, ...usable.map(part => Number(part.endTime)).filter(Number.isFinite), bgEnd);
 
   const inner = buildKaraokeSpanMarkup(usable, bgStart, bgEnd);
   if (!inner) {
@@ -374,7 +375,7 @@ function buildKaraokeParagraphMarkup(
   );
   const translation = buildTranslationMarkup(line);
   const backgroundTranslation = buildBackgroundTranslationMarkup(line);
-  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="v1">${inner}${background}${backgroundTranslation}${translation}</p>`;
+  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="${line.oppositeAligned ? "v2" : "v1"}">${inner}${background}${backgroundTranslation}${translation}</p>`;
   return { markup, endTime: lineEnd };
 }
 
@@ -387,7 +388,9 @@ function buildLineParagraphMarkup(line, index, lyrics, durationMs, lineNumber) {
   }
 
   const translation = buildTranslationMarkup(line);
-  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="v1">${escapeXml(plainText)}${translation}</p>`;
+  const background = buildBackgroundVocalMarkup(line.backgroundSyllables, lineStart, lineEnd);
+  const backgroundTranslation = buildBackgroundTranslationMarkup(line);
+  const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="${line.oppositeAligned ? "v2" : "v1"}">${escapeXml(plainText)}${background}${backgroundTranslation}${translation}</p>`;
   return { markup, endTime: lineEnd };
 }
 
@@ -430,10 +433,19 @@ function lyricsToTtml({
   lyrics = [],
   title = "",
   artist = "",
+  album = "",
   source = "",
   durationMs = 0,
   xmlLang = "en",
+  metadata = {},
+  preserveOriginal = true,
 } = {}) {
+  // Imported documents are archives: export their original XML verbatim so
+  // namespaces, extensions, agents, structure, and whitespace survive.
+  // Callers generating a new document from edited lyrics can opt out.
+  if (preserveOriginal && typeof metadata?.ttml?.content === "string" && metadata.ttml.content) {
+    return metadata.ttml.content;
+  }
   const safeLyrics = Array.isArray(lyrics) ? lyrics : [];
   const useKaraoke = lyricsUseKaraokeTiming(safeLyrics, source);
   let lineNumber = 0;
@@ -478,8 +490,18 @@ function lyricsToTtml({
   metadataBlocks.push(
     `<ttm:agent type="person" xml:id="v1">${safeArtist ? `<ttm:name type="full">${escapeXml(safeArtist)}</ttm:name>` : ""}</ttm:agent>`,
   );
+  if (safeLyrics.some(line => line.oppositeAligned)) {
+    metadataBlocks.push('<ttm:agent type="person" xml:id="v2"/>');
+  }
   if (safeTitle) {
     metadataBlocks.push(`<ttm:title>${escapeXml(safeTitle)}</ttm:title>`);
+  }
+  if (String(album || "").trim()) {
+    metadataBlocks.push(`<amll:meta key="album" value="${escapeXml(String(album).trim())}"/>`);
+  }
+  const songwriters = Array.isArray(metadata?.credits?.songwriters) ? metadata.credits.songwriters : [];
+  if (songwriters.length) {
+    metadataBlocks.push(`<iTunesMetadata xmlns="http://music.apple.com/lyric-ttml-internal"><songwriters>${songwriters.map(name => `<songwriter>${escapeXml(name)}</songwriter>`).join("")}</songwriters></iTunesMetadata>`);
   }
   if (safeSource) {
     metadataBlocks.push(
@@ -496,7 +518,7 @@ function lyricsToTtml({
     documentEndMs > 0 ? ` dur="${formatTtmlClock(documentEndMs)}"` : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:itunes="${ITUNES_NS}" xml:lang="${escapeXml(xmlLang)}" itunes:timing="${itunesTiming}">
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:itunes="${ITUNES_NS}" xmlns:amll="http://www.example.com/ns/amll" xml:lang="${escapeXml(xmlLang)}" itunes:timing="${itunesTiming}">
   <head>
     ${metadataXml}
     <styling>

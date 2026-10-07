@@ -627,6 +627,10 @@ function parseTtmlToLyrics(ttmlContent) {
     lyrics: parsed.lyrics,
     durationMs: getLyricTimingExtents(parsed.lyrics).maxEnd || parsed.durationMs,
     useKaraokeTiming,
+    metadata: {
+      ttml: { content },
+      ...extractTtmlCredits(content),
+    },
   };
 }
 
@@ -636,10 +640,23 @@ function extractTtmlMetadata(ttmlContent) {
   const artistMatch = content.match(
     /<ttm:agent[^>]*>[\s\S]*?<ttm:name[^>]*>([\s\S]*?)<\/ttm:name>/i,
   );
+  const amll = {};
+  for (const match of content.matchAll(/<amll:meta\b([^>]*)\/?\s*>/gi)) {
+    const key = readAttribute(match[1], "key");
+    const value = decodeXmlEntities(readAttribute(match[1], "value")).trim();
+    if (value) (amll[key] ||= []).push(value);
+  }
   return {
-    title: stripXmlTags(titleMatch?.[1] || ""),
-    artist: stripXmlTags(artistMatch?.[1] || ""),
+    title: stripXmlTags(titleMatch?.[1] || amll.musicName?.[0] || ""),
+    artist: stripXmlTags(artistMatch?.[1] || amll.artists?.join(", ") || ""),
+    ...(amll.album?.[0] ? { album: amll.album[0] } : {}),
   };
+}
+
+function extractTtmlCredits(content) {
+  const songwriters = [...content.matchAll(/<songwriter\b[^>]*>([\s\S]*?)<\/songwriter>/gi)]
+    .map(match => stripXmlTags(match[1])).filter(Boolean);
+  return songwriters.length ? { credits: { songwriters: [...new Set(songwriters)] } } : {};
 }
 
 module.exports = {

@@ -22,7 +22,7 @@ const catalog = Array.from({ length: 53 }, (_, i) => ({ vaultId: `spotify_${i}`,
 let unavailable = false;
 attachBridgeVault(transport, () => ({
   listEntries: () => catalog,
-  getEntry: id => unavailable ? null : ({ lyrics, manifest: { title: catalog.find(entry => entry.vaultId === id).title, artist: 'Artist', durationMs: 1000, spotifyTrackId: id.slice(8), originalSource: 'ttml-import', metadata: { credits: { songwriters: ['Writer'] } } } }),
+  getEntry: id => unavailable ? null : ({ lyrics, manifest: { title: catalog.find(entry => entry.vaultId === id).title, artist: 'Artist', durationMs: 1000, spotifyTrackId: id.slice(8), originalSource: 'ttml-import', metadata: { credits: { songwriters: ['Writer'] }, ttml: { content: '<tt custom="keep"><body><p>Test</p></body></tt>' } } } }),
 }));
 const requests = [];
 class FakeSocket {
@@ -60,7 +60,7 @@ async function main() {
   assert.equal(JSON.parse(raw).length, 53);
   const saved = JSON.parse(raw).find(entry => entry.track.spotifyTrackId === '52');
   assert.deepEqual(saved.lyrics, lyrics);
-  assert.deepEqual(saved.metadata, { credits: { songwriters: ['Writer'] } });
+  assert.deepEqual(saved.metadata, { credits: { songwriters: ['Writer'] }, ttml: { content: '<tt custom="keep"><body><p>Test</p></body></tt>' } });
   assert.equal(saved.originalSource, 'ttml-import');
   await transferDesktopVaultToMobile(() => {});
   assert.equal(JSON.parse(raw).length, 53, 'repeated transfers update existing songs');

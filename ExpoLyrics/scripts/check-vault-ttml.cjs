@@ -1,4 +1,7 @@
+/* global __dirname */
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { lyricsToTtml } = require('../lib/lyrics-ttml-export');
 const { parseTtmlToLyrics, extractTtmlMetadata } = require('../lib/lyrics-ttml-import');
 
@@ -94,5 +97,59 @@ for (const importer of [
   assert.equal(oppositeBackground.oppositeAligned, true);
   assert.deepEqual(oppositeBackground.syllables, line.syllables);
   assert.deepEqual(oppositeBackground.backgroundSyllables, line.backgroundSyllables);
+
+  const exporter = importer === require('../lib/lyrics-ttml-import')
+    ? require('../lib/lyrics-ttml-export') : require('../../DesktopBridge/src/lyricsTtmlExport');
+  const original = geronimoBackground.replace('<tt>', `<tt xmlns:custom="urn:example" custom:flag="keep"><head><metadata>
+<ttm:agent type="person" xml:id="v1"/><ttm:agent type="person" xml:id="v2"/>
+<amll:meta key="musicName" value="GERONIMO!"/><amll:meta key="artists" value="DPR LIVE"/>
+<amll:meta key="album" value="IS ANYBODY OUT THERE?"/>
+<iTunesMetadata><songwriters><songwriter>홍다빈</songwriter></songwriters></iTunesMetadata>
+<custom:annotation><!-- Keep unknown XML too -->unchanged</custom:annotation>
+</metadata></head>`).replace('end="2:53.761">', 'end="2:53.761" ttm:agent="v2">');
+  const preserved = importer.parseTtmlToLyrics(original);
+  assert.equal(preserved.metadata.ttml.content, original);
+  assert.deepEqual(preserved.metadata.credits.songwriters, ['홍다빈']);
+  assert.deepEqual(importer.extractTtmlMetadata(original), { title: 'GERONIMO!', artist: 'DPR LIVE', album: 'IS ANYBODY OUT THERE?' });
+  assert.equal(exporter.lyricsToTtml({ ...preserved, title: 'GERONIMO!', artist: 'DPR LIVE' }), original,
+    'Imported XML must survive export exactly, including unsupported elements and attributes');
+  const rebuilt = exporter.lyricsToTtml({ ...preserved, title: 'GERONIMO!', artist: 'DPR LIVE', preserveOriginal: false });
+  assert.match(rebuilt, /xml:id="v2"/);
+  const rebuiltLine = importer.parseTtmlToLyrics(rebuilt).lyrics[0];
+  assert.equal(rebuiltLine.oppositeAligned, true);
+  assert.equal(rebuiltLine.lineEndTime, preserved.lyrics[0].lineEndTime);
+  assert.deepEqual(rebuiltLine.backgroundSyllables, preserved.lyrics[0].backgroundSyllables,
+    'Background timing beyond the lead line must not be clamped on generated export');
+  assert.equal(rebuiltLine.backgroundTranslatedText, 'Background translation');
+  const rebuiltLineTimed = importer.parseTtmlToLyrics(exporter.lyricsToTtml({
+    ...preserved, title: 'GERONIMO!', artist: 'DPR LIVE', source: 'spicy-lyrics-line', preserveOriginal: false,
+    lyrics: preserved.lyrics.map(line => ({ ...line, syllables: [{ text: 'GERONIMO!', startTime: 173349, endTime: 173761 }] })),
+  })).lyrics[0];
+  assert.equal(rebuiltLineTimed.oppositeAligned, true);
+  assert.deepEqual(rebuiltLineTimed.backgroundSyllables, preserved.lyrics[0].backgroundSyllables);
+  assert.equal(rebuiltLineTimed.backgroundTranslatedText, 'Background translation');
+
+  if (importer === require('../../DesktopBridge/src/lyricsTtmlImport')) {
+    const { createLyricsVaultStore } = require('../../DesktopBridge/src/lyricsVault');
+    const fixtureRoot = path.resolve(__dirname, '../.expo');
+    fs.mkdirSync(fixtureRoot, { recursive: true });
+    const fixture = fs.mkdtempSync(path.join(fixtureRoot, 'ttml-preservation-'));
+    try {
+      const store = createLyricsVaultStore({ userDataPath: fixture });
+      for (const save of [() => store.importTtml({ ttmlContent: original }), () => store.importLyricsFile(original, 'song.ttml')]) {
+        const saved = save();
+        const loaded = store.getEntry(saved.vaultId);
+        assert.deepEqual(loaded.lyrics, preserved.lyrics, 'Compact desktop storage must preserve every supported lyric field');
+        assert.equal(loaded.manifest.album, 'IS ANYBODY OUT THERE?');
+        assert.deepEqual(loaded.metadata.credits.songwriters, ['홍다빈']);
+        assert.equal(exporter.lyricsToTtml({ lyrics: loaded.lyrics, metadata: loaded.metadata }), original,
+          'Desktop vault save/reload/export must preserve the original XML exactly');
+      }
+    } finally {
+      assert.equal(path.dirname(fixture), fixtureRoot);
+      assert(path.basename(fixture).startsWith('ttml-preservation-'));
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  }
 }
 console.log('Vault TTML checks passed for mobile and desktop: round trip, opposite alignment, nested backgrounds, lead isolation, parentheses, timing, translations and line timing.');

@@ -1021,7 +1021,7 @@ function createLyricsService({
         trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
         title: String(track?.title || ttmlMeta.title || "").trim(),
         artist: String(track?.artist || ttmlMeta.artist || "").trim(),
-        album: String(track?.album || "").trim(),
+        album: String(track?.album || ttmlMeta.album || "").trim(),
         durationMs: Number(
           track?.durationMs || parsed.durationMs || 0,
         ),
@@ -1066,6 +1066,7 @@ function createLyricsService({
       const saved = store.save({
         track: matchTrack,
         lyrics: lyricsToSave,
+        metadata: parsed.metadata,
         sourceLabel,
         includeTranslations,
         originalSource: "ttml-import",
@@ -1075,7 +1076,7 @@ function createLyricsService({
         rememberSourceLyrics(matchTrack.trackId, "local-vault", {
           lyrics: lyricsToSave,
           source: sourceLabel,
-          metadata: {},
+          metadata: saved.metadata || {},
         });
       }
 
@@ -1146,6 +1147,7 @@ function createLyricsService({
       const saved = store.save({
         track: matchTrack,
         lyrics: lyricsToSave,
+        metadata: parsed.metadata,
         sourceLabel,
         includeTranslations,
         originalSource: `${parsed.format}-import`,
@@ -1155,7 +1157,7 @@ function createLyricsService({
         rememberSourceLyrics(matchTrack.trackId, "local-vault", {
           lyrics: lyricsToSave,
           source: sourceLabel,
-          metadata: {},
+          metadata: saved.metadata || {},
         });
       }
 
