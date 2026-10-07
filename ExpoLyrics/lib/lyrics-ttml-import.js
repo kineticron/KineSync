@@ -11,10 +11,6 @@ function decodeXmlEntities(value) {
     .replace(/&amp;/g, "&");
 }
 
-function stripXmlTagsPreservingWhitespace(value) {
-  return decodeXmlEntities(String(value || "").replace(/<[^>]+>/g, ""));
-}
-
 function stripXmlTags(value) {
   return decodeXmlEntities(
     String(value || "")
@@ -389,31 +385,34 @@ function hasRole(attributes, role) {
 function topLevelSpans(content) {
   const tokens = /<\/?span\b[^>]*>/gi;
   const result = [];
-  let depth = 0, opening = null, token;
+  let depth = 0;
+  let opening = null;
+  let token;
   while ((token = tokens.exec(content))) {
-    if (token[0].startsWith('</')) {
+    if (/^<\//.test(token[0])) {
       if (depth === 0) continue;
       if (--depth === 0 && opening) {
-        result.push({ attributes: opening[0].slice(5, -1), inner: content.slice(opening.index + opening[0].length, token.index), start: opening.index, end: tokens.lastIndex });
+        result.push({
+          attributes: opening[0].slice(5, -1),
+          inner: content.slice(opening.index + opening[0].length, token.index),
+          start: opening.index,
+          end: tokens.lastIndex,
+        });
       }
-    } else if (!token[0].endsWith('/>')) {
+    } else if (!/\/\s*>$/.test(token[0])) {
       if (depth++ === 0) opening = token;
     }
   }
   return result;
 }
 
-function parseTimingSpans(content, lineStart, lineEnd) {
+function collectTimingSpans(content, lineStart, lineEnd, isBackground) {
   const spans = [];
-  const spanRe = /<span\b([^>]*)>([\s\S]*?)<\/span>/gi;
-  let match = spanRe.exec(content);
   let cursor = 0;
 
-  while (match) {
-    const attributes = match[1];
-    const inner = match[2];
-    const matchStart = match.index;
-    const between = content.slice(cursor, matchStart);
+  for (const span of topLevelSpans(content)) {
+    const { attributes, inner } = span;
+    const between = content.slice(cursor, span.start);
     const hadWhitespaceBefore =
       spans.length > 0 && /\s/.test(String(between || ""));
 
@@ -422,16 +421,16 @@ function parseTimingSpans(content, lineStart, lineEnd) {
       hasRole(attributes, "x-bg-translation") ||
       hasRole(attributes, "x-bg")
     ) {
-      cursor = matchStart + match[0].length;
-      match = spanRe.exec(content);
+      cursor = span.end;
       continue;
     }
     const begin = readAttribute(attributes, "begin");
     const end = readAttribute(attributes, "end");
-    const text = stripXmlTags(inner);
-    if (!text) {
-      cursor = matchStart + match[0].length;
-      match = spanRe.exec(content);
+    const text = isBackground
+      ? stripXmlTags(leadLyricContent(inner)).replace(/[()\uFF08\uFF09]/g, "")
+      : stripXmlTags(leadLyricContent(inner));
+    if (!text.trim()) {
+      cursor = span.end;
       continue;
     }
     const startTime = begin ? parseTtmlClock(begin) : lineStart;
@@ -439,18 +438,33 @@ function parseTimingSpans(content, lineStart, lineEnd) {
     if (!Number.isFinite(endTime) || endTime <= startTime) {
       endTime = Math.max(startTime + 1, lineEnd);
     }
-    spans.push({
-      text,
-      startTime,
-      endTime,
-      hadWhitespaceBefore,
-      hadTrailingWhitespace: /\s$/.test(stripXmlTagsPreservingWhitespace(inner)),
-    });
-    cursor = matchStart + match[0].length;
-    match = spanRe.exec(content);
+    const nested = topLevelSpans(inner).length
+      ? collectTimingSpans(inner, startTime, endTime, isBackground)
+      : [];
+    if (nested.length) {
+      spans.push(...nested);
+      if (hadWhitespaceBefore && spans.length > nested.length) {
+        spans[spans.length - nested.length].hadWhitespaceBefore = true;
+      }
+    } else {
+      spans.push({
+        text,
+        startTime,
+        endTime,
+        hadWhitespaceBefore,
+        hadTrailingWhitespace: /\s$/.test(decodeXmlEntities(inner.replace(/<[^>]+>/g, ""))),
+      });
+    }
+    cursor = span.end;
   }
 
-  return applyImportedWordBoundaries(spans).map((part) => {
+  return spans;
+}
+
+function parseTimingSpans(content, lineStart, lineEnd, isBackground = false) {
+  return applyImportedWordBoundaries(
+    collectTimingSpans(content, lineStart, lineEnd, isBackground),
+  ).map((part) => {
     const syllable = {
       text: part.text,
       startTime: part.startTime,
@@ -464,30 +478,59 @@ function parseTimingSpans(content, lineStart, lineEnd) {
 }
 
 function parseTranslationText(content, role = "x-translation") {
-  const spanRe = /<span\b([^>]*)>([\s\S]*?)<\/span>/gi;
-  let match = spanRe.exec(content);
-  while (match) {
-    if (hasRole(match[1], role)) {
-      return stripXmlTags(match[2]);
+  for (const span of topLevelSpans(content)) {
+    if (hasRole(span.attributes, role)) {
+      const text = stripXmlTags(span.inner);
+      return role === "x-bg-translation"
+        ? text.replace(/[()\uFF08\uFF09]/g, "").trim()
+        : text;
     }
-    match = spanRe.exec(content);
+    if (hasRole(span.attributes, "x-bg") && role === "x-translation") continue;
+    const nested = parseTranslationText(span.inner, role);
+    if (nested) return nested;
   }
   return "";
 }
 
 function parseBackgroundSpans(content, lineStart, lineEnd) {
+  const backgrounds = [];
   for (const span of topLevelSpans(content)) {
-    if (!hasRole(span.attributes, 'x-bg')) continue;
-    const begin = readAttribute(span.attributes, 'begin');
-    const end = readAttribute(span.attributes, 'end');
+    if (!hasRole(span.attributes, "x-bg")) {
+      if (!hasRole(span.attributes, "x-translation") &&
+          !hasRole(span.attributes, "x-bg-translation")) {
+        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd));
+      }
+      continue;
+    }
+    const begin = readAttribute(span.attributes, "begin");
+    const end = readAttribute(span.attributes, "end");
     const bgStart = begin ? parseTtmlClock(begin) : lineStart;
     const bgEnd = end ? parseTtmlClock(end) : lineEnd;
-    const timed = parseTimingSpans(span.inner, bgStart, bgEnd);
-    if (timed.length) return timed;
-    const text = stripXmlTags(span.inner);
-    if (text) return [{ text, startTime: bgStart, endTime: bgEnd }];
+    const timed = parseTimingSpans(span.inner, bgStart, bgEnd, true);
+    if (timed.length) {
+      backgrounds.push(...timed);
+      continue;
+    }
+    const text = stripXmlTags(leadLyricContent(span.inner))
+      .replace(/[()\uFF08\uFF09]/g, "").trim();
+    if (text) backgrounds.push({ text, startTime: bgStart, endTime: bgEnd });
   }
-  return [];
+  return backgrounds;
+}
+
+function leadLyricContent(content) {
+  let result = "";
+  let cursor = 0;
+  for (const span of topLevelSpans(content)) {
+    result += content.slice(cursor, span.start);
+    if (!hasRole(span.attributes, "x-bg") &&
+        !hasRole(span.attributes, "x-translation") &&
+        !hasRole(span.attributes, "x-bg-translation")) {
+      result += leadLyricContent(span.inner);
+    }
+    cursor = span.end;
+  }
+  return result + content.slice(cursor);
 }
 
 function parseParagraphs(ttmlContent, useKaraokeTiming) {
@@ -519,12 +562,7 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
     }
 
     if (!syllables.length) {
-      const plainText = stripXmlTags(
-        inner.replace(
-          /<span\b[^>]*ttm:role\s*=\s*"x-(?:bg-)?translation"[^>]*>[\s\S]*?<\/span>/gi,
-          "",
-        ),
-      );
+      const plainText = stripXmlTags(leadLyricContent(inner));
       if (plainText) {
         syllables = [
           {

@@ -50,6 +50,9 @@ then
 - Added native simulator previews to iOS release builds and tightened IPA checks to reject the previous type mismatch.
 CHANGELOG
   )
+elif [[ "${version}" == "1.1.3" ]]
+then
+  changelog="Fix TTML incorrectly parsing background lyrics."
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

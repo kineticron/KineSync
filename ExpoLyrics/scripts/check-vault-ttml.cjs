@@ -16,9 +16,60 @@ assert.equal(parsed.lyrics[0].lineStartTime, 1000);
 assert.equal(parsed.lyrics[0].lineEndTime, 5000);
 assert.equal(parsed.lyrics[0].syllables.map(s => s.text).join(''), 'Stay here');
 assert.equal(parsed.lyrics[0].translatedText, 'Quédate aquí');
-assert.deepEqual(parsed.lyrics[0].backgroundSyllables.map(s => [s.text, s.startTime, s.endTime]), [['(Here)', 2500, 4500]]);
-assert.equal(parsed.lyrics[0].backgroundTranslatedText, '(Aquí)');
+assert.deepEqual(parsed.lyrics[0].backgroundSyllables.map(s => [s.text, s.startTime, s.endTime]), [['Here', 2500, 4500]]);
+assert.equal(parsed.lyrics[0].backgroundTranslatedText, 'Aquí');
 assert.deepEqual(extractTtmlMetadata(xml), { title: 'Light & Sound', artist: 'KineSync' });
 assert.equal(parseTtmlToLyrics('<tt><body/></tt>').lyrics.length, 0);
 assert.equal(parseTtmlToLyrics('not lyrics').lyrics.length, 0);
-console.log('Vault TTML round trip passed: words, sustained timing, translations, nested background vocals, metadata and invalid input.');
+
+// Structure and timing from GeronimoDPRLive: the background starts after the
+// lead paragraph ends, with split words and parentheses across timed spans.
+const geronimoBackground = `<tt><body><p begin="2:53.349" end="2:53.761">
+<span begin="2:53.349" end="2:53.461">GERO</span><span begin="2:53.461" end="2:53.601">NI</span><span begin="2:53.601" end="2:53.761">MO!</span><span ttm:role="x-bg"><span begin="2:55.576" end="2:55.723">(I</span> <span begin="2:55.723" end="2:55.857">ain&apos;t</span> <span begin="2:55.857" end="2:56.156">got</span> <span begin="2:56.156" end="2:56.566">no</span><span begin="2:56.566" end="2:57.140">where</span> <span begin="2:57.140" end="2:57.304">to</span> <span begin="2:57.304" end="2:58.705">run)</span></span>
+<span ttm:role="x-translation"><span>Lead translation</span></span>
+<span ttm:role="x-bg-translation"><span>(Background translation)</span></span>
+</p></body></tt>`;
+
+for (const importer of [
+  require('../lib/lyrics-ttml-import'),
+  require('../../DesktopBridge/src/lyricsTtmlImport'),
+]) {
+  const result = importer.parseTtmlToLyrics(geronimoBackground);
+  const line = result.lyrics[0];
+  assert.equal(importer.joinImportedSyllableText(line.syllables), 'GERONIMO!');
+  assert.deepEqual(line.syllables.map(s => [s.startTime, s.endTime]), [
+    [173349, 173461], [173461, 173601], [173601, 173761],
+  ]);
+  assert.equal(importer.joinImportedSyllableText(line.backgroundSyllables), "I ain't got nowhere to run");
+  assert.deepEqual(line.backgroundSyllables.map(s => [s.startTime, s.endTime]), [
+    [175576, 175723], [175723, 175857], [175857, 176156],
+    [176156, 176566], [176566, 177140], [177140, 177304], [177304, 178705],
+  ]);
+  assert.equal(line.backgroundSyllables[3].isPartOfWord, true);
+  assert.equal(line.translatedText, 'Lead translation');
+  assert.equal(line.backgroundTranslatedText, 'Background translation');
+  assert.equal(line.lineEndTime, 173761);
+  assert.equal(result.durationMs, 178705);
+
+  const lineTimed = importer.parseTtmlToLyrics(
+    geronimoBackground.replace('<tt>', '<tt itunes:timing="Line">'),
+  ).lyrics[0];
+  assert.equal(lineTimed.syllables[0].text, 'GERONIMO!');
+  assert.deepEqual(lineTimed.backgroundSyllables, line.backgroundSyllables);
+
+  const multiple = importer.parseTtmlToLyrics(`<tt><body><p begin="1" end="4">
+<span begin="1" end="2">(Lead)</span><span ttm:role="x-bg"><span begin="2" end="3">(One)</span></span><span ttm:role="x-bg" begin="3" end="5">（Two）</span>
+</p></body></tt>`).lyrics[0];
+  assert.equal(multiple.syllables[0].text, '(Lead)');
+  assert.deepEqual(multiple.backgroundSyllables.map(s => [s.text, s.startTime, s.endTime]), [
+    ['One ', 2000, 3000], ['Two', 3000, 5000],
+  ]);
+
+  const nested = importer.parseTtmlToLyrics(`<tt><body><p begin="1" end="5"><span>
+<span begin="1" end="2">Lead</span><span ttm:role="x-bg"><span><span begin="3" end="4">(Back </span><span begin="4" end="5">up)</span></span></span>
+</span></p></body></tt>`).lyrics[0];
+  assert.equal(importer.joinImportedSyllableText(nested.syllables), 'Lead');
+  assert.equal(importer.joinImportedSyllableText(nested.backgroundSyllables), 'Back up');
+  assert.deepEqual(nested.backgroundSyllables.map(s => [s.startTime, s.endTime]), [[3000, 4000], [4000, 5000]]);
+}
+console.log('Vault TTML checks passed for mobile and desktop: round trip, nested backgrounds, lead isolation, parentheses, timing, translations and line timing.');
