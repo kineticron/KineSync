@@ -53,6 +53,9 @@ CHANGELOG
 elif [[ "${version}" == "1.1.3" ]]
 then
   changelog="Fix TTML incorrectly parsing background lyrics."
+elif [[ "${version}" == "1.1.4" ]]
+then
+  changelog="Added album art and app branding, fixed source clipping, and removed Live Activity lyrics."
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

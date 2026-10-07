@@ -3,6 +3,7 @@ import KineSyncActivityTypes
 import ExpoModulesCore
 import Foundation
 import UIKit
+import ImageIO
 import os
 
 public final class KineSyncLiveActivityModule: Module {
@@ -24,46 +25,35 @@ public final class KineSyncLiveActivityModule: Module {
 }
 
 private struct LyricsSnapshot: Decodable {
-  struct Line: Decodable {
-    let startMs: Double
-    let endMs: Double
-    let text: String
-  }
   let trackId: String
   let title: String
   let artist: String
   let album: String
+  let artworkUrl: String?
   let source: String
   let status: String
   let timingMode: String
-  let instrumental: Bool
   let isPlaying: Bool
-  let positionMs: Double
-  let durationMs: Double
-  let sampledAtMs: Double
-  let lines: [Line]?
 }
 
 @MainActor
 private final class LyricsActivityController {
   static let shared = LyricsActivityController()
   private let logger = Logger(subsystem: "dev.kineticron.KineSync.live-activity", category: "host")
-  private let sessionVersion = "lyrics-v4"
+  private let sessionVersion = "metadata-v1"
   private var activity: Activity<LyricsActivityAttributes>?
   private var snapshot: LyricsSnapshot?
-  private var lines: [LyricsSnapshot.Line] = []
-  private var anchorUptime = ProcessInfo.processInfo.systemUptime
-  private var anchorPositionMs = 0.0
   private var lastState: LyricsActivityAttributes.ContentState?
-  private var lastStaleDate: Date?
-  private var timer: Task<Void, Never>?
   private var observation: Task<Void, Never>?
   private var updateTask: Task<Void, Never>?
   private var endingIDs = Set<String>()
   private var revision = 0
+  private var artworkKey = ""
+  private var artwork: String?
+  private var artworkTask: Task<Void, Never>?
   private var suppressedTrack: String?
   private var report: (([String: String]) -> Void)?
-  private var status = ["state": "idle", "message": "Open KineSync to show live lyrics."]
+  private var status = ["state": "idle", "message": "Open KineSync to show playback details."]
 
   private func setStatus(_ state: String, _ message: String) {
     let next = ["state": state, "message": message]
@@ -77,19 +67,14 @@ private final class LyricsActivityController {
     self.report = report
     revision += 1
     let generation = revision
-    timer?.cancel()
-    if let timeline = next.lines { lines = timeline }
-    else if snapshot?.trackId != next.trackId { lines = [] }
     if retry || snapshot?.trackId != next.trackId { suppressedTrack = nil }
     snapshot = next
-    anchorUptime = ProcessInfo.processInfo.systemUptime
-    let deliveryMs = max(0, min(5000, Date().timeIntervalSince1970 * 1000 - next.sampledAtMs))
-    anchorPositionMs = max(0, next.positionMs + (next.isPlaying ? deliveryMs : 0))
+    loadArtwork(next)
 
     guard let plugins = Bundle.main.builtInPlugInsURL,
           FileManager.default.fileExists(atPath: plugins.appendingPathComponent("KineSyncLyricsWidget.appex").path) else {
       await stop()
-      setStatus("error", "Lyrics widget is missing. Reinstall with Sideloadly's Remove Extensions option disabled.")
+      setStatus("error", "Live Activity widget is missing. Reinstall with Sideloadly's Remove Extensions option disabled.")
       return status
     }
     guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -118,7 +103,7 @@ private final class LyricsActivityController {
       await endCurrentActivities()
       guard generation == revision else { return status }
     }
-    // Retire pre-fix presentations after installing a new widget binary.
+    // Retire lyric presentations after installing the metadata-only widget.
     for existing in Activity<LyricsActivityAttributes>.activities where existing.attributes.session != sessionVersion {
       endingIDs.insert(existing.id)
       await existing.end(nil, dismissalPolicy: .immediate)
@@ -137,7 +122,6 @@ private final class LyricsActivityController {
     }
     guard generation == revision else { return status }
     await publish(generation: generation, mayStart: true)
-    if generation == revision { schedule(generation: generation) }
     return status
   }
 
@@ -151,59 +135,30 @@ private final class LyricsActivityController {
         if state == .dismissed || state == .ended {
           self.suppressedTrack = self.snapshot?.trackId
           self.activity = nil
-          self.timer?.cancel()
-          self.setStatus("dismissed", "Live Activity ended. Tap Restart live lyrics to show it again.")
+          self.setStatus("dismissed", "Live Activity ended. Tap Restart Live Activity to show it again.")
           return
         }
       }
     }
   }
 
-  private func position(_ value: LyricsSnapshot) -> Double {
-    let elapsed = value.isPlaying ? (ProcessInfo.processInfo.systemUptime - anchorUptime) * 1000 : 0
-    let projected = max(0, anchorPositionMs + elapsed)
-    return projected
-  }
-
-  // Find the next real line boundary. No per-word or frame-rate ActivityKit updates.
-  private func nextBoundary(_ value: LyricsSnapshot, position: Double) -> Double {
-    if value.durationMs > 0 && position >= value.durationMs {
-      return value.durationMs + 15000
-    }
-    var boundary = value.durationMs > position ? value.durationMs : position + 30000
-    if value.timingMode != "static" {
-      for line in lines {
-        if line.startMs > position { boundary = min(boundary, line.startMs) }
-        if line.endMs > position { boundary = min(boundary, line.endMs) }
-      }
-    }
-    return boundary
-  }
-
   private func publish(generation: Int, mayStart: Bool) async {
     guard generation == revision, let value = snapshot else { return }
-    let current = position(value)
     // Keep the existing session when playback disappears or pauses. A local
     // replacement cannot start while the host is in the background.
     let idle = value.trackId.isEmpty
-    let finished = value.durationMs > 0 && current >= value.durationMs
     if let activity, activity.activityState == .dismissed || activity.activityState == .ended {
       suppressedTrack = value.trackId
       self.activity = nil
     }
     if suppressedTrack == value.trackId { return }
 
-    let line = idle || value.timingMode == "static" ? nil : lines.first {
-      current >= $0.startMs && current < $0.endMs
-    }
-    let fallback = idle ? "Ready for music" : finished ? "Waiting for next song" : value.instrumental ? "Instrumental" : value.timingMode == "static"
-      ? "Lyrics are not timed" : lines.isEmpty ? "Waiting for lyrics" : "Instrumental break"
     var state = LyricsActivityAttributes.ContentState(
       title: idle ? "KineSync" : value.title, artist: idle ? "" : value.artist,
       album: idle ? "" : value.album, source: value.source,
       status: idle ? "Waiting for a song" : value.status,
-      lyric: idle || finished ? fallback : line?.text ?? fallback,
-      timingMode: idle ? "unknown" : value.timingMode, isPlaying: !idle && value.isPlaying && !finished
+      timingMode: idle ? "unknown" : value.timingMode, isPlaying: !idle && value.isPlaying,
+      artwork: idle ? nil : artwork
     )
     // Budget the actual Swift Codable JSON, including escaping and multibyte text.
     // Leave >1 KB for immutable attributes and ActivityKit encoding overhead.
@@ -214,22 +169,16 @@ private final class LyricsActivityController {
       state.album = String(state.album.prefix(limit / 2))
       state.source = String(state.source.prefix(limit / 2))
       state.status = String(state.status.prefix(limit))
-      state.lyric = String(state.lyric.prefix(limit))
       limit /= 2
     } while ((try? JSONEncoder().encode(state).count) ?? Int.max) > 2800 && limit > 0
     guard let encoded = try? JSONEncoder().encode(state), encoded.count <= 2800 else {
-      setStatus("error", "Live lyrics exceeded the iOS content limit.")
+      setStatus("error", "Live Activity exceeded the iOS content limit.")
       return
     }
-    let staleDate: Date? = !idle && value.isPlaying && !finished
-      ? Date(timeIntervalSinceNow: max(0.1, (nextBoundary(value, position: current) - current) / 1000) + 1)
-      : nil
-    // Small clock corrections should not trigger an otherwise identical render.
-    let deadlineChanged = abs((staleDate?.timeIntervalSince1970 ?? 0) - (lastStaleDate?.timeIntervalSince1970 ?? 0)) > 1
-    let content = ActivityContent(state: state, staleDate: staleDate, relevanceScore: 100)
+    let content = ActivityContent(state: state, staleDate: nil, relevanceScore: 100)
     if let active = activity {
-      if state != lastState || deadlineChanged {
-        // A timer update can overlap an incoming seek/track change across await.
+      if state != lastState {
+        // Artwork loading can overlap an incoming track change across await.
         // Serialize ActivityKit writes so the newest snapshot always wins.
         let previous = updateTask
         let update = Task {
@@ -242,7 +191,7 @@ private final class LyricsActivityController {
       }
     } else {
       guard mayStart else {
-        setStatus("idle", "Open KineSync to show live lyrics.")
+        setStatus("idle", "Open KineSync to show playback details.")
         return
       }
       // SDK 58 uses UIScene on iOS 27. Check foreground scenes directly;
@@ -252,7 +201,7 @@ private final class LyricsActivityController {
         ? UIApplication.shared.applicationState == .active
         : scenes.contains { $0.activationState == .foregroundActive }
       guard isForeground else {
-        setStatus("waiting", "Open KineSync to start live lyrics.")
+        setStatus("waiting", "Open KineSync to start the Live Activity.")
         return
       }
       do {
@@ -263,38 +212,19 @@ private final class LyricsActivityController {
       } catch {
         // Keep the actual ActivityKit reason visible; never silently swallow a failure.
         suppressedTrack = value.trackId
-        setStatus("error", "Could not start live lyrics: \(error.localizedDescription)")
+        setStatus("error", "Could not start Live Activity: \(error.localizedDescription)")
         return
       }
     }
     guard generation == revision else { return }
     lastState = state
-    lastStaleDate = staleDate
     setStatus("active", idle ? "Live Activity started - waiting for a song" : state.isPlaying ? "Live Activity started" : "Live Activity paused")
   }
 
-  private func schedule(generation: Int) {
-    guard activity != nil, let value = snapshot, generation == revision,
-          !value.trackId.isEmpty, value.isPlaying else { return }
-    let current = position(value)
-    // Idle, paused and finished presentations have no timers or stale deadline.
-    guard value.durationMs <= 0 || current < value.durationMs else { return }
-    let seconds = max(0.1, min(30, (nextBoundary(value, position: current) - current) / 1000))
-    timer = Task { [weak self] in
-      do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
-      catch { return }
-      guard !Task.isCancelled, let self, generation == self.revision else { return }
-      await self.publish(generation: generation, mayStart: false)
-      if !Task.isCancelled { self.schedule(generation: generation) }
-    }
-  }
-
   private func endCurrentActivities() async {
-    timer?.cancel()
     observation?.cancel()
     activity = nil
     lastState = nil
-    lastStaleDate = nil
     let ending = Activity<LyricsActivityAttributes>.activities
     endingIDs.formUnion(ending.map(\.id))
     await updateTask?.value
@@ -305,10 +235,67 @@ private final class LyricsActivityController {
   }
 
   func stop() async {
+    artworkTask?.cancel()
+    artworkKey = ""
+    artwork = nil
     revision += 1
     let generation = revision
     await endCurrentActivities()
     guard generation == revision else { return }
-    setStatus("idle", "Open KineSync to show live lyrics.")
+    setStatus("idle", "Open KineSync to show playback details.")
+  }
+
+  private func loadArtwork(_ value: LyricsSnapshot) {
+    let source = value.trackId.isEmpty ? "" : value.artworkUrl ?? ""
+    let key = value.trackId + "\n" + source
+    guard key != artworkKey else { return }
+    artworkTask?.cancel()
+    artworkKey = key
+    artwork = nil // Never display the previous song's cover while loading.
+    guard !source.isEmpty else { return }
+    artworkTask = Task { [weak self] in
+      do {
+        let data: Data
+        if source.hasPrefix("data:image/"), let comma = source.firstIndex(of: ","),
+           source[..<comma].hasSuffix(";base64"), source.utf8.count <= 7_000_000,
+           let decoded = Data(base64Encoded: String(source[source.index(after: comma)...])) {
+          data = decoded
+        } else {
+          guard let url = URL(string: source), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
+          // HTTP is also used by a paired desktop on the local network.
+          let request = URLRequest(url: url, timeoutInterval: 10)
+          let (download, response) = try await URLSession.shared.data(for: request)
+          guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { return }
+          data = download
+        }
+        guard !Task.isCancelled, data.count <= 5_000_000,
+              let encoded = Self.thumbnail(data), let self, self.artworkKey == key else { return }
+        self.artwork = encoded
+        // A newer playback snapshot can arrive during the download. Publish using
+        // its current revision, never the revision that started this request.
+        await self.publish(generation: self.revision, mayStart: false)
+      } catch {
+        // Missing/offline artwork leaves the playback presentation usable.
+      }
+    }
+  }
+
+  private static func thumbnail(_ data: Data) -> String? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    for size in [48, 32] {
+      let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: size,
+      ]
+      guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { continue }
+      let image = UIImage(cgImage: cgImage)
+      for quality in [0.5, 0.25, 0.1] {
+        if let jpeg = image.jpegData(compressionQuality: quality), jpeg.count <= 900 {
+          return jpeg.base64EncodedString()
+        }
+      }
+    }
+    return nil
   }
 }

@@ -19,11 +19,11 @@ struct PreviewApp: App {
             }
             let state = LyricsActivityAttributes.ContentState(
               title: "KineSync", artist: "", album: "",
-              source: "Preview", status: "Waiting for a song", lyric: "Ready for music",
+              source: "Preview", status: "Waiting for a song",
               timingMode: "unknown", isPlaying: false
             )
             let activity = try Activity.request(
-              attributes: LyricsActivityAttributes(session: "lyrics-v4"),
+              attributes: LyricsActivityAttributes(session: "metadata-v1"),
               content: ActivityContent(state: state, staleDate: nil), pushType: nil
             )
             status = "Started Live Activity: \(activity.id)"

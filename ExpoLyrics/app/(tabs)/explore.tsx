@@ -731,11 +731,11 @@ export default function BridgeSettingsScreen() {
             </Animated.View>
 
             <View style={styles.card}>
-              {Platform.OS === 'ios' ? <SettingSection title="Live lyrics">
+              {Platform.OS === 'ios' ? <SettingSection title="Live Activity">
                 <Text style={styles.onboardingHint}>{liveActivityMessage}</Text>
                 <Pressable style={styles.secondaryButton} onPress={restartLiveActivity}>
                   <Ionicons name="mic-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Restart live lyrics</Text>
+                  <Text style={styles.secondaryButtonText}>Restart Live Activity</Text>
                 </Pressable>
               </SettingSection> : null}
               <SettingSection title="Onboarding">

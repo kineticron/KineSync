@@ -14,15 +14,13 @@ declare class LyricsModule extends NativeModule<{ onStatus: (status: Status) => 
 const native = Platform.OS === 'ios' ? requireOptionalNativeModule<LyricsModule>('KineSyncLiveActivity') : null;
 export const useLiveActivityStatus = create<Status>(() => ({
   state: native ? 'idle' : 'unavailable',
-  message: native ? 'Open KineSync to show live lyrics.' : 'Live lyrics require an iOS build with the KineSync widget extension. Expo Go is not supported.',
+  message: native ? 'Open KineSync to show playback details.' : 'Live Activity requires an iOS build with the KineSync widget extension. Expo Go is not supported.',
 }));
 
 let running = false;
 let pending = false;
 let retryRequested = false;
 let enabled = false;
-let sentLyrics: ReturnType<typeof usePlaybackStore.getState>['lyrics'] | null = null;
-let sentTrackId: string | undefined;
 
 // One in-flight native operation; rapid seeks/source/track changes replace pending
 // work with the newest store snapshot instead of replaying an obsolete queue.
@@ -35,15 +33,12 @@ async function flush() {
       const retry = retryRequested;
       retryRequested = false;
       const state = usePlaybackStore.getState();
-      const includeLines = retry || state.lyrics !== sentLyrics || state.currentTrack?.id !== sentTrackId;
-      const snapshot = makeLiveActivitySnapshot(state, performance.now(), Date.now(), includeLines);
+      const snapshot = makeLiveActivitySnapshot(state);
       try {
         const status = await native.sync(JSON.stringify(snapshot), retry);
-        sentLyrics = state.lyrics;
-        sentTrackId = snapshot.trackId;
         if (enabled) useLiveActivityStatus.setState(status);
       } catch (error) {
-        useLiveActivityStatus.setState({ state: 'error', message: `Live lyrics failed: ${error instanceof Error ? error.message : String(error)}` });
+        useLiveActivityStatus.setState({ state: 'error', message: `Live Activity failed: ${error instanceof Error ? error.message : String(error)}` });
       }
     }
   } finally {
@@ -63,7 +58,6 @@ export function restartLiveActivity() { enqueue(true); }
 export function startLiveActivitySync() {
   if (!native) return () => {};
   enabled = true;
-  sentLyrics = null;
   const unsubscribe = usePlaybackStore.subscribe((next, previous) => {
     if (liveActivityInputChanged(next, previous)) enqueue();
   });
@@ -76,7 +70,6 @@ export function startLiveActivitySync() {
     unsubscribe();
     lifecycle.remove();
     statusListener.remove();
-    // Native scheduling survives React screen changes and Fast Refresh. Only an
-    // an explicit stop, system timeout, or user dismissal ends it.
+    // Only an explicit stop, system timeout, or user dismissal ends the activity.
   };
 }

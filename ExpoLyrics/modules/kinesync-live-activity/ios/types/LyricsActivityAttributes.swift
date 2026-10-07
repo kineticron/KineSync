@@ -10,20 +10,21 @@ public struct LyricsActivityAttributes: ActivityAttributes {
     public var album: String
     public var source: String
     public var status: String
-    public var lyric: String
     public var timingMode: String
     public var isPlaying: Bool
+    // Tiny host-generated JPEG; counted in the ActivityKit content budget.
+    public var artwork: String?
 
     public init(title: String, artist: String, album: String, source: String,
-                status: String, lyric: String, timingMode: String, isPlaying: Bool) {
+                status: String, timingMode: String, isPlaying: Bool, artwork: String? = nil) {
       self.title = title
       self.artist = artist
       self.album = album
       self.source = source
       self.status = status
-      self.lyric = lyric
       self.timingMode = timingMode
       self.isPlaying = isPlaying
+      self.artwork = artwork
     }
   }
 

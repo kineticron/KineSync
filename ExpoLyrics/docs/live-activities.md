@@ -1,9 +1,14 @@
-# Live lyrics on iOS
+# Playback Live Activity on iOS
 
 KineSync uses a local Expo module to publish an ActivityKit activity and a
 SwiftUI WidgetKit extension to render it. Start playback in the foreground,
 then leave the app to see the compact Dynamic Island. Hold the Island to expand.
-The Lock Screen also shows the lyrics on devices without Dynamic Island.
+The Lock Screen also shows playback details on devices without Dynamic Island.
+
+The current presentation shows album art, KineSync branding, song/artist/album,
+source, and status. Compact mode shows artwork and a playback icon; minimal mode
+shows `KS`. Lyrics and instrumental-break subtitles are no longer displayed.
+The historical lyric-rendering investigation below describes earlier builds.
 
 ## Blank Island investigation (September 2026)
 
@@ -57,62 +62,42 @@ IPA. Physical-device confirmation on iOS 27 beta remains required.
 
 ## Content and rendering budgets
 
-The compact leading and minimal regions use the app's diagonal microphone:
-outlined for line timing, filled with sparkles for karaoke. Compact trailing
-shows a truncated current lyric. The expanded Island and Lock Screen show two
-lines of the current lyric plus song, artist, album, source, and status. Source
-parsing is shared with the player footer. Static lyrics never pretend to be a
-timed active line. Interludes, loading, pauses, and stale content have fallbacks.
+The expanded Island and Lock Screen show song, artist, album, source, status,
+and the KineSync name. The expanded Island insets its details horizontally by
+14 pt and reserves 10 pt below them to keep text clear of its rounded corners.
+Compact mode shows a 24 pt album thumbnail and playback icon; minimal mode shows
+`KS`. Missing artwork uses the existing microphone fallback. The Lock Screen
+layout is 110 pt high including padding, below the 160 pt system maximum.
 
-Apple's smaller reference iPhone provides **52.33 × 36.67 pt** per compact
-region and at least **36.67 × 36.67 pt** for minimal. Our icon is **22 × 22 pt**
-and compact text is **48 × 28 pt**, one line. Expanded top regions are **24 pt**
-high, and bottom content is bounded to **108 pt**. Lock Screen content including
-padding is **140 pt**, below Apple's **160 pt** maximum. Fixed fonts, line
-limits, tail truncation, and clipping bound all text; long content cannot grow
-the view past its allocated region. The layout intentionally uses fixed text
-sizes; larger accessibility text does not expand this constrained surface.
+ActivityKit content has a 4 KB limit. The native publisher checks the actual
+Swift-encoded JSON and reduces text until it fits 2,800 bytes, leaving room for
+immutable attributes and encoding overhead. The host loads HTTP(S) or data-URI
+artwork and uses ImageIO to downsample it to at most 48 px. JPEG compression is
+bounded to 900 bytes before base64 encoding and included in the same content
+budget. The extension decodes the thumbnail without network access or an App
+Group. Changing tracks immediately clears the previous cover.
 
-ActivityKit content has a **4 KB** limit. Only the current line and short text
-metadata enter `ContentState`; the full lyrics timeline stays in the host's
-memory. The native publisher checks the actual Swift-encoded JSON, including
-escaping and Unicode, and reduces text until it fits **2,800 bytes**, leaving
-room for the small immutable attributes and encoding overhead. No artwork,
-base64, fonts, remote images, or JavaScript rendering enters the extension.
+## Lifecycle
 
-## Timing and lifecycle
+The root provider observes track metadata, artwork, playback state, source,
+status, and lifecycle changes. Playback position ticks and clock corrections
+no longer trigger native updates. No lyric timeline is transferred, and no
+line-boundary timers or stale lyric deadlines run in the host.
 
-The root provider observes authoritative playback anchors, lyrics, metadata,
-source, and lifecycle changes. It ignores the 10 Hz screen interpolation clock,
-serializes native calls, and coalesces pending changes to the latest snapshot.
-The timeline is transferred only when lyrics or track change, or on explicit
-restart. Pause and seek corrections immediately re-anchor the native clock.
-New tracks atomically clear old lyrics before they can be published.
+An existing activity is reused across songs and recovered after reload.
+Dismissed activities stay dismissed for that song until **Restart Live Activity**.
+Old lyric sessions are retired when syncing the `metadata-v1` presentation.
 
-Native scheduling wakes at line boundaries while iOS permits the host to run.
-It sends updates only when content or its expiry changes, not per syllable or
-frame. An existing activity is reused across songs and recovered after reload.
-There is a 15-second end-of-song grace period for the next track to arrive, and
-paused activities end after five minutes of available runtime. Disconnected
-desktop feeds end their activity. Dismissed activities stay dismissed for that
-song until **Restart live lyrics**, rather than immediately returning.
+The activity keeps its last supplied playback details when iOS suspends the
+app. New tracks, pauses, or source changes still require host execution to reach
+it; removing lyrics does not add background execution. The current build uses
+no APNs service. SideStore with a free Apple account cannot provision the push
+notification entitlement needed for remote ActivityKit updates. The activity
+no longer replaces content with an "Open KineSync to refresh" lyric prompt.
 
-**A Live Activity does not grant background execution.** A native timer also
-stops when iOS suspends the host. This implementation does not play silent audio
-or add background modes to bypass that rule. Every playing state becomes stale
-just after its next boundary; the widget then says to open KineSync to refresh.
-An app actively permitted to play background audio may continue native updates,
-but the existing Spotify WebView/remote playback source and device behavior need
-device testing. Continuous lyrics during suspension would require a separately
-provisioned APNs service and is not provided by this local sideloadable build.
-The extension cannot fetch lyrics or run its own reliable per-line timeline.
-
-The system decides whether a Live Activity appears in compact or minimal form
-when other activities compete for the Island. An activity request succeeding
-is not proof that iOS displayed its view. Check both the Island and Lock Screen.
-Apple may also throttle updates; this is a line-level preview, not a guaranteed
-frame-accurate karaoke renderer. ActivityKit's maximum active lifetime is eight
-hours; a system-ended activity can be restarted in the foreground.
+The system decides whether the Island shows compact or minimal form when other
+activities compete. ActivityKit can throttle updates and end the activity;
+restart it in the foreground when needed.
 
 ## Native generation and signing
 
@@ -160,7 +145,7 @@ python3 ExpoLyrics/scripts/verify-ios-live-activity.py /path/to/KineSync.ipa
 ```
 
 The app also checks for its embedded `.appex` and exposes missing-extension,
-authorization, and ActivityKit request errors under **Settings > Live lyrics**.
+authorization, and ActivityKit request errors under **Settings > Live Activity**.
 
 ## Verification
 
@@ -180,20 +165,18 @@ version mismatch, absent flags, simulator binaries, missing type descriptors, an
 the prior module identity mismatch. These checks do not
 replace Xcode compilation or a physical-device rendering test.
 
-Before releasing, test a freshly built, Sideloadly-installed IPA:
+Before releasing, test a freshly built SideStore/Sideloadly-installed IPA:
 
-- Smaller Dynamic Island iPhone: start a karaoke song in the foreground, leave
-  the app, check compact/minimal, then hold to expand. Verify filled mic,
-  current line, title/artist/album, source and status. Repeat with line timing.
-- Lock Screen: check long Unicode lyrics/metadata, absent album, an interlude,
-  static/no lyrics, light/dark appearance and Always-On display.
-- Seek backward/forward, pause/resume, change source, and advance to the next
-  song. Confirm no old-song lyric flashes and no duplicate activity appears.
-- Try actual background audio and desktop remote playback separately. Wait
-  beyond a line boundary while suspended and confirm stale text replaces it.
-- Disable Live Activities in iOS Settings, dismiss an activity, and use the
-  restart control. Confirm clear status instead of silent retry loops.
-- Export an IPA with the widget removed and run the verifier: it must fail.
+- Check artwork and the playback icon in compact mode, `KS` in minimal mode,
+  and KineSync, track details, source, and status in the expanded Island.
+- Verify lyrics, instrumental-break labels, and lyric refresh prompts are absent
+  in all presentations. Keep ordinary player lyrics working in the app.
+- Check long Unicode metadata, missing album/artwork, and Lock Screen layout.
+- Pause/resume, change source, change artwork, and advance to the next song.
+  Confirm no previous-song cover flashes or duplicate activities appear.
+- Leave the app and confirm the last supplied details remain visible.
+- Disable Live Activities, dismiss the activity, and use **Restart Live Activity**.
+- Export an IPA with the widget removed; the verifier must reject it.
 
 ## References
 

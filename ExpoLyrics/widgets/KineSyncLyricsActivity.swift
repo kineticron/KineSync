@@ -2,6 +2,7 @@ import ActivityKit
 import KineSyncActivityTypes
 import SwiftUI
 import WidgetKit
+import UIKit
 import os
 
 @main
@@ -16,14 +17,18 @@ struct KineSyncLyricsWidgetBundle: WidgetBundle {
 struct KineSyncLyricsActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: LyricsActivityAttributes.self) { context in
-      LyricsBanner(state: context.state, stale: context.isStale)
+      LyricsBanner(state: context.state)
         .activityBackgroundTint(.black)
         .activitySystemActionForegroundColor(.white)
         .widgetURL(URL(string: "expolyrics://"))
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          LyricsMicrophone(mode: context.state.timingMode).frame(width: 24, height: 24)
+          HStack(spacing: 6) {
+            LyricsArtwork(state: context.state, size: 28)
+            Text("KineSync").font(.system(size: 11, weight: .semibold))
+              .foregroundColor(.white).lineLimit(1)
+          }
         }
         DynamicIslandExpandedRegion(.trailing) {
           Image(systemName: context.state.isPlaying ? "play.fill" : "pause.fill")
@@ -33,22 +38,21 @@ struct KineSyncLyricsActivity: Widget {
             .accessibilityLabel(context.state.isPlaying ? "Playing" : "Paused")
         }
         DynamicIslandExpandedRegion(.bottom) {
-          LyricsDetails(state: context.state, stale: context.isStale)
+          LyricsDetails(state: context.state)
+            // Keep the footer clear of the Island's curved lower corners.
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 108, alignment: .top)
-            .clipped()
         }
       } compactLeading: {
         // Apple's smaller reference device offers 52.33 x 36.67 pt per side.
-        Text("KS").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
+        LyricsArtwork(state: context.state, size: 24)
       } compactTrailing: {
-        Text(context.isStale ? "Open" : context.state.isPlaying ? (context.state.lyric.isEmpty ? "Lyrics" : context.state.lyric) : context.state.artist.isEmpty ? "Ready" : "Paused")
+        Image(systemName: context.state.isPlaying ? "play.fill" : context.state.artist.isEmpty ? "music.note" : "pause.fill")
           .font(.system(size: 12, weight: .semibold))
           .foregroundColor(.white)
-          .lineLimit(1)
-          .truncationMode(.tail)
-          .frame(width: 48, height: 28)
-          .clipped()
+          .frame(width: 24, height: 24)
+          .accessibilityLabel(context.state.isPlaying ? "Playing" : context.state.artist.isEmpty ? "Ready for music" : "Paused")
       } minimal: {
         Text("KS").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
       }
@@ -60,42 +64,38 @@ struct KineSyncLyricsActivity: Widget {
 
 private struct LyricsBanner: View {
   let state: LyricsActivityAttributes.ContentState
-  let stale: Bool
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      LyricsMicrophone(mode: state.timingMode).frame(width: 28, height: 28)
-      LyricsDetails(state: state, stale: stale)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      LyricsArtwork(state: state, size: 44)
+      VStack(alignment: .leading, spacing: 4) {
+        Text("KineSync").font(.system(size: 10, weight: .semibold))
+          .foregroundColor(.white.opacity(0.65))
+        LyricsDetails(state: state)
+      }.frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(14)
     // Includes padding; below Apple's 160 pt maximum Lock Screen height.
-    .frame(height: 140, alignment: .top)
+    .frame(height: 110, alignment: .top)
     .clipped()
   }
 }
 
 private struct LyricsDetails: View {
   let state: LyricsActivityAttributes.ContentState
-  let stale: Bool
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
       Text(state.title.isEmpty ? "KineSync" : state.artist.isEmpty ? state.title : "\(state.title) · \(state.artist)")
         .font(.system(size: 12, weight: .semibold))
         .lineLimit(1)
         .frame(height: 15, alignment: .leading)
-      if !state.album.isEmpty {
-        Text(state.album).font(.system(size: 10)).lineLimit(1).foregroundColor(.white.opacity(0.65))
-          .frame(height: 13, alignment: .leading)
-      }
-      Text(stale ? "Open KineSync to refresh" : state.lyric.isEmpty ? "Waiting for lyrics" : state.lyric)
-        .font(.system(size: 17, weight: .bold))
-        .lineLimit(2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 42, alignment: .leading)
       Text("\(state.isPlaying || state.artist.isEmpty ? "" : "Paused · ")\(state.source)")
         .font(.system(size: 10, weight: .medium)).lineLimit(1)
         .foregroundColor(.white.opacity(0.8))
         .frame(height: 13, alignment: .leading)
+      if !state.album.isEmpty {
+        Text(state.album).font(.system(size: 10)).lineLimit(1).foregroundColor(.white.opacity(0.65))
+          .frame(height: 13, alignment: .leading)
+      }
       if !state.status.isEmpty {
         Text(state.status).font(.system(size: 10)).lineLimit(1).foregroundColor(.white.opacity(0.65))
           .frame(height: 13, alignment: .leading)
@@ -106,6 +106,24 @@ private struct LyricsDetails: View {
     .multilineTextAlignment(.leading)
     // Fixed point sizes keep every presentation inside its system budget.
     .dynamicTypeSize(.large)
+  }
+}
+
+private struct LyricsArtwork: View {
+  let state: LyricsActivityAttributes.ContentState
+  let size: CGFloat
+  var body: some View {
+    Group {
+      if let artwork = state.artwork, let data = Data(base64Encoded: artwork),
+         let image = UIImage(data: data) {
+        Image(uiImage: image).resizable().scaledToFill()
+          .accessibilityLabel("Album artwork")
+      } else {
+        LyricsMicrophone(mode: state.timingMode)
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(RoundedRectangle(cornerRadius: 5))
   }
 }
 

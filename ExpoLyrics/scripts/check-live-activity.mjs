@@ -30,43 +30,41 @@ const base = {
   playbackMode: 'mobile', connectionStatus: 'disconnected',
   anchorPositionMs: 1000, anchorMonotonicMs: 10000, isPlaying: true,
 };
-const snapshot = makeLiveActivitySnapshot(base, 11250, 100000);
-assert.equal(snapshot.positionMs, 2250, 'Project native clock from monotonic anchor, not stale UI clock');
-assert.equal(snapshot.lines[0].text, 'Hello world');
+const snapshot = makeLiveActivitySnapshot(base);
+assert.equal(snapshot.title, 'Song');
+assert.equal(snapshot.artist, 'Artist');
+for (const key of ['lyric', 'lines', 'positionMs', 'durationMs', 'sampledAtMs', 'instrumental']) {
+  assert.equal(Object.hasOwn(snapshot, key), false, `Live Activity must not receive lyric scheduling data: ${key}`);
+}
+assert(!JSON.stringify(snapshot).includes('Hello world'), 'Lyric text must stay inside the player');
 assert.equal(snapshot.timingMode, 'karaoke');
 assert.equal(snapshot.source, 'Spicy · Karaoke');
 assert.equal(snapshot.status, 'Fetched 1 lines');
-assert.equal(makeLiveActivitySnapshot({ ...base, isPlaying: false }, 11250, 100000).positionMs, 1000);
-assert.equal(makeLiveActivitySnapshot(base, 999999, 100000).positionMs, 120000);
-assert.equal(makeLiveActivitySnapshot({ ...base, anchorPositionMs: 50000, anchorMonotonicMs: 11250 }, 11250, 100000).positionMs, 50000, 'Seeks replace the anchor');
+assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: { ...base.currentTrack, artworkUrl: 'https://example.com/cover.jpg' } }).artworkUrl, 'https://example.com/cover.jpg');
+assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }).artworkUrl, '', 'Idle snapshots clear artwork');
+assert.equal(makeLiveActivitySnapshot({ ...base, playbackMode: 'desktop', currentTrack: { ...base.currentTrack, artworkUrl: 'data:image/jpeg;base64,cover' } }).artworkUrl, '', 'Disconnected desktop snapshots clear artwork');
 assert.equal(liveActivityInputChanged({ ...base, playbackPosition: 2000 }, base), false, '10 Hz UI ticks must not publish ActivityKit updates');
 assert.equal(liveActivityInputChanged({ ...base, isPlaying: false }, base), true);
+assert.equal(liveActivityInputChanged({ ...base, anchorPositionMs: 5000, anchorMonotonicMs: 15000 }, base), false, 'Clock corrections must not publish metadata updates');
+assert.equal(liveActivityInputChanged({ ...base, currentTrack: { ...base.currentTrack, artworkUrl: 'https://example.com/new.jpg' } }, base), true, 'Artwork changes must still publish');
 assert.equal(liveActivityInputChanged({ ...base, lyricsSource: 'spicy-lyrics-line' }, base), true);
-assert.equal(makeLiveActivitySnapshot({ ...base, lyricsSource: 'spicy-lyrics-line' }, 0, 0).timingMode, 'interpolated');
-assert.equal(makeLiveActivitySnapshot({ ...base, lyrics: [{ lineStartTime: 0, lineEndTime: 0, syllables: [{ text: 'Plain lyrics', startTime: 0, endTime: 0 }] }] }, 0, 0).timingMode, 'static');
-assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }, 0, 0).trackId, '');
-assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }, 0, 0).isPlaying, false);
-assert.equal(makeLiveActivitySnapshot({ ...base, playbackMode: 'desktop' }, 0, 0).trackId, '', 'Switch to static content on desktop disconnect');
-// Clear stale track/lyrics even when the native queue omits unchanged timelines.
+assert.equal(makeLiveActivitySnapshot({ ...base, lyricsSource: 'spicy-lyrics-line' }).timingMode, 'interpolated');
+assert.equal(makeLiveActivitySnapshot({ ...base, lyrics: [{ lineStartTime: 0, lineEndTime: 0, syllables: [{ text: 'Plain lyrics', startTime: 0, endTime: 0 }] }] }).timingMode, 'static');
+assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }).trackId, '');
+assert.equal(makeLiveActivitySnapshot({ ...base, currentTrack: null }).isPlaying, false);
+assert.equal(makeLiveActivitySnapshot({ ...base, playbackMode: 'desktop' }).trackId, '', 'Switch to static content on desktop disconnect');
+// Clear stale metadata after a disconnect or when playback disappears.
 for (const input of [{ ...base, currentTrack: null }, { ...base, playbackMode: 'desktop' }]) {
-  for (const includeLines of [true, false]) {
-    const idle = makeLiveActivitySnapshot(input, 11250, 100000, includeLines);
+    const idle = makeLiveActivitySnapshot(input);
     assert.equal(idle.title, 'KineSync');
     assert.equal(idle.artist, '');
     assert.equal(idle.status, 'Waiting for a song');
     assert.equal(idle.timingMode, 'unknown');
-    assert.equal(idle.instrumental, false);
     assert.equal(idle.isPlaying, false);
-    assert.equal(idle.positionMs, 0);
-    assert.equal(idle.durationMs, 0);
-    assert.deepEqual(idle.lines, []);
-  }
 }
-assert.equal(makeLiveActivitySnapshot({ ...base, isPlaying: false }, 11250, 100000).title, 'Song', 'Pauses retain the song');
-assert.equal(makeLiveActivitySnapshot(base, 11250, 100000).title, 'Song', 'Playback replaces the static title');
-assert.equal(makeLiveActivitySnapshot(base, 0, 0, false).lines, undefined, 'Clock corrections must not resend the entire timeline');
-assert.deepEqual(makeLiveActivitySnapshot({ ...base, lyrics: [{ ...base.lyrics[0], lineStartTime: NaN }] }, 0, 0).lines, []);
-const unicode = makeLiveActivitySnapshot({ ...base, currentTrack: { ...base.currentTrack, title: '👨‍👩‍👧‍👦日本語\\"'.repeat(500) } }, 0, 0);
+assert.equal(makeLiveActivitySnapshot({ ...base, isPlaying: false }).title, 'Song', 'Pauses retain the song');
+assert.equal(makeLiveActivitySnapshot(base).title, 'Song', 'Playback replaces the static title');
+const unicode = makeLiveActivitySnapshot({ ...base, currentTrack: { ...base.currentTrack, title: '👨‍👩‍👧‍👦日本語\\"'.repeat(500) } });
 assert(Array.from(unicode.title).length <= 240);
 assert(!/[\uD800-\uDBFF]$/.test(unicode.title), 'Do not split UTF-16 surrogate pairs');
 
@@ -149,4 +147,4 @@ assert(linked.modules.some((module) => module.packageName === 'kinesync-live-act
 const liveModule = linked.modules.find((module) => module.packageName === 'kinesync-live-activity');
 assert(liveModule.pods.some((pod) => pod.podName === 'KineSyncActivityTypes'), 'Expo must autolink shared activity types into the host');
 assert.deepEqual(liveModule.swiftModuleNames, ['KineSyncLiveActivity'], 'Expo provider must import the host module without any widget collision');
-console.log('Live Activity checks passed: timing, lyrics/source payloads, Expo autolinking, generated widget target, repeat prebuild, and missing-extension detection.');
+console.log('Live Activity checks passed: metadata/source payloads, Expo autolinking, generated widget target, repeat prebuild, and missing-extension detection.');
