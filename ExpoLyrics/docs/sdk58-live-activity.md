@@ -66,3 +66,11 @@ The simulator fixture requests this same idle state with playback disabled.
 These changes address the missing fallback but do not establish that a widget
 will render after Sideloadly re-signing. Test before playback as well as during
 a song, including the Lock Screen and expanded Island.
+
+[Build 64](https://github.com/kineticron/KineSync/actions/runs/37547187265)
+at `af1294e` tested the idle state on iPhone 16 Pro / iOS 27. The host screenshot
+shows a successful ActivityKit request. System logs report one discovered
+activity configuration and a successfully accepted 31,464-byte widget archive.
+The compact screenshot still has no visible Island and fails the content
+checker. This is not a confirmed rendering fix. The simulator evidence does
+not establish why the physical device displays a blank, clickable Island.
