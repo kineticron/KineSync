@@ -584,6 +584,11 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
       lineEndTime: lineEnd,
       syllables,
     };
+    // Apple/AMLL TTML uses v2 for the opposite vocal lane. Background
+    // agents belong to their nested spans and must not change the lead lane.
+    if (readAttribute(attributes, "ttm:agent").trim() === "v2") {
+      line.oppositeAligned = true;
+    }
     if (backgroundSyllables.length) {
       line.backgroundSyllables = backgroundSyllables;
     }

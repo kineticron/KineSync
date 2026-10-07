@@ -71,5 +71,28 @@ for (const importer of [
   assert.equal(importer.joinImportedSyllableText(nested.syllables), 'Lead');
   assert.equal(importer.joinImportedSyllableText(nested.backgroundSyllables), 'Back up');
   assert.deepEqual(nested.backgroundSyllables.map(s => [s.startTime, s.endTime]), [[3000, 4000], [4000, 5000]]);
+
+  // Geronimo uses v1 for the normal lane and v2 for opposite alignment.
+  // A v2 paragraph stays opposite even when it is the first paragraph, while
+  // v2 on a nested background span must not flip a v1 lead paragraph.
+  const agents = `<tt><head><metadata><ttm:agent type="person" xml:id="v1"/><ttm:agent type="person" xml:id="v2"/></metadata></head><body>
+<p begin="24.317" end="24.892" ttm:agent="v2"><span begin="24.317" end="24.507">GERO</span><span begin="24.507" end="24.719">NI</span><span begin="24.719" end="24.892">MO!</span></p>
+<p begin="25" end="27" ttm:agent="v1"><span begin="25" end="26">Lead</span><span ttm:role="x-bg" ttm:agent="v2"><span begin="26" end="27">(Back)</span></span></p>
+<p begin="28" end="29">Unassigned</p><p begin="30" end="31" ttm:agent="v1000">Group</p>
+</body></tt>`;
+  for (const document of [agents, agents.replace('<tt>', '<tt itunes:timing="Line">')]) {
+    const aligned = importer.parseTtmlToLyrics(document).lyrics;
+    assert.deepEqual(aligned.map(line => Boolean(line.oppositeAligned)), [true, false, false, false]);
+    assert.equal(importer.joinImportedSyllableText(aligned[0].syllables), 'GERONIMO!');
+    assert.equal(aligned[0].lineStartTime, 24317);
+    assert.equal(aligned[0].lineEndTime, 24892);
+    assert.equal(importer.joinImportedSyllableText(aligned[1].backgroundSyllables), 'Back');
+  }
+  const oppositeBackground = importer.parseTtmlToLyrics(
+    geronimoBackground.replace('end="2:53.761">', 'end="2:53.761" ttm:agent="v2">'),
+  ).lyrics[0];
+  assert.equal(oppositeBackground.oppositeAligned, true);
+  assert.deepEqual(oppositeBackground.syllables, line.syllables);
+  assert.deepEqual(oppositeBackground.backgroundSyllables, line.backgroundSyllables);
 }
-console.log('Vault TTML checks passed for mobile and desktop: round trip, nested backgrounds, lead isolation, parentheses, timing, translations and line timing.');
+console.log('Vault TTML checks passed for mobile and desktop: round trip, opposite alignment, nested backgrounds, lead isolation, parentheses, timing, translations and line timing.');

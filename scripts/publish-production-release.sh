@@ -59,6 +59,9 @@ then
 elif [[ "${version}" == "1.1.5" ]]
 then
   changelog="Removed Live Activity checks from iOS CI."
+elif [[ "${version}" == "1.1.6" ]]
+then
+  changelog="Fixed opposite-aligned lines when importing TTML lyrics."
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT
