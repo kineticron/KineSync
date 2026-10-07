@@ -56,6 +56,9 @@ then
 elif [[ "${version}" == "1.1.4" ]]
 then
   changelog="Added album art and app branding, fixed source clipping, and removed Live Activity lyrics."
+elif [[ "${version}" == "1.1.5" ]]
+then
+  changelog="Removed Live Activity checks from iOS CI."
 fi
 notes_file=$(mktemp)
 trap 'rm -f "${notes_file}"' EXIT

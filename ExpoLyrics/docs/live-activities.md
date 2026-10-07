@@ -42,8 +42,9 @@ compact Island shows both the microphone and lyric text; the widget log reports
 `KineSyncActivityTypes.LyricsActivityAttributes`. This restores the content that
 was absent from run 34756296771. Cold simulator startup consumed most of the
 preview timeout and the job timed out immediately after capturing its artifacts;
-the limit is now twenty minutes. Production device IPA compilation and integrity
-checks remain required. Physical-device confirmation on iOS 27 is still needed.
+the preview timeout was subsequently increased to twenty minutes. Live Activity
+checks and simulator previews have since been removed from GitHub CI.
+Physical-device confirmation on iOS 27 is still needed.
 
 The widget also uses an intrinsic 24-point icon without a geometry-dependent
 scale and nonempty text fallbacks in each presentation. Restart previously
@@ -122,20 +123,20 @@ itself passes the small content state between host and extension.
 
 Both `.github/workflows/ios-unsigned-ipa.yml` and `ios-development-build.yml`:
 
-1. Clean-prebuild the native project, run regression checks, and assert the
-   module pod, extension sources, dependency, and embed phase exist.
+1. Clean-prebuild the native project.
 2. Build the host scheme and dependent widget for `iphoneos` with signing
    disabled for all targets.
-3. Copy the complete `.app` with `ditto`, preserving `PlugIns`, then zip Payload.
-4. Validate the **actual IPA** before uploading: host flag, extension point,
-   bundle IDs/versions, compiled native code, matching shared attributes modules,
-   arm64 iOS device binaries, and
-   byte-for-byte preservation of every extension file from the built `.app`.
+3. Copy the complete `.app` with `ditto`, preserving `PlugIns`, then zip Payload
+   and upload the IPA.
+
+Live Activity regression checks, target validation, simulator preview capture,
+and IPA Live Activity verification no longer run in GitHub CI. The scripts are
+still available for manual troubleshooting.
 
 Sideloadly can remove all or individual extensions. Keep **Remove Extensions**
 disabled, or explicitly preserve **KineSyncLyricsWidget**. The signer must sign
 both bundles and preserve their parent/child bundle ID relationship. The widget
-uses an additional provisioning App ID. The workflow can verify the downloaded
+uses an additional provisioning App ID. The manual verifier can inspect the
 IPA, but cannot control Sideloadly's subsequent settings or provisioning.
 
 For an exported/re-signed IPA, inspect it before installing:

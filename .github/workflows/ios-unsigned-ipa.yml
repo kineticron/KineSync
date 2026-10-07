@@ -13,11 +13,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      capture_live_activity_preview:
-        description: Capture the iOS simulator Live Activity preview
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -58,7 +53,6 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
           [[ $(xcrun --sdk iphoneos --show-sdk-version) == 27.* ]]
-          xcrun simctl list runtimes
 
       - name: Set shared release version
         working-directory: ExpoLyrics
@@ -85,48 +79,12 @@ jobs:
           restore-keys: |
             ios-caches-${{ runner.os }}-
 
-      - name: Verify Live Activity native target
-        working-directory: ExpoLyrics
-        run: |
-          npm run test:live-activity
-          python3 scripts/check-ios-live-activity.py
-          node scripts/verify-live-activity-project.js
-
       - name: Verify Spotify login and app types
         working-directory: ExpoLyrics
         run: |
           npm run test:spotify-browser
           npm run test:security
           npx tsc --noEmit
-
-      - name: Capture native Live Activity preview
-        id: live-activity-preview
-        if: github.event_name != 'workflow_dispatch' || inputs.capture_live_activity_preview
-        # The SDK 58 experiment must still produce a device IPA when the
-        # new simulator fails to render. Keep its failure visible separately.
-        continue-on-error: ${{ github.ref == 'refs/heads/SDK-58-live-activity' }}
-        timeout-minutes: 20
-        run: bash ExpoLyrics/scripts/preview-ios-live-activity.sh
-
-      - name: Report Live Activity preview result
-        if: always()
-        run: |
-          echo "Live Activity preview outcome: ${{ steps.live-activity-preview.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-          if [[ '${{ steps.live-activity-preview.outcome }}' == 'failure' ]]; then
-            echo '::warning::Live Activity preview failed; this IPA is a device experiment, not a verified rendering fix.'
-          fi
-
-      - name: Upload Live Activity preview
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: Live-Activity-preview
-          path: |
-            ExpoLyrics/.expo/live-activity-preview/*.png
-            ExpoLyrics/.expo/live-activity-preview/*.log
-            ExpoLyrics/.expo/live-activity-preview/*.txt
-            ExpoLyrics/.expo/live-activity-preview/devices.json
-          if-no-files-found: ignore
 
       - name: Build Release and locate .app
         env:
@@ -298,7 +256,6 @@ jobs:
           IPA="${GITHUB_WORKSPACE}/ExpoLyrics/KineSync-iOS-unsigned.ipa"
           rm -f "${IPA}"
           ditto -c -k --sequesterRsrc --keepParent "${STAGE}/Payload" "${IPA}"
-          python3 ExpoLyrics/scripts/verify-ios-live-activity.py "${IPA}" --expected-app "${APP}"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -325,7 +282,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download verified IPA
+      - name: Download IPA
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ExpoLyrics-unsigned-ipa

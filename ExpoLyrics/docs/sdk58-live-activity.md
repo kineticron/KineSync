@@ -1,5 +1,9 @@
 # SDK 58 Live Activity experiment
 
+Historical experiment notes: Live Activity checks and simulator previews have
+since been removed from GitHub CI. The preview scripts remain available for
+manual troubleshooting.
+
 The `SDK-58-live-activity` branch uses Expo 58.0.5 and Expo's recommended
 React Native 0.88 release candidate. The unsigned IPA workflow runs on
 GitHub's `xcode-27` preview runner, checks the iOS SDK version, and captures
