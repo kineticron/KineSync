@@ -1,12 +1,22 @@
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { ungzip } from 'pako';
 
 const result = await build({ stdin: { contents: `export {SpotifyDetector} from './lib/spotify-detector/client';
-export {sampleFrom,decodeDealer,decodeStateBody,observerBody} from './lib/spotify-detector/protocol';
+export {sampleFrom,decodeDealer,decodeStateBody,observerBody,trackHex,metadataFrom} from './lib/spotify-detector/protocol';
 export {detectorPacket} from './lib/spotify-detector/packet';`, resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'esm', write: false });
-const { SpotifyDetector, sampleFrom, decodeDealer, detectorPacket } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
-const trackId = 'a'.repeat(22);
+const { SpotifyDetector, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const trackId = '4uLU6hMCjMI75M1A2tKUQC';
+const uri = `spotify:track:${trackId}`;
+const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const expectedGid = [...trackId].reduce((n, c) => n * 62n + BigInt(alphabet.indexOf(c)), 0n).toString(16).padStart(32, '0');
+assert.equal(trackHex(uri), expectedGid);
+assert.equal(trackHex(`spotify:track:${'0'.repeat(21)}1`), '0'.repeat(31) + '1');
+assert.throws(() => trackHex(`spotify:track:${'Z'.repeat(22)}`));
+const metadata = { gid: expectedGid, name: 'Test', artist: [{ name: 'Artist' }, { name: 'Guest' }], album: { name: 'Album' } };
+assert.equal(metadataFrom(uri, { ...metadata, gid: Buffer.from(expectedGid, 'hex').toString('base64') }).artist, 'Artist, Guest');
+assert.throws(() => metadataFrom(uri, { ...metadata, gid: '0'.repeat(32) }));
 const epoch = Date.now();
 const state = (position = 1000, timestamp = epoch, paused = false, uri = `spotify:track:${trackId}`) => ({
   active_device_id: 'iphone', devices: { iphone: { name: 'iPhone' } }, player_state: {
@@ -35,6 +45,8 @@ try {
   globalThis.clearTimeout = globalThis.clearInterval = id => timers.delete(id);
   globalThis.fetch = async (url, options) => {
     requests.push({ url, ...options });
+    if (options.method === 'GET') return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(metadata)).buffer };
+    if (options.method === 'POST') return { ok: responseStatus === 200, status: responseStatus === 200 ? 204 : responseStatus, arrayBuffer: async () => new ArrayBuffer(0) };
     const snapshot = responseState;
     if (holdResponse) await new Promise(resolve => { releaseResponse = resolve; });
     return { ok: responseStatus === 200, status: responseStatus,
@@ -62,11 +74,37 @@ try {
   assert.notEqual(requests[0].url.split('/').pop(), `hobs_${'b'.repeat(35)}`);
   assert.equal(JSON.parse(requests[0].body).device.device_info.capabilities.can_be_player, false);
   assert.equal(samples.length, 1);
+  const metadataRequests = requests.length;
+  const matches = await Promise.all([detector.metadata(uri), detector.metadata(uri)]);
+  assert.equal(matches[0].artist, 'Artist, Guest');
+  assert.equal(requests.length, metadataRequests + 1, 'metadata deduplicates concurrent lookups');
+  assert.equal(requests.at(-1).url, `https://guc3-spclient.spotify.com/metadata/4/track/${expectedGid}?market=from_token`);
+  assert.equal(requests.at(-1).headers.authorization, 'Bearer verified');
+  await detector.metadata(uri);
+  assert.equal(requests.length, metadataRequests + 1, 'metadata is cached');
+  const commandBody = () => JSON.parse(new TextDecoder().decode(ungzip(new Uint8Array(requests.at(-1).body))));
+  await detector.control({ type: 'toggle' });
+  assert.equal(commandBody().command.endpoint, 'pause');
+  assert.equal(requests.at(-1).headers['content-encoding'], 'gzip');
+  assert.equal(requests.at(-1).headers['x-spotify-connection-id'], 'our-connection');
+  assert.equal(new URL(requests.at(-1).url).pathname, `/connect-state/v1/player/command/from/${new URL(requests[0].url).pathname.split('/').pop()}/to/iphone`);
+  assert.equal(samples.length, 1, 'command acknowledgment cannot invent a clock anchor');
+  await detector.control({ type: 'seek', positionMs: 999999 });
+  assert.equal(commandBody().command.value, 200000);
+  await assert.rejects(detector.control({ type: 'seek', positionMs: NaN }), /Invalid seek/);
+  for (const [type, endpoint] of [['next', 'skip_next'], ['previous', 'skip_prev']]) {
+    await detector.control({ type }); assert.equal(commandBody().command.endpoint, endpoint);
+  }
+  responseStatus = 403;
+  await assert.rejects(detector.control({ type: 'toggle' }), /control HTTP 403/);
+  responseStatus = 200;
   ws.event({ payloads: [state()] });
   assert.equal(samples.length, 1, 'duplicate anchors do not reset the lyrics clock');
   assert.equal(ready, 2, 'an identical anchor confirms readiness without re-ingesting');
   ws.event({ payloads: [state(1500, epoch + 500, true)] });
   assert.equal(samples.at(-1).playing, false, 'pause overrides is_playing');
+  await detector.control({ type: 'toggle' });
+  assert.equal(commandBody().command.endpoint, 'resume');
   ws.event({ payloads: [state(1000, epoch)] });
   assert.equal(samples.length, 2, 'old snapshots cannot rewind a newer pause');
   ws.event({ payloads: [state(60000, epoch + 1000)] });

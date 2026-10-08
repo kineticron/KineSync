@@ -4,6 +4,35 @@ import { decodeCluster } from './binary';
 
 export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; activeDeviceId?: string };
 
+/** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
+ * without rounding through a JS Number or depending on native BigInt support. */
+export function trackHex(uri: string): string {
+  const id = /^spotify:track:([a-zA-Z0-9]{22})$/.exec(uri)?.[1];
+  if (!id) throw new Error('No valid Spotify track identity.');
+  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const bytes = new Uint8Array(16);
+  for (const c of id) {
+    let carry = alphabet.indexOf(c);
+    for (let i = 15; i >= 0; i--) { carry += bytes[i] * 62; bytes[i] = carry & 255; carry = Math.floor(carry / 256); }
+    if (carry) throw new Error('Spotify track identity exceeds 128 bits.');
+  }
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+export type TrackMetadata = Pick<Sample, 'artist' | 'album' | 'artworkUrl' | 'title'>;
+export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
+  const o = payload as Record<string, any>;
+  if (!o || typeof o !== 'object') throw new Error('Spotify metadata is missing.');
+  const expected = trackHex(uri);
+  const gid = typeof o.gid === 'string' ? (/^[a-fA-F0-9]{32}$/.test(o.gid) ? o.gid.toLowerCase() : Buffer.from(o.gid, 'base64').toString('hex')) : '';
+  if (!gid || gid !== expected) throw new Error('Spotify metadata identity mismatch.');
+  const artist = (Array.isArray(o.artist) ? o.artist : []).map((a: any) => typeof a?.name === 'string' ? a.name.trim() : '').filter(Boolean).join(', ');
+  if (!artist) throw new Error('Spotify metadata contains no artist names.');
+  const images = Array.isArray(o.album?.cover_group?.image) ? o.album.cover_group.image : [];
+  const cover = images.find((i: any) => i.size === 'LARGE') ?? images[images.length - 1];
+  return { artist, album: String(o.album?.name ?? ''), title: String(o.name ?? ''),
+    artworkUrl: /^[a-fA-F0-9]{40}$/.test(cover?.file_id ?? '') ? `https://i.scdn.co/image/${cover.file_id}` : '' };
+}
+
 export function projectedPosition(sample: Sample, now: number): number {
   const basis = sample.positionTimestampMs ?? sample.receivedAt;
   const position = sample.positionMs + (sample.playing ? Math.max(0, now - basis) : 0);

@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Button, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Button, Share, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
@@ -12,7 +12,6 @@ import { installBrowserControlPreludeScript, installBrowserControlScript, spotif
   makeBrowserCommandScript, parseBrowserEvent, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST, type BrowserCommand } from '@/lib/spotify-browser';
 import { registerSpotifyPlayerActions } from '@/lib/spotify-player-actions';
 import { saveMobileLyricsSettings } from '@/lib/mobile-lyrics-settings';
-import { resolveSpotifyDetectorCatalogMatch } from '@/lib/mobile-lyrics-client';
 import { refreshLyricsForCurrentTrack } from '@/lib/lyrics-sync';
 import { usePlaybackStore } from '@/store/playback-store';
 import { useSpotifySessionStore } from '@/store/spotify-session-store';
@@ -25,7 +24,7 @@ const CONTROL_SCRIPT = `${installBrowserControlPreludeScript}\n${installBrowserC
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
 
 /** iOS mobile-only: WKWebView bootstraps/renews login, Dealer owns detection.
- * Browser controls remain available on demand; browser playback never ingests. */
+ * Controls and metadata use the captured spclient session directly. */
 export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
   const mobile = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
   const loggedOut = useSpotifySessionStore(s => s.loggedOut);
@@ -38,12 +37,12 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const mounted = useRef(false);
   const documentUrl = useRef(PLAYER_URL);
   const browserRun = useRef(0);
-  const pendingCommand = useRef<BrowserCommand | null>(null);
-  const controlReady = useRef(false);
   const lastSample = useRef<Sample | null>(null);
   const lyricsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enriched = useRef(new Map<string, { artist: string; album: string }>());
   const enrichmentRun = useRef(0);
+  const metadataPending = useRef('');
+  const metadataAttempts = useRef(new Map<string, number>());
   const diagnostics = useRef({ samples: 0, sourceTimestampMs: 0, receivedAtMs: 0, device: '', status: '' });
   const callbacks = useRef({ sample: (_s: Sample) => {}, status: (_s: string) => {}, sessionNeeded: () => {}, authenticated: (_token: string, _expires: number) => {}, ready: () => {} });
   const detectorRef = useRef<SpotifyDetector | null>(null);
@@ -63,19 +62,36 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     const result = store.ingestPacket(packet, 'mobile');
     if (result.trackChanged) {
       enrichmentRun.current++;
+      metadataPending.current = '';
       if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
       store.setLyricsStatusMessage('Spotify detected. Loading mobile lyrics…');
+    }
+    const needsMetadata = !packet.artist.trim() || !packet.album;
+    if ((result.trackChanged || needsMetadata) && metadataPending.current !== s.uri && (metadataAttempts.current.get(s.uri) ?? 0) < 3) {
+      metadataPending.current = s.uri;
+      if (metadataAttempts.current.size >= 32) metadataAttempts.current.clear();
+      metadataAttempts.current.set(s.uri, (metadataAttempts.current.get(s.uri) ?? 0) + 1);
       const run = enrichmentRun.current;
       const uri = s.uri;
-      // A single enrichment per track, never per heartbeat or repeated anchor.
-      void resolveSpotifyDetectorCatalogMatch({ title: s.title, artist: s.artist, album: s.album,
-        durationMs: s.durationMs, spotifyTrackId: packet.spotifyTrackId }).then(match => {
+      // This bearer is scoped for spclient, not the public Web API. Resolve
+      // the exact track GID, with no artist-dependent search prerequisite.
+      void detector.metadata(uri).then(match => {
         if (!match || !canIngest() || run !== enrichmentRun.current || lastSample.current?.uri !== uri) return;
         if (enriched.current.size >= 32) enriched.current.clear();
         enriched.current.set(uri, { artist: match.artist, album: match.album });
         if (lastSample.current) publish(lastSample.current);
-      }).catch(() => {}).finally(() => {
+      }).catch(error => {
+        if (canIngest() && run === enrichmentRun.current) {
+          const message = error instanceof Error ? error.message : 'Spotify metadata lookup failed.';
+          diagnostics.current.status = message;
+          if (!usePlaybackStore.getState().currentTrack?.artist) store.setLyricsStatusMessage(`${message} Reconnect Spotify to retry artist lookup.`);
+        }
+      }).finally(() => {
+        if (run === enrichmentRun.current && metadataPending.current === uri) metadataPending.current = '';
         if (!canIngest() || run !== enrichmentRun.current) return;
+        // Artist-less title searches can pick the wrong song or fail entirely.
+        // Keep detection running, but wait for metadata before lyrics search.
+        if (!usePlaybackStore.getState().currentTrack?.artist?.trim()) return;
         lyricsTimer.current = setTimeout(() => {
           lyricsTimer.current = null;
           if (canIngest() && usePlaybackStore.getState().currentTrack?.id === packet.trackId) void refreshLyricsForCurrentTrack('auto');
@@ -102,8 +118,9 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     },
   };
   const remount = useCallback(() => {
+    metadataAttempts.current.clear();
     browserRun.current++; setBrowserGeneration(browserRun.current);
-    controlReady.current = false; documentUrl.current = PLAYER_URL;
+    documentUrl.current = PLAYER_URL;
     setSessionNeeded(true); setLoggingOut(false);
   }, []);
   const openBrowser = useCallback(() => {
@@ -117,11 +134,18 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   }, []);
   const sendCommand = useCallback((command: BrowserCommand) => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }
-    if (web.current && controlReady.current) web.current.injectJavaScript(makeBrowserCommandScript(command));
-    else { pendingCommand.current = command; setBrowserOpen(true); }
-  }, [openBrowser]);
+    if (!['toggle', 'previous', 'next', 'seek'].includes(command.type)) return;
+    void detector.control(command as { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }).catch(error => {
+      if (!canIngest()) return;
+      const message = error instanceof Error ? error.message : 'Spotify command failed.';
+      diagnostics.current.status = message; setStatus(message);
+      Alert.alert('Spotify control', message);
+      // A refused seek must replace the screen's optimistic scrub anchor.
+      if (command.type === 'seek' && !message.includes('429')) detector.refresh();
+    });
+  }, [detector, openBrowser]);
   useImperativeHandle(ref, () => ({ openBrowser, reload: () => { remount(); detector.refresh(); },
-    togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback: () => detector.refresh(),
+    togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback: () => { metadataAttempts.current.clear(); detector.refresh(); },
     skipPrevious: () => sendCommand({ type: 'previous' }), skipNext: () => sendCommand({ type: 'next' }),
     seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }), runDiagnostics,
   }), [detector, openBrowser, remount, runDiagnostics, sendCommand]);
@@ -131,7 +155,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     const enrichmentEpoch = enrichmentRun;
     const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { remount(); detector.refresh(); }, logout: () => {
       detector.clear(); enrichmentRun.current++; enriched.current.clear(); lastSample.current = null;
-      pendingCommand.current = null; controlReady.current = false;
+      metadataAttempts.current.clear(); metadataPending.current = '';
       setBrowserOpen(false); setLoggingOut(true);
       browserRun.current++; setBrowserGeneration(browserRun.current);
     } });
@@ -141,7 +165,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     };
   }, [detector, openBrowser, remount]);
   useEffect(() => {
-    if (loggedOut) { detector.clear(); enrichmentRun.current++; pendingCommand.current = null; lastSample.current = null; enriched.current.clear(); }
+    if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }
     const update = () => detector.setEnabled(mobile && !loggedOut && AppState.currentState !== 'background');
     update();
     const sub = AppState.addEventListener('change', next => {
@@ -154,7 +178,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const showWebView = loggingOut || (!loggedOut && (browserOpen || (mobile && sessionNeeded)));
   useEffect(() => {
     if (!showWebView) {
-      controlReady.current = false; browserRun.current++; setBrowserGeneration(browserRun.current);
+      browserRun.current++; setBrowserGeneration(browserRun.current);
     }
   }, [showWebView]);
   useEffect(() => { if (browserOpen && web.current) web.current.injectJavaScript(CONTROL_SCRIPT); }, [browserOpen]);
@@ -180,7 +204,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (run !== browserRun.current) return;
         if (loggingOut) { setLoggingOut(false); return; }
         web.current?.injectJavaScript(CAPTURE_SCRIPT);
-        if (browserOpen || pendingCommand.current) web.current?.injectJavaScript(CONTROL_SCRIPT);
+        if (browserOpen) web.current?.injectJavaScript(CONTROL_SCRIPT);
       }}
       onMessage={e => {
         if (run !== browserRun.current || loggedOut || !mounted.current) return;
@@ -190,10 +214,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         const event = parseBrowserEvent(e.nativeEvent.data);
         if (event?.type === 'signedIn') useSpotifySessionStore.getState().setSignedIn(event.signedIn);
         if (event?.type === 'ready') {
-          controlReady.current = true;
           web.current?.injectJavaScript(makeBrowserCommandScript({ type: 'setMonitoring', enabled: false }));
-          const command = pendingCommand.current; pendingCommand.current = null;
-          if (command) web.current?.injectJavaScript(makeBrowserCommandScript(command));
         }
         if (event?.type === 'error') setStatus(event.message);
       }}

@@ -1,6 +1,7 @@
 import { Buffer } from 'buffer';
+import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
-  sampleFrom, spotifyHost, stateFingerprint, type Sample } from './protocol';
+  sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -34,6 +35,10 @@ export class SpotifyDetector {
   private registered = false;
   private blocked = false;
   private pendingState: { payload: unknown; receivedAt: number } | null = null;
+  private requests = new Set<AbortController>();
+  private metadataCache = new Map<string, TrackMetadata>();
+  private metadataPending = new Map<string, Promise<TrackMetadata>>();
+  private commandPending = false;
   constructor(private callbacks: Callbacks) {}
 
   capture(raw: string, origin: string): boolean {
@@ -81,10 +86,73 @@ export class SpotifyDetector {
     this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
     this.fingerprint = ''; this.lastSourceTimestamp = 0;
     this.blocked = false;
+    this.metadataCache.clear(); this.metadataPending.clear();
+  }
+  async metadata(uri: string): Promise<TrackMetadata> {
+    const cached = this.metadataCache.get(uri);
+    if (cached) return cached;
+    const pending = this.metadataPending.get(uri);
+    if (pending) return pending;
+    const run = this.generation;
+    const lookup = (async () => {
+      const path = `/metadata/4/track/${trackHex(uri)}?market=from_token`;
+      const response = await this.request(path, 'GET');
+      const data = metadataFrom(uri, JSON.parse(new TextDecoder().decode(response)));
+      if (run !== this.generation) throw new Error('Spotify session changed during metadata lookup.');
+      if (this.metadataCache.size >= 32) this.metadataCache.clear();
+      this.metadataCache.set(uri, data);
+      return data;
+    })();
+    this.metadataPending.set(uri, lookup);
+    try { return await lookup; }
+    finally { if (this.metadataPending.get(uri) === lookup) this.metadataPending.delete(uri); }
+  }
+  async control(command: { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }): Promise<void> {
+    if (this.commandPending) throw new Error('Waiting for the previous Spotify command.');
+    const target = this.lastSample?.activeDeviceId;
+    if (!this.enabled || !this.registered || !target) throw new Error('Spotify detector is reconnecting; try again when a device is detected.');
+    if (command.type === 'seek' && !Number.isFinite(command.positionMs)) throw new Error('Invalid seek position.');
+    const endpoint = { toggle: this.lastSample?.playing ? 'pause' : 'resume', previous: 'skip_prev', next: 'skip_next', seek: 'seek_to' }[command.type];
+    // Route to the device observed by Dealer, not a newly mounted web player.
+    const from = new URL(this.route).pathname.split('/').pop()!;
+    const path = `/connect-state/v1/player/command/from/${encodeURIComponent(from)}/to/${encodeURIComponent(target)}`;
+    const value = command.type === 'seek' ? Math.round(Math.max(0, Math.min(this.lastSample!.durationMs || Infinity, command.positionMs!))) : undefined;
+    const body = { command: { endpoint, ...(value !== undefined ? { value } : {}),
+      options: { only_for_local_device: false, system_initiated: false, override_restrictions: false } },
+      connection_type: 'wlan', intent_id: Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('') };
+    this.commandPending = true;
+    try {
+      await this.request(path, 'POST', body);
+      this.callbacks.status(`Spotify ${endpoint} accepted; awaiting the device update.`);
+    } finally { this.commandPending = false; }
+  }
+  private async request(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Uint8Array> {
+    if (!this.enabled || this.blocked || !this.token || !this.route || !this.connectionId) throw new Error('Spotify session is not ready.');
+    const run = this.generation;
+    const controller = new AbortController(); this.requests.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
+      'x-spotify-connection-id': this.connectionId };
+    if (this.clientToken) headers['client-token'] = this.clientToken;
+    if (body !== undefined) { headers['content-type'] = 'application/json'; headers['content-encoding'] = 'gzip'; }
+    try {
+      const response = await fetch(new URL(path, this.route).toString(), { method, headers, signal: controller.signal,
+        ...(body !== undefined ? { body: Uint8Array.from(gzip(JSON.stringify(body))).buffer } : {}) });
+      if (run !== this.generation) throw new Error('Spotify session changed during request.');
+      if (response.status === 401) this.needSession('Spotify session expired. Refreshing login…');
+      if (response.status === 429) { this.blocked = true; this.disconnect(); }
+      if (!response.ok) throw new Error(`Spotify ${method === 'GET' ? 'metadata' : 'control'} HTTP ${response.status}.`);
+      // Read while the abort/timeout is still installed, including slow bodies.
+      const bytes = await response.arrayBuffer();
+      if (run !== this.generation) throw new Error('Spotify session changed during response.');
+      return new Uint8Array(bytes);
+    } finally { clearTimeout(timeout); this.requests.delete(controller); }
   }
   private disconnect() {
     this.generation++;
     this.controller?.abort(); this.controller = null;
+    for (const controller of this.requests) controller.abort();
+    this.requests.clear(); this.metadataPending.clear();
     if (this.heartbeat) clearInterval(this.heartbeat);
     if (this.reconnect) clearTimeout(this.reconnect);
     if (this.expiry) clearTimeout(this.expiry);
