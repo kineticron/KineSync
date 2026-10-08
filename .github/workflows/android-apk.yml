@@ -11,6 +11,14 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      build_variant:
+        description: APK type (development uses Metro and preserves release app data)
+        type: choice
+        default: release
+        options:
+          - release
+          - development
 
 permissions:
   contents: read
@@ -65,6 +73,7 @@ jobs:
       - name: Configure release signing and version
         working-directory: ExpoLyrics
         env:
+          BUILD_VARIANT: ${{ inputs.build_variant || 'release' }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -129,6 +138,16 @@ jobs:
               '\n            signingConfig signingConfigs.release' +
               source.slice(releaseBodyStart);
           }
+          // Sign the development client with the same certificate/package so
+          // adb install -r can preserve existing Spotify cookies and settings.
+          if (process.env.BUILD_VARIANT === 'development') {
+            const debugStart = source.indexOf('        debug {', currentBuildTypesStart);
+            const debugEnd = source.indexOf('\n        }', debugStart);
+            if (debugStart < 0 || debugEnd < 0) throw new Error('Could not locate debug build type');
+            const debugBlock = source.slice(debugStart, debugEnd);
+            if (!debugBlock.includes('signingConfig signingConfigs.debug')) throw new Error('Unexpected debug signing configuration');
+            source = source.slice(0, debugStart) + debugBlock.replace('signingConfig signingConfigs.debug', 'signingConfig signingConfigs.release') + source.slice(debugEnd);
+          }
           const runNumber = Number(process.env.GITHUB_RUN_NUMBER);
           if (!Number.isSafeInteger(runNumber) || runNumber < 1) throw new Error('Invalid GITHUB_RUN_NUMBER');
           const versionCode = 100000 + runNumber;
@@ -145,9 +164,16 @@ jobs:
           # files in the wrong directory.
           # Packaging the universal APK needs more than Expo's default 2 GB heap.
           # Limit workers so native compilation leaves memory for the JVM.
+          if [[ "${BUILD_VARIANT}" == "development" ]]; then
+            gradle_task=assembleDebug
+            apk_path=android/app/build/outputs/apk/debug/app-debug.apk
+          else
+            gradle_task=assembleRelease
+            apk_path=android/app/build/outputs/apk/release/app-release.apk
+          fi
           (cd android && ./gradlew --no-daemon --stacktrace --max-workers=2 \
-            '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' assembleRelease)
-          cp android/app/build/outputs/apk/release/app-release.apk KineSync-Android.apk
+            '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' "${gradle_task}")
+          cp "${apk_path}" KineSync-Android.apk
           if [[ ! -s KineSync-Android.apk ]]; then
             echo "Gradle did not produce an APK." >&2
             exit 1
@@ -170,7 +196,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ExpoLyrics-android-apk
+          name: ${{ inputs.build_variant == 'development' && 'ExpoLyrics-android-development-apk' || 'ExpoLyrics-android-apk' }}
           path: |
             ExpoLyrics/KineSync-Android.apk
             ExpoLyrics/KineSync-Android.apk.sha256
