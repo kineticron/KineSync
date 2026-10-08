@@ -21,7 +21,8 @@ defaults:
 
 jobs:
   ios-development-build:
-    runs-on: macos-latest
+    # Match the SDK 58 / iOS 27 toolchain used by the unsigned device build.
+    runs-on: xcode-27
     timeout-minutes: 120
 
     steps:
@@ -60,6 +61,13 @@ jobs:
             echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
           } >> "${GITHUB_ENV}"
 
+      - name: Verify iOS 27 toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+          [[ $(xcrun --sdk iphoneos --show-sdk-version) == 27.* ]]
+
       - name: Install JS dependencies
         working-directory: ExpoLyrics
         run: npm ci
@@ -81,9 +89,9 @@ jobs:
             ${{ env.HOME }}/Library/Caches/ccache
             ${{ env.HOME }}/.cocoapods
             ${{ env.HOME }}/Library/Caches/CocoaPods
-          key: ios-debug-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
+          key: ios-debug-xcode27-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
           restore-keys: |
-            ios-debug-caches-${{ runner.os }}-
+            ios-debug-xcode27-caches-${{ runner.os }}-
 
       - name: Build Debug development client and locate .app
         env:

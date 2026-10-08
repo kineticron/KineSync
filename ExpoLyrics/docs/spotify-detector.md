@@ -28,3 +28,5 @@ Playback controls and the explicit Spotify browser remain available through the 
 4. Open Spotify diagnostics to share detector state/device/receipt timestamps without credentials. Test background/foreground, desktop/mobile handoff, logout and fresh login.
 
 Local validation: `npm run test:spotify-detector`, `npm run test:spotify-browser`, `npm run test:lyrics`, `npx tsc --noEmit`, `npm run lint`, and an iOS Hermes export. The SDK 58 Worklets test harness supports array closures so the real playback-store jitter/seek checks execute against the current SDK.
+
+The requested development build uses `.github/workflows/ios-development-build.yml` on this branch, with the same Xcode 27 runner/toolchain check as the existing SDK 58 unsigned build. It creates the `ExpoLyrics-development-ipa` Actions artifact (Debug, Expo development client, unsigned for local re-signing). It does not use EAS or publish a release.
