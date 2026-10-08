@@ -238,6 +238,22 @@ export type SpotifyCatalogMatch = {
   durationMs: number;
 };
 
+/** Connect provides an authoritative track URI, unlike a potentially stale
+ * DOM link. Resolve that identity even when Connect omitted artist names. */
+export async function resolveSpotifyDetectorCatalogMatch(track: {
+  title: string; artist: string; album?: string; durationMs?: number; spotifyTrackId?: string;
+}): Promise<SpotifyCatalogMatch | null> {
+  const token = storedSpotifyToken();
+  if (token && /^[a-zA-Z0-9]{22}$/.test(track.spotifyTrackId || '')) {
+    const match = await mobileLyricsService.resolveSpotifyCatalogTrackById(track.spotifyTrackId!, token);
+    if (match && match.id === track.spotifyTrackId) return {
+      spotifyTrackId: match.id, artist: match.artist, album: track.album || match.album || '',
+      durationMs: Number(match.durationMs) || Number(track.durationMs) || 0,
+    };
+  }
+  return track.artist ? resolveSpotifyCatalogMatch(track) : null;
+}
+
 /**
  * Same catalog enrichment the Desktop Bridge uses for id-less playback: resolve
  * the canonical Spotify catalog row from clean title/artist/duration via the

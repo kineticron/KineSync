@@ -75,6 +75,7 @@ import {
   type SpotifyBrowserFallbackHandle,
 } from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
+import { SpotifyNativeDetector } from "@/components/lyrics/spotify-native-detector";
 import { PromotionalBackdrop } from "@/components/ui/promotional-backdrop";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
@@ -1744,7 +1745,9 @@ export default function HomeScreen() {
       </>
       ) : null}
 
-      {!tour.active && !tour.pending && <SpotifyBrowserFallback ref={spotifyBrowserRef} />}
+      {!tour.active && !tour.pending && (Platform.OS === 'ios'
+        ? <SpotifyNativeDetector ref={spotifyBrowserRef} />
+        : <SpotifyBrowserFallback ref={spotifyBrowserRef} />)}
 
       <SettingsMenu
         open={menuOpen}

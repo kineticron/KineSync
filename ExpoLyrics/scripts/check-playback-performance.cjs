@@ -28,11 +28,16 @@ const foreground = (value) => { appState.currentState = value; appListeners.forE
 const ui = vm.createContext({});
 function worklet(fn) {
   assert.ok(fn.__workletHash, 'execute the production-transformed UI callback');
-  const closure = {};
-  for (const [name, value] of Object.entries(fn.__closure)) {
+  // Worklets 0.13 (SDK 58) serializes closures as arrays; older versions used
+  // named objects. Preserve the production representation in the test runtime.
+  const arrayClosure = Array.isArray(fn.__closure);
+  const names = arrayClosure ? /(?:var|let|const)\s*\[([^\]]*)\]\s*=\s*this\.__closure/.exec(fn.__initData.code)?.[1].split(',') ?? [] : [];
+  const closure = arrayClosure ? [] : {};
+  for (const [key, value] of Object.entries(fn.__closure ?? {})) {
+    const name = arrayClosure ? names[Number(key)]?.trim() : key;
     // Non-worklet functions cross as opaque remote references; only runOnJS
     // can call them. Direct invocation on the UI runtime would fail this test.
-    closure[name] = ['cancelAnimation', 'runOnJS', 'withTiming'].includes(name) ? value : typeof value === 'function'
+    closure[key] = ['cancelAnimation', 'runOnJS', 'withTiming'].includes(name) ? value : typeof value === 'function'
       ? value.__workletHash ? worklet(value) : { remote: value }
       : value;
   }
@@ -86,9 +91,10 @@ function load(relative) {
   if (relative.endsWith('playback-controls.tsx')) {
     babel.traverse(transformed.ast, {
       AssignmentExpression({ node }) {
-        if (node.left.type !== 'MemberExpression' || node.left.property.name !== '__closure' || node.right.type !== 'ObjectExpression') return;
-        for (const property of node.right.properties) {
-          assert.notEqual(property.key?.name, 'fullscreenActions', 'UI worklets must not serialize React elements or their Fiber owners');
+        if (node.left.type !== 'MemberExpression' || node.left.property.name !== '__closure') return;
+        const captures = node.right.type === 'ObjectExpression' ? node.right.properties : node.right.type === 'ArrayExpression' ? node.right.elements : [];
+        for (const property of captures) {
+          assert.notEqual(property?.key?.name ?? property?.name, 'fullscreenActions', 'UI worklets must not serialize React elements or their Fiber owners');
         }
       },
     });

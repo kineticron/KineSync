@@ -26,6 +26,7 @@ const React = require('react');
     '@/store/spotify-session-store': { useSpotifySessionStore: { getState: () => ({ signedIn: true, loggedOut: false }) } },
     '@/store/playback-store': { usePlaybackStore: { getState: () => playback, subscribe: () => () => {} }, startPlaybackClock() {} },
     '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack() {} }, '@/lib/mobile-lyrics-settings': { saveMobileLyricsSettings() {} },
+    '@/lib/spotify-player-actions': { registerSpotifyPlayerActions: () => () => {} },
     '@/lib/mobile-lyrics-client': { resolveSpotifyCatalogMatch: () => { catalogCalls++; return new Promise(resolve => { resolveCatalog = resolve; }); } },
     '@/lib/spotify-browser': { parseBrowserEvent: JSON.parse, isTrustedSpotifyWebViewMessageUrl: () => true, makeBrowserCommandScript: JSON.stringify,
       installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth' },

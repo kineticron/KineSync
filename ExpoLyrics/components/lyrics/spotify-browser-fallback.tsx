@@ -45,6 +45,8 @@ import {
   usePlaybackStore,
 } from "@/store/playback-store";
 import type { PlaybackPacket } from "@/types/bridge";
+import { registerSpotifyPlayerActions } from "@/lib/spotify-player-actions";
+export { requestReloadSpotifyBrowser, requestLogoutSpotifyBrowser, requestOpenSpotifyBrowser } from "@/lib/spotify-player-actions";
 
 const DESKTOP_WEB_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
@@ -76,21 +78,6 @@ type BrowserTrackMetadata = {
 
 // Onboarding signs in through its own WebView; cookies are shared, so this one
 // only needs a nudge to pick the session up.
-let reloadBrowserCallback: (() => void) | null = null;
-let openBrowserCallback: (() => void) | null = null;
-
-export function requestReloadSpotifyBrowser() {
-  reloadBrowserCallback?.();
-}
-
-export function requestLogoutSpotifyBrowser() {
-  logoutBrowserCallback?.();
-}
-let logoutBrowserCallback: (() => void) | null = null;
-
-export function requestOpenSpotifyBrowser() {
-  openBrowserCallback?.();
-}
 
 export type SpotifyBrowserFallbackHandle = {
   openBrowser: () => void;
@@ -260,16 +247,12 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       }), [refreshBrowser, syncBrowserMonitoring]);
 
     useEffect(() => {
-      logoutBrowserCallback = () => {
+      const unregister = registerSpotifyPlayerActions({ logout: () => {
         setBrowserOpen(false);
         getActiveWebView()?.injectJavaScript('window.location.href="https://accounts.spotify.com/logout"; true;');
-      };
-      reloadBrowserCallback = () => refreshBrowser(true, true);
-      openBrowserCallback = openBrowser;
+      }, reload: () => refreshBrowser(true, true), open: openBrowser });
       return () => {
-        logoutBrowserCallback = null;
-        reloadBrowserCallback = null;
-        openBrowserCallback = null;
+        unregister();
         if (lyricsRefreshTimerRef.current) {
           clearTimeout(lyricsRefreshTimerRef.current);
         }
