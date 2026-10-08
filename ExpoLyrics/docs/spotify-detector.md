@@ -32,6 +32,10 @@ Protocol references: [Spotcontrol metadata implementation](https://github.com/mc
 
 ## Device test
 
+The SDK 58 x86 development APK was built on `detector-refactor` in [Android Actions run 37824788307](https://github.com/kineticron/KineSync/actions/runs/37824788307). Its checksum and signing certificate were verified before updating the existing BlueStacks Android 7.1.1 installation with `adb install -r`, preserving app data. Core library desugaring resolved the development launcher's startup crash, and the app loaded its current Android JavaScript from Metro over ADB forwarding.
+
+The live Spotify test is currently blocked before authentication: the emulator's WebView reports an untrusted certificate authority on the sign-in page. The host's validated Spotify TLS chain is issued by its Avast HTTPS-scanning root, which the emulator does not trust. No TLS checks have been disabled. Native observer registration, live metadata/lyrics, and server-accepted controls remain unverified on this device until its certificate trust and an active Spotify playback device are available. Android regression tests cover the native capture/bootstrap, enrichment, commands, and lifecycle independently of that account/network condition.
+
 1. Select Mobile-Only and sign in through the existing settings/onboarding flow.
 2. Start music in the official Spotify app, then return to KineSync. If setup needs a nudge, open Spotify from KineSync and open its device picker. Close the browser after capture.
 3. Verify lyrics continue while the WebView is unmounted. Let a track play uninterrupted, pause/resume from Control Center, seek, and change tracks. Look for lyric jumps or unexpected backward movement.
