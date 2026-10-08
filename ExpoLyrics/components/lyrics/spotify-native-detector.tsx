@@ -1,10 +1,10 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Button, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Button, Platform, Share, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 import { SpotifyDetector } from '@/lib/spotify-detector/client';
-import { bootstrap } from '@/lib/spotify-detector/bootstrap';
+import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
 import type { Sample } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
@@ -19,11 +19,13 @@ import { usePlayerTourStore } from '@/store/player-tour-store';
 import type { SpotifyBrowserFallbackHandle } from './spotify-browser-fallback';
 
 const PLAYER_URL = 'https://open.spotify.com/';
-const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}`;
+const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}`;
 const CONTROL_SCRIPT = `${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
-const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+const USER_AGENT = Platform.OS === 'android'
+  ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
+  : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
 
-/** iOS mobile-only: WKWebView bootstraps/renews login, Dealer owns detection.
+/** Native mobile-only: WebView bootstraps/renews login, Dealer owns detection.
  * Controls and metadata use the captured spclient session directly. */
 export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
   const mobile = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
@@ -109,7 +111,12 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       publish(s);
       setStatus(`Spotify detector active · ${s.device || 'Spotify device'}`);
     },
-    status: s => { if (mounted.current) { diagnostics.current.status = s; setStatus(s); } },
+    status: s => {
+      if (mounted.current) {
+        diagnostics.current.status = s; setStatus(s);
+        if (__DEV__) console.debug('[Spotify detector]', s);
+      }
+    },
     sessionNeeded: () => { if (mounted.current && !useSpotifySessionStore.getState().loggedOut) setSessionNeeded(true); },
     authenticated: (token, expiresAt) => {
       if (!mounted.current || useSpotifySessionStore.getState().loggedOut) return;
@@ -226,7 +233,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
 });
 const styles = StyleSheet.create({
   root: { ...StyleSheet.absoluteFill, backgroundColor: '#0A0B11', zIndex: 40 },
-  hidden: { transform: [{ translateX: -10000 }] },
+  hidden: Platform.OS === 'android' ? { opacity: 0.01, elevation: 0, zIndex: -1 } : { transform: [{ translateX: -10000 }] },
   header: { padding: 14, backgroundColor: '#0A0B11' },
   title: { color: '#FFF', fontSize: 18, fontWeight: '600' }, status: { color: '#AAB5BB', marginVertical: 8 },
   buttons: { flexDirection: 'row', justifyContent: 'space-between' }, web: { flex: 1 },

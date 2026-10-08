@@ -145,3 +145,38 @@ export const bootstrap = String.raw`(function () {
   window.addEventListener('pagehide',function(){clearInterval(timer);});
   send({type:'notice',message:'Network capture installed.'});
 })(); true;`;
+
+// Android can defer its existing Connect observer until local playback starts.
+// Register that already-created controller once to discover the observer route,
+// without polling player state, creating a player, or transferring playback.
+export const bootstrapAndroidObserver = String.raw`(function () {
+  if (location.origin !== 'https://open.spotify.com' || window.__spotifyDetectorObserverBootstrap) return;
+  window.__spotifyDetectorObserverBootstrap = true;
+  var attempts = 0, stopped = false, timer = 0;
+  window.addEventListener('pagehide', function () { stopped = true; window.clearTimeout(timer); });
+  var discover = function () {
+    if (stopped) return;
+    var root = document.querySelector('[data-testid="now-playing-bar"], [aria-label="Now playing bar"], footer');
+    var key = root && Object.keys(root).find(function (k) { return k.indexOf('__reactFiber') === 0; });
+    var fiber = key && root[key], controller = null;
+    for (var depth = 0; fiber && depth < 220; depth += 1, fiber = fiber.return) {
+      var container = fiber.memoizedProps && fiber.memoizedProps.value;
+      if (!container || !(container._map instanceof Map)) continue;
+      container._map.forEach(function (entry, name) {
+        if (String(name) !== 'Symbol(PlayerSDK)') return;
+        var candidate = entry && entry.instance && entry.instance.harmony && entry.instance.harmony._controller;
+        if (candidate && typeof candidate.register === 'function' && typeof candidate.getCurrentState === 'function') controller = candidate;
+      });
+      if (controller) break;
+    }
+    if (controller) {
+      Promise.resolve().then(function () { if (!stopped) return controller.register(); }).catch(function () {
+        // Session capture remains mounted; an explicit reconnect can try again.
+        window.ReactNativeWebView.postMessage(JSON.stringify({type:'notice',message:'Android observer registration failed. Reconnect Spotify to retry.'}));
+      });
+      return;
+    }
+    if (++attempts < 40) timer = window.setTimeout(discover, 500);
+  };
+  discover();
+})(); true;`;

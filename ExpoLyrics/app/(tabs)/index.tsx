@@ -1745,7 +1745,7 @@ export default function HomeScreen() {
       </>
       ) : null}
 
-      {!tour.active && !tour.pending && (Platform.OS === 'ios'
+      {!tour.active && !tour.pending && (Platform.OS === 'ios' || Platform.OS === 'android'
         ? <SpotifyNativeDetector ref={spotifyBrowserRef} />
         : <SpotifyBrowserFallback ref={spotifyBrowserRef} />)}
 

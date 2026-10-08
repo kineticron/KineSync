@@ -19,6 +19,15 @@ on:
         options:
           - release
           - development
+      architecture:
+        description: Native architectures (use x86 for the existing BlueStacks instance)
+        type: choice
+        default: universal
+        options:
+          - universal
+          - x86
+          - x86_64
+          - arm64-v8a
 
 permissions:
   contents: read
@@ -74,6 +83,7 @@ jobs:
         working-directory: ExpoLyrics
         env:
           BUILD_VARIANT: ${{ inputs.build_variant || 'release' }}
+          BUILD_ARCHITECTURE: ${{ inputs.architecture || 'universal' }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -171,8 +181,12 @@ jobs:
             gradle_task=assembleRelease
             apk_path=android/app/build/outputs/apk/release/app-release.apk
           fi
+          architecture_args=()
+          if [[ "${BUILD_ARCHITECTURE}" != "universal" ]]; then
+            architecture_args=("-PreactNativeArchitectures=${BUILD_ARCHITECTURE}")
+          fi
           (cd android && ./gradlew --no-daemon --stacktrace --max-workers=2 \
-            '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' "${gradle_task}")
+            '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' "${architecture_args[@]}" "${gradle_task}")
           cp "${apk_path}" KineSync-Android.apk
           if [[ ! -s KineSync-Android.apk ]]; then
             echo "Gradle did not produce an APK." >&2

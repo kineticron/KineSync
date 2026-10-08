@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
+const platform = process.argv.includes('--android') ? 'android' : 'ios';
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
 let cursor = 0, dirty = false, actions, instance;
 let tour = { active: false, pending: false };
@@ -36,11 +37,11 @@ const callableStore = state => Object.assign(fn => fn(state), { getState: () => 
 const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } };
 const mocks = {
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
-  'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState,
+  'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
     Share: { share: async () => {} }, Alert: { alert() {} }, StyleSheet: { create: x => x, absoluteFill: {} } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
-  '@/lib/spotify-detector/client': { SpotifyDetector: Detector }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture' },
+  '@/lib/spotify-detector/client': { SpotifyDetector: Detector }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
   '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, artist: s.artist || '', album: s.album || '' }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
     makeBrowserCommandScript: JSON.stringify, parseBrowserEvent: JSON.parse,
@@ -54,6 +55,7 @@ const mocks = {
   '@/store/player-tour-store': { usePlayerTourStore: { getState: () => tour } },
 };
 const context = { exports: {}, require: name => { assert(name in mocks, name); return mocks[name]; },
+  __DEV__: false,
   Date, setTimeout: fn => { scheduled.push(fn); return scheduled.length; }, clearTimeout() {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../components/lyrics/spotify-native-detector.tsx'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
@@ -73,6 +75,9 @@ render();
 let web = find(tree); assert(web, 'cold launch bootstraps shared login cookies');
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 assert.equal(web.props.sharedCookiesEnabled, true);
+assert.equal(web.props.userAgent.includes('Chrome/'), platform === 'android');
+assert.equal(web.props.injectedJavaScriptBeforeContentLoaded.includes('android-observer'), platform === 'android');
+if (platform === 'android') assert.equal(tree.props.style[1].opacity, 0.01, 'Chromium bootstrap stays in the viewport');
 assert.equal(instance.enabled, true);
 web.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'playback', positionMs: 9999 }), url: 'https://open.spotify.com/' } });
 assert.equal(packets.length, 0, 'browser playback is never mixed with native detector timing');
@@ -117,5 +122,5 @@ for (const hook of hooks) hook?.cleanup?.();
 assert.equal(listeners.size, 0); assert.equal(actions, null);
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 4000 });
 assert.equal(packets.length, acceptedPackets, 'unmounted detector cannot write playback');
-console.log('Native detector lifecycle checks passed: shared login, browser unmount, single state source, native controls, tour/background cleanup and logout.');
+console.log(`Native detector lifecycle checks passed (${platform}): shared login, browser unmount, single state source, native controls, tour/background cleanup and logout.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

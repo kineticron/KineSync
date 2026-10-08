@@ -61,6 +61,7 @@
       ],
       "./plugins/with-network-security-config.js",
       "./plugins/with-release-signing.js",
+      "./plugins/with-android-desugaring.js",
       "./plugins/with-live-activity.js",
       "./plugins/with-high-refresh-rate.js",
       [

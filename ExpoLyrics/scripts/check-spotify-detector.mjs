@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import { build } from 'esbuild';
 import { ungzip } from 'pako';
 
@@ -43,6 +44,27 @@ try {
   globalThis.setTimeout = (fn, ms) => { timers.set(++timerId, { fn, ms, interval: false }); return timerId; };
   globalThis.setInterval = (fn, ms) => { timers.set(++timerId, { fn, ms, interval: true }); return timerId; };
   globalThis.clearTimeout = globalThis.clearInterval = id => timers.delete(id);
+  const bootstrapSource = await import('node:fs/promises').then(fs => fs.readFile('./lib/spotify-detector/bootstrap.ts', 'utf8'));
+  const bootstrapMarker = 'export const bootstrapAndroidObserver = String.raw`';
+  const bootstrapStart = bootstrapSource.indexOf(bootstrapMarker) + bootstrapMarker.length;
+  const androidScript = bootstrapSource.slice(bootstrapStart, bootstrapSource.indexOf('`;', bootstrapStart));
+  let androidRoot = null, androidRegistrations = 0;
+  const pagehide = [];
+  const androidWindow = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+    addEventListener: (_, fn) => pagehide.push(fn), ReactNativeWebView: { postMessage() {} } };
+  const androidInstall = () => new Function('window', 'document', 'location', androidScript)(androidWindow,
+    { querySelector: () => androidRoot }, { origin: 'https://open.spotify.com' });
+  androidInstall();
+  const discovery = [...timers.entries()].find(([, t]) => t.ms === 500);
+  assert(discovery, 'Android waits for the existing SDK to mount');
+  androidRoot = { __reactFiberFixture: { memoizedProps: { value: { _map: new Map([[Symbol('PlayerSDK'), { instance: { harmony: { _controller: {
+    register: () => { androidRegistrations++; return Promise.resolve(); },
+    getCurrentState: () => { throw new Error('bootstrap must not poll playback'); },
+  } } } }]]) } } } };
+  timers.delete(discovery[0]); discovery[1].fn(); await flush(); androidInstall(); await flush();
+  assert.equal(androidRegistrations, 1, 'Android registers the existing observer only once');
+  assert.equal(timers.size, 0, 'observer bootstrap does not create playback polling');
+  pagehide.forEach(fn => fn());
   globalThis.fetch = async (url, options) => {
     requests.push({ url, ...options });
     if (options.method === 'GET') return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(metadata)).buffer };

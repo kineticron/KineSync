@@ -45,6 +45,9 @@ export class SpotifyDetector {
     try {
       if (new URL(origin).origin !== 'https://open.spotify.com') return false;
       const e = JSON.parse(raw);
+      if (e.type === 'notice' && e.message === 'Android observer registration failed. Reconnect Spotify to retry.' && !this.registered) {
+        this.callbacks.status(e.message); return true;
+      }
       if (e.type === 'credentials' && e.authenticated === true && typeof e.token === 'string' && e.token.length > 0 && e.token.length < 4096) {
         const changed = e.token !== this.token;
         this.token = e.token;
