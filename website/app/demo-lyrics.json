@@ -1,0 +1,198 @@
+[
+  {
+    "lineStartTime": 0,
+    "lineEndTime": 4600,
+    "syllables": [
+      {
+        "text": "Follow ",
+        "startTime": 0,
+        "endTime": 650
+      },
+      {
+        "text": "the ",
+        "startTime": 650,
+        "endTime": 1300
+      },
+      {
+        "text": "lyrics",
+        "startTime": 1300,
+        "endTime": 4600
+      }
+    ],
+    "translatedText": "Suis les paroles",
+    "oppositeAligned": false
+  },
+  {
+    "lineStartTime": 5000,
+    "lineEndTime": 9600,
+    "syllables": [
+      {
+        "text": "Testing ",
+        "startTime": 5000,
+        "endTime": 5650
+      },
+      {
+        "text": "one ",
+        "startTime": 5650,
+        "endTime": 6300
+      },
+      {
+        "text": "two ",
+        "startTime": 6300,
+        "endTime": 6950
+      },
+      {
+        "text": "three",
+        "startTime": 6950,
+        "endTime": 9600
+      }
+    ],
+    "translatedText": "Test un deux trois",
+    "backgroundSyllables": [
+      {
+        "text": "Background lyrics",
+        "startTime": 6800,
+        "endTime": 9600
+      }
+    ],
+    "backgroundTranslatedText": "Paroles de fond",
+    "oppositeAligned": false
+  },
+  {
+    "lineStartTime": 10000,
+    "lineEndTime": 14600,
+    "syllables": [
+      {
+        "text": "If ",
+        "startTime": 10000,
+        "endTime": 10650
+      },
+      {
+        "text": "you ",
+        "startTime": 10650,
+        "endTime": 11300
+      },
+      {
+        "text": "can ",
+        "startTime": 11300,
+        "endTime": 11950
+      },
+      {
+        "text": "read ",
+        "startTime": 11950,
+        "endTime": 12600
+      },
+      {
+        "text": "this ",
+        "startTime": 12600,
+        "endTime": 13250
+      },
+      {
+        "text": "it ",
+        "startTime": 13250,
+        "endTime": 13900
+      },
+      {
+        "text": "works",
+        "startTime": 13900,
+        "endTime": 14600
+      }
+    ],
+    "translatedText": "Si vous pouvez le lire ça marche",
+    "oppositeAligned": false
+  },
+  {
+    "lineStartTime": 15000,
+    "lineEndTime": 19600,
+    "syllables": [
+      {
+        "text": "This ",
+        "startTime": 15000,
+        "endTime": 15650
+      },
+      {
+        "text": "is ",
+        "startTime": 15650,
+        "endTime": 16300
+      },
+      {
+        "text": "a ",
+        "startTime": 16300,
+        "endTime": 16950
+      },
+      {
+        "text": "cool ",
+        "startTime": 16950,
+        "endTime": 17600
+      },
+      {
+        "text": "app ",
+        "startTime": 17600,
+        "endTime": 18250
+      },
+      {
+        "text": "waow",
+        "startTime": 18250,
+        "endTime": 19600
+      }
+    ],
+    "translatedText": "C'est un appli super waow",
+    "backgroundSyllables": [
+      {
+        "text": "Background lyrics",
+        "startTime": 16800,
+        "endTime": 19600
+      }
+    ],
+    "backgroundTranslatedText": "Paroles de fond",
+    "oppositeAligned": true
+  },
+  {
+    "lineStartTime": 20000,
+    "lineEndTime": 24600,
+    "syllables": [
+      {
+        "text": "Well ",
+        "startTime": 20000,
+        "endTime": 20650
+      },
+      {
+        "text": "I ",
+        "startTime": 20650,
+        "endTime": 21300
+      },
+      {
+        "text": "guess ",
+        "startTime": 21300,
+        "endTime": 21950
+      },
+      {
+        "text": "this ",
+        "startTime": 21950,
+        "endTime": 22600
+      },
+      {
+        "text": "song ",
+        "startTime": 22600,
+        "endTime": 23250
+      },
+      {
+        "text": "has ",
+        "startTime": 23250,
+        "endTime": 23900
+      },
+      {
+        "text": "to ",
+        "startTime": 23900,
+        "endTime": 24550
+      },
+      {
+        "text": "end",
+        "startTime": 24550,
+        "endTime": 24600
+      }
+    ],
+    "translatedText": "Bon je suppose que cette chanson doit finir",
+    "oppositeAligned": false
+  }
+]

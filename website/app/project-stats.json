@@ -1,0 +1,11 @@
+{
+  "stars": 4,
+  "contributors": 1,
+  "license": "GPL-3.0",
+  "updatedAt": "2026-10-09T08:33:13.805Z",
+  "cadence": {
+    "days": 7,
+    "releases": 6,
+    "windowDays": 90
+  }
+}
