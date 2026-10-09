@@ -19,6 +19,7 @@ Open http://localhost:3000/KineSync/.
 npm run build
 npm run typecheck
 npm test
+npm run format:check
 ```
 
 The exported site is in `out/`. The default base path is `/KineSync`. Set `NEXT_PUBLIC_BASE_PATH` to an empty string when hosting at a domain root. The canonical URL, sitemap, and structured data should also be updated for a different host.

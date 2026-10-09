@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "preview": "node scripts/preview.mjs",
+    "format:check": "prettier --check app scripts tests next.config.ts tsconfig.json package.json .prettierrc.json",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs"
   },
@@ -22,6 +23,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "prettier": "3.9.9",
     "sharp": "0.35.5",
     "typescript": "~5.9.3"
   }
