@@ -6,7 +6,7 @@ import { router } from 'expo-router';
 import { SpotifyDetector } from '@/lib/spotify-detector/client';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
-import type { Sample } from '@/lib/spotify-detector/protocol';
+import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
   isAllowedSpotifyWebViewNavigation, isTrustedSpotifyWebViewMessageUrl,
   makeBrowserCommandScript, parseBrowserEvent, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST, type BrowserCommand } from '@/lib/spotify-browser';
@@ -41,7 +41,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const browserRun = useRef(0);
   const lastSample = useRef<Sample | null>(null);
   const lyricsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const enriched = useRef(new Map<string, { artist: string; album: string }>());
+  const enriched = useRef(new Map<string, TrackMetadata>());
   const enrichmentRun = useRef(0);
   const metadataPending = useRef('');
   const metadataAttempts = useRef(new Map<string, number>());
@@ -59,7 +59,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const publish = (s: Sample) => {
     if (!canIngest()) return;
     const metadata = enriched.current.get(s.uri);
-    const packet = detectorPacket(metadata ? { ...s, artist: metadata.artist || s.artist, album: metadata.album || s.album } : s);
+    const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title, artist: metadata.artist || s.artist, album: metadata.album || s.album, artworkUrl: metadata.artworkUrl || s.artworkUrl } : s);
     const store = usePlaybackStore.getState();
     const result = store.ingestPacket(packet, 'mobile');
     if (result.trackChanged) {
@@ -68,8 +68,8 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
       store.setLyricsStatusMessage('Spotify detected. Loading mobile lyrics…');
     }
-    const needsMetadata = !packet.artist.trim() || !packet.album;
-    if ((result.trackChanged || needsMetadata) && metadataPending.current !== s.uri && (metadataAttempts.current.get(s.uri) ?? 0) < 3) {
+    const needsMetadata = !packet.artist.trim() || !packet.album || !packet.title.trim() || /^unknown track$/i.test(packet.title.trim()) || !packet.artworkUrl;
+    if ((result.trackChanged || (!metadata && needsMetadata)) && metadataPending.current !== s.uri && (metadataAttempts.current.get(s.uri) ?? 0) < 3) {
       metadataPending.current = s.uri;
       if (metadataAttempts.current.size >= 32) metadataAttempts.current.clear();
       metadataAttempts.current.set(s.uri, (metadataAttempts.current.get(s.uri) ?? 0) + 1);
@@ -80,7 +80,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       void detector.metadata(uri).then(match => {
         if (!match || !canIngest() || run !== enrichmentRun.current || lastSample.current?.uri !== uri) return;
         if (enriched.current.size >= 32) enriched.current.clear();
-        enriched.current.set(uri, { artist: match.artist, album: match.album });
+        enriched.current.set(uri, match);
         if (lastSample.current) publish(lastSample.current);
       }).catch(error => {
         if (canIngest() && run === enrichmentRun.current) {

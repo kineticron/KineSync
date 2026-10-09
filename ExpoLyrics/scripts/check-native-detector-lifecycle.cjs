@@ -29,7 +29,7 @@ class Detector {
   setEnabled(value) { this.enabled = value; }
   capture() { return true; }
   refresh() {}
-  async metadata() { return { artist: 'Resolved Artist', album: 'Album' }; }
+  async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
   async control(command) { commands.push(command); }
   clear() { this.enabled = false; this.clears++; }
 }
@@ -42,7 +42,7 @@ const mocks = {
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
   '@/lib/spotify-detector/client': { SpotifyDetector: Detector }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
-  '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, artist: s.artist || '', album: s.album || '' }) },
+  '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
     makeBrowserCommandScript: JSON.stringify, parseBrowserEvent: JSON.parse,
     isAllowedSpotifyWebViewNavigation: url => /^https:\/\/(open|accounts)\.spotify\.com\//.test(url),
@@ -95,12 +95,18 @@ assert.equal(JSON.parse(injected.at(-1)).enabled, false, 'browser playback polli
 ref.current.togglePlayPause(); assert.equal(commands.at(-1).type, 'toggle', 'mounted browser does not receive transport commands');
 for (let n = 0; n < 10; n++) await Promise.resolve();
 scheduled.splice(0).forEach(fn => fn());
-instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Test', artist: '', positionMs: 1000 });
+instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Unknown track', artist: '', artworkUrl: 'https://i.scdn.co/image/stale', positionMs: 1000 });
 assert.equal(playback.currentTrack.artist, '', 'raw observer may omit artist');
 const searchesBefore = searches.length;
 assert.equal(scheduled.length, 0, 'missing artist cannot launch a lyrics search');
 for (let n = 0; n < 10; n++) await Promise.resolve();
 assert.equal(playback.currentTrack.artist, 'Resolved Artist', 'native metadata fills artist before searching');
+assert.equal(packets.at(-1).title, 'Resolved Title', 'ID-only snapshots receive the exact catalog title');
+assert.equal(packets.at(-1).artworkUrl, 'https://i.scdn.co/image/resolved', 'catalog artwork replaces stale observer artwork');
+instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Unknown track', artist: '', positionMs: 2000 });
+assert.equal(packets.at(-1).title, 'Resolved Title', 'subsequent sparse anchors retain the enriched title');
+assert.equal(packets.at(-1).artworkUrl, 'https://i.scdn.co/image/resolved', 'subsequent sparse anchors retain the enriched cover');
+assert.equal(packets.at(-1).positionMs, 2000, 'enrichment preserves native position anchors');
 scheduled.splice(0).forEach(fn => fn());
 assert.equal(searches.length, searchesBefore + 1);
 const acceptedPackets = packets.length;
