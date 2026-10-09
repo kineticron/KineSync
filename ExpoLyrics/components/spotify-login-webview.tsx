@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 
 import {
@@ -10,14 +10,18 @@ import {
 } from '@/lib/spotify-browser';
 
 const LOGIN_URL = 'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
+const PLAYER_URL = 'https://open.spotify.com/';
+const ANDROID_PLAYER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
 export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage'>) {
   const [generation, setGeneration] = useState(0);
   const [error, setError] = useState(false);
+  const [playerPhase, setPlayerPhase] = useState(false);
   const documentUrl = useRef(LOGIN_URL);
   const retry = () => {
     documentUrl.current = LOGIN_URL;
     setError(false);
+    setPlayerPhase(false);
     setGeneration(value => value + 1);
   };
 
@@ -29,18 +33,33 @@ export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage
         </View>
       )}
       <WebView
-        key={`spotify-login-${generation}`}
-        source={{ uri: LOGIN_URL }}
+        key={`spotify-login-${generation}-${playerPhase ? 'player' : 'accounts'}`}
+        source={{ uri: playerPhase ? PLAYER_URL : LOGIN_URL }}
         originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
         // Use the real browser identity for Accounts and its security challenges.
         // Desktop emulation belongs to the playback WebView, not sign-in.
+        userAgent={playerPhase ? ANDROID_PLAYER_USER_AGENT : undefined}
+        contentMode={playerPhase ? 'desktop' : 'recommended'}
         injectedJavaScript={spotifyAuthProbeScript}
         onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
           const allowed = isAllowedSpotifyLoginNavigation(url, isTopFrame);
+          if (allowed && isTopFrame !== false && Platform.OS === 'android' && !playerPhase &&
+              /^https:\/\/open\.spotify\.com\//.test(url)) {
+            // Accounts cookies are already shared. Remount the player with its
+            // desktop identity before Android's unsupported mobile player loads.
+            documentUrl.current = PLAYER_URL;
+            setPlayerPhase(true);
+            return false;
+          }
           if (allowed && isTopFrame !== false) documentUrl.current = url;
           return allowed;
         }}
-        onNavigationStateChange={({ url }) => { documentUrl.current = url; }}
+        onNavigationStateChange={({ url }) => {
+          documentUrl.current = url;
+          if (Platform.OS === 'android' && !playerPhase && /^https:\/\/open\.spotify\.com\//.test(url)) {
+            setPlayerPhase(true);
+          }
+        }}
         sharedCookiesEnabled
         thirdPartyCookiesEnabled
         domStorageEnabled
