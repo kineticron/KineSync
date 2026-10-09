@@ -32,7 +32,9 @@ for (const engine of ['spicy', 'amll']) {
       readFileSync(resolve(`public/previews/${engine}.html`), 'utf8')
     )
     assert.equal(digest(html), manifest.renderers[engine].htmlSha256)
-    const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
+    const scripts = [
+      ...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)
+    ]
     assert.ok(scripts.length > 0)
     for (const script of scripts)
       assert.doesNotThrow(() => new Script(script[1]))
