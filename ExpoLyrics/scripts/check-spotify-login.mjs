@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { build } from 'esbuild';
@@ -54,7 +55,7 @@ const source = fs.readFileSync('components/spotify-login-webview.tsx', 'utf8');
 const modules = {
   react: { useRef: current => ({ current }), useState: initial => { const id = index++; return [initial, value => changes.push({ id, value })]; } },
   'react/jsx-runtime': { jsx, jsxs: jsx },
-  'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
+  'react-native': { Platform: { OS: 'ios' }, View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
   'react-native-webview': { WebView: 'WebView' },
   '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
 };
@@ -83,4 +84,20 @@ const retry = nodes.find(node => node.type === 'Pressable');
 assert(retry, 'Retry must also be available for an unreported stall');
 retry.props.onPress();
 assert(changes.some(change => change.id === 0 && typeof change.value === 'function' && change.value(0) === 1));
+modules['react-native'].Platform.OS = 'android';
+index = 0;
+const androidWebView = flatten(context.exports.SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
+assert.equal(androidWebView.props.userAgent, undefined, 'Android Accounts keeps its native identity for challenges');
+assert.equal(androidWebView.props.onShouldStartLoadWithRequest({ url: 'https://open.spotify.com/', isTopFrame: true }), false,
+  'Android must remount the desktop player before the unsupported mobile player loads');
+assert(changes.some(change => change.id === 2 && change.value === true), 'Player navigation starts the desktop capture phase');
+assert(androidWebView.props.onShouldStartLoadWithRequest({ url: 'https://challenge.spotify.com/c/www/verify', isTopFrame: true }),
+  'Accounts challenges remain native on Android');
+index = 0;
+modules.react.useState = initial => [index++ === 2 ? true : initial, () => {}];
+const desktopPlayer = flatten(context.exports.SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
+assert.equal(desktopPlayer.props.source.uri, 'https://open.spotify.com/');
+assert.match(desktopPlayer.props.userAgent, /Windows NT.*Chrome\/137/);
+assert.equal(desktopPlayer.props.contentMode, 'desktop');
+assert.equal(desktopPlayer.props.sharedCookiesEnabled, true);
 console.log('Spotify login checks passed: challenge frames, native browser identity, player-only probes, confirmed sign-in, and process recovery.');

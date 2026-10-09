@@ -630,6 +630,9 @@ export const installBrowserControlScript = String.raw`
       if (!slider) return 0;
       var rawMaximum = Number(slider.getAttribute('aria-valuemax') || slider.max || 0);
       if (!finite(rawMaximum) || rawMaximum <= 0) return 0;
+      // Chromium's Spotify range can be a ratio (0..1) or percentage
+      // (0..100). Those units are not seconds and cannot supply duration.
+      if (rawMaximum <= 100) return 0;
       return rawMaximum > 10000 ? Math.round(rawMaximum) : Math.round(rawMaximum * 1000);
     };
     var playbackDurationPosition = function () {
@@ -1093,11 +1096,13 @@ export const installBrowserControlScript = String.raw`
       input.dispatchEvent(new Event('change', { bubbles: true }));
     };
     var seek = function (targetMs) {
-      var data = progressData();
-      if (!data || !isEnabled(data.slider)) throw new Error('Seek is unavailable in the persistent Spotify player.');
+      targetMs = Number(targetMs);
+      if (!finite(targetMs)) throw new Error('Invalid Spotify seek position.');
+      var slider = progressSlider();
+      var data = connectSampleIsFresh() ? estimateSample(connectSample, 'spotify-connect', 0) : progressData();
+      if (!data || !isEnabled(slider)) throw new Error('Seek is unavailable in the persistent Spotify player.');
       if (!data.durationMs) throw new Error('Spotify has not exposed a duration yet; wait for the track to begin.');
-      var fraction = Math.max(0, Math.min(1, Number(targetMs) / data.durationMs));
-      var slider = data.slider;
+      var fraction = Math.max(0, Math.min(1, targetMs / data.durationMs));
       uiClock = null;
       if (slider instanceof HTMLInputElement && slider.type === 'range') {
         var minimum = Number(slider.min || 0);
