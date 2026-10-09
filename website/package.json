@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "prebuild": "node scripts/project-stats.mjs",
     "dev": "next dev",
+    "sync:previews": "node scripts/sync-app-previews.mjs",
+    "check:previews": "node scripts/check-native-previews.mjs",
     "build": "next build",
     "preview": "node scripts/preview.mjs",
     "format:check": "prettier --check app scripts tests next.config.ts tsconfig.json package.json .prettierrc.json",

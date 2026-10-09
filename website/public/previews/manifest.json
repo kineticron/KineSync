@@ -1,0 +1,11 @@
+{
+  "demoSha256": "2efe92e5ab5c233ccf4bcfe65e42cbd5a9b3dc8b6431c69e59f334caa5d40ef5",
+  "renderers": {
+    "spicy": {
+      "htmlSha256": "57ef06c7f24144999f34c3fee8b8888922583dfdc4e83c5abbab91c490977492"
+    },
+    "amll": {
+      "htmlSha256": "82d7134c9198a778295681372d8941aba2c06c1271331823408643a1c0ce73ca"
+    }
+  }
+}

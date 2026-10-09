@@ -16,6 +16,9 @@ export default function Home() {
   }
   return (
     <>
+      <noscript>
+        <style>{'.text-mask > span { transform: none !important; }'}</style>
+      </noscript>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{

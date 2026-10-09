@@ -3,15 +3,13 @@ import '@fontsource/dm-sans/latin-400.css'
 import '@fontsource/dm-sans/latin-500.css'
 import '@fontsource/dm-sans/latin-600.css'
 import '@fontsource/dm-sans/latin-700.css'
-import '@fontsource/manrope/latin-500.css'
-import '@fontsource/manrope/latin-700.css'
 import './globals.css'
 
 const origin = 'https://kineticron.github.io'
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '/KineSync'
-const title = 'KineSync | Give your music the words it deserves'
+const title = 'KineSync | All Lyrics, All Devices, Always'
 const description =
-  'Open source Spotify lyrics for Android and iOS. Follow synchronized lyrics, explore Spicy and AMLL styles, and build your own TTML lyrics library.'
+  '100% free Spotify lyrics for iOS and Android. No Spotify Premium required. Experience Spicy and AMLL, save your lyrics files, and explore the fully open source app.'
 
 export const metadata: Metadata = {
   metadataBase: new URL(origin),
@@ -19,7 +17,7 @@ export const metadata: Metadata = {
   description,
   alternates: { canonical: `${origin}${basePath}/` },
   applicationName: 'KineSync',
-  icons: { icon: `${basePath}/icon.svg` },
+  icons: { icon: `${basePath}/app-icon.png` },
   openGraph: {
     type: 'website',
     locale: 'en_US',
@@ -45,7 +43,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true }
 }
 
-export const viewport: Viewport = { themeColor: '#11100f', colorScheme: 'dark' }
+export const viewport: Viewport = { themeColor: '#090a11', colorScheme: 'dark' }
 
 export default function RootLayout({
   children

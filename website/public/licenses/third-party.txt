@@ -409,3 +409,13 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+Native lyric preview engines
+
+Spicy Lyrics: https://github.com/Spikerko/spicy-lyrics
+Apple Music-like Lyrics: https://github.com/amll-dev/applemusic-like-lyrics
+Both are licensed under GNU AGPL version 3. The full license is available at
+../licenses/app-renderers.txt on this site.
+Corresponding source and upstream version notices:
+https://github.com/Kineticron/KineSync/tree/main/ExpoLyrics/components/lyrics
+https://github.com/Kineticron/KineSync/blob/main/ExpoLyrics/THIRD_PARTY_NOTICES.md

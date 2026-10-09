@@ -5,8 +5,22 @@ import assert from 'node:assert/strict'
 
 const root = resolve('out')
 const html = readFileSync(join(root, 'index.html'), 'utf8')
+
+test('production CSS preserves standard backdrop blur alongside the Safari fallback', () => {
+  const css = [...html.matchAll(/href="(\/KineSync\/[^"?#]+\.css)"/g)]
+    .map((match) =>
+      readFileSync(join(root, match[1].replace('/KineSync/', '')), 'utf8')
+    )
+    .join('\n')
+  assert.match(css, /(?<!-)backdrop-filter:\s*blur\(/)
+  assert.match(css, /-webkit-backdrop-filter:\s*blur\(/)
+})
 test('export has crawlable content and search metadata', () => {
-  assert.match(html, /<h1[^>]*>Your music/)
+  assert.match(html, /<h1[^>]*aria-label="[^"]+"/)
+  assert.match(
+    html,
+    /<title>KineSync \| All Lyrics, All Devices, Always<\/title>/
+  )
   assert.match(
     html,
     /rel="canonical" href="https:\/\/kineticron.github.io\/KineSync\/"/
@@ -21,7 +35,7 @@ test('export has crawlable content and search metadata', () => {
     'robots.txt',
     'sitemap.xml',
     'social-card.png',
-    'icon.svg'
+    'app-icon.png'
   ])
     assert.ok(existsSync(join(root, file)), file)
 })
@@ -39,12 +53,12 @@ test('all exported script, stylesheet, and image references resolve under the Pa
     )
   assert.doesNotMatch(
     html,
-    /fonts.googleapis.com|googletagmanager|google-analytics/
+    /fonts\.googleapis\.com|googletagmanager|google-analytics/
   )
 })
 test('initial images stay within the landing page asset budget', () => {
   assert.ok(statSync(join(root, 'social-card.png')).size < 300_000)
-  assert.ok(statSync(join(root, 'icon.svg')).size < 2000)
+  assert.ok(statSync(join(root, 'app-icon.png')).size < 50_000)
   const walk = (folder) =>
     readdirSync(folder).flatMap((name) => {
       const file = join(folder, name)
