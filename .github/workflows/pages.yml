@@ -2,7 +2,7 @@ name: Website
 
 on:
   push:
-    branches: [main, codex/project-website]
+    branches: [main, development]
     paths: ['website/**', '.github/workflows/pages.yml']
   pull_request:
     paths: ['website/**', '.github/workflows/pages.yml']
@@ -38,7 +38,7 @@ jobs:
           path: website/out
 
   deploy:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/project-website')
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
