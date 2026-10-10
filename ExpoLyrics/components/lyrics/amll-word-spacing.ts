@@ -33,8 +33,10 @@ function toFiniteMs(value: unknown, fallback = 0) {
   return Number.isFinite(numberValue) ? Math.max(0, numberValue) : fallback;
 }
 
-const CJK_CHAR_RE =
-  /[぀-ヿ㐀-䶿一-鿿가-힯]/u;
+// Chinese/Japanese text generally omits word spaces. Korean uses spaces
+// between words, so Hangul must honor the provider's explicit boundaries.
+const UNSPACED_CJK_CHAR_RE =
+  /[぀-ヿ㐀-䶿一-鿿]/u;
 const CENSOR_ONLY_RE = /^[*＊•·]+$/u;
 
 // Standard closing punctuation that clings to the previous word (no space before it).
@@ -89,8 +91,8 @@ export function needsSpaceBetweenGroups(currentText: string, nextText: string): 
   const currentTrimmed = currentText.trim();
   const nextTrimmed = nextText.trim();
 
-  // CJK word boundaries take no space.
-  if (CJK_CHAR_RE.test(nextFirst) || CJK_CHAR_RE.test(currentLast)) {
+  // Chinese/Japanese word boundaries take no space.
+  if (UNSPACED_CJK_CHAR_RE.test(nextFirst) || UNSPACED_CJK_CHAR_RE.test(currentLast)) {
     return false;
   }
 
@@ -139,7 +141,7 @@ export function needsSpaceBetweenGroups(currentText: string, nextText: string): 
 
 /**
  * Group syllables into word clusters. Flagged lines follow `isPartOfWord`
- * (a `true` syllable continues the current word); unflagged lines stay 1:1.
+ * (a `true` syllable joins to the next syllable); unflagged lines stay 1:1.
  */
 export function groupAmllSyllables(
   syllables: AmllSyllable[],

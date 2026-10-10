@@ -396,6 +396,33 @@ const amllCjk = buildAmllWords([
 ], 1000, 1400);
 assert.equal(amllCjk.map((w) => w.word).join(''), '光の',
   'CJK word boundaries take no space');
+// Spicy-syllable Korean uses the same join flags as English; each false flag
+// ends a word even when both sides of the boundary are Hangul.
+const koreanFlagged = [
+  { text: '한', startTime: 1000, endTime: 1200, isPartOfWord: true },
+  { text: '글', startTime: 1200, endTime: 1500, isPartOfWord: false },
+  { text: '가', startTime: 1600, endTime: 1800, isPartOfWord: true },
+  { text: '사', startTime: 1800, endTime: 2100, isPartOfWord: false },
+];
+const koreanSnapshot = JSON.stringify(koreanFlagged);
+assert.deepEqual(buildAmllWords(koreanFlagged, 1000, 2100), [
+  { word: '한글 ', startTime: 1000, endTime: 1500 },
+  { word: '가사', startTime: 1600, endTime: 2100 },
+], 'Spicy Korean word boundaries survive AMLL conversion with grouped timings');
+assert.equal(JSON.stringify(koreanFlagged), koreanSnapshot, 'Korean provider input stays intact');
+for (const [parts, expected] of [
+  [['한글', 'rap', '가사'], '한글 rap 가사'],
+  [['한글 ', '가사'], '한글 가사'],
+  [['한글', ' 가사'], '한글 가사'],
+  [['한글', ',', '가사'], '한글, 가사'],
+  [['中', '文'], '中文'],
+]) {
+  const input = parts.map((text, index) => ({
+    text, startTime: index * 200, endTime: (index + 1) * 200, isPartOfWord: false,
+  }));
+  assert.equal(buildAmllWords(input, 0, parts.length * 200).map(word => word.word).join(''),
+    expected, `flagged word spacing: ${expected}`);
+}
 const amllLiteral = buildAmllWords([
   { text: '한', startTime: 1000, endTime: 1500 },
   { text: '글 ', startTime: 1500, endTime: 2000 },
@@ -450,6 +477,79 @@ const amllQuotes = buildAmllWords([
 ], 1000, 1800);
 assert.equal(amllQuotes.map((w) => w.word).join(''), 'said, "Hello" world',
   'quoted words maintain spaces on both sides');
+
+// Exercise the real Spicy parsers before conversion, including background lanes.
+for (const mobile of [false, true]) {
+  const context = vm.createContext({
+    Buffer, console, URL, URLSearchParams, TextDecoder, AbortController,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    module: { exports: {} }, global: {}, process: { env: {} },
+    require: require('node:module').createRequire(path.resolve(root, '../DesktopBridge/src/lyricsService.js')),
+  });
+  if (mobile) {
+    const source = fs.readFileSync(path.resolve(root, 'lib/mobile-lyrics-service.js'), 'utf8')
+      .replace(/^import .*;\r?\n/gm, '');
+    vm.runInContext(source.slice(0, source.indexOf('export {')), context);
+  } else {
+    const directory = path.resolve(root, '../DesktopBridge/src/lyrics');
+    const index = fs.readFileSync(path.join(directory, 'index.js'), 'utf8');
+    const parts = index.match(/const partFiles = \[([\s\S]*?)\];/)[1];
+    for (const match of parts.matchAll(/"([^"]+)"/g)) {
+      vm.runInContext(fs.readFileSync(path.join(directory, 'parts', match[1]), 'utf8'), context);
+    }
+  }
+  for (const [parts, expected] of [
+    [[['한', true], ['글', false], ['가', true], ['사', false]], '한글 가사'],
+    [[['한글', false], ['rap', false], ['가사', false]], '한글 rap 가사'],
+    [[['光', true], ['の', false]], '光の'],
+    [[['中', true], ['文', false]], '中文'],
+    [[['Hel', true], ['lo', false], [',', false], ['world', false]], 'Hello, world'],
+    [[["It", true], ["'s", false], ['fine', false]], "It's fine"],
+    [[['c\'', true], ['est', false], ['bien', false]], "c'est bien"],
+  ]) {
+    const block = { StartTime: 1, EndTime: 4, Syllables: parts.map(([Text, IsPartOfWord], index) => ({
+      Text, IsPartOfWord, StartTime: 1 + index * 0.2, EndTime: 1.2 + index * 0.2,
+    })) };
+    context.payload = { Type: 'Syllable', Content: [{ Type: 'Vocal', Lead: block, Background: [block] }] };
+    const snapshot = JSON.stringify(context.payload);
+    const parsed = vm.runInContext('parseSpicyLyrics(payload, 4000)', context);
+    assert.equal(parsed.length, 1);
+    for (const syllables of [parsed[0].syllables, parsed[0].backgroundSyllables]) {
+      const words = buildAmllWords(syllables, 1000, 4000);
+      assert.equal(words.map(word => word.word).join(''), expected,
+        `${mobile ? 'mobile' : 'desktop'} parser to AMLL: ${expected}`);
+      assert.equal(words[0].startTime, 1000);
+      assert.equal(words.at(-1).endTime, Math.round(block.Syllables.at(-1).EndTime * 1000));
+    }
+    assert.equal(JSON.stringify(context.payload), snapshot, 'parser keeps provider payload intact');
+  }
+}
+console.log('Spicy parser-to-AMLL checks passed for desktop/mobile lead and background spacing.');
+
+// Optional local provider snapshots: do not commit complete song lyrics.
+if (process.argv.includes('--song-fixtures')) {
+  for (const file of ['xibal-krc.json', 'cluster-lyrics/thai.json', 'cluster-lyrics/hindi.json', 'cluster-lyrics/telugu.json']) {
+    const fixture = JSON.parse(fs.readFileSync(path.resolve(root, '.expo', file), 'utf8'));
+    let lanes = 0;
+    for (const line of fixture.lyrics) {
+      for (const syllables of [line.syllables, line.backgroundSyllables]) {
+        if (!syllables?.length) continue;
+        assert.ok(syllables.every(part => typeof part.isPartOfWord !== 'boolean'),
+          'these saved provider songs use literal spacing');
+        const snapshot = JSON.stringify(syllables);
+        const words = buildAmllWords(syllables, line.lineStartTime, line.lineEndTime);
+        assert.equal(words.map(word => word.word).join(''), syllables.map(part => part.text || '').join(''),
+          `${file}: complete source line spacing survives AMLL conversion`);
+        assert.equal(words[0].startTime, syllables[0].startTime);
+        assert.equal(words.at(-1).endTime, syllables.at(-1).endTime);
+        assert.equal(JSON.stringify(syllables), snapshot);
+        lanes++;
+      }
+    }
+    assert.ok(lanes > 0);
+    console.log(`Provider song passed: ${file} (${lanes} lanes)`);
+  }
+}
 
 const { createSpicyPlaybackClock } = load('components/lyrics/spicy-playback-clock.ts');
 for (const hz of [60, 90, 120, 144]) {
