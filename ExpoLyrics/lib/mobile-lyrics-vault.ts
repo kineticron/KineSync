@@ -103,7 +103,10 @@ function entryMatchesTrack(entry: MobileVaultEntry, track: Track) {
   const artistMatches = normalizeText(entry.track.artist) === normalizeText(track.artist);
   const entryDuration = Number(entry.track.durationMs || 0);
   const trackDuration = Number(track.durationMs || 0);
+  // Imports store the last lyric timestamp, not the full recording duration.
+  // Keep matching existing imports by title/artist even with a silent outro.
   const durationMatches =
+    entry.originalSource === "ttml-import" ||
     !entryDuration || !trackDuration || Math.abs(entryDuration - trackDuration) <= 2500;
   return titleMatches && artistMatches && durationMatches;
 }

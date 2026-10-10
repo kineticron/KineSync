@@ -41,6 +41,35 @@ async function main() {
   await vault.renameMobileVaultEntry(imported.vaultId, 'New display name', 'New display artist');
   assert.equal((await vault.readVaultEntries()).find(entry => entry.vaultId === imported.vaultId).metadata.ttml.content, originalTtml,
     'Renaming a vault entry must not modify its original document');
+  // TTML timing ends at the last vocal, which can precede the audio outro.
+  // Seed persisted data directly to cover imports saved before this fix too.
+  const { parseTtmlToLyrics } = require('../lib/lyrics-ttml-import');
+  const geronimoTtml = '<tt><body><p begin="173.349" end="178.705">GERONIMO!</p></body></tt>';
+  const geronimo = parseTtmlToLyrics(geronimoTtml);
+  const playbackTrack = { id: 'playing-geronimo', title: 'GERONIMO!', artist: 'DPR LIVE', durationMs: 190000 };
+  raw = JSON.stringify([{
+    vaultId: 'existing-import', savedAt: 1,
+    track: { ...playbackTrack, id: 'import-old', durationMs: geronimo.durationMs },
+    lyrics: geronimo.lyrics, metadata: geronimo.metadata, originalSource: 'ttml-import',
+  }]);
+  const match = await vault.lookupMobileVaultLyrics(playbackTrack);
+  assert.ok(match, 'Existing TTML imports must match despite an instrumental outro');
+  assert.equal(match.trackId, playbackTrack.id);
+  assert.equal(match.metadata.ttml.content, geronimoTtml);
+  assert.equal(await vault.lookupMobileVaultLyrics({ ...playbackTrack, artist: 'Someone else' }), null);
+  assert.equal(await vault.lookupMobileVaultLyrics({ ...playbackTrack, title: 'Another song' }), null);
+  await vault.saveMobileVaultLyrics({
+    track: { ...playbackTrack, id: 'import-new', durationMs: geronimo.durationMs },
+    lyrics: geronimo.lyrics, metadata: geronimo.metadata, originalSource: 'ttml-import',
+  });
+  assert.ok(await vault.lookupMobileVaultLyrics({ ...playbackTrack, title: 'Geronimo', artist: 'dpr live' }),
+    'New TTML imports must retain normalized title and artist matching');
+  raw = JSON.stringify(JSON.parse(raw).map(entry => ({ ...entry, originalSource: 'lrclib' })));
+  assert.equal(await vault.lookupMobileVaultLyrics(playbackTrack), null,
+    'Saved playback lyrics must retain duration checks for different recordings');
+  raw = JSON.stringify(JSON.parse(raw).map(entry => ({ ...entry, track: { ...entry.track, spotifyTrackId: 'same-id' } })));
+  assert.ok(await vault.lookupMobileVaultLyrics({ ...playbackTrack, spotifyTrackId: 'same-id' }),
+    'Exact Spotify IDs must still take priority');
   console.log('Vault artwork checks passed: URL-only storage, no image bytes/local files, bounded song size, and safe migration alongside saves.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
