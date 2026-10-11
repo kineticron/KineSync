@@ -646,17 +646,33 @@ function extractTtmlMetadata(ttmlContent) {
     const value = decodeXmlEntities(readAttribute(match[1], "value")).trim();
     if (value) (amll[key] ||= []).push(value);
   }
+  const spotifyTrackId = [...(amll.spotifyId || []), ...(amll.spotifyTrackId || [])]
+    .map(value => value.replace(/^spotify:track:/i, "").replace(/^https?:\/\/open\.spotify\.com\/(?:intl-[^/]+\/)?track\//i, "").split(/[?#]/)[0])
+    .find(value => /^[A-Za-z0-9]{22}$/.test(value));
   return {
     title: stripXmlTags(titleMatch?.[1] || amll.musicName?.[0] || ""),
     artist: stripXmlTags(artistMatch?.[1] || amll.artists?.join(", ") || ""),
     ...(amll.album?.[0] ? { album: amll.album[0] } : {}),
+    ...(spotifyTrackId ? { spotifyTrackId } : {}),
   };
 }
 
 function extractTtmlCredits(content) {
   const songwriters = [...content.matchAll(/<songwriter\b[^>]*>([\s\S]*?)<\/songwriter>/gi)]
     .map(match => stripXmlTags(match[1])).filter(Boolean);
-  return songwriters.length ? { credits: { songwriters: [...new Set(songwriters)] } } : {};
+  const metadata = songwriters.length ? { credits: { songwriters: [...new Set(songwriters)] } } : {};
+  for (const match of content.matchAll(/<amll:meta\b([^>]*)\/?\s*>/gi)) {
+    const key = readAttribute(match[1], "key");
+    if (key !== "kinesync:attribution" && key !== "kinesync:spicyApi") continue;
+    try {
+      const value = JSON.parse(decodeXmlEntities(readAttribute(match[1], "value")));
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        if (key === "kinesync:attribution") metadata.attribution = value;
+        else metadata.spicyApi = value;
+      }
+    } catch { /* Ignore malformed optional metadata. */ }
+  }
+  return metadata;
 }
 
 module.exports = {

@@ -86,8 +86,9 @@ async function runLyricsSourceHealthCheck({
   );
   const safeMinPasses = Math.max(1, Number(minPasses) || 1);
 
-  const sourceResults = [];
-  for (const source of selectedSources) {
+  const sourceResults = new Array(selectedSources.length);
+  let nextSourceIndex = 0;
+  const checkSource = async (source) => {
     const trackResults = [];
     for (const track of safeTracks) {
       const probeResult = await probeLyricsSource(track, source);
@@ -98,14 +99,23 @@ async function runLyricsSourceHealthCheck({
     }
 
     const passCount = trackResults.filter((result) => result.ok).length;
-    sourceResults.push({
+    return {
       source,
       passCount,
       totalTracks: trackResults.length,
       isHealthy: passCount >= safeMinPasses,
       trackResults,
-    });
-  }
+    };
+  };
+  // Providers are independent, but keep each provider's requests sequential.
+  // Three workers bound outstanding requests without changing report order.
+  const runWorker = async () => {
+    while (nextSourceIndex < selectedSources.length) {
+      const index = nextSourceIndex++;
+      sourceResults[index] = await checkSource(selectedSources[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, selectedSources.length) }, runWorker));
 
   return {
     selectedSources,

@@ -503,6 +503,18 @@ function lyricsToTtml({
   if (songwriters.length) {
     metadataBlocks.push(`<iTunesMetadata xmlns="http://music.apple.com/lyric-ttml-internal"><songwriters>${songwriters.map(name => `<songwriter>${escapeXml(name)}</songwriter>`).join("")}</songwriters></iTunesMetadata>`);
   }
+  if (metadata?.attribution) {
+    metadataBlocks.push(`<amll:meta key="kinesync:attribution" value="${escapeXml(JSON.stringify(metadata.attribution))}"/>`);
+    const credit = metadata.attribution;
+    const contributors = credit.community ? [
+      credit.uploader && `Uploaded by: ${credit.uploader.username || credit.uploader.id || "Unknown"}${credit.uploader.url ? ` (${credit.uploader.url})` : ""}`,
+      credit.maker && `Made by: ${credit.maker.username || credit.maker.id || "Unknown"}${credit.maker.url ? ` (${credit.maker.url})` : ""}`,
+    ].filter(Boolean) : [];
+    metadataBlocks.push(`<ttm:desc>${escapeXml([`Provided by: ${credit.provider || "Unknown"}`, ...contributors].join("; "))}</ttm:desc>`);
+  }
+  if (metadata?.spicyApi) {
+    metadataBlocks.push(`<amll:meta key="kinesync:spicyApi" value="${escapeXml(JSON.stringify(metadata.spicyApi))}"/>`);
+  }
   if (safeSource) {
     metadataBlocks.push(
       `<ttm:copyright>${escapeXml(`Source: ${safeSource}`)}</ttm:copyright>`,

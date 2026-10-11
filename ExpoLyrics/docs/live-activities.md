@@ -6,7 +6,7 @@ then leave the app to see the compact Dynamic Island. Hold the Island to expand.
 The Lock Screen also shows playback details on devices without Dynamic Island.
 
 The current presentation shows album art, KineSync branding, song/artist/album,
-source, and status. Compact mode shows artwork and a playback icon; minimal mode
+source, and status. Compact mode shows artwork and a playback icon. Minimal mode
 shows `KS`. Lyrics and instrumental-break subtitles are no longer displayed.
 The historical lyric-rendering investigation below describes earlier builds.
 
@@ -25,10 +25,10 @@ iOS 27, installed with Sideloadly. Comparing the actual simulator artifacts
 provided a reproduction independent of that phone and signer:
 
 - [Run 34755165244](https://github.com/kineticron/KineSync/actions/runs/34755165244),
-  commit `459d684`: matching attributes module names; microphone and lyric visible.
+  commit `459d684`: matching attributes module names. Microphone and lyric visible.
   The host build failed because the widget's Swift module shadowed the Expo pod.
 - [Run 34756296771](https://github.com/kineticron/KineSync/actions/runs/34756296771),
-  commit `9b14951`: host and widget modules separated; native build passes,
+  commit `9b14951`: host and widget modules separated. Native build passes,
   extension registration logged, but the screenshot shows an empty Island.
 
 The earlier assertion that these distinct module identities were safe was not
@@ -38,17 +38,17 @@ state the same defining module without sharing the widget and Expo module names.
 The actual IPA verifier now rejects the previous separately defined types.
 [Run 37354859460](https://github.com/kineticron/KineSync/actions/runs/37354859460)
 compiled the actual widget with its shared CocoaPods dependency. Its captured
-compact Island shows both the microphone and lyric text; the widget log reports
+compact Island shows both the microphone and lyric text. The widget log reports
 `KineSyncActivityTypes.LyricsActivityAttributes`. This restores the content that
 was absent from run 34756296771. Cold simulator startup consumed most of the
-preview timeout and the job timed out immediately after capturing its artifacts;
-the preview timeout was subsequently increased to twenty minutes. Live Activity
+preview timeout and the job timed out immediately after capturing its artifacts.
+The preview timeout was subsequently increased to twenty minutes. Live Activity
 checks and simulator previews have since been removed from GitHub CI.
 Physical-device confirmation on iOS 27 is still needed.
 
 The widget also uses an intrinsic 24-point icon without a geometry-dependent
 scale and nonempty text fallbacks in each presentation. Restart previously
-reused the active session; it now ends it and requests a new one. Old `lyrics`
+reused the active session. It now ends it and requests a new one. Old `lyrics`
 sessions of the current attributes type are retired on first playback after
 upgrading to `lyrics-v3`. Activities created with the old attributes type may
 need to be dismissed on the Lock Screen after installing the fix.
@@ -66,7 +66,7 @@ IPA. Physical-device confirmation on iOS 27 beta remains required.
 The expanded Island and Lock Screen show song, artist, album, source, status,
 and the KineSync name. The expanded Island insets its details horizontally by
 14 pt and reserves 10 pt below them to keep text clear of its rounded corners.
-Compact mode shows a 24 pt album thumbnail and playback icon; minimal mode shows
+Compact mode shows a 24 pt album thumbnail and playback icon. Minimal mode shows
 `KS`. Missing artwork uses the existing microphone fallback. The Lock Screen
 layout is 110 pt high including padding, below the 160 pt system maximum.
 
@@ -91,26 +91,26 @@ Old lyric sessions are retired when syncing the `metadata-v1` presentation.
 
 The activity keeps its last supplied playback details when iOS suspends the
 app. New tracks, pauses, or source changes still require host execution to reach
-it; removing lyrics does not add background execution. The current build uses
+it. Removing lyrics does not add background execution. The current build uses
 no APNs service. SideStore with a free Apple account cannot provision the push
 notification entitlement needed for remote ActivityKit updates. The activity
 no longer replaces content with an "Open KineSync to refresh" lyric prompt.
 
 The system decides whether the Island shows compact or minimal form when other
-activities compete. ActivityKit can throttle updates and end the activity;
-restart it in the foreground when needed.
+activities compete. ActivityKit can throttle updates and end the activity.
+Restart it in the foreground when needed.
 
 ## Native generation and signing
 
 Tracked sources live in `modules/kinesync-live-activity/ios`, `widgets`, and
 `plugins/with-live-activity.js`, outside generated `ios`. The root `.gitignore`
-explicitly includes this module's Swift files and podspec; its general `ios/`
+explicitly includes this module's Swift files and podspec. Its general `ios/`
 rule would otherwise omit them from a clean checkout. Expo Autolinking links
 the local module. The config plugin recreates the extension, copies the exact
 widget implementation, enables `NSSupportsLiveActivities` in
 the host, adds the host target dependency and `PlugIns` copy phase, and aligns
 extension bundle ID and versions while keeping its Swift module distinct from
-the Expo host pod. Both import `KineSyncActivityTypes`; the widget Podfile target
+the Expo host pod. Both import `KineSyncActivityTypes`. The widget Podfile target
 links this small pod without pulling React Native or Expo into the extension.
 It also declares the extension to EAS for
 credential provisioning if signed EAS builds are used. It is safe to rerun and
@@ -177,7 +177,7 @@ Before releasing, test a freshly built SideStore/Sideloadly-installed IPA:
   Confirm no previous-song cover flashes or duplicate activities appear.
 - Leave the app and confirm the last supplied details remain visible.
 - Disable Live Activities, dismiss the activity, and use **Restart Live Activity**.
-- Export an IPA with the widget removed; the verifier must reject it.
+- Export an IPA with the widget removed. The verifier must reject it.
 
 ## References
 

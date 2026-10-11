@@ -14,8 +14,9 @@ function load(relative, dependencies, globals = {}) {
   return context.exports;
 }
 const validation = load('lib/bridge-validation.ts', { '@/lib/artwork': { normalizeBridgeArtworkUri: value => value } });
-let raw = null;
-const vault = load('lib/mobile-lyrics-vault.ts', { '@react-native-async-storage/async-storage': { getItem: async () => raw, setItem: async (_, value) => { raw = value; } } });
+const { loadMobileVault } = require('./helpers/mobile-vault-harness.cjs');
+const harness = loadMobileVault();
+const vault = harness.vault;
 const transport = new EventEmitter();
 const lyrics = [{ lineStartTime: 0, lineEndTime: 1000, translatedText: 'Translation', syllables: [{ text: 'Test', startTime: 0, endTime: 1000 }] }];
 const catalog = Array.from({ length: 53 }, (_, i) => ({ vaultId: `spotify_${i}`, title: `Song ${i}`, artist: 'Artist', lineCount: 1, translatedLineCount: 1 }));
@@ -57,20 +58,25 @@ async function main() {
   assert.equal(result.failed, 0);
   assert.deepEqual(progress.at(-1), [53, 53]);
   assert.deepEqual(requests.filter(packet => packet.type === 'vault:list' && packet.query === '').map(packet => packet.offset), [0, 50]);
-  assert.equal(JSON.parse(raw).length, 53);
-  const saved = JSON.parse(raw).find(entry => entry.track.spotifyTrackId === '52');
-  assert.deepEqual(saved.lyrics, lyrics);
-  assert.deepEqual(saved.metadata, { credits: { songwriters: ['Writer'] }, ttml: { content: '<tt custom="keep"><body><p>Test</p></body></tt>' } });
+  assert.equal((await vault.readVaultEntries()).length, 53);
+  const saved = (await vault.readVaultEntries()).find(entry => entry.track.spotifyTrackId === '52');
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.lyrics)), lyrics);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved.metadata)), { credits: { songwriters: ['Writer'] }, ttml: { content: '<tt custom="keep"><body><p>Test</p></body></tt>' } });
   assert.equal(saved.originalSource, 'ttml-import');
   await transferDesktopVaultToMobile(() => {});
-  assert.equal(JSON.parse(raw).length, 53, 'repeated transfers update existing songs');
+  assert.equal((await vault.readVaultEntries()).length, 53, 'repeated transfers update existing songs');
   catalog.push(...Array.from({ length: 52 }, (_, i) => ({ vaultId: `spotify_${i + 53}`, title: `Song ${i + 53}`, artist: 'Artist', lineCount: 1, translatedLineCount: 1 })));
-  raw = null;
   const capacity = await transferDesktopVaultToMobile(() => {});
-  assert.equal(capacity.transferred, 100);
-  assert.equal(capacity.failed, 5);
-  assert.match(capacity.error, /100 songs/);
-  assert.equal(JSON.parse(raw).length, 100, 'capacity failures preserve successfully transferred songs');
+  assert.equal(capacity.transferred, 105);
+  assert.equal(capacity.failed, 0);
+  assert.equal((await vault.readVaultEntries()).length, 105, 'SQLite transfers can exceed the former 100-song limit');
+  harness.database.exec("CREATE TRIGGER reject_last BEFORE INSERT ON vault_entries WHEN json_extract(NEW.track, '$.title') = 'Song 104' BEGIN SELECT RAISE(ABORT, 'disk write failed'); END;");
+  const failedWrite = await transferDesktopVaultToMobile(() => {});
+  assert.equal(failedWrite.failed, 1);
+  assert.equal(failedWrite.transferred, 104);
+  assert.match(failedWrite.error, /disk write failed/);
+  assert.equal((await vault.readVaultEntries()).length, 105, 'a failed replacement preserves the previous song');
+  harness.database.exec('DROP TRIGGER reject_last');
   unavailable = true;
   const partial = await transferDesktopVaultToMobile(() => {});
   assert.equal(partial.transferred, 0);
@@ -89,4 +95,4 @@ async function main() {
   await rejected;
   console.log('Desktop vault checks passed: validated protocol, paginated browse, transfer all regardless of search, translations/metadata, deduplication, partial failures, and disconnect cleanup.');
 }
-main().catch(error => { bridgeClient.disconnect(); console.error(error); process.exitCode = 1; });
+main().catch(error => { bridgeClient.disconnect(); console.error(error); process.exitCode = 1; }).finally(() => harness.close());

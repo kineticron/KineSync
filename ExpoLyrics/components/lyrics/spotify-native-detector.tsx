@@ -1,9 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Button, Platform, Share, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Button, Linking, Platform, Share, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
-import { SpotifyDetector } from '@/lib/spotify-detector/client';
+import { SpotifyDetector, SpotifyPlaybackUnavailableError } from '@/lib/spotify-detector/client';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
@@ -19,6 +19,20 @@ import { usePlayerTourStore } from '@/store/player-tour-store';
 import type { SpotifyBrowserFallbackHandle } from './spotify-browser-fallback';
 
 const PLAYER_URL = 'https://open.spotify.com/';
+
+async function openSpotifyApp() {
+  // Eevee's Safari extension uses this link. Both apps share the spotify
+  // scheme, so iOS ultimately chooses the installed handler.
+  const urls = Platform.OS === 'ios'
+    ? ['spotify://eevee/open.spotify.com/', 'spotify://']
+    : ['spotify://'];
+  for (const url of urls) {
+    try { await Linking.openURL(url); return; } catch { /* Try the next launch URL. */ }
+  }
+  Alert.alert('Couldn’t Open Spotify', 'Open the Spotify app on one of your devices and start playback, then return to KineSync.', [
+    { text: 'Close', style: 'cancel' },
+  ]);
+}
 const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}`;
 const CONTROL_SCRIPT = `${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
 const USER_AGENT = Platform.OS === 'android'
@@ -59,7 +73,9 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const publish = (s: Sample) => {
     if (!canIngest()) return;
     const metadata = enriched.current.get(s.uri);
-    const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title, artist: metadata.artist || s.artist, album: metadata.album || s.album, artworkUrl: metadata.artworkUrl || s.artworkUrl } : s);
+    const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title,
+      artist: metadata.artist || s.artist, album: metadata.album || s.album,
+      artworkUrl: metadata.artworkUrl || s.artworkUrl } : s);
     const store = usePlaybackStore.getState();
     const result = store.ingestPacket(packet, 'mobile');
     if (result.trackChanged) {
@@ -146,7 +162,14 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       if (!canIngest()) return;
       const message = error instanceof Error ? error.message : 'Spotify command failed.';
       diagnostics.current.status = message; setStatus(message);
-      Alert.alert('Spotify control', message);
+      if (error instanceof SpotifyPlaybackUnavailableError) {
+        Alert.alert("Can't Start Playback Just Yet", "KineSync can't start the playback without you starting the Spotify app on one of your other devices.", [
+          { text: 'Close', style: 'cancel' },
+          { text: 'Open Spotify', onPress: () => { void openSpotifyApp(); } },
+        ]);
+      } else {
+        Alert.alert('Spotify control', message);
+      }
       // A refused seek must replace the screen's optimistic scrub anchor.
       if (command.type === 'seek' && !message.includes('429')) detector.refresh();
     });
@@ -193,13 +216,13 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const run = browserGeneration;
   return <View pointerEvents={browserOpen ? 'auto' : 'none'} aria-hidden={!browserOpen}
     style={[styles.root, !browserOpen && styles.hidden]}>
-    {browserOpen && <SafeAreaView edges={['top']} style={styles.header}>
+    {browserOpen && <SafeAreaView edges={_stableEdges1} style={styles.header}>
       <Text style={styles.title}>Spotify</Text><Text style={styles.status}>{status}</Text>
       <View style={styles.buttons}><Button title="Reconnect" onPress={() => { remount(); detector.refresh(); }} />
         <Button title="Diagnostics" onPress={runDiagnostics} /><Button title="Close" onPress={() => setBrowserOpen(false)} /></View>
     </SafeAreaView>}
     <WebView<object> key={`spotify-detector-${browserGeneration}`} ref={web}
-      source={{ uri: loggingOut ? 'https://accounts.spotify.com/logout' : PLAYER_URL }}
+      source={loggingOut ? LOGOUT_SOURCE : PLAYER_SOURCE}
       originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
       userAgent={USER_AGENT} contentMode="desktop" sharedCookiesEnabled thirdPartyCookiesEnabled
       domStorageEnabled javaScriptEnabled setSupportMultipleWindows={false}
@@ -238,3 +261,8 @@ const styles = StyleSheet.create({
   title: { color: '#FFF', fontSize: 18, fontWeight: '600' }, status: { color: '#AAB5BB', marginVertical: 8 },
   buttons: { flexDirection: 'row', justifyContent: 'space-between' }, web: { flex: 1 },
 });
+
+// Static native props retain their identity across renders.
+const _stableEdges1 = ['top'] as const;
+const LOGOUT_SOURCE = { uri: 'https://accounts.spotify.com/logout' };
+const PLAYER_SOURCE = { uri: PLAYER_URL };

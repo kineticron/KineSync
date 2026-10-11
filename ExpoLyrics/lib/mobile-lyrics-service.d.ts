@@ -41,7 +41,7 @@ export function createLyricsService(options?: {
   getSpotifyWebToken?: () => string;
   getGeminiApiKey?: () => string;
   getSpotifyAccessToken?: () => string | Promise<string>;
-  getSpicyLyricsUseCorsProxy?: (() => boolean) | null;
+  getSpicyLyricsPublishableKey?: () => string | Promise<string>;
 }): {
   fetchSyncedLyrics(
     track: MobileLyricsTrack,
@@ -69,6 +69,7 @@ export function createLyricsService(options?: {
       durationMs?: number;
     },
     accessToken: string,
+    options?: { enrichFromWebApi?: boolean; strictImportMatch?: boolean },
   ): Promise<SpotifyCatalogTrack | null>;
   mergeNativePlaybackArtist(nativeArtist: string, catalogArtist: string): string;
 };

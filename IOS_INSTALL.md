@@ -20,7 +20,7 @@ refresh apps directly on the device.
 
 4. Find KineSync in the new source and tap **Install**.
 5. Open KineSync and choose a playback setup. **Use this phone only** needs no
-   Desktop Bridge; **Use a Desktop Bridge** lets you scan its pairing QR code.
+   Desktop Bridge. **Use a Desktop Bridge** lets you scan its pairing QR code.
 
 You can instead download the
 [latest KineSync IPA](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa),
@@ -43,7 +43,7 @@ limit.
 4. Select the device and enter the Apple Account used for sideloading.
    Keep **Remove Extensions** disabled (or preserve
    **KineSyncLyricsWidget** if choosing extensions individually). The Live
-   Activity is an embedded widget extension; removing it prevents Lock Screen
+   Activity is an embedded widget extension. Removing it prevents Lock Screen
    lyrics and Dynamic Island content from rendering. Then click **Start**.
 5. On iOS 16 or newer, enable **Settings > Privacy & Security > Developer Mode**
    if prompted. Trust the developer profile under
@@ -51,25 +51,24 @@ limit.
 6. Open KineSync and choose Mobile-Only or the optional Desktop Bridge during
    onboarding. Allow Local Network access if you choose the bridge.
 
-## Live lyrics and Dynamic Island
+## Playback Live Activity and Dynamic Island
 
 Start a song while KineSync is open, then go to the Home Screen or lock the
-device. On supported iPhones, hold the Dynamic Island to see the active lyric,
-song/artist/album, and lyrics source/status. The compact Island shows a shortened
-lyric and the same outlined/filled microphone distinction as the app. Devices
-without Dynamic Island use the Lock Screen presentation.
+device. On supported iPhones, hold the Dynamic Island to see artwork,
+song/artist/album, and source/status. Compact mode shows artwork and a playback
+icon. Minimal mode shows `KS`. Devices without Dynamic Island use the Lock
+Screen presentation. The current widget does not display advancing lyric text.
 
 Allow Live Activities for KineSync in iOS Settings. If nothing appears, open
-KineSync's Settings and check **Live lyrics**; **Restart live lyrics** retries
+KineSync's Settings and check its Live Activity controls. Restarting retries
 starting the activity and shows any native error. A build with a missing
-extension reports that explicitly. This feature requires a newly built IPA;
+extension reports that explicitly. This feature requires a newly built IPA.
 Expo Go and JavaScript-only updates cannot add the native extension.
 
-iOS controls presentation and background runtime. Native lyric scheduling can
-continue while the app has runtime, including during permitted background
-playback. If iOS suspends the app, the current line expires and the activity
-asks you to reopen KineSync. Free-account sideloading does not provide APNs
-updates to keep lyrics advancing in a suspended app. See the
+iOS controls presentation and background runtime. If iOS suspends the app,
+the activity keeps its last supplied playback metadata. New songs, pauses,
+and source changes need host execution to update it. The current build has no
+APNs service for remote ActivityKit updates. See the
 [implementation and device checks](ExpoLyrics/docs/live-activities.md).
 
 ## Choose a playback setup
@@ -103,7 +102,7 @@ release name and notes identify the exact `main` commit used for the build.
 - The phone and Desktop Bridge must be able to reach each other. For local use,
   they should normally be on the same network.
 - Use the bridge address shown by the desktop app, typically
-  `ws://<computer-LAN-IP>:3001`; do not use `localhost` on the phone.
+  `ws://<computer-LAN-IP>:3001`. Do not use `localhost` on the phone.
 - Confirm that KineSync is allowed under **Settings > Privacy & Security > Local
   Network**.
 - For remote access, use the bridge's secure `wss://` relay URL.

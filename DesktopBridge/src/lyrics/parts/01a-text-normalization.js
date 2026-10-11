@@ -157,7 +157,7 @@ function getPrimaryArtistName(input) {
     String(input || "")
       .split(artistSplitRegex)
       .map((part) => part.trim())
-      .filter(Boolean)[0] || String(input || "").trim()
+      .find(Boolean) || String(input || "").trim()
   );
 }
 

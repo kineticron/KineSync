@@ -6,6 +6,7 @@ import {
 } from "@applemusic-like-lyrics/core";
 import "@applemusic-like-lyrics/core/style.css";
 import { buildAmllWords } from "./amll-word-spacing";
+import { createActiveLineTimeline } from "./active-line-timeline";
 
 type KineSyncSyllable = {
   text?: string;
@@ -29,12 +30,13 @@ type LyricsAttribution = {
   source?: string;
   provider?: string;
   community?: boolean;
-  maker?: { username?: string; avatar?: string };
-  uploader?: { username?: string; avatar?: string };
+  maker?: { username?: string; avatar?: string; url?: string };
+  uploader?: { username?: string; avatar?: string; url?: string };
 };
 
 type IncomingMessage = {
   type?: string;
+  active?: boolean;
   lines?: KineSyncLine[];
   positionMs?: number;
   previewPositionMs?: number | null;
@@ -102,6 +104,8 @@ let staticSongwriters: string[] = [];
 let staticAttribution: LyricsAttribution | undefined;
 let frameRequestId: number | null = null;
 let animateUntilMs = 0;
+let rendererActive = true;
+let findActiveSource = createActiveLineTimeline([]);
 const IDLE_ANIMATION_GRACE_MS = 750;
 root.appendChild(playerElement);
 playerElement.classList.add("kinesync-amll-player");
@@ -281,7 +285,7 @@ function appendCreditsContent(
   };
   const appendProfileLine = (
     label: string,
-    profile: { username?: string; avatar?: string },
+    profile: { username?: string; avatar?: string; url?: string },
   ) => {
     if (!profile.username) return;
     const line = document.createElement("div");
@@ -290,7 +294,19 @@ function appendCreditsContent(
     const strong = document.createElement("span");
     strong.className = "kinesync-credits-strong";
     strong.textContent = label;
-    text.append(strong, document.createTextNode(`@${profile.username}`));
+    text.appendChild(strong);
+    const name = document.createElement(/^https:\/\//i.test(profile.url || "") ? "a" : "span");
+    name.textContent = `@${profile.username}`;
+    if (name instanceof HTMLAnchorElement) {
+      name.href = profile.url!;
+      name.style.color = "inherit";
+      name.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        post({ type: "attributionLink", url: profile.url });
+      });
+    }
+    text.appendChild(name);
     line.appendChild(text);
     if (profile.avatar) {
       const avatar = document.createElement("img");
@@ -430,6 +446,11 @@ function setLyrics(message: IncomingMessage) {
   }
   staticLyricsRoot?.replaceChildren();
   const converted = convertLines(sourceLines);
+  findActiveSource = createActiveLineTimeline(sourceIndexByAmllLine.map((index) => {
+    const line = sourceLines[index];
+    const start = toFiniteMs(line?.lineStartTime);
+    return { start, end: Math.max(start + 1, toFiniteMs(line?.lineEndTime, start + 1)), index };
+  }));
   player.setLyricLines(converted, getProjectedPosition());
   renderCredits(
     message.songwriters || [],
@@ -489,7 +510,7 @@ function sync(message: IncomingMessage) {
   // Upstream treats a seek as an unconditional scroll reset. A remote anchor
   // correction must preserve the reader's manual position until they resume.
   player.setCurrentTime(getProjectedPosition(), autoFollowEnabled && (wasFar || Boolean(message.force)));
-  if (isPlaying && previewPositionMs === null) {
+  if (rendererActive && document.visibilityState !== "hidden" && isPlaying && previewPositionMs === null) {
     player.resume();
   } else {
     player.pause();
@@ -648,7 +669,7 @@ function playbackNeedsFrames() {
 function scheduleFrame(graceMs = 0) {
   const now = performance.now();
   animateUntilMs = Math.max(animateUntilMs, now + Math.max(0, graceMs));
-  if (document.visibilityState === "hidden" || frameRequestId !== null) {
+  if (!rendererActive || document.visibilityState === "hidden" || frameRequestId !== null) {
     return;
   }
   lastFrameMs = now;
@@ -657,6 +678,7 @@ function scheduleFrame(graceMs = 0) {
 
 function frame() {
   frameRequestId = null;
+  if (!rendererActive || document.visibilityState === "hidden") return;
   const now = performance.now();
   const delta = Math.max(0, Math.min(80, now - lastFrameMs));
   lastFrameMs = now;
@@ -667,14 +689,7 @@ function frame() {
   player.setCurrentTime(position);
   player.update(delta);
 
-  const activeAmllIndex = sourceIndexByAmllLine.findIndex((sourceIndex) => {
-    const line = sourceLines[sourceIndex];
-    if (!line) return false;
-    const start = toFiniteMs(line.lineStartTime);
-    const end = Math.max(start + 1, toFiniteMs(line.lineEndTime, start + 1));
-    return position >= start && position < end;
-  });
-  const nextActiveSourceIndex = sourceIndexByAmllLine[activeAmllIndex] ?? -1;
+  const nextActiveSourceIndex = findActiveSource(position);
   if (nextActiveSourceIndex !== activeSourceIndex) {
     activeSourceIndex = nextActiveSourceIndex;
     post({ type: "activeLineChange", index: activeSourceIndex });
@@ -685,16 +700,21 @@ function frame() {
   }
 }
 
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") {
+function updateSuspension() {
+  if (!rendererActive || document.visibilityState === "hidden") {
     if (frameRequestId !== null) {
       cancelAnimationFrame(frameRequestId);
       frameRequestId = null;
     }
+    window.clearTimeout(longPressTimer);
+    touchStartSourceIndex = -1;
+    player.pause();
     return;
   }
+  if (isPlaying && previewPositionMs === null) player.resume();
   scheduleFrame(IDLE_ANIMATION_GRACE_MS);
-});
+}
+document.addEventListener("visibilitychange", updateSuspension);
 
 window.KineSyncLyrics = {
   receive(message: IncomingMessage) {
@@ -709,6 +729,10 @@ window.KineSyncLyrics = {
     }
     if (message.type === "sync") {
       sync(message);
+    }
+    if (message.type === "visibility") {
+      rendererActive = message.active !== false;
+      updateSuspension();
     }
   },
 };

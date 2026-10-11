@@ -450,16 +450,20 @@ async function searchItunesAlbumCandidates(
   const ranked = new Map<string, ItunesAlbumCandidate>();
 
   try {
-    for (const term of getItunesAlbumSearchTerms(track)) {
+    // Every term contributes to the ranking (there is no early-exit fallback).
+    // Fetch together, then merge in term order to preserve tie-breaking.
+    const payloads = await Promise.all(getItunesAlbumSearchTerms(track).map(term => {
       const params = new URLSearchParams({
         term,
         entity: 'album',
         limit: String(ITUNES_ALBUM_SEARCH_LIMIT),
       });
-      const payload = await fetchJson(
+      return fetchJson(
         `${ITUNES_SEARCH_URL}?${params.toString()}`,
         controller.signal,
       );
+    }));
+    for (const payload of payloads) {
       const rows = Array.isArray(payload?.results) ? payload.results : [];
       for (const row of rows) {
         const collectionViewUrl = String(row?.collectionViewUrl || '').trim();
@@ -487,6 +491,7 @@ async function searchItunesAlbumCandidates(
       }
     }
   } catch {
+    controller.abort();
     return [];
   } finally {
     clearTimeout(timer);

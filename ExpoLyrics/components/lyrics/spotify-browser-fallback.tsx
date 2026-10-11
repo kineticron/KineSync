@@ -662,7 +662,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           browserOpen ? styles.browserOverlayOpen : styles.browserOverlayClosed,
         ]}
       >
-        <SafeAreaView edges={["top", "left", "right"]} style={styles.header}>
+        <SafeAreaView edges={_stableEdges1} style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>Spotify browser</Text>
             <Text style={styles.subtitle} numberOfLines={2}>
@@ -723,7 +723,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                       webViewRefs.current.primary = instance;
                     }
                   }}
-                  source={{ uri: BROWSER_URL }}
+                  source={_stableSource2}
                   originWhitelist={SPOTIFY_WEBVIEW_ORIGIN_WHITELIST}
                   onShouldStartLoadWithRequest={({ url, isTopFrame }) => {
                     if (browserGeneration !== browserGenerationRef.current) {
@@ -977,3 +977,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableEdges1 = ["top", "left", "right"] as const;
+const _stableSource2 = { uri: BROWSER_URL } as const;

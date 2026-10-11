@@ -6,9 +6,9 @@ function createLyricsService({
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
   getSpotifyAccessToken = () => "",
-  getSpicyLyricsUseCorsProxy = null,
+  getSpicyLyricsPublishableKey = () => process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
 } = {}) {
-  setSpicyLyricsNetworkOptions({ getSpicyLyricsUseCorsProxy });
+  const isExpiredSpicyPacket = (packet) => packet?.metadata?.spicyApi && !(Number(packet.metadata.spicyApi.expiresAt) > Date.now());
   const lastDisplayedByTrack = new Map();
   const geminiTranslationCache = new Map();
   const publishedToFrontendCache = new Map();
@@ -166,6 +166,10 @@ function createLyricsService({
       return null;
     }
     const base = activeTrackSourceCache.bySource.get(normalizedSource);
+    if (isExpiredSpicyPacket(base)) {
+      activeTrackSourceCache.bySource.delete(normalizedSource);
+      return null;
+    }
     if (!base?.lyrics?.length) {
       return null;
     }
@@ -219,7 +223,12 @@ function createLyricsService({
     if (!cacheKey) {
       return null;
     }
-    return publishedToFrontendCache.get(cacheKey) || null;
+    const cached = publishedToFrontendCache.get(cacheKey);
+    if (isExpiredSpicyPacket(cached)) {
+      publishedToFrontendCache.delete(cacheKey);
+      return null;
+    }
+    return cached || null;
   };
 
   const buildLyricsPacketFromBase = (track, basePacket) => {
@@ -404,11 +413,13 @@ function createLyricsService({
           if (activeTrackSourceCache.trackId !== cacheKey) {
             return null;
           }
-          return (
-            activeTrackSourceCache.bySource.get(
-              sanitizePreferredSource(source),
-            ) || null
-          );
+          const key = sanitizePreferredSource(source);
+          const cached = activeTrackSourceCache.bySource.get(key);
+          if (isExpiredSpicyPacket(cached)) {
+            activeTrackSourceCache.bySource.delete(key);
+            return null;
+          }
+          return cached || null;
         },
         set: (source, basePacket) => {
           rememberSourceLyrics(cacheKey, source, basePacket);
@@ -774,6 +785,7 @@ function createLyricsService({
         refreshMusixmatchUserToken,
         spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
         spotifyAccessToken: resolvedSpotifyAccessToken,
+        spicyLyricsPublishableKey: await getSpicyLyricsPublishableKey(),
         waitForAutoCompletion: false,
       });
       initialBaseCandidate = {
@@ -912,7 +924,7 @@ function createLyricsService({
         return null;
       }
       const displayed = lastDisplayedByTrack.get(cacheKey);
-      if (displayed) {
+      if (displayed && !isExpiredSpicyPacket(displayed)) {
         return displayed;
       }
       const published = getPublishedLyrics(cacheKey);
@@ -1005,6 +1017,7 @@ function createLyricsService({
       const {
         getLyricsVaultStore,
         resolveVaultSourceLabel,
+        buildVaultImportTrack,
       } = require("./lyricsVault");
       const store = getLyricsVaultStore();
       if (!store) {
@@ -1017,16 +1030,7 @@ function createLyricsService({
       }
 
       const ttmlMeta = extractTtmlMetadata(ttmlContent);
-      const mergedTrack = {
-        trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
-        title: String(track?.title || ttmlMeta.title || "").trim(),
-        artist: String(track?.artist || ttmlMeta.artist || "").trim(),
-        album: String(track?.album || ttmlMeta.album || "").trim(),
-        durationMs: Number(
-          track?.durationMs || parsed.durationMs || 0,
-        ),
-        spotifyTrackId: String(track?.spotifyTrackId || "").trim(),
-      };
+      const mergedTrack = buildVaultImportTrack({ ...ttmlMeta, durationMs: parsed.durationMs }, track);
       if (!mergedTrack.title) {
         throw new Error(
           "Could not determine song title. Play the track on Spotify or use a TTML with title metadata.",
@@ -1092,6 +1096,7 @@ function createLyricsService({
       const {
         getLyricsVaultStore,
         resolveVaultSourceLabel,
+        buildVaultImportTrack,
       } = require("./lyricsVault");
       const store = getLyricsVaultStore();
       if (!store) {
@@ -1099,14 +1104,7 @@ function createLyricsService({
       }
 
       const parsed = parseLyricsImportFile(fileContent, filePath);
-      const mergedTrack = {
-        trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
-        title: String(track?.title || parsed.title || "").trim(),
-        artist: String(track?.artist || parsed.artist || "").trim(),
-        album: String(track?.album || parsed.album || "").trim(),
-        durationMs: Number(track?.durationMs || parsed.durationMs || 0),
-        spotifyTrackId: String(track?.spotifyTrackId || parsed.spotifyTrackId || "").trim(),
-      };
+      const mergedTrack = buildVaultImportTrack(parsed, track);
       if (!mergedTrack.title) {
         throw new Error(
           "Could not determine song title. Play the track on Spotify or include title metadata in the file.",

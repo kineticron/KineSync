@@ -1306,11 +1306,8 @@ export default function HomeScreen() {
         <View style={styles.landscapeRoot}>
           <View style={styles.landscapeLeftPane}>
             <SafeAreaView
-              edges={["top", "left", "bottom"]}
-              style={[
-                styles.landscapeLeftSafe,
-                { paddingHorizontal: LANDSCAPE_LEFT_PANE_PADDING },
-              ]}
+              edges={_stableEdges1}
+              style={_stableStyle2}
             >
               <HorizontalPlayerPanel
                 title={currentTrack?.title || "KineSync"}
@@ -1374,11 +1371,8 @@ export default function HomeScreen() {
 
           {lyricsMounted ? (
             <SafeAreaView
-              edges={["top", "right", "bottom"]}
-              style={[
-                styles.landscapeRightPane,
-                { paddingLeft: LANDSCAPE_LYRICS_PADDING },
-              ]}
+              edges={_stableEdges3}
+              style={_stableStyle4}
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
@@ -1456,7 +1450,7 @@ export default function HomeScreen() {
             exiting={FadeOut.duration(220).easing(PLAYER_MODE_EASE)}
           >
             <SafeAreaView
-              edges={["top", "left", "right"]}
+              edges={_stableEdges5}
               style={styles.fullscreenTopSafeArea}
             />
           </Reanimated.View>
@@ -1467,7 +1461,7 @@ export default function HomeScreen() {
             exiting={FadeOutUp.duration(260).easing(PLAYER_MODE_EASE)}
           >
             <SafeAreaView
-              edges={["top", "left", "right"]}
+              edges={_stableEdges6}
               style={styles.topSafeArea}
             >
               <Reanimated.View style={lyricsChromeOpacityStyle}>
@@ -1661,7 +1655,7 @@ export default function HomeScreen() {
           >
             <LinearGradient
               pointerEvents="none"
-              colors={["transparent", "rgba(0,0,0,0.85)"]}
+              colors={_stableColors7}
               style={styles.lyricsBottomBlur}
             />
           </Reanimated.View>
@@ -1677,7 +1671,7 @@ export default function HomeScreen() {
       )}
 
       <SafeAreaView
-        edges={["bottom", "left", "right"]}
+        edges={_stableEdges8}
         style={styles.bottomArea}
         pointerEvents={
           controlsVisible || fullscreenAlbumMode ? "box-none" : "none"
@@ -1968,3 +1962,19 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableEdges1 = ["top", "left", "bottom"] as const;
+const _stableStyle2 = [
+                styles.landscapeLeftSafe,
+                { paddingHorizontal: LANDSCAPE_LEFT_PANE_PADDING },
+              ];
+const _stableEdges3 = ["top", "right", "bottom"] as const;
+const _stableStyle4 = [
+                styles.landscapeRightPane,
+                { paddingLeft: LANDSCAPE_LYRICS_PADDING },
+              ];
+const _stableEdges5 = ["top", "left", "right"] as const;
+const _stableEdges6 = ["top", "left", "right"] as const;
+const _stableColors7 = ["transparent", "rgba(0,0,0,0.85)"] as const;
+const _stableEdges8 = ["bottom", "left", "right"] as const;

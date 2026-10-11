@@ -321,7 +321,7 @@
               <div class="tile-icon" aria-hidden="true">♫</div>
               <div class="tile-heading">
                 <h2>Spotify Account</h2>
-                <p>OAuth for detection, controls, and Spicy Lyrics</p>
+                <p>OAuth for detection and controls</p>
               </div>
             </div>
             <div class="tile-body">
@@ -338,7 +338,7 @@
                 </button>
               </div>
               <p class="hint" id="spotify-auth-help">
-                Sign in to enable Spotify playback detection, controls, and Spicy Lyrics.
+                Sign in to enable Spotify playback detection and controls.
               </p>
               <p class="hint" id="spotify-desktop-status">
                 If the saved desktop session expired, reopen Spotify here to sign in again.
@@ -1476,7 +1476,7 @@
           setText(
             "spotify-auth-help",
             tokenValid
-              ? "Your container Spotify login also supplies playback controls and Spicy Lyrics. No second sign-in is needed."
+              ? "Your container Spotify login also supplies playback controls. No second sign-in is needed."
               : "Sign in through the container Spotify window; its session will connect here automatically.",
           );
         }
@@ -2130,7 +2130,25 @@
           setText("position-ms", nextMs);
         }
       };
-      setInterval(renderPlaybackPosition, 50);
+      let playbackRenderTimer = null;
+      const updatePlaybackRendering = () => {
+        if (playbackRenderTimer !== null) clearInterval(playbackRenderTimer);
+        playbackRenderTimer = null;
+        if (document.hidden) return;
+        renderPlaybackPosition();
+        const position = computePlaybackPosition();
+        if (playbackClock.isPlaying &&
+            (playbackClock.durationMs <= 0 || position < playbackClock.durationMs)) {
+          playbackRenderTimer = setInterval(() => {
+            renderPlaybackPosition();
+            if (playbackClock.durationMs > 0 && computePlaybackPosition() >= playbackClock.durationMs) {
+              clearInterval(playbackRenderTimer);
+              playbackRenderTimer = null;
+            }
+          }, 50);
+        }
+      };
+      document.addEventListener("visibilitychange", updatePlaybackRendering);
 
       window.bridgeStatus.onStatus((status) => {
         updateLocalPairingQr(status);
@@ -2161,6 +2179,7 @@
         }
         playbackClock.isPlaying = isPlaying;
         playbackClock.durationMs = Number(status.durationMs || 0);
+        updatePlaybackRendering();
 
         setText("server-url", status.wsUrl || "Unavailable");
         const localClientCount = Number(status.connectedClients || 0);

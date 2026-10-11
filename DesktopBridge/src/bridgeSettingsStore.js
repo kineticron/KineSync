@@ -20,6 +20,7 @@ const SETTINGS_DEFAULTS = {
   ngrokDomain: "",
   ngrokAuthToken: "",
   spicyLyricsUseCorsProxy: false,
+  spicyLyricsPublishableKey: "",
 };
 
 // Legacy settings location (used when productName was "desktopbridge")
@@ -241,6 +242,7 @@ function createBridgeSettingsStore({ app }) {
     ngrokDomain: sanitizeNgrokDomain(raw?.ngrokDomain || ""),
     ngrokAuthToken: sanitizeNgrokAuthToken(decodeSecret(raw?.ngrokAuthToken || "")),
     spicyLyricsUseCorsProxy: sanitizeSpicyLyricsUseCorsProxy(raw?.spicyLyricsUseCorsProxy),
+    spicyLyricsPublishableKey: String(raw?.spicyLyricsPublishableKey || "").trim(),
   });
 
   // Upgrade plaintext secrets written by older releases when OS protection is
@@ -279,6 +281,15 @@ function createBridgeSettingsStore({ app }) {
         geminiApiKeyConfigured: Boolean(normalized.geminiApiKey),
         ngrokConfigured: Boolean(normalized.ngrokDomain && normalized.ngrokAuthToken),
       };
+    },
+    getSpicyLyricsPublishableKey() {
+      return normalize(store.store).spicyLyricsPublishableKey;
+    },
+    setSpicyLyricsPublishableKey(value) {
+      const key = String(value || "").trim();
+      if (key && !/^sl_pk_\S+$/.test(key)) throw new Error("Use a Spicy Lyrics publishable key (sl_pk_).");
+      store.set("spicyLyricsPublishableKey", key);
+      return key;
     },
     getMusixmatchUserToken() {
       return normalize(store.store).musixmatchUserToken;

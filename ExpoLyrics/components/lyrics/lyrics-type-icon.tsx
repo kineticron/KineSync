@@ -209,10 +209,7 @@ export const LyricsTypeIcon = memo(function LyricsTypeIcon({
       ) : null}
 
       <View
-        style={[
-          styles.micWrap,
-          { transform: [{ rotate: MIC_ROTATION }] },
-        ]}>
+        style={_stableStyle1}>
         <MicBody
           filled={isKaraoke}
           color={color}
@@ -258,3 +255,9 @@ const styles = StyleSheet.create({
     marginTop: -3,
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = [
+          styles.micWrap,
+          { transform: [{ rotate: MIC_ROTATION }] },
+        ];

@@ -37,9 +37,9 @@ export function SetupBackground() {
   ] }));
   return <View pointerEvents="none" style={StyleSheet.absoluteFill}>
     <Animated.View style={[styles.gradientField, drift]}>
-      <LinearGradient colors={SETUP_GRADIENT} locations={[0, 0.52, 1]} start={{ x: 0, y: 1 }} end={{ x: 0, y: 0 }} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={SETUP_GRADIENT} locations={_stableLocations1} start={_stableStart2} end={_stableEnd3} style={StyleSheet.absoluteFill} />
     </Animated.View>
-    <View style={[StyleSheet.absoluteFill, styles.shade]} />
+    <View style={_stableStyle4} />
   </View>;
 }
 
@@ -67,3 +67,9 @@ const styles = StyleSheet.create({
   shade: { backgroundColor: 'rgba(9,12,19,0.82)' },
   reveal: { position: 'absolute', top: 0, bottom: 0, left: 0, overflow: 'hidden' },
 });
+
+// Static native props retain their identity across renders.
+const _stableLocations1 = [0, 0.52, 1] as const;
+const _stableStart2 = { x: 0, y: 1 } as const;
+const _stableEnd3 = { x: 0, y: 0 } as const;
+const _stableStyle4 = [StyleSheet.absoluteFill, styles.shade];

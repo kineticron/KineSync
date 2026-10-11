@@ -3,7 +3,7 @@
 ## Supported versions
 
 Security fixes are released against the latest version on the default branch
-and the latest tagged release. Please upgrade before reporting a problem; old
+and the latest tagged release. Please upgrade before reporting a problem. Old
 tags may contain known vulnerable dependencies or stale native binaries.
 
 ## Installation and provenance
@@ -28,11 +28,12 @@ Please email `kineticrondev@gmail.com` with the subject:
 Do not create a public GitHub issue for an unpatched or credential-related
 vulnerability. Include the affected version/commit, deployment mode (desktop
 or Docker), operating system, and safe reproduction steps. Redact secrets and
-personal data; attach logs or media only after removing credentials, tokens,
+personal data. Attach logs or media only after removing credentials, tokens,
 cookies, and private URLs.
 
-You should receive an acknowledgement within 3 business days. We will
-coordinate a fix, release, and disclosure timeline with the reporter.
+You can also use [GitHub private vulnerability reporting](https://github.com/Kineticron/KineSync/security/advisories/new).
+Reports are handled by volunteer maintainers. Response times are not guaranteed.
+We will coordinate a fix, release, and disclosure timeline with the reporter.
 
 For ordinary setup or support questions, use a normal GitHub issue and include
 the sanitized diagnostics requested in the issue template.

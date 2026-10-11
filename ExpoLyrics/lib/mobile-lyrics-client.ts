@@ -8,6 +8,7 @@ import {
   getMobileLyricsSettings,
 } from "@/lib/mobile-lyrics-settings";
 import { usePlaybackStore } from '@/store/playback-store';
+import spicyLyricsConfig from '../../DesktopBridge/src/spicyLyricsConfig.json';
 import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import {
@@ -68,7 +69,10 @@ const mobileLyricsService = createLyricsService({
       "GEMINI_API_KEY",
       "OPENROUTER_API_KEY",
     ),
-  getSpicyLyricsUseCorsProxy: () => false,
+  getSpicyLyricsPublishableKey: () =>
+    getCachedMobileLyricsSettings().spicyLyricsPublishableKey ||
+    process.env.EXPO_PUBLIC_SPICY_LYRICS_PUBLISHABLE_KEY ||
+    spicyLyricsConfig.publishableKey || "",
 });
 
 function cleanTrackMetadata(value: unknown) {
@@ -300,6 +304,17 @@ export async function resolveSpotifyCatalogMatch(track: {
     album: searchTrack.album || match.album || "",
     durationMs: Number(match.durationMs || 0) > 0 ? Number(match.durationMs) : durationMs,
   };
+}
+
+/** Import lookup never calls the traditional Web API or trusts lyric-end duration. */
+export async function resolveSpotifyImportMatch(track: Pick<Track, 'title' | 'artist' | 'album'>) {
+  await getMobileLyricsSettings();
+  const accessToken = storedSpotifyToken() || readEnv("EXPO_PUBLIC_SPOTIFY_ACCESS_TOKEN", "SPOTIFY_ACCESS_TOKEN");
+  if (!accessToken || !track.title || !track.artist) return null;
+  return mobileLyricsService.resolveSpotifyCatalogTrackViaPartnerSearch(
+    { title: cleanTrackMetadata(track.title), artist: cleanTrackMetadata(track.artist), album: cleanTrackMetadata(track.album), durationMs: 0 },
+    accessToken, { enrichFromWebApi: false, strictImportMatch: true },
+  );
 }
 
 export function clearMobileLyricsCache() {

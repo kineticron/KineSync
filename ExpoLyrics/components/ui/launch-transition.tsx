@@ -156,7 +156,7 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
       </Animated.View>
       {!finished && (
         <Animated.View style={[styles.overlay, overlayStyle]} accessibilityLabel="KineSync is opening" accessibilityRole="progressbar">
-          <View style={[StyleSheet.absoluteFill, styles.veil]} />
+          <View style={_stableStyle1} />
           <Animated.View style={[styles.brand, wordmarkStyle]}>
             <View style={styles.dimBrand}>
               <Wordmark onMetrics={measureWordmark} />
@@ -184,3 +184,6 @@ const styles = StyleSheet.create({
   name: { color: '#FFFFFF', fontSize: 32, lineHeight: 42, fontWeight: '800', letterSpacing: -1 },
   whiteStem: { position: 'absolute', backgroundColor: '#FFFFFF' },
 });
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = [StyleSheet.absoluteFill, styles.veil];

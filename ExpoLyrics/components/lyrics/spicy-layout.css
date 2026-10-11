@@ -1,4 +1,14 @@
 /* Native KineSync geometry. Upstream CSS continues to paint words and letters. */
+/* Paint glyphs only at the animated leaves. A text-clipped background on the
+   containing line also paints descendants at their untransformed positions,
+   leaving a second outline behind when a word lifts or scales. Group shadows
+   similarly duplicate the leaf glow. Keep static/direct-text lines untouched. */
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .line:not(.musical-line),
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .letterGroup,
+#SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent .KineSyncLyricsRows .word:has(.letter) {
+  background-image: none !important;
+  text-shadow: none !important;
+}
 #SpicyLyricsPage[hidden] { display: none; }
 #SpicyLyricsPage.SpicyRenderer .LyricsContainer .LyricsContent {
   --DefaultLyricsSize: calc(var(--ks-font-size) * var(--ks-font-scale, 1));

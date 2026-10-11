@@ -9,7 +9,7 @@ export default function AppStackLayout() {
   const touring = usePlayerTourStore(state => state.active || state.pending);
   const portraitOnly = usePlayerTourStore(state => state.active || state.pending);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={_stableStyle1}>
       <Stack screenOptions={{ orientation: portraitOnly ? 'portrait' : 'default', headerShown: false, statusBarHidden: false, statusBarStyle: 'light', contentStyle: { backgroundColor: Design.background }, animation: reduceMotion ? 'none' : 'slide_from_right', animationDuration: 260 }}>
         <Stack.Screen name="index" options={{ gestureEnabled: !touring, fullScreenGestureEnabled: false }} />
         <Stack.Screen name="explore" />
@@ -17,3 +17,6 @@ export default function AppStackLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = { flex: 1 };

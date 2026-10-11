@@ -11,7 +11,7 @@ export default function ModalScreen() {
         This is a modal
       </Text>
       <Link href="/" dismissTo style={styles.link}>
-        <Text style={[{ color: '#0a7ea4', lineHeight: 30, fontSize: 16 }]}>
+        <Text style={_stableStyle1}>
           Go to home screen
         </Text>
       </Link>
@@ -34,3 +34,6 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = [{ color: '#0a7ea4' as const, lineHeight: 30, fontSize: 16 }];

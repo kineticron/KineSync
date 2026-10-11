@@ -32,11 +32,11 @@ Parts are ordered to match the original monolithic file's execution order:
 - **06-translation.js**: Gemini/OpenRouter translation enrichment and cache.
 - **07a-source-scoring.js**: Source registry, ordering, timing tier
   classification, coverage stats, candidate scoring, and upgrade logic.
-- **07b-service-orchestration.js**: `createLyricsService` — the main
+- **07b-service-orchestration.js**: `createLyricsService`: the main
   orchestration pipeline.
 - **07c-module-exports.js**: Module exports for the lyrics service.
 - **08-local-vault-source.js**: Local vault lyrics adapter.
 
 When changing behavior, prefer editing the smallest relevant part file.
-Keep in mind that all parts share the same VM context — top-level
+Keep in mind that all parts share the same VM context: top-level
 `const`/`let` declarations become global to all files.

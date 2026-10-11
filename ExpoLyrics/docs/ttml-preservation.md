@@ -15,7 +15,7 @@ translations and alignment.
 
 Renaming an entry or adding translations for playback does not rewrite its
 archived original XML. Code that intentionally generates an updated document
-can call `lyricsToTtml` with `preserveOriginal: false`; generated documents
+can call `lyricsToTtml` with `preserveOriginal: false`. Generated documents
 contain supported lyric fields, not every arbitrary XML extension. The
 archived source remains available in metadata.
 

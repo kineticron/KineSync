@@ -1,5 +1,5 @@
 import { Image as ExpoImage } from 'expo-image';
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { AnimatedArtworkVideoLayer } from '@/components/lyrics/animated-artwork-video-layer';
@@ -18,6 +18,7 @@ export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
   style,
 }: AnimatedBridgedArtworkProps) {
   const safeStaticUri = String(staticUri || '').trim();
+  const staticSource = useMemo(() => ({ uri: safeStaticUri }), [safeStaticUri]);
   const safeAnimatedUri = String(animatedUri || '').trim();
   const shouldPlayVideo = Boolean(safeAnimatedUri && active);
 
@@ -29,7 +30,7 @@ export const AnimatedBridgedArtwork = memo(function AnimatedBridgedArtwork({
     <View style={style} pointerEvents="none">
       {safeStaticUri ? (
         <ExpoImage
-          source={{ uri: safeStaticUri }}
+          source={staticSource}
           style={StyleSheet.absoluteFill}
           cachePolicy="memory-disk"
           recyclingKey={safeStaticUri}

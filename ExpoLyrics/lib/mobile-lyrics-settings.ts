@@ -6,6 +6,7 @@ const MOBILE_LYRICS_SETTINGS_KEY = "kinesync_mobile_lyrics_settings";
 const MOBILE_LYRICS_SECURE_KEY = "kinesync_mobile_lyrics_secure_v1";
 
 export type MobileLyricsSettings = {
+  spicyLyricsPublishableKey: string;
   spotifyWebToken: string;
   /** Epoch ms the captured Spotify token expires; 0 when unknown. */
   spotifyWebTokenExpiresAt: number;
@@ -20,6 +21,7 @@ export type MobileLyricsSettings = {
 };
 
 const DEFAULT_SETTINGS: MobileLyricsSettings = {
+  spicyLyricsPublishableKey: "",
   spotifyWebToken: "",
   spotifyWebTokenExpiresAt: 0,
   musixmatchUserToken: "",
@@ -37,6 +39,7 @@ let storageAvailable = true;
 
 function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefined): MobileLyricsSettings {
   return {
+    spicyLyricsPublishableKey: String(value?.spicyLyricsPublishableKey || "").trim(),
     spotifyWebToken: String(value?.spotifyWebToken || "").trim(),
     spotifyWebTokenExpiresAt: Math.max(0, Number(value?.spotifyWebTokenExpiresAt || 0)),
     musixmatchUserToken: String(value?.musixmatchUserToken || "").trim(),
@@ -101,6 +104,9 @@ export async function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
 export async function saveMobileLyricsSettings(
   settings: Partial<MobileLyricsSettings>,
 ): Promise<MobileLyricsSettings> {
+  if (settings.spicyLyricsPublishableKey && !/^sl_pk_\S+$/.test(settings.spicyLyricsPublishableKey.trim())) {
+    throw new Error("Use a Spicy Lyrics publishable key (sl_pk_). Secret keys are not accepted.");
+  }
   const current = await getMobileLyricsSettings();
   cachedSettings = normalizeSettings({ ...current, ...settings });
   loaded = true;

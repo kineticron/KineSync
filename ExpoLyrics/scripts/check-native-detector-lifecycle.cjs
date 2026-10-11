@@ -6,6 +6,9 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
 const platform = process.argv.includes('--android') ? 'android' : 'ios';
+const alerts = [], openedUrls = [];
+let controlError, rejectLaunch = false;
+class SpotifyPlaybackUnavailableError extends Error {}
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
 let cursor = 0, dirty = false, actions, instance;
 let tour = { active: false, pending: false };
@@ -30,7 +33,7 @@ class Detector {
   capture() { return true; }
   refresh() {}
   async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
-  async control(command) { commands.push(command); }
+  async control(command) { commands.push(command); if (controlError) throw controlError; }
   clear() { this.enabled = false; this.clears++; }
 }
 const callableStore = state => Object.assign(fn => fn(state), { getState: () => state });
@@ -38,10 +41,12 @@ const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.a
 const mocks = {
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
-    Share: { share: async () => {} }, Alert: { alert() {} }, StyleSheet: { create: x => x, absoluteFill: {} } },
+    Share: { share: async () => {} }, Alert: { alert: (...args) => alerts.push(args) },
+    Linking: { openURL: async url => { openedUrls.push(url); if (rejectLaunch) throw new Error('No app'); } },
+    StyleSheet: { create: x => x, absoluteFill: {} } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
-  '@/lib/spotify-detector/client': { SpotifyDetector: Detector }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
+  '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
   '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
     makeBrowserCommandScript: JSON.stringify, parseBrowserEvent: JSON.parse,
@@ -88,6 +93,26 @@ assert.equal(packets.length, 1);
 ref.current.togglePlayPause();
 assert.equal(commands.at(-1).type, 'toggle', 'controls target native device while browser is unmounted');
 assert.equal(find(tree), null);
+controlError = new SpotifyPlaybackUnavailableError('No device');
+ref.current.togglePlayPause();
+await Promise.resolve();
+assert.equal(alerts.at(-1)[0], "Can't Start Playback Just Yet");
+assert.equal(alerts.at(-1)[1], "KineSync can't start the playback without you starting the Spotify app on one of your other devices.");
+assert.equal(alerts.at(-1)[2][0].text, 'Close');
+assert.equal(alerts.at(-1)[2][1].text, 'Open Spotify');
+alerts.at(-1)[2][1].onPress();
+await Promise.resolve();
+assert.equal(openedUrls.at(-1), platform === 'ios' ? 'spotify://eevee/open.spotify.com/' : 'spotify://');
+rejectLaunch = true;
+alerts.at(-1)[2][1].onPress();
+for (let n = 0; n < 10; n++) await Promise.resolve();
+assert.equal(openedUrls.at(-1), 'spotify://', 'standard launch is the final fallback');
+assert.equal(alerts.at(-1)[0], 'Couldn’t Open Spotify');
+controlError = new Error('Spotify control HTTP 429.');
+ref.current.togglePlayPause();
+await Promise.resolve();
+assert.equal(alerts.at(-1)[0], 'Spotify control', 'other errors retain their diagnostic message');
+controlError = undefined;
 ref.current.openBrowser(); render(); web = find(tree); assert(web, 'browser remains available on demand');
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: '{"type":"ready"}', url: 'https://open.spotify.com/' } });

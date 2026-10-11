@@ -21,21 +21,36 @@ closely ports the upstream implementations from `src/modules/Spring.ts`,
 network, and global-store dependencies with KineSync's local WebView bridge and
 playback clock. The renderer preserves upstream spring/spline, emphasis,
 blur, interlude-dot and line-state effects. `spicy-layout-host.ts` and
-`spicy-layout.css` provide KineSync's native row geometry and scrolling policy;
-the upstream virtualizer and scroll controller are not bundled into the host.
+`spicy-layout.css` provide KineSync's native row geometry and scrolling policy.
+The upstream virtualizer and scroll controller are not bundled into the host.
 
-## Apple Music-like Lyrics native renderer parity
+## Apple Music-like Lyrics WebView renderer
 
-The native React Native lyrics renderer translates visual behavior and animation
-math from [`amll-dev/applemusic-like-lyrics`](https://github.com/amll-dev/applemusic-like-lyrics)
-at commit `eb5c852f7bf809f32425c3025f423598c619af58`.
+The AMLL WebView host bundles `@applemusic-like-lyrics/core` version 0.5.2
+from [`amll-dev/applemusic-like-lyrics`](https://github.com/amll-dev/applemusic-like-lyrics).
+The installed version and integrity hash are recorded in `package-lock.json`.
+The earlier native port used commit `eb5c852f7bf809f32425c3025f423598c619af58`.
+That port is no longer the active renderer.
 
 Apple Music-like Lyrics is licensed under the GNU Affero General Public License
-v3.0 (AGPL-3.0). The native KineSync implementation reproduces the upstream
-line/background scale and spring parameters, word-fade width, emphasis curves,
-and interlude-dot choreography using React Native and Reanimated primitives.
-KineSync owns font sizes, line wrapping, row spacing, alignment and scrolling.
-Background animation changes only painting, keeping its layout space reserved.
-Native filter blur is retained on both platforms and clears during manual
-scrolling. The filter stays present at zero blur to keep its native hierarchy
-stable while focus moves.
+v3.0 (AGPL-3.0-only). `components/lyrics/amll-webview-entry.ts` wraps its
+lyric player and background support with KineSync's local message bridge,
+playback clock, layout options, and attribution UI. Generated JavaScript and
+CSS are included in `amll-webview-bundle.ts`. Native React Native controls
+surround the WebView. The lyrics themselves use the upstream web renderer.
+
+The mobile app declares AGPL-3.0-only in its package metadata. The complete
+license text is included in [LICENSE](LICENSE). Other dependencies retain
+the license files and copyright notices distributed with their packages.
+
+## Experimental native lyric renderers
+
+`components/lyrics/native/reference-motion.ts` and the native word/line/scroll
+controllers port the bundled Spicy and AMLL motion policies cited above.
+The `amll-reference-*.ts` files contain pure layout and word splitting source
+extracted from AMLL core 0.5.2 and retain its AGPL-3.0-only license.
+The Skia measurement adapter replaces the browser's DOM measurement.
+
+The native AMLL layout adapter uses `@formatjs/intl-segmenter` for runtimes
+without `Intl.Segmenter`. FormatJS is MIT licensed; its package metadata and
+upstream copyright/license notices apply to this dependency.

@@ -83,6 +83,7 @@ async function probeLyricsSource(
   {
     musixmatchUserToken = process.env.MUSIXMATCH_USER_TOKEN || "",
     spotifyWebToken = process.env.SPOTIFY_WEB_TOKEN || "",
+    spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
   } = {},
 ) {
@@ -127,6 +128,7 @@ async function probeLyricsSource(
       musixmatchUserToken: String(musixmatchUserToken || "").trim(),
       spotifyWebToken: String(spotifyWebToken || "").trim(),
       spotifyAccessToken: String(spotifyAccessToken || "").trim(),
+      spicyLyricsPublishableKey,
     });
     if (!result?.lyrics?.length) {
       return {
@@ -171,11 +173,12 @@ function getSourceAttemptOrder(
   {
     hasMusixmatchUserToken = false,
     hasSpotifyWebToken = false,
+    hasSpicyLyricsPublishableKey = false,
     hasSpotifyTrackId = false,
     track = null,
   } = {},
 ) {
-  const hasSpicy = hasSpotifyWebToken || hasSpotifyTrackId;
+  const hasSpicy = hasSpicyLyricsPublishableKey && hasSpotifyTrackId;
   const singleFeatVariant =
     track &&
     trackNeedsFeaturedVariantVerification(track) &&
@@ -883,6 +886,7 @@ async function fetchBestSyncedLyrics(
     musixmatchUserToken = "",
     refreshMusixmatchUserToken = null,
     spotifyWebToken = "",
+    spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
   } = {},
@@ -897,6 +901,7 @@ async function fetchBestSyncedLyrics(
     hasSpotifyWebToken:
       Boolean(safeSpotifyWebToken) || Boolean(safeSpotifyAccessToken),
     hasSpotifyTrackId,
+    hasSpicyLyricsPublishableKey: /^sl_pk_\S+$/.test(String(spicyLyricsPublishableKey || "").trim()),
     track,
   });
   if (!attemptOrder.length) {
@@ -961,6 +966,7 @@ async function fetchBestSyncedLyrics(
         musixmatchUserToken: safeMusixmatchUserToken,
         spotifyWebToken: safeSpotifyWebToken,
         spotifyAccessToken: safeSpotifyAccessToken,
+        spicyLyricsPublishableKey,
       });
     try {
       return await fetchWithCurrentToken();
@@ -1239,26 +1245,11 @@ async function fetchBestSyncedLyrics(
 }
 
 async function enrichTrackForVaultMatch(track, spotifyAccessToken = "") {
-  let matchTrack = await buildLyricsMatchTrack(track, { spotifyAccessToken });
-  if (String(matchTrack?.spotifyTrackId || "").trim() || !spotifyAccessToken) {
-    return matchTrack;
-  }
-  if (!String(matchTrack?.title || "").trim()) {
-    return matchTrack;
-  }
+  if (track?.spotifyTrackId || !spotifyAccessToken || !track?.title || !track?.artist) return track;
   try {
     const resolved = await resolveSpotifyCatalogTrackViaPartnerSearch(
-      matchTrack,
-      spotifyAccessToken,
+      { ...track, durationMs: 0 }, spotifyAccessToken, { enrichFromWebApi: false, strictImportMatch: true },
     );
-    if (!resolved?.id) {
-      return matchTrack;
-    }
-    return buildLyricsMatchTrack(
-      { ...matchTrack, spotifyTrackId: resolved.id },
-      { spotifyAccessToken },
-    );
-  } catch {
-    return matchTrack;
-  }
+    return resolved?.id ? { ...track, spotifyTrackId: resolved.id } : track;
+  } catch { return track; }
 }

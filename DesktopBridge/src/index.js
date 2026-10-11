@@ -3,6 +3,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { spawn, execSync } = require("node:child_process");
 const { createBridgeSettingsStore } = require("./bridgeSettingsStore");
+const spicyLyricsConfig = require("./spicyLyricsConfig.json");
 const {
   createMusixmatchTokenManager,
 } = require("./musixmatchTokenManager");
@@ -95,7 +96,15 @@ const createWindow = () => {
     },
   });
 
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const target = new URL(url);
+      if (target.protocol === "https:" && target.hostname === "developers.spicylyrics.org") {
+        void shell.openExternal(target.href);
+      }
+    } catch { /* Invalid external URLs stay blocked. */ }
+    return { action: "deny" };
+  });
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!String(url || "").startsWith("file://")) event.preventDefault();
   });
@@ -179,8 +188,7 @@ app.whenReady().then(() => {
     getSpotifyWebToken: () => bridgeSettingsStore.getSpotifyWebToken(),
     getGeminiApiKey: () => bridgeSettingsStore.getGeminiApiKey(),
     getSpotifyAccessToken: spotifyAccessTokenGetter,
-    getSpicyLyricsUseCorsProxy: () =>
-      bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
+    getSpicyLyricsPublishableKey: () => bridgeSettingsStore.getSpicyLyricsPublishableKey() || process.env.SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey || "",
   });
   const playbackController = createPlaybackController();
   playbackController.setSpotifyAccessTokenGetter(spotifyAccessTokenGetter);
@@ -409,6 +417,7 @@ app.whenReady().then(() => {
         relayBridgeId: bridgeSettingsStore.getRelayBridgeId(),
         ngrokDomain: bridgeSettingsStore.getNgrokDomain(),
         spicyLyricsUseCorsProxy: bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
+        spicyLyricsKeyConfigured: Boolean(bridgeSettingsStore.getSpicyLyricsPublishableKey() || process.env.SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey),
         ...getMusixmatchTokenStatus(),
         ...getSpotifyWebTokenStatus(),
         ...getGeminiApiKeyStatus(),
@@ -430,7 +439,8 @@ app.whenReady().then(() => {
     if (
       typeof patch !== "object" ||
       patch === null ||
-      (!Object.prototype.hasOwnProperty.call(patch, "musixmatchUserToken") &&
+      (!Object.prototype.hasOwnProperty.call(patch, "spicyLyricsPublishableKey") &&
+        !Object.prototype.hasOwnProperty.call(patch, "musixmatchUserToken") &&
         !Object.prototype.hasOwnProperty.call(patch, "spotifyWebToken") &&
         !Object.prototype.hasOwnProperty.call(patch, "geminiApiKey") &&
         !Object.prototype.hasOwnProperty.call(patch, "openRouterApiKey") &&
@@ -448,6 +458,13 @@ app.whenReady().then(() => {
         ...getSpotifyWebTokenStatus(),
         ...getGeminiApiKeyStatus(),
       };
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "spicyLyricsPublishableKey")) {
+      try {
+        bridgeSettingsStore.setSpicyLyricsPublishableKey(patch.spicyLyricsPublishableKey);
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
     }
     const relayClientSettingsChanged = [
       "bridgeKey",
@@ -509,6 +526,7 @@ app.whenReady().then(() => {
           bridgeSettingsStore.getNgrokAuthToken(),
       ),
       spicyLyricsUseCorsProxy: bridgeSettingsStore.getSpicyLyricsUseCorsProxy(),
+        spicyLyricsKeyConfigured: Boolean(bridgeSettingsStore.getSpicyLyricsPublishableKey() || process.env.SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey),
       ...getMusixmatchTokenStatus(),
       ...getSpotifyWebTokenStatus(),
       ...getGeminiApiKeyStatus(),
@@ -1549,6 +1567,7 @@ app.whenReady().then(() => {
       containerSpotifyTokenWatcher?.stop();
       relayBridge.stop();
       bridge.stop();
+      getLyricsVaultStore()?.close();
     });
 
   process.once("SIGINT", () => app.quit());

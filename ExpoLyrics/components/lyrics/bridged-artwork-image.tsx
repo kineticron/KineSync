@@ -1,5 +1,5 @@
 import { Image as ExpoImage, type ImageProps } from "expo-image";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
 const ARTWORK_CROSSFADE_MS = 380;
@@ -21,15 +21,17 @@ export const BridgedArtworkImage = memo(function BridgedArtworkImage({
   ...rest
 }: BridgedArtworkImageProps) {
   const safeUri = String(uri || "").trim();
+  const source = useMemo(() => ({ uri: safeUri }), [safeUri]);
+  const containerStyles = useMemo(() => [style, containerStyle], [style, containerStyle]);
   if (!safeUri) {
     return null;
   }
 
   return (
-    <View style={[style, containerStyle]} pointerEvents="none">
+    <View style={containerStyles} pointerEvents="none">
       <ExpoImage
         {...rest}
-        source={{ uri: safeUri }}
+        source={source}
         style={StyleSheet.absoluteFill}
         cachePolicy={rest.cachePolicy ?? "memory-disk"}
         recyclingKey={recyclingKey ?? safeUri}

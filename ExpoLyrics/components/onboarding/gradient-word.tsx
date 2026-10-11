@@ -10,8 +10,12 @@ export function GradientWord({ text, colors, active, style }: { text: string; co
   return <MaskedView androidRenderingMode="software" maskElement={<Text style={[style, { color: '#000' }]}>{text}</Text>}>
     <Text style={[style, { opacity: 0 }]}>{text}</Text>
     <Animated.View style={[styles.field, drift]}>
-      <LinearGradient colors={[colors[0], colors[1], colors[0]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={[colors[0], colors[1], colors[0]]} start={_stableStart1} end={_stableEnd2} style={StyleSheet.absoluteFill} />
     </Animated.View>
   </MaskedView>;
 }
 const styles = StyleSheet.create({ field: { position: 'absolute', top: 0, bottom: 0, left: 0, width: '200%' } });
+
+// Static native props retain their identity across renders.
+const _stableStart1 = { x: 0, y: 0 } as const;
+const _stableEnd2 = { x: 1, y: 0 } as const;

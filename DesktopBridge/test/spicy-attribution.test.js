@@ -35,3 +35,17 @@ test("Spicy attribution preserves community maker and uploader credit", () => {
   assert.equal(metadata.attribution.maker.username, "lyric-maker");
   assert.equal(metadata.attribution.uploader.username, "lyric-uploader");
 });
+
+test("official sources and community URLs are attributed conditionally", () => {
+  const profile = { username: "sync-maker", url: "https://spicylyrics.org/uid/123" };
+  const metadata = extractSpicyPayloadMetadata({ source: "spicy_lyrics", UploadAttribution: { Maker: profile, Uploader: profile } });
+  assert.equal(metadata.attribution.provider, "Spicy Lyrics");
+  assert.equal(metadata.attribution.uploader.url, profile.url);
+  assert.equal(metadata.attribution.maker.url, profile.url);
+  for (const [source, provider] of [["apple_music", "Apple Music"], ["spotify", "Spotify"]]) {
+    const credit = extractSpicyPayloadMetadata({ source, UploadAttribution: { Maker: profile } }).attribution;
+    assert.equal(credit.provider, provider);
+    assert.equal(credit.maker, undefined);
+  }
+  assert.equal(extractSpicyPayloadMetadata({}).attribution.provider, "Unknown");
+});
