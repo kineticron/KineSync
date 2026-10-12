@@ -1,6 +1,6 @@
 # Contributing to KineSync
 
-Contributions are welcome in the mobile app, Desktop Bridge, documentation, accessibility, lyric parsing, and performance tooling. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+Contributions are welcome in the mobile app, Desktop Bridge, documentation, accessibility, lyric parsing, and performance tooling.
 
 ## Before starting
 

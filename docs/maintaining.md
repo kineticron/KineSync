@@ -49,4 +49,4 @@ quality claims.
 
 The root license covers GPL Desktop Bridge code. The mobile app already declares AGPL and includes an AGPL license file. Preserve component boundaries and upstream notices. Adding a dependency or copying source requires license compatibility and attribution review. The source declaration is not a substitute for reviewing notices in packaged distributions.
 
-Release notes belong in `RELEASE_NOTES/v<version>.md`. Use the process in [RELEASES.md](../RELEASES.md). Document unresolved limitations explicitly instead of inventing guarantees, a roadmap, or a history of releases.
+Release notes belong in the notes of the GitHub release. Use the process in [RELEASES.md](../RELEASES.md). Document unresolved limitations explicitly instead of inventing guarantees, a roadmap, or a history of releases.

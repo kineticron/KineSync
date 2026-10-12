@@ -9,6 +9,7 @@ import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import { nativeWordProgress, type NativeLyricRow, type NativeLyricsStyle, type NativeVoice, type NativeWord } from './native-lyrics-model';
 import { useReferenceLineMotion } from './use-reference-line-motion';
 import { AmllBackground } from './amll-background';
+import { NativeInterludeView } from './native-interlude';
 import { NativeSkiaVoice } from './native-skia-voice';
 import { useReferenceRowScroll, type ReferenceScroll } from './reference-scroll';
 
@@ -16,20 +17,6 @@ export type NativeReveal = 'clip' | 'mask' | 'canvas' | 'tree';
 const gradientColors = ['#fff', '#fff', '#ffffff00'] as const;
 const gradientStart = { x: 0, y: 0 };
 const gradientEnd = { x: 1, y: 0 };
-
-const PauseDot = memo(function PauseDot({ index, position, start, duration }: { index: number; position: SharedValue<number>; start: number; duration: number }) {
-  const animation = useAnimatedStyle(() => {
-    const progress = Math.max(0, Math.min(1, (position.value - start) / Math.max(1, duration)));
-    return { opacity: 0.25 + 0.75 * Math.max(0, Math.min(1, progress * 3 - index)),
-      transform: [{ scale: 1 + 0.12 * Math.sin(progress * Math.PI) }] };
-  });
-  return <Animated.View style={[styles.dot, animation]} />;
-});
-
-const PauseDots = memo(function PauseDots({ position, start, duration }: { position: SharedValue<number>; start: number; duration: number }) {
-  return <View accessibilityLabel="Instrumental break" style={styles.dots}>{[0, 1, 2].map(index =>
-    <PauseDot key={index} index={index} position={position} start={start} duration={duration} />)}</View>;
-});
 
 const NativeWordView = memo(function NativeWordView({ word, position, textStyle, reveal, spicy }: {
   word: NativeWord; position: SharedValue<number>; textStyle: TextStyle; reveal: NativeReveal; spicy: boolean;
@@ -69,7 +56,7 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
   const { getMappingKey } = useMappingHelper();
   const lineMotion = useReferenceLineMotion(rowActive, !spicy && !staticLyrics, background, !spicy && playing);
   const voiceStyle = useAnimatedStyle(() => ({ transform: [{ scale: spicy || staticLyrics ? 1 : lineMotion.value.scale }], transformOrigin: right ? 'right center' : 'left center' }));
-  const textStyle = useMemo<TextStyle>(() => ({ color: '#fff', fontSize, lineHeight,
+  const textStyle = useMemo<TextStyle>(() => ({ color: '#fff', fontSize, lineHeight, fontFamily: background ? 'KineSync-SF-Regular' : 'KineSync-SF-Bold',
     fontWeight: background ? '500' : staticLyrics ? '600' : '800', includeFontPadding: false,
     letterSpacing: staticLyrics ? 0.15 : 0, textAlign: right ? 'right' : 'left',
     ...(staticLyrics && background ? { color: 'rgba(255,255,255,0.78)' } : {}) }), [background, fontSize, lineHeight, right, staticLyrics]);
@@ -92,11 +79,10 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
   </Animated.View>;
 });
 
-export const NativeLyricRowView = memo(function NativeLyricRowView({ row, position, style, fontScale, landscape, preview, active, selected, staticLyrics, showTranslation, reveal, tapToSeek, onPress, onLongPress, pause, distance, playing, viewportWidth, referenceScroll, presentationWindow, hasDuet }: {
-  row: NativeLyricRow; hasDuet: boolean; position: SharedValue<number>; style: NativeLyricsStyle; fontScale: number; landscape: boolean;
+export const NativeLyricRowView = memo(function NativeLyricRowView({ row, position, seekVersion, style, fontScale, landscape, preview, active, selected, staticLyrics, showTranslation, reveal, tapToSeek, onPress, onLongPress, distance, playing, viewportWidth, referenceScroll, presentationWindow, hasDuet }: {
+  row: NativeLyricRow; hasDuet: boolean; position: SharedValue<number>; seekVersion: SharedValue<number>; style: NativeLyricsStyle; fontScale: number; landscape: boolean;
   preview: boolean; active: boolean; selected: boolean; staticLyrics: boolean; showTranslation: boolean; reveal: NativeReveal;
   tapToSeek: boolean; onPress?: (row: NativeLyricRow) => void; onLongPress?: (row: NativeLyricRow) => void;
-  pause?: { start: number; duration: number; before: boolean };
   distance: number; playing: boolean; viewportWidth: number; referenceScroll: ReferenceScroll; presentationWindow: SharedValue<PlaybackWindowState>;
 }) {
   const { getMappingKey } = useMappingHelper();
@@ -125,16 +111,17 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
     accessibilityState={{ selected }} delayLongPress={540}
     onPress={() => { if (tapToSeek) onPress?.(row); }} onLongPress={() => onLongPress?.(row)}
     style={[styles.row, { minHeight: staticLyrics ? 0 : (spicy ? 84 : 72) * fontScale,
+      justifyContent: !spicy && !staticLyrics ? 'flex-start' : 'center',
       paddingVertical: !staticLyrics ? spicy ? 12 : fontSize * 0.4 : 10,
       paddingHorizontal: staticLyrics ? 28 : spicy ? landscape ? 14 : 28 : (landscape ? 28 : 22) + (viewportWidth <= 500 ? 20 : fontSize) }, staticLyrics && styles.staticRow, selected && styles.selected]}>
     <View style={[styles.lane, { width: staticLyrics || !spicy && (reveal === 'canvas' || reveal === 'tree') ? '100%' : landscape ? '90%' : '88%' }, staticLyrics && styles.staticLane, right && styles.rightLane]}>
-      {pause?.before && <PauseDots position={position} start={pause.start} duration={pause.duration} />}
+      {row.interlude && !staticLyrics && <NativeInterludeView interlude={row.interlude} position={position} seekVersion={seekVersion}
+        spicy={spicy} fontSize={fontSize} viewportWidth={viewportWidth} right={right} />}
       <NativeVoiceView hasDuet={hasDuet} voice={row.lead} position={position} fontSize={fontSize} lineHeight={lineHeight} background={false}
         right={right} animate={active} prepared={distance <= 1} showTranslation={showTranslation} reveal={reveal} spicy={spicy} staticLyrics={staticLyrics} blur={blur} rowActive={rowActive} blurValue={blurValue} playing={playing} />
       {!!row.backgrounds.length && (!spicy && !staticLyrics
-        ? <AmllBackground active={rowActive} playing={playing} fontSize={fontSize} referenceScroll={referenceScroll} index={row.index} right={right}>{backgroundViews}</AmllBackground>
+        ? <AmllBackground fontSize={fontSize}>{backgroundViews}</AmllBackground>
         : backgroundViews)}
-      {pause && !pause.before && <PauseDots position={position} start={pause.start} duration={pause.duration} />}
     </View>
   </Pressable></Animated.View>;
 });
@@ -146,9 +133,7 @@ const styles = StyleSheet.create({
   word: { maxWidth: '100%', overflow: 'hidden' },
   fill: { ...StyleSheet.absoluteFill }, clip: { overflow: 'hidden' },
   unsung: { color: 'rgba(255,255,255,0.35)' },
-  background: { marginTop: 3 }, translation: { color: 'rgba(255,255,255,0.65)', marginTop: 4, fontWeight: '500', includeFontPadding: false },
+  background: { marginTop: 3 }, translation: { fontFamily: 'KineSync-SF-Regular', color: 'rgba(255,255,255,0.65)', marginTop: 4, fontWeight: '500', includeFontPadding: false },
   staticRow: { paddingTop: 0, paddingBottom: 14 }, staticLane: { maxWidth: 300 }, staticBackground: { marginTop: 5 },
   selected: { backgroundColor: 'rgba(255,255,255,0.13)' },
-  dots: { height: 16, marginTop: 15, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#fff' },
 });

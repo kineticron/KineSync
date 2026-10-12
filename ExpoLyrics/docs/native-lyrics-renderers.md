@@ -2,40 +2,39 @@
 
 Branch: `feat/native-lyrics-renderers`.
 
-This is an experimental port of both Spicy and AMLL. **Full visual parity is not
-complete and the production default remains the existing WebViews.** Set
-`EXPO_PUBLIC_NATIVE_LYRICS=1` when starting Metro to select the native platform
-hosts. Web retains the reference implementation. The native hosts currently
+Native Spicy and AMLL are the default on iOS and Android. Full visual parity
+is still being implemented. Set `EXPO_PUBLIC_NATIVE_LYRICS=0` when starting Metro
+to use the WebView reference hosts instead. Web retains the reference implementation. The native hosts currently
 select FlashList with native Skia paragraphs to reproduce the reference's
 gradients, glow and per-letter animation. Clip and software mask implementations
-remain available in the lab for comparison; they do not provide visual parity.
+remain available in the lab for comparison, they do not provide visual parity.
 
 ## Reference fidelity work (October 11)
 
 The bundled WebViews are the visual authority. Reference computed CSS, matching
 paused timestamps, and Android motion recordings are used alongside source
-comparisons. Real API lyrics can be frozen with `fixture=live`; this snapshots
+comparisons. Real API lyrics can be frozen with `fixture=live`, this snapshots
 already fetched lyrics without seeking or changing Spotify playback. The lab's
 development-only `nativeLyricsParityArm(position, playing)` starts either host
 after recording has begun.
 
 - Spicy uses the original cubic splines, analytic spring integration, letter
   falloff, glow coefficients and follow-scroll easing/duration. Flagged word
-  gaps are measured as 0.32ch; literal provider spaces keep their own advances.
+  gaps are measured as 0.32ch, literal provider spaces keep their own advances.
   Inactive paint follows computed leaf styles (shadow only, including the leaf's
   0.5 unsung alpha), rather than assuming inherited line alpha is the final paint.
   Computed CSS also distinguishes background text size (75%) from its line
   spacing (62%). Joined-syllable pivots follow selector specificity and RTL
-  overrides. Formatting controls are removed only from paint data; ZWJ/ZWNJ and
+  overrides. Formatting controls are removed only from paint data, ZWJ/ZWNJ and
   original provider/callback objects are preserved.
   Flex wrapping counts trailing gaps, retains word-group boundaries, and updates
   paint offsets after inserted breaks. The sustained 46.1-second comparison
   caught the paragraph wrapper dropping a gap and fitting an extra word.
 - AMLL uses the bundled CJK timing split and line-balancing policy. Native Skia
   measures shaped ranges instead of DOM boxes. Hermes lacks Intl.Segmenter, so
-  the FormatJS implementation supplies word boundaries; its CJK boundaries still
+  the FormatJS implementation supplies word boundaries, its CJK boundaries still
   need comparison with the WebView's ICU dictionaries across languages.
-  The lane follows `.2em` padding on both sides; songs with duet lines replace
+  The lane follows `.2em` padding on both sides, songs with duet lines replace
   the far-side padding with 15% of the lane. Landscape uses the reference's
   inverted duet flag. Explicit paragraph struts keep fallback-font baselines
   aligned with the primary font's line box. A real QQ QRC Korean fixture caught
@@ -44,14 +43,36 @@ after recording has begun.
   filtering use the reference equations. Follow-scroll uses independent row
   springs and stagger delays instead of Android's platform scroll animation.
   On disable, word float reverses from its clamped animation endpoint at elapsed
-  time speed, including while playback is paused. Background vocals have their
-  own collapse/slide/opacity wrapper and the reference main-text padding.
-- The native list moves once per follow target; UI-thread transforms animate
-  the residual displacement. No per-frame scroll positions enter React state.
-  Canvas cells consume a precomputed discrete UI playback window, avoiding React
-  cell updates at activation. Experimental clip/mask/tree cells receive semantic
-  invalidation. Shared scroll bookkeeping stays
+  time speed, including while playback is paused. Background vocals remain visible in normal flow at all times,
+  whether playing or paused, active or inactive. Their natural child height
+  reserves space without a recycled measurement cache, visibility spring or
+  collapsing slot. Cue changes and pausing do not change background layout.
+- The native viewport scrolls continuously on the UI thread. AMLL row transforms
+  apply only the difference between each staggered spring and the viewport's
+  spring. Both spring positions publish on animation frames, making corrections
+  independent of callback order without exposing partial command updates to
+  style mappers. Deferred row measurements preserve the
+  requested animation. Long returns animate from the actual drag endpoint.
+  Geometry updates retarget the viewport and row springs with the final height
+  delta, matching the cell transition without introducing a stagger delay. This
+  preserves the focus anchor when measured geometry changes.
+  No per-frame scroll positions enter React state.
+  Canvas glyphs consume a precomputed discrete UI playback window, glyph
+  animation never requires per-frame React updates. Shared scroll bookkeeping stays
   on JS without synchronous reads of UI shared values.
+- Both native renderers load the SF Pro Display faces from `skia-lyrics` into a
+  shared per-renderer font provider. AMLL collapses spaces at explicit balanced
+  breaks and uses one reveal edge per syllable across separately scaled letters.
+  Spicy blurs clipped letter images, reduces glow alpha, and leaves canvas space
+  around transformed ink and shadows.
+- Breaks of at least three seconds have persistent native interlude slots before
+  the upcoming lyric. AMLL uses the breathing, sequential lighting and exit
+  equations recovered from the WebView on `main` (0.5.2), rather than the changed
+  0.6 implementation. Spicy uses its original dot timing, four spring channels
+  and pre-hidden group transition. Slot height animates on entry and early exit,
+  auto-follow anchors on the slot, and seeks restore its layout immediately.
+  Native checks compare AMLL snapshots with the recovered reference, exercise
+  Spicy dot springs, and verify gradual layout transitions and seek cleanup.
 
 `test:lyrics-native` now includes a comparison against the bundled reference:
 7,505 spline samples, 3,600 Spicy spring frames, AMLL spring solver trajectories,
@@ -63,7 +84,7 @@ measurements of the current fidelity implementation.
 
 ## Architecture
 
-- One Reanimated UI clock projects playback anchors; playback position ticks do
+- One Reanimated UI clock projects playback anchors, playback position ticks do
   not subscribe React or cross into JS each frame. Focus and AppState suspend it.
 - A binary search over precomputed cue boundaries schedules JS only when the
   semantic playback window changes. Overlaps, background voices and pauses use
@@ -71,7 +92,7 @@ measurements of the current fidelity implementation.
   ignored.
 - Both FlatList and FlashList use the same memoized row model. FlashList uses
   recycling-aware local state/mapping keys and separate item types. No scrolling
-  coordinates enter React state. Native scrolling owns gestures; a user touch
+  coordinates enter React state. Native scrolling owns gestures, a user touch
   disables following, and a subsequent layout change cannot restore it.
 - Original line objects reach press/long-press callbacks. Unicode cluster repair
   and the reference AMLL spacing policy precede layout. Provider fragments in an
@@ -84,25 +105,27 @@ measurements of the current fidelity implementation.
   reveals. Neither reproduces all reference effects.
 - The Skia candidate shapes the entire paragraph, visits its glyph runs including
   fallback fonts, and batches gradient/glow glyph draws into one native picture
-  per voice. Spatial ink intersection and clipping preserve wrapped final glyphs
-  and ligatures without relying on problematic native cluster indices. Settled
-  voices cache their pictures. This removes per-letter React/Skia mask trees;
+  per voice. Glyph advances and baselines assign syllables to their own glyphs,
+  clipping preserves shared ligatures and each owned glyph's overhanging ink
+  without borrowing the next character or another row's descender. Settled
+  voices cache their pictures. This removes per-letter React/Skia mask trees,
   `reveal=tree` retains that earlier implementation for comparison. Exact visual
   parity across all fonts, directions and lifecycle states is still unfinished.
   Skia is a native drawing engine,
-  without a browser; it adds a native dependency and requires a rebuilt client.
+  without a browser, it adds a native dependency and requires a rebuilt client.
 
 Paused active voices also reuse their picture once word springs and line alpha
 settle. Inactive AMLL float release continues on elapsed time until it reaches
-rest, so caching does not truncate the reference's completion motion.
+rest, so caching does not truncate the reference's completion motion. Highlight
+release also continues after deactivation instead of switching to dark paint.
 The final settled-paused Korean fixture captures recorded just one presentation
-in each eight-second window (`spicy-paused-final`, `amll-paused-final`); this is an
+in each eight-second window (`spicy-paused-final`, `amll-paused-final`), this is an
 idle check, not a playback FPS score or a physical-device battery measurement.
 
 The signed-in main-player pass on October 11 covered fresh QQ QRC Korean lyrics
 (`STOPLIGHT`, 45 lines) and subsequent live track replacement (`back of the club`,
 35 lines), in both native styles. Sanitized network inspection observed successful
-Spicy, LrcLib, Kugou and artwork responses; Spotify metadata also returned 429 and
+Spicy, LrcLib, Kugou and artwork responses, Spotify metadata also returned 429 and
 some QQ search endpoints returned 500, while provider fallback loaded lyrics.
 No credentials, cookies, request headers or lyric response bodies are recorded.
 Original renderer preference and automatic playback-control hiding are restored
@@ -122,7 +145,7 @@ and [glyph drawing API](https://shopify.github.io/react-native-skia/docs/text/gl
 ## Batched drawing experiment (October 11)
 
 Signed-in main application, real 58-line Ken Carson API result, isolated lab
-clock starting at 18,876 ms; 12-second BlueStacks recordings. These are single
+clock starting at 18,876 ms, 12-second BlueStacks recordings. These are single
 debug runs on the emulator's synthetic 240 Hz display, before the final
 background-padding and joined-pivot corrections. They are not release benchmarks.
 
@@ -142,7 +165,7 @@ A later refined run on the same fixture recorded Spicy 102.39 presented FPS /
 16.67 ms presentation p95 and AMLL 90.07 FPS / 25.00 ms p95
 (`spicy-parity-refined`, `amll-parity-refined`). These runs preceded the final
 Spicy flex-wrap and AMLL background-stagger adjustments. The lab now supplies
-the actual fixture duration to both reference hosts; their default demo duration
+the actual fixture duration to both reference hosts, their default demo duration
 of 25 seconds had clamped comparisons at later timestamps. Earlier reference
 captures beyond that cap are invalid. Initial playback comparisons below 25
 seconds and native-only metrics are unaffected by that reference-host cap.
@@ -150,7 +173,7 @@ seconds and native-only metrics are unaffected by that reference-host cap.
 ## BlueStacks playback measurements
 
 Measured October 10, 2026 on BlueStacks Nougat32, Android 7.1 / SDK 25, x86.
-Same deterministic 100-line fixture, translations and background vocals enabled;
+Same deterministic 100-line fixture, translations and background vocals enabled,
 3 seconds warmup followed by roughly 12 seconds capture. Figures are single-run
 exploratory debug measurements, not a release performance claim.
 
@@ -195,12 +218,12 @@ With deliberate 150 ms JS stalls every second, Skia's presentation interval p95
 remained 12.50 ms for both styles, matching its normal playback captures. JS delay
 p95 rose to 112.08 ms (Spicy) and 116.57 ms (AMLL), as expected. The reference
 intervals were 12.50 ms and 54.17 ms respectively. This supports continuing with
-UI-thread word animation; it does not prove boundary activation or follow-scroll
+UI-thread word animation, it does not prove boundary activation or follow-scroll
 is independent of JS. Those semantic changes still schedule JS work and can be
 late while JS is blocked.
 
 Do not interpret these intervals as whole-app FPS. SurfaceFlinger reports a
-synthetic 240 Hz display; framestats has a bounded history and measures native
+synthetic 240 Hz display, framestats has a bounded history and measures native
 frames, not every lyric surface independently. CPU ticks are raw deltas, not
 percent utilization. Memory includes retained engine/process resources from
 sequential runs. Emulator battery output is simulated. Repeat randomized cold
@@ -217,7 +240,7 @@ fidelity comparisons run in `dev.kineticron.KineSync` with the signed-in session
 and real API lyrics. The historical tables cover the isolated renderer workload.
 
 ```powershell
-# ExpoLyrics/android, x86 BlueStacks; existing init script handles long Windows object paths.
+# ExpoLyrics/android, x86 BlueStacks, existing init script handles long Windows object paths.
 .\gradlew.bat :app:assembleDebug '-PreactNativeArchitectures=x86' '-PkineSyncPerformanceSideBySide=true' '-Djavax.net.ssl.trustStoreType=Windows-ROOT' '-Djavax.net.ssl.trustStore=NONE' -I ../../scripts/android-short-object-paths.gradle --console=plain
 
 # ExpoLyrics, in another terminal:
@@ -235,7 +258,7 @@ npm run profile:lyrics-native -- 127.0.0.1:5555 both stall --canvas-only
 The lab supports `backend=webview|flat|flash`, `reveal=clip|mask|canvas|tree`,
 `renderer=spicy|amll`, `lines` (up to 2000), `position`, `paused=1`, and `stall=1`.
 `fixture=static` supplies untimed text. `--parity-candidates` compares the WebView
-reference and Skia; `--canvas-only` runs Skia alone.
+reference and Skia, `--canvas-only` runs Skia alone.
 The stall workload blocks JS for 150 ms each second. Measurements stream logcat
 before launch, verify a unique readiness marker, save screenshots and merge
 results into `.cache/performance/native-lyrics/<scenario>/comparison.json`.
@@ -245,7 +268,7 @@ Both 2000-line Skia playback workloads completed: JS delay p95 was 6.73 ms for
 Spicy and 7.49 ms for AMLL, with 493/490 CPU ticks and 12.50 ms presentation p95.
 These were playback at the beginning of the document, not a full traversal of
 all 2000 lines. Paused Skia captures used 29/37 CPU ticks versus 28/33 for the
-references; no continuing presentation cadence was recorded while settled.
+references, no continuing presentation cadence was recorded while settled.
 
 ## Required before switching the default
 

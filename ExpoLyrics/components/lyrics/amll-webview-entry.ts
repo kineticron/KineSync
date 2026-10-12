@@ -1,5 +1,6 @@
 import {
   LayoutAlignAnchor,
+  LayoutReason,
   LyricPlayer,
   type LyricLine,
   type LyricLineMouseEvent,
@@ -332,7 +333,7 @@ function appendCreditsContent(
   }
   if (attribution?.uploader?.username) {
     appendProfileLine(
-      attribution.maker?.username ? "Uploaded By: " : "Made By: ",
+      "Uploaded By: ",
       attribution.uploader,
     );
   }
@@ -420,7 +421,7 @@ function renderCredits(
 }
 
 async function relayout(force = false) {
-  await player.calcLayout(true, force);
+  player.calcLayout(force ? LayoutReason.RebuildView : LayoutReason.ConfigChange);
   updateSelectionClasses();
   scheduleFrame(IDLE_ANIMATION_GRACE_MS);
 }

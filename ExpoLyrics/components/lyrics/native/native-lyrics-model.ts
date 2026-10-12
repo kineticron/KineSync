@@ -5,6 +5,7 @@ import type { LyricLine, LyricSyllable } from '../../../types/bridge';
 import { getSpicyWordJoins } from '../spicy-word-spacing';
 import { chunkAndSplitLyricWords } from './amll-reference-word-split';
 import { isCJK } from './amll-reference-is-cjk';
+import type { NativeInterlude } from './native-interlude-motion';
 import { spicyIsRtl, spicyPaintText, spicyWordOrigin } from './spicy-text-policy';
 
 export type NativeLyricsStyle = 'amll' | 'spicy';
@@ -12,7 +13,7 @@ export type NativeWord = { text: string; starts: number[]; ends: number[]; weigh
 export type NativePaintWord = { text: string; start: number; end: number; offset: number; emphasized: boolean; letters: string[]; joined: boolean; gapAfter?: boolean; origin?: number;
   group?: number; emphasis?: { start: number; end: number; index: number; count: number; last: boolean } };
 export type NativeVoice = { words: NativeWord[]; paintWords: NativePaintWord[]; paintText: string; start: number; end: number; translation?: string };
-export type NativeLyricRow = { line: LyricLine; index: number; key: string; lead: NativeVoice; backgrounds: NativeVoice[] };
+export type NativeLyricRow = { line: LyricLine; index: number; key: string; lead: NativeVoice; backgrounds: NativeVoice[]; interlude?: NativeInterlude };
 
 /** Keep a whole shaping run in one native Text. Never split an Indic cluster or Arabic word into Views. */
 function spicyWords(syllables: LyricSyllable[]): NativeWord[] {
@@ -114,7 +115,7 @@ export function buildNativeRows(lyrics: LyricLine[], style: NativeLyricsStyle, s
   const voice = (parts: LyricSyllable[], start: number, end: number, translation?: string) => staticLyrics
     ? buildNativeVoice([{ text: parts.map(part => part.text).join(''), startTime: 0, endTime: 0 }], 0, 0, 'spicy', translation)
     : buildNativeVoice(parts, start, end, style, translation);
-  return lyrics.map((line, index) => ({
+  const rows: NativeLyricRow[] = lyrics.map((line, index) => ({
     line, index, key: `${index}:${line.lineStartTime}-${line.lineEndTime}`,
     lead: voice(line.syllables, line.lineStartTime, line.lineEndTime, line.translatedText),
     backgrounds: (style === 'spicy' && line.spicyBackgrounds?.length
@@ -125,6 +126,13 @@ export function buildNativeRows(lyrics: LyricLine[], style: NativeLyricsStyle, s
             lineEndTime: Math.max(...line.backgroundSyllables.map(part => part.endTime)) }]
         : []).map(block => voice(block.syllables, block.lineStartTime, block.lineEndTime, line.backgroundTranslatedText)),
   }));
+  let coveredEnd = style === 'spicy' ? lyrics.find(line => line.spicyLyricsStartTime !== undefined)?.spicyLyricsStartTime ?? 0 : 0;
+  for (const row of rows) {
+    if (!staticLyrics && row.lead.start - coveredEnd >= 3000)
+      row.interlude = { start: coveredEnd, end: row.lead.start };
+    coveredEnd = style === 'spicy' ? row.lead.end : Math.max(coveredEnd, row.lead.end, ...row.backgrounds.map(voice => voice.end));
+  }
+  return rows;
 }
 
 export function nativeWordProgress(position: number, starts: number[], ends: number[], weights: number[]) {
@@ -137,4 +145,10 @@ export function nativeWordProgress(position: number, starts: number[], ends: num
     revealed += weight * Math.max(0, Math.min(1, (position - starts[i]) / Math.max(1, ends[i] - starts[i])));
   }
   return total ? revealed / total : 0;
+}
+
+/** During a break, follow the slot before the upcoming line rather than the passed lyric. */
+export function nativeFollowIndex(rows: NativeLyricRow[], index: number, position: number) {
+  const interludeIndex = rows.findIndex(row => row.interlude && position >= row.interlude.start && position < row.interlude.end);
+  return interludeIndex >= 0 ? interludeIndex : index;
 }

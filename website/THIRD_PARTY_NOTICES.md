@@ -6,4 +6,4 @@ The locally hosted Manrope and DM Sans font files are licensed under the SIL Ope
 
 The interactive Spicy and AMLL previews reuse the mobile app's AGPL-3.0 renderer bundles. Upstream versions and provenance are recorded in [the app notices](../ExpoLyrics/THIRD_PARTY_NOTICES.md), and the complete license is served in `public/licenses/app-renderers.txt`. Corresponding source is available in the public KineSync repository under `ExpoLyrics/components/lyrics/`. Preserve these notices with the generated preview hosts.
 
-The sample lyrics and vault placeholder were created for KineSync. Provisional screenshots show the actual app; album artwork belongs to its respective owners. The GitHub mark identifies the repository link and is a trademark of GitHub. Spotify is a trademark of its respective owner. KineSync is an independent project.
+The sample lyrics and vault placeholder were created for KineSync. Provisional screenshots show the actual app, album artwork belongs to its respective owners. The GitHub mark identifies the repository link and is a trademark of GitHub. Spotify is a trademark of its respective owner. KineSync is an independent project.

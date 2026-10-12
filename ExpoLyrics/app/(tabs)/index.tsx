@@ -817,15 +817,6 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.resyncPlayback();
   }, []);
 
-  const handlePlaybackPrevious = useCallback(() => {
-    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
-    if (usePlaybackStore.getState().connectionStatus === "connected") {
-      bridgeClient.skipPrevious();
-      return;
-    }
-    spotifyBrowserRef.current?.skipPrevious();
-  }, []);
-
   const handlePlaybackNext = useCallback(() => {
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
@@ -897,6 +888,19 @@ export default function HomeScreen() {
     },
     [autoFollowEnabled, currentTrack?.durationMs, isPlaying, sendSeekToPlaybackSource],
   );
+
+  const handlePlaybackPrevious = useCallback(() => {
+    if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
+    if (usePlaybackStore.getState().playbackPosition > 3000) {
+      handleSeek(0);
+      return;
+    }
+    if (usePlaybackStore.getState().connectionStatus === "connected") {
+      bridgeClient.skipPrevious();
+      return;
+    }
+    spotifyBrowserRef.current?.skipPrevious();
+  }, [handleSeek]);
 
   const handleActiveLineChange = useCallback((nextActiveLine: number) => {
     setActiveLineIndex(nextActiveLine);

@@ -43,12 +43,12 @@ function checkMarkdownLinks(root, file) {
 
 function run(root) {
   const errors = [];
-  const required = ['README.md', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'SUPPORT.md', 'SECURITY.md',
+  const required = ['README.md', 'CONTRIBUTING.md', 'SECURITY.md',
     'LICENSE', 'ExpoLyrics/LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/README.md',
     '.github/PULL_REQUEST_TEMPLATE.md', '.github/CODEOWNERS', '.github/dependabot.yml'];
   for (const file of required) if (!fs.existsSync(path.join(root, file))) errors.push(`Missing community file: ${file}`);
   const documents = fs.readdirSync(root).filter(file => file.endsWith('.md'));
-  for (const directory of ['docs', 'ExpoLyrics/docs', 'scripts', 'RELEASE_NOTES', '.github']) {
+  for (const directory of ['docs', 'ExpoLyrics/docs', 'scripts', '.github']) {
     for (const file of fs.readdirSync(path.join(root, directory))) if (file.endsWith('.md')) documents.push(`${directory}/${file}`);
   }
   documents.push('ExpoLyrics/README.md', 'ExpoLyrics/THIRD_PARTY_NOTICES.md', 'DesktopBridge/README.md', 'DesktopBridge/src/lyrics/README.md');

@@ -630,7 +630,7 @@ function appendCreditsContent(
   if (attribution?.community) append("", "These lyrics have been provided by the Spicy Lyrics community");
   if (attribution?.maker?.username) appendProfile("Made By: ", attribution.maker);
   if (attribution?.uploader?.username) {
-    appendProfile(attribution.maker?.username ? "Uploaded By: " : "Made By: ", attribution.uploader);
+    appendProfile("Uploaded By: ", attribution.uploader);
   }
 }
 

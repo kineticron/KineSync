@@ -7,14 +7,14 @@ Production workflows build Android, iOS, Windows, and Docker artifacts on pushes
 Before publishing a new version:
 
 1. Set the same three-part version in both component `package.json` files, their lockfiles (including root package entries), and `ExpoLyrics/app.json`.
-2. Write `RELEASE_NOTES/v<version>.md` with the user-visible changes, limitations, and upgrade requirements. Notes are required. Commit subjects are not used as a substitute.
+2. Edit the GitHub release notes with the user-visible changes, limitations, and upgrade requirements. The platform publishers preserve the release title and notes.
 3. Run `node scripts/release-version.js`, `node scripts/check-repository.cjs`, `node --test scripts/test/*.test.cjs`, and the relevant component checks in [CONTRIBUTING.md](CONTRIBUTING.md).
 4. Merge the reviewed release commit to `main` and wait for the platform workflows.
 5. Verify checksums and smoke-test installation, playback, pairing, and upgrades on the intended platforms.
 
 Tags identify immutable source commits. The publisher refuses to move an existing `v<version>` tag or upload assets from a different commit under that version. Bump the version for a changed release. A retry from the same commit may replace that commit's build assets, so published binary digests should still be checked. Existing historical tags are not rewritten by this change.
 
-Only the current `main` commit can publish. Parallel platform publishers share one versioned draft release. It becomes public when all required assets are present. A failed build leaves the release incomplete rather than publishing a partial download set. Release notes are maintained in source, not a hardcoded version switch in the publisher.
+Only the current `main` commit can publish. Parallel platform publishers share one versioned draft release. It becomes public when all required assets are present. A failed build leaves the release incomplete rather than publishing a partial download set. Release notes are maintained directly on the GitHub release.
 
 ## Release contents
 

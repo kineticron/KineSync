@@ -179,6 +179,7 @@ function extractSpicyPayloadMetadata(payload) {
     if (!profile || typeof profile !== "object") {
       return undefined;
     }
+    const url = String(profile.url || "").trim();
     const normalized = {
       ...(String(profile.id || "").trim()
         ? { id: String(profile.id).trim() }
@@ -186,7 +187,7 @@ function extractSpicyPayloadMetadata(payload) {
       ...(String(profile.username || "").trim()
         ? { username: String(profile.username).trim() }
         : {}),
-      ...(/^https:\/\//i.test(String(profile.url || "")) ? { url: String(profile.url).trim() } : {}),
+      ...(/^https:\/\//i.test(url) ? { url } : {}),
       ...(String(profile.avatar || "").trim()
         ? { avatar: String(profile.avatar).trim() }
         : {}),

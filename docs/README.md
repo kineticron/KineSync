@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | [Install on Android](../ANDROID_INSTALL.md) or [iOS](../IOS_INSTALL.md) | [Configure lyric sources](lyrics-sources.md) | [Set up a contribution](../CONTRIBUTING.md) |
 | [Choose a playback setup](../SETUP.md) | [Run your own bridge](../DOCKER.md) | [Explore the architecture](architecture.md) |
-| [Get help](../SUPPORT.md) | [Import and preserve TTML](../ExpoLyrics/docs/ttml-preservation.md) | [Measure performance](../ExpoLyrics/docs/performance-results.md) |
+| [Get help](https://github.com/Kineticron/KineSync/issues) | [Import and preserve TTML](../ExpoLyrics/docs/ttml-preservation.md) | [Measure performance](../ExpoLyrics/docs/performance-results.md) |
 
 > [!TIP]
 > **New to KineSync?** Install the mobile app first. The Desktop Bridge is optional, and the installation guides walk through phone-only playback.
@@ -21,7 +21,7 @@
 - [Playback setup, pairing, and source builds](../SETUP.md)
 - [Docker Desktop Bridge](../DOCKER.md)
 - [Lyric providers, credentials, and restrictions](lyrics-sources.md)
-- [Troubleshooting and support](../SUPPORT.md)
+- [Troubleshooting and support](https://github.com/Kineticron/KineSync/issues)
 
 ## Development
 
@@ -49,7 +49,7 @@
 - [Release operations](../RELEASES.md)
 - [GitHub configuration](maintaining.md)
 - [Security policy](../SECURITY.md)
-- [Code of Conduct](../CODE_OF_CONDUCT.md)
+- Be respectful when contributing and reporting issues.
 - [Third-party notices](../THIRD_PARTY_NOTICES.md)
 
 > [!NOTE]

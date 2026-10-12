@@ -31,10 +31,28 @@ export function balanceAmllText(text: string, words: NativePaintWord[], width: n
   append(cursor, text.length);
   const breaks = calcBalancedBreaks(children, width, text, segmenter).map(index => starts[index]);
   if (!breaks.length) return { text, words };
+  // DOM whitespace collapses at a line boundary; SkParagraph preserves it
+  // after an explicit newline. Replace boundary spaces instead of inserting a
+  // newline in front of them, and remap all timing offsets through the edit.
+  const edits = breaks.map(offset => {
+    let start = offset;
+    let end = offset;
+    while (start > 0 && /[^\S\n]/u.test(text[start - 1])) start--;
+    while (end < text.length && /[^\S\n]/u.test(text[end])) end++;
+    return { start, end };
+  }).filter((edit, index, all) => index === 0 || edit.start > all[index - 1].end);
+  const remap = (offset: number) => {
+    let delta = 0;
+    for (const edit of edits) {
+      if (offset < edit.start) break;
+      if (offset < edit.end) return edit.start + delta + 1;
+      delta += 1 - (edit.end - edit.start);
+    }
+    return offset + delta;
+  };
   let balanced = '';
   cursor = 0;
-  for (const offset of breaks) { balanced += text.slice(cursor, offset) + '\n'; cursor = offset; }
+  for (const edit of edits) { balanced += text.slice(cursor, edit.start) + '\n'; cursor = edit.end; }
   balanced += text.slice(cursor);
-  return { text: balanced, words: words.map(word => ({ ...word,
-    offset: word.offset + breaks.filter(offset => offset <= word.offset).length })) };
+  return { text: balanced, words: words.map(word => ({ ...word, offset: remap(word.offset) })) };
 }

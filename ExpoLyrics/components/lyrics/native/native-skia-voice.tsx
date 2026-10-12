@@ -1,5 +1,5 @@
-import React, { memo, useMemo, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import React, { memo, useContext, useMemo, useState } from 'react';
+import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
   type SkParagraph, type SkRect } from '@shopify/react-native-skia';
 import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
@@ -10,6 +10,8 @@ import { type ReferenceLineMotion } from './use-reference-line-motion';
 import { NativeGlyphPicture, shapeGlyphWords } from './native-glyph-picture';
 import { wrapSpicyText } from './spicy-native-layout';
 import { spicyIsRtl } from './spicy-text-policy';
+import { amllRevealStart } from './native-glyph-layout';
+import { NativeLyricsFontContext } from './native-lyrics-fonts';
 import { balanceAmllText } from './amll-native-layout';
 
 type ShapedWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
@@ -42,7 +44,7 @@ const AnimatedGlyph = memo(function AnimatedGlyph({ rects, shaped, paragraph, wi
     if (spicy) {
       const m = letter < 0 ? motion.value : motion.value.letters[letter] ?? motion.value;
       return { scale: letter < 0 ? 1 : m.scale, x: 0, y: letter < 0 ? 0 : m.y * (background ? fontSize / 0.75 : fontSize),
-        glow: Math.min(1, Math.max(0, m.glow * (letter < 0 ? 0.35 : 1.85))), radius: 4 + (letter < 0 ? 2 : 12) * m.glow };
+        glow: Math.min(1, Math.max(0, m.glow * (letter < 0 ? 0.35 : 1.85))) * 0.5, radius: 4 + (letter < 0 ? 2 : 12) * m.glow };
     }
     if (letter < 0) return { scale: 1, x: 0, y: 0, glow: 0, radius: 0 };
     const m = amllEmphasis(position.value, word.emphasis?.start ?? word.start, word.emphasis?.end ?? word.end,
@@ -77,12 +79,12 @@ const GlyphSlice = memo(function GlyphSlice({ rect, paragraph, width, position, 
       const progress = clamp01((position.value - w.word.start) / Math.max(1, w.word.end - w.word.start));
       advanced += progress * (w.width + (i === 0 ? fade * 1.5 : 0) + (i === words.length - 1 ? fade * 0.5 : 0));
     }
-    return { x: rect.x + advanced - shaped.before - fade * 2, y: rect.y };
+    return { x: amllRevealStart(rect, shaped.rects, advanced, shaped.before, fade), y: rect.y };
   });
   const end = useDerivedValue(() => ({ x: start.value.x + (rtl ? -1 : 1) * (spicy ? rect.width * 0.2 : rect.height * 0.56), y: rect.y }));
   const colors = useDerivedValue(() => spicy ? background ? ['rgba(255,255,255,0.6)', 'rgba(255,255,255,0.3)']
     : ['rgba(255,255,255,0.85)', 'rgba(255,255,255,0.5)']
-    : [`rgba(255,255,255,${lineActive.value ? lineMotion.value.bright : lineMotion.value.dark})`, `rgba(255,255,255,${lineMotion.value.dark})`]);
+    : [`rgba(255,255,255,${lineMotion.value.bright})`, `rgba(255,255,255,${lineMotion.value.dark})`]);
   const shadowOpacity = useDerivedValue(() => position.value > lineEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5);
   const inactiveShadow = useDerivedValue(() => spicy && !lineActive.value ? shadowOpacity.value : 0);
   const activeGlow = useDerivedValue(() => spicy && !lineActive.value ? 0 : glow.value);
@@ -106,6 +108,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   voice: NativeVoice; position: SharedValue<number>; fontSize: number; lineHeight: number;
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean;
 }) {
+  const fonts = useContext(NativeLyricsFontContext);
   const [width, setWidth] = useState(0);
   // The outer line cancels its .2em margin with padding. Duet songs replace
   // the far-side padding with 15% of the lane; the main line's 1em cancels itself.
@@ -116,18 +119,18 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       { duration: 200, easing: Easing.bezier(0.61, 1, 0.88, 1) }); });
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const shaped = useMemo(() => {
-    if (width <= 0) return null;
+    if (width <= 0 || !fonts) return null;
     const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
       strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
-        fontFamilies: [Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif'], fontSize,
+        fontFamilies: ['SF Pro Display'], fontSize,
         fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, heightMultiplier: lineHeight / fontSize },
-      textStyle: { fontFamilies: [Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif'], fontSize,
+      textStyle: { fontFamilies: ['SF Pro Display'], fontSize,
         fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, color: Skia.Color('white'),
         heightMultiplier: lineHeight / fontSize, halfLeading: true, letterSpacing: staticLyrics ? 0.15 : 0 } };
     let text = staticLyrics ? voice.words.map(w => w.text).join('') : voice.paintText;
     let paintWords = voice.paintWords;
     if (!spicy && !staticLyrics) {
-      const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle).addText(text).build();
+      const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText(text).build();
       unwrapped.layout(100000);
       const balanced = balanceAmllText(text, paintWords, textWidth, (start, end) =>
         unwrapped.getRectsForRange(start, end).reduce((sum, rect) => sum + rect.width, 0));
@@ -135,9 +138,9 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       paintWords = balanced.words;
     }
     const makeParagraph = (inputText: string, inputWords: NativePaintWord[]) => {
-      const builder = Skia.ParagraphBuilder.Make(paragraphStyle);
+      const builder = Skia.ParagraphBuilder.Make(paragraphStyle, fonts);
       if (spicy && !staticLyrics && inputWords.some(word => word.gapAfter)) {
-        const probe = Skia.ParagraphBuilder.Make(paragraphStyle).addText('0 ').build();
+        const probe = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText('0 ').build();
         probe.layout(1000);
         const ch = probe.getRectsForRange(0, 1).reduce((sum, rect) => sum + rect.width, 0);
         const space = probe.getRectsForRange(1, 2).reduce((sum, rect) => sum + rect.width, 0);
@@ -179,13 +182,13 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
       translation = Skia.ParagraphBuilder.Make({ textAlign: right ? TextAlign.Right : TextAlign.Left,
         textStyle: { fontFamilies: paragraphStyle.textStyle.fontFamilies, fontSize: size, fontStyle: { weight: spicy ? 500 : 700 },
-          heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }).addText(voice.translation).build();
+          heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts).addText(voice.translation).build();
       translation.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
     }
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
     return { paragraph, height: paragraph.getHeight(), translation, translationMargin, mainPadding,
-      totalHeight: paragraph.getHeight() + mainPadding * 2 + (translation ? translationMargin + translation.getHeight() : 0), words, glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words) : [] };
-  }, [background, batched, fontSize, lineHeight, right, showTranslation, spicy, staticLyrics, textWidth, voice, width]);
+      totalHeight: paragraph.getHeight() + mainPadding * 2 + (translation ? translationMargin + translation.getHeight() : 0), words, glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };
+  }, [background, batched, fonts, fontSize, lineHeight, right, showTranslation, spicy, staticLyrics, textWidth, voice, width]);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
     : spicy ? position.value > voice.end ? 0.497 : 0.51 : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
@@ -194,8 +197,8 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     const next = event.nativeEvent.layout.width;
     setWidth(previous => Math.abs(previous - next) > 0.1 ? next : previous);
   }}>
-    {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 64 }]}>
-      <Group transform={[{ translateY: staticLyrics ? 32 : spicy ? 31 : 30 }, { translateX: right && !spicy && !staticLyrics ? width - textWidth : 0 }]}><Group>
+    {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
+      <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
         <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture key={`${voice.start}:${voice.end}:${voice.paintText}:${textWidth}:${shaped.height}:${fontSize}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voice.end} lineMotion={lineMotion} />
@@ -214,4 +217,4 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   </Animated.View>;
 });
 
-const styles = StyleSheet.create({ canvas: { position: 'absolute', left: 0, right: 0, top: -32 } });
+const styles = StyleSheet.create({ canvas: { position: 'absolute', left: -64, right: -64, top: -64 } });

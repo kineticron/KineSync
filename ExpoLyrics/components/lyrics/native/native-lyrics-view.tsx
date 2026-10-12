@@ -8,10 +8,12 @@ import { usePlaybackStore } from '@/store/playback-store';
 import { detectLyricsTimingMode } from '@/lib/lyrics-timing';
 import { getAutoScrollTargetRange, getBackgroundActiveLines, getLyricTimingIndex, getPlaybackWindowState } from '@/lib/lyrics-layout';
 import type { LyricLine, LyricsMetadata } from '@/types/bridge';
-import { buildNativeRows, type NativeLyricRow, type NativeLyricsStyle } from './native-lyrics-model';
+import { buildNativeRows, nativeFollowIndex, type NativeLyricRow, type NativeLyricsStyle } from './native-lyrics-model';
 import { NativeLyricRowView, type NativeReveal } from './native-lyric-row';
 import { useNativeLyricsClock } from './use-native-lyrics-clock';
+import { NativeLyricsFontContext, useNativeLyricsFonts } from './native-lyrics-fonts';
 import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView } from './reference-scroll';
+import { AmllLayoutCell } from './amll-layout-cell';
 
 export type NativeLyricsViewProps = {
   demoLyrics?: LyricLine[]; demoLayout?: 'preview' | 'player'; demoIsPlaying?: boolean;
@@ -35,6 +37,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   resumeAutoFollowSignal = 0, selectedLineKeys, onLinePress, onLineLongPress, onActiveLineChange,
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
+  const fonts = useNativeLyricsFonts();
   const lyrics = usePlaybackStore(state => demoLyrics ?? state.lyrics);
   const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : state.lyricsSource);
   const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : state.lyricsMetadata);
@@ -55,11 +58,13 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   const scrollCommand = useSharedValue(initialScrollCommand);
   const scrollState = useRef(initialScrollCommand);
   const scrollResidual = useSharedValue(0);
+  const renderedScrollResidual = useSharedValue(0);
   const actualScrollOffset = useSharedValue(0);
-  const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, actualOffset: actualScrollOffset, spicy: style === 'spicy' }), [actualScrollOffset, scrollCommand, scrollResidual, style]);
+  const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
+    actualOffset: actualScrollOffset, spicy: style === 'spicy' }), [actualScrollOffset, renderedScrollResidual, scrollCommand, scrollResidual, style]);
   const following = useRef(autoFollowEnabled);
   const currentPosition = useRef(0);
-  const pendingIndex = useRef(-1);
+  const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
   const activeIndex = useRef(-2);
   const generation = useRef(0);
@@ -89,6 +94,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   const presentationWindow = useDerivedValue(() => cueWindows[presentationCue.value]);
 
   const scrollTo = useCallback((index: number, animated: boolean) => {
+    index = nativeFollowIndex(rows, index, currentPosition.current);
     if (!following.current || !active || staticLyrics || index < 0 || index >= rows.length) return;
     const measured = list === 'flash' ? flashRef.current?.getLayout(index) : undefined;
     const target = `${index}:${landscapeMode}:${fontScale}:${showTranslatedText}:${viewportHeight}:${measured?.y}:${flashRef.current?.getFirstItemOffset()}`;
@@ -97,14 +103,16 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     if (list === 'flash') {
       const host = flashRef.current;
       const layout = host?.getLayout(index);
-      if (!host || !layout || !viewportHeight) { pendingIndex.current = index; return; }
+      if (!host || !layout || !viewportHeight) { pendingScroll.current = { index, animated }; return; }
+      pendingScroll.current = null;
       const offset = Math.max(0, layout.y + host.getFirstItemOffset() - anchor);
       const previous = scrollState.current;
       const oldOffset = previous.serial ? previous.offset : host.getAbsoluteLastScrollOffset();
       const command = { serial: previous.serial + 1, offset, delta: offset - oldOffset, index,
         firstVisible: host.getFirstVisibleIndex(), interval: index > 0 ? rows[index].lead.start - rows[index - 1].lead.start : 800,
-        instant: !animated || !previous.serial || Math.abs(offset - oldOffset) > viewportHeight,
-        interlude: currentPosition.current > rows[index].lead.end, snap: true };
+        instant: !animated || !previous.serial,
+        interlude: currentPosition.current > rows[index].lead.end, snap: true,
+        geometry: style === 'amll' && animated && previous.snap && previous.index === index };
       scrollState.current = command;
       scrollCommand.value = command;
     } else flatRef.current?.scrollToIndex({ index, animated, viewPosition: 0, viewOffset: -anchor });
@@ -163,7 +171,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   }, [autoFollowEnabled, backgrounds, lyrics, resumeAutoFollowSignal, scrollTo, timing]);
   const takeOwnership = useCallback(() => {
     following.current = false;
-    pendingIndex.current = -1;
+    pendingScroll.current = null;
     lastScrollTarget.current = '';
     const command = { ...scrollState.current, offset: flashRef.current?.getAbsoluteLastScrollOffset() ?? 0,
       serial: scrollState.current.serial + 1, instant: true, snap: false };
@@ -179,20 +187,18 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     onLinePress?.(row.line);
   }, [onAutoFollowChange, onLinePress, onUserInteraction]);
   const longPress = useCallback((row: NativeLyricRow) => { onUserInteraction?.(); onLineLongPress?.(row.line); }, [onLineLongPress, onUserInteraction]);
-  const pause = useMemo(() => window.isLongPause ? { start: window.pauseStartMs, duration: window.pauseVisualDurationMs,
-    before: window.pauseBeforeIndex >= 0 } : undefined, [window.isLongPause, window.pauseBeforeIndex, window.pauseStartMs, window.pauseVisualDurationMs]);
+  // Canvas presentation stays on the UI clock; background flow is permanent.
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
-  const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position}
+  const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
     presentationWindow={presentationWindow}
     active={!!experimentalWindow && item.index >= experimentalWindow.visualActiveLineStartIndex && item.index <= experimentalWindow.visualActiveLineEndIndex}
     distance={experimentalWindow ? Math.abs(item.index - Math.max(0, experimentalWindow.focusLineIndex)) : 0}
     selected={selectedLineKeys?.has(`${item.line.lineStartTime}-${item.line.lineEndTime}`) ?? false}
     staticLyrics={staticLyrics} showTranslation={showTranslatedText} reveal={reveal} tapToSeek={tapToSeekEnabled}
-    onPress={press} onLongPress={longPress}
-    pause={item.index === window.pauseAfterIndex || item.index === window.pauseBeforeIndex ? pause : undefined} />,
+    onPress={press} onLongPress={longPress} />,
   [fontScale, hasDuet, landscapeMode, longPress, playing, position, press, preview, referenceScroll, reveal, selectedLineKeys, showTranslatedText, staticLyrics, style, viewportWidth,
-    tapToSeekEnabled, presentationWindow, experimentalWindow, pause, window.pauseAfterIndex, window.pauseBeforeIndex]);
+    tapToSeekEnabled, presentationWindow, experimentalWindow, seekVersion]);
   const footer = useMemo(() => !metadata.credits?.songwriters?.length && !metadata.attribution ? null : <Pressable
     style={[styles.footer, landscapeMode && styles.rightFooter]} onPress={() => {
       onUserInteraction?.();
@@ -202,26 +208,31 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     {!!metadata.attribution?.provider && <Text style={styles.credits}><Text style={styles.strong}>Provided By: </Text>{metadata.attribution.provider}</Text>}
     {metadata.attribution?.community && <Text style={styles.credits}>These lyrics have been provided by the Spicy Lyrics community</Text>}
     {[metadata.attribution?.maker, metadata.attribution?.uploader].map((profile, index) => profile?.username && <Pressable
-      key={index} style={styles.profile} onPress={event => {
+      key={index} style={styles.profile}
+      accessibilityRole={profile.url && /^https:\/\//i.test(profile.url) ? 'link' : 'text'}
+      accessibilityLabel={`${index === 1 ? 'Uploaded' : 'Made'} by @${profile.username}`}
+      onPress={event => {
         event.stopPropagation();
         if (profile.url && /^https:\/\//i.test(profile.url)) void Linking.openURL(profile.url).catch(() => {});
       }}>
-      <Text style={styles.credits}><Text style={styles.strong}>{index === 1 && metadata.attribution?.maker?.username ? 'Uploaded By: ' : 'Made By: '}</Text>@{profile.username}</Text>
+      <Text style={styles.credits}><Text style={styles.strong}>{index === 1 ? 'Uploaded By: ' : 'Made By: '}</Text><Text style={profile.url && /^https:\/\//i.test(profile.url) ? styles.profileLink : undefined}>@{profile.username}</Text></Text>
       {!!profile.avatar && <Image source={{ uri: profile.avatar }} style={styles.avatar} accessibilityLabel={`${profile.username}'s avatar`} />}
     </Pressable>)}
   </Pressable>, [landscapeMode, lyrics, metadata, onCreditsTimestampPress, onUserInteraction]);
   const retryFlatScroll = useCallback(({ index, averageItemLength }: { index: number; averageItemLength: number }) => {
     if (!following.current) return;
-    pendingIndex.current = index;
+    pendingScroll.current = { index, animated: false };
     flatRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
     // Retry only after new rows have laid out; no delayed retries can steal a user drag.
   }, []);
   const onContentSizeChange = useCallback(() => {
-    if (pendingIndex.current >= 0 && following.current) {
-      const index = pendingIndex.current;
-      pendingIndex.current = -1;
+    if (pendingScroll.current && following.current) {
+      const { index, animated } = pendingScroll.current;
+      pendingScroll.current = null;
       lastScrollTarget.current = '';
-      scrollTo(index, false);
+      // A row measured after the cue still needs the requested animation.
+      // Forcing an instant retry causes a cold-layout snap on the first song.
+      scrollTo(index, animated);
     } else if (following.current) {
       const current = getPlaybackWindowState(currentPosition.current, lyrics, backgrounds, timing);
       const range = getAutoScrollTargetRange(current, currentPosition.current, lyrics);
@@ -230,8 +241,9 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   }, [backgrounds, lyrics, scrollTo, timing]);
   if (!lyrics.length) return <View style={styles.empty}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    <ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
+    <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
+          CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
           extraData={renderItem}
           drawDistance={420} renderScrollComponent={ReferenceScrollView} maintainVisibleContentPosition={maintainVisibleContentPosition} contentContainerStyle={contentStyle}
           onLoad={onContentSizeChange}
@@ -239,10 +251,11 @@ export const NativeLyricsView = memo(function NativeLyricsView({
           ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={takeOwnership}
           onTouchStart={takeOwnership} onContentSizeChange={onContentSizeChange} />
       : <FlatList ref={flatRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} contentContainerStyle={contentStyle}
+          CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
           extraData={renderItem}
           ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={takeOwnership}
           onTouchStart={takeOwnership} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
-          initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider>
+          initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>
   </View>;
 });
 
@@ -253,5 +266,6 @@ const styles = StyleSheet.create({
   rightFooter: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   credits: { color: 'rgba(255,255,255,0.56)', fontSize: 13, lineHeight: 18, fontWeight: '600' },
   strong: { fontWeight: '800' }, profile: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  profileLink: { textDecorationLine: 'underline' },
   avatar: { width: 18, height: 18 },
 });

@@ -30,6 +30,8 @@
 
 ## Features
 
+**New in v1.2.0: Native Renderer Rework.** Spicy and AMLL now render natively by default on iOS and Android, with Skia lyric drawing, animated interludes, and reworked scrolling. See the [release notes](https://github.com/Kineticron/KineSync/releases/tag/v1.2.0) for changes and current limitations.
+
 - **Phone-only playback:** sign in to Spotify and play through KineSync's embedded Spotify browser. A computer is optional and allows you to manage and own your lyrics efficiently.
 - **Spicy and AMLL lyric styles:** full Spicy Lyrics and Apple Music feature parity.
 - **Get Karaoke Lyrics:** Spicy Lyrics, Musixmatch, QQ Music, NetEase, Kugou, LRCLIB, and a local lyrics vault mean you get syllable-level sync for almost every song.
@@ -111,7 +113,7 @@ Windows installs attempt to download verified native binaries for the matching r
 
 ## Contributing and support
 
-Bug fixes, documentation, accessibility work, translations, and reproducible performance reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before participating. Use [SUPPORT.md](SUPPORT.md) for troubleshooting and [SECURITY.md](SECURITY.md) for private vulnerability reports.
+Bug fixes, documentation, accessibility work, translations, and reproducible performance reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before participating. Use [GitHub issues](https://github.com/Kineticron/KineSync/issues) for troubleshooting and [SECURITY.md](SECURITY.md) for private vulnerability reports.
 
 ## License and acknowledgements
 

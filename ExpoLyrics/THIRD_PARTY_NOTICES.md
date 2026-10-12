@@ -26,7 +26,7 @@ The upstream virtualizer and scroll controller are not bundled into the host.
 
 ## Apple Music-like Lyrics WebView renderer
 
-The AMLL WebView host bundles `@applemusic-like-lyrics/core` version 0.5.2
+The AMLL WebView host bundles `@applemusic-like-lyrics/core` version 0.6.0
 from [`amll-dev/applemusic-like-lyrics`](https://github.com/amll-dev/applemusic-like-lyrics).
 The installed version and integrity hash are recorded in `package-lock.json`.
 The earlier native port used commit `eb5c852f7bf809f32425c3025f423598c619af58`.
@@ -52,5 +52,5 @@ extracted from AMLL core 0.5.2 and retain its AGPL-3.0-only license.
 The Skia measurement adapter replaces the browser's DOM measurement.
 
 The native AMLL layout adapter uses `@formatjs/intl-segmenter` for runtimes
-without `Intl.Segmenter`. FormatJS is MIT licensed; its package metadata and
+without `Intl.Segmenter`. FormatJS is MIT licensed, its package metadata and
 upstream copyright/license notices apply to this dependency.

@@ -13,6 +13,10 @@ export const SPICY_LETTER_SCALE = curve([0, 0.7, 1], [0.95, 1.175, 1]);
 export const SPICY_Y = curve([0, 0.9, 1], [0.01, -1 / 60, 0]);
 export const SPICY_LETTER_Y = curve([0, 0.9, 1], [0.01, -1 / 56, 0]);
 export const SPICY_GLOW = curve([0, 0.15, 0.6, 1], [0, 1, 1, 0]);
+export const SPICY_DOT_SCALE = curve([0, 0.7, 1], [0.75, 1.05, 1]);
+export const SPICY_DOT_Y = curve([0, 0.9, 1], [0, -0.12, 0]);
+export const SPICY_DOT_GLOW = curve([0, 0.6, 1], [0, 1, 1]);
+export const SPICY_DOT_OPACITY = curve([0, 0.6, 1], [0.35, 1, 1]);
 
 export function splineAt(c: Curve, x: number): number {
   'worklet';

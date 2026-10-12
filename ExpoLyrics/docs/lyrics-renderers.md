@@ -1,10 +1,11 @@
 # Lyrics renderers
 
-An opt-in native port and comparative BlueStacks lab are described in
+The default native renderers and comparative BlueStacks lab are described in
 [Native lyrics renderer experiments](native-lyrics-renderers.md). Visual parity
-is still being implemented; the default hosts below remain the references.
+is still being implemented, the WebView hosts below remain the references.
 
-Both lyrics styles use WebViews. The previous AMLL native port
+Both lyrics styles use native renderers on iOS and Android by default. Set
+`EXPO_PUBLIC_NATIVE_LYRICS=0` to opt into the WebView hosts, web always uses them. The previous AMLL native port
 (`lib/amll-native.ts`, `lyric-line.tsx`, `lyrics-view.tsx`, `native-lyric-*`)
 was removed. The settings panel switches style between **Spicy** and **AMLL**,
 stored as `lyricsStyle: 'spicy' | 'amll'` (legacy `native` maps to `amll`,

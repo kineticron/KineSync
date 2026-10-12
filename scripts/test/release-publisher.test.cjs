@@ -32,3 +32,32 @@ test('a version-tag collision stops the actual publisher before GitHub mutations
   const calls = fs.readFileSync(log, 'utf8');
   assert.doesNotMatch(calls, /--method (?:POST|PATCH|PUT)|release (?:create|edit|upload)/);
 });
+
+test('platform uploads preserve the existing GitHub release title and notes', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'kinesync-publisher-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const bootstrap = path.join(directory, 'mock-gh.sh');
+  const log = path.join(directory, 'calls.txt');
+  fs.writeFileSync(bootstrap, `gh() {
+    printf '%s\\n' "$*" >> "$MOCK_GH_LOG"
+    case "$*" in
+      *git/ref/heads/main*|*commits/v*) printf '%s\\n' "$GITHUB_SHA" ;;
+      *git/ref/tags/v*|release\\ view*|release\\ edit*|release\\ upload*) return 0 ;;
+      *) printf '%s\\n' 'Unexpected GitHub call' >&2; return 99 ;;
+    esac
+  }
+  sleep() { :; }
+`);
+  const bash = process.platform === 'win32' ? path.join(process.env.ProgramFiles || 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
+  const result = spawnSync(bash, ['scripts/publish-production-release.sh', 'unused.apk'], {
+    cwd: path.resolve(__dirname, '../..'), encoding: 'utf8',
+    env: { ...process.env, BASH_ENV: bootstrap.replaceAll('\\', '/'),
+      MOCK_GH_LOG: log.replaceAll('\\', '/'), GITHUB_REPOSITORY: 'example/project', GITHUB_SHA: 'current-commit' },
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, result.stderr);
+  const calls = fs.readFileSync(log, 'utf8');
+  assert.match(calls, /release upload/);
+  assert.match(calls, /release edit/);
+  assert.doesNotMatch(calls, /release create|--title|--notes/);
+});

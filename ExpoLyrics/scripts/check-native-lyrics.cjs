@@ -7,7 +7,7 @@ const output = buildSync({ entryPoints: [path.resolve(__dirname, '../components/
   platform: 'node', format: 'cjs', write: false }).outputFiles[0].text;
 const moduleObject = { exports: {} };
 vm.runInNewContext(output, { module: moduleObject, exports: moduleObject.exports, require });
-const { buildNativeRows, buildNativeVoice, nativeWordProgress } = moduleObject.exports;
+const { buildNativeRows, buildNativeVoice, nativeWordProgress, nativeFollowIndex } = moduleObject.exports;
 const makePart = (text, index, isPartOfWord) => ({ text, startTime: index * 1000, endTime: (index + 1) * 1000,
   ...(isPartOfWord === undefined ? {} : { isPartOfWord }) });
 for (const style of ['amll', 'spicy']) {
@@ -70,4 +70,22 @@ assert.equal(buildNativeRows([staticLine], 'amll', true)[0].lead.words.map(word 
 assert.equal(nativeWordProgress(100, [100], [100], [1]), 0, 'zero-length intervals remain finite');
 assert.equal(nativeWordProgress(101, [100], [100], [1]), 1);
 assert.equal(nativeWordProgress(100, [], [], []), 0);
+const gapLine = (start, end, backgroundEnd) => ({ lineStartTime: start, lineEndTime: end,
+  syllables: [{ text: 'line', startTime: start, endTime: end }],
+  ...(backgroundEnd ? { backgroundSyllables: [{ text: 'echo', startTime: end, endTime: backgroundEnd }] } : {}) });
+for (const style of ['amll', 'spicy']) {
+  const gaps = buildNativeRows([gapLine(4000, 5000), gapLine(7999, 9000), gapLine(12000, 13000)], style);
+  assert.equal(gaps[0].interlude.start, 0, 'Intro has its own persistent break slot');
+  assert.equal(gaps[0].interlude.end, 4000);
+  assert.equal(gaps[1].interlude, undefined, 'Sub-three-second breaks must not allocate a dot slot');
+  assert.equal(gaps[2].interlude.start, 9000, 'Three-second breaks use the full media interval');
+  assert.equal(gaps[2].interlude.end, 12000);
+  assert.equal(nativeFollowIndex(gaps, 1, 10000), 2, 'Auto-follow anchors on the break slot before the upcoming lyric');
+  assert.equal(nativeFollowIndex(gaps, 1, 8500), 1, 'Normal lyric following keeps its existing target');
+  assert.ok(buildNativeRows([gapLine(4000, 5000)], style, true).every(row => !row.interlude), 'Static lyrics never show break animations');
+}
+assert.equal(buildNativeRows([gapLine(0, 1000, 5000), gapLine(7000, 8000)], 'amll')[1].interlude, undefined,
+  'AMLL background vocals must finish before counting a break');
+assert.equal(buildNativeRows([{ ...gapLine(5000, 6000), spicyLyricsStartTime: 3000 }], 'spicy')[0].interlude, undefined,
+  'Spicy provider intro anchors participate in the break threshold');
 console.log('Native lyrics checks passed: immutable provider text, Unicode clusters, literal/flagged spacing, timing, seeks, independent backgrounds.');

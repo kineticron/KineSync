@@ -15,7 +15,6 @@ fi
 version=$(node scripts/release-version.js)
 
 release_tag="v${version}"
-changelog=$(node scripts/release-notes.cjs "${version}")
 notes_file=$(mktemp)
 license_dir=$(mktemp -d)
 trap 'rm -f "${notes_file}"; rm -rf "${license_dir}"' EXIT
@@ -27,10 +26,6 @@ cp ExpoLyrics/LICENSE "${license_dir}/KineSync-Mobile-LICENSE.txt"
 } > "${license_dir}/KineSync-THIRD-PARTY-NOTICES.md"
 
 cat > "${notes_file}" <<EOF
-## Changelog
-
-${changelog}
-
 ## Artifacts
 
 - \`KineSync-Android.apk\`: Signed Android app.
@@ -69,8 +64,6 @@ if ! gh release view "${release_tag}" >/dev/null 2>&1; then
 fi
 
 gh release edit "${release_tag}" \
-  --title "${release_tag}" \
-  --notes-file "${notes_file}" \
   --prerelease=false
 
 gh release upload "${release_tag}" "$@" "${license_dir}"/* --clobber

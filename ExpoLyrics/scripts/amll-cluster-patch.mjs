@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { patchAmllScroll } from './amll-scroll-patch.mjs';
 
-// AMLL 0.5.2 creates its own grapheme segmenter. Patch the build input rather
+// AMLL 0.6 creates its own grapheme segmenter. Patch the build input rather
 // than node_modules or global Intl: its word segmenter must remain untouched.
 // Fail loudly on upstream changes instead of silently shipping unsafe text.
 export function patchAmllClusters(source) {
