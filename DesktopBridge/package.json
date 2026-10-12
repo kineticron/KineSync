@@ -13,7 +13,7 @@
     "publish": "electron-forge publish",
     "postinstall": "node scripts/postinstall.js",
     "lint": "node scripts/check-syntax.cjs",
-    "test": "node --test --test-isolation=none test/*.test.js",
+    "test": "node --test test/*.test.js",
     "relay": "node scripts/start-relay.js",
     "relay:ngrok": "node scripts/start-relay-ngrok.js",
     "check:lyrics-sources": "node scripts/check-lyrics-source-health.js",
