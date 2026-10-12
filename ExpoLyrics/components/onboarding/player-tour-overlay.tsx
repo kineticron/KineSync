@@ -71,9 +71,9 @@ export function PlayerTourOverlay({
       />
       <LinearGradient
         pointerEvents="none"
-        colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.03)"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        colors={_stableColors1}
+        start={_stableStart2}
+        end={_stableEnd3}
         style={StyleSheet.absoluteFill}
       />
       <View style={[styles.copy, !dialog && styles.compactCopy]}>
@@ -148,7 +148,7 @@ export function PlayerTourOverlay({
       key={step}
       entering={overlayEntrance}
       pointerEvents="box-none"
-      style={[StyleSheet.absoluteFill, styles.overlay]}
+      style={_stableStyle4}
     >
       <View
         pointerEvents="box-none"
@@ -229,3 +229,9 @@ const styles = StyleSheet.create({
   },
   primaryText: { color: Design.text, fontSize: 14, fontWeight: "700" },
 });
+
+// Static native props retain their identity across renders.
+const _stableColors1 = ["rgba(255,255,255,0.16)", "rgba(255,255,255,0.03)"] as const;
+const _stableStart2 = { x: 0, y: 0 } as const;
+const _stableEnd3 = { x: 1, y: 1 } as const;
+const _stableStyle4 = [StyleSheet.absoluteFill, styles.overlay];

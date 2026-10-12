@@ -26,6 +26,7 @@ import {
   saveMobileLyricsSettings,
 } from '@/lib/mobile-lyrics-settings';
 import { getMobileMusixmatchTokenStatus } from '@/lib/mobile-musixmatch-token';
+import { clearMobileLyricsCache } from '@/lib/mobile-lyrics-client';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { ConnectionStatus } from '@/types/bridge';
 import { requestShowOnboarding } from '@/providers/bridge-provider';
@@ -189,6 +190,7 @@ export default function BridgeSettingsScreen() {
     'Automatic token',
   );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [mobileLyricsError, setMobileLyricsError] = useState('');
   const [mobileLyricsSaved, setMobileLyricsSaved] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>(
     serverUrl ? 'desktop' : 'mobile',
@@ -303,6 +305,7 @@ export default function BridgeSettingsScreen() {
   }, []);
 
   const saveMobileLyricsApiSettings = useCallback(() => {
+    setMobileLyricsError('');
     void saveMobileLyricsSettings({
       spotifyWebToken: spotifyTokenInput,
       spotifyWebTokenExpiresAt: 0,
@@ -321,8 +324,9 @@ export default function BridgeSettingsScreen() {
       );
       setGeminiKeyInput(settings.geminiApiKey);
       setMobileLyricsSaved(true);
+      clearMobileLyricsCache();
       setTimeout(() => setMobileLyricsSaved(false), 1800);
-    });
+    }).catch((error) => setMobileLyricsError(error instanceof Error ? error.message : 'Could not save API settings.'));
   }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput]);
 
   const handleBarcodeScanned = useCallback(
@@ -605,7 +609,7 @@ export default function BridgeSettingsScreen() {
               <SettingSection title="Translations">
                 <View style={styles.sectionToggle}>
                   <Text style={styles.fieldLabel}>Show translations</Text>
-                  <Switch accessibilityLabel="Show translations" value={showTranslatedText} onValueChange={setShowTranslatedText} trackColor={{ false: '#47534F', true: Design.accent }} thumbColor="#FFFFFF" />
+                  <Switch accessibilityLabel="Show translations" value={showTranslatedText} onValueChange={setShowTranslatedText} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
                 </View>
                 <Pressable style={({ pressed, hovered }) => [styles.languageButton, (pressed || hovered) && styles.languageButtonHover]}
                   accessibilityRole="button" accessibilityLabel={`Translation language: ${translationLanguage}`}
@@ -640,6 +644,7 @@ export default function BridgeSettingsScreen() {
                   secureTextEntry
                 />
                 <Text style={styles.onboardingHint}>{musixmatchTokenStatus}</Text>
+                {!!mobileLyricsError && <Text style={styles.onboardingHint}>{mobileLyricsError}</Text>}
                 <FieldRow
                   label="Gemini API Key"
                   value={geminiKeyInput}
@@ -1180,3 +1185,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableTrackColor1 = { false: '#47534F', true: Design.accent } as const;

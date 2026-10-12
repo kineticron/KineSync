@@ -1,80 +1,62 @@
 # Release operations
 
-Every push to `main` builds one production version. All workflows publish to a
-single normal GitHub Release named from `DesktopBridge/package.json`, such as
-`v1.0.7`.
+Production workflows build Android, iOS, Windows, and Docker artifacts on pushes to `main`. Manual runs produce the artifacts described by each workflow. Development builds are for debugging and must not be used as release performance baselines.
 
-The release is never a prerelease. Its title is the version tag. The changelog
-starts with the commit message as a placeholder. After every workflow finishes,
-a maintainer can replace that line with the final changelog.
+## Versioning and release notes
+
+Before publishing a new version:
+
+1. Set the same three-part version in both component `package.json` files, their lockfiles (including root package entries), and `ExpoLyrics/app.json`.
+2. Edit the GitHub release notes with the user-visible changes, limitations, and upgrade requirements. The platform publishers preserve the release title and notes.
+3. Run `node scripts/release-version.js`, `node scripts/check-repository.cjs`, `node --test scripts/test/*.test.cjs`, and the relevant component checks in [CONTRIBUTING.md](CONTRIBUTING.md).
+4. Merge the reviewed release commit to `main` and wait for the platform workflows.
+5. Verify checksums and smoke-test installation, playback, pairing, and upgrades on the intended platforms.
+
+Tags identify immutable source commits. The publisher refuses to move an existing `v<version>` tag or upload assets from a different commit under that version. Bump the version for a changed release. A retry from the same commit may replace that commit's build assets, so published binary digests should still be checked. Existing historical tags are not rewritten by this change.
+
+Only the current `main` commit can publish. Parallel platform publishers share one versioned draft release. It becomes public when all required assets are present. A failed build leaves the release incomplete rather than publishing a partial download set. Release notes are maintained directly on the GitHub release.
 
 ## Release contents
 
 | Artifact | Purpose |
 | --- | --- |
 | `KineSync-Android.apk` | Signed Android app |
-| `KineSync-iOS-unsigned.ipa` | Unsigned iOS app |
+| `KineSync-iOS-unsigned.ipa` | IPA to be re-signed by the user |
 | `sidestore-source.json` | SideStore source |
 | `KineSync-Desktop-Windows-Setup.exe` | Windows Desktop Bridge installer |
 | `kinesync-docker-setup.zip` | Docker Desktop Bridge setup |
-| Native runtime files | Windows source installation support |
+| Versioned native manifest and runtime files | Verified Windows source-installation support |
+| Component license texts and third-party notices | Source licensing and renderer attribution accompanying downloads |
 
-Checksums are published beside the main downloads. The Docker image is also
-published to GHCR with `latest`, version, and commit tags. Actions keeps the
-individual workflow artifacts.
+Checksums accompany the main downloads. GHCR publishes the Docker image with `latest`, version, and commit tags. Individual workflow artifacts retain build outputs according to GitHub's configured retention policy. Built releases must retain applicable license material and upstream notices.
 
-## Versioning
+The persistent downloads live under [the latest release](https://github.com/Kineticron/KineSync/releases/latest). Checksums verify integrity. They do not replace signature verification or establish compatibility with a device.
 
-Before merging a release change to `main`:
-
-1. Set the same three-part version in both `package.json` files, both
-   `package-lock.json` files, and `ExpoLyrics/app.json`.
-2. Run the local checks.
-3. Merge to `main` and wait for the Android, iOS, Windows, and Docker workflows.
-4. Open the `v*` release and replace the commit-message placeholder with the
-   final changelog.
-5. Test the Android app, iOS app, Windows installer, and Docker setup.
-
-The release publisher handles parallel workflow uploads and ignores completed
-builds from older `main` commits.
-
-The release stays in draft until every required artifact and checksum is
-present. The final upload publishes it and marks it as the latest release.
-
-## Persistent download URLs
-
-- Android APK: `https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Android.apk`
-- iOS IPA: `https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa`
-- SideStore source: `https://github.com/Kineticron/KineSync/releases/latest/download/sidestore-source.json`
-- Windows installer: `https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe`
-- Docker setup: `https://github.com/Kineticron/KineSync/releases/latest/download/kinesync-docker-setup.zip`
-
-## Repository setup
+## Repository configuration
 
 ### Android signing
 
-Store the release keystore in these repository secrets:
+Configure these repository secrets:
 
 - `ANDROID_KEYSTORE_BASE64`
 - `ANDROID_KEYSTORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-Keep an offline backup. Replacing the key prevents Android from installing an
-update over an older build.
+Keep an offline backup. Changing the certificate prevents an update from installing over an older app. Never commit keystores, certificates, or secret values. Manual Android development builds currently use the release identity/package to preserve test-device data. Install them only with that behavior understood.
 
 ### Windows signing
 
-Windows signing is optional. Set both secrets together when a certificate is
-available:
+Signing is optional. When a certificate is available, configure both `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`. An unsigned installer can trigger SmartScreen warnings.
 
-- `WINDOWS_CERTIFICATE_PFX_BASE64`
-- `WINDOWS_CERTIFICATE_PASSWORD`
+### iOS toolchain
 
-Unsigned installers may show a Windows SmartScreen warning.
+The current SDK 58 workflows use the `xcode-27` preview runner and verify the iOS SDK. Review the runner/toolchain with each Expo upgrade. Unsigned CI packaging does not verify a user's provisioning profile or sideloaded device behavior.
 
 ### Container registry
 
-Allow GitHub Actions to publish packages. Keep
-`ghcr.io/kineticron/kinesync-desktop-bridge` public so setup works without a
-GitHub login.
+Allow Actions to publish packages and keep `ghcr.io/kineticron/kinesync-desktop-bridge` public for anonymous setup. Review pinned build inputs and provenance as described in [DOCKER.md](DOCKER.md).
+
+### GitHub quality and security settings
+
+See [maintainer guidance](docs/maintaining.md) for pull-request checks, dependency updates, protected branches, private reporting, and the distinction between committed configuration and live GitHub settings.

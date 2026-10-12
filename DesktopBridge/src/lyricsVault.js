@@ -124,6 +124,8 @@ function pickVaultPersistedMetadata(metadata) {
     return {};
   }
   const persisted = {};
+  if (metadata.attribution) persisted.attribution = JSON.parse(JSON.stringify(metadata.attribution));
+  if (metadata.spicyApi) persisted.spicyApi = { ...metadata.spicyApi };
   if (metadata.instrumental) {
     persisted.instrumental = true;
   }
@@ -428,7 +430,7 @@ function parseTtmlLyricsImport(content) {
     album: ttmlMeta.album || "",
     metadata: parsed.metadata,
     durationMs: parsed.durationMs,
-    spotifyTrackId: "",
+    spotifyTrackId: ttmlMeta.spotifyTrackId || "",
     sourceLabel: parsed.useKaraokeTiming
       ? "local-vault-karaoke"
       : "local-vault-line",
@@ -467,284 +469,170 @@ function defaultExportPath(entry, format) {
   return `${base}.${ext}`;
 }
 
+// File metadata identifies the imported song; now-playing is only a fallback.
+function buildVaultImportTrack(parsed = {}, track = {}) {
+  track = track || {};
+  const samePlayback = (!parsed.title || normalizeVaultText(parsed.title) === normalizeVaultText(track.title)) &&
+    (!parsed.artist || (track.artist && artistsLikelyMatch(parsed.artist, track.artist)));
+  const spotifyTrackId = String(parsed.spotifyTrackId || (samePlayback ? track.spotifyTrackId : "") || "").trim();
+  return {
+    title: String(parsed.title || track.title || "").trim(),
+    artist: String(parsed.artist || track.artist || "").trim(),
+    album: String(parsed.album || (samePlayback ? track.album : "") || "").trim(),
+    durationMs: Number((samePlayback ? track.durationMs : 0) || parsed.durationMs || 0),
+    spotifyTrackId, trackId: spotifyTrackId || (samePlayback ? track.trackId : "") || "",
+  };
+}
+
 function createLyricsVaultStore({ userDataPath }) {
+  const { DatabaseSync } = require("node:sqlite");
   const vaultRoot = path.join(String(userDataPath || ""), VAULT_DIR_NAME);
-  const indexPath = path.join(vaultRoot, INDEX_FILENAME);
-
-  const ensureVaultRoot = () => {
-    fs.mkdirSync(vaultRoot, { recursive: true });
-  };
-
-  const readIndex = () => {
-    ensureVaultRoot();
-    try {
-      if (!fs.existsSync(indexPath)) {
-        return { bySpotifyId: {}, byFingerprint: {}, byTitleArtist: {} };
-      }
-      const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8"));
-      return {
-        bySpotifyId:
-          parsed?.bySpotifyId && typeof parsed.bySpotifyId === "object"
-            ? parsed.bySpotifyId
-            : {},
-        byFingerprint:
-          parsed?.byFingerprint && typeof parsed.byFingerprint === "object"
-            ? parsed.byFingerprint
-            : {},
-        byTitleArtist:
-          parsed?.byTitleArtist && typeof parsed.byTitleArtist === "object"
-            ? parsed.byTitleArtist
-            : {},
-      };
-    } catch {
-      return { bySpotifyId: {}, byFingerprint: {}, byTitleArtist: {} };
+  fs.mkdirSync(vaultRoot, { recursive: true });
+  const db = new DatabaseSync(path.join(vaultRoot, "vault.sqlite"));
+  try {
+    if (Number(db.prepare("PRAGMA user_version").get().user_version) > 1) {
+      throw new Error("This lyrics vault was created by a newer KineSync version.");
     }
-  };
-
-  const writeIndex = (index) => {
-    ensureVaultRoot();
-    fs.writeFileSync(
-      indexPath,
-      JSON.stringify({
-        bySpotifyId: index.bySpotifyId || {},
-        byFingerprint: index.byFingerprint || {},
-        byTitleArtist: index.byTitleArtist || {},
-      }),
-      "utf8",
+    db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS vault_entries (
+      vault_id TEXT PRIMARY KEY, spotify_id TEXT NOT NULL,
+      title_artist TEXT NOT NULL, saved_at INTEGER NOT NULL,
+      expires_at INTEGER, manifest TEXT NOT NULL, lyrics BLOB NOT NULL, catalog TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS vault_spotify ON vault_entries(spotify_id);
+    CREATE INDEX IF NOT EXISTS vault_title_artist ON vault_entries(title_artist);
+    CREATE INDEX IF NOT EXISTS vault_saved ON vault_entries(saved_at DESC);
+    CREATE TABLE IF NOT EXISTS vault_keys (
+      lookup_key TEXT PRIMARY KEY, vault_id TEXT NOT NULL
+      REFERENCES vault_entries(vault_id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS vault_migrations (name TEXT PRIMARY KEY);
+    PRAGMA user_version = 1;
+    `);
+  } catch (error) { db.close(); throw error; }
+  const transaction = operation => {
+    db.exec("BEGIN IMMEDIATE");
+    try { const result = operation(); db.exec("COMMIT"); return result; }
+    catch (error) { db.exec("ROLLBACK"); throw error; }
   };
-
-  const entryDirForId = (vaultId) => {
-    const safeId = String(vaultId || "").trim();
-    if (!/^(?:spotify_[A-Za-z0-9._-]{1,128}|fp_[a-f0-9]{20,64})$/.test(safeId)) {
+  const validId = vaultId => {
+    if (!/^(?:spotify_[A-Za-z0-9._-]{1,128}|fp_[a-f0-9]{20,64})$/.test(String(vaultId || ""))) {
       throw new Error("Invalid vault entry ID.");
     }
-    const resolvedRoot = path.resolve(vaultRoot);
-    const resolved = path.resolve(resolvedRoot, safeId);
-    if (resolved === resolvedRoot || !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
-      throw new Error("Vault path is outside the vault directory.");
-    }
-    return resolved;
+    return vaultId;
   };
-
-  const readEntryFromDir = (vaultId) => {
-    const entryDir = entryDirForId(vaultId);
-    const manifestPath = path.join(entryDir, MANIFEST_FILENAME);
-    if (!entryHasLyrics(entryDir)) {
-      return null;
-    }
-    try {
-      const gzipPath = path.join(entryDir, LYRICS_GZIP_FILENAME);
-      const legacyPath = path.join(entryDir, LEGACY_LYRICS_FILENAME);
-      const lyrics = readLyricsFromEntryDir(entryDir);
-      if (!Array.isArray(lyrics) || !lyrics.length) {
-        return null;
-      }
-      const { normalizeImportedLyricsTimestamps } = require("./lyricsTtmlImport");
-      normalizeImportedLyricsTimestamps(lyrics);
-      if (!fs.existsSync(gzipPath) && fs.existsSync(legacyPath)) {
-        writeLyricsToEntryDir(entryDir, lyrics);
-      }
-      let manifest = {};
-      if (fs.existsSync(manifestPath)) {
-        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      }
-      const sourceLabel = resolveVaultSourceLabel(
-        lyrics,
-        manifest?.sourceLabel || "",
-      );
-      return {
-        vaultId,
-        lyrics: cloneLyrics(lyrics),
-        sourceLabel,
-        manifest,
-        metadata: manifest?.metadata || {},
-      };
-    } catch {
-      return null;
-    }
+  const put = (vaultId, manifest, lyrics) => {
+    validId(vaultId);
+    manifest = { ...manifest, vaultId, lineCount: Number(manifest.lineCount || lyrics.length),
+      sourceLabel: resolveVaultSourceLabel(lyrics, manifest.sourceLabel) };
+    const compressed = gzipJsonPayload(compactLyricsForStorage(lyrics));
+    // Keep the same bounded decompression contract as legacy vault files.
+    gunzipJsonPayload(compressed);
+    const track = { ...manifest, spotifyTrackId: manifest.spotifyTrackId || "" };
+    const expiresAt = Number(manifest.metadata?.spicyApi?.expiresAt || 0);
+    const catalog = { ...manifest };
+    delete catalog.metadata;
+    db.prepare(`INSERT INTO vault_entries
+      (vault_id, spotify_id, title_artist, saved_at, expires_at, manifest, lyrics, catalog) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(vault_id) DO UPDATE SET spotify_id=excluded.spotify_id,
+      title_artist=excluded.title_artist, saved_at=excluded.saved_at,
+      expires_at=excluded.expires_at, manifest=excluded.manifest, lyrics=excluded.lyrics, catalog=excluded.catalog`)
+      .run(vaultId, track.spotifyTrackId, buildTitleArtistKey(track), Number(manifest.savedAt || 0),
+        manifest.metadata?.spicyApi ? (Number.isFinite(expiresAt) ? expiresAt : 0) : null,
+        JSON.stringify(manifest), compressed, JSON.stringify(catalog));
+    db.prepare("DELETE FROM vault_keys WHERE vault_id = ?").run(vaultId);
+    const keys = collectLookupFingerprintKeys(track).map(key => `fp:${key}`);
+    if (track.spotifyTrackId) keys.unshift(`spotify:${track.spotifyTrackId}`);
+    if (buildTitleArtistKey(track)) keys.push(`title:${buildTitleArtistKey(track)}`);
+    const insertKey = db.prepare("INSERT INTO vault_keys VALUES (?, ?) ON CONFLICT(lookup_key) DO UPDATE SET vault_id=excluded.vault_id");
+    for (const key of keys) insertKey.run(key, vaultId);
   };
-
-  const lookupKeysForTrack = (track) => {
-    const spotifyTrackId = String(track?.spotifyTrackId || "").trim();
-    const fingerprint = buildTrackFingerprint(track);
-    return { spotifyTrackId, fingerprint };
-  };
-
-  const findEntryByTitleArtistFallback = (track) => {
-    const queryTitle = String(track?.title || "").trim();
-    if (!queryTitle) {
-      return null;
-    }
-    try {
-      const dirs = fs.readdirSync(vaultRoot, { withFileTypes: true });
-      for (const dir of dirs) {
-        if (!dir.isDirectory() || dir.name === INDEX_FILENAME) {
-          continue;
+  // Commit all legacy entries and the marker together. Retain legacy files as a
+  // recovery copy; a failed migration rolls back and is retried on next launch.
+  try {
+    if (!db.prepare("SELECT 1 FROM vault_migrations WHERE name = ?").get("filesystem-v2")) {
+      transaction(() => {
+        for (const dir of fs.readdirSync(vaultRoot, { withFileTypes: true })) {
+          if (!dir.isDirectory()) continue;
+          const entryDir = path.join(vaultRoot, dir.name);
+          if (!entryHasLyrics(entryDir)) continue;
+          const manifest = JSON.parse(fs.readFileSync(path.join(entryDir, MANIFEST_FILENAME), "utf8"));
+          const lyrics = readLyricsFromEntryDir(entryDir);
+          if (!lyrics.length) throw new Error(`Legacy vault entry ${dir.name} contains no lyrics.`);
+          require("./lyricsTtmlImport").normalizeImportedLyricsTimestamps(lyrics);
+          put(dir.name, manifest, lyrics);
         }
-        const entry = readEntryFromDir(dir.name);
-        if (!entry?.lyrics?.length) {
-          continue;
+        // Preserve aliases from the old index, including historical fingerprints.
+        const indexPath = path.join(vaultRoot, INDEX_FILENAME);
+        if (fs.existsSync(indexPath)) {
+          const index = JSON.parse(fs.readFileSync(indexPath, "utf8"));
+          for (const [field, prefix] of [["bySpotifyId", "spotify"], ["byFingerprint", "fp"], ["byTitleArtist", "title"]]) {
+            for (const [key, id] of Object.entries(index[field] || {})) {
+              if (db.prepare("SELECT 1 FROM vault_entries WHERE vault_id = ?").get(id)) {
+                db.prepare("INSERT OR REPLACE INTO vault_keys VALUES (?, ?)").run(`${prefix}:${key}`, id);
+              }
+            }
+          }
         }
-        const manifest = entry.manifest || {};
-        if (!titlesLikelyMatch(queryTitle, manifest.title)) {
-          continue;
-        }
-        if (!artistsLikelyMatch(track?.artist, manifest.artist)) {
-          continue;
-        }
-        return entry;
-      }
-    } catch {
-      return null;
+        db.prepare("INSERT INTO vault_migrations VALUES (?)").run("filesystem-v2");
+      });
     }
-    return null;
+  } catch (error) { db.close(); throw error; }
+  const readEntry = vaultId => {
+    validId(vaultId);
+    const row = db.prepare("SELECT manifest, lyrics FROM vault_entries WHERE vault_id = ? AND (expires_at IS NULL OR expires_at > ?)").get(vaultId, Date.now());
+    if (!row) return null;
+    const manifest = JSON.parse(row.manifest);
+    const lyrics = expandLyricsFromStorage(gunzipJsonPayload(Buffer.from(row.lyrics)));
+    require("./lyricsTtmlImport").normalizeImportedLyricsTimestamps(lyrics);
+    return { vaultId, manifest, lyrics, sourceLabel: resolveVaultSourceLabel(lyrics, manifest.sourceLabel), metadata: manifest.metadata || {} };
   };
-
-  const collectVaultIdsForTrack = (track, index) => {
-    const spotifyTrackId = String(track?.spotifyTrackId || "").trim();
-    const vaultIds = [];
-
-    if (spotifyTrackId) {
-      if (index.bySpotifyId[spotifyTrackId]) {
-        vaultIds.push(index.bySpotifyId[spotifyTrackId]);
-      }
-      vaultIds.push(`spotify_${spotifyTrackId}`);
-    }
-
-    for (const fingerprint of collectLookupFingerprintKeys(track)) {
-      if (index.byFingerprint[fingerprint]) {
-        vaultIds.push(index.byFingerprint[fingerprint]);
-      }
-      vaultIds.push(`fp_${fingerprint.slice(0, 20)}`);
-    }
-
-    const titleArtistKey = buildTitleArtistKey(track);
-    if (titleArtistKey && index.byTitleArtist[titleArtistKey]) {
-      vaultIds.push(index.byTitleArtist[titleArtistKey]);
-    }
-
-    return [...new Set(vaultIds)];
-  };
-
+  const catalog = () => db.prepare("SELECT vault_id, catalog AS manifest FROM vault_entries WHERE expires_at IS NULL OR expires_at > ? ORDER BY saved_at DESC").all(Date.now());
   return {
-    getVaultRoot() {
-      return vaultRoot;
-    },
-
+    getVaultRoot() { return vaultRoot; },
+    close() { db.close(); },
     lookup(track) {
-      if (!track || (!track.title && !track.spotifyTrackId)) {
-        return null;
+      if (!track || (!track.title && !track.spotifyTrackId)) return null;
+      const keys = collectLookupFingerprintKeys(track).map(key => `fp:${key}`);
+      if (track.spotifyTrackId) keys.unshift(`spotify:${track.spotifyTrackId}`);
+      if (buildTitleArtistKey(track)) keys.push(`title:${buildTitleArtistKey(track)}`);
+      for (const key of keys) {
+        const row = db.prepare("SELECT vault_id FROM vault_keys WHERE lookup_key = ?").get(key);
+        if (row) { const entry = readEntry(row.vault_id); if (entry && (!track.spotifyTrackId || !entry.manifest.spotifyTrackId || track.spotifyTrackId === entry.manifest.spotifyTrackId)) return entry; }
       }
-      const index = readIndex();
-      const vaultIds = collectVaultIdsForTrack(track, index);
-
-      for (const vaultId of vaultIds) {
-        const entry = readEntryFromDir(vaultId);
-        if (entry?.lyrics?.length) {
-          return entry;
-        }
+      // Preserve legacy fuzzy matching, inspecting only small catalog metadata.
+      for (const row of catalog()) {
+        const manifest = JSON.parse(row.manifest);
+        if (track.spotifyTrackId && manifest.spotifyTrackId && track.spotifyTrackId !== manifest.spotifyTrackId) continue;
+        if (titlesLikelyMatch(track.title, manifest.title) && artistsLikelyMatch(track.artist, manifest.artist)) return readEntry(row.vault_id);
       }
-      return findEntryByTitleArtistFallback(track);
+      return null;
     },
-
-    save({
-      track,
-      lyrics,
-      sourceLabel = "",
-      includeTranslations = false,
-      originalSource = "",
-      metadata = null,
-    } = {}) {
+    save({ track, lyrics, sourceLabel = "", includeTranslations = false, originalSource = "", metadata = null } = {}) {
       const safeLyrics = cloneLyrics(lyrics);
-      if (!safeLyrics.length) {
-        throw new Error("Cannot save empty lyrics to the vault.");
-      }
-      if (!track?.title && !track?.spotifyTrackId) {
-        throw new Error("Track metadata is required to save lyrics to the vault.");
-      }
-
+      if (!safeLyrics.length) throw new Error("Cannot save empty lyrics to the vault.");
+      if (!track?.title && !track?.spotifyTrackId) throw new Error("Track metadata is required to save lyrics to the vault.");
       const vaultId = resolveVaultId(track);
-      const entryDir = entryDirForId(vaultId);
-      const manifestPath = path.join(entryDir, MANIFEST_FILENAME);
-      let existingMetadata = {};
-      if (fs.existsSync(manifestPath)) {
-        try {
-          const existingManifest = JSON.parse(
-            fs.readFileSync(manifestPath, "utf8"),
-          );
-          existingMetadata = existingManifest?.metadata || {};
-        } catch {
-          existingMetadata = {};
-        }
-      }
-      const persistedMetadata = mergeVaultPersistedMetadata(
-        existingMetadata,
-        metadata,
-      );
-      const resolvedSourceLabel = resolveVaultSourceLabel(
-        safeLyrics,
-        sourceLabel,
-      );
-      const { spotifyTrackId, fingerprint } = lookupKeysForTrack(track);
-      const savedAt = Date.now();
+      const existing = db.prepare("SELECT manifest FROM vault_entries WHERE vault_id = ?").get(vaultId);
+      const persistedMetadata = mergeVaultPersistedMetadata(existing ? JSON.parse(existing.manifest).metadata : {}, metadata);
+      const resolvedSourceLabel = resolveVaultSourceLabel(safeLyrics, sourceLabel);
       const manifest = {
-        vaultId,
-        title: String(track?.title || "").trim(),
-        artist: String(track?.artist || "").trim(),
-        album: String(track?.album || "").trim(),
-        durationMs: Number(track?.durationMs || 0),
-        spotifyTrackId,
-        fingerprint,
-        sourceLabel: resolvedSourceLabel,
-        originalSource: String(originalSource || "").trim(),
-        includeTranslations: Boolean(includeTranslations),
-        storageVersion: VAULT_STORAGE_VERSION,
-        savedAt,
+        vaultId, title: String(track.title || "").trim(), artist: String(track.artist || "").trim(),
+        album: String(track.album || "").trim(), durationMs: Number(track.durationMs || 0),
+        spotifyTrackId: String(track.spotifyTrackId || "").trim(), fingerprint: buildTrackFingerprint(track),
+        sourceLabel: resolvedSourceLabel, originalSource: String(originalSource || "").trim(),
+        includeTranslations: Boolean(includeTranslations), storageVersion: 3, savedAt: Date.now(),
         lineCount: safeLyrics.length,
-        translatedLineCount: safeLyrics.reduce(
-          (count, line) =>
-            count + (String(line?.translatedText || "").trim() ? 1 : 0),
-          0,
-        ),
-        ...(Object.keys(persistedMetadata).length
-          ? { metadata: persistedMetadata }
-          : {}),
+        translatedLineCount: safeLyrics.filter(line => String(line.translatedText || "").trim()).length,
+        ...(Object.keys(persistedMetadata).length ? { metadata: persistedMetadata } : {}),
       };
-
-      fs.mkdirSync(entryDir, { recursive: true });
-      writeLyricsToEntryDir(entryDir, safeLyrics);
-      fs.writeFileSync(
-        path.join(entryDir, MANIFEST_FILENAME),
-        JSON.stringify(manifest),
-        "utf8",
-      );
-
-      const index = readIndex();
-      if (spotifyTrackId) {
-        index.bySpotifyId[spotifyTrackId] = vaultId;
-      }
-      for (const fingerprint of collectLookupFingerprintKeys(track)) {
-        index.byFingerprint[fingerprint] = vaultId;
-      }
-      const titleArtistKey = buildTitleArtistKey(track);
-      if (titleArtistKey) {
-        index.byTitleArtist[titleArtistKey] = vaultId;
-      }
-      writeIndex(index);
-
-      return {
-        ok: true,
-        vaultId,
-        entryDir,
-        sourceLabel: resolvedSourceLabel,
-        lineCount: safeLyrics.length,
-        translatedLineCount: manifest.translatedLineCount,
-        manifest,
-        metadata: persistedMetadata,
-      };
+      transaction(() => put(vaultId, manifest, safeLyrics));
+      return { ok: true, vaultId, entryDir: path.join(vaultRoot, vaultId), sourceLabel: resolvedSourceLabel,
+        lineCount: safeLyrics.length, translatedLineCount: manifest.translatedLineCount, manifest, metadata: persistedMetadata };
     },
-
     importTtml({
       ttmlContent,
       track = null,
@@ -757,14 +645,7 @@ function createLyricsVaultStore({ userDataPath }) {
       }
 
       const ttmlMeta = extractTtmlMetadata(ttmlContent);
-      const mergedTrack = {
-        title: String(track?.title || ttmlMeta.title || "").trim(),
-        artist: String(track?.artist || ttmlMeta.artist || "").trim(),
-        album: String(track?.album || ttmlMeta.album || "").trim(),
-        durationMs: Number(track?.durationMs || parsed.durationMs || 0),
-        spotifyTrackId: String(track?.spotifyTrackId || "").trim(),
-        trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
-      };
+      const mergedTrack = buildVaultImportTrack({ ...ttmlMeta, durationMs: parsed.durationMs }, track);
       if (!mergedTrack.title) {
         throw new Error(
           "Could not determine song title. Play the track on Spotify or use a TTML with title metadata.",
@@ -791,14 +672,7 @@ function createLyricsVaultStore({ userDataPath }) {
         throw new Error("File did not contain any lyric lines.");
       }
 
-      const mergedTrack = {
-        title: String(track?.title || parsed.title || "").trim(),
-        artist: String(track?.artist || parsed.artist || "").trim(),
-        album: String(track?.album || parsed.album || "").trim(),
-        durationMs: Number(track?.durationMs || parsed.durationMs || 0),
-        spotifyTrackId: String(track?.spotifyTrackId || parsed.spotifyTrackId || "").trim(),
-        trackId: String(track?.trackId || track?.spotifyTrackId || "").trim(),
-      };
+      const mergedTrack = buildVaultImportTrack(parsed, track);
       if (!mergedTrack.title) {
         throw new Error(
           "Could not determine song title. Play the track on Spotify or use a file with title metadata.",
@@ -820,68 +694,23 @@ function createLyricsVaultStore({ userDataPath }) {
       });
     },
 
-    listEntryCount() {
-      ensureVaultRoot();
-      try {
-        return fs
-          .readdirSync(vaultRoot, { withFileTypes: true })
-          .filter(
-            (entry) =>
-              entry.isDirectory() &&
-              entryHasLyrics(path.join(vaultRoot, entry.name)),
-          ).length;
-      } catch {
-        return 0;
-      }
-    },
 
+    listEntryCount() { return Number(db.prepare("SELECT count(*) AS count FROM vault_entries WHERE expires_at IS NULL OR expires_at > ?").get(Date.now()).count); },
     listEntries() {
-      ensureVaultRoot();
-      try {
-        return fs
-          .readdirSync(vaultRoot, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => {
-            const entryDir = path.join(vaultRoot, entry.name);
-            if (!entryHasLyrics(entryDir)) {
-              return null;
-            }
-            const full = readEntryFromDir(entry.name);
-            if (!full?.manifest) {
-              return null;
-            }
-            const manifest = full.manifest;
-            return {
-              vaultId: entry.name,
-              title: String(manifest.title || "Unknown title"),
-              artist: String(manifest.artist || "Unknown artist"),
-              album: String(manifest.album || ""),
-              durationMs: Number(manifest.durationMs || 0),
-              lineCount: Number(manifest.lineCount || full.lyrics.length || 0),
-              translatedLineCount: Number(manifest.translatedLineCount || 0),
-              sourceLabel: full.sourceLabel,
-              savedAt: Number(manifest.savedAt || 0),
-              spotifyTrackId: String(manifest.spotifyTrackId || ""),
-            };
-          })
-          .filter(Boolean)
-          .sort((left, right) => Number(right.savedAt) - Number(left.savedAt));
-      } catch {
-        return [];
-      }
+      return catalog().map(row => {
+        const manifest = JSON.parse(row.manifest);
+        return { vaultId: row.vault_id, title: manifest.title || "Unknown title", artist: manifest.artist || "Unknown artist",
+          album: manifest.album || "", durationMs: Number(manifest.durationMs || 0),
+          lineCount: Number(manifest.lineCount || 0), translatedLineCount: Number(manifest.translatedLineCount || 0),
+          sourceLabel: manifest.sourceLabel, savedAt: Number(manifest.savedAt || 0), spotifyTrackId: manifest.spotifyTrackId || "" };
+      });
     },
-
-    getEntry(vaultId) {
-      const safeId = String(vaultId || "").trim();
-      if (!safeId) {
-        return null;
-      }
-      return readEntryFromDir(safeId);
-    },
+    getEntry(vaultId) { return String(vaultId || "").trim() ? readEntry(String(vaultId).trim()) : null; },
   };
 }
 
 function initLyricsVaultStore({ userDataPath }) {
+  vaultStoreInstance?.close();
   vaultStoreInstance = createLyricsVaultStore({ userDataPath });
   return vaultStoreInstance;
 }
@@ -900,6 +729,7 @@ module.exports = {
   MANIFEST_FILENAME,
   artistsLikelyMatch,
   buildTitleArtistKey,
+  buildVaultImportTrack,
   buildTrackFingerprint,
   cloneLyrics,
   collectLookupFingerprintKeys,

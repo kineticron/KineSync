@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Platform, StyleSheet, View } from "react-native";
+import { AppState, Linking, Platform, StyleSheet, View } from "react-native";
 import WebView, { type WebViewMessageEvent } from "react-native-webview";
 
 import {
@@ -39,6 +39,7 @@ type SpicyLyricsViewProps = {
   demoLyrics?: LyricLineType[];
   demoLayout?: 'preview' | 'player';
   demoIsPlaying?: boolean;
+  demoDurationMs?: number;
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
   previewPositionMs?: number | null;
@@ -318,6 +319,7 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
   demoLyrics,
   demoLayout = 'preview',
   demoIsPlaying,
+  demoDurationMs = 25000,
   previewPositionMs = null,
   autoFollowEnabled = true,
   resumeAutoFollowSignal = 0,
@@ -472,12 +474,12 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
       positionMs: previewPositionMs ?? currentPosition,
       previewPositionMs: demoLyrics ? null : previewPositionMs,
       isPlaying: demoLyrics ? active && (demoIsPlaying ?? true) : active && previewPositionMs === null ? isPlaying : false,
-      durationMs: demoLyrics ? 25000 : currentTrack?.durationMs ?? 0,
+      durationMs: demoLyrics ? demoDurationMs : currentTrack?.durationMs ?? 0,
       // Demo clock ticks are ordinary anchors, not repeated seeks.
       force: !demoLyrics && previewPositionMs !== null,
     });
   }, [active, anchorMonotonicMs, anchorPositionMs, currentTrack?.id, currentTrack?.durationMs,
-    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, previewPositionMs, resumeAutoFollowSignal]);
+    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, demoDurationMs, previewPositionMs, resumeAutoFollowSignal]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     if (currentSourceKey.current !== sourceKey) return;
@@ -486,6 +488,7 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
       index?: number;
       enabled?: boolean;
       positionMs?: number;
+      url?: string;
     } | null = null;
     try {
       payload = JSON.parse(event.nativeEvent.data);
@@ -493,6 +496,14 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
       return;
     }
     if (!payload || typeof payload !== "object") {
+      return;
+    }
+    if (payload.type === "attributionLink") {
+      const attribution = usePlaybackStore.getState().lyricsMetadata.attribution;
+      const allowed = [attribution?.maker?.url, attribution?.uploader?.url];
+      if (payload.url && /^https:\/\//i.test(payload.url) && allowed.includes(payload.url)) {
+        void Linking.openURL(payload.url).catch(() => {});
+      }
       return;
     }
     if (payload.type === "ready") {
@@ -543,13 +554,17 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
     sourceKey,
   ]);
 
+  const handleLoadEnd = useCallback(() => {
+    if (currentSourceKey.current === sourceKey) setReadySourceKey(sourceKey);
+  }, [sourceKey]);
+
   return (
     <View style={styles.container}>
       <TransparentWebView
         key={`spicy-lyrics-${sourceKey}`}
         ref={webViewRef}
-        source={{ html: demoLyrics && demoLayout === 'preview' ? DEMO_LYRICS_HTML : WEB_LYRICS_HTML }}
-        originWhitelist={["*"]}
+        source={demoLyrics && demoLayout === 'preview' ? DEMO_WEBVIEW_SOURCE : LIVE_WEBVIEW_SOURCE}
+        originWhitelist={_stableOriginWhitelist1}
         javaScriptEnabled
         domStorageEnabled={false}
         cacheEnabled={false}
@@ -562,7 +577,7 @@ export const SpicyLyricsView = memo(function SpicyLyricsView({
         textInteractionEnabled={false}
         androidLayerType={Platform.OS === "android" ? "hardware" : undefined}
         onMessage={handleMessage}
-        onLoadEnd={() => { if (currentSourceKey.current === sourceKey) setReadySourceKey(sourceKey); }}
+        onLoadEnd={handleLoadEnd}
         style={styles.webView}
         containerStyle={styles.webViewContainer}
       />
@@ -584,3 +599,8 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableOriginWhitelist1 = ["*"] as const;
+const LIVE_WEBVIEW_SOURCE = { html: WEB_LYRICS_HTML };
+const DEMO_WEBVIEW_SOURCE = { html: DEMO_LYRICS_HTML };

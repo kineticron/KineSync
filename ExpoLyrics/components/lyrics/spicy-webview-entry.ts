@@ -66,8 +66,8 @@ type LyricsAttribution = {
   source?: string;
   provider?: string;
   community?: boolean;
-  maker?: { username?: string; avatar?: string };
-  uploader?: { username?: string; avatar?: string };
+  maker?: { username?: string; avatar?: string; url?: string };
+  uploader?: { username?: string; avatar?: string; url?: string };
 };
 
 type IncomingMessage = {
@@ -593,7 +593,7 @@ function appendCreditsContent(
     row.appendChild(document.createTextNode(value));
     container.appendChild(row);
   };
-  const appendProfile = (label: string, profile: { username?: string; avatar?: string }) => {
+  const appendProfile = (label: string, profile: { username?: string; avatar?: string; url?: string }) => {
     if (!profile.username) return;
     const row = document.createElement("div");
     row.className = "kinesync-credits-profile";
@@ -601,7 +601,19 @@ function appendCreditsContent(
     const strong = document.createElement("span");
     strong.className = "kinesync-credits-strong";
     strong.textContent = label;
-    text.append(strong, document.createTextNode(`@${profile.username}`));
+    text.appendChild(strong);
+    const name = document.createElement(/^https:\/\//i.test(profile.url || "") ? "a" : "span");
+    name.textContent = `@${profile.username}`;
+    if (name instanceof HTMLAnchorElement) {
+      name.href = profile.url!;
+      name.style.color = "inherit";
+      name.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        post({ type: "attributionLink", url: profile.url });
+      });
+    }
+    text.appendChild(name);
     row.appendChild(text);
     if (profile.avatar) {
       const avatar = document.createElement("img");
@@ -618,7 +630,7 @@ function appendCreditsContent(
   if (attribution?.community) append("", "These lyrics have been provided by the Spicy Lyrics community");
   if (attribution?.maker?.username) appendProfile("Made By: ", attribution.maker);
   if (attribution?.uploader?.username) {
-    appendProfile(attribution.maker?.username ? "Uploaded By: " : "Made By: ", attribution.uploader);
+    appendProfile("Uploaded By: ", attribution.uploader);
   }
 }
 

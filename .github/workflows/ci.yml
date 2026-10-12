@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+      - name: Check documentation, versions, and workflow policy
+        run: |
+          node scripts/check-repository.cjs
+          node scripts/release-version.js
+          node --test scripts/test/*.test.cjs
+      - name: Check shell syntax
+        run: bash -n scripts/publish-production-release.sh scripts/setup-docker.sh
+      - name: Validate GitHub Actions workflows
+        run: |
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "${RUNNER_TEMP}/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -shellcheck="" -pyflakes=""
+
+  desktop:
+    name: Desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: DesktopBridge/package-lock.json
+      - name: Install test dependencies without native downloads
+        working-directory: DesktopBridge
+        run: npm ci --ignore-scripts
+      - name: Check syntax and run regressions
+        working-directory: DesktopBridge
+        run: |
+          npm run lint
+          npm test
+
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ExpoLyrics/package-lock.json
+      - name: Install dependencies
+        working-directory: ExpoLyrics
+        run: npm ci
+      - name: Typecheck, lint, and deterministic regressions
+        working-directory: ExpoLyrics
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test

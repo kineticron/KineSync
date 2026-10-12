@@ -2,7 +2,7 @@
 
 KineSync can run entirely on a phone. Desktop Bridge is optional and is useful
 for tighter synchronization, desktop Spotify playback, local lyrics, and remote
-relay access. Choose the first method that fits your needs; methods are ordered
+relay access. Choose the first method that fits your needs. Methods are ordered
 from easiest to most advanced.
 
 ## Method 1: Mobile-Only (easiest)
@@ -45,10 +45,10 @@ Use this method for development or when you need to modify KineSync.
 
 | Component | Requirement                                      |
 | --------- | ------------------------------------------------ |
-| OS        | Windows 10/11 (desktop bridge); any for Expo app |
-| Node.js   | 20.x or later                                    |
+| OS        | Windows 10/11 (desktop bridge). Any for Expo app |
+| Node.js   | 22.x (the version used by CI)                     |
 | npm       | 10.x or later                                    |
-| Expo      | Expo Go or a development build                   |
+| Expo      | A native development build for full functionality |
 
 > **Compiling native binaries from source only** (most contributors can skip this):
 >
@@ -62,7 +62,7 @@ Use this method for development or when you need to modify KineSync.
 
 ```powershell
 cd DesktopBridge
-npm install
+npm ci
 ```
 
 That's it. On Windows, `npm install` automatically downloads the prebuilt native binaries (`windows_media_session.node`, `spotify-seek-helper.dll`) from the GitHub release that matches the current version. It validates a versioned manifest, exact file sizes, and SHA-256 digests, then installs files only after the entire missing batch is verified. No C++ or .NET toolchain is required.
@@ -90,10 +90,10 @@ npm run build:seek-helper    # .NET Spotify seek helper
 #### Verifying the binaries are in place
 
 ```powershell
-Test-Path DesktopBridge\native\windows-media-session\build\Release\windows_media_session.node
+Test-Path native\windows-media-session\build\Release\windows_media_session.node
 # Should return True
 
-Test-Path DesktopBridge\native\spotify-seek-helper\bin\Release\net9.0-windows10.0.19041.0\spotify-seek-helper.dll
+Test-Path native\spotify-seek-helper\bin\Release\net9.0-windows10.0.19041.0\spotify-seek-helper.dll
 # Should return True
 ```
 
@@ -108,14 +108,19 @@ Test-Path DesktopBridge\native\spotify-seek-helper\bin\Release\net9.0-windows10.
 
 ```powershell
 cd ExpoLyrics
-npm install
+npm ci
 ```
 
-No native build steps are needed. Expo handles this automatically.
+Run these commands from the repository root in a separate terminal. JavaScript
+development can use Expo Go where compatible, but native modules, config
+plugins, and the iOS widget require a native build.
 
-> **Contributors:** Before building, update `ExpoLyrics/app.json`:
-> - Replace `"projectId": "YOUR_EAS_PROJECT_ID"` with your own EAS project ID (`eas init`)
-> - Replace `dev.kineticron.KineSync` bundle identifiers with your own if needed
+For Android, install JDK 17 and the Android SDK, then run `npm run android`
+from `ExpoLyrics`. For iOS, use macOS and the Xcode toolchain required by the
+current Expo SDK, then run `npm run ios`. EAS account configuration is needed
+only if you choose EAS cloud builds. Local builds do not need a placeholder
+project ID. Use separate bundle identifiers for personal distributions when
+needed, and keep signing keys private.
 
 ### Run both apps locally
 
@@ -135,7 +140,8 @@ No native build steps are needed. Expo handles this automatically.
    npx expo start -c --tunnel
    ```
 
-3. In the Expo app, open **Bridge Settings** and enter:
+3. Open the app in a native development build (Expo Go supports only a subset).
+   In **Bridge Settings**, enter:
    ```
    WebSocket URL: ws://<your-desktop-ip>:3001
    Handshake Key: <your-chosen-key>
@@ -146,7 +152,7 @@ No native build steps are needed. Expo handles this automatically.
 Use this when your phone is not on the same Wi-Fi network as your desktop (e.g. using mobile data, or connecting from elsewhere).
 
 > **Docker users:** follow the embedded-ngrok instructions in
-> [DOCKER.md](DOCKER.md#optional-remote-access-with-ngrok). The Docker image
+> [DOCKER.md](DOCKER.md#remote-access-with-ngrok). The Docker image
 > does not require a separate ngrok CLI or three terminals. The instructions
 > below apply only to the Windows from-source development workflow.
 
@@ -215,8 +221,8 @@ This is the **Expo WebSocket URL** printed by terminal 1.
 #### Troubleshooting
 
 - **`ERROR: Set NGROK_URL in your .env`**: `.env` is missing or `NGROK_URL` is empty
-- **ngrok exits immediately**: auth token not set; run `ngrok config add-authtoken <token>`
-- **App connects but no playback**: Desktop Bridge must also be running (terminal 2); check the bridge key matches on both sides
+- **ngrok exits immediately**: auth token not set. Run `ngrok config add-authtoken <token>`
+- **App connects but no playback**: Desktop Bridge must also be running (terminal 2). Check the bridge key matches on both sides
 - **Port 8787 already in use**: change `BRIDGE_RELAY_PORT` in `.env` and update the Desktop Bridge's Relay WebSocket URL to match
 
 ## Project Conventions
@@ -245,7 +251,7 @@ The lyrics service is loaded via a shared Node.js VM context (`src/lyrics/index.
 
 ### Code Style
 
-- JavaScript: No formal linter configured; keep consistent with existing style
+- Desktop JavaScript: `npm run lint` checks syntax. Keep consistent with existing style
 - TypeScript: Strict mode with `tsc --noEmit` for type checking
 - Indentation: 2 spaces
 - Quotes: Double quotes (JS), single quotes (TS/TSX)
@@ -269,4 +275,6 @@ npx tsc --noEmit
 
 ## License
 
-GNU General Public License v3.0 (GNU GPLv3)
+Desktop Bridge: GPL-3.0-only under [LICENSE](LICENSE). Mobile app:
+AGPL-3.0-only under [ExpoLyrics/LICENSE](ExpoLyrics/LICENSE). See
+[third-party notices](THIRD_PARTY_NOTICES.md) for incorporated code.

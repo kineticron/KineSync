@@ -20,13 +20,13 @@ export default function RootLayout() {
   const touring = usePlayerTourStore(state => state.active || state.pending);
   const portraitOnly = usePlayerTourStore(state => state.active || state.pending);
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={_stableStyle1}>
       <SafeAreaProvider>
         <ThemeProvider value={appTheme}>
           <BridgeProvider>
             <Stack screenOptions={{ orientation: portraitOnly ? 'portrait' : 'default', statusBarHidden: false, statusBarStyle: 'light', contentStyle: { backgroundColor: Design.background } }}>
               <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
-              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+              <Stack.Screen name="modal" options={_stableOptions2} />
             </Stack>
           </BridgeProvider>
           {Platform.OS !== 'ios' && <StatusBar style="light" hidden={false} />}
@@ -35,3 +35,7 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = { flex: 1 };
+const _stableOptions2 = { presentation: 'modal', title: 'Modal' } as const;

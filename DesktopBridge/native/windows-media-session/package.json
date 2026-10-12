@@ -5,10 +5,9 @@
   "main": "index.js",
   "gypfile": true,
   "dependencies": {
-    "desktopbridge": "file:../..",
-    "node-addon-api": "^8.3.1"
+    "node-addon-api": "^8.9.2"
   },
   "scripts": {
-    "rebuild:electron": "node ../../node_modules/@electron/node-gyp/bin/node-gyp.js rebuild --target=40.6.0 --arch=x64 --dist-url=https://electronjs.org/headers"
+    "rebuild:electron": "node rebuild-electron.cjs"
   }
 }

@@ -142,6 +142,7 @@ export type VaultGetResultPacket = {
 };
 
 export type LyricsAttributionProfile = {
+  url?: string;
   id?: string;
   username?: string;
   avatar?: string;
@@ -156,6 +157,7 @@ export type LyricsAttributionMetadata = {
 };
 
 export type LyricsMetadata = {
+  spicyApi?: { fetchedAt: number; expiresAt: number };
   /** Original imported XML, retained for lossless TTML export. */
   ttml?: { content: string };
   instrumental?: boolean;

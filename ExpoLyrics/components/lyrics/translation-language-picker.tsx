@@ -53,11 +53,11 @@ export function TranslationLanguagePicker({ open, selected, onSelect, onClose }:
   };
   return (
     <Modal visible={open} transparent animationType={reduceMotion ? 'none' : 'fade'} statusBarTranslucent
-      supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}
+      supportedOrientations={_stableSupportedOrientations1}
       onRequestClose={close}>
       <View style={styles.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessible={false} />
-        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']} pointerEvents="box-none">
+        <SafeAreaView style={styles.safeArea} edges={_stableEdges2} pointerEvents="box-none">
           <KeyboardAvoidingView style={styles.positioner} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} pointerEvents="box-none">
             <View style={styles.panel} accessibilityViewIsModal onAccessibilityEscape={close}>
               <BlurView pointerEvents="none" intensity={34} tint="dark" style={StyleSheet.absoluteFill} />
@@ -146,3 +146,7 @@ const styles = StyleSheet.create({
   emptyHint: { color: Design.muted, fontSize: 13, textAlign: 'center' },
   resetButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 16, borderRadius: 14, backgroundColor: 'rgba(168,240,207,0.08)', marginTop: 4 },
 });
+
+// Static native props retain their identity across renders.
+const _stableSupportedOrientations1 = ['portrait' as const, 'landscape' as const, 'landscape-left' as const, 'landscape-right' as const];
+const _stableEdges2 = ['top', 'bottom', 'left', 'right'] as const;

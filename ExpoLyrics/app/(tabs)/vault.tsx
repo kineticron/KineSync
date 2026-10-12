@@ -12,17 +12,17 @@ import { BridgedArtworkImage } from '@/components/lyrics/bridged-artwork-image';
 import { DesktopVaultCatalog } from '@/components/lyrics/desktop-vault-catalog';
 import { Design } from '@/constants/design';
 import { useVaultIncomingShare } from '@/hooks/use-vault-incoming-share';
-import { deleteMobileVaultEntry, readVaultEntries, renameMobileVaultEntry, saveMobileVaultLyrics, type MobileVaultEntry } from '@/lib/mobile-lyrics-vault';
+import { deleteMobileVaultEntry, readVaultCatalog, getMobileVaultEntry, renameMobileVaultEntry, saveMobileVaultLyrics, type MobileVaultSummary } from '@/lib/mobile-lyrics-vault';
 import { extractTtmlMetadata, parseTtmlToLyrics } from '@/lib/lyrics-ttml-import';
 import { buildDefaultTtmlFilename, lyricsToTtml } from '@/lib/lyrics-ttml-export';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { LyricLine, LyricsMetadata } from '@/types/bridge';
 
-type ImportDraft = { lyrics: LyricLine[]; durationMs: number; album?: string; metadata?: LyricsMetadata; shared: boolean };
+type ImportDraft = { lyrics: LyricLine[]; durationMs: number; album?: string; spotifyTrackId?: string; metadata?: LyricsMetadata; shared: boolean };
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
 export default function VaultScreen() {
-  const [entries, setEntries] = useState<MobileVaultEntry[]>([]);
+  const [entries, setEntries] = useState<MobileVaultSummary[]>([]);
   const [query, setQuery] = useState('');
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
@@ -35,7 +35,10 @@ export default function VaultScreen() {
   const { resolvedSharedPayloads, clearSharedPayloads, error } = useVaultIncomingShare();
   const track = usePlaybackStore(s => s.currentTrack);
   const lyrics = usePlaybackStore(s => s.lyrics);
-  const reload = useCallback(async () => setEntries(await readVaultEntries()), []);
+  const reload = useCallback(async () => {
+    try { setEntries(await readVaultCatalog()); }
+    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+  }, []);
   useFocusEffect(useCallback(() => { void reload(); }, [reload]));
 
   const prepareImport = useCallback(async (uri: string, name: string, shared: boolean) => {
@@ -51,14 +54,14 @@ export default function VaultScreen() {
     const metadata = extractTtmlMetadata(content);
     setEditing(null);
     if (metadata.title && metadata.artist) {
-      await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: metadata.title, artist: metadata.artist, album: metadata.album, durationMs: parsed.durationMs }, lyrics: parsed.lyrics, metadata: parsed.metadata, originalSource: 'ttml-import' });
+      await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: metadata.title, artist: metadata.artist, album: metadata.album, spotifyTrackId: metadata.spotifyTrackId, durationMs: parsed.durationMs }, lyrics: parsed.lyrics, metadata: parsed.metadata, originalSource: 'ttml-import' });
       setMessage(`Imported ${metadata.title} into your local vault.`);
       if (shared) clearSharedPayloads();
       await reload();
     } else {
       setTitle(metadata.title || name.replace(/\.ttml$/i, ''));
       setArtist(metadata.artist);
-      setDraft({ lyrics: parsed.lyrics, durationMs: parsed.durationMs, album: metadata.album, metadata: parsed.metadata, shared });
+      setDraft({ lyrics: parsed.lyrics, durationMs: parsed.durationMs, album: metadata.album, spotifyTrackId: metadata.spotifyTrackId, metadata: parsed.metadata, shared });
     }
   }, [clearSharedPayloads, reload]);
 
@@ -146,7 +149,7 @@ export default function VaultScreen() {
           <Button disabled={busy} style={[styles.primaryButton, styles.editorButton, busy && styles.disabled]} onPress={() => void run(async () => {
             if (!title.trim() || !artist.trim()) throw new Error('Enter a song name and artist.');
             if (editing) await renameMobileVaultEntry(editing, title, artist);
-            else if (draft) await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: title.trim(), artist: artist.trim(), album: draft.album, durationMs: draft.durationMs }, lyrics: draft.lyrics, metadata: draft.metadata, originalSource: 'ttml-import' });
+            else if (draft) await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: title.trim(), artist: artist.trim(), album: draft.album, spotifyTrackId: draft.spotifyTrackId, durationMs: draft.durationMs }, lyrics: draft.lyrics, metadata: draft.metadata, originalSource: 'ttml-import' });
             closeEditor(); setMessage('Saved to local vault.');
           })}><Ionicons name="checkmark" size={19} color={Design.accentInk} /><Text style={styles.primaryButtonText}>Save</Text></Button>
           <Button disabled={busy} style={[styles.secondaryButton, styles.editorButton, busy && styles.disabled]} onPress={closeEditor}><Text style={styles.buttonText}>Cancel</Text></Button>
@@ -164,7 +167,7 @@ export default function VaultScreen() {
         <TextInput accessibilityLabel="Search vault" placeholder="Search songs or artists" placeholderTextColor={Design.muted} value={query} onChangeText={setQuery} autoCorrect={false} selectionColor={Design.accent} onFocus={() => setFocusedField('search')} onBlur={() => setFocusedField(null)} style={styles.searchInput} />
         {!!query && <Button accessibilityLabel="Clear search" hitSlop={4} onPress={() => setQuery('')} style={styles.clearSearch}><Ionicons name="close-circle" size={19} color={Design.muted} /></Button>}
       </View>
-      {!filteredEntries.length && <View style={[styles.card, styles.emptyState]}>
+      {!filteredEntries.length && <View style={_stableStyle1}>
         <BlurView pointerEvents="none" intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
         <View style={styles.emptyIcon}><Ionicons name={entries.length ? 'search-outline' : 'library-outline'} size={30} color={Design.accent} /></View>
         <Text style={styles.emptyTitle}>{entries.length ? 'No matching songs' : 'Make room for your favorites'}</Text>
@@ -174,22 +177,24 @@ export default function VaultScreen() {
       {filteredEntries.map(entry => <View key={entry.vaultId} style={styles.songCard}>
         <BlurView pointerEvents="none" intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
         <View style={styles.songRow}>
-          {entry.track.artworkUrl ? <BridgedArtworkImage uri={entry.track.artworkUrl} cachePolicy="memory" style={styles.artwork} contentFit="cover" recyclingKey={`vault-${entry.vaultId}`} /> : <View style={[styles.artwork, styles.artworkPlaceholder]}><Ionicons name="musical-notes-outline" size={24} color={Design.accent} /></View>}
+          {entry.track.artworkUrl ? <BridgedArtworkImage uri={entry.track.artworkUrl} cachePolicy="memory" style={styles.artwork} contentFit="cover" recyclingKey={`vault-${entry.vaultId}`} /> : <View style={_stableStyle2}><Ionicons name="musical-notes-outline" size={24} color={Design.accent} /></View>}
           <View style={styles.songCopy}>
             <Text style={styles.songTitle}>{entry.track.title}</Text>
             <Text style={styles.artist}>{entry.track.artist}</Text>
-            <Text style={styles.songDetail}>{entry.lyrics.length} {entry.lyrics.length === 1 ? 'line' : 'lines'}{entry.lyrics.some(line => line.translatedText || line.backgroundTranslatedText) ? ' · Translated' : ''}</Text>
+            <Text style={styles.songDetail}>{entry.lineCount} {entry.lineCount === 1 ? 'line' : 'lines'}{entry.hasTranslations ? ' · Translated' : ''}</Text>
           </View>
         </View>
         <View style={styles.songActions}>
           <Button accessibilityLabel={`Edit ${entry.track.title}`} disabled={busy || Boolean(draft)} style={[styles.songAction, (busy || Boolean(draft)) && styles.disabled]} onPress={() => { setEditing(entry.vaultId); setTitle(entry.track.title); setArtist(entry.track.artist); }}><Ionicons name="create-outline" size={17} color={Design.text} /><Text style={styles.actionText}>Edit</Text></Button>
           <Button accessibilityLabel={`Export ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => void run(async () => {
-            const file = new File(Paths.cache, buildDefaultTtmlFilename(entry.track));
+            const full = await getMobileVaultEntry(entry.vaultId);
+            if (!full) throw new Error("These lyrics are no longer available. Refresh your vault.");
+            const file = new File(Paths.cache, buildDefaultTtmlFilename(full.track));
             file.create({ overwrite: true });
-            file.write(lyricsToTtml({ lyrics: entry.lyrics, ...entry.track, source: entry.originalSource, metadata: entry.metadata }));
+            file.write(lyricsToTtml({ lyrics: full.lyrics, ...full.track, source: full.originalSource, metadata: full.metadata }));
             await shareAsync(file.uri, { mimeType: 'application/ttml+xml', UTI: 'public.xml' });
           })}><Ionicons name="share-outline" size={17} color={Design.text} /><Text style={styles.actionText}>Export</Text></Button>
-          <Button accessibilityLabel={`Delete ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => Alert.alert('Delete saved lyrics?', `${entry.track.title} will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void run(async () => { await deleteMobileVaultEntry(entry.vaultId); }) }])}><Ionicons name="trash-outline" size={17} color="#FF93A4" /><Text style={[styles.actionText, styles.deleteText]}>Delete</Text></Button>
+          <Button accessibilityLabel={`Delete ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => Alert.alert('Delete saved lyrics?', `${entry.track.title} will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void run(async () => { await deleteMobileVaultEntry(entry.vaultId); }) }])}><Ionicons name="trash-outline" size={17} color="#FF93A4" /><Text style={_stableStyle3}>Delete</Text></Button>
         </View>
       </View>)}
       </View>
@@ -251,3 +256,8 @@ const styles = StyleSheet.create({
   deleteText: { color: '#FF93A4' },
   disabled: { opacity: 0.4 },
 });
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = [styles.card, styles.emptyState];
+const _stableStyle2 = [styles.artwork, styles.artworkPlaceholder];
+const _stableStyle3 = [styles.actionText, styles.deleteText];

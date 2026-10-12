@@ -133,8 +133,8 @@ function GlassIcon({ icon, active }: { icon: IoniconName; active?: boolean }) {
           "rgba(255,255,255,0.24)",
           active ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
         ]}
-        start={{ x: 0.15, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
+        start={_stableStart1}
+        end={_stableEnd2}
         style={styles.iconGlassInner}
       >
         <View style={styles.iconCutout}>
@@ -682,8 +682,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         <View style={[styles.footer, { paddingBottom: insets.bottom + (landscape ? 10 : 16), paddingLeft: insets.left + 22, paddingRight: insets.right + 22 }]}>
           <LinearGradient
             pointerEvents="none"
-            colors={["rgba(9,12,19,0)", Design.background, Design.background]}
-            locations={[0, 0.3, 1]}
+            colors={_stableColors3}
+            locations={_stableLocations4}
             style={StyleSheet.absoluteFill}
           />
           <View style={[styles.nextWrap, landscape && styles.nextWrapLandscape]}>
@@ -696,7 +696,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             </Reanimated.View>
             <Pressable onPress={handleNext} style={styles.nextButton}>
               <BlurView intensity={36} tint="light" style={styles.nextBlur}>
-                <LinearGradient colors={["rgba(168,240,207,0.23)", "rgba(168,240,207,0.09)"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.nextGradient}>
+                <LinearGradient colors={_stableColors5} start={_stableStart6} end={_stableEnd7} style={styles.nextGradient}>
                   <Reanimated.View key={footerLabel} entering={FadeInUp.springify().damping(18).stiffness(240).reduceMotion(ReduceMotion.System)} style={styles.nextLabel}>
                     <Text style={styles.nextText}>{footerLabel}</Text>
                     <Ionicons name={isLastStep ? "checkmark-circle" : "arrow-forward-circle"} size={23} color={Design.accent} />
@@ -1291,3 +1291,12 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableStart1 = { x: 0.15, y: 0 } as const;
+const _stableEnd2 = { x: 0.9, y: 1 } as const;
+const _stableColors3 = ["rgba(9,12,19,0)", Design.background, Design.background] as const;
+const _stableLocations4 = [0, 0.3, 1] as const;
+const _stableColors5 = ["rgba(168,240,207,0.23)", "rgba(168,240,207,0.09)"] as const;
+const _stableStart6 = { x: 0, y: 0 } as const;
+const _stableEnd7 = { x: 1, y: 1 } as const;

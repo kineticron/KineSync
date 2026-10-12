@@ -21,9 +21,10 @@ import type {
 } from '@/types/bridge';
 
 const SEEK_RESET_THRESHOLD_MS = 1800;
-// Visual interpolation happens on the UI thread, so a 10 Hz JS clock keeps the
-// timeline and line boundaries responsive without waking the JS runtime every frame.
-const PLAYBACK_CLOCK_INTERVAL_MS = 100;
+// Visible timelines run on the UI thread and lyrics project their own anchors.
+// This snapshot is for diagnostics/imperative reads; avoid notifying every
+// store selector ten times per second for a value no view renders.
+const PLAYBACK_CLOCK_INTERVAL_MS = 1000;
 const PLAYBACK_POSITION_UPDATE_EPSILON_MS = 32;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
@@ -205,6 +206,8 @@ function schedulePlaybackClockTick() {
     return;
   }
   tickPlaybackClock();
+  const durationMs = state.currentTrack?.durationMs ?? 0;
+  if (durationMs > 0 && computePlaybackPosition(state) >= durationMs) return;
   playbackClockTimer = setInterval(tickPlaybackClock, PLAYBACK_CLOCK_INTERVAL_MS);
 }
 

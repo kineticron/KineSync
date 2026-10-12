@@ -1,85 +1,61 @@
-# ExpoLyrics
+# KineSync mobile app
 
-React Native (Expo) mobile app for KineSync. Displays real-time synced lyrics
-using on-device Spotify playback or the optional
-[KineSync Desktop Bridge](../DesktopBridge/).
+[← Documentation](../docs/README.md) · [Architecture](../docs/architecture.md) · [Contributing](../CONTRIBUTING.md)
 
-## Features
+The Expo / React Native app for Android and iOS. It follows Spotify through an embedded browser or the optional Desktop Bridge and presents synchronized lyrics using Spicy and AMLL WebView hosts.
 
-- Real-time synced lyrics with word-by-word karaoke highlighting
-- Album artwork display with animated transitions
-- Landscape mode with split-pane layout
-- Bridge connectivity over LAN, Tailscale, or ngrok relay
-- Settings panel for bridge URL, handshake key, and playback tuning
-
-## Tech Stack
-
-- [Expo SDK 57](https://docs.expo.dev/versions/v57.0.0/)
-- [React Native 0.86](https://reactnative.dev/)
-- [Expo Router](https://docs.expo.dev/router/introduction/) (file-based routing)
-- [React Native Reanimated 4](https://docs.reanimated.dev/)
-- [Zustand](https://zustand.docs.pmnd.rs/) (state management)
-- [Shopify FlashList](https://shopify.github.io/flash-list/)
-
-## Quick Start
-
-For a prebuilt Android app, download the
-[latest signed APK](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Android.apk).
-See the repository's [Android installation guide](../ANDROID_INSTALL.md) for
-first-time installation and playback setup.
-
-For a prebuilt iPhone/iPad app, use the repository's
-[latest unsigned IPA](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-iOS-unsigned.ipa)
-with SideStore or Sideloadly. See the
-[iOS installation guide](../IOS_INSTALL.md) for the one-tap SideStore source,
-refresh requirements, and troubleshooting.
-
-After installing, choose a playback method from easiest to most advanced:
-
-1. **Mobile-Only (recommended):** Choose **Use this phone only** during
-   onboarding and sign in to Spotify. No Desktop Bridge or computer is needed.
-2. **Windows Desktop Bridge (optional):** Install the
-   [latest Windows `.exe`](https://github.com/Kineticron/KineSync/releases/latest/download/KineSync-Desktop-Windows-Setup.exe)
-   and scan its pairing QR code.
-3. **Docker Desktop Bridge (optional):** Follow the
-   [one-command Docker guide](../DOCKER.md#one-command-install).
-4. **From source (advanced):** Follow the repository's
-   [source setup](../SETUP.md#method-4-run-from-source-advanced).
-
-To run from source:
-
-```bash
-npm install
-npx expo start -c --tunnel
-```
-
-Scan the QR code with Expo Go. Open settings to configure your bridge URL.
-
-## Project Structure
-
-```
-app/                  File-based routes (Expo Router)
-  (tabs)/             Tab navigator screens
-  _layout.tsx         Root layout
-components/
-  lyrics/             Lyrics display components
-  onboarding/         First-launch onboarding
-  ui/                 Shared UI primitives
-lib/                  Business logic (bridge, timing, artwork)
-store/                Zustand stores
-providers/            React context providers
-hooks/                Custom hooks
-constants/            Theme and layout constants
-types/                TypeScript type definitions
-```
+For downloads and end-user setup, see [Android installation](../ANDROID_INSTALL.md), [iOS installation](../IOS_INSTALL.md), and the [documentation index](../docs/README.md).
 
 ## Development
 
-```bash
-npx tsc --noEmit     # Type check
-npx expo lint        # Lint
+> [!IMPORTANT]
+> **Native features need a native build.** Expo Go cannot validate the iOS widget or every native module. Use a release build for performance comparisons.
+
+Use Node.js 22 and the committed npm lockfile:
+
+```sh
+npm ci
+npm start
 ```
+
+The project currently uses Expo SDK 58, React Native 0.88.0-rc.3, React 19, Reanimated, and Zustand. Exact versions are in [package.json](package.json) and `package-lock.json`. Native modules and widgets require a development or release build. Expo Go cannot exercise all features.
+
+For an Android native build, install the Android SDK and JDK 17, then use `npm run android`. For iOS, use macOS with Xcode and the SDK required by the current Expo version, then use `npm run ios`. Prebuild generates ignored native projects from the tracked config plugins and module sources. See [SETUP.md](../SETUP.md) for pairing and Windows native build requirements.
+
+## Checks
+
+```sh
+npm run typecheck
+npm run lint
+npm test
+npm run test:performance
+```
+
+The default test suite runs deterministic lyric, playback, vault, tour, artwork, security, detector, and launch checks without an emulator. Live Activity checks have their own `test:live-activity` command. Timing-based performance assertions are separate from CI's deterministic suite. Compare native performance with matching release builds. [Performance measurements](docs/performance-results.md) include reproduction commands and measurement limits.
+
+## Generated bundles and shared providers
+
+Rebuild tracked WebView bundles after changing an entry point or its styles:
+
+```sh
+npm run build:spicy-webview
+npm run build:amll-webview
+```
+
+Shared provider changes originate in `DesktopBridge/src/lyrics/parts/`. The mobile service is a portable bundled copy with runtime adapters. No regeneration tool is currently shipped. Keep provider behavior aligned in both implementations and run their regression tests.
+
+## Structure
+
+| Directory | Purpose |
+| --- | --- |
+| `app/` | Expo Router screens |
+| `components/lyrics/` | WebView hosts, controls, artwork, and settings |
+| `lib/` | Playback, providers, storage, translation, and timing |
+| `store/`, `providers/`, `hooks/` | State and lifecycle |
+| `plugins/`, `modules/`, `widgets/` | Native project generation and iOS integration |
+| `scripts/` | Tests, bundle generation, and profiling |
+| `docs/` | Implementation notes and measurement reports |
 
 ## License
 
-GNU General Public License v3.0 (GNU GPLv3)
+AGPL-3.0-only. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Upstream renderer code retains its own attribution.

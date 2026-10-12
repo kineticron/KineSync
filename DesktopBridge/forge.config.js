@@ -22,6 +22,9 @@ module.exports = {
       unpack: 'native/**/*.{node,dll,json}',
     },
     icon: appIconBase,
+    // Build-only dependency trees can contain local junctions back to this app.
+    // Runtime native payloads are loaded directly from native/, without these.
+    ignore: [/^\/native\/.*\/node_modules(?:\/|$)/, /^\/docker(?:\/|$)/, /^\/\.[^/]+/],
   },
   rebuildConfig: {},
   makers: [

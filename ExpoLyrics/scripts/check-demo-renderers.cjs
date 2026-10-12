@@ -30,6 +30,7 @@ for (const style of ['spicy', 'amll']) {
     '@/store/playback-store': { usePlaybackStore: Object.assign(selector => selector(playback), { getState: () => playback }) },
     '@/components/lyrics/spicy-webview-bundle': { SPICY_WEBVIEW_JS: '', SPICY_WEBVIEW_CSS: '' },
     '@/components/lyrics/amll-webview-bundle': { AMLL_WEBVIEW_JS: '', AMLL_WEBVIEW_CSS: '' },
+    '@/components/lyrics/lyrics-attribution': { LyricsAttribution: 'Attribution' },
   };
   const context = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, Date, performance: { now: () => 1000 } };
   const filename = path.join(__dirname, `../components/lyrics/${style}-lyrics-view.tsx`);
@@ -38,7 +39,7 @@ for (const style of ['spicy', 'amll']) {
   function render(props) {
     cursor = 0; pending = []; injections = [];
     const tree = Component({ tapToSeekEnabled: true, ...props });
-    const webview = tree.props.children;
+    const webview = React.Children.toArray(tree.props.children).find(child => child.type === 'WebView');
     webview.props.ref.current = { injectJavaScript: script => {
       const match = script.match(/\.receive\((.*)\); true;/);
       assert.ok(match); injections.push(JSON.parse(match[1]));
@@ -50,6 +51,14 @@ for (const style of ['spicy', 'amll']) {
   assert.equal(injections.length, 0);
   webview.props.onLoadEnd(); webview = render({});
   assert.equal(injections.find(packet => packet.type === 'setLyrics').lines[0].syllables[0].text, 'Live song');
+  const liveSource = webview.props.source;
+  const liveWhitelist = webview.props.originWhitelist;
+  const liveLoadEnd = webview.props.onLoadEnd;
+  webview = render({ fontScale: 1.1 });
+  assert.equal(webview.props.source, liveSource, 'option updates retain the large native WebView source');
+  assert.equal(webview.props.originWhitelist, liveWhitelist);
+  assert.equal(webview.props.onLoadEnd, liveLoadEnd);
+  webview = render({});
   const staleLoad = webview.props.onLoadEnd;
   const staleMessage = webview.props.onMessage;
   const liveKey = webview.key;

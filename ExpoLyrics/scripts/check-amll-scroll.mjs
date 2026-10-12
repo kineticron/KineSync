@@ -5,40 +5,56 @@ import { patchAmllScroll } from './amll-scroll-patch.mjs';
 
 const original = await readFile(new URL('../node_modules/@applemusic-like-lyrics/core/dist/amll-core.mjs', import.meta.url), 'utf8');
 const source = patchAmllScroll(original);
-const start = source.indexOf('function attachPlayerScrollHandlers(');
-const end = source.indexOf('\n//#endregion', start);
+const region = name => {
+  const start = source.indexOf(`//#region ${name}`);
+  assert.ok(start >= 0, `AMLL region exists: ${name}`);
+  return source.slice(start, source.indexOf('//#endregion', start));
+};
 let now = 0, nextId = 0, layouts = 0;
-const frames = new Map(), events = new Map();
+const frames = new Map(), events = new Map(), timers = new Map();
 const context = vm.createContext({
   performance: { now: () => now },
   requestAnimationFrame: callback => { const id = ++nextId; frames.set(id, callback); return id; },
   cancelAnimationFrame: id => frames.delete(id),
-  window: { addEventListener() {} },
-  document: { elementFromPoint: () => null }, HTMLElement: class {},
-  clampPlayerScrollOffset: state => { state.scrollOffset = Math.max(-10000, Math.min(10000, state.scrollOffset)); },
+  window: {
+    setTimeout: callback => { const id = ++nextId; timers.set(id, callback); return id; },
+    clearTimeout: id => timers.delete(id),
+  },
+  AbortController,
+  WheelEvent: { DOM_DELTA_PIXEL: 0 },
+  Duration: { fromMillis: n => n, asMillis: n => n, divDuration: (a, b) => a / b },
 });
-vm.runInContext(source.slice(start, end), context);
-const state = { scrollOffset: 0, isUserScrolling: false };
-context.attachPlayerScrollHandlers({ addEventListener: (type, handler) => events.set(type, handler) }, state, {
-  onBeginScroll: () => true, onEndScroll() {}, onLayout: () => layouts++, containsTarget: () => false,
+vm.runInContext(region('src/lyric-player/base/scroll.ts') + '\n' + region('src/lyric-player/base/focus.ts'), context);
+const engine = new context.ScrollInteractionEngine({ addEventListener: (type, handler) => events.set(type, handler) }, {
+  onInteractionStart() {}, onScrollUpdate: () => layouts++,
 });
-const send = (type, y) => events.get(type)({ preventDefault() {}, touches: [{ screenX: 0, screenY: y }], changedTouches: [{ screenX: 0, screenY: y }] });
+engine.updateBoundary(-10000, 10000);
+const send = (type, y) => events.get(type)({ cancelable: true, preventDefault() {},
+  touches: type === 'touchend' || type === 'touchcancel' ? [] : [{ screenX: 0, screenY: y }],
+  changedTouches: [{ screenX: 0, screenY: y }], deltaY: y, deltaMode: 0 });
 const frame = () => { now += 16; const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(now)); };
 send('touchstart', 400); now += 16; send('touchmove', 350); now += 16; send('touchmove', 300);
 assert.equal(frames.size, 1, 'drag layouts coalesce to one frame');
 frame(); assert.equal(layouts, 1);
-send('touchend', 300); const endOffset = state.scrollOffset;
-frame(); assert.ok(state.scrollOffset > endOffset, 'fling continues smoothly after release');
-state.cancelMomentum(); state.scrollOffset = 0; frame(); frame();
-assert.equal(state.scrollOffset, 0, 'Auto scroll reset cannot be overwritten by an old inertia frame');
+send('touchend', 300); const endOffset = engine.offset;
+frame(); assert.ok(engine.offset > endOffset, 'fling continues after release');
+engine.resetScroll(); frame(); frame();
+assert.equal(engine.offset, 0, 'Auto reset cannot be overwritten by an old inertia frame');
 assert.equal(frames.size, 0);
+send('touchmove', 0); send('touchend', 0); frame();
+assert.equal(engine.offset, 0, 'events after reset cannot restart momentum');
+send('wheel', 100); frame(); assert.equal(engine.offset, 0, 'wheel momentum cannot undo Auto reset');
+now += 150;
 send('touchstart', 400); now += 16; send('touchmove', 300); send('touchend', 300); frame();
-send('touchstart', 200); frame(); const heldOffset = state.scrollOffset; frame(); frame();
-assert.equal(state.scrollOffset, heldOffset, 'a new finger immediately cancels the previous fling');
-send('touchcancel', 200); assert.equal(state.isUserScrolling, false); assert.equal(frames.size, 0);
-state.cancelMomentum(); send('touchmove', 0); send('touchend', 0); frame();
-assert.equal(state.scrollOffset, heldOffset, 'cancelled touch events cannot restart momentum');
-assert.ok(source.includes('this.scrollState.cancelMomentum?.();'), 'production reset calls the gesture cancellation');
-assert.ok(source.includes('this.scrollState.manualAlignIndex ??'), 'manual scroll keeps its spatial anchor across lyric changes');
+send('touchstart', 200); frame(); const heldOffset = engine.offset; frame(); frame();
+assert.equal(engine.offset, heldOffset, 'new touch immediately cancels the previous fling');
+send('touchcancel', 200); assert.equal(frames.size, 0);
+now += 1000; assert.equal(engine.canResumeAutoAlign, false, 'manual scrolling waits for the Auto button');
+const focus = new context.FocusController();
+const flags = { isAutoAlignSuspended: false, hasBottomContent: false, canDisplayInterlude: false };
+focus.resolve({ scrollToIndex: 2 }, 10, flags);
+assert.equal(focus.resolve({ scrollToIndex: 6 }, 10, { ...flags, isAutoAlignSuspended: true }).index, 2,
+  'manual scroll keeps its spatial anchor across lyric changes');
+send('wheel', 40); engine.dispose(); assert.equal(frames.size, 0); assert.equal(timers.size, 0);
 assert.throws(() => patchAmllScroll('upstream changed'), /no longer matches upstream/);
 console.log('AMLL scrolling checks passed: coalesced drag, inertia cancellation, new touch/cancel, manual anchors and upstream patch guard.');

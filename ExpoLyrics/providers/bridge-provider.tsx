@@ -147,6 +147,17 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!initialized) return;
 
+    // Explicit benchmark builds use the same production renderer and looping
+    // tour fixture without a network/login dependency. Normal builds omit it.
+    const performanceScenario = process.env.EXPO_PUBLIC_PERFORMANCE_SCENARIO;
+    if (performanceScenario === 'tour-amll' || performanceScenario === 'tour-spicy') {
+      usePlaybackStore.getState().setLyricsStyle(performanceScenario === 'tour-amll' ? 'amll' : 'spicy');
+      usePlayerTourStore.getState().requestStart();
+      setShowOnboarding(false);
+      setOnboardingChecked(true);
+      return;
+    }
+
     // Check if onboarding was completed before, then connect only when desktop mode is configured.
     (async () => {
       try {
@@ -196,7 +207,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
 
   return (
     <LaunchTransition ready={onboardingChecked}>
-      <View style={{ flex: 1, overflow: 'hidden' }} aria-hidden={showOnboarding} accessibilityElementsHidden={showOnboarding} importantForAccessibility={showOnboarding ? 'no-hide-descendants' : 'auto'}>
+      <View style={_stableStyle1} aria-hidden={showOnboarding} accessibilityElementsHidden={showOnboarding} importantForAccessibility={showOnboarding ? 'no-hide-descendants' : 'auto'}>
         {children}
       </View>
       {showOnboarding && (
@@ -207,3 +218,6 @@ export function BridgeProvider({ children }: PropsWithChildren) {
     </LaunchTransition>
   );
 }
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = { flex: 1, overflow: 'hidden' as const };

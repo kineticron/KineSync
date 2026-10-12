@@ -180,6 +180,9 @@ const storeCode = babel.transformSync(fs.readFileSync(storeFilename, 'utf8'), {
   caller: { name: 'metro', platform: 'ios', supportsStaticESM: false }, envName: 'production',
 }).code;
 const storeModule = { exports: {} };
+let scheduledClockIntervals = 0;
+let lastClockIntervalMs = 0;
+let lastClockTick;
 const storeRequire = (name) => {
   if (name === 'react-native') return { AppState: { currentState: 'active' }, Platform: { OS: 'web' } };
   if (name === '@/lib/lyrics-enrich') return { enrichLyrics: (lines) => lines };
@@ -189,7 +192,12 @@ const storeRequire = (name) => {
 };
 vm.runInThisContext(`(function(require,module,exports,Date,performance,setInterval,clearInterval){${storeCode}\n})`)(
   storeRequire, storeModule, storeModule.exports, { now: () => packetTime.wall },
-  { now: () => packetTime.mono }, () => 1, () => {},
+  { now: () => packetTime.mono }, (callback, intervalMs) => {
+    lastClockTick = callback;
+    scheduledClockIntervals++;
+    lastClockIntervalMs = intervalMs;
+    return 1;
+  }, () => {},
 );
 const actualStore = storeModule.exports.usePlaybackStore;
 const ingest = (patch = {}) => actualStore.getState().ingestPacket({
@@ -217,4 +225,26 @@ assert.equal(actualStore.getState().anchorPositionMs, 60030, 'resume creates a f
 assert.equal(ingest({ trackId: 'song-b', positionMs: 60040 }).trackChanged, true);
 assert.equal(actualStore.getState().anchorPositionMs, 60040, 'new tracks bypass the old clock deadband');
 storeModule.exports.stopPlaybackClock();
+storeModule.exports.startPlaybackClock();
+assert.equal(lastClockIntervalMs, 1000, 'diagnostic snapshots do not drive visible frame-rate clocks');
+storeModule.exports.stopPlaybackClock();
+ingest({ positionMs: 180000 });
+const intervalsAtEnd = scheduledClockIntervals;
+storeModule.exports.startPlaybackClock();
+assert.equal(scheduledClockIntervals, intervalsAtEnd, 'starting an ended track does not leave an idle interval');
+storeModule.exports.stopPlaybackClock();
+actualStore.setState({ isPlaying: true, anchorPositionMs: 0, playbackPosition: 0,
+  anchorMonotonicMs: packetTime.mono, currentTrack: { id: 'long-song', durationMs: 720000 } });
+let clockNotifications = 0;
+const unsubscribeClock = actualStore.subscribe(() => clockNotifications++);
+storeModule.exports.startPlaybackClock();
+for (let i = 0; i < 600; i++) {
+  packetTime.mono += lastClockIntervalMs;
+  lastClockTick();
+}
+assert.equal(clockNotifications, 600, 'ten virtual minutes produce 600 diagnostic store updates instead of 6000');
+assert.equal(actualStore.getState().playbackPosition, 600000, 'lower notification cadence preserves projected time');
+unsubscribeClock();
+storeModule.exports.stopPlaybackClock();
+console.log('Measured virtual-time budget: 600 diagnostic timer callbacks/store updates per 10 minutes (legacy 100ms cadence: 6000).');
 console.log('Playback performance checks passed: anchor-only clock, focus/background cleanup, immediate scrub feedback, exact release seek, cancellation, transform fill, Android prebuild, and real packet jitter/seek/track changes.');

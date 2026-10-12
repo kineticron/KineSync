@@ -17,7 +17,7 @@ installed widget's identifier and extension point after sideloading. Host
 and widget still import the same `KineSyncActivityTypes` static pod.
 
 For Sideloadly, keep both extensions (`Dropping 0 of 2 plugins`). The host
-identifier is `dev.kineticron.KineSync`; the lyrics extension must have the
+identifier is `dev.kineticron.KineSync`. The lyrics extension must have the
 same host prefix after signing. Enable File Sharing only exposes documents
 and can remain enabled. A successful unsigned IPA check cannot validate
 Sideloadly's provisioning profiles or signatures on the installed device.
@@ -27,7 +27,7 @@ Lock Screen presentations.
 
 Two temporary beta compatibility settings remain: npm's `legacy-peer-deps`
 allows Expo's recommended RN release candidate despite Reanimated's stable
-peer range; TypeScript uses Expo's documented legacy RN type condition
+peer range. TypeScript uses Expo's documented legacy RN type condition
 while dependencies such as MaskedView still use removed `NativeMethods`
 types. Revisit both with stable RN 0.88 / SDK 58.
 
@@ -47,7 +47,7 @@ had no visible Island. Its preview step incorrectly reported success despite
 all 24 content checks failing. Subsequent commits make the failure exit
 explicit, preserve the exit status during cleanup, capture host request
 status, and include ActivityKit system logs. These later changes affect the
-CI fixture and reporting; the device app's native code is unchanged.
+CI fixture and reporting. The device app's native code is unchanged.
 Sideloadly re-signing and physical-device rendering still require device testing.
 
 References: [SDK 58 migration notes](https://expo.dev/changelog/sdk-58-beta),
@@ -60,12 +60,12 @@ The next device experiment starts an activity in the foreground even without
 a detected song. Empty playback and disconnected desktop feeds now show
 `KineSync`, `Ready for music`, and `Waiting for a song`, clearing old track
 metadata and lyrics. Pauses and song completion keep the activity instead of
-ending it after a timeout; waiting and paused states have no timer or stale
+ending it after a timeout. Waiting and paused states have no timer or stale
 deadline. iOS still controls its maximum lifetime and user dismissal.
 
 The compact and minimal Island have a constant `KS` text label independent
 of playback data. Compact waiting content says `Ready`. Session `lyrics-v4`
-retires earlier presentations; Restart also explicitly replaces the session.
+retires earlier presentations. Restart also explicitly replaces the session.
 The simulator fixture requests this same idle state with playback disabled.
 These changes address the missing fallback but do not establish that a widget
 will render after Sideloadly re-signing. Test before playback as well as during

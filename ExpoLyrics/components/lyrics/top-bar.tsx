@@ -88,8 +88,8 @@ export const TopBar = memo(function TopBar({
 
         <View collapsable={false} style={styles.titleWrap}>
           {fitTitle ? <>
-            <Text style={[styles.title, styles.fittedTitle]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{title}</Text>
-            <Text style={[styles.artist, styles.fittedArtist]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{artist}</Text>
+            <Text style={_stableStyle1} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{title}</Text>
+            <Text style={_stableStyle2} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{artist}</Text>
           </> : <>
             <MarqueeText style={styles.title}>{title}</MarqueeText>
             <MarqueeText style={styles.artist}>{artist}</MarqueeText>
@@ -217,3 +217,7 @@ const styles = StyleSheet.create({
     opacity: 0.94,
   },
 });
+
+// Static native props retain their identity across renders.
+const _stableStyle1 = [styles.title, styles.fittedTitle];
+const _stableStyle2 = [styles.artist, styles.fittedArtist];

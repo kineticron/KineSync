@@ -2579,6 +2579,7 @@ function describeSourceError(error) {
   }
   if (
     message.includes("missing musixmatch") ||
+    message.includes("spicy lyrics publishable client key") ||
     message.includes("token format is invalid") ||
     message.includes("missing spotify web token")
   ) {

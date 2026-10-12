@@ -201,40 +201,10 @@ function createSpicyFetchProfiler() {
 
 async function fetchFromSpicyLyrics(
   track,
-  { spotifyWebToken = "", spotifyAccessToken = "" } = {},
+  { spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "" } = {},
 ) {
   const profile = createSpicyFetchProfiler();
-  let accessToken = "";
-  const oauthToken = String(spotifyAccessToken || "").trim();
-  if (oauthToken) {
-    accessToken = oauthToken;
-    profile.mark("1-token-resolve", { path: "oauth" });
-  } else {
-    try {
-      accessToken = await getSpotifyWebAccessToken(spotifyWebToken);
-      profile.mark("1-token-resolve", { path: "web-token-exchange" });
-    } catch (error) {
-      profile.finish({
-        ok: false,
-        failedStep: "1-token-resolve",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw createSourceStageError("spicy", "spotify-token", error);
-    }
-  }
-
-  spicyDebugLog("Spicy source token resolved", {
-    hasOAuthToken: Boolean(oauthToken),
-    hasLegacySpotifyWebToken: Boolean(String(spotifyWebToken || "").trim()),
-    accessTokenPreview: maskTokenPreview(accessToken),
-    track: {
-      trackId: String(track?.trackId || ""),
-      spotifyTrackId: String(track?.spotifyTrackId || ""),
-      title: String(track?.title || ""),
-      artist: String(track?.artist || ""),
-      durationMs: Number(track?.durationMs || 0),
-    },
-  });
+  const publishableKey = spicyLyricsPublishableKey;
 
   const directSpotifyId = String(track?.spotifyTrackId || "").trim();
   let spotifyTrackIds = [];
@@ -274,104 +244,19 @@ async function fetchFromSpicyLyrics(
   };
 
   for (const [candidateIndex, spotifyTrackId] of spotifyTrackIds.entries()) {
-    let queryResults = null;
-    const queryStartedAt = Date.now();
+    let spicyLyricsData;
     try {
-      queryResults = await fetchSpicyLyricsQueryWithQueueRetry(
-        [
-          {
-            operation: "lyrics",
-            variables: buildSpicyLyricsQueryVariables(spotifyTrackId),
-          },
-        ],
-        {
-          "SpicyLyrics-WebAuth": `Bearer ${accessToken}`,
-        },
-        {
-          expectedOperation: "lyrics",
-          expectedOperationId: "0",
-          expectedTrackId: spotifyTrackId,
-        },
-      );
+      spicyLyricsData = await fetchSpicyLyricsByTrackId(spotifyTrackId, publishableKey);
     } catch (error) {
-      profile.mark(`3-spicy-api-query#${candidateIndex + 1}`, {
-        spotifyTrackId,
-        ok: false,
-        elapsedMs: Date.now() - queryStartedAt,
-      });
       lastHardError = createSourceStageError("spicy", "backend", error);
       continue;
     }
-    profile.mark(`3-spicy-api-query#${candidateIndex + 1}`, {
-      spotifyTrackId,
-      ok: true,
-      elapsedMs: Date.now() - queryStartedAt,
-    });
-
-    const parseStartedAt = Date.now();
-    const lyricQueryResult = selectSpicyQueryResult(queryResults, {
-      expectedOperation: "lyrics",
-      expectedOperationId: "0",
-      expectedTrackId: spotifyTrackId,
-    });
-    const firstResult = lyricQueryResult?.result || null;
-    if (!firstResult || Number(firstResult.httpStatus || 0) === 404) {
+    if (!spicyLyricsData) {
       lastNoMatchError = createSourceStageNoMatchError("spicy", "backend");
       continue;
     }
-    if (Number(firstResult.httpStatus || 0) !== 200) {
-      const httpStatus = Number(firstResult.httpStatus || 0);
-      const errorMessage =
-        httpStatus === 503
-          ? "Spicy Lyrics query is still queued (HTTP 503)."
-          : `Spicy Lyrics query failed with status ${
-              httpStatus || "unknown"
-            }.`;
-      lastHardError = createSourceStageError(
-        "spicy",
-        "backend",
-        new Error(errorMessage),
-      );
-      continue;
-    }
-    if (!hasSpicyLyricsQueryPayload(firstResult)) {
-      lastHardError = createSourceStageError(
-        "spicy",
-        "backend",
-        new Error(
-          `Spicy Lyrics returned empty or unsupported payload (format=${String(
-            firstResult.format || "unknown",
-          )}).`,
-        ),
-      );
-      continue;
-    }
 
-    const rawSpicyData = firstResult.data;
-    const wasPacked = isSpicyObjPackPayload(rawSpicyData);
-    let spicyLyricsData = null;
-    try {
-      spicyLyricsData = normalizeSpicyLyricsQueryData(rawSpicyData);
-    } catch (error) {
-      profile.mark(`4-unpack-lyrics#${candidateIndex + 1}`, {
-        spotifyTrackId,
-        packed: wasPacked,
-        ok: false,
-        elapsedMs: Date.now() - parseStartedAt,
-      });
-      lastHardError = createSourceStageError("spicy", "backend", error);
-      continue;
-    }
-    spicyDebugLog("Spicy source first query result", {
-      spotifyTrackId,
-      operationId: String(lyricQueryResult?.operationId || ""),
-      operation: String(lyricQueryResult?.operation || ""),
-      httpStatus: Number(firstResult.httpStatus || 0),
-      format: String(firstResult.format || ""),
-      packed: wasPacked,
-      payload: summarizeSpicyPayload(spicyLyricsData || rawSpicyData),
-    });
-
+    const parseStartedAt = Date.now();
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,
       track?.durationMs || 0,
@@ -483,6 +368,7 @@ async function fetchFromSpicyLyrics(
       lyrics,
       source: sourceLabel,
       metadata: {
+        spicyApi: { fetchedAt: Date.now(), expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 },
         ...(songwriters.length ? { credits: { songwriters } } : {}),
         ...(spicyMetadata.attribution
           ? { attribution: spicyMetadata.attribution }

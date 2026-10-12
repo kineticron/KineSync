@@ -3,11 +3,11 @@ import { Buffer } from 'node:buffer';
 import { build } from 'esbuild';
 import { ungzip } from 'pako';
 
-const result = await build({ stdin: { contents: `export {SpotifyDetector} from './lib/spotify-detector/client';
+const result = await build({ stdin: { contents: `export {SpotifyDetector,SpotifyPlaybackUnavailableError} from './lib/spotify-detector/client';
 export {sampleFrom,decodeDealer,decodeStateBody,observerBody,trackHex,metadataFrom} from './lib/spotify-detector/protocol';
 export {detectorPacket} from './lib/spotify-detector/packet';`, resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'esm', write: false });
-const { SpotifyDetector, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const trackId = '4uLU6hMCjMI75M1A2tKUQC';
 const uri = `spotify:track:${trackId}`;
 const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -117,8 +117,10 @@ try {
   for (const [type, endpoint] of [['next', 'skip_next'], ['previous', 'skip_prev']]) {
     await detector.control({ type }); assert.equal(commandBody().command.endpoint, endpoint);
   }
-  responseStatus = 403;
-  await assert.rejects(detector.control({ type: 'toggle' }), /control HTTP 403/);
+    responseStatus = 403;
+    await assert.rejects(detector.control({ type: 'toggle' }), /control HTTP 403/);
+    responseStatus = 404;
+    await assert.rejects(detector.control({ type: 'toggle' }), SpotifyPlaybackUnavailableError);
   responseStatus = 200;
   ws.event({ payloads: [state()] });
   assert.equal(samples.length, 1, 'duplicate anchors do not reset the lyrics clock');

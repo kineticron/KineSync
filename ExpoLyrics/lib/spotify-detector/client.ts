@@ -11,6 +11,8 @@ type Callbacks = {
   ready: () => void;
 };
 
+export class SpotifyPlaybackUnavailableError extends Error {}
+
 /** One non-playing Connect observer. Credentials/routes are memory-only.
  * No polling clock: the playback store owns interpolation between events. */
 export class SpotifyDetector {
@@ -113,7 +115,7 @@ export class SpotifyDetector {
   async control(command: { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }): Promise<void> {
     if (this.commandPending) throw new Error('Waiting for the previous Spotify command.');
     const target = this.lastSample?.activeDeviceId;
-    if (!this.enabled || !this.registered || !target) throw new Error('Spotify detector is reconnecting; try again when a device is detected.');
+    if (!this.enabled || !this.registered || !target) throw new SpotifyPlaybackUnavailableError('Spotify detector is reconnecting; try again when a device is detected.');
     if (command.type === 'seek' && !Number.isFinite(command.positionMs)) throw new Error('Invalid seek position.');
     const endpoint = { toggle: this.lastSample?.playing ? 'pause' : 'resume', previous: 'skip_prev', next: 'skip_next', seek: 'seek_to' }[command.type];
     // Route to the device observed by Dealer, not a newly mounted web player.
@@ -144,6 +146,7 @@ export class SpotifyDetector {
       if (run !== this.generation) throw new Error('Spotify session changed during request.');
       if (response.status === 401) this.needSession('Spotify session expired. Refreshing login…');
       if (response.status === 429) { this.blocked = true; this.disconnect(); }
+      if (method === 'POST' && response.status === 404) throw new SpotifyPlaybackUnavailableError('Spotify playback device is unavailable.');
       if (!response.ok) throw new Error(`Spotify ${method === 'GET' ? 'metadata' : 'control'} HTTP ${response.status}.`);
       // Read while the abort/timeout is still installed, including slow bodies.
       const bytes = await response.arrayBuffer();

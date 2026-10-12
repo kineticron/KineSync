@@ -6,7 +6,7 @@ password. Desktop Bridge stays open. Spotify is shown when an account needs to
 be signed in, then disappears after the login is persisted in `/config`.
 
 Docker is an optional Desktop Bridge method. The easiest KineSync setup is
-**Mobile-Only**, selected during mobile-app onboarding; it needs no computer or
+**Mobile-Only**, selected during mobile-app onboarding. It needs no computer or
 bridge. Use Docker when you want desktop Spotify playback, tighter sync, local
 lyrics, or relay access without maintaining a Windows-native installation.
 
@@ -106,7 +106,7 @@ PGID=568
 TZ=America/New_York
 ```
 
-- `BRIDGE_KEY` must match the key in ExpoLyrics; the pairing QR fills it in.
+- `BRIDGE_KEY` must match the key in ExpoLyrics. The pairing QR fills it in.
 - Keep `.env` private. It is ignored by Git.
 - Change `TZ` to the appropriate IANA timezone when needed.
 - Keep `KINESYNC_UI_BIND_ADDRESS=127.0.0.1`.
@@ -178,9 +178,9 @@ Only one running endpoint can own a reserved free domain.
 ### No windows appear
 
 - Confirm `docker compose ps` reports `kinesync` as running or healthy.
-- Run the setup command again; it reconnects the native Xpra client.
+- Run the setup command again. It reconnects the native Xpra client.
 - Check that another program is not using `KINESYNC_UI_PORT`.
-- Keep the UI address on `127.0.0.1`; remote-host Xpra connections are not part
+- Keep the UI address on `127.0.0.1`. Remote-host Xpra connections are not part
   of this setup.
 
 ### ExpoLyrics cannot connect
@@ -202,7 +202,7 @@ docker exec --user abc kinesync bash -lc '
 ```
 
 `spotify` should be listed. The container does not inspect Spotify on another
-machine; Spotify synchronizes account state and Desktop Bridge observes the
+machine. Spotify synchronizes account state and Desktop Bridge observes the
 containerized client.
 
 ### Logs and health
@@ -214,13 +214,13 @@ docker compose logs kinesync
 
 Persistent application logs are under `/config/log/` (normally
 `.kinesync-config/log/` on the host). The health check validates the WebSocket
-listener; it does not prove Spotify is logged in or playing.
+listener. It does not prove Spotify is logged in or playing.
 
 ## Image security and provenance
 
 The service enables `no-new-privileges`, keeps Docker's default seccomp profile,
 drops `NET_RAW`, and runs Spotify and Electron as the unprivileged `abc` user.
-Chromium is launched with `--no-sandbox` inside that container boundary; native
+Chromium is launched with `--no-sandbox` inside that container boundary. Native
 desktop builds keep Chromium sandboxing. Do not add `SYS_ADMIN`, privileged
 mode, a Docker socket, host D-Bus, or an unconfined seccomp profile.
 

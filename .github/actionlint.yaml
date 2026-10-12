@@ -1,0 +1,4 @@
+# GitHub's Xcode preview runner used by the SDK 58 iOS workflows.
+self-hosted-runner:
+  labels:
+    - xcode-27

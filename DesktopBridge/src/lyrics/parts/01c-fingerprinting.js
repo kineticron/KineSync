@@ -167,6 +167,9 @@ function extractSpicyPayloadMetadata(payload) {
     .trim()
     .toLowerCase();
   const providerLabels = {
+    spotify: "Spotify",
+    apple_music: "Apple Music",
+    spicy_lyrics: "Spicy Lyrics",
     spt: "Spotify",
     aml: "Apple Music",
     spl: "Spicy Lyrics",
@@ -176,6 +179,7 @@ function extractSpicyPayloadMetadata(payload) {
     if (!profile || typeof profile !== "object") {
       return undefined;
     }
+    const url = String(profile.url || "").trim();
     const normalized = {
       ...(String(profile.id || "").trim()
         ? { id: String(profile.id).trim() }
@@ -183,24 +187,22 @@ function extractSpicyPayloadMetadata(payload) {
       ...(String(profile.username || "").trim()
         ? { username: String(profile.username).trim() }
         : {}),
+      ...(/^https:\/\//i.test(url) ? { url } : {}),
       ...(String(profile.avatar || "").trim()
         ? { avatar: String(profile.avatar).trim() }
         : {}),
     };
     return Object.keys(normalized).length ? normalized : undefined;
   };
-  const uploadMetadata = payload?.TTMLUploadMetadata;
+  const uploadMetadata = payload?.UploadAttribution || payload?.TTMLUploadMetadata;
   const maker = normalizeProfile(uploadMetadata?.Maker);
   const uploader = normalizeProfile(uploadMetadata?.Uploader);
-  const attribution = source
-    ? {
-        source,
-        provider: providerLabels[source] || "Unknown",
-        ...(source === "spl" ? { community: true } : {}),
-        ...(maker ? { maker } : {}),
-        ...(uploader ? { uploader } : {}),
-      }
-    : undefined;
+  const community = source === "spicy_lyrics" || source === "spl";
+  const attribution = {
+    source: source || "unknown",
+    provider: providerLabels[source] || "Unknown",
+    ...(community ? { community: true, ...(maker ? { maker } : {}), ...(uploader ? { uploader } : {}) } : {}),
+  };
   return { titles: deduped, attribution };
 }
 

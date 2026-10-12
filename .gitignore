@@ -25,6 +25,8 @@ pids/
 !.env.docker.example
 *.pem
 *.jks
+*.keystore
+*.pfx
 *.p8
 *.p12
 *.key
@@ -117,3 +119,8 @@ test_am.js
 
 # Experimental Projects
 SpotifyBrowserLab/
+SpotifyConnectProbe/
+
+# Static project website
+website/.next/
+website/*.tsbuildinfo

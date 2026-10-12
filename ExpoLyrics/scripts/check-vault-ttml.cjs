@@ -134,8 +134,9 @@ for (const importer of [
     const fixtureRoot = path.resolve(__dirname, '../.expo');
     fs.mkdirSync(fixtureRoot, { recursive: true });
     const fixture = fs.mkdtempSync(path.join(fixtureRoot, 'ttml-preservation-'));
+    let store;
     try {
-      const store = createLyricsVaultStore({ userDataPath: fixture });
+      store = createLyricsVaultStore({ userDataPath: fixture });
       for (const save of [() => store.importTtml({ ttmlContent: original }), () => store.importLyricsFile(original, 'song.ttml')]) {
         const saved = save();
         const loaded = store.getEntry(saved.vaultId);
@@ -146,6 +147,7 @@ for (const importer of [
           'Desktop vault save/reload/export must preserve the original XML exactly');
       }
     } finally {
+      store?.close();
       assert.equal(path.dirname(fixture), fixtureRoot);
       assert(path.basename(fixture).startsWith('ttml-preservation-'));
       fs.rmSync(fixture, { recursive: true, force: true });

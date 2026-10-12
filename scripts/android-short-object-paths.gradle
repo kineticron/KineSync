@@ -1,0 +1,16 @@
+// Optional local Windows build workaround; hashes long CMake object paths.
+// Usage: gradlew assembleRelease -I ../../scripts/android-short-object-paths.gradle
+allprojects { project ->
+    if (project.name in ['app', 'react-native-reanimated', 'react-native-worklets', 'react-native-gesture-handler']) {
+        ['com.android.application', 'com.android.library'].each { pluginId ->
+            project.plugins.withId(pluginId) {
+                project.extensions.getByName('androidComponents').finalizeDsl { android ->
+                    android.defaultConfig.externalNativeBuild.cmake.arguments.add('-DCMAKE_OBJECT_PATH_MAX=260')
+                    if (project.name == 'app' && project.findProperty('kineSyncPerformanceSideBySide') == 'true') {
+                        android.defaultConfig.applicationId = android.defaultConfig.applicationId + '.performance'
+                    }
+                }
+            }
+        }
+    }
+}
