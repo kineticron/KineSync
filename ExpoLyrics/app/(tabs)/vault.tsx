@@ -161,6 +161,9 @@ export default function VaultScreen() {
           await saveMobileVaultLyrics({ track, lyrics, originalSource: lyricsSource, metadata: lyricsMetadata });
           setMessage('Saved current lyrics, including translations.');
         })}><Ionicons name="download-outline" size={20} color={Design.text} /><Text style={styles.buttonText}>Save current song</Text></Button>
+        <Button accessibilityLabel="Open Sync Studio" style={styles.secondaryButton} onPress={() => router.push('/sync-studio')}>
+          <Ionicons name="pulse-outline" size={20} color={Design.text} /><Text style={styles.buttonText}>Sync lyrics yourself (Sync Studio)</Text>
+        </Button>
           </View>
           <Text style={styles.hint}>Import a .ttml file, or share one to KineSync from another app.</Text>
         </View>

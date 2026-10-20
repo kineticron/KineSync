@@ -578,6 +578,7 @@ export const SettingsMenu = memo(function SettingsMenu({
                   onPress={onRefetchLyrics}
                 />
                 <MenuAction icon="archive-outline" label="Local vault" onPress={() => { onClose(); router.push("/vault"); }} showChevron />
+                <MenuAction icon="pulse-outline" label="Sync Studio" onPress={() => { onClose(); router.push("/sync-studio"); }} showChevron />
                 <View
                   style={[
                     styles.sourceGrid,

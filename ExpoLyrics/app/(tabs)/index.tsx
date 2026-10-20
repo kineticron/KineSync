@@ -81,6 +81,7 @@ import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
+import { registerSyncStudioPlaybackControls } from "@/lib/sync-studio/playback";
 import {
   refreshLyricsForCurrentTrack,
   requestImmediateTranslationForCurrentSource,
@@ -800,6 +801,12 @@ export default function HomeScreen() {
     }
     spotifyBrowserRef.current?.togglePlayPause();
   }, []);
+
+  // Sync Studio (its own screen) taps and seeks against this same playback source.
+  useEffect(
+    () => registerSyncStudioPlaybackControls({ seekTo: sendSeekToPlaybackSource, togglePlayPause: handlePlaybackPlayPause }),
+    [handlePlaybackPlayPause, sendSeekToPlaybackSource],
+  );
 
   const handlePlaybackResync = useCallback(() => {
     if (usePlayerTourStore.getState().active) return;

@@ -6,8 +6,12 @@ import { usePlaybackStore } from '@/store/playback-store';
 import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 
 /** No playback-position React subscription and no JS frame/tick loop. */
-export function useNativeLyricsClock({ active, duration, preview, demo, playing, demoPlayback }: {
+export type NativeClockAnchor = { positionMs: number; monotonicMs: number; playing: boolean };
+
+export function useNativeLyricsClock({ active, duration, preview, demo, playing, demoPlayback, anchor }: {
   active: boolean; duration: number; preview?: number | null; demo: boolean; playing?: boolean; demoPlayback?: PreviewPlaybackAnchor;
+  /** Follow this clock instead of KineSync's playback (Sync Studio's local audio). */
+  anchor?: NativeClockAnchor | null;
 }) {
   const position = useSharedValue(0);
   const running = useSharedValue(false);
@@ -19,10 +23,11 @@ export function useNativeLyricsClock({ active, duration, preview, demo, playing,
     running.value = visible;
     if (!visible) return;
     const state = usePlaybackStore.getState();
-    const anchor = demoPlayback ?? state;
-    const isPlaying = demo ? demoPlayback ? demoPlayback.isPlaying && preview == null : (playing ?? true) : state.isPlaying && preview == null;
-    const current = Math.max(0, Math.min(duration, preview ?? (demo && !demoPlayback ? 0 : anchor.anchorPositionMs +
-      (anchor.isPlaying ? Math.max(0, performance.now() - anchor.anchorMonotonicMs) : 0))));
+    const clock = anchor ? { isPlaying: anchor.playing, anchorPositionMs: anchor.positionMs, anchorMonotonicMs: anchor.monotonicMs }
+      : demoPlayback ?? state;
+    const isPlaying = demo && !anchor ? demoPlayback ? demoPlayback.isPlaying && preview == null : (playing ?? true) : clock.isPlaying && preview == null;
+    const current = Math.max(0, Math.min(duration, preview ?? (demo && !demoPlayback && !anchor ? 0 : clock.anchorPositionMs +
+      (clock.isPlaying ? Math.max(0, performance.now() - clock.anchorMonotonicMs) : 0))));
     const now = performance.now();
     const previous = lastSync.current;
     const expected = previous.position + (previous.playing ? Math.max(0, now - previous.monotonic) : 0);
@@ -31,7 +36,7 @@ export function useNativeLyricsClock({ active, duration, preview, demo, playing,
     seekVersion.value = serial;
     position.value = current;
     if (isPlaying && current < duration) position.value = withTiming(duration, { duration: duration - current, easing: Easing.linear });
-  }, [active, demo, demoPlayback, duration, playing, position, preview, running, seekVersion]);
+  }, [active, anchor, demo, demoPlayback, duration, playing, position, preview, running, seekVersion]);
   useFocusEffect(useCallback(() => {
     sync();
     const unsubscribe = demo ? () => {} : usePlaybackStore.subscribe((state, previous) => {
