@@ -24,6 +24,8 @@ Maintainers can submit KineSync as an application template in the developer dash
 
 Musixmatch anonymous access is configured automatically in desktop and phone-only modes, with a user-token override available. Source availability, throttling, and provider changes can interrupt lookup. QQ Music, NetEase, Kugou, and LRCLIB fallbacks are implemented in the shared lyric service. See its [module layout](../DesktopBridge/src/lyrics/README.md) when changing adapters.
 
+Some provider files for non-Chinese songs place a Chinese translation line after every lyric line. When that alternating pattern is clear, KineSync drops the Chinese lines so they do not show as lyrics. Chinese, Japanese, and Korean songs are left unchanged, and local vault lyrics are never filtered.
+
 Gemini translation is optional and requires a configured API key. Lyrics are sent to the translation service when requested. Target-language selection is separate from UI localization. Keep API keys out of issues, screenshots, and source control.
 
 ## Attribution, caching, and export

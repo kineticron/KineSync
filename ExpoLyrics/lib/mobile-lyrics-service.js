@@ -3265,6 +3265,55 @@ function preserveKugouKrcSpacing(syllables) {
   return preserved;
 }
 
+// Some provider files for non-Chinese songs interleave a Chinese translation
+// line after each original line. Those are not lyrics and ignore KineSync's
+// translation toggle, so drop them when the pattern is clear: the song is
+// mostly lines in a non-Han script and Chinese-only lines keep following them.
+// Japanese and Korean lines (kana, Hangul) and mostly Chinese songs are left alone.
+const KRC_HAN_RE = /\p{Script=Han}/u;
+// Letters of any script other than Han (Latin, Devanagari, Gurmukhi, Arabic...).
+const KRC_LATIN_RE = /(?!\p{Script=Han})\p{L}/u;
+const KRC_KANA_HANGUL_RE = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+function classifyKrcLineScript(line) {
+  const text = (line?.syllables || []).map((syllable) => syllable?.text || "").join("");
+  if (KRC_KANA_HANGUL_RE.test(text)) {
+    return "other";
+  }
+  const hasHan = KRC_HAN_RE.test(text);
+  const hasLatin = KRC_LATIN_RE.test(text);
+  if (hasHan && !hasLatin) {
+    return "han";
+  }
+  if (hasLatin && !hasHan) {
+    return "latin";
+  }
+  return "other";
+}
+
+function dropInterleavedChineseTranslationLines(lines) {
+  if (!Array.isArray(lines) || lines.length < 4) {
+    return lines;
+  }
+  const scripts = lines.map(classifyKrcLineScript);
+  const latinCount = scripts.filter((script) => script === "latin").length;
+  const hanCount = scripts.filter((script) => script === "han").length;
+  if (latinCount < 2 || hanCount < 2 || latinCount < hanCount * 0.8) {
+    return lines;
+  }
+  let followsLatin = 0;
+  for (let index = 1; index < scripts.length; index += 1) {
+    if (scripts[index] === "han" && scripts[index - 1] === "latin") {
+      followsLatin += 1;
+    }
+  }
+  // Interleaved translations: most Chinese lines sit right after a non-Han line.
+  if (followsLatin < Math.max(2, hanCount * 0.6)) {
+    return lines;
+  }
+  return lines.filter((_, index) => scripts[index] !== "han");
+}
+
 function parseKugouKrc(krc) {
   const lines = String(krc || "")
     .split("\n")
@@ -3345,7 +3394,9 @@ function parseKugouKrc(krc) {
     });
   }
 
-  return parsed.filter((line) => line?.syllables?.length);
+  return dropInterleavedChineseTranslationLines(
+    parsed.filter((line) => line?.syllables?.length),
+  );
 }
 
 function coerceFiniteNumber(value, fallback = NaN) {
@@ -12875,6 +12926,10 @@ async function finalizeFetchedLyricsResult(result) {
       !source.includes("lrc-red")
     ) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
+    }
+    // Several sources interleave a Chinese translation after each lyric line.
+    if (!source.includes("local-vault")) {
+      result.lyrics = dropInterleavedChineseTranslationLines(result.lyrics);
     }
   }
   return result;
