@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["dev.kineticron.kinesync.spotifyapp.KineSyncSpotifyAppModule"]
+  }
+}

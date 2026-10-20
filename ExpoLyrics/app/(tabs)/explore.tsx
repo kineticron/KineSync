@@ -40,6 +40,7 @@ import {
   parseBrowserEvent,
 } from '@/lib/spotify-browser';
 import { requestOpenSpotifyBrowser, requestLogoutSpotifyBrowser, requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
+import { openNotificationAccessSettings, refreshNotificationAccess, spotifyAppSupported, usePhonePlaybackSource } from '@/lib/spotify-app';
 import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
 import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
 import { Design } from '@/constants/design';
@@ -200,6 +201,10 @@ export default function BridgeSettingsScreen() {
   const [bridgeSaveError, setBridgeSaveError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false);
   const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
+  const phoneSource = usePhonePlaybackSource((s) => s.source);
+  const setPhoneSource = usePhonePlaybackSource((s) => s.setSource);
+  const notificationAccess = usePhonePlaybackSource((s) => s.notificationAccess);
+  const followSpotifyApp = spotifyAppSupported && phoneSource === 'spotify-app';
   const setSpotifySignedIn = useSpotifySessionStore((s) => s.setSignedIn);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const scanHandledRef = useRef(false);
@@ -569,6 +574,57 @@ export default function BridgeSettingsScreen() {
               {playbackMode === 'desktop' ? <View style={styles.divider} /> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Mobile-Only">
+                {spotifyAppSupported ? (
+                  <View style={styles.modeChoices} accessibilityRole="radiogroup" accessibilityLabel="Follow Spotify playback from">
+                    {([
+                      ['spotify-app', 'musical-notes-outline', 'Spotify app', 'Follows the Spotify app. Uses less memory.'],
+                      ['browser', 'globe-outline', 'Built-in player', 'Play Spotify inside KineSync.'],
+                    ] as const).map(([source, icon, title, hint]) => (
+                      <Pressable
+                        key={source}
+                        accessibilityRole="radio"
+                        aria-checked={phoneSource === source}
+                        accessibilityState={{ checked: phoneSource === source }}
+                        style={({ pressed }) => [
+                          styles.modeChoice,
+                          phoneSource === source && styles.modeChoiceActive,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => {
+                          setPhoneSource(source);
+                          refreshNotificationAccess();
+                          usePlaybackStore.getState().clearLyrics();
+                          usePlaybackStore.setState({ currentTrack: null, isPlaying: false });
+                        }}>
+                        <Ionicons name={icon} size={20} color="#FFFFFF" />
+                        <View style={styles.modeChoiceCopy}>
+                          <Text style={styles.modeChoiceTitle}>{title}</Text>
+                          <Text style={styles.modeChoiceHint}>{hint}</Text>
+                        </View>
+                        <Ionicons name={phoneSource === source ? 'checkmark-circle' : 'ellipse-outline'} size={21} color={phoneSource === source ? Design.accent : Design.muted} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+                {followSpotifyApp && !notificationAccess ? (
+                  <>
+                    <Pressable
+                      accessibilityRole="button"
+                      style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                      onPress={openNotificationAccessSettings}>
+                      <Ionicons name="notifications-outline" size={18} color="#FFFFFF" />
+                      <Text style={styles.primaryButtonText}>Allow notification access</Text>
+                    </Pressable>
+                    <Text style={styles.fieldLabel}>
+                      Android only shares what Spotify is playing with apps that have notification access. KineSync uses it to read Spotify&apos;s playback controls, not your notifications.
+                    </Text>
+                  </>
+                ) : null}
+                {followSpotifyApp ? (
+                  <Text style={styles.fieldLabel}>
+                    Play music in the Spotify app. Signing in below is optional; it only helps find Spicy Lyrics when Spotify doesn&apos;t share the track ID.
+                  </Text>
+                ) : null}
                 <View style={spotifySignedIn ? styles.spotifySessionRow : undefined}>
                 {spotifySignedIn ? (
                   <View style={styles.spotifySignedInStatus} accessible accessibilityLabel="Spotify is logged in">
@@ -625,7 +681,7 @@ export default function BridgeSettingsScreen() {
               <View style={styles.divider} />
 
               {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
-                {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
+                {spotifySignedIn && !followSpotifyApp && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
                   <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>Spotify player</Text>
                 </Pressable>}
