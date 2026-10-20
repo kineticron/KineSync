@@ -67,7 +67,12 @@ ios/
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.swift
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.podspec
+!ExpoLyrics/modules/kinesync-video-encoder/ios/
+!ExpoLyrics/modules/kinesync-video-encoder/ios/*.swift
+!ExpoLyrics/modules/kinesync-video-encoder/ios/*.podspec
 android/
+!ExpoLyrics/modules/kinesync-video-encoder/android/
+ExpoLyrics/modules/kinesync-video-encoder/android/build/
 app-example/
 
 # Electron / bundler output

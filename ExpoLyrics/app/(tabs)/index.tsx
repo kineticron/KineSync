@@ -2,10 +2,8 @@ import { BlurView } from "expo-blur";
 import { Asset } from "expo-asset";
 import { LyricsTypeIcon } from "@/components/lyrics/lyrics-type-icon";
 import { LinearGradient } from "expo-linear-gradient";
-import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
 import { useFocusEffect, useRouter } from "expo-router";
-import * as Sharing from "expo-sharing";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import {
   memo,
@@ -21,7 +19,6 @@ import {
   AppState,
   Platform,
   Pressable,
-  Share,
   StyleSheet,
   useWindowDimensions,
   View,
@@ -60,7 +57,6 @@ import {
 import { AnimatedBridgedArtwork } from "@/components/lyrics/animated-bridged-artwork";
 import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
-import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
 import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
 import { LyricsAttribution } from "@/components/lyrics/lyrics-attribution";
@@ -123,131 +119,6 @@ function getLineKey(line: LyricLine) {
 function LyricsPlaybackWakeLock() {
   useKeepAwake(LYRICS_PLAYBACK_WAKE_LOCK_TAG);
   return null;
-}
-
-function isCensorshipBoundary(leftText: string, rightText: string) {
-  const left = String(leftText || "").trim();
-  const right = String(rightText || "").trim();
-  if (!left || !right) {
-    return false;
-  }
-  const censorRun = /^[*＊•·]+$/;
-  return (
-    (censorRun.test(left) && /^[A-Za-z0-9]/.test(right)) ||
-    (/[A-Za-z0-9]$/.test(left) && censorRun.test(right))
-  );
-}
-
-function getPrimaryLineText(line: LyricLine) {
-  const syllables = line.syllables || [];
-  if (!syllables.length) {
-    return "";
-  }
-
-  let text = String(syllables[0]?.text || "");
-  for (let index = 1; index < syllables.length; index += 1) {
-    const prev = syllables[index - 1];
-    const current = syllables[index];
-    const currentText = String(current?.text || "");
-    if (!currentText) {
-      continue;
-    }
-    const hasWhitespaceBoundary = /\s$/.test(text) || /^\s/.test(currentText);
-    const boundaryFromWordFlag = prev?.isPartOfWord === false;
-    const prevTrim = String(prev?.text || "").trim();
-    const currentTrim = currentText.trim();
-    const boundaryFromCensorship = isCensorshipBoundary(prevTrim, currentTrim);
-    const boundaryFromHeuristic =
-      typeof prev?.isPartOfWord !== "boolean" &&
-      /[A-Za-z0-9]$/.test(text) &&
-      /^[A-Za-z0-9]/.test(currentText);
-    if (
-      !hasWhitespaceBoundary &&
-      (boundaryFromWordFlag || boundaryFromCensorship || boundaryFromHeuristic)
-    ) {
-      text += " ";
-    }
-    text += currentText;
-  }
-  return text.trim();
-}
-
-function base64ToUint8Array(base64: string) {
-  if (typeof atob !== "function") {
-    throw new Error("Base64 decoding is not available in this browser.");
-  }
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function safeGifPayload(base64: unknown) {
-  const value = typeof base64 === 'string' ? base64 : '';
-  if (!value || value.length % 4 === 1 || value.length > Math.ceil(MAX_GIF_BYTES * 4 / 3) + 16 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
-  const bytes = Math.floor(value.replace(/=+$/, '').length * 3 / 4);
-  return bytes > 0 && bytes <= MAX_GIF_BYTES ? value : null;
-}
-
-function makeSafeGifFileName() {
-  const bytes = new Uint8Array(12);
-  const cryptoApi = globalThis.crypto as { getRandomValues?: (array: Uint8Array) => Uint8Array } | undefined;
-  if (cryptoApi?.getRandomValues) cryptoApi.getRandomValues(bytes);
-  else bytes.set(Array.from({ length: bytes.length }, () => Math.floor(Math.random() * 256)));
-  return `kinesync-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}.gif`;
-}
-
-async function shareGifOnWeb({
-  base64,
-  fileName,
-  mimeType,
-  title,
-  artist,
-}: {
-  base64: string;
-  fileName: string;
-  mimeType: string;
-  title: string;
-  artist: string;
-}) {
-  if (typeof document === "undefined" || typeof URL === "undefined") {
-    throw new Error("Web download is not available in this environment.");
-  }
-
-  const blob = new Blob([base64ToUint8Array(base64)], { type: mimeType });
-  const file =
-    typeof File !== "undefined"
-      ? new File([blob], fileName, { type: mimeType })
-      : null;
-  const nav = navigator as Navigator & {
-    canShare?: (data: { files?: File[] }) => boolean;
-    share?: (data: {
-      files?: File[];
-      title?: string;
-      text?: string;
-    }) => Promise<void>;
-  };
-
-  if (file && nav.share && nav.canShare?.({ files: [file] })) {
-    await nav.share({
-      files: [file],
-      title: "Share synced lyric GIF",
-      text: `${title} - ${artist}`,
-    });
-    return;
-  }
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.rel = "noreferrer";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 type PlaybackControlsDockProps = {
@@ -423,7 +294,6 @@ export default function HomeScreen() {
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(
     () => new Set(),
   );
-  const [shareBusy, setShareBusy] = useState(false);
   useEffect(() => {
     setFullscreenAlbumMode(false);
     setAlbumArtworkMorphing(false);
@@ -913,152 +783,11 @@ export default function HomeScreen() {
     });
   }, []);
 
-  const ensureSelectionForShare = useCallback(() => {
-    const { lyrics } = usePlaybackStore.getState();
-    const selected = lyrics.filter((line) =>
-      selectedLineKeys.has(getLineKey(line)),
-    );
-    if (selected.length > 0) {
-      return selected;
-    }
-    if (!lyrics.length) {
-      return [];
-    }
-    const anchorIndex = Math.max(0, activeLineIndex.current);
-    const start = Math.max(0, Math.min(anchorIndex, lyrics.length - 1));
-    const end = Math.min(lyrics.length, start + 6);
-    return lyrics.slice(start, end);
-  }, [selectedLineKeys]);
-
-  const exportShareGif = useCallback(async () => {
-    if (shareBusy) {
-      return;
-    }
-    const linesToShare = ensureSelectionForShare();
-    if (!currentTrack?.id || !linesToShare.length) {
-      Alert.alert("Nothing to share", "Select at least one lyric line first.");
-      return;
-    }
-
-    setShareBusy(true);
-    try {
-      const response = await bridgeClient.requestShareGif({
-        trackId: currentTrack.id,
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        artworkUrl: resolvedArtworkUrl,
-        includeTranslations: showTranslatedText,
-        lines: linesToShare
-          .map((line) => {
-            const text = getPrimaryLineText(line);
-            if (!text) {
-              return null;
-            }
-            return {
-              lineStartTime: line.lineStartTime,
-              lineEndTime: line.lineEndTime,
-              text,
-              translatedText: showTranslatedText
-                ? String(line.translatedText || "").trim() || undefined
-                : undefined,
-              syllables: (line.syllables || []).map((syl) => ({
-                text: String(syl.text || ""),
-                startTime: Number(syl.startTime || line.lineStartTime),
-                endTime: Number(syl.endTime || line.lineEndTime),
-              })),
-            };
-          })
-          .filter((line): line is NonNullable<typeof line> => Boolean(line)),
-      });
-
-      const safeBase64 = safeGifPayload(response.base64);
-      if (!response.ok || !safeBase64 || response.mimeType && response.mimeType !== 'image/gif') {
-        throw new Error(
-          response.error || "Desktop bridge did not return GIF data.",
-        );
-      }
-
-      const fileName = makeSafeGifFileName();
-      if (Platform.OS === "web") {
-        await shareGifOnWeb({
-          base64: safeBase64,
-          fileName,
-          mimeType: response.mimeType || "image/gif",
-          title: currentTrack.title,
-          artist: currentTrack.artist,
-        });
-        return;
-      }
-
-      const uri = `${FileSystem.cacheDirectory || ""}${fileName}`;
-      await FileSystem.writeAsStringAsync(uri, safeBase64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          dialogTitle: "Share synced lyric GIF",
-          mimeType: "image/gif",
-          UTI: "com.compuserve.gif",
-        });
-      } else {
-        await Share.share({
-          message: `Lyric GIF ready: ${currentTrack.title} - ${currentTrack.artist}`,
-          url: uri,
-        });
-      }
-    } catch (error) {
-      Alert.alert(
-        "GIF export failed",
-        error instanceof Error ? error.message : "Unable to create GIF.",
-      );
-    } finally {
-      setShareBusy(false);
-    }
-  }, [
-    currentTrack,
-    ensureSelectionForShare,
-    resolvedArtworkUrl,
-    shareBusy,
-    showTranslatedText,
-  ]);
-
-  const clearSelection = useCallback(() => {
-    setSelectedLineKeys(new Set());
-  }, []);
-
-  const openShareMenu = useCallback(() => {
-    const selectedCount = selectedLineKeys.size;
-    const fallbackCount = ensureSelectionForShare().length;
-    Alert.alert(
-      "Share Lyric GIF",
-      selectedCount > 0
-        ? `${selectedCount} selected line${selectedCount === 1 ? "" : "s"} will be animated.`
-        : `No lines selected. Sharing ${fallbackCount} lines from current playback window.`,
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Clear selection",
-          style: "destructive",
-          onPress: clearSelection,
-        },
-        {
-          text: "Create GIF",
-          onPress: () => {
-            void exportShareGif();
-          },
-        },
-      ],
-    );
-  }, [
-    clearSelection,
-    ensureSelectionForShare,
-    exportShareGif,
-    selectedLineKeys.size,
-  ]);
+  /** The share screen opens on the line playing now, with the cover the player shows. */
+  const openShareLyrics = useCallback(() => {
+    if (usePlayerTourStore.getState().active) return;
+    router.push({ pathname: "/share-lyrics", params: { line: String(Math.max(0, activeLineIndex.current)), art: resolvedArtworkUrl } });
+  }, [resolvedArtworkUrl, router]);
 
   const handleResumeAutoFollow = useCallback(() => {
     setScrubPreviewPositionMs(null);
@@ -1345,6 +1074,7 @@ export default function HomeScreen() {
                     onNext={handlePlaybackNext}
                     onSeek={handleSeek}
                     onRequestTranslate={handleTranslate}
+                    onOpenShareMenu={openShareLyrics}
                     translationLoading={translationLoading}
                     onUserInteraction={handleControlsInteraction}
                     fullscreenAlbumProgress={fullscreenAlbumProgress}
@@ -1687,13 +1417,12 @@ export default function HomeScreen() {
             durationMs={currentTrack?.durationMs ?? 0}
             shareSelectionCount={selectedLineKeys.size}
             shareSelectionMode={selectedLineKeys.size > 0}
-            shareBusy={shareBusy}
             onScrubPreview={handleScrubPreview}
             showResumeAutoFollow={
               !autoFollowEnabled && scrubPreviewPositionMs === null
             }
             onResumeAutoFollow={handleResumeAutoFollow}
-            onOpenShareMenu={openShareMenu}
+            onOpenShareMenu={openShareLyrics}
             onPlayPause={handlePlaybackPlayPause}
             onPlayPauseResync={handlePlaybackResync}
             onPrevious={handlePlaybackPrevious}
@@ -1714,6 +1443,9 @@ export default function HomeScreen() {
                 </Pressable>
                 <Pressable accessibilityRole="button" accessibilityLabel="Show lyrics" hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, tour.active && tour.step === 'lyrics' && styles.tourHighlight, pressed && styles.fullscreenBottomButtonPressed]} onPress={handleShowLyrics}>
                   <LyricsTypeIcon mode={lyricsTimingMode === "unknown" ? "interpolated" : lyricsTimingMode} size={17} color="#FFFFFF" />
+                </Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="Share lyrics" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={openShareLyrics}>
+                  <Ionicons name="share-outline" size={20} color="#FFFFFF" />
                 </Pressable>
                 <Pressable accessibilityRole="button" accessibilityLabel="Open settings" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/explore")}>
                   <Ionicons name="settings-outline" size={20} color="#FFFFFF" />

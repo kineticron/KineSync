@@ -243,7 +243,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   onScrubPreview,
   showResumeAutoFollow = false,
   onResumeAutoFollow,
-  onOpenShareMenu: _onOpenShareMenu,
+  onOpenShareMenu,
   onPlayPause,
   onPlayPauseResync,
   onNext,
@@ -401,6 +401,22 @@ onPressIn={onUserInteraction}
           ) : null}
         </View>
       </Pressable>
+
+      {onOpenShareMenu ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Share lyrics"
+          style={({ pressed }) => [styles.utilityButton, pressed && styles.utilityButtonPressed]}
+          onPress={() => {
+            onUserInteraction?.();
+            onOpenShareMenu();
+          }}
+          onPressIn={onUserInteraction}
+          onPressOut={onUserInteraction}
+          hitSlop={8}>
+          <Ionicons name="share-outline" size={18} color="#FFFFFF" />
+        </Pressable>
+      ) : null}
     </>
   );
 
@@ -466,6 +482,24 @@ onPressIn={onUserInteraction}
             </View>
           </Pressable>
         </View>
+
+        {onOpenShareMenu ? (
+          <View style={styles.landscapeActionSlot}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Share lyrics"
+              style={({ pressed }) => [styles.landscapeUtilityButton, pressed && styles.utilityButtonPressed]}
+              onPress={() => {
+                onUserInteraction?.();
+                onOpenShareMenu();
+              }}
+              onPressIn={onUserInteraction}
+              onPressOut={onUserInteraction}
+              hitSlop={8}>
+              <Ionicons name="share-outline" size={18} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        ) : null}
       </>
     );
   }
