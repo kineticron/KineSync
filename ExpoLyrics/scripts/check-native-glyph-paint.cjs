@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 
 const directory = path.join(__dirname, '../components/lyrics/native');
-const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8') + '\nexport { drawVoice };',
+const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8'),
   resolveDir: directory, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', write: false,
   external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
 }).outputFiles[0].text;

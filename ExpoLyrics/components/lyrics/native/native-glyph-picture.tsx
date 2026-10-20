@@ -11,7 +11,7 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[] };
+export type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[] };
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
@@ -77,7 +77,7 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
   canvas.translate(-ox, -oy);
 }
 
-function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
+export function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
   spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock) {
   'worklet';
   const paint = Skia.Paint();

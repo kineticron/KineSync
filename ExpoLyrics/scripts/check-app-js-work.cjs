@@ -225,19 +225,21 @@ function checkPlayerNotificationsAndCatalogMerge() {
   const ast = ts.createSourceFile('index.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const callbacks = {};
   function visit(node) {
-    if (ts.isVariableDeclaration(node) && ['handleActiveLineChange', 'ensureSelectionForShare'].includes(node.name.getText(ast)))
+    if (ts.isVariableDeclaration(node) && ['handleActiveLineChange', 'openShareLyrics'].includes(node.name.getText(ast)))
       callbacks[node.name.getText(ast)] = node.initializer.arguments[0].getText(ast);
     ts.forEachChild(node, visit);
   }
   visit(ast);
   const lyrics = Array.from({ length: 20 }, (_, id) => ({ id }));
-  const context = { result: {}, activeLineIndex: { current: -1 }, selectedLineKeys: new Set(), getLineKey: line => line.id,
+  const pushed = [];
+  const context = { result: {}, activeLineIndex: { current: -1 }, resolvedArtworkUrl: 'art', router: { push: route => pushed.push(route) },
+    usePlayerTourStore: { getState: () => ({ active: false }) },
     usePlaybackStore: { getState: () => ({ lyrics }) }, setActiveLineIndex() { throw new Error('Line notifications cannot trigger a player render'); } };
   for (const [name, callback] of Object.entries(callbacks)) vm.runInNewContext(ts.transpileModule(`result.${name} = ${callback}`, {}).outputText, context);
   for (let i = 0; i < 600; i++) context.result.handleActiveLineChange(i % 20);
   context.result.handleActiveLineChange(7);
-  assert.equal(context.result.ensureSelectionForShare()[0].id, 7, 'Sharing reads the most recent line without React state');
-  context.selectedLineKeys.add(2); assert.equal(context.result.ensureSelectionForShare()[0].id, 2);
+  context.result.openShareLyrics();
+  assert.equal(pushed[0].params.line, '7', 'Sharing reads the most recent line without React state');
 
   const catalog = fs.readFileSync(path.join(root, 'components/lyrics/desktop-vault-catalog.tsx'), 'utf8');
   const catalogAst = ts.createSourceFile('desktop.tsx', catalog, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);

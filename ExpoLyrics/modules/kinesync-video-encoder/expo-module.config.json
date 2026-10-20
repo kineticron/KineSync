@@ -1,0 +1,11 @@
+{
+  "platforms": ["android", "apple"],
+  "android": {
+    "modules": ["dev.kineticron.kinesync.videoencoder.KineSyncVideoEncoderModule"]
+  },
+  "apple": {
+    "modules": ["KineSyncVideoEncoderModule"],
+    "podspecPath": ["ios/KineSyncVideoEncoder.podspec"],
+    "swiftModuleName": "KineSyncVideoEncoder"
+  }
+}
