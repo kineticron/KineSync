@@ -81,6 +81,8 @@ import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { bridgeClient } from "@/lib/bridge-client";
+import { SpotifyAppTracker } from "@/components/lyrics/spotify-app-tracker";
+import { isFollowingSpotifyApp, spotifyAppControls, usePhonePlaybackSource } from "@/lib/spotify-app";
 import {
   refreshLyricsForCurrentTrack,
   requestImmediateTranslationForCurrentSource,
@@ -366,7 +368,10 @@ export default function HomeScreen() {
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
   const playbackMode = usePlaybackStore((s) => s.playbackMode);
   const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
-  const showEmptyState = !tour.active && (!currentTrack || (playbackMode === 'mobile' && !spotifySignedIn) || (playbackMode === 'desktop' && connectionStatus !== 'connected'));
+  // Following the Spotify app needs no Spotify sign-in to show playback.
+  const followSpotifyApp = usePhonePlaybackSource((s) => s.source === 'spotify-app');
+  const mobileReady = spotifySignedIn || followSpotifyApp;
+  const showEmptyState = !tour.active && (!currentTrack || (playbackMode === 'mobile' && !mobileReady) || (playbackMode === 'desktop' && connectionStatus !== 'connected'));
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
   const liveIsPlaying = usePlaybackStore((s) => s.isPlaying);
   const isPlaying = tour.active ? tour.isPlaying : liveIsPlaying;
@@ -789,6 +794,10 @@ export default function HomeScreen() {
       bridgeClient.seekTo(positionMs);
       return;
     }
+    if (isFollowingSpotifyApp()) {
+      spotifyAppControls.seekTo(positionMs);
+      return;
+    }
     spotifyBrowserRef.current?.seekTo(positionMs);
   }, []);
 
@@ -796,6 +805,10 @@ export default function HomeScreen() {
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().togglePlayback(); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.togglePlayPause();
+      return;
+    }
+    if (isFollowingSpotifyApp()) {
+      spotifyAppControls.togglePlayPause();
       return;
     }
     spotifyBrowserRef.current?.togglePlayPause();
@@ -807,6 +820,8 @@ export default function HomeScreen() {
       bridgeClient.resyncPlayback();
       return;
     }
+    // The Spotify app reports exact positions; nothing to resync.
+    if (isFollowingSpotifyApp()) return;
     spotifyBrowserRef.current?.resyncPlayback();
   }, []);
 
@@ -814,6 +829,10 @@ export default function HomeScreen() {
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipNext();
+      return;
+    }
+    if (isFollowingSpotifyApp()) {
+      spotifyAppControls.skipNext();
       return;
     }
     spotifyBrowserRef.current?.skipNext();
@@ -890,6 +909,10 @@ export default function HomeScreen() {
     }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipPrevious();
+      return;
+    }
+    if (isFollowingSpotifyApp()) {
+      spotifyAppControls.skipPrevious();
       return;
     }
     spotifyBrowserRef.current?.skipPrevious();
@@ -1360,7 +1383,7 @@ export default function HomeScreen() {
               style={_stableStyle4}
             >
               {showEmptyState ? (
-                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={mobileReady} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}
@@ -1591,7 +1614,7 @@ export default function HomeScreen() {
               style={[styles.lyricsContentInner, lyricsChromeOpacityStyle]}
             >
               {showEmptyState ? (
-                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+                <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={mobileReady} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}
@@ -1741,7 +1764,10 @@ export default function HomeScreen() {
         </Reanimated.View>
       ) : null}
 
-      {!tour.active && !tour.pending && (Platform.OS === 'ios' || Platform.OS === 'android'
+      {/* Phone-only playback follows either the Spotify app (Android notification access) or Spotify's web session. */}
+      {!tour.active && !tour.pending && (playbackMode === 'mobile' && followSpotifyApp
+        ? <SpotifyAppTracker />
+        : Platform.OS === 'ios' || Platform.OS === 'android'
         ? <SpotifyNativeDetector ref={spotifyBrowserRef} />
         : <SpotifyBrowserFallback ref={spotifyBrowserRef} />)}
 

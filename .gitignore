@@ -68,6 +68,8 @@ ios/
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.swift
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.podspec
 android/
+!ExpoLyrics/modules/kinesync-spotify-app/android/
+ExpoLyrics/modules/kinesync-spotify-app/android/build/
 app-example/
 
 # Electron / bundler output

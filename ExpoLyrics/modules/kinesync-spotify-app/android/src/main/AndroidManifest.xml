@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!--
+      Granting KineSync notification access lets it read the Spotify app's
+      media session (track, position, play state) through MediaSessionManager.
+      The listener itself does not read or store notifications.
+    -->
+    <service
+      android:name="dev.kineticron.kinesync.spotifyapp.SpotifyAppListenerService"
+      android:exported="true"
+      android:label="KineSync"
+      android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+      <intent-filter>
+        <action android:name="android.service.notification.NotificationListenerService" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
