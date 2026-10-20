@@ -23,7 +23,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "prettier": "3.9.9",
