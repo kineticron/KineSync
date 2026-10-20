@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS node-runtime
+FROM node:26-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567 AS node-runtime
 
 WORKDIR /opt/kinesync
 COPY docker/runtime/package.json docker/runtime/package-lock.json ./
