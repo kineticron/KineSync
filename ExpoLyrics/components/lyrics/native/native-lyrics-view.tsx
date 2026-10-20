@@ -11,7 +11,7 @@ import { getAutoScrollTargetRange, getBackgroundActiveLines, getLyricTimingIndex
 import type { LyricLine, LyricsMetadata } from '@/types/bridge';
 import { buildNativeRows, nativeFollowIndex, type NativeLyricRow, type NativeLyricsStyle } from './native-lyrics-model';
 import { NativeLyricRowView, type NativeReveal } from './native-lyric-row';
-import { useNativeLyricsClock } from './use-native-lyrics-clock';
+import { useNativeLyricsClock, type NativeClockAnchor } from './use-native-lyrics-clock';
 import { NativeLyricsFontContext, useNativeLyricsFonts } from './native-lyrics-fonts';
 import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView } from './reference-scroll';
 import { AmllLayoutCell } from './amll-layout-cell';
@@ -27,6 +27,10 @@ export type NativeLyricsViewProps = {
   onActiveLineChange?: (index: number) => void; onAutoFollowChange?: (enabled: boolean) => void;
   onCreditsTimestampPress?: (position: number) => void; onUserInteraction?: () => void;
   fontScale?: number; landscapeMode?: boolean; active?: boolean;
+  /** Show these lyrics against the real song clock (Sync Studio preview). */
+  overrideLyrics?: LyricLine[];
+  /** Follow this clock instead of KineSync's playback. */
+  clockAnchor?: NativeClockAnchor | null;
 };
 
 const keyExtractor = (row: NativeLyricRow) => row.key;
@@ -40,20 +44,22 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   tapToSeekEnabled, showTranslatedText = true, previewPositionMs = null, autoFollowEnabled = true,
   resumeAutoFollowSignal = 0, selectedLineKeys, onLinePress, onLineLongPress, onActiveLineChange,
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
+  overrideLyrics, clockAnchor,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
   const transition = useLyricsPacketTransition();
-  const lyrics = usePlaybackStore(state => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
-  const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : transition?.packet.lyricsSource ?? state.lyricsSource);
-  const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
-  const status = usePlaybackStore(state => demoLyrics ? '' : transition?.packet.lyricsStatusMessage ?? state.lyricsStatusMessage);
-  const trackDuration = usePlaybackStore(state => demoLyrics ? 0 : state.currentTrack?.durationMs ?? 0);
-  const playing = usePlaybackStore(state => demoLyrics ? demoPlayback?.isPlaying ?? demoIsPlaying ?? true : state.isPlaying);
+  const lyrics = usePlaybackStore(state => demoLyrics ?? overrideLyrics ?? transition?.packet.lyrics ?? state.lyrics);
+  const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : overrideLyrics ? 'sync-studio' : transition?.packet.lyricsSource ?? state.lyricsSource);
+  const metadata = usePlaybackStore(state => demoLyrics || overrideLyrics ? emptyMetadata : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
+  const status = usePlaybackStore(state => demoLyrics || overrideLyrics ? '' : transition?.packet.lyricsStatusMessage ?? state.lyricsStatusMessage);
+  const trackDuration = usePlaybackStore(state => demoLyrics || clockAnchor ? 0 : state.currentTrack?.durationMs ?? 0);
+  const storePlaying = usePlaybackStore(state => demoLyrics ? demoPlayback?.isPlaying ?? demoIsPlaying ?? true : state.isPlaying);
+  const playing = clockAnchor ? clockAnchor.playing : storePlaying;
   const duration = useMemo(() => demoLyrics && demoDurationMs ? demoDurationMs : Math.max(trackDuration, Math.max(1, ...lyrics.map(line => Math.max(line.lineEndTime,
     ...(line.backgroundSyllables ?? []).map(part => part.endTime),
     ...(line.spicyBackgrounds ?? []).map(block => block.lineEndTime)))) + 1000), [demoDurationMs, demoLyrics, lyrics, trackDuration]);
   const staticLyrics = useMemo(() => detectLyricsTimingMode(lyrics, source) === 'static', [lyrics, source]);
-  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback });
+  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback, anchor: clockAnchor });
   const hasDuet = useMemo(() => lyrics.some(line => landscapeMode ? !line.oppositeAligned : !!line.oppositeAligned), [landscapeMode, lyrics]);
   const rows = useMemo(() => buildNativeRows(lyrics, style, staticLyrics), [lyrics, staticLyrics, style]);
   const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);

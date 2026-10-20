@@ -70,3 +70,13 @@ The Skia measurement adapter replaces the browser's DOM measurement.
 The native AMLL layout adapter uses `@formatjs/intl-segmenter` for runtimes
 without `Intl.Segmenter`. FormatJS is MIT licensed, its package metadata and
 upstream copyright/license notices apply to this dependency.
+
+## Syllable guessing (Sync Studio)
+
+Sync Studio's "Guess syllables" uses the npm package
+[`hyphen`](https://github.com/ytiurin/hyphen) 1.14.1 (ISC license), which
+bundles TeX hyphenation patterns from the
+[hyph-utf8](https://www.ctan.org/pkg/hyph-utf8) collection (US English,
+Spanish, Portuguese, French, Italian, German, Indonesian, Turkish, Polish and
+Russian are used), and [`syllable`](https://github.com/words/syllable) 5.0.1
+(MIT license) for English syllable counts.

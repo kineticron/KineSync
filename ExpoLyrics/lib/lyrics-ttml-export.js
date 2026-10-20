@@ -441,6 +441,7 @@ function lyricsToTtml({
   xmlLang = "en",
   metadata = {},
   preserveOriginal = true,
+  spotifyTrackId = "",
 } = {}) {
   // Imported documents are archives: export their original XML verbatim so
   // namespaces, extensions, agents, structure, and whitespace survive.
@@ -500,6 +501,13 @@ function lyricsToTtml({
   }
   if (String(album || "").trim()) {
     metadataBlocks.push(`<amll:meta key="album" value="${escapeXml(String(album).trim())}"/>`);
+  }
+  // Spicy Lyrics and AMLL match uploads to a song by its Spotify track ID.
+  const safeSpotifyId = String(spotifyTrackId || "").trim();
+  if (/^[A-Za-z0-9]{22}$/.test(safeSpotifyId)) {
+    if (safeTitle) metadataBlocks.push(`<amll:meta key="musicName" value="${escapeXml(safeTitle)}"/>`);
+    if (safeArtist) metadataBlocks.push(`<amll:meta key="artists" value="${escapeXml(safeArtist)}"/>`);
+    metadataBlocks.push(`<amll:meta key="spotifyId" value="${safeSpotifyId}"/>`);
   }
   const songwriters = Array.isArray(metadata?.credits?.songwriters) ? metadata.credits.songwriters : [];
   if (songwriters.length) {

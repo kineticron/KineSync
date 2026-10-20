@@ -576,7 +576,9 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
       }
     }
 
-    if (!syllables.length) {
+    // A paragraph with only background vocals (a song opening on an ad-lib)
+    // is still a line.
+    if (!syllables.length && !backgroundSyllables.length) {
       match = paraRe.exec(ttmlContent);
       continue;
     }
