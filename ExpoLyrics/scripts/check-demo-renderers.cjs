@@ -31,6 +31,7 @@ for (const style of ['spicy', 'amll']) {
     '@/components/lyrics/spicy-webview-bundle': { SPICY_WEBVIEW_JS: '', SPICY_WEBVIEW_CSS: '' },
     '@/components/lyrics/amll-webview-bundle': { AMLL_WEBVIEW_JS: '', AMLL_WEBVIEW_CSS: '' },
     '@/components/lyrics/lyrics-attribution': { LyricsAttribution: 'Attribution' },
+    './lyrics-packet-transition': { useLyricsPacketTransition: () => null, withLyricsPacketTransition: component => component },
   };
   const context = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, Date, performance: { now: () => 1000 } };
   const filename = path.join(__dirname, `../components/lyrics/${style}-lyrics-view.tsx`);
@@ -41,6 +42,7 @@ for (const style of ['spicy', 'amll']) {
     const tree = Component({ tapToSeekEnabled: true, ...props });
     const webview = React.Children.toArray(tree.props.children).find(child => child.type === 'WebView');
     webview.props.ref.current = { injectJavaScript: script => {
+      if (script.includes('type:"lyricsPacketReady"')) return;
       const match = script.match(/\.receive\((.*)\); true;/);
       assert.ok(match); injections.push(JSON.parse(match[1]));
     } };
@@ -84,6 +86,17 @@ for (const style of ['spicy', 'amll']) {
   assert.equal(pause.positionMs, 3500);
   assert.equal(pause.isPlaying, false);
   if (style === 'spicy') assert.equal(pause.active, true, 'paused lyrics remain visible');
+  const demoPlayback = { anchorPositionMs: 4000, anchorMonotonicMs: 900, isPlaying: true };
+  render({ ...demo, previewPositionMs: null, demoPlayback });
+  assert.equal(injections.find(packet => packet.type === 'sync').positionMs, 4100, 'Demo hosts project their own anchor without 100ms React ticks');
+  render({ ...demo, previewPositionMs: null, demoPlayback });
+  assert.equal(injections.length, 0, 'Stable demo anchors produce no repeated WebView traffic');
+  render({ ...demo, previewPositionMs: 7000, demoPlayback });
+  assert.equal(injections.find(packet => packet.type === 'sync').positionMs, 7000);
+  assert.equal(injections.find(packet => packet.type === 'sync').isPlaying, false, 'Anchored demo scrubs hold their preview until release');
+  render({ ...demo, previewPositionMs: null, demoPlayback: { ...demoPlayback, isPlaying: false } });
+  assert.equal(injections.find(packet => packet.type === 'sync').positionMs, 4000);
+  assert.equal(injections.find(packet => packet.type === 'sync').isPlaying, false);
   webview = render({});
   assert.equal(injections.length, 0, 'returning to live playback waits for the live source');
   webview.props.onLoadEnd(); render({});

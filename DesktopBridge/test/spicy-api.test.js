@@ -42,6 +42,61 @@ function load(fetch, mobile = false) {
 }
 
 for (const mobile of [false, true]) {
+  test(`${mobile ? "mobile" : "desktop"} keeps fresh Spicy lyrics valid through publication and source-cache reuse`, async () => {
+    let requests = 0;
+    const context = load(async () => {
+      requests++;
+      return new Response(JSON.stringify({ Body: body, Status: 200 }));
+    }, mobile);
+    context.track = { trackId: "promise-by-slayr", spotifyTrackId: trackId, title: "promise", artist: "slayr", durationMs: 4000 };
+    const packets = [];
+    context.onPacket = packet => packets.push(packet);
+    const result = await vm.runInContext(`
+      const freshnessService = createLyricsService({ getSpicyLyricsPublishableKey: () => "${key}" });
+      freshnessService.fetchSyncedLyrics(track, { preferredSource: "spicy-lyrics", onSyncedLyrics: onPacket });
+    `, context);
+    const { spicyLyricsExpiresAt } = require("../src/lyricsPolicy");
+    assert.ok(packets.length > 0, "The test must exercise the actual publication path");
+    for (const packet of [...packets, result]) {
+      assert.ok(packet.metadata.spicyApi?.fetchedAt > 0, "Publication must retain the original retrieval time");
+      assert.ok(spicyLyricsExpiresAt(packet) > Date.now(), "Fresh lyrics must not trigger an expiry refetch");
+      assert.equal(packet.metadata.attribution.provider, "Spicy Lyrics");
+    }
+    const cached = await vm.runInContext('freshnessService.fetchSyncedLyrics(track, { preferredSource: "spicy-lyrics" })', context);
+    assert.equal(requests, 1, "A fresh source-cache hit must not request the API again");
+    assert.equal(cached.metadata.spicyApi.fetchedAt, result.metadata.spicyApi.fetchedAt);
+    assert.equal(cached.metadata.spicyApi.expiresAt, result.metadata.spicyApi.expiresAt);
+    context.packet = result;
+    vm.runInContext('freshnessService.rememberPublishedLyrics(track.trackId, packet)', context);
+    const published = vm.runInContext('freshnessService.getPublishedLyrics(track.trackId)', context);
+    assert.equal(published.metadata.spicyApi.expiresAt, result.metadata.spicyApi.expiresAt);
+  });
+
+  test(`${mobile ? "mobile" : "desktop"} discards expired in-memory copies without waiting for another lookup`, () => {
+    const context = load(() => { throw Error('Unexpected request'); }, mobile);
+    let now = 1000;
+    let scheduled;
+    context.Date = { now: () => now };
+    context.setTimeout = callback => { scheduled = callback; return { unref() {} }; };
+    context.clearTimeout = () => {};
+    vm.runInContext(`const expiryService = createLyricsService(); expiryService.rememberPublishedLyrics('song', {
+      lyrics: [{}], source: 'spicy-lyrics-syllable', metadata: { spicyApi: { fetchedAt: 1000, expiresAt: 1010 } }
+    });`, context);
+    assert.equal(vm.runInContext('expiryService.getMusixmatchRuntimeStatus().publishedLyricsCacheEntries', context), 1);
+    now = 1011;
+    scheduled();
+    assert.equal(vm.runInContext('expiryService.getMusixmatchRuntimeStatus().publishedLyricsCacheEntries', context), 0);
+  });
+
+  test(`${mobile ? "mobile" : "desktop"} rejects non-community replies instead of caching commercial Spicy copies`, async () => {
+    for (const source of ['apple_music', 'spotify', 'unknown']) {
+      const context = load(async () => new Response(JSON.stringify({ Body: { ...body, source }, Status: 200 })), mobile);
+      context.track = { spotifyTrackId: trackId, title: 'Hello', artist: 'Artist', durationMs: 4000 };
+      context.key = key;
+      await assert.rejects(vm.runInContext('fetchFromSpicyLyrics(track, { spicyLyricsPublishableKey: key })', context), error => error.sourceFailureReason?.endsWith('-no-match'));
+    }
+  });
+
   test(`${mobile ? "mobile" : "desktop"} uses official GET with only publishable authentication`, async () => {
     const calls = [];
     const context = load(async (url, options) => {

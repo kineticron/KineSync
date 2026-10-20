@@ -1,6 +1,7 @@
 import { buildAmllWords } from '../amll-word-spacing';
 import { repairSyllableClusters } from '../cluster-safe-syllables';
 import { getGraphemes } from '../../../lib/graphemes';
+import { getBackgroundEndTime } from '../../../lib/lyrics-layout';
 import type { LyricLine, LyricSyllable } from '../../../types/bridge';
 import { getSpicyWordJoins } from '../spicy-word-spacing';
 import { chunkAndSplitLyricWords } from './amll-reference-word-split';
@@ -130,7 +131,7 @@ export function buildNativeRows(lyrics: LyricLine[], style: NativeLyricsStyle, s
   for (const row of rows) {
     if (!staticLyrics && row.lead.start - coveredEnd >= 3000)
       row.interlude = { start: coveredEnd, end: row.lead.start };
-    coveredEnd = style === 'spicy' ? row.lead.end : Math.max(coveredEnd, row.lead.end, ...row.backgrounds.map(voice => voice.end));
+    coveredEnd = Math.max(coveredEnd, getBackgroundEndTime(row.line));
   }
   return rows;
 }

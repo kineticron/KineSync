@@ -17,7 +17,7 @@ import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
 import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { usePlaybackStore, type LyricsStyle } from "@/store/playback-store";
-import type { ConnectionStatus } from "@/types/bridge";
+import type { BridgeTimingDiagnostics, ConnectionStatus, LyricLine } from "@/types/bridge";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { saveBridgeSettings } from "@/lib/bridge-settings";
 import { bridgeClient } from "@/lib/bridge-client";
@@ -30,6 +30,8 @@ import Animated, {
 } from "react-native-reanimated";
 
 const menuEntrance = FadeInDown.duration(240).reduceMotion(ReduceMotion.System);
+const EMPTY_LYRICS: LyricLine[] = [];
+const EMPTY_TIMING: BridgeTimingDiagnostics = {};
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
 
@@ -60,7 +62,6 @@ type SettingsMenuProps = {
   onChangeLyricsStyle: (style: LyricsStyle) => void;
   connectionStatus: ConnectionStatus;
   playbackMode: PlaybackMode;
-  latencyMs: number;
   errorMessage: string;
 };
 
@@ -398,19 +399,19 @@ export const SettingsMenu = memo(function SettingsMenu({
   onChangeLyricsStyle,
   connectionStatus,
   playbackMode,
-  latencyMs,
   errorMessage,
 }: SettingsMenuProps) {
-  const lyrics = usePlaybackStore((state) => state.lyrics);
-  const lyricsSource = usePlaybackStore((state) => state.lyricsSource);
+  const lyrics = usePlaybackStore((state) => open ? state.lyrics : EMPTY_LYRICS);
+  const lyricsSource = usePlaybackStore((state) => open ? state.lyricsSource : '');
   const lyricsStatusMessage = usePlaybackStore(
-    (state) => state.lyricsStatusMessage,
+    (state) => open ? state.lyricsStatusMessage : '',
   );
   const lyricsTimingLabel = useMemo(
     () => getLyricsTimingLabel(lyrics, lyricsSource),
     [lyrics, lyricsSource],
   );
-  const bridgeTiming = usePlaybackStore((state) => state.bridgeTiming);
+  const latencyMs = usePlaybackStore((state) => open ? Math.max(0, state.driftOffset) : 0);
+  const bridgeTiming = usePlaybackStore((state) => open ? state.bridgeTiming : EMPTY_TIMING);
   const activeSource = useMemo(
     () => inferActiveSource(lyricsSource),
     [lyricsSource],

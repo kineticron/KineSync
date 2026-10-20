@@ -7,8 +7,11 @@ import {
   AMLL_WEBVIEW_JS,
 } from "@/components/lyrics/amll-webview-bundle";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
+import { useLyricsPacketTransition, withLyricsPacketTransition } from "./lyrics-packet-transition";
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine as LyricLineType } from "@/types/bridge";
+
+import type { PreviewPlaybackAnchor } from "./use-playback-timeline-clock";
 
 const TransparentWebView = WebView as unknown as React.ComponentType<Record<string, unknown>>;
 
@@ -33,6 +36,7 @@ type AmllLyricsViewProps = {
   demoLyrics?: LyricLineType[];
   demoLayout?: 'preview' | 'player';
   demoIsPlaying?: boolean;
+  demoPlayback?: PreviewPlaybackAnchor;
   demoDurationMs?: number;
   tapToSeekEnabled: boolean;
   showTranslatedText?: boolean;
@@ -335,12 +339,13 @@ function serializeForInjection(payload: unknown) {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export const AmllLyricsView = memo(function AmllLyricsView({
+export const AmllLyricsView = withLyricsPacketTransition(memo(function AmllLyricsView({
   tapToSeekEnabled,
   showTranslatedText = true,
   demoLyrics,
   demoLayout = 'preview',
   demoIsPlaying,
+  demoPlayback,
   demoDurationMs = 25000,
   previewPositionMs = null,
   autoFollowEnabled = true,
@@ -366,14 +371,15 @@ export const AmllLyricsView = memo(function AmllLyricsView({
   currentSourceKey.current = sourceKey;
   const [readySourceKey, setReadySourceKey] = useState<string | null>(null);
   const ready = readySourceKey === sourceKey;
-  const liveLyrics = usePlaybackStore((state) => demoLyrics ?? state.lyrics);
+  const transition = useLyricsPacketTransition();
+  const liveLyrics = usePlaybackStore((state) => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
   const lyrics = demoLyrics ?? liveLyrics;
-  const liveMetadata = usePlaybackStore((state) => demoLyrics ? DEMO_METADATA : state.lyricsMetadata);
+  const liveMetadata = usePlaybackStore((state) => demoLyrics ? DEMO_METADATA : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
   const lyricsMetadata = demoLyrics ? DEMO_METADATA : liveMetadata;
-  const liveSource = usePlaybackStore((state) => demoLyrics ? "demo-syllable" : state.lyricsSource);
+  const liveSource = usePlaybackStore((state) => demoLyrics ? "demo-syllable" : transition?.packet.lyricsSource ?? state.lyricsSource);
   const lyricsSource = demoLyrics ? "demo-syllable" : liveSource;
-  const lyricsStatusMessage = usePlaybackStore((state) => demoLyrics ? "" : state.lyricsStatusMessage);
-  const currentTrack = usePlaybackStore((state) => demoLyrics ? null : state.currentTrack);
+  const lyricsStatusMessage = usePlaybackStore((state) => demoLyrics ? "" : transition?.packet.lyricsStatusMessage ?? state.lyricsStatusMessage);
+  const currentTrack = usePlaybackStore((state) => demoLyrics ? null : transition ? transition.packet.currentTrack : state.currentTrack);
   const songwriters = useMemo(
     () => lyricsMetadata.credits?.songwriters || [],
     [lyricsMetadata.credits?.songwriters],
@@ -404,6 +410,11 @@ export const AmllLyricsView = memo(function AmllLyricsView({
     webViewRef.current?.injectJavaScript(
       `window.KineSyncLyrics && window.KineSyncLyrics.receive(${serializeForInjection(payload)}); true;`,
     );
+  }, [ready]);
+
+  const injectReady = useCallback(() => {
+    if (ready) webViewRef.current?.injectJavaScript(
+      'requestAnimationFrame(() => requestAnimationFrame(() => window.ReactNativeWebView?.postMessage(JSON.stringify({type:"lyricsPacketReady"})))); true;');
   }, [ready]);
 
   // iOS suspends the WebView process while the app is backgrounded. Its
@@ -443,8 +454,10 @@ export const AmllLyricsView = memo(function AmllLyricsView({
       attribution: lyricsMetadata.attribution,
       lastLyricEndTime,
     });
+    injectReady();
   }, [
     inject,
+    injectReady,
     lastLyricEndTime,
     lyrics,
     lyricsMetadata.instrumental,
@@ -484,20 +497,21 @@ export const AmllLyricsView = memo(function AmllLyricsView({
     // freshly mounted AMLL view would otherwise start from the stale anchor
     // and visibly snap forward when the next packet lands. Mirrors Spicy view.
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const anchor = demoPlayback ?? state;
     const currentPosition =
-      state.anchorPositionMs +
-      (state.isPlaying ? Math.max(0, now - state.anchorMonotonicMs) : 0);
+      anchor.anchorPositionMs +
+      (anchor.isPlaying ? Math.max(0, now - anchor.anchorMonotonicMs) : 0);
     inject({
       type: "sync",
       positionMs: previewPositionMs ?? currentPosition,
       previewPositionMs: demoLyrics ? null : previewPositionMs,
-      isPlaying: demoLyrics ? active && (demoIsPlaying ?? true) : active && previewPositionMs === null ? isPlaying : false,
+      isPlaying: demoLyrics ? active && (demoPlayback?.isPlaying ?? demoIsPlaying ?? true) && (!demoPlayback || previewPositionMs === null) : active && previewPositionMs === null ? isPlaying : false,
       durationMs: demoLyrics ? demoDurationMs : currentTrack?.durationMs ?? 0,
       // Demo clock ticks are ordinary anchors, not repeated seeks.
       force: !demoLyrics && previewPositionMs !== null,
     });
   }, [active, anchorMonotonicMs, anchorPositionMs, currentTrack?.id, currentTrack?.durationMs,
-    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, demoDurationMs, previewPositionMs, resumeAutoFollowSignal]);
+    inject, isPlaying, lyrics, demoLyrics, demoIsPlaying, demoPlayback, demoDurationMs, previewPositionMs, resumeAutoFollowSignal]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     if (currentSourceKey.current !== sourceKey) return;
@@ -514,6 +528,10 @@ export const AmllLyricsView = memo(function AmllLyricsView({
       return;
     }
     if (!payload || typeof payload !== "object") {
+      return;
+    }
+    if (payload.type === "lyricsPacketReady") {
+      transition?.onReady();
       return;
     }
     if (payload.type === "attributionLink") {
@@ -570,6 +588,7 @@ export const AmllLyricsView = memo(function AmllLyricsView({
     onLinePress,
     onUserInteraction,
     sourceKey,
+    transition,
   ]);
 
   const handleLoadEnd = useCallback(() => {
@@ -601,7 +620,7 @@ export const AmllLyricsView = memo(function AmllLyricsView({
       />
     </View>
   );
-});
+}));
 
 const styles = StyleSheet.create({
   container: {

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 import { ungzip } from 'pako';
 
 const result = await build({ stdin: { contents: `export {SpotifyDetector,SpotifyPlaybackUnavailableError} from './lib/spotify-detector/client';
 export {sampleFrom,decodeDealer,decodeStateBody,observerBody,trackHex,metadataFrom} from './lib/spotify-detector/protocol';
-export {detectorPacket} from './lib/spotify-detector/packet';`, resolveDir: process.cwd() },
+export {detectorPacket} from './lib/spotify-detector/packet';
+export {bootstrap,bootstrapAndroidObserver} from './lib/spotify-detector/bootstrap';`, resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'esm', write: false });
-const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom, bootstrap, bootstrapAndroidObserver } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const trackId = '4uLU6hMCjMI75M1A2tKUQC';
 const uri = `spotify:track:${trackId}`;
 const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -39,20 +41,138 @@ class Socket {
   event(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
 }
 const flush = async () => { for (let n = 0; n < 15; n++) await Promise.resolve(); };
+const observerUrl = 'https://guc3-spclient.spotify.com/connect-state/v1/devices/test-observer';
+const observerState = { player_state: state().player_state };
+assert(sampleFrom(observerState), 'native playback accepts player_state without a devices map');
+const checkBootstrap = async (transport, options = {}) => {
+  const { url = observerUrl, status = 200, payload = observerState, raw,
+    authorization = 'Bearer request-token', origin = 'https://open.spotify.com', probe = {} } = options;
+  const messages = [], pending = [], intervals = new Map(), pagehide = [];
+  const work = { requestClones: 0, responseClones: 0 };
+  const responseText = raw ?? JSON.stringify(payload);
+  class Xhr {
+    responseType = transport === 'xhr-json' ? 'json' : '';
+    status = status;
+    responseText = responseText;
+    response = payload;
+    open() {}
+    setRequestHeader() {}
+    addEventListener(_, fn) { this.loadend = fn; }
+    getResponseHeader() { return 'application/json'; }
+    send() { this.loadend?.(); }
+  }
+  const window = {
+    fetch: async input => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('/api/token')) return { status: 400, json: async () => probe };
+      return { status, headers: new Headers({ 'content-type': 'application/json' }),
+        clone: () => { work.responseClones++; return { text: () => { const body = Promise.resolve(responseText); pending.push(body); return body; } }; } };
+    },
+    WebSocket: class {},
+    ReactNativeWebView: { postMessage: raw => messages.push(JSON.parse(raw)) },
+    addEventListener: (_, fn) => pagehide.push(fn),
+  };
+  runInNewContext(bootstrap, { window, XMLHttpRequest: Xhr, URL, Headers,
+    location: { origin, href: `${origin}/` },
+    setInterval: fn => { intervals.set(1, fn); return 1; }, clearInterval: id => intervals.delete(id) });
+  await flush();
+  if (transport === 'fetch') {
+    const headers = { authorization, 'client-token': 'request-client' };
+    if (options.requestObject) {
+      await window.fetch({ url, method: 'PUT', headers, clone: () => {
+        work.requestClones++;
+        return { text: async () => '{"device":{}}' };
+      } });
+    } else await window.fetch(url, { method: 'PUT', headers });
+    await Promise.all(pending);
+  } else {
+    const xhr = new Xhr();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Authorization', authorization);
+    xhr.setRequestHeader('Client-Token', 'request-client');
+    xhr.send();
+  }
+  await flush();
+  pagehide.forEach(fn => fn());
+  assert.equal(intervals.size, 0, 'pagehide cleans up the token probe');
+  options.checkWork?.(work);
+  return messages;
+};
+for (const transport of ['fetch', 'xhr-text', 'xhr-json']) {
+  const messages = await checkBootstrap(transport);
+  const verified = messages.filter(m => m.type === 'credentials' && m.authenticated === true);
+  assert.deepEqual(verified, [{ type: 'credentials', token: 'request-token', clientToken: 'request-client',
+    authenticated: true, verification: 'observer-response' }], `${transport}: player_state alone verifies the exact request bearer`);
+  assert(messages.some(m => m.type === 'credentials' && m.authenticated === undefined), 'observed headers stay unverified until the response');
+  assert(messages.every(m => /^(credentials|observerEndpoint|socket|notice)$/.test(m.type)), 'raw response and playback diagnostics never cross the bridge');
+  for (const [reason, options] of [
+    ['untrusted page', { origin: 'https://open.spotify.com.evil.test' }],
+    ['untrusted endpoint', { url: 'https://guc3-spclient.spotify.com.evil.test/connect-state/v1/devices/test' }],
+    ['wrong endpoint', { url: 'https://guc3-spclient.spotify.com/connect-state/v1/player/state' }],
+    ['extra path segment', { url: `${observerUrl}/state` }],
+    ...[201, 204, 400, 401, 403, 429, 500].map(status => [`HTTP ${status}`, { status }]),
+    ...[{}, { device: {} }, { player_state: null }, { player_state: true }, { player_state: 'state' },
+      { player_state: [] }, { player_state: {} }, { player_state: { unrelated: true } },
+      { player_state: { is_playing: 'true' } }].map(payload => ['unrecognized state', { payload }]),
+    ...['', 'Basic request-token', 'Bearer ', 'Bearer token extra'].map(authorization => ['missing/malformed bearer', { authorization }]),
+    ['anonymous token probe', { payload: {}, probe: { accessToken: 'anonymous-token', isAnonymous: true } }],
+    ['unverified token probe', { payload: {}, probe: { accessToken: 'unverified-token' } }],
+  ]) {
+    const rejected = await checkBootstrap(transport, options);
+    assert.equal(rejected.filter(m => m.type === 'credentials' && m.authenticated === true).length, 0,
+      `${transport}: ${reason} cannot verify credentials`);
+  }
+  if (transport !== 'xhr-json') {
+    const malformed = await checkBootstrap(transport, { raw: '{invalid JSON' });
+    assert(!malformed.some(m => m.authenticated === true), `${transport}: malformed JSON cannot verify credentials`);
+  }
+  for (const payload of [{ ...observerState, devices: {} }, { ...observerState, device: {} }, { player_state: { is_paused: true } }]) {
+    const accepted = await checkBootstrap(transport, { payload });
+    assert.equal(accepted.filter(m => m.verification === 'observer-response').length, 1,
+      `${transport}: recognized playing/paused states and existing devices-map responses still verify`);
+  }
+}
+await checkBootstrap('fetch', { requestObject: true, checkWork: work => {
+  assert.deepEqual(work, { requestClones: 0, responseClones: 1 },
+    'observer verification reads the response once without cloning a request for discarded diagnostics');
+} });
+for (const options of [
+  { url: 'https://guc3-spclient.spotify.com/connect-state/v1/player/state' },
+  { url: `${observerUrl}/extra` }, { status: 401 }, { status: 429 }, { authorization: 'Basic invalid' },
+]) {
+  await checkBootstrap('fetch', { ...options, checkWork: work => {
+    assert.equal(work.responseClones, 0, 'responses ineligible to verify credentials need no diagnostic clone');
+  } });
+}
+{
+  const listeners = [], sent = [];
+  class BrowserSocket {
+    send(...args) { sent.push(args); return 'native-result'; }
+    addEventListener(...args) { listeners.push(args); }
+  }
+  class Xhr { open() {} setRequestHeader() {} send() {} }
+  const window = { WebSocket: BrowserSocket, fetch: async () => ({ json: async () => ({}) }),
+    ReactNativeWebView: { postMessage() {} }, addEventListener() {} };
+  runInNewContext(bootstrap, { window, XMLHttpRequest: Xhr, URL, Headers,
+    location: { origin: 'https://open.spotify.com', href: 'https://open.spotify.com/' },
+    setInterval: () => 1, clearInterval() {} });
+  await flush();
+  const socket = new window.WebSocket('wss://dealer.spotify.com/');
+  assert.equal(socket.send, BrowserSocket.prototype.send, 'capture leaves native socket sends untouched');
+  assert.equal(listeners.length, 0, 'discarded browser playback creates no message parser/listener');
+  assert.equal(socket.send('opaque-message'), 'native-result');
+  assert.deepEqual(sent, [['opaque-message']], 'native socket traffic still passes through unchanged');
+}
 try {
   globalThis.WebSocket = Socket;
   globalThis.setTimeout = (fn, ms) => { timers.set(++timerId, { fn, ms, interval: false }); return timerId; };
   globalThis.setInterval = (fn, ms) => { timers.set(++timerId, { fn, ms, interval: true }); return timerId; };
   globalThis.clearTimeout = globalThis.clearInterval = id => timers.delete(id);
-  const bootstrapSource = await import('node:fs/promises').then(fs => fs.readFile('./lib/spotify-detector/bootstrap.ts', 'utf8'));
-  const bootstrapMarker = 'export const bootstrapAndroidObserver = String.raw`';
-  const bootstrapStart = bootstrapSource.indexOf(bootstrapMarker) + bootstrapMarker.length;
-  const androidScript = bootstrapSource.slice(bootstrapStart, bootstrapSource.indexOf('`;', bootstrapStart));
   let androidRoot = null, androidRegistrations = 0;
   const pagehide = [];
   const androidWindow = { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
     addEventListener: (_, fn) => pagehide.push(fn), ReactNativeWebView: { postMessage() {} } };
-  const androidInstall = () => new Function('window', 'document', 'location', androidScript)(androidWindow,
+  const androidInstall = () => new Function('window', 'document', 'location', bootstrapAndroidObserver)(androidWindow,
     { querySelector: () => androidRoot }, { origin: 'https://open.spotify.com' });
   androidInstall();
   const discovery = [...timers.entries()].find(([, t]) => t.ms === 500);
@@ -166,7 +286,7 @@ try {
   assert.equal(timers.size, 0);
   const encoded = Buffer.from(JSON.stringify(state())).toString('base64');
   assert.equal(sampleFrom(decodeDealer({ payloads: [encoded] })).artist, 'Artist');
-  console.log('Spotify detector checks passed: verified session, independent observer, duplicate/stale suppression, pause/seek, monotonic handoff, registration race, lifecycle cleanup and rate limits.');
+  console.log('Spotify detector checks passed: bootstrap fetch/XHR verification, verified session, independent observer, duplicate/stale suppression, pause/seek, monotonic handoff, registration race, lifecycle cleanup and rate limits.');
 } finally {
   for (const [key, value] of Object.entries(saved)) globalThis[key] = value;
 }

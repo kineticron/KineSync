@@ -33,6 +33,8 @@ npm run test:performance
 
 The default test suite runs deterministic lyric, playback, vault, tour, artwork, security, detector, and launch checks without an emulator. Live Activity checks have their own `test:live-activity` command. Timing-based performance assertions are separate from CI's deterministic suite. Compare native performance with matching release builds. [Performance measurements](docs/performance-results.md) include reproduction commands and measurement limits.
 
+The native player uses album artwork for a Kawarp background rendered with Skia, without a WebView. Eight Kawase blur passes prepare a 128 by 128 color texture once per artwork change. A single shader combines fluid warping, saturation, grain and a dark scrim for readable lyrics. Ambient motion runs on the UI thread at up to 30 updates per second, with the shader's longest physical edge capped at 720 pixels. The background fades in and crossfades between artwork over 1.2 seconds, retaining the displayed color mix if another song arrives mid-transition. Missing artwork fades back to the promotional backdrop. Motion freezes when playback pauses, the player loses focus, the app backgrounds or reduced motion is enabled. The web build and native rendering failures use a static blurred artwork background. These bounds limit rendering work, they are not device frame-time or battery measurements.
+
 ## Generated bundles and shared providers
 
 Rebuild tracked WebView bundles after changing an entry point or its styles:

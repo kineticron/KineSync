@@ -1,6 +1,7 @@
 "use strict";
 module.exports = {
   createLyricsService,
+  fetchFromSpicyLyrics,
   getAvailableLyricsSources,
   getTemporarilyDisabledLyricsSources,
   normalizeLyricsSourceKey: normalizeSourceKey,

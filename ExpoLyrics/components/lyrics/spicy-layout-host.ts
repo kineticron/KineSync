@@ -333,7 +333,7 @@ export function scrollToActiveLine(
   let target = bottom - top <= height - topOffset - ACTIVE_RANGE_BOTTOM_PADDING
     ? Math.max(0, top - topOffset)
     : Math.max(0, bottom - height + ACTIVE_RANGE_BOTTOM_PADDING);
-  if (creditsLayout && position >= lyrics[lyrics.length - 1].lineEndTime) {
+  if (creditsLayout && position >= timing.maxEndTimeByIndex[lyrics.length - 1]) {
     target = getCreditsAwareScrollOffset({
       range, lyricsLength: lyrics.length, listHeight: height,
       creditsLayout,

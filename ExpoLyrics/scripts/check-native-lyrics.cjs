@@ -84,8 +84,17 @@ for (const style of ['amll', 'spicy']) {
   assert.equal(nativeFollowIndex(gaps, 1, 8500), 1, 'Normal lyric following keeps its existing target');
   assert.ok(buildNativeRows([gapLine(4000, 5000)], style, true).every(row => !row.interlude), 'Static lyrics never show break animations');
 }
-assert.equal(buildNativeRows([gapLine(0, 1000, 5000), gapLine(7000, 8000)], 'amll')[1].interlude, undefined,
-  'AMLL background vocals must finish before counting a break');
+for (const style of ['amll', 'spicy']) {
+  assert.equal(buildNativeRows([gapLine(0, 1000, 5000), gapLine(7000, 8000)], style)[1].interlude, undefined,
+    'Background vocals must finish before counting a break');
+  const extended = buildNativeRows([line, gapLine(3500, 4000), gapLine(10000, 11000)], style);
+  assert.equal(extended[1].interlude, undefined, 'An overlapping background cannot create a break');
+  assert.equal(extended[2].interlude.start, 6000, 'Breaks respect earlier background packages across shorter leads');
+  assert.equal(extended[2].interlude.end, 10000);
+  assert.equal(extended[0].lead.end, 3000, 'Package timing never stretches the lead voice');
+  assert.equal(nativeFollowIndex(extended, 0, 5500), 0, 'Background playback cannot scroll to a premature break slot');
+  assert.equal(nativeFollowIndex(extended, 1, 6000), 2, 'Real breaks still use the existing follow slot');
+}
 assert.equal(buildNativeRows([{ ...gapLine(5000, 6000), spicyLyricsStartTime: 3000 }], 'spicy')[0].interlude, undefined,
   'Spicy provider intro anchors participate in the break threshold');
 console.log('Native lyrics checks passed: immutable provider text, Unicode clusters, literal/flagged spacing, timing, seeks, independent backgrounds.');

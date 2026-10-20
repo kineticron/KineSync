@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { useAnimatedReaction, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
+import { useLyricsPacketTransition, withLyricsPacketTransition } from '../lyrics-packet-transition';
 import { usePlaybackStore } from '@/store/playback-store';
 import { detectLyricsTimingMode } from '@/lib/lyrics-timing';
 import { getAutoScrollTargetRange, getBackgroundActiveLines, getLyricTimingIndex, getPlaybackWindowState } from '@/lib/lyrics-layout';
@@ -14,9 +15,12 @@ import { useNativeLyricsClock } from './use-native-lyrics-clock';
 import { NativeLyricsFontContext, useNativeLyricsFonts } from './native-lyrics-fonts';
 import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView } from './reference-scroll';
 import { AmllLayoutCell } from './amll-layout-cell';
+import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
+import { buildNativeCueTimeline } from './native-cue-timeline';
 
 export type NativeLyricsViewProps = {
   demoLyrics?: LyricLine[]; demoLayout?: 'preview' | 'player'; demoIsPlaying?: boolean;
+  demoPlayback?: PreviewPlaybackAnchor; demoDurationMs?: number;
   tapToSeekEnabled: boolean; showTranslatedText?: boolean; previewPositionMs?: number | null;
   autoFollowEnabled?: boolean; resumeAutoFollowSignal?: number; selectedLineKeys?: Set<string>;
   onLinePress?: (line: LyricLine) => void; onLineLongPress?: (line: LyricLine) => void;
@@ -31,24 +35,25 @@ const maintainVisibleContentPosition = { disabled: true };
 const emptyMetadata: LyricsMetadata = {};
 
 /** Experimental native host. Both list backends deliberately use identical rows and clocks for A/B profiling. */
-export const NativeLyricsView = memo(function NativeLyricsView({
-  style, list = 'flash', reveal = 'clip', demoLyrics, demoLayout = 'preview', demoIsPlaying,
+export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeLyricsView({
+  style, list = 'flash', reveal = 'clip', demoLyrics, demoLayout = 'preview', demoIsPlaying, demoPlayback, demoDurationMs,
   tapToSeekEnabled, showTranslatedText = true, previewPositionMs = null, autoFollowEnabled = true,
   resumeAutoFollowSignal = 0, selectedLineKeys, onLinePress, onLineLongPress, onActiveLineChange,
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
-  const lyrics = usePlaybackStore(state => demoLyrics ?? state.lyrics);
-  const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : state.lyricsSource);
-  const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : state.lyricsMetadata);
-  const status = usePlaybackStore(state => demoLyrics ? '' : state.lyricsStatusMessage);
+  const transition = useLyricsPacketTransition();
+  const lyrics = usePlaybackStore(state => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
+  const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : transition?.packet.lyricsSource ?? state.lyricsSource);
+  const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
+  const status = usePlaybackStore(state => demoLyrics ? '' : transition?.packet.lyricsStatusMessage ?? state.lyricsStatusMessage);
   const trackDuration = usePlaybackStore(state => demoLyrics ? 0 : state.currentTrack?.durationMs ?? 0);
-  const playing = usePlaybackStore(state => demoLyrics ? demoIsPlaying ?? true : state.isPlaying);
-  const duration = useMemo(() => Math.max(trackDuration, Math.max(1, ...lyrics.map(line => Math.max(line.lineEndTime,
+  const playing = usePlaybackStore(state => demoLyrics ? demoPlayback?.isPlaying ?? demoIsPlaying ?? true : state.isPlaying);
+  const duration = useMemo(() => demoLyrics && demoDurationMs ? demoDurationMs : Math.max(trackDuration, Math.max(1, ...lyrics.map(line => Math.max(line.lineEndTime,
     ...(line.backgroundSyllables ?? []).map(part => part.endTime),
-    ...(line.spicyBackgrounds ?? []).map(block => block.lineEndTime)))) + 1000), [lyrics, trackDuration]);
+    ...(line.spicyBackgrounds ?? []).map(block => block.lineEndTime)))) + 1000), [demoDurationMs, demoLyrics, lyrics, trackDuration]);
   const staticLyrics = useMemo(() => detectLyricsTimingMode(lyrics, source) === 'static', [lyrics, source]);
-  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying });
+  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback });
   const hasDuet = useMemo(() => lyrics.some(line => landscapeMode ? !line.oppositeAligned : !!line.oppositeAligned), [landscapeMode, lyrics]);
   const rows = useMemo(() => buildNativeRows(lyrics, style, staticLyrics), [lyrics, staticLyrics, style]);
   const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);
@@ -78,10 +83,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
   const preview = !!demoLyrics && demoLayout === 'preview';
   const topPadding = preview ? 12 : landscapeMode ? 168 : 150;
   const contentStyle = useMemo(() => ({ paddingTop: topPadding, paddingBottom: Math.max(280, viewportHeight) }), [topPadding, viewportHeight]);
-  const cues = useMemo(() => [...new Set([0, ...lyrics.flatMap(line => [line.lineStartTime, line.lineEndTime,
-    Math.max(0, line.lineStartTime - 500), ...(line.backgroundSyllables ?? []).flatMap(part => [part.startTime, part.endTime]),
-    ...(line.spicyBackgrounds ?? []).flatMap(block => [block.lineStartTime, block.lineEndTime])])])].sort((a, b) => a - b), [lyrics]);
-  const cueWindows = useMemo(() => cues.map(time => getPlaybackWindowState(time, lyrics, backgrounds, timing)), [backgrounds, cues, lyrics, timing]);
+  const { cues, windows: cueWindows } = useMemo(() => buildNativeCueTimeline(lyrics, backgrounds, timing), [backgrounds, lyrics, timing]);
   // Compute discrete presentation state on the UI thread. Cells and their glyph
   // trees retain their identity when a cue advances, even if JS is busy.
   const presentationCue = useDerivedValue(() => {
@@ -122,7 +124,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     if (!mounted.current || token !== generation.current || latestLyrics.current !== lyrics || !active || AppState.currentState !== 'active') return;
     currentPosition.current = time;
     const next = getPlaybackWindowState(time, lyrics, backgrounds, timing);
-    setWindow(previous => previous.activeLineStartIndex === next.activeLineStartIndex &&
+    if (reveal !== 'canvas') setWindow(previous => previous.activeLineStartIndex === next.activeLineStartIndex &&
       previous.activeLineEndIndex === next.activeLineEndIndex && previous.visualActiveLineStartIndex === next.visualActiveLineStartIndex &&
       previous.visualActiveLineEndIndex === next.visualActiveLineEndIndex && previous.focusLineIndex === next.focusLineIndex &&
       previous.isLongPause === next.isLongPause && previous.pauseStartMs === next.pauseStartMs &&
@@ -135,16 +137,12 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     const range = getAutoScrollTargetRange(next, time, lyrics);
     if (seek) lastScrollTarget.current = '';
     if (range) scrollTo(range.startIndex, !seek);
-  }, [active, backgrounds, lyrics, onActiveLineChange, scrollTo, timing]);
+  }, [active, backgrounds, lyrics, onActiveLineChange, reveal, scrollTo, timing]);
   const cueIdentity = useMemo(() => ({ lyrics, token: ++generation.current }), [lyrics]);
   const token = cueIdentity.token;
   useAnimatedReaction(() => {
     if (!running.value || staticLyrics) return null;
-    const time = position.value;
-    let low = 0;
-    let high = cues.length;
-    while (low < high) { const mid = (low + high) >>> 1; if (cues[mid] <= time) low = mid + 1; else high = mid; }
-    return { index: low, token, seek: seekVersion.value };
+    return { index: presentationCue.value, token, seek: seekVersion.value };
   }, (cue, previous) => {
     // Cross to JS only at a semantic cue, never on scroll or every playback frame.
     if (cue !== null && (cue.index !== previous?.index || cue.token !== previous?.token || cue.seek !== previous?.seek))
@@ -226,6 +224,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
     // Retry only after new rows have laid out; no delayed retries can steal a user drag.
   }, []);
   const onContentSizeChange = useCallback(() => {
+    transition?.onReady();
     if (pendingScroll.current && following.current) {
       const { index, animated } = pendingScroll.current;
       pendingScroll.current = null;
@@ -238,8 +237,8 @@ export const NativeLyricsView = memo(function NativeLyricsView({
       const range = getAutoScrollTargetRange(current, currentPosition.current, lyrics);
       if (range) scrollTo(range.startIndex, true);
     }
-  }, [backgrounds, lyrics, scrollTo, timing]);
-  if (!lyrics.length) return <View style={styles.empty}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
+  }, [backgrounds, lyrics, scrollTo, timing, transition]);
+  if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
@@ -257,7 +256,7 @@ export const NativeLyricsView = memo(function NativeLyricsView({
           onTouchStart={takeOwnership} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>
   </View>;
-});
+}));
 
 const styles = StyleSheet.create({
   root: { flex: 1 }, empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 },

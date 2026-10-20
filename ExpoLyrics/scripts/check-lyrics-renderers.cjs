@@ -1,4 +1,4 @@
-/* global __dirname */
+/* global __dirname, Buffer */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -133,6 +133,36 @@ assert.equal(layout.getPlaybackWindowState(10000, lines).isLongPause, true);
 assert.equal(layout.getPlaybackWindowState(18000, lines).isLongPause, false);
 assert.deepEqual(rangeAt(2000), { startIndex: 0, endIndex: 0 }, 'backward seeks rebuild the range');
 assert.equal(layout.getAutoScrollTargetRange(layout.EMPTY_WINDOW_STATE, 0, []), null);
+const packageLines = [makeLine(1000, 2000), makeLine(7000, 8000)];
+packageLines[0].backgroundSyllables = [{ text: 'echo', startTime: 1800, endTime: 5000 }];
+const packageTiming = layout.getLyricTimingIndex(packageLines);
+const packageBackgrounds = layout.getBackgroundActiveLines(packageLines);
+const packageState = position => layout.getPlaybackWindowState(position, packageLines, packageBackgrounds, packageTiming);
+for (const position of [2000, 3500, 4999]) {
+  const state = packageState(position);
+  assert.equal(state.isLongPause, false, 'a background tail is ongoing lyrics, not an interlude');
+  assert.equal(state.activeLineStartIndex, 0, 'the background keeps its own package highlighted');
+  assert.deepEqual(layout.getAutoScrollTargetRange(state, position, packageLines), { startIndex: 0, endIndex: 0 },
+    'background-only playback stays anchored to its row');
+}
+assert.equal(packageState(5000).activeLineStartIndex, 1, 'short-gap prehighlight starts when the whole package ends');
+assert.equal(packageState(3500).activeLineStartIndex, 0, 'backward seeks restore the background package');
+const exactBackgroundLines = [
+  { ...makeLine(1000, 2000), spicyBackgrounds: [
+    { lineStartTime: 1500, lineEndTime: 6000, syllables: [{ text: 'long echo', startTime: 1500, endTime: 6000 }] },
+    { lineStartTime: 2000, lineEndTime: 3000, syllables: [{ text: 'short echo', startTime: 2000, endTime: 3000 }] },
+  ] }, makeLine(3500, 4000), makeLine(10000, 11000),
+];
+assert.equal(layout.getBackgroundEndTime(exactBackgroundLines[0]), 6000, 'all independent background blocks contribute');
+const exactState = position => layout.getPlaybackWindowState(position, exactBackgroundLines);
+assert.deepEqual(layout.getAutoScrollTargetRange(exactState(3750), 3750, exactBackgroundLines), { startIndex: 0, endIndex: 1 },
+  'overlapping backgrounds keep the existing scroll range with the next lead');
+assert.deepEqual(layout.getAutoScrollTargetRange(exactState(4500), 4500, exactBackgroundLines), { startIndex: 0, endIndex: 0 },
+  'an older background outliving a newer lead remains the scroll anchor');
+assert.equal(exactState(6500).pauseStartMs, 6000, 'a real interlude starts after all earlier packages finish');
+assert.equal(exactState(6500).pauseVisualDurationMs, 3500, 'dot duration excludes the background tail');
+assert.equal(exactState(9500).activeLineStartIndex, 2, 'long-pause early exit still prehighlights the upcoming lyric');
+assert.equal(exactState(11000).isLongPause, false, 'song end never allocates pause dots');
 for (const anchor of [0, 32]) {
   const padding = layout.getBottomListPadding({ viewportHeight: 400, lyricsLength: 4, lastLineTop: 600, lastLineHeight: 84, creditsLayout: null, hasCredits: false, activeLineTopOffset: anchor });
   assert.equal(600 + 84 + padding - 400, 600 - anchor, 'last row reaches the native anchor without dead space');
@@ -270,6 +300,29 @@ assert.ok(rapidScroll < spacedScroll && rapidScroll >= 240 && spacedScroll <= 44
 assert.ok(farScroll >= spacedScroll && farScroll <= 440, 'longer glides take longer without exceeding the base');
 host.destroyLyricsLayout();
 console.log('WebView controller checks passed: measured anchors, seeks, manual scroll, resume, landscape and last-line padding.');
+
+landscape = false;
+const packageContent = new ElementBox();
+packageContent.className = 'content';
+scrollRoot.appendChild(packageContent);
+const packageRuntime = packageLines.map((line, sourceIndex) => ({ sourceIndex, StartTime: line.lineStartTime,
+  EndTime: line.lineEndTime, HTMLElement: new ElementBox() }));
+packageRuntime.splice(1, 0, { sourceIndex: 0, StartTime: 1800, EndTime: 5000, BGLine: true, HTMLElement: new ElementBox() });
+host.initLyricsLayout(viewport, packageContent, packageRuntime, packageLines);
+for (const position of [1500, 2500, 4500]) {
+  host.scrollToActiveLine(position, true, true, () => {});
+  assert.equal(viewport.scrollTop, 150, 'lead-to-background handoff keeps the measured scroll anchor');
+  assert.ok(!packageContent.children[1].classList.contains('ks-preactive'), 'the next row stays dim during attached vocals');
+}
+host.scrollToActiveLine(5000, true, false, () => {});
+assert.ok(packageContent.children[1].classList.contains('ks-preactive'), 'the next row highlights at the package end');
+clockMs += 500;
+host.scrollToActiveLine(5500, true, false, () => {});
+assert.equal(viewport.scrollTop, 234, 'the real short gap still scrolls to the next measured row');
+host.scrollToActiveLine(2500, true, true, () => {});
+assert.equal(viewport.scrollTop, 150, 'seeking back restores the background row anchor');
+assert.ok(!packageContent.children[1].classList.contains('ks-preactive'), 'seeking back clears premature highlighting');
+host.destroyLyricsLayout();
 
 const touchContent = new ElementBox();
 landscape = false;

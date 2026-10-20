@@ -11,8 +11,9 @@ function loadMobileVault({ legacy = null, filename = ':memory:', resolveImported
   let database;
   let backup = legacy;
   const queries = [];
-  const context = { exports: {}, require(name) {
-    if (name === '@react-native-async-storage/async-storage') return { getItem: async () => backup };
+  const context = { exports: {}, setTimeout, clearTimeout, require(name) {
+    if (name === '@react-native-async-storage/async-storage') return { getItem: async () => backup, setItem: async (_key, value) => { backup = value; } };
+    if (name === '@/lib/lyrics-policy') return require('../../lib/lyrics-policy');
     if (name === '@/lib/vault-spotify-match') return { resolveImportedVaultTrack: resolveImportedTrack };
     assert.equal(name, 'expo-sqlite');
     return { openDatabaseAsync: async () => {

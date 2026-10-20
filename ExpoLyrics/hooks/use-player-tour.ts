@@ -4,7 +4,6 @@ import { getTourPosition, TOUR_DURATION_MS, usePlayerTourStore } from '@/store/p
 
 export function usePlayerTour(focused: boolean) {
   const tour = usePlayerTourStore();
-  const [position, setPosition] = useState(0);
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   useEffect(() => {
     if (focused && tour.pending) usePlayerTourStore.getState().start();
@@ -20,16 +19,13 @@ export function usePlayerTour(focused: boolean) {
   }, [focused, tour.active]);
   useEffect(() => {
     if (!tour.active || !focused || !foreground) return;
-    const sync = () => {
-      const state = usePlayerTourStore.getState();
-      const next = getTourPosition(state);
-      if (next >= TOUR_DURATION_MS && state.isPlaying) state.seek(0);
-      setPosition(next >= TOUR_DURATION_MS && state.isPlaying ? 0 : next);
-    };
-    sync();
     if (!tour.isPlaying) return;
-    const timer = setInterval(sync, 100);
-    return () => clearInterval(timer);
+    const remaining = TOUR_DURATION_MS - getTourPosition(usePlayerTourStore.getState());
+    const timer = setTimeout(() => {
+      const state = usePlayerTourStore.getState();
+      if (state.active && state.isPlaying) state.seek(0);
+    }, Math.max(0, remaining));
+    return () => clearTimeout(timer);
   }, [tour.active, tour.isPlaying, tour.anchorPositionMs, tour.anchorMonotonicMs, focused, foreground]);
-  return { ...tour, position, foreground };
+  return { ...tour, foreground };
 }

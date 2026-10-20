@@ -167,12 +167,14 @@ assert.ok(retry);
 assert.ok(scrollCallback);
 for (const animated of [false, true]) {
   const calls = [];
-  const context = { useCallback: fn => fn, pendingScroll: { current: { index: 4, animated } },
+  let ready = false;
+  const context = { useCallback: fn => fn, transition: { onReady: () => { ready = true; } }, pendingScroll: { current: { index: 4, animated } },
     following: { current: true }, lastScrollTarget: { current: 'old' },
     scrollTo: (index, animation) => calls.push([index, animation]), backgrounds: [], lyrics: [], timing: {} };
   vm.runInNewContext(`(${retry})()`, context);
   assert.deepEqual(calls, [[4, animated]], 'A cold row measurement must preserve the original scroll animation');
   assert.equal(context.pendingScroll.current, null);
+  assert.equal(ready, true, 'A measured replacement must release the waiting lyrics crossfade');
 }
 for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true, true, false], [4, false, true, false], [4, true, false, false]]) {
   const command = { current: { serial: 8, index: 4, offset: 600, snap } };

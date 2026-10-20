@@ -175,31 +175,42 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
-    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock });
+    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     const time = position.value;
     const previous = state.value;
     const isActive = active.value;
+    // A proven idle picture needs no word scans while its presentation is unchanged.
+    if (previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
+      (time === previous.time || !isActive && (time < lineEnd) === (previous.time < lineEnd) &&
+        (time < words[0].word.start || time > lineEnd + 1500))) {
+      if (time !== previous.time) state.modify(s => { s.time = time; return s; }, false);
+      return;
+    }
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
     const floatClock = advanceAmllFloatClock(previous.floatClock, isActive, time, dt * 1000);
     const floatSettled = spicy || words.every(w => amllWordFloatPosition(floatClock, time, w.word.start, w.word.end) <= w.word.start);
     const idle = floatSettled && !isActive && !previous.active && (time < lineEnd) === (previous.time < lineEnd);
     const settled = !spicy || previous.words.every(w => w.settled);
     if (settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
-      lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) return;
+      lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) {
+      state.modify(s => { s.cached = true; return s; }, false);
+      return;
+    }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
     // composited by the parent without rebuilding glyph commands each frame.
     if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
-      state.modify(s => { s.time = time; for (const w of s.words) w.previousPosition = time; return s; }, false);
+      state.modify(s => { s.time = time; s.cached = true; return s; }, false);
       return;
     }
-    const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.words[index], time, dt)) : [];
+    const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
+      ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd, lineMotion.value, floatClock), bounds);
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock };
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
   }, [active, background, bounds, fontSize, lineEnd, lineMotion, picture, position, spicy, state, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;

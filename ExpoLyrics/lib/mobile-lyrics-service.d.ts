@@ -26,6 +26,8 @@ export type SpotifyCatalogTrack = {
   durationMs: number;
 };
 
+export function fetchFromSpicyLyrics(track: MobileLyricsTrack, options: { spicyLyricsPublishableKey: string }): Promise<MobileLyricsPacket | null>;
+
 export type MobileLyricsSourcePreference =
   | "auto"
   | "local-vault"

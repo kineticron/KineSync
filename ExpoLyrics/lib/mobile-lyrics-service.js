@@ -903,7 +903,6 @@ const QQ_DIRECT_CANDIDATE_PARALLELISM = 4;
 const QQ_DIRECT_CANDIDATE_PROBE_CAP = 8;
 const QQ_DIRECT_LYRIC_FETCH_TIMEOUT_MS = 8_000;
 const MAX_SPOTIFY_TRACK_CANDIDATES = 12;
-const MAX_SPICY_STRICT_SPOTIFY_CANDIDATES = 3;
 const SPICY_QQ_FINGERPRINT_TIMEOUT_MS = 3_000;
 const VERSION_HINTS = [
   "japanese",
@@ -6411,44 +6410,6 @@ async function searchSpotifyTrackCandidates(track, accessToken) {
     .filter(Boolean);
 }
 
-function strictSpicySpotifyTitleArtistMatch(track, candidate) {
-  if (!titleCoreMatchesQuery(track, candidate?.title || "")) {
-    return false;
-  }
-  if (hasMissingFeaturedArtistHints(track?.title || "", candidate?.title || "")) {
-    if (
-      !featuredArtistHintsPresentInCandidate(
-        track?.title || "",
-        candidate?.title || "",
-        candidate?.artist || "",
-      )
-    ) {
-      return false;
-    }
-  }
-
-  const requestedPrimaryArtist = normalizeText(
-    getPrimaryArtistName(track?.artist || ""),
-  );
-  if (!requestedPrimaryArtist) {
-    // If we don't know the artist, at least enforce exact core-title matching.
-    return true;
-  }
-  const candidatePrimaryArtist = normalizeText(
-    getPrimaryArtistName(candidate?.artist || ""),
-  );
-  if (!candidatePrimaryArtist) {
-    return false;
-  }
-
-  // Windows media session often only provides the first artist; accept primary overlap.
-  return (
-    requestedPrimaryArtist === candidatePrimaryArtist ||
-    requestedPrimaryArtist.includes(candidatePrimaryArtist) ||
-    candidatePrimaryArtist.includes(requestedPrimaryArtist)
-  );
-}
-
 function formatSpotifyArtistNames(artistEntries = []) {
   const names = [];
   const seen = new Set();
@@ -6788,55 +6749,6 @@ async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken, { 
     spotifyPartnerCatalogInFlight.delete(cacheKey);
   }
 }
-async function searchSpotifyTrackCandidatesStrictForSpicy(track, accessToken) {
-  const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
-  const seenIds = new Set();
-  const matches = [];
-  let lastError = null;
-  const searchResults = await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchSpotifyPartnerSearch(query, accessToken);
-        return { payload, error: null };
-      } catch (error) {
-        return { payload: null, error };
-      }
-    }),
-  );
-  for (const result of searchResults) {
-    if (result.error) {
-      lastError = result.error;
-      continue;
-    }
-    collectSpotifyPartnerSearchMatches(
-      track,
-      result.payload,
-      seenIds,
-      matches,
-    );
-  }
-  if (!matches.length && lastError) {
-    throw lastError;
-  }
-  const ranked = matches.sort((a, b) => b.score - a.score);
-  if (!ranked.length) {
-    return [];
-  }
-
-  const strict = ranked.filter((candidate) =>
-    strictSpicySpotifyTitleArtistMatch(track, candidate),
-  );
-  if (strict.length) {
-    return strict
-      .slice(0, MAX_SPICY_STRICT_SPOTIFY_CANDIDATES)
-      .map((candidate) => candidate.id)
-      .filter(Boolean);
-  }
-
-  // No strict hit: return empty so Spicy can fail fast instead of mismatching.
-  return [];
-}
-
 function scoreLyricsCoverage(lyrics, durationMs = 0) {
   if (!Array.isArray(lyrics) || !lyrics.length) {
     return -1;
@@ -8402,6 +8314,12 @@ async function fetchFromSpicyLyrics(
       continue;
     }
 
+    // Only community syncs come from Spicy. Other recordings use lrc.red
+    // and the normal provider fallbacks, without retaining Spicy's copies.
+    if (extractSpicyPayloadMetadata(spicyLyricsData).attribution.provider !== "Spicy Lyrics") {
+      continue;
+    }
+
     const parseStartedAt = Date.now();
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,
@@ -8510,11 +8428,12 @@ async function fetchFromSpicyLyrics(
       });
     }
 
+    const fetchedAt = Date.now();
     const candidate = {
       lyrics,
       source: sourceLabel,
       metadata: {
-        spicyApi: { fetchedAt: Date.now(), expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000 },
+        spicyApi: { fetchedAt, expiresAt: fetchedAt + 30 * 24 * 60 * 60 * 1000 },
         ...(songwriters.length ? { credits: { songwriters } } : {}),
         ...(spicyMetadata.attribution
           ? { attribution: spicyMetadata.attribution }
@@ -9355,19 +9274,21 @@ async function fetchFromLrcRed(track) {
       .slice(0, 3);
   }
 
-  let bestResult = null;
-  let lastError = null;
-  for (const candidate of candidates) {
+  const errors = [];
+  // Start all bounded candidate requests concurrently, but consume them in
+  // ranked order so a top-ranked karaoke result can return as soon as it
+  // settles without waiting for lower-ranked (possibly hanging) requests.
+  const candidatePromises = candidates.map(async (candidate, index) => {
     try {
       const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`);
       // Reject static lyrics, HTML error pages, and invalid payloads.
-      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) continue;
+      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
       const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
-      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) continue;
+      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) return null;
       const parsed = parseTtmlToLyrics(content);
       if (!parsed.lyrics?.some((line) =>
         Number(line.lineEndTime) > Number(line.lineStartTime),
-      )) continue;
+      )) return null;
       const result = {
         lyrics: parsed.lyrics,
         source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
@@ -9381,12 +9302,21 @@ async function fetchFromLrcRed(track) {
         },
       };
       if (parsed.useKaraokeTiming) return result;
-      bestResult ||= result;
+      return result;
     } catch (error) {
-      if (!/HTTP 404\b/.test(String(error?.message || error))) lastError = error;
+      if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;
+      return null;
     }
+  });
+  let bestResult = null;
+  for (const promise of candidatePromises) {
+    const result = await promise;
+    if (!result) continue;
+    if (result.source === "lrc-red-karaoke") return result;
+    bestResult ||= result;
   }
   if (bestResult) return bestResult;
+  const lastError = errors.filter(Boolean).pop();
   if (lastError) throw lastError;
   return null;
 }
@@ -12514,6 +12444,9 @@ function mergeLyricsMetadata(...metadataList) {
     if (!metadata || typeof metadata !== "object") {
       continue;
     }
+    if (metadata.spicyApi && typeof metadata.spicyApi === "object") {
+      merged.spicyApi = { ...metadata.spicyApi };
+    }
     if (metadata.ttml && typeof metadata.ttml === "object") {
       merged.ttml = { ...metadata.ttml };
     }
@@ -13760,6 +13693,25 @@ function createLyricsService({
     bySource: new Map(),
   };
   const AUTO_TRANSLATION_QUIET_MS = 5_000;
+  let cacheExpiryTimer;
+  const scheduleCacheExpiry = () => {
+    clearTimeout(cacheExpiryTimer);
+    const caches = [lastDisplayedByTrack, publishedToFrontendCache, activeTrackSourceCache.bySource];
+    let nextExpiry = Infinity;
+    let removed = false;
+    for (const cache of caches) {
+      for (const [key, packet] of cache) {
+        if (isExpiredSpicyPacket(packet)) { cache.delete(key); removed = true; }
+        else if (packet?.metadata?.spicyApi) nextExpiry = Math.min(nextExpiry, Number(packet.metadata.spicyApi.expiresAt));
+      }
+    }
+    if (removed) geminiTranslationCache.clear();
+    if (Number.isFinite(nextExpiry)) {
+      cacheExpiryTimer = setTimeout(scheduleCacheExpiry, Math.max(1, Math.min(60_000, nextExpiry - Date.now())));
+      cacheExpiryTimer?.unref?.();
+    }
+  };
+
 
   const stripDesktopSourceSuffix = (source) =>
     String(source || "")
@@ -13897,6 +13849,7 @@ function createLyricsService({
       return;
     }
     activeTrackSourceCache.bySource.set(normalizedSource, incoming);
+    scheduleCacheExpiry();
   };
 
   const getCachedSourceLyricsPacket = (trackId, preferredSource) => {
@@ -13959,6 +13912,7 @@ function createLyricsService({
       lyrics,
       statusMessage: String(packet.statusMessage || ""),
     });
+    scheduleCacheExpiry();
   };
 
   const getPublishedLyrics = (trackId) => {
@@ -14682,6 +14636,7 @@ function createLyricsService({
       return buildLyricsPacketFromBase({ trackId: cacheKey }, published);
     },
     clearCache() {
+      clearTimeout(cacheExpiryTimer);
       lastDisplayedByTrack.clear();
       geminiTranslationCache.clear();
       publishedToFrontendCache.clear();
@@ -14914,6 +14869,7 @@ function createLyricsService({
 
 export {
   createLyricsService,
+  fetchFromSpicyLyrics,
   getAvailableLyricsSources,
   getTemporarilyDisabledLyricsSources,
   probeLyricsSource,

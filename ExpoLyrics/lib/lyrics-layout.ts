@@ -56,6 +56,7 @@ export type BackgroundActiveLine = {
 };
 
 export type LyricTimingIndex = {
+  endTimeByIndex: number[];
   maxEndTimeByIndex: number[];
 };
 
@@ -170,14 +171,17 @@ export function findFirstUpcomingLineIndex(
 }
 
 export function getBackgroundEndTime(line: LyricLineType) {
-  const backgroundSyllables = line.backgroundSyllables;
-  if (!backgroundSyllables?.length) {
-    return line.lineEndTime;
+  let endTime = line.lineEndTime;
+  for (const syllable of line.backgroundSyllables ?? []) {
+    endTime = Math.max(endTime, syllable.endTime);
   }
-  return Math.max(
-    line.lineEndTime,
-    backgroundSyllables[backgroundSyllables.length - 1].endTime,
-  );
+  for (const background of line.spicyBackgrounds ?? []) {
+    endTime = Math.max(endTime, background.lineEndTime);
+    for (const syllable of background.syllables) {
+      endTime = Math.max(endTime, syllable.endTime);
+    }
+  }
+  return endTime;
 }
 
 export function getBackgroundActiveLines(lyrics: LyricLineType[]) {
@@ -197,15 +201,18 @@ export function getBackgroundActiveLines(lyrics: LyricLineType[]) {
 }
 
 export function getLyricTimingIndex(lyrics: LyricLineType[]): LyricTimingIndex {
+  const endTimeByIndex: number[] = [];
   const maxEndTimeByIndex: number[] = [];
   let maxEndTime = 0;
 
   for (let index = 0; index < lyrics.length; index += 1) {
-    maxEndTime = Math.max(maxEndTime, lyrics[index].lineEndTime);
+    const endTime = getBackgroundEndTime(lyrics[index]);
+    endTimeByIndex.push(endTime);
+    maxEndTime = Math.max(maxEndTime, endTime);
     maxEndTimeByIndex.push(maxEndTime);
   }
 
-  return { maxEndTimeByIndex };
+  return { endTimeByIndex, maxEndTimeByIndex };
 }
 
 export function extendLineIndexRange(
@@ -287,8 +294,7 @@ export function getPlaybackWindowState(
         break;
       }
 
-      const line = lyrics[idx];
-      if (isLineInPrimaryWindow(playbackPosition, line)) {
+      if (playbackPosition < timingIndex.endTimeByIndex[idx]) {
         activeStart = idx;
         if (activeEnd < 0) {
           activeEnd = idx;
@@ -301,7 +307,7 @@ export function getPlaybackWindowState(
       if (playbackPosition < line.lineStartTime) {
         break;
       }
-      if (playbackPosition < line.lineEndTime) {
+      if (playbackPosition < timingIndex.endTimeByIndex[idx]) {
         if (activeStart === -1) {
           activeStart = idx;
         }
@@ -323,33 +329,33 @@ export function getPlaybackWindowState(
     }
   }
 
-  const previousLineIndex = findLastEndedLineIndex(playbackPosition, lyrics);
+  const previousLineIndex = lastStartedIndex;
   const nextLineIndex = findFirstUpcomingLineIndex(playbackPosition, lyrics);
 
   // Keep previous line fully revealed for short inter-line gaps.
   if (previousLineIndex >= 0 && nextLineIndex >= 0) {
-    const previous = lyrics[previousLineIndex];
+    const previousEndTime = timingIndex.maxEndTimeByIndex[previousLineIndex];
     const next = lyrics[nextLineIndex];
     if (
-      playbackPosition >= previous.lineEndTime &&
+      playbackPosition >= previousEndTime &&
       playbackPosition < next.lineStartTime
     ) {
       const pauseDuration = Math.max(
         0,
-        next.lineStartTime - previous.lineEndTime,
+        next.lineStartTime - previousEndTime,
       );
       const isLongPause = pauseDuration >= LONG_PAUSE_THRESHOLD_MS;
       const pauseVisualDuration = Math.max(
         1,
         pauseDuration - PAUSE_DOTS_EARLY_EXIT_MS,
       );
-      const pauseVisualEndTime = previous.lineEndTime + pauseVisualDuration;
+      const pauseVisualEndTime = previousEndTime + pauseVisualDuration;
       const showLongPauseVisuals =
         isLongPause && playbackPosition < pauseVisualEndTime;
       const pauseProgress =
         showLongPauseVisuals && pauseVisualDuration > 0
           ? clamp01(
-              (playbackPosition - previous.lineEndTime) / pauseVisualDuration,
+              (playbackPosition - previousEndTime) / pauseVisualDuration,
             )
           : 0;
       return finalize({
@@ -360,7 +366,7 @@ export function getPlaybackWindowState(
         pauseBeforeIndex: -1,
         isLongPause: showLongPauseVisuals,
         pauseProgress,
-        pauseStartMs: previous.lineEndTime,
+        pauseStartMs: previousEndTime,
         pauseVisualDurationMs: pauseVisualDuration,
       });
     }
@@ -621,7 +627,7 @@ export function getAutoScrollTargetRange(
     if (!line) {
       return null;
     }
-    if (playbackPosition < line.lineEndTime) {
+    if (playbackPosition < getBackgroundEndTime(line)) {
       return { startIndex: activeStart, endIndex: activeStart };
     }
     const nextIndex = activeStart + 1;

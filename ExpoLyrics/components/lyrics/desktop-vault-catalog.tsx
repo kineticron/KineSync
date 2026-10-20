@@ -38,7 +38,15 @@ export function DesktopVaultCatalog({ disabled, onTransferred }: { disabled: boo
     try {
       const result = await bridgeClient.browseDesktopVault(query, offset);
       if (version !== generation.current) return;
-      setEntries(previous => offset ? [...previous, ...(result.entries || [])].filter((entry, index, all) => all.findIndex(item => item.vaultId === entry.vaultId) === index) : result.entries || []);
+      setEntries(previous => {
+        if (!offset) return result.entries || [];
+        const seen = new Set<string>();
+        return [...previous, ...(result.entries || [])].filter(entry => {
+          if (seen.has(entry.vaultId)) return false;
+          seen.add(entry.vaultId);
+          return true;
+        });
+      });
       setTotal(result.total || 0);
       setNextOffset(result.nextOffset ?? null);
     } catch (error) {

@@ -985,6 +985,7 @@
       );
       const vaultLyricsStatus = document.getElementById("vault-lyrics-status");
       let latestLyricsLineCount = 0;
+      let latestLyricsExportRestricted = false;
       let cachedVaultEntries = [];
 
       const normalizeVaultSearchText = (value) =>
@@ -1195,6 +1196,12 @@
           jsonButton.title = "Export as JSON";
           jsonButton.textContent = "JSON";
 
+          if (entry.exportRestricted) {
+            ttmlButton.disabled = true;
+            jsonButton.disabled = true;
+            ttmlButton.title = jsonButton.title = "Spicy Lyrics community syncs cannot be exported";
+          }
+
           actions.append(ttmlButton, jsonButton);
           row.append(main, actions);
           vaultEntryList.append(row);
@@ -1403,14 +1410,15 @@
         if (!exportLyricsTtmlButton) return;
         const lines = Number(status.lyricsLines ?? latestLyricsLineCount ?? 0);
         latestLyricsLineCount = lines;
-        const enabled = lines > 0;
+        latestLyricsExportRestricted = Boolean(status.lyricsExportRestricted ?? latestLyricsExportRestricted);
+        const enabled = lines > 0 && !latestLyricsExportRestricted;
         exportLyricsTtmlButton.disabled = !enabled;
         exportLyricsTtmlButton.title = enabled
           ? "Save synced lyrics for the current track as a TTML file"
-          : "Load synced lyrics for the current track before exporting";
+          : latestLyricsExportRestricted ? "Spicy Lyrics community syncs cannot be exported" : "Load synced lyrics for the current track before exporting";
         if (saveLyricsVaultButton) {
-          saveLyricsVaultButton.disabled = !enabled;
-          saveLyricsVaultButton.title = enabled
+          saveLyricsVaultButton.disabled = lines <= 0;
+          saveLyricsVaultButton.title = lines > 0
             ? "Store the current synced lyrics in the local vault"
             : "Load synced lyrics for the current track before saving";
         }

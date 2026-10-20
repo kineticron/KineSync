@@ -6,6 +6,7 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const { parseTtmlToLyrics, extractTtmlMetadata } = require("./lyricsTtmlImport");
 const { lyricsToTtml, lyricsUseKaraokeTiming } = require("./lyricsTtmlExport");
+const { spicyLyricsExpiresAt, isSpicyCommunityLyrics, withSpicyFreshness } = require("./lyricsPolicy");
 
 const VAULT_STORAGE_VERSION = 2;
 const LYRICS_GZIP_FILENAME = "lyrics.json.gz";
@@ -496,6 +497,7 @@ function createLyricsVaultStore({ userDataPath }) {
     db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
+    PRAGMA secure_delete = ON;
     PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS vault_entries (
       vault_id TEXT PRIMARY KEY, spotify_id TEXT NOT NULL,
@@ -505,11 +507,14 @@ function createLyricsVaultStore({ userDataPath }) {
     CREATE INDEX IF NOT EXISTS vault_spotify ON vault_entries(spotify_id);
     CREATE INDEX IF NOT EXISTS vault_title_artist ON vault_entries(title_artist);
     CREATE INDEX IF NOT EXISTS vault_saved ON vault_entries(saved_at DESC);
+    CREATE INDEX IF NOT EXISTS vault_expiry ON vault_entries(expires_at);
     CREATE TABLE IF NOT EXISTS vault_keys (
       lookup_key TEXT PRIMARY KEY, vault_id TEXT NOT NULL
       REFERENCES vault_entries(vault_id) ON DELETE CASCADE
     );
+    CREATE INDEX IF NOT EXISTS vault_keys_entry ON vault_keys(vault_id);
     CREATE TABLE IF NOT EXISTS vault_migrations (name TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS vault_refresh (vault_id TEXT PRIMARY KEY, track TEXT NOT NULL);
     PRAGMA user_version = 1;
     `);
   } catch (error) { db.close(); throw error; }
@@ -528,20 +533,23 @@ function createLyricsVaultStore({ userDataPath }) {
     validId(vaultId);
     manifest = { ...manifest, vaultId, lineCount: Number(manifest.lineCount || lyrics.length),
       sourceLabel: resolveVaultSourceLabel(lyrics, manifest.sourceLabel) };
+    const metadata = withSpicyFreshness(manifest);
+    if (metadata) manifest.metadata = metadata;
     const compressed = gzipJsonPayload(compactLyricsForStorage(lyrics));
     // Keep the same bounded decompression contract as legacy vault files.
     gunzipJsonPayload(compressed);
     const track = { ...manifest, spotifyTrackId: manifest.spotifyTrackId || "" };
-    const expiresAt = Number(manifest.metadata?.spicyApi?.expiresAt || 0);
+    const expiresAt = spicyLyricsExpiresAt(manifest);
     const catalog = { ...manifest };
     delete catalog.metadata;
+    catalog.exportRestricted = isSpicyCommunityLyrics(manifest);
     db.prepare(`INSERT INTO vault_entries
       (vault_id, spotify_id, title_artist, saved_at, expires_at, manifest, lyrics, catalog) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(vault_id) DO UPDATE SET spotify_id=excluded.spotify_id,
       title_artist=excluded.title_artist, saved_at=excluded.saved_at,
       expires_at=excluded.expires_at, manifest=excluded.manifest, lyrics=excluded.lyrics, catalog=excluded.catalog`)
       .run(vaultId, track.spotifyTrackId, buildTitleArtistKey(track), Number(manifest.savedAt || 0),
-        manifest.metadata?.spicyApi ? (Number.isFinite(expiresAt) ? expiresAt : 0) : null,
+        expiresAt,
         JSON.stringify(manifest), compressed, JSON.stringify(catalog));
     db.prepare("DELETE FROM vault_keys WHERE vault_id = ?").run(vaultId);
     const keys = collectLookupFingerprintKeys(track).map(key => `fp:${key}`);
@@ -549,6 +557,7 @@ function createLyricsVaultStore({ userDataPath }) {
     if (buildTitleArtistKey(track)) keys.push(`title:${buildTitleArtistKey(track)}`);
     const insertKey = db.prepare("INSERT INTO vault_keys VALUES (?, ?) ON CONFLICT(lookup_key) DO UPDATE SET vault_id=excluded.vault_id");
     for (const key of keys) insertKey.run(key, vaultId);
+    db.prepare("DELETE FROM vault_refresh WHERE vault_id = ?").run(vaultId);
   };
   // Commit all legacy entries and the marker together. Retain legacy files as a
   // recovery copy; a failed migration rolls back and is retried on next launch.
@@ -581,7 +590,87 @@ function createLyricsVaultStore({ userDataPath }) {
       });
     }
   } catch (error) { db.close(); throw error; }
+  // Reindex old SQLite entries too. Never grant a new lease when saving,
+  // importing, transferring, or upgrading an existing Spicy response.
+  try {
+    transaction(() => {
+      if (db.prepare("SELECT 1 FROM vault_migrations WHERE name = ?").get("spicy-policy-v1")) return;
+      for (const row of db.prepare("SELECT vault_id, manifest, catalog FROM vault_entries").all()) {
+        const manifest = JSON.parse(row.manifest);
+        const catalog = { ...JSON.parse(row.catalog), exportRestricted: isSpicyCommunityLyrics(manifest) };
+        db.prepare("UPDATE vault_entries SET expires_at = ?, catalog = ? WHERE vault_id = ?")
+          .run(spicyLyricsExpiresAt(manifest), JSON.stringify(catalog), row.vault_id);
+      }
+      // Legacy recovery files must not preserve API data after the database expires.
+      for (const dir of fs.readdirSync(vaultRoot, { withFileTypes: true })) {
+        if (!dir.isDirectory() || !/^(?:spotify_[A-Za-z0-9._-]{1,128}|fp_[a-f0-9]{20,64})$/.test(dir.name)) continue;
+        const entryDir = path.resolve(vaultRoot, dir.name);
+        if (path.dirname(entryDir) !== path.resolve(vaultRoot)) continue;
+        const manifestPath = path.join(entryDir, MANIFEST_FILENAME);
+        if (!fs.existsSync(manifestPath)) continue;
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        if (spicyLyricsExpiresAt(manifest) !== null) {
+          for (const name of [MANIFEST_FILENAME, LYRICS_GZIP_FILENAME, LEGACY_LYRICS_FILENAME, LEGACY_TTML_FILENAME]) {
+            fs.rmSync(path.join(entryDir, name), { force: true });
+          }
+        }
+      }
+      db.prepare("INSERT INTO vault_migrations VALUES (?)").run("spicy-policy-v1");
+    });
+  } catch (error) { db.close(); throw error; }
+  let refreshTimer;
+  let refreshRunning = false;
+  let closed = false;
+  let refresher;
+  const purgeExpired = () => {
+    const expired = db.prepare("SELECT vault_id, manifest FROM vault_entries WHERE expires_at IS NOT NULL AND expires_at <= ?").all(Date.now());
+    if (!expired.length) return;
+    transaction(() => {
+      for (const row of expired) {
+        const manifest = JSON.parse(row.manifest);
+        // Only track identifiers survive, never lyrics, XML or attribution blobs.
+        const track = { title: manifest.title, artist: manifest.artist, album: manifest.album,
+          durationMs: manifest.durationMs, spotifyTrackId: manifest.spotifyTrackId };
+        if (track.spotifyTrackId) db.prepare("INSERT OR REPLACE INTO vault_refresh VALUES (?, ?)").run(row.vault_id, JSON.stringify(track));
+        db.prepare("DELETE FROM vault_entries WHERE vault_id = ?").run(row.vault_id);
+      }
+    });
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  };
+  const scheduleRefresh = () => {
+    if (!refresher || closed) return;
+    clearTimeout(refreshTimer);
+    const next = db.prepare("SELECT min(expires_at) AS expiry FROM vault_entries WHERE expires_at IS NOT NULL").get().expiry;
+    refreshTimer = setTimeout(() => {
+      // Expiry must keep running even while another refresh waits on the network.
+      purgeExpired();
+      scheduleRefresh();
+      void refreshExpired().catch(() => {});
+    }, Math.max(1, Math.min(60_000, next === null ? 60_000 : next - Date.now())));
+    refreshTimer.unref?.();
+  };
+  const refreshExpired = async () => {
+    if (closed || refreshRunning) return;
+    refreshRunning = true;
+    try {
+      purgeExpired();
+      for (const job of db.prepare("SELECT * FROM vault_refresh").all()) {
+        if (closed) break;
+        try {
+          const track = JSON.parse(job.track);
+          const result = await refresher(track);
+          if (closed) break;
+          // A user save while the request was running supersedes this refresh.
+          if (!db.prepare("SELECT 1 FROM vault_refresh WHERE vault_id = ?").get(job.vault_id)) continue;
+          if (result?.lyrics?.length) store.save({ track, lyrics: result.lyrics, originalSource: result.source, metadata: result.metadata });
+          else db.prepare("DELETE FROM vault_refresh WHERE vault_id = ?").run(job.vault_id);
+        } catch { /* Keep the identifier for retry. Expired sync data is already deleted. */ }
+      }
+    } finally { refreshRunning = false; scheduleRefresh(); }
+  };
+  purgeExpired();
   const readEntry = vaultId => {
+    purgeExpired();
     validId(vaultId);
     const row = db.prepare("SELECT manifest, lyrics FROM vault_entries WHERE vault_id = ? AND (expires_at IS NULL OR expires_at > ?)").get(vaultId, Date.now());
     if (!row) return null;
@@ -590,10 +679,12 @@ function createLyricsVaultStore({ userDataPath }) {
     require("./lyricsTtmlImport").normalizeImportedLyricsTimestamps(lyrics);
     return { vaultId, manifest, lyrics, sourceLabel: resolveVaultSourceLabel(lyrics, manifest.sourceLabel), metadata: manifest.metadata || {} };
   };
-  const catalog = () => db.prepare("SELECT vault_id, catalog AS manifest FROM vault_entries WHERE expires_at IS NULL OR expires_at > ? ORDER BY saved_at DESC").all(Date.now());
-  return {
+  const catalog = () => { purgeExpired(); return db.prepare("SELECT vault_id, catalog AS manifest FROM vault_entries WHERE expires_at IS NULL OR expires_at > ? ORDER BY saved_at DESC").all(Date.now()); };
+  const store = {
     getVaultRoot() { return vaultRoot; },
-    close() { db.close(); },
+    close() { closed = true; clearTimeout(refreshTimer); db.close(); },
+    startRefresh(refresh) { refresher = refresh; void refreshExpired().catch(() => {}); return () => { refresher = undefined; clearTimeout(refreshTimer); }; },
+    refreshExpiredEntries: refreshExpired,
     lookup(track) {
       if (!track || (!track.title && !track.spotifyTrackId)) return null;
       const keys = collectLookupFingerprintKeys(track).map(key => `fp:${key}`);
@@ -617,7 +708,7 @@ function createLyricsVaultStore({ userDataPath }) {
       if (!track?.title && !track?.spotifyTrackId) throw new Error("Track metadata is required to save lyrics to the vault.");
       const vaultId = resolveVaultId(track);
       const existing = db.prepare("SELECT manifest FROM vault_entries WHERE vault_id = ?").get(vaultId);
-      const persistedMetadata = mergeVaultPersistedMetadata(existing ? JSON.parse(existing.manifest).metadata : {}, metadata);
+      const persistedMetadata = mergeVaultPersistedMetadata(existing ? JSON.parse(existing.manifest).metadata : {}, withSpicyFreshness({ metadata, originalSource, sourceLabel }));
       const resolvedSourceLabel = resolveVaultSourceLabel(safeLyrics, sourceLabel);
       const manifest = {
         vaultId, title: String(track.title || "").trim(), artist: String(track.artist || "").trim(),
@@ -630,6 +721,8 @@ function createLyricsVaultStore({ userDataPath }) {
         ...(Object.keys(persistedMetadata).length ? { metadata: persistedMetadata } : {}),
       };
       transaction(() => put(vaultId, manifest, safeLyrics));
+      purgeExpired();
+      scheduleRefresh();
       return { ok: true, vaultId, entryDir: path.join(vaultRoot, vaultId), sourceLabel: resolvedSourceLabel,
         lineCount: safeLyrics.length, translatedLineCount: manifest.translatedLineCount, manifest, metadata: persistedMetadata };
     },
@@ -695,18 +788,19 @@ function createLyricsVaultStore({ userDataPath }) {
     },
 
 
-    listEntryCount() { return Number(db.prepare("SELECT count(*) AS count FROM vault_entries WHERE expires_at IS NULL OR expires_at > ?").get(Date.now()).count); },
+    listEntryCount() { purgeExpired(); return Number(db.prepare("SELECT count(*) AS count FROM vault_entries WHERE expires_at IS NULL OR expires_at > ?").get(Date.now()).count); },
     listEntries() {
       return catalog().map(row => {
         const manifest = JSON.parse(row.manifest);
         return { vaultId: row.vault_id, title: manifest.title || "Unknown title", artist: manifest.artist || "Unknown artist",
           album: manifest.album || "", durationMs: Number(manifest.durationMs || 0),
           lineCount: Number(manifest.lineCount || 0), translatedLineCount: Number(manifest.translatedLineCount || 0),
-          sourceLabel: manifest.sourceLabel, savedAt: Number(manifest.savedAt || 0), spotifyTrackId: manifest.spotifyTrackId || "" };
+          sourceLabel: manifest.sourceLabel, exportRestricted: Boolean(manifest.exportRestricted), savedAt: Number(manifest.savedAt || 0), spotifyTrackId: manifest.spotifyTrackId || "" };
       });
     },
     getEntry(vaultId) { return String(vaultId || "").trim() ? readEntry(String(vaultId).trim()) : null; },
   };
+  return store;
 }
 
 function initLyricsVaultStore({ userDataPath }) {

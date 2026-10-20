@@ -78,3 +78,14 @@ test('failed legacy migration rolls back and can be retried without losing backu
   assert.equal(store.listEntryCount(), 1);
   assert.ok(fs.existsSync(path.join(dir, 'lyrics.json')));
 });
+
+test('entry replacement and expiry cascade use the vault ID index', t => {
+  const f = fixture(t);
+  const store = f.open();
+  const db = new DatabaseSync(path.join(store.getVaultRoot(), 'vault.sqlite'));
+  try {
+    const plan = db.prepare('EXPLAIN QUERY PLAN DELETE FROM vault_keys WHERE vault_id = ?').all('spotify_example');
+    assert.ok(plan.some(row => row.detail.includes('vault_keys_entry')), JSON.stringify(plan));
+    assert.ok(plan.every(row => !row.detail.includes('SCAN vault_keys')), JSON.stringify(plan));
+  } finally { db.close(); }
+});

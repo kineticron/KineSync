@@ -143,12 +143,21 @@ renderToStaticMarkup(React.createElement(PlaybackTimeline, {
   }, onScrubPreview: (value) => { preview = value; },
 }));
 const stopGestureClock = focusEffects.pop()();
+let gestureTime = 0;
+ui.Date = { now: () => gestureTime };
 // The initial test track is 1px wide; coordinates are normalized ratios.
 gesture.onBegin({ x: 0.1 });
 assert.equal(styles[1]().transform[0].scaleX, 0.1, 'thumb follows input before JS begins the scrub');
 assert.ok(!('width' in styles[1]()), 'scrubbing never animates a layout width');
 flushJS();
 assert.equal(preview, 10000);
+for (let frame = 1; frame <= 120; frame++) {
+  gestureTime = frame * 1000 / 120;
+  gesture.onUpdate({ x: 0.1 + frame / 240 });
+}
+assert.equal(jsQueue.length, 4, '120 visual scrub frames queue only four lyric previews on RN');
+assert.equal(styles[1]().transform[0].scaleX, 0.6, 'UI thumb movement stays continuous while the preview queue waits');
+flushJS();
 gesture.onUpdate({ x: 0.6 });
 gesture.onFinalize({ x: 0.9 }, true);
 assert.equal(styles[1]().transform[0].scaleX, 0.9, 'release is painted before the seek crosses to JS');

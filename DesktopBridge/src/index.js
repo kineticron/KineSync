@@ -190,6 +190,16 @@ app.whenReady().then(() => {
     getSpotifyAccessToken: spotifyAccessTokenGetter,
     getSpicyLyricsPublishableKey: () => bridgeSettingsStore.getSpicyLyricsPublishableKey() || process.env.SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey || "",
   });
+  const stopVaultRefresh = getLyricsVaultStore().startRefresh(async (track) => {
+    try {
+      return await require("./lyrics").fetchFromSpicyLyrics(track, {
+        spicyLyricsPublishableKey: bridgeSettingsStore.getSpicyLyricsPublishableKey() || process.env.SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey || "",
+      });
+    } catch (error) {
+      if (error.sourceFailureReason?.endsWith("-no-match")) return null;
+      throw error;
+    }
+  });
   const playbackController = createPlaybackController();
   playbackController.setSpotifyAccessTokenGetter(spotifyAccessTokenGetter);
   const STATUS_PUSH_INTERVAL_MS = 250;
@@ -399,6 +409,7 @@ app.whenReady().then(() => {
     broadcastLyrics(lyricsPacket);
     latestLyricsStatus = {
       lyricsStatus: lyricsPacket.statusMessage || "Synced lyrics loaded.",
+      lyricsExportRestricted: require("./lyricsPolicy").isSpicyCommunityLyrics(lyricsPacket),
       lyricsLines: Array.isArray(lyricsPacket.lyrics)
         ? lyricsPacket.lyrics.length
         : 0,
@@ -630,6 +641,9 @@ app.whenReady().then(() => {
     });
 
   ipcMain.handle("bridge:lyrics:export-ttml", async () => {
+    try {
+      require("./lyricsPolicy").assertLyricsExportAllowed(latestLyricsPacket || {});
+    } catch (error) { return { ok: false, error: error.message }; }
     const lyrics = Array.isArray(latestLyricsPacket?.lyrics)
       ? latestLyricsPacket.lyrics
       : [];
@@ -845,6 +859,10 @@ app.whenReady().then(() => {
         return { ok: false, error: "Vault entry not found or has no lyrics." };
       }
 
+      try {
+        require("./lyricsPolicy").assertLyricsExportAllowed({ ...entry.manifest, metadata: entry.metadata });
+      } catch (error) { return { ok: false, error: error.message }; }
+
       const exportFormat = String(format || "ttml").toLowerCase() === "json"
         ? "json"
         : "ttml";
@@ -958,6 +976,14 @@ app.whenReady().then(() => {
 
 
   const statusTimer = setInterval(() => {
+    const expiresAt = require("./lyricsPolicy").spicyLyricsExpiresAt(latestLyricsPacket || {});
+    if (latestLyricsPacket?.lyrics?.length && expiresAt !== null && expiresAt <= Date.now()) {
+      lyricsService.clearCache();
+      lyricsRequestVersion += 1;
+      activeLyricsRequest = null;
+      publishLyricsPacket({ trackId: latestSnapshot?.trackId || "", lyrics: [], source: "spicy-lyrics:expired", metadata: {}, statusMessage: "Refreshing expired lyrics..." });
+      if (latestSnapshot) void runLyricsSync(latestSnapshot, { force: true });
+    }
     pushStatus({
       ...latestPlaybackStatus,
       ...latestLyricsStatus,
@@ -1535,6 +1561,7 @@ app.whenReady().then(() => {
 
   let quitCleanupStarted = false;
   app.on("before-quit", (event) => {
+    stopVaultRefresh();
       if (!quitCleanupStarted && ngrokRelayManager) {
         event.preventDefault();
         quitCleanupStarted = true;

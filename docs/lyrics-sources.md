@@ -14,6 +14,8 @@ Use a publishable `sl_pk_` client key from the [Spicy developer dashboard](https
 
 Native requests need no-origin access enabled for the application. Web requests need the actual origin allowlisted. See the [API documentation](https://developers.spicylyrics.org/docs).
 
+Only the official `GET /v1/lyrics/{spotifyTrackId}` developer endpoint is used, with publishable-key authentication. KineSync accepts community syncs from this adapter. Non-community replies fall through to lrc.red and the other online providers. The developer API cannot filter by source before answering.
+
 For an application-wide publishable key, set `publishableKey` in [DesktopBridge/src/spicyLyricsConfig.json](../DesktopBridge/src/spicyLyricsConfig.json). Desktop and mobile builds use this shared public configuration. User configuration and environment variables take precedence. Rebuild after changing it. Environment alternatives are `SPICY_LYRICS_PUBLISHABLE_KEY` for desktop and `EXPO_PUBLIC_SPICY_LYRICS_PUBLISHABLE_KEY` for mobile/web.
 
 Maintainers can submit KineSync as an application template in the developer dashboard. Approval is required before users can obtain configured keys from its catalog. KineSync does not issue keys itself.
@@ -26,6 +28,8 @@ Gemini translation is optional and requires a configured API key. Lyrics are sen
 
 ## Attribution, caching, and export
 
-Provider names and supplied community uploader/maker links are shown in both renderers and retained in vault metadata and TTML exports. Missing provider attribution is shown as Unknown. Spicy API cache entries expire after 30 days.
+For lyrics retrieved through Spicy, attribution stays at the bottom right while lyrics are visible in either renderer, in portrait and landscape. Community handles use U: and M:. Opening playback controls reveals the Spicy Lyrics provider name and a glass background, animated with the controls. Tap the attribution to open contributor links and songwriter details. Apple Music and Spotify responses from Spicy show just their provider name. Missing provider attribution is shown as Unknown. Other sources retain their existing attribution UI.
 
-Export support does not grant permission to redistribute provider data. KineSync currently exposes sync-data export, while Spicy's [terms](https://developers.spicylyrics.org/terms) prohibit exporting that data. Review the relevant provider terms before using export or distributing a build that includes those workflows. This limitation remains unresolved. The presence of an export button is not evidence of provider approval.
+Community syncs obtained from Spicy Lyrics cannot be exported as TTML or JSON, including after saving to a vault, importing a previously saved copy, or transferring within KineSync. Export restrictions follow the original provider metadata rather than the local-vault label. lrc.red lyrics retain normal save and export support.
+
+Spicy vault copies are deleted at their original API expiry, capped at 30 days from retrieval, and refetched using the official developer API. Saving or transferring a copy does not renew its expiry. On a failed refresh, only the track identifiers remain for retry, with no stale lyrics available for playback or export. A withdrawn or missing community sync is discarded. Maintenance runs while the application is active and resumes on launch or mobile foregrounding. Legacy Spicy recovery copies are removed during migration. See Spicy's [terms](https://developers.spicylyrics.org/terms).

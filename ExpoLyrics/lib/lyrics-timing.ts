@@ -1,6 +1,16 @@
 import type { LyricLine } from "@/types/bridge";
 
 export type LyricsTimingMode = "karaoke" | "interpolated" | "static" | "unknown";
+const translationCache = new WeakMap<LyricLine[], boolean>();
+
+/** Store updates reuse immutable lyric packets; scan each packet only once. */
+export function hasLyricsTranslation(lyrics: LyricLine[]) {
+  const cached = translationCache.get(lyrics);
+  if (cached !== undefined) return cached;
+  const translated = lyrics.some(line => Boolean(line.translatedText || line.backgroundTranslatedText));
+  translationCache.set(lyrics, translated);
+  return translated;
+}
 
 function hasMeaningfulTiming(lyrics: LyricLine[]) {
   return lyrics.some((line) => {

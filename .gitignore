@@ -113,6 +113,10 @@ test_am.js
 .cursor/
 .hermes/
 .claude/
+.agents/
+.gemini/
+skills-lock.json
+graphify-out/
 .idea/
 .kinesync-config/
 .docker-build-ca.crt

@@ -1,8 +1,10 @@
 import {
   createLyricsService,
+  fetchFromSpicyLyrics,
   isLikelySameTrack,
 } from "@/lib/mobile-lyrics-service";
-import { lookupMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
+import { lookupMobileVaultLyrics, startMobileVaultRefresh, refreshMobileVault } from "@/lib/mobile-lyrics-vault";
+import { AppState } from 'react-native';
 import {
   getCachedMobileLyricsSettings,
   getMobileLyricsSettings,
@@ -73,6 +75,22 @@ const mobileLyricsService = createLyricsService({
     getCachedMobileLyricsSettings().spicyLyricsPublishableKey ||
     process.env.EXPO_PUBLIC_SPICY_LYRICS_PUBLISHABLE_KEY ||
     spicyLyricsConfig.publishableKey || "",
+});
+
+startMobileVaultRefresh(async track => {
+  await getMobileLyricsSettings();
+  try {
+    return await fetchFromSpicyLyrics(toMobileTrack(track), {
+      spicyLyricsPublishableKey: getCachedMobileLyricsSettings().spicyLyricsPublishableKey ||
+        process.env.EXPO_PUBLIC_SPICY_LYRICS_PUBLISHABLE_KEY || spicyLyricsConfig.publishableKey || '',
+    });
+  } catch (error) {
+    if ((error as { sourceFailureReason?: string }).sourceFailureReason?.endsWith('-no-match')) return null;
+    throw error;
+  }
+});
+AppState.addEventListener('change', state => {
+  if (state === 'active') void refreshMobileVault().catch(() => {});
 });
 
 function cleanTrackMetadata(value: unknown) {

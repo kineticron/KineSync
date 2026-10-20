@@ -58,12 +58,12 @@ import {
   TOP_BAR_CONTENT_HEIGHT,
 } from "@/constants/player-layout";
 import { AnimatedBridgedArtwork } from "@/components/lyrics/animated-bridged-artwork";
-import { BridgedArtworkImage } from "@/components/lyrics/bridged-artwork-image";
 import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
 import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
 import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
+import { LyricsAttribution } from "@/components/lyrics/lyrics-attribution";
 import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
 import {
   PlaybackControls,
@@ -76,7 +76,7 @@ import {
 } from "@/components/lyrics/spotify-browser-fallback";
 import { TopBar } from "@/components/lyrics/top-bar";
 import { SpotifyNativeDetector } from "@/components/lyrics/spotify-native-detector";
-import { PromotionalBackdrop } from "@/components/ui/promotional-backdrop";
+import { ArtworkBackground } from "@/components/lyrics/artwork-background";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { ListeningEmptyState } from "@/components/lyrics/listening-empty-state";
 import { MarqueeText } from "@/components/ui/marquee-text";
@@ -86,6 +86,7 @@ import {
   requestImmediateTranslationForCurrentSource,
 } from "@/lib/lyrics-sync";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
+import { isSpicyLyricsResponse, spicyLyricsExpiresAt } from "@/lib/lyrics-policy";
 import type { PlaybackMode } from "@/lib/playback-source";
 import {
   animateIconButtonPressIn,
@@ -95,7 +96,7 @@ import {
 import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
 import { usePlayerTour } from "@/hooks/use-player-tour";
-import { TOUR_TRACK, usePlayerTourStore, type PlayerTourStep } from "@/store/player-tour-store";
+import { TOUR_DURATION_MS, TOUR_TRACK, usePlayerTourStore, type PlayerTourStep } from "@/store/player-tour-store";
 import { DEMO_LYRICS } from "@/components/onboarding/renderer-preview";
 import { PlayerTourOverlay } from "@/components/onboarding/player-tour-overlay";
 import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
@@ -269,7 +270,6 @@ type PlaybackControlsDockProps = {
   autoHidePlaybackControls?: boolean;
   onToggleAutoHidePlaybackControls?: () => void;
   playbackMode?: PlaybackMode;
-  latencyMs?: number;
   onUserInteraction?: () => void;
   fullscreenAlbumMode?: boolean;
   fullscreenActions?: ReactNode;
@@ -301,7 +301,6 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   autoHidePlaybackControls,
   onToggleAutoHidePlaybackControls,
   playbackMode = "desktop",
-  latencyMs = 0,
   onUserInteraction,
   fullscreenAlbumMode,
   fullscreenActions,
@@ -336,7 +335,6 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       autoHidePlaybackControls={autoHidePlaybackControls}
       onToggleAutoHidePlaybackControls={onToggleAutoHidePlaybackControls}
       playbackMode={playbackMode}
-      latencyMs={latencyMs}
       onUserInteraction={onUserInteraction}
       fullscreenAlbumMode={fullscreenAlbumMode}
       fullscreenActions={fullscreenActions}
@@ -369,7 +367,6 @@ export default function HomeScreen() {
   const playbackMode = usePlaybackStore((s) => s.playbackMode);
   const spotifySignedIn = useSpotifySessionStore((s) => s.signedIn);
   const showEmptyState = !tour.active && (!currentTrack || (playbackMode === 'mobile' && !spotifySignedIn) || (playbackMode === 'desktop' && connectionStatus !== 'connected'));
-  const driftOffset = usePlaybackStore((s) => s.driftOffset);
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
   const liveIsPlaying = usePlaybackStore((s) => s.isPlaying);
   const isPlaying = tour.active ? tour.isPlaying : liveIsPlaying;
@@ -378,6 +375,21 @@ export default function HomeScreen() {
   const liveLyrics = usePlaybackStore((s) => s.lyrics);
   const lyrics = tour.active ? DEMO_LYRICS : liveLyrics;
   const lyricsMetadata = usePlaybackStore((s) => s.lyricsMetadata);
+  const spicyExpiry = spicyLyricsExpiresAt({ source: lyricsSource, metadata: lyricsMetadata });
+  useEffect(() => {
+    if (spicyExpiry === null || !liveLyrics.length) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const checkExpiry = () => {
+      clearTimeout(timer);
+      if (spicyExpiry <= Date.now()) {
+        usePlaybackStore.getState().clearLyrics();
+        void refreshLyricsForCurrentTrack('auto');
+      } else timer = setTimeout(checkExpiry, Math.min(60_000, spicyExpiry - Date.now()));
+    };
+    checkExpiry();
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') checkExpiry(); });
+    return () => { clearTimeout(timer); subscription.remove(); };
+  }, [spicyExpiry, liveLyrics.length]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
@@ -394,8 +406,8 @@ export default function HomeScreen() {
   const previewPlayback = useMemo(() => tour.active ? {
     anchorPositionMs: tour.anchorPositionMs,
     anchorMonotonicMs: tour.anchorMonotonicMs,
-    isPlaying: tour.isPlaying && tour.foreground && isScreenFocused,
-  } : undefined, [tour.active, tour.anchorPositionMs, tour.anchorMonotonicMs, tour.isPlaying, tour.foreground, isScreenFocused]);
+    isPlaying: tour.isPlaying,
+  } : undefined, [tour.active, tour.anchorPositionMs, tour.anchorMonotonicMs, tour.isPlaying]);
   const lyricsStyle = usePlaybackStore((s) => s.lyricsStyle);
   const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
@@ -404,31 +416,10 @@ export default function HomeScreen() {
   const [scrubPreviewPositionMs, setScrubPreviewPositionMs] = useState<
     number | null
   >(null);
-  // ponytail: throttle scrub state updates to ~32ms so every gesture frame doesn't re-render the 2150-line HomeScreen
-  const scrubThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingScrubValueRef = useRef<number | null>(null);
   const handleScrubPreview = useCallback((positionMs: number | null) => {
-    if (positionMs === null) {
-      if (scrubThrottleRef.current) {
-        clearTimeout(scrubThrottleRef.current);
-        scrubThrottleRef.current = null;
-      }
-      pendingScrubValueRef.current = null;
-      setScrubPreviewPositionMs(null);
-      return;
-    }
-    pendingScrubValueRef.current = positionMs;
-    if (!scrubThrottleRef.current) {
-      setScrubPreviewPositionMs(positionMs);
-      scrubThrottleRef.current = setTimeout(() => {
-        scrubThrottleRef.current = null;
-        if (pendingScrubValueRef.current !== null) {
-          setScrubPreviewPositionMs(pendingScrubValueRef.current);
-        }
-      }, 32);
-    }
+    setScrubPreviewPositionMs(positionMs);
   }, []);
-  const [activeLineIndex, setActiveLineIndex] = useState(-1);
+  const activeLineIndex = useRef(-1);
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(
     () => new Set(),
   );
@@ -447,6 +438,7 @@ export default function HomeScreen() {
   const fullscreenMenuButtonScale = useSharedValue(1);
   const lyricsRestoreOpacity = useSharedValue(1);
   const controlsOpacity = useSharedValue(1);
+  const controlsTarget = useSharedValue(1);
   const controlsTranslateY = useSharedValue(0);
   const controlsIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -583,7 +575,6 @@ export default function HomeScreen() {
     );
   const fullscreenArtworkImageTop =
     fullscreenArtworkTop + fullscreenAlbumLabelBlockHeight;
-  const bridgeConnected = connectionStatus === "connected";
   const translationLoading = !tour.active && Boolean(lyricsMetadata.translation?.isLoading);
   const lyricsTimingMode = useMemo(
     () => detectLyricsTimingMode(lyrics, lyricsSource),
@@ -687,7 +678,7 @@ export default function HomeScreen() {
   }, []);
 
   const hideControls = useCallback(() => {
-    setControlsVisible(false);
+    controlsTarget.set(0);
     controlsOpacity.value = withTiming(0, {
       duration: 240,
       easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
@@ -696,10 +687,11 @@ export default function HomeScreen() {
       duration: 260,
       easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
     });
-  }, [controlsOpacity, controlsTranslateY]);
+    setControlsVisible(false);
+  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
 
   const showControls = useCallback(() => {
-    setControlsVisible(true);
+    controlsTarget.set(1);
     controlsOpacity.value = withTiming(1, {
       duration: 220,
       easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
@@ -708,7 +700,8 @@ export default function HomeScreen() {
       duration: 240,
       easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
     });
-  }, [controlsOpacity, controlsTranslateY]);
+    setControlsVisible(true);
+  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
@@ -903,7 +896,7 @@ export default function HomeScreen() {
   }, [handleSeek]);
 
   const handleActiveLineChange = useCallback((nextActiveLine: number) => {
-    setActiveLineIndex(nextActiveLine);
+    activeLineIndex.current = nextActiveLine;
   }, []);
 
   const handleLineLongPress = useCallback((line: LyricLine) => {
@@ -931,11 +924,11 @@ export default function HomeScreen() {
     if (!lyrics.length) {
       return [];
     }
-    const anchorIndex = Math.max(0, activeLineIndex);
+    const anchorIndex = Math.max(0, activeLineIndex.current);
     const start = Math.max(0, Math.min(anchorIndex, lyrics.length - 1));
     const end = Math.min(lyrics.length, start + 6);
     return lyrics.slice(start, end);
-  }, [activeLineIndex, selectedLineKeys]);
+  }, [selectedLineKeys]);
 
   const exportShareGif = useCallback(async () => {
     if (shareBusy) {
@@ -1288,22 +1281,10 @@ export default function HomeScreen() {
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
       ) : null}
-      {hasResolvedArtwork ? (
-        // ponytail: single blurred image; sharp layer was fully occluded by tint anyway
-        <BridgedArtworkImage
-          uri={resolvedArtworkUrl}
-          style={styles.backgroundBlur}
-          contentFit="cover"
-          blurRadius={40}
-          recyclingKey={`background-blur-${resolvedArtworkUrl}`}
-        />
-      ) : null}
-      {!hasResolvedArtwork && <PromotionalBackdrop />}
-      <View
-        style={[
-          hasResolvedArtwork && styles.backgroundTint,
-          hasResolvedArtwork && styles.backgroundTintWithArtwork,
-        ]}
+      <ArtworkBackground
+        uri={resolvedArtworkUrl}
+        playing={isPlaying && !showEmptyState}
+        active={isScreenFocused}
       />
 
       {isLandscape ? (
@@ -1389,7 +1370,9 @@ export default function HomeScreen() {
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                         selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1410,7 +1393,9 @@ export default function HomeScreen() {
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                         selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1616,7 +1601,9 @@ export default function HomeScreen() {
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1635,7 +1622,9 @@ export default function HomeScreen() {
                   tapToSeekEnabled={tapToSeekEnabled}
                   showTranslatedText={showTranslatedText}
                   selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={tour.active ? (scrubPreviewPositionMs ?? tour.position) : scrubPreviewPositionMs}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
@@ -1717,7 +1706,6 @@ export default function HomeScreen() {
               handleToggleAutoHidePlaybackControls
             }
             playbackMode={playbackMode}
-            latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
             onUserInteraction={handleControlsInteraction}
             fullscreenActions={
               <>
@@ -1741,6 +1729,16 @@ export default function HomeScreen() {
         </Reanimated.View>
       </SafeAreaView>
       </>
+      ) : null}
+
+      {!tour.active && lyrics.length > 0 && !showEmptyState && isSpicyLyricsResponse({ source: lyricsSource, metadata: lyricsMetadata }) ? (
+        <Reanimated.View pointerEvents={fullscreenAlbumMode && !albumArtworkMorphing ? 'none' : 'box-none'}
+          style={[styles.lyricsAttributionLayer, !isLandscape && lyricsChromeOpacityStyle]}>
+          <LyricsAttribution metadata={lyricsMetadata} trackId={currentTrack?.id}
+            controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
+            controlsHeight={isLandscape ? 0 : controlsDockHeight}
+            bottomInset={insets.bottom} onInteraction={handleControlsInteraction} />
+        </Reanimated.View>
       ) : null}
 
       {!tour.active && !tour.pending && (Platform.OS === 'ios' || Platform.OS === 'android'
@@ -1775,7 +1773,6 @@ export default function HomeScreen() {
         onChangeLyricsStyle={setLyricsStyle}
         connectionStatus={connectionStatus}
         playbackMode={playbackMode}
-        latencyMs={bridgeConnected ? driftOffset : Math.max(0, driftOffset)}
         errorMessage={errorMessage}
       />
       {tour.active && isScreenFocused && <PlayerTourOverlay controlsHeight={controlsDockHeight} transitioning={albumArtworkMorphing} landscape={isLandscape} fullscreen={fullscreenAlbumMode} />}
@@ -1807,17 +1804,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     overflow: "visible",
-  },
-  backgroundBlur: {
-    ...StyleSheet.absoluteFill,
-    opacity: 0.96,
-  },
-  backgroundTint: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(8, 9, 14, 0.68)",
-  },
-  backgroundTintWithArtwork: {
-    backgroundColor: "rgba(8, 9, 14, 0.5)",
   },
   topSafeArea: {
     zIndex: 5,
@@ -1950,6 +1936,10 @@ const styles = StyleSheet.create({
     bottom: 0,
     top: "75%",
     zIndex: 20,
+  },
+  lyricsAttributionLayer: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 21,
   },
   bottomArea: {
     position: "absolute",

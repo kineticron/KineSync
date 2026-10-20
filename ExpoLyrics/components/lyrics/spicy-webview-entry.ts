@@ -34,7 +34,7 @@ import { getSpicyWordJoins } from "./spicy-word-spacing";
 import { repairSyllableClusters } from "./cluster-safe-syllables";
 import { getGraphemes } from "../../lib/graphemes";
 import { createSpicyPlaybackClock } from "./spicy-playback-clock";
-import { LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING } from "../../lib/lyrics-layout";
+import { getBackgroundEndTime, LONG_PAUSE_THRESHOLD_MS, LYRICS_LAYOUT, TOP_LIST_PADDING } from "../../lib/lyrics-layout";
 import { LANDSCAPE_TOP_LIST_PADDING, LANDSCAPE_LYRICS_HORIZONTAL_INSET, LANDSCAPE_LYRICS_EDGE_BLEED, LANDSCAPE_LYRIC_TEXT_LANE_WIDTH } from "../../constants/player-layout";
 import type { LyricLine } from "../../types/bridge";
 
@@ -520,6 +520,7 @@ function renderSyncedLyrics() {
     );
   }
 
+  let coveredEnd = introStart;
   sourceLines.forEach((line, sourceIndex) => {
     runtimeLines.push(
       currentLyricsType === "Line"
@@ -544,10 +545,10 @@ function renderSyncedLyrics() {
       if (background) runtimeLines.push(background);
     }
     const next = sourceLines[sourceIndex + 1];
-    const leadEnd = finiteMs(line.lineEndTime);
+    coveredEnd = Math.max(coveredEnd, finiteMs(getBackgroundEndTime(line as LyricLine)));
     const nextStart = finiteMs(next?.lineStartTime);
-    if (next && nextStart - leadEnd >= LONG_PAUSE_THRESHOLD_MS) {
-      runtimeLines.push(createDotRuntimeLine(leadEnd, nextStart, Boolean(next.oppositeAligned)));
+    if (next && nextStart - coveredEnd >= LONG_PAUSE_THRESHOLD_MS) {
+      runtimeLines.push(createDotRuntimeLine(coveredEnd, nextStart, Boolean(next.oppositeAligned)));
     }
   });
 

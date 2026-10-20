@@ -1,7 +1,7 @@
 {
   "name": "expolyrics",
   "main": "expo-router/entry",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -11,9 +11,9 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:lyrics && npm run test:vault && npm run test:tour && npm run test:artwork && npm run test:launch && npm run test:security && npm run test:spotify-browser && npm run test:spotify-detector && node scripts/check-android-frame-metrics.cjs",
-    "test:artwork": "node ./scripts/artwork-packet-check.mjs && node ./scripts/check-artwork-search-performance.cjs",
+    "test:artwork": "node ./scripts/artwork-packet-check.mjs && node ./scripts/check-artwork-search-performance.cjs && node ./scripts/check-kawarp-background.cjs",
     "test:launch": "node ./scripts/check-launch-transition.cjs",
-    "test:performance": "node ./scripts/benchmark-performance.cjs --check && node ./scripts/check-energy-performance.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-artwork-search-performance.cjs && node ./scripts/check-android-frame-metrics.cjs",
+    "test:performance": "node ./scripts/check-app-js-work.cjs && node ./scripts/benchmark-performance.cjs --check && node ./scripts/check-energy-performance.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-artwork-search-performance.cjs && node ./scripts/check-android-frame-metrics.cjs",
     "benchmark:performance": "node ./scripts/benchmark-performance.cjs",
     "benchmark:emulator": "node ./scripts/benchmark-emulator.cjs",
     "profile:android": "node ./scripts/capture-android-performance.cjs",
@@ -24,11 +24,11 @@
     "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-spotify-seek.cjs && node ./scripts/check-tour-tracker.cjs",
     "test:spotify-detector": "node ./scripts/check-spotify-detector.mjs && node ./scripts/check-native-detector-lifecycle.cjs && node ./scripts/check-native-detector-lifecycle.cjs --android",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
-    "test:lyrics": "node ./scripts/check-spicy-attribution.cjs && node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-playback-previous.cjs && node ./scripts/check-energy-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
+    "test:lyrics": "node ./scripts/check-lyrics-packet-transition.cjs && node ./scripts/check-native-inactive-work.cjs && node ./scripts/check-native-glyph-idle.cjs && node ./scripts/check-spicy-attribution.cjs && node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-playback-previous.cjs && node ./scripts/check-energy-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
-    "test:vault": "node ./scripts/check-vault-sqlite.cjs && node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs",
-    "test:tour": "node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs"
+    "test:vault": "node ./scripts/check-vault-sqlite.cjs && node ./scripts/check-vault-policy.cjs && node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs",
+    "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",

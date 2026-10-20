@@ -17,6 +17,24 @@ function createLyricsService({
     bySource: new Map(),
   };
   const AUTO_TRANSLATION_QUIET_MS = 5_000;
+  let cacheExpiryTimer;
+  const scheduleCacheExpiry = () => {
+    clearTimeout(cacheExpiryTimer);
+    const caches = [lastDisplayedByTrack, publishedToFrontendCache, activeTrackSourceCache.bySource];
+    let nextExpiry = Infinity;
+    let removed = false;
+    for (const cache of caches) {
+      for (const [key, packet] of cache) {
+        if (isExpiredSpicyPacket(packet)) { cache.delete(key); removed = true; }
+        else if (packet?.metadata?.spicyApi) nextExpiry = Math.min(nextExpiry, Number(packet.metadata.spicyApi.expiresAt));
+      }
+    }
+    if (removed) geminiTranslationCache.clear();
+    if (Number.isFinite(nextExpiry)) {
+      cacheExpiryTimer = setTimeout(scheduleCacheExpiry, Math.max(1, Math.min(60_000, nextExpiry - Date.now())));
+      cacheExpiryTimer?.unref?.();
+    }
+  };
 
   const stripDesktopSourceSuffix = (source) =>
     String(source || "")
@@ -154,6 +172,7 @@ function createLyricsService({
       return;
     }
     activeTrackSourceCache.bySource.set(normalizedSource, incoming);
+    scheduleCacheExpiry();
   };
 
   const getCachedSourceLyricsPacket = (trackId, preferredSource) => {
@@ -216,6 +235,7 @@ function createLyricsService({
       lyrics,
       statusMessage: String(packet.statusMessage || ""),
     });
+    scheduleCacheExpiry();
   };
 
   const getPublishedLyrics = (trackId) => {
@@ -934,6 +954,7 @@ function createLyricsService({
       return buildLyricsPacketFromBase({ trackId: cacheKey }, published);
     },
     clearCache() {
+      clearTimeout(cacheExpiryTimer);
       lastDisplayedByTrack.clear();
       geminiTranslationCache.clear();
       publishedToFrontendCache.clear();

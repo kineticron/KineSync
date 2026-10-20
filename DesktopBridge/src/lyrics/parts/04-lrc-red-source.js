@@ -29,20 +29,22 @@ async function fetchFromLrcRed(track) {
       .slice(0, 3);
   }
 
-  let bestResult = null;
-  let lastError = null;
-  for (const candidate of candidates) {
+  const errors = [];
+  // Start all bounded candidate requests concurrently, but consume them in
+  // ranked order so a top-ranked karaoke result can return as soon as it
+  // settles without waiting for lower-ranked (possibly hanging) requests.
+  const candidatePromises = candidates.map(async (candidate, index) => {
     try {
       const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`);
       // Reject static lyrics, HTML error pages, and invalid payloads.
-      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) continue;
+      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
       const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
-      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) continue;
+      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) return null;
       const parsed = parseTtmlToLyrics(content);
       if (!parsed.lyrics?.some((line) =>
         Number(line.lineEndTime) > Number(line.lineStartTime),
-      )) continue;
-      const result = {
+      )) return null;
+      return {
         lyrics: parsed.lyrics,
         source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
         metadata: {
@@ -54,13 +56,20 @@ async function fetchFromLrcRed(track) {
           },
         },
       };
-      if (parsed.useKaraokeTiming) return result;
-      bestResult ||= result;
     } catch (error) {
-      if (!/HTTP 404\b/.test(String(error?.message || error))) lastError = error;
+      if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;
+      return null;
     }
+  });
+  let bestResult = null;
+  for (const promise of candidatePromises) {
+    const result = await promise;
+    if (!result) continue;
+    if (result.source === "lrc-red-karaoke") return result;
+    bestResult ||= result;
   }
   if (bestResult) return bestResult;
+  const lastError = errors.filter(Boolean).pop();
   if (lastError) throw lastError;
   return null;
 }

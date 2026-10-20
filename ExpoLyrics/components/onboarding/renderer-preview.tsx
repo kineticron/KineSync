@@ -15,13 +15,14 @@ import { BlurView } from 'expo-blur';
 import { Design } from "@/constants/design";
 import { usePlaybackStore } from "@/store/playback-store";
 
+import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 import { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
 export { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
 
 export function RendererPreview({ active, sideBySide = false }: { active: boolean; sideBySide?: boolean }) {
   const selected = usePlaybackStore((s) => s.lyricsStyle);
   const select = usePlaybackStore((s) => s.setLyricsStyle);
-  const [position, setPosition] = useState(0);
+  const [playback, setPlayback] = useState<PreviewPlaybackAnchor>(() => ({ anchorPositionMs: 0, anchorMonotonicMs: performance.now(), isPlaying: false }));
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
@@ -35,13 +36,13 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
     return () => subscription.remove();
   }, []);
   useEffect(() => {
-    if (!active || !foreground) return;
-    const start = Date.now();
-    const timer = setInterval(
-      () => setPosition((Date.now() - start) % 25000),
-      100,
-    );
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setTimeout>;
+    const restart = () => {
+      setPlayback({ anchorPositionMs: 0, anchorMonotonicMs: performance.now(), isPlaying: active && foreground });
+      if (active && foreground) timer = setTimeout(restart, 25000);
+    };
+    restart();
+    return () => clearTimeout(timer);
   }, [active, foreground]);
   return (
     <View style={styles.comparison}>
@@ -91,7 +92,8 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
             <View style={styles.lyrics}>
               <Renderer
                 demoLyrics={DEMO_LYRICS}
-                previewPositionMs={position}
+                demoPlayback={playback}
+                demoDurationMs={25000}
                 active={active && foreground}
                 tapToSeekEnabled={false}
                 showTranslatedText

@@ -53,6 +53,9 @@ function mergeLyricsMetadata(...metadataList) {
     if (!metadata || typeof metadata !== "object") {
       continue;
     }
+    if (metadata.spicyApi && typeof metadata.spicyApi === "object") {
+      merged.spicyApi = { ...metadata.spicyApi };
+    }
     if (metadata.ttml && typeof metadata.ttml === "object") {
       merged.ttml = { ...metadata.ttml };
     }

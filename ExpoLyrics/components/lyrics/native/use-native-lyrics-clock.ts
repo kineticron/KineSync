@@ -3,10 +3,11 @@ import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { cancelAnimation, Easing, useSharedValue, withTiming } from 'react-native-reanimated';
 import { usePlaybackStore } from '@/store/playback-store';
+import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 
 /** No playback-position React subscription and no JS frame/tick loop. */
-export function useNativeLyricsClock({ active, duration, preview, demo, playing }: {
-  active: boolean; duration: number; preview?: number | null; demo: boolean; playing?: boolean;
+export function useNativeLyricsClock({ active, duration, preview, demo, playing, demoPlayback }: {
+  active: boolean; duration: number; preview?: number | null; demo: boolean; playing?: boolean; demoPlayback?: PreviewPlaybackAnchor;
 }) {
   const position = useSharedValue(0);
   const running = useSharedValue(false);
@@ -18,9 +19,10 @@ export function useNativeLyricsClock({ active, duration, preview, demo, playing 
     running.value = visible;
     if (!visible) return;
     const state = usePlaybackStore.getState();
-    const isPlaying = demo ? (playing ?? true) : state.isPlaying && preview == null;
-    const current = Math.max(0, Math.min(duration, preview ?? (demo ? 0 : state.anchorPositionMs +
-      (state.isPlaying ? Math.max(0, performance.now() - state.anchorMonotonicMs) : 0))));
+    const anchor = demoPlayback ?? state;
+    const isPlaying = demo ? demoPlayback ? demoPlayback.isPlaying && preview == null : (playing ?? true) : state.isPlaying && preview == null;
+    const current = Math.max(0, Math.min(duration, preview ?? (demo && !demoPlayback ? 0 : anchor.anchorPositionMs +
+      (anchor.isPlaying ? Math.max(0, performance.now() - anchor.anchorMonotonicMs) : 0))));
     const now = performance.now();
     const previous = lastSync.current;
     const expected = previous.position + (previous.playing ? Math.max(0, now - previous.monotonic) : 0);
@@ -29,7 +31,7 @@ export function useNativeLyricsClock({ active, duration, preview, demo, playing 
     seekVersion.value = serial;
     position.value = current;
     if (isPlaying && current < duration) position.value = withTiming(duration, { duration: duration - current, easing: Easing.linear });
-  }, [active, demo, duration, playing, position, preview, running, seekVersion]);
+  }, [active, demo, demoPlayback, duration, playing, position, preview, running, seekVersion]);
   useFocusEffect(useCallback(() => {
     sync();
     const unsubscribe = demo ? () => {} : usePlaybackStore.subscribe((state, previous) => {

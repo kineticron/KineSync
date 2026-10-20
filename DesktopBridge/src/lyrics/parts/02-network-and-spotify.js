@@ -952,44 +952,6 @@ async function searchSpotifyTrackCandidates(track, accessToken) {
     .filter(Boolean);
 }
 
-function strictSpicySpotifyTitleArtistMatch(track, candidate) {
-  if (!titleCoreMatchesQuery(track, candidate?.title || "")) {
-    return false;
-  }
-  if (hasMissingFeaturedArtistHints(track?.title || "", candidate?.title || "")) {
-    if (
-      !featuredArtistHintsPresentInCandidate(
-        track?.title || "",
-        candidate?.title || "",
-        candidate?.artist || "",
-      )
-    ) {
-      return false;
-    }
-  }
-
-  const requestedPrimaryArtist = normalizeText(
-    getPrimaryArtistName(track?.artist || ""),
-  );
-  if (!requestedPrimaryArtist) {
-    // If we don't know the artist, at least enforce exact core-title matching.
-    return true;
-  }
-  const candidatePrimaryArtist = normalizeText(
-    getPrimaryArtistName(candidate?.artist || ""),
-  );
-  if (!candidatePrimaryArtist) {
-    return false;
-  }
-
-  // Windows media session often only provides the first artist; accept primary overlap.
-  return (
-    requestedPrimaryArtist === candidatePrimaryArtist ||
-    requestedPrimaryArtist.includes(candidatePrimaryArtist) ||
-    candidatePrimaryArtist.includes(requestedPrimaryArtist)
-  );
-}
-
 function formatSpotifyArtistNames(artistEntries = []) {
   const names = [];
   const seen = new Set();
@@ -1329,55 +1291,6 @@ async function resolveSpotifyCatalogTrackViaPartnerSearch(track, accessToken, { 
     spotifyPartnerCatalogInFlight.delete(cacheKey);
   }
 }
-async function searchSpotifyTrackCandidatesStrictForSpicy(track, accessToken) {
-  const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
-  const seenIds = new Set();
-  const matches = [];
-  let lastError = null;
-  const searchResults = await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchSpotifyPartnerSearch(query, accessToken);
-        return { payload, error: null };
-      } catch (error) {
-        return { payload: null, error };
-      }
-    }),
-  );
-  for (const result of searchResults) {
-    if (result.error) {
-      lastError = result.error;
-      continue;
-    }
-    collectSpotifyPartnerSearchMatches(
-      track,
-      result.payload,
-      seenIds,
-      matches,
-    );
-  }
-  if (!matches.length && lastError) {
-    throw lastError;
-  }
-  const ranked = matches.sort((a, b) => b.score - a.score);
-  if (!ranked.length) {
-    return [];
-  }
-
-  const strict = ranked.filter((candidate) =>
-    strictSpicySpotifyTitleArtistMatch(track, candidate),
-  );
-  if (strict.length) {
-    return strict
-      .slice(0, MAX_SPICY_STRICT_SPOTIFY_CANDIDATES)
-      .map((candidate) => candidate.id)
-      .filter(Boolean);
-  }
-
-  // No strict hit: return empty so Spicy can fail fast instead of mismatching.
-  return [];
-}
-
 function scoreLyricsCoverage(lyrics, durationMs = 0) {
   if (!Array.isArray(lyrics) || !lyrics.length) {
     return -1;

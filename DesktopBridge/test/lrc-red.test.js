@@ -59,7 +59,7 @@ for (const mobile of [false, true]) {
       ] }) : wordTtml);
     }, mobile);
     const result = await vm.runInContext("fetchFromLrcRed(track).then(finalizeFetchedLyricsResult)", context);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     assert.equal(new URL(calls[0].url).searchParams.get("q"), `${track.title} ${track.artist}`);
     assert.equal(calls[1].url, `https://lrc.red/s/${isrc}.ttml`);
     assert.equal(calls[1].options.headers.Authorization, undefined);
@@ -118,5 +118,66 @@ for (const mobile of [false, true]) {
     assert.equal(upgrades("spicy-lyrics-line", "lrc-red-line"), true);
     assert.equal(upgrades("lrc-red-line", "spicy-lyrics-line"), false);
     assert.equal(vm.runInContext('getSourcePriorityBucket("lrc-red-line") > getSourcePriorityBucket("spicy-lyrics-line")', context), true);
+  });
+
+  test(`${platform}: top-ranked lrc-red karaoke returns without waiting for a hanging lower-ranked request`, async () => {
+    const started = [];
+    const deferreds = [];
+    let resolveStarted;
+    const startedAll = new Promise((resolve) => { resolveStarted = resolve; });
+    const context = load(async (url) => {
+      if (url.includes("search.json")) {
+        return new Response(JSON.stringify({ hits: [
+          { isrc: "USAAA2600001", title: track.title, artist: track.artist, duration: 10 },
+          { isrc: "USAAA2600002", title: track.title, artist: track.artist, duration: 10 },
+        ] }));
+      }
+      const index = url.includes("USAAA2600001") ? 0 : 1;
+      started.push(index);
+      if (started.length === 2) resolveStarted();
+      return new Promise((resolve) => {
+        deferreds[index] = resolve;
+      });
+    }, mobile);
+    context.track = { title: track.title, artist: track.artist, durationMs: track.durationMs };
+    const resultPromise = vm.runInContext("fetchFromLrcRed(track)", context);
+    await startedAll;
+    assert.deepEqual(started.slice().sort(), [0, 1]);
+    deferreds[0](new Response(wordTtml));
+    const result = await resultPromise;
+    assert.equal(result.source, "lrc-red-karaoke");
+    assert.ok(String(result.metadata.attribution.url).includes("USAAA2600001"));
+    deferreds[1](new Response(wordTtml));
+  });
+
+  test(`${platform}: lrc-red candidate priority holds when lower-ranked requests complete first`, async () => {
+    const started = [];
+    const deferreds = [];
+    let resolveStarted;
+    const startedAll = new Promise((resolve) => { resolveStarted = resolve; });
+    const context = load(async (url) => {
+      if (url.includes("search.json")) {
+        return new Response(JSON.stringify({ hits: [
+          { isrc: "USAAA2600001", title: track.title, artist: track.artist, duration: 10 },
+          { isrc: "USAAA2600002", title: track.title, artist: track.artist, duration: 10 },
+        ] }));
+      }
+      const index = url.includes("USAAA2600001") ? 0 : 1;
+      started.push(index);
+      if (started.length === 2) resolveStarted();
+      return new Promise((resolve) => {
+        deferreds[index] = resolve;
+      });
+    }, mobile);
+    context.track = { title: track.title, artist: track.artist, durationMs: track.durationMs };
+    const resultPromise = vm.runInContext("fetchFromLrcRed(track)", context);
+    await startedAll;
+    assert.deepEqual(started.slice().sort(), [0, 1]);
+    // Lower-ranked candidate completes first, but must not win.
+    deferreds[1](new Response(wordTtml));
+    deferreds[0](new Response(wordTtml));
+    const result = await resultPromise;
+    assert.equal(result.source, "lrc-red-karaoke");
+    assert.ok(String(result.metadata.attribution.url).includes("USAAA2600001"));
   });
 }

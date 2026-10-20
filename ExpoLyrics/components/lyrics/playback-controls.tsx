@@ -29,6 +29,7 @@ import { selectionAsync } from 'expo-haptics';
 import { usePlaybackTimelineClock, type PreviewPlaybackAnchor } from './use-playback-timeline-clock';
 import type { PlayerTourStep } from '@/store/player-tour-store';
 import type { PlaybackMode } from '@/lib/playback-source';
+import { hasLyricsTranslation } from '@/lib/lyrics-timing';
 
 const ReanimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
 
@@ -46,7 +47,6 @@ function formatRemainingTime(positionMs: number, durationMs: number) {
   return `-${formatTime(remaining)}`;
 }
 
-const SCRUB_DISPLAY_INTERVAL_MS = 80;
 const SCRUB_LYRIC_PREVIEW_INTERVAL_MS = 220;
 const INTERACTION_KEEP_ALIVE_MS = 1000;
 const UTILITY_ROW_HEIGHT = 44;
@@ -76,7 +76,6 @@ type PlaybackControlsProps = {
   autoHidePlaybackControls?: boolean;
   onToggleAutoHidePlaybackControls?: () => void;
   playbackMode?: PlaybackMode;
-  latencyMs?: number;
   onUserInteraction?: () => void;
   fullscreenAlbumMode?: boolean;
   fullscreenActions?: ReactNode;
@@ -255,7 +254,6 @@ export const PlaybackControls = memo(function PlaybackControls({
   autoHidePlaybackControls = false,
   onToggleAutoHidePlaybackControls,
   playbackMode = 'desktop',
-  latencyMs = 0,
   onUserInteraction,
   fullscreenAlbumMode = false,
   fullscreenActions,
@@ -266,7 +264,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   tourStep,
   previewTranslated,
 }: PlaybackControlsProps) {
-  const liveTranslated = usePlaybackStore(s => s.lyrics.some(line => Boolean(line.translatedText || line.backgroundTranslatedText)));
+  const liveTranslated = usePlaybackStore(s => hasLyricsTranslation(s.lyrics));
   const translated = previewTranslated ?? liveTranslated;
   const isOverlay = layout === 'overlay';
   const isLandscapeUtilities = layout === 'landscape-utilities';
@@ -595,7 +593,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   const [trackWidth, setTrackWidth] = useState(1);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const scrubValueRef = useRef(0);
-  const lastScrubPreviewAtRef = useRef(0);
   const scrubProgress = useSharedValue(0);
   const trackScaleY = useSharedValue(1);
   const lastScrubJsCallAt = useSharedValue(0);
@@ -619,20 +616,9 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   }, [maxDuration]);
 
   const flushScrubPreview = useCallback(
-    (ratio: number, forcePreview = false) => {
+    (ratio: number) => {
       scrubValueRef.current = ratio;
-      const now =
-        typeof performance !== 'undefined' &&
-        typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
-      if (
-        forcePreview ||
-        now - lastScrubPreviewAtRef.current >= SCRUB_LYRIC_PREVIEW_INTERVAL_MS
-      ) {
-        lastScrubPreviewAtRef.current = now;
-        onScrubPreview?.(ratio * maxDuration);
-      }
+      onScrubPreview?.(ratio * maxDuration);
     },
     [maxDuration, onScrubPreview],
   );
@@ -687,7 +673,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           lastScrubJsCallAt.value = Date.now();
           if (onUserInteraction) runOnJS(onUserInteraction)();
           runOnJS(setIsScrubbing)(true);
-          runOnJS(flushScrubPreview)(ratio, true);
+          runOnJS(flushScrubPreview)(ratio);
         })
         .onUpdate((event) => {
           const ratio = Math.max(
@@ -696,9 +682,9 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           );
           scrubProgress.value = ratio;
           const now = Date.now();
-          if (now - lastScrubJsCallAt.value >= SCRUB_DISPLAY_INTERVAL_MS) {
+          if (now - lastScrubJsCallAt.value >= SCRUB_LYRIC_PREVIEW_INTERVAL_MS) {
             lastScrubJsCallAt.value = now;
-            runOnJS(flushScrubPreview)(ratio, false);
+            runOnJS(flushScrubPreview)(ratio);
           }
         })
         .onFinalize((event, success) => {

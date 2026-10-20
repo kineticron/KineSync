@@ -1,5 +1,21 @@
 # Third-party notices
 
+## Kawarp artwork backgrounds
+
+The native player background adapts the tint, Kawase blur, simplex domain warp,
+and output shaders from [`better-lyrics/kawarp`](https://github.com/better-lyrics/kawarp),
+commit `bb914faf44a394c8b05896b31b21edbb369b5596`,
+`packages/core/src/index.ts`. Copyright (c) 2026 Better Lyrics, MIT licensed.
+The complete notice is in [THIRD_PARTY_LICENSES/Kawarp-LICENSE](THIRD_PARTY_LICENSES/Kawarp-LICENSE).
+
+`components/lyrics/kawarp-shaders.ts` ports GLSL to SkSL, combines warp and
+output into one pass, and adds native texture crossfading, fixed grain and a
+readability scrim. `kawarp-texture.ts` replaces WebGL framebuffers with native
+128 by 128 Skia textures. Blur runs only when artwork changes. The animated
+canvas uses Reanimated on the UI thread with bounded output resolution, and
+stops ambient motion on pause, loss of focus, backgrounding or reduced motion.
+The web player and native failures use a static artwork fallback.
+
 ## Spicy Lyrics renderer
 
 The WebView lyrics renderer includes code and CSS from
