@@ -15,6 +15,7 @@ const partFiles = [
   "03-qq-sources.js",
   "04-netease-spicy-lrclib-sources.js",
   "04-kugou-source.js",
+  "04-lrc-red-source.js",
   "05a-musixmatch-client.js",
   "05b-musixmatch-parsing.js",
   "06-translation.js",

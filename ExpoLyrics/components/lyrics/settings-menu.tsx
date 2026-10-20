@@ -73,6 +73,7 @@ type SourceOption = {
 const SOURCE_OPTIONS: SourceOption[] = [
   { id: "auto", label: "Auto", icon: "sparkles" },
   { id: "local-vault", label: "Local", icon: "archive" },
+  { id: "lrc-red", label: "lrc.red", icon: "musical-notes" },
   { id: "kugou", label: "Kugou", icon: "mic" },
   { id: "netease", label: "Netease", icon: "cloud" },
   { id: "qq-direct", label: "QQ", icon: "musical-note" },
@@ -108,6 +109,7 @@ function inferActiveSource(lyricsSource: string): LyricsSourcePreference {
   if (source.includes("local-vault")) {
     return "local-vault";
   }
+  if (source.includes("lrc-red")) return "lrc-red";
   if (source.includes("spicy")) {
     return "spicy-lyrics";
   }

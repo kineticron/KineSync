@@ -3,6 +3,7 @@
 import { Buffer } from "buffer";
 import * as pako from "pako";
 import CryptoJS from "crypto-js";
+import { parseTtmlToLyrics as parseLrcRedTtml, parseTtmlTimeExpression as parseLrcRedTime } from "./lyrics-ttml-import";
 
 const process = { env: {} };
 const isBrowserRuntime =
@@ -870,6 +871,7 @@ const VALID_SOURCE_KEYS = new Set([
   "musixmatch",
   "lrclib",
   "spicy-lyrics",
+  "lrc-red",
 ]);
 const TEMPORARILY_DISABLED_SOURCES = new Set([]);
 const SOURCE_ALIASES = Object.freeze({
@@ -878,6 +880,9 @@ const SOURCE_ALIASES = Object.freeze({
   "qq-mirror": "qq-direct",
   mxm: "musixmatch",
   "musixmatch-token": "musixmatch",
+  "lrc.red": "lrc-red",
+  "lrc-red-karaoke": "lrc-red",
+  "lrc-red-line": "lrc-red",
   spicy: "spicy-lyrics",
   spicylyrics: "spicy-lyrics",
   spicy_lyrics: "spicy-lyrics",
@@ -9317,6 +9322,75 @@ async function fetchFromKugou(track) {
   return bestResult;
 }
 
+// ---- DesktopBridge/src/lyrics/parts/04-lrc-red-source.js ----
+"use strict";
+
+// Public API: https://lrc.red/docs. Search resolves recordings to ISRCs;
+// TTML preserves supplied word/syllable timing and background vocals.
+async function fetchFromLrcRed(track) {
+  const parseTtmlToLyrics = parseLrcRedTtml;
+  const parseTtmlTimeExpression = parseLrcRedTime;
+  const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
+    .replace(/[-\s]/g, "")
+    .toUpperCase();
+  const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
+  let candidates = validIsrc(directIsrc) ? [{ isrc: directIsrc }] : [];
+  if (!candidates.length) {
+    if (!String(track?.title || "").trim()) return null;
+    const payload = await fetchJson("https://lrc.red/search.json", {
+      params: { q: `${track.title} ${track.artist || ""}`.trim() },
+    });
+    candidates = (Array.isArray(payload?.hits) ? payload.hits : [])
+      .map((hit) => ({
+        ...hit,
+        durationMs: Number(hit.duration || 0) * 1000,
+        score: scoreCandidate(track, hit.title, hit.artist) +
+          scoreDurationBonus(track, hit.title, hit.artist, Number(hit.duration || 0) * 1000),
+      }))
+      .filter((hit) =>
+        validIsrc(hit.isrc) &&
+        isLikelySameTrack(track, hit.title, hit.artist, hit.durationMs),
+      )
+      .sort((left, right) => compareCandidateMatchQuality(track, left, right))
+      .slice(0, 3);
+  }
+
+  let bestResult = null;
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`);
+      // Reject static lyrics, HTML error pages, and invalid payloads.
+      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) continue;
+      const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
+      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) continue;
+      const parsed = parseTtmlToLyrics(content);
+      if (!parsed.lyrics?.some((line) =>
+        Number(line.lineEndTime) > Number(line.lineStartTime),
+      )) continue;
+      const result = {
+        lyrics: parsed.lyrics,
+        source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
+        metadata: {
+          ...(parsed.metadata || {}),
+          attribution: {
+            source: "lrc-red",
+            provider: "lrc.red",
+            url: `https://lrc.red/s/${candidate.isrc}`,
+          },
+        },
+      };
+      if (parsed.useKaraokeTiming) return result;
+      bestResult ||= result;
+    } catch (error) {
+      if (!/HTTP 404\b/.test(String(error?.message || error))) lastError = error;
+    }
+  }
+  if (bestResult) return bestResult;
+  if (lastError) throw lastError;
+  return null;
+}
+
 // ---- DesktopBridge/src/lyrics/parts/05a-musixmatch-client.js ----
 // Musixmatch client profiles, token resolution, richsync/subtitle fetching, translation mapping, and source adapter.
 // This file is evaluated by ../index.js in a shared compatibility context.
@@ -12393,6 +12467,7 @@ async function fetchFromLocalVault(_track) {
 
 const SOURCE_FETCHERS = {
   "local-vault": fetchFromLocalVault,
+  "lrc-red": fetchFromLrcRed,
   kugou: fetchFromKugou,
   netease: fetchFromNetease,
   "qq-direct": fetchFromQQ,
@@ -12438,6 +12513,9 @@ function mergeLyricsMetadata(...metadataList) {
   for (const metadata of metadataList) {
     if (!metadata || typeof metadata !== "object") {
       continue;
+    }
+    if (metadata.ttml && typeof metadata.ttml === "object") {
+      merged.ttml = { ...metadata.ttml };
     }
     if (metadata.instrumental) {
       merged.instrumental = true;
@@ -12577,8 +12655,8 @@ function getSourceAttemptOrder(
     "qq-direct",
   ];
   const apiOrder = singleFeatVariant
-    ? ["kugou", ...coreSources, ...(hasSpicy ? ["spicy-lyrics"] : [])]
-    : ["kugou", ...(hasSpicy ? ["spicy-lyrics"] : []), ...coreSources];
+    ? ["lrc-red", "kugou", ...coreSources, ...(hasSpicy ? ["spicy-lyrics"] : [])]
+    : ["lrc-red", "kugou", ...(hasSpicy ? ["spicy-lyrics"] : []), ...coreSources];
   const preferred = sanitizePreferredSource(preferredSource);
   if (preferred === "auto") {
     return ["local-vault", ...apiOrder];
@@ -12858,7 +12936,11 @@ async function finalizeFetchedLyricsResult(result) {
     if (!isSpicyKaraokeSource(result.source)) {
       mergeCensorshipSyllablesInLyrics(result.lyrics);
     }
-    if (!isSpicyKaraokeSource(result.source) && !source.includes("local-vault")) {
+    if (
+      !isSpicyKaraokeSource(result.source) &&
+      !source.includes("local-vault") &&
+      !source.includes("lrc-red")
+    ) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
   }
@@ -12883,7 +12965,7 @@ function getLyricsTimingTier(sourceLabel) {
   ) {
     return 3;
   }
-  if (source.includes("spicy-lyrics-line")) {
+  if (source.includes("lrc-red-line") || source.includes("spicy-lyrics-line")) {
     return 2;
   }
   if (source.includes("qrc")) {
@@ -12948,6 +13030,12 @@ function getLyricsCoverageRatio(lyrics, durationMs = 0) {
 
 function getSourcePriorityBucket(sourceLabel) {
   const source = String(sourceLabel || "").toLowerCase();
+  if (source.includes("lrc-red-karaoke")) {
+    return 700;
+  }
+  if (source.includes("lrc-red-line")) {
+    return 370;
+  }
   if (source.includes("local-vault-karaoke")) {
     return 720;
   }
@@ -13188,6 +13276,11 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
   if (nextIsSpicyStatic && !currentIsSpicyStatic) {
     return false;
   }
+  const currentIsLrcRedKaraoke = String(currentBest.source).includes("lrc-red-karaoke");
+  const nextIsLrcRedKaraoke = String(candidate.source).includes("lrc-red-karaoke");
+  if (currentIsLrcRedKaraoke !== nextIsLrcRedKaraoke) {
+    return nextIsLrcRedKaraoke;
+  }
   const currentIsSpicyKaraoke = isSpicyKaraokeSource(currentBest.source);
   const nextIsSpicyKaraoke = isSpicyKaraokeSource(candidate.source);
   if (currentIsSpicyKaraoke && !nextIsSpicyKaraoke) {
@@ -13199,6 +13292,11 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
 
   const currentIsKaraoke = isKaraokeLyricsSource(currentBest.source);
   const nextIsKaraoke = isKaraokeLyricsSource(candidate.source);
+  const currentIsLrcRedLine = String(currentBest.source).includes("lrc-red-line");
+  const nextIsLrcRedLine = String(candidate.source).includes("lrc-red-line");
+  if (!currentIsKaraoke && !nextIsKaraoke && currentIsLrcRedLine !== nextIsLrcRedLine) {
+    return nextIsLrcRedLine;
+  }
   const currentIsSpicyLine = isSpicyLineSource(currentBest.source);
   const nextIsSpicyLine = isSpicyLineSource(candidate.source);
   if (currentIsSpicyLine && !nextIsSpicyLine && !nextIsKaraoke) {
@@ -13226,7 +13324,7 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
   if (nextIsKaraoke && !currentIsKaraoke) {
     return true;
   }
-  // Explicit karaoke priority order: spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
+  // Explicit online karaoke priority order: lrc-red-karaoke > spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
   if (nextIsKaraoke && currentIsKaraoke && nextPriority > currentPriority) {
     return true;
   }

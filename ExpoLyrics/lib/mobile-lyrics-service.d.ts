@@ -7,6 +7,7 @@ export type MobileLyricsTrack = {
   album?: string;
   durationMs: number;
   spotifyTrackId?: string;
+  isrc?: string;
 };
 
 export type MobileLyricsPacket = {
@@ -28,6 +29,7 @@ export type SpotifyCatalogTrack = {
 export type MobileLyricsSourcePreference =
   | "auto"
   | "local-vault"
+  | "lrc-red"
   | "kugou"
   | "netease"
   | "qq-direct"

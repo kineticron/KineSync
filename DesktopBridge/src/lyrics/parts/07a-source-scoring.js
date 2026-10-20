@@ -6,6 +6,7 @@
 
 const SOURCE_FETCHERS = {
   "local-vault": fetchFromLocalVault,
+  "lrc-red": fetchFromLrcRed,
   kugou: fetchFromKugou,
   netease: fetchFromNetease,
   "qq-direct": fetchFromQQ,
@@ -51,6 +52,9 @@ function mergeLyricsMetadata(...metadataList) {
   for (const metadata of metadataList) {
     if (!metadata || typeof metadata !== "object") {
       continue;
+    }
+    if (metadata.ttml && typeof metadata.ttml === "object") {
+      merged.ttml = { ...metadata.ttml };
     }
     if (metadata.instrumental) {
       merged.instrumental = true;
@@ -190,8 +194,8 @@ function getSourceAttemptOrder(
     "qq-direct",
   ];
   const apiOrder = singleFeatVariant
-    ? ["kugou", ...coreSources, ...(hasSpicy ? ["spicy-lyrics"] : [])]
-    : ["kugou", ...(hasSpicy ? ["spicy-lyrics"] : []), ...coreSources];
+    ? ["lrc-red", "kugou", ...coreSources, ...(hasSpicy ? ["spicy-lyrics"] : [])]
+    : ["lrc-red", "kugou", ...(hasSpicy ? ["spicy-lyrics"] : []), ...coreSources];
   const preferred = sanitizePreferredSource(preferredSource);
   if (preferred === "auto") {
     return ["local-vault", ...apiOrder];
@@ -469,7 +473,11 @@ async function finalizeFetchedLyricsResult(result) {
   if (result.lyrics?.length) {
     mergeCensorshipSyllablesInLyrics(result.lyrics);
     const source = String(result.source || "").toLowerCase();
-    if (!isSpicyKaraokeSource(result.source) && !source.includes("local-vault")) {
+    if (
+      !isSpicyKaraokeSource(result.source) &&
+      !source.includes("local-vault") &&
+      !source.includes("lrc-red")
+    ) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
   }
@@ -494,7 +502,7 @@ function getLyricsTimingTier(sourceLabel) {
   ) {
     return 3;
   }
-  if (source.includes("spicy-lyrics-line")) {
+  if (source.includes("lrc-red-line") || source.includes("spicy-lyrics-line")) {
     return 2;
   }
   if (source.includes("qrc")) {
@@ -559,6 +567,12 @@ function getLyricsCoverageRatio(lyrics, durationMs = 0) {
 
 function getSourcePriorityBucket(sourceLabel) {
   const source = String(sourceLabel || "").toLowerCase();
+  if (source.includes("lrc-red-karaoke")) {
+    return 700;
+  }
+  if (source.includes("lrc-red-line")) {
+    return 370;
+  }
   if (source.includes("local-vault-karaoke")) {
     return 720;
   }
@@ -799,6 +813,11 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
   if (nextIsSpicyStatic && !currentIsSpicyStatic) {
     return false;
   }
+  const currentIsLrcRedKaraoke = String(currentBest.source).includes("lrc-red-karaoke");
+  const nextIsLrcRedKaraoke = String(candidate.source).includes("lrc-red-karaoke");
+  if (currentIsLrcRedKaraoke !== nextIsLrcRedKaraoke) {
+    return nextIsLrcRedKaraoke;
+  }
   const currentIsSpicyKaraoke = isSpicyKaraokeSource(currentBest.source);
   const nextIsSpicyKaraoke = isSpicyKaraokeSource(candidate.source);
   if (currentIsSpicyKaraoke && !nextIsSpicyKaraoke) {
@@ -810,6 +829,11 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
 
   const currentIsKaraoke = isKaraokeLyricsSource(currentBest.source);
   const nextIsKaraoke = isKaraokeLyricsSource(candidate.source);
+  const currentIsLrcRedLine = String(currentBest.source).includes("lrc-red-line");
+  const nextIsLrcRedLine = String(candidate.source).includes("lrc-red-line");
+  if (!currentIsKaraoke && !nextIsKaraoke && currentIsLrcRedLine !== nextIsLrcRedLine) {
+    return nextIsLrcRedLine;
+  }
   const currentIsSpicyLine = isSpicyLineSource(currentBest.source);
   const nextIsSpicyLine = isSpicyLineSource(candidate.source);
   if (currentIsSpicyLine && !nextIsSpicyLine && !nextIsKaraoke) {
@@ -837,7 +861,7 @@ function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
   if (nextIsKaraoke && !currentIsKaraoke) {
     return true;
   }
-  // Explicit karaoke priority order: spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
+  // Explicit online karaoke priority order: lrc-red-karaoke > spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
   if (nextIsKaraoke && currentIsKaraoke && nextPriority > currentPriority) {
     return true;
   }

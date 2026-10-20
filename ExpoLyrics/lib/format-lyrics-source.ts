@@ -14,6 +14,9 @@ export function formatLyricsSourceLabel(source: string) {
   if (lower.includes("local-vault")) {
     return "Local vault";
   }
+  if (lower.includes("lrc-red-karaoke")) return "lrc.red · Karaoke";
+  if (lower.includes("lrc-red-line")) return "lrc.red · Line";
+  if (lower.includes("lrc-red")) return "lrc.red";
   if (lower.includes("spicy-lyrics-line")) {
     return "Spicy · Line";
   }

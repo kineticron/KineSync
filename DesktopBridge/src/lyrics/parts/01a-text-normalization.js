@@ -28,6 +28,7 @@ const VALID_SOURCE_KEYS = new Set([
   "musixmatch",
   "lrclib",
   "spicy-lyrics",
+  "lrc-red",
 ]);
 const TEMPORARILY_DISABLED_SOURCES = new Set([]);
 const SOURCE_ALIASES = Object.freeze({
@@ -36,6 +37,9 @@ const SOURCE_ALIASES = Object.freeze({
   "qq-mirror": "qq-direct",
   mxm: "musixmatch",
   "musixmatch-token": "musixmatch",
+  "lrc.red": "lrc-red",
+  "lrc-red-karaoke": "lrc-red",
+  "lrc-red-line": "lrc-red",
   spicy: "spicy-lyrics",
   spicylyrics: "spicy-lyrics",
   spicy_lyrics: "spicy-lyrics",

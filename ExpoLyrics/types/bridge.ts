@@ -149,6 +149,7 @@ export type LyricsAttributionProfile = {
 };
 
 export type LyricsAttributionMetadata = {
+  url?: string;
   source: string;
   provider: string;
   community?: boolean;

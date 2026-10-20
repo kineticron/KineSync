@@ -1,0 +1,110 @@
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { createRequire } = require("node:module");
+const test = require("node:test");
+
+const track = { title: "Example Song", artist: "Example Artist", durationMs: 10000 };
+const isrc = "GBUM71029604";
+const wordTtml = '<tt lrc:timing="Word"><body><div><p begin="1.000" end="9.000"><span begin="1.000" end="3.000">Hel</span><span begin="3.000" end="5.000">lo</span> <span begin="5.000" end="9.000">world</span><span ttm:role="x-bg"><span begin="6.000" end="8.000">(oh)</span></span></p></div></body></tt>';
+const lineTtml = '<tt lrc:timing="Line"><body><div><p begin="1.000" end="9.000">Hello world</p></div></body></tt>';
+
+function load(fetch, mobile) {
+  const src = path.resolve(__dirname, "../src");
+  const context = vm.createContext({
+    AbortController, Buffer, clearTimeout, setTimeout, clearInterval, setInterval,
+    TextDecoder, URL, URLSearchParams, console, fetch, global: {}, module: { exports: {} },
+    process: { env: {} }, require: createRequire(path.join(src, "lyricsService.js")),
+    parseLrcRedTtml: require("../../ExpoLyrics/lib/lyrics-ttml-import").parseTtmlToLyrics,
+    parseLrcRedTime: require("../../ExpoLyrics/lib/lyrics-ttml-import").parseTtmlTimeExpression,
+  });
+  if (mobile) {
+    let source = fs.readFileSync(path.resolve(src, "../../ExpoLyrics/lib/mobile-lyrics-service.js"), "utf8");
+    source = source.replace(/^import .*;\r?\n/gm, "");
+    vm.runInContext(source.slice(0, source.indexOf("export {")), context);
+  } else {
+    const index = fs.readFileSync(path.join(src, "lyrics/index.js"), "utf8");
+    for (const match of index.match(/const partFiles = \[([\s\S]*?)\];/)[1].matchAll(/"([^"]+)"/g)) {
+      vm.runInContext(fs.readFileSync(path.join(src, "lyrics/parts", match[1]), "utf8"), context);
+    }
+  }
+  context.track = { ...track };
+  return context;
+}
+
+for (const mobile of [false, true]) {
+  const platform = mobile ? "mobile" : "desktop";
+  test(`${platform}: searches and preserves karaoke timing, joins, background vocals and credit`, async () => {
+    const calls = [];
+    const context = load(async (url, options) => {
+      calls.push({ url, options });
+      return new Response(url.includes("search.json") ? JSON.stringify({ hits: [
+        { isrc: "USAAA2600001", title: "Example Song (Live)", artist: track.artist, duration: 10 },
+        { isrc: "USAAA2600002", title: track.title, artist: "Wrong Singer", duration: 10 },
+        { isrc, title: track.title, artist: track.artist, duration: 10 },
+      ] }) : wordTtml);
+    }, mobile);
+    const result = await vm.runInContext("fetchFromLrcRed(track).then(finalizeFetchedLyricsResult)", context);
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[0].url).searchParams.get("q"), `${track.title} ${track.artist}`);
+    assert.equal(calls[1].url, `https://lrc.red/s/${isrc}.ttml`);
+    assert.equal(calls[1].options.headers.Authorization, undefined);
+    assert.equal(result.source, "lrc-red-karaoke");
+    assert.equal(result.lyrics[0].syllables[0].startTime, 1000);
+    assert.equal(result.lyrics[0].syllables[1].startTime, 3000);
+    assert.equal(result.lyrics[0].syllables.map(s => s.text).join(""), "Hello world");
+    assert(result.lyrics[0].backgroundSyllables.length);
+    assert.equal(result.metadata.attribution.provider, "lrc.red");
+    assert.equal(result.metadata.ttml.content, wordTtml);
+    context.metadata = result.metadata;
+    assert.equal(vm.runInContext('mergeLyricsMetadata(metadata).ttml.content', context), wordTtml);
+    const exporter = require(mobile ? "../../ExpoLyrics/lib/lyrics-ttml-export" : "../src/lyricsTtmlExport");
+    assert.equal(exporter.detectLyricsTimingMode(result.lyrics, result.source), "karaoke");
+    assert.equal(vm.runInContext('sanitizePreferredSource("lrc.red")', context), "lrc-red");
+    assert.equal(vm.runInContext('getSourceAttemptOrder("auto")[1]', context), "lrc-red");
+  });
+
+  test(`${platform}: direct ISRC, line timing, no match, static and API failure`, async () => {
+    for (const [body, status, expected] of [[lineTtml, 200, "lrc-red-line"], ["missing", 404, null],
+      ['<tt><body><p>Static</p></body></tt>', 200, null],
+      ['<tt><body><p begin="0" end="0">Static</p></body></tt>', 200, null],
+      ['<html>Error</html>', 200, null]]) {
+      const context = load(async (url) => {
+        assert.equal(url, `https://lrc.red/s/${isrc}.ttml`);
+        return new Response(body, { status });
+      }, mobile);
+      context.track.isrc = "GB-UM7-10-29604";
+      const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+      assert.equal(result?.source || null, expected);
+      if (result) {
+        const exporter = require(mobile ? "../../ExpoLyrics/lib/lyrics-ttml-export" : "../src/lyricsTtmlExport");
+        assert.equal(exporter.detectLyricsTimingMode(result.lyrics, result.source), "interpolated");
+      }
+    }
+    const context = load(async () => new Response("unavailable", { status: 503 }), mobile);
+    context.track.isrc = isrc;
+    await assert.rejects(vm.runInContext("fetchFromLrcRed(track)", context), /503/);
+    const miss = load(async () => new Response('{"hits":[]}'), mobile);
+    assert.equal(await vm.runInContext("fetchFromLrcRed(track)", miss), null);
+  });
+
+  test(`${platform}: priority holds in both arrival orders without promoting line lyrics over karaoke`, () => {
+    const context = load(async () => { throw Error("unexpected fetch"); }, mobile);
+    context.lyrics = [{ text: "Hello world", lineStartTime: 1000, lineEndTime: 9000, syllables: [] }];
+    const upgrades = (from, to) => {
+      context.from = from; context.to = to;
+      return vm.runInContext("shouldUpgradeLyricsCandidate(track, { source: from, lyrics }, { source: to, lyrics })", context);
+    };
+    for (const source of ["spicy-lyrics-syllable", "kugou-krc", "qq-musicu-qrc", "netease-yrc", "musixmatch-richsync"]) {
+      assert.equal(upgrades(source, "lrc-red-karaoke"), true, source);
+      assert.equal(upgrades("lrc-red-karaoke", source), false, source);
+      assert.equal(upgrades(source, "lrc-red-line"), false, source);
+      assert.equal(upgrades("lrc-red-line", source), true, source);
+    }
+    assert.equal(upgrades("spicy-lyrics-line", "lrc-red-line"), true);
+    assert.equal(upgrades("lrc-red-line", "spicy-lyrics-line"), false);
+    assert.equal(vm.runInContext('getSourcePriorityBucket("lrc-red-line") > getSourcePriorityBucket("spicy-lyrics-line")', context), true);
+  });
+}

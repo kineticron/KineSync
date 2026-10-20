@@ -25,6 +25,7 @@ Parts are ordered to match the original monolithic file's execution order:
 - **04-netease-spicy-lrclib-sources.js**: Netease, Spicy Lyrics, and LRCLib
   adapters.
 - **04-kugou-source.js**: Kugou karaoke (KRC) search, download, and adapter.
+- **04-lrc-red-source.js**: lrc.red recording search and ISRC-based TTML adapter.
 - **05a-musixmatch-client.js**: Musixmatch API client, token handling,
   profile resolution, and signature building.
 - **05b-musixmatch-parsing.js**: Musixmatch query matching, richsync/subtitle

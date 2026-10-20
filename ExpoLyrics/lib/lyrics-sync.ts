@@ -37,6 +37,7 @@ function isCurrentTrackRequest(requestId: number, signature: string) {
 export type LyricsSourcePreference =
   | "auto"
   | "local-vault"
+  | "lrc-red"
   | "kugou"
   | "netease"
   | "qq-direct"
@@ -71,6 +72,7 @@ function inferCurrentSourcePreference(
   if (source.includes("local-vault")) {
     return "local-vault";
   }
+  if (source.includes("lrc-red")) return "lrc-red";
   if (source.includes("spicy")) {
     return "spicy-lyrics";
   }

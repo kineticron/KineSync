@@ -45,6 +45,8 @@ export function detectLyricsTimingMode(
   if (source.includes("spicy-lyrics-static")) {
     return "static";
   }
+  if (source.includes("lrc-red-karaoke")) return "karaoke";
+  if (source.includes("lrc-red-line")) return "interpolated";
   if (source.includes("spicy-lyrics-line")) {
     return "interpolated";
   }

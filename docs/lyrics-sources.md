@@ -1,6 +1,12 @@
 # Lyric sources and configuration
 
-KineSync supports local vault lyrics and online providers including Spicy Lyrics, Musixmatch, QQ Music, NetEase, Kugou, and LRCLIB. Availability and timing differ by recording and provider. Word/syllable timings generally take precedence over line timings. Selecting a provider does not guarantee a match or convert line timings into accurate syllable timings.
+KineSync supports local vault lyrics and online providers including lrc.red, Spicy Lyrics, Musixmatch, QQ Music, NetEase, Kugou, and LRCLIB. Availability and timing differ by recording and provider. Word/syllable timings generally take precedence over line timings. Selecting a provider does not guarantee a match or convert line timings into accurate syllable timings.
+
+## lrc.red
+
+[lrc.red](https://lrc.red) provides a free public [API](https://lrc.red/docs) with no key required. Desktop and phone-only modes search by title and artist, validate the recording and duration, and fetch TTML by ISRC. Tracks that already supply an ISRC use it directly. Original timings, background vocals, TTML, and provider credit are retained. Static or missing lyrics fall through to other providers in Auto mode.
+
+Among online providers, `lrc-red-karaoke` has the highest priority, above `spicy-lyrics-syllable`. `lrc-red-line` ranks immediately above `spicy-lyrics-line`, below all karaoke sources. Existing local vault lookup still runs first. lrc.red can also be selected explicitly in the source picker.
 
 ## Spicy Lyrics
 
