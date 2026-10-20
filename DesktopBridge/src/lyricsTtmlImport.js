@@ -312,7 +312,7 @@ function joinImportedSyllableText(syllables) {
   return text.trim();
 }
 
-function applyImportedWordBoundaries(syllables) {
+function applyImportedWordBoundaries(syllables, inferTimingBoundaries = true) {
   const parts = Array.isArray(syllables) ? syllables : [];
   for (let index = 0; index < parts.length; index += 1) {
     const current = parts[index];
@@ -332,6 +332,7 @@ function applyImportedWordBoundaries(syllables) {
       Number(next.startTime || 0) - Number(current.endTime || 0),
     );
     const timingBoundary =
+      inferTimingBoundaries &&
       gapMs >= 120 &&
       (shouldInsertSyllableBoundarySpace(current.text, next.text) ||
         (!containsCjk(current.text) &&
@@ -461,9 +462,10 @@ function collectTimingSpans(content, lineStart, lineEnd, isBackground) {
   return spans;
 }
 
-function parseTimingSpans(content, lineStart, lineEnd, isBackground = false) {
+function parseTimingSpans(content, lineStart, lineEnd, isBackground = false, inferTimingBoundaries = true) {
   return applyImportedWordBoundaries(
     collectTimingSpans(content, lineStart, lineEnd, isBackground),
+    inferTimingBoundaries,
   ).map((part) => {
     const syllable = {
       text: part.text,
@@ -492,13 +494,13 @@ function parseTranslationText(content, role = "x-translation") {
   return "";
 }
 
-function parseBackgroundSpans(content, lineStart, lineEnd) {
+function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries) {
   const backgrounds = [];
   for (const span of topLevelSpans(content)) {
     if (!hasRole(span.attributes, "x-bg")) {
       if (!hasRole(span.attributes, "x-translation") &&
           !hasRole(span.attributes, "x-bg-translation")) {
-        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd));
+        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd, inferTimingBoundaries));
       }
       continue;
     }
@@ -506,7 +508,7 @@ function parseBackgroundSpans(content, lineStart, lineEnd) {
     const end = readAttribute(span.attributes, "end");
     const bgStart = begin ? parseTtmlClock(begin) : lineStart;
     const bgEnd = end ? parseTtmlClock(end) : lineEnd;
-    const timed = parseTimingSpans(span.inner, bgStart, bgEnd, true);
+    const timed = parseTimingSpans(span.inner, bgStart, bgEnd, true, inferTimingBoundaries);
     if (timed.length) {
       backgrounds.push(...timed);
       continue;
@@ -533,7 +535,7 @@ function leadLyricContent(content) {
   return result + content.slice(cursor);
 }
 
-function parseParagraphs(ttmlContent, useKaraokeTiming) {
+function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
   const lyrics = [];
   const paraRe = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
   let match = paraRe.exec(ttmlContent);
@@ -554,11 +556,11 @@ function parseParagraphs(ttmlContent, useKaraokeTiming) {
       inner,
       "x-bg-translation",
     );
-    const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd);
+    const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd, inferTimingBoundaries);
     let syllables = [];
 
     if (useKaraokeTiming) {
-      syllables = parseTimingSpans(inner, lineStart, lineEnd);
+      syllables = parseTimingSpans(inner, lineStart, lineEnd, false, inferTimingBoundaries);
     }
 
     if (!syllables.length) {
@@ -621,7 +623,10 @@ function parseTtmlToLyrics(ttmlContent) {
     return { lyrics: [], durationMs: 0, useKaraokeTiming: false };
   }
   const useKaraokeTiming = detectKaraokeTiming(content);
-  const parsed = parseParagraphs(content, useKaraokeTiming);
+  // lrc.red encodes word boundaries in literal whitespace. A pause inside a
+  // word must not synthesize a space between adjacent syllable spans.
+  const inferTimingBoundaries = !/\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
+  const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries);
   normalizeImportedLyricsTimestamps(parsed.lyrics);
   return {
     lyrics: parsed.lyrics,

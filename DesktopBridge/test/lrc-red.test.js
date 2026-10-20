@@ -11,6 +11,18 @@ const isrc = "GBUM71029604";
 const wordTtml = '<tt lrc:timing="Word"><body><div><p begin="1.000" end="9.000"><span begin="1.000" end="3.000">Hel</span><span begin="3.000" end="5.000">lo</span> <span begin="5.000" end="9.000">world</span><span ttm:role="x-bg"><span begin="6.000" end="8.000">(oh)</span></span></p></div></body></tt>';
 const lineTtml = '<tt lrc:timing="Line"><body><div><p begin="1.000" end="9.000">Hello world</p></div></body></tt>';
 
+test("lrc.red TTML preserves joined syllables across pauses in lead and background vocals", () => {
+  const content = '<tt xmlns:lrc="http://lrc.red/lyric-ttml-internal" lrc:timing="Word"><body><p begin="1.000" end="3.000"><span begin="1.000" end="1.300">Sun</span><span begin="1.472" end="1.900">rise</span> <span begin="2.000" end="3.000">glows</span><span ttm:role="x-bg"><span begin="1.000" end="1.300">(sun</span><span begin="1.600" end="2.000">rise)</span></span></p></body></tt>';
+  for (const importer of [require("../src/lyricsTtmlImport"), require("../../ExpoLyrics/lib/lyrics-ttml-import")]) {
+    const line = importer.parseTtmlToLyrics(content).lyrics[0];
+    assert.equal(line.syllables.map(s => s.text).join(""), "Sunrise glows");
+    assert.equal(line.backgroundSyllables.map(s => s.text).join(""), "sunrise");
+    assert.equal(line.syllables[0].isPartOfWord, true);
+    assert.equal(line.backgroundSyllables[0].isPartOfWord, true);
+    assert.deepEqual(line.syllables.map(s => [s.startTime, s.endTime]), [[1000, 1300], [1472, 1900], [2000, 3000]]);
+  }
+});
+
 function load(fetch, mobile) {
   const src = path.resolve(__dirname, "../src");
   const context = vm.createContext({
