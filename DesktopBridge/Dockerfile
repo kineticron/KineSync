@@ -8,7 +8,7 @@ RUN --mount=type=secret,id=build_ca \
     fi && \
     npm ci && npm cache clean --force
 
-FROM ubuntu:24.04@sha256:1e0a86e57d247923571b75e0aaf48a1449cf8c543d51fb3e07a4a7d7bfa79316
+FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
 ARG TARGETARCH
 ARG VCS_REF=unknown
