@@ -483,6 +483,10 @@ async function finalizeFetchedLyricsResult(result) {
     ) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
+    // Several sources interleave a Chinese translation after each lyric line.
+    if (!source.includes("local-vault")) {
+      result.lyrics = dropInterleavedChineseTranslationLines(result.lyrics);
+    }
   }
   return result;
 }
