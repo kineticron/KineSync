@@ -16,17 +16,17 @@
   "dependencies": {
     "@fontsource/dm-sans": "5.3.0",
     "@fontsource/manrope": "5.3.0",
-    "lucide-react": "1.53.0",
-    "motion": "14.0.0",
-    "next": "16.4.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "lucide-react": "1.60.0",
+    "motion": "14.4.0",
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "prettier": "3.9.9",
+    "prettier": "3.9.10",
     "sharp": "0.35.5",
     "typescript": "~5.9.3"
   }
