@@ -609,10 +609,10 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
 
 function detectKaraokeTiming(ttmlContent) {
   const timingMatch = String(ttmlContent || "").match(
-    new RegExp(`itunes:timing\\s*=\\s*"(Word|Line)"`, "i"),
+    /(?:^|\s)(?:lrc|itunes):timing\s*=\s*(["'])(Word|Line)\1/i,
   );
   if (timingMatch) {
-    return timingMatch[1].toLowerCase() === "word";
+    return timingMatch[2].toLowerCase() === "word";
   }
   return /<span\b[^>]*\bbegin\s*=/i.test(ttmlContent);
 }

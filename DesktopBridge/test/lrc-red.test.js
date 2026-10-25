@@ -61,7 +61,7 @@ for (const mobile of [false, true]) {
       ] }) : wordTtml);
     }, mobile);
     const result = await vm.runInContext("fetchFromLrcRed(track).then(finalizeFetchedLyricsResult)", context);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 2);
     assert.equal(new URL(calls[0].url).searchParams.get("q"), `${track.title} ${track.artist}`);
     assert.equal(calls[1].url, `https://lrc.red/s/${isrc}.ttml`);
     assert.equal(calls[1].options.headers.Authorization, undefined);
@@ -87,6 +87,7 @@ for (const mobile of [false, true]) {
       ['<html>Error</html>', 200, null]]) {
       const context = load(async (url) => {
         if (url.includes("search.json")) return new Response('{"hits":[]}');
+        if (url.includes("api.deezer.com")) return Response.json({ data: [] });
         if (url.endsWith(".json")) return new Response('{"sync":"line"}');
         assert.equal(url, `https://lrc.red/s/${isrc}.ttml`);
         return new Response(body, { status });
@@ -134,9 +135,95 @@ for (const mobile of [false, true]) {
         assert.equal(result.source, example.sync === "word" ? "lrc-red-karaoke" : "lrc-red-line");
       }
       assert.equal(calls.filter(url => url.includes("api.deezer.com")).length, 1);
-      assert.equal(calls.filter(url => url.includes("search.json")).length, 0);
+      assert.equal(calls.filter(url => url.includes("search.json")).length, example.sync === "line" ? 2 : 0);
     });
   }
+
+  test(`${platform}: corroborates localized artists with a catalog artist ID`, async () => {
+    for (const confirmed of [true, false]) {
+      const calls = [];
+      const context = load(async url => {
+        calls.push(url);
+        if (url.includes("search/artist")) return Response.json({ data: [{ id: confirmed ? 7 : 99, name: "BTS" }] });
+        if (url.includes("api.deezer.com/search")) return Response.json({ data: [
+          { title: track.title, artist: { id: 7, name: "BTS" }, duration: 10, isrc },
+        ] });
+        if (url.includes("search.json")) return Response.json({ hits: [] });
+        return url.endsWith(".json") ? Response.json({ sync: "word" }) : new Response(wordTtml);
+      }, mobile);
+      context.track.artist = "방탄소년단";
+      const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+      assert.equal(result?.source || null, confirmed ? "lrc-red-karaoke" : null);
+      assert.equal(calls.some(url => url.includes("search/artist")), true);
+      assert.equal(calls.some(url => url.includes("/s/")), confirmed);
+    }
+  });
+
+  test(`${platform}: rejects different versions, remaster years, artists and durations`, async () => {
+    const cases = [
+      ["Example Song", "Example Song (Live)"],
+      ["Example Song", "Example Song (2022 Mix)"],
+      ["Example Song", "Example Song (Home Demo)"],
+      ["Example Song", "Example Song (Mono)"],
+      ["Example Song - Remastered 2009", "Example Song (Remastered 2015)"],
+    ];
+    for (const [wanted, actual] of cases) {
+      const context = load(async url => {
+        if (url.includes("api.deezer.com")) return Response.json({ data: [] });
+        if (url.includes("search.json")) return Response.json({ hits: [
+          { isrc, title: actual, artist: track.artist, duration: 10 },
+          { isrc, title: wanted, artist: "Unrelated Singer", duration: 10 },
+          { isrc, title: wanted, artist: track.artist, duration: 14 },
+        ] });
+        assert.fail(`wrong recording must not be fetched: ${wanted} / ${actual} / ${url}`);
+      }, mobile);
+      context.track.title = wanted;
+      assert.equal(await vm.runInContext("fetchFromLrcRed(track)", context), null);
+    }
+    const context = load(async url => {
+      if (url.includes("api.deezer.com")) return Response.json({ data: [
+        { isrc, title: "Example Song (2009 - Remaster)", artist: { name: track.artist }, duration: 10 },
+      ] });
+      return url.endsWith(".json") ? Response.json({ sync: "word", duration: 10 }) : new Response(wordTtml);
+    }, mobile);
+    context.track.title = "Example Song - Remastered 2009";
+    assert.equal((await vm.runInContext("fetchFromLrcRed(track)", context)).source, "lrc-red-karaoke");
+  });
+
+  test(`${platform}: deduplicates catalog ISRCs and upgrades line results through text fallback`, async () => {
+    const calls = [];
+    const context = load(async url => {
+      calls.push(url);
+      if (url.includes("api.deezer.com")) return Response.json({ data: [0, 1, 2, 3].map(i => ({
+        isrc: i < 3 ? isrc : "USAAA2600002", title: track.title,
+        artist: { name: track.artist }, duration: 10,
+      })) });
+      if (url.includes("search.json")) return Response.json({ hits: [
+        { isrc: "USAAA2600003", title: track.title, artist: track.artist, duration: 10 },
+      ] });
+      if (url.includes("USAAA2600003")) return url.endsWith(".json") ? Response.json({ sync: "word" }) : new Response(wordTtml);
+      if (url.includes("USAAA2600002")) return new Response("missing", { status: 404 });
+      return url.endsWith(".json") ? Response.json({ sync: "line" }) : new Response(lineTtml);
+    }, mobile);
+    const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+    assert.equal(result.source, "lrc-red-karaoke");
+    assert.equal(calls.filter(url => url.endsWith(`/${isrc}.json`)).length, 1);
+    assert(calls.some(url => url.includes("USAAA2600002")));
+    assert(calls.some(url => url.includes("search.json")));
+  });
+
+  test(`${platform}: retries catalog after a stale direct ISRC and rejects recording duration mismatch`, async () => {
+    const context = load(async url => {
+      if (url.includes("api.deezer.com")) return Response.json({ data: [
+        { isrc, title: track.title, artist: { name: track.artist }, duration: 10 },
+      ] });
+      if (url.includes("USAAA2600001")) return Response.json({ sync: "word", duration: 14 });
+      return url.endsWith(".json") ? Response.json({ sync: "word", duration: 10 }) : new Response(wordTtml);
+    }, mobile);
+    context.track.isrc = "USAAA2600001";
+    const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+    assert.equal(result.metadata.attribution.url, `https://lrc.red/s/${isrc}`);
+  });
 
   test(`${platform}: priority holds in both arrival orders without promoting line lyrics over karaoke`, () => {
     const context = load(async () => { throw Error("unexpected fetch"); }, mobile);
@@ -162,6 +249,8 @@ for (const mobile of [false, true]) {
     let resolveStarted;
     const startedAll = new Promise((resolve) => { resolveStarted = resolve; });
     const context = load(async (url) => {
+      if (url.includes("api.deezer.com")) return Response.json({ data: [] });
+      if (url.endsWith(".json") && !url.includes("search.json")) return Response.json({ sync: "word" });
       if (url.includes("search.json")) {
         return new Response(JSON.stringify({ hits: [
           { isrc: "USAAA2600001", title: track.title, artist: track.artist, duration: 10 },
@@ -192,6 +281,8 @@ for (const mobile of [false, true]) {
     let resolveStarted;
     const startedAll = new Promise((resolve) => { resolveStarted = resolve; });
     const context = load(async (url) => {
+      if (url.includes("api.deezer.com")) return Response.json({ data: [] });
+      if (url.endsWith(".json") && !url.includes("search.json")) return Response.json({ sync: "word" });
       if (url.includes("search.json")) {
         return new Response(JSON.stringify({ hits: [
           { isrc: "USAAA2600001", title: track.title, artist: track.artist, duration: 10 },
