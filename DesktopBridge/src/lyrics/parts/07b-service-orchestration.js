@@ -43,6 +43,7 @@ function createLyricsService({
 
   /** Map fetcher-specific labels (e.g. qq-musicu-qrc) to Expo/bridge source keys (qq-direct). */
   const canonicalSourceCacheKey = (source) => {
+    if (source === "auto") return "auto"
     const stripped = stripDesktopSourceSuffix(source).replace(
       /-instrumental$/i,
       "",

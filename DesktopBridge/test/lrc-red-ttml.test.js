@@ -14,9 +14,15 @@ function document(timing, paragraph) {
 
 // Rewind's first line, extended with timed background vocals after the lead.
 const lineParagraph = `<p begin="20.370" end="23.317" lrc:key="L1" ttm:agent="v1">미처 몰랐던 네 모습<span ttm:role="x-bg"><span begin="23.400" end="23.600">(Re</span><span begin="23.900" end="24.300">wind)</span></span></p>`;
-const lineSyllables = [
+const wordFallback = [
   { text: "미처 몰랐던 네 모습", startTime: 20370, endTime: 23317 },
 ];
+const lineSyllables = ["미처 ", "몰랐던 ", "네 ", "모습"].map((text, i) => ({
+  text,
+  startTime: 20370 + (23317 - 20370) * i / 4,
+  endTime: 20370 + (23317 - 20370) * (i + 1) / 4,
+  isPartOfWord: false,
+}))
 const lineBackground = [
   { text: "Re", startTime: 23400, endTime: 23600, isPartOfWord: true },
   { text: "wind", startTime: 23900, endTime: 24300, isPartOfWord: false },
@@ -76,7 +82,7 @@ for (const [platform, importer] of importers) {
           '<p begin="20.370" end="23.317">미처 몰랐던 네 모습</p>',
         ));
         assert.equal(withoutSpans.useKaraokeTiming, true);
-        assert.deepEqual(withoutSpans.lyrics[0].syllables, lineSyllables);
+        assert.deepEqual(withoutSpans.lyrics[0].syllables, wordFallback);
       });
     }
   }

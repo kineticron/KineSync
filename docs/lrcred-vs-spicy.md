@@ -4,7 +4,7 @@ Captured on 2026-10-25, 11:30 to 11:35 UTC, against development commit `98f9195`
 
 ## Method and evidence
 
-The [request evidence](lrcred-vs-spicy.evidence.json) contains 90 captured real HTTP requests with URLs, statuses, response SHA-256 hashes, actual metadata outputs, lyric text hashes and line timestamp samples. Full response bodies are retained locally in `/tmp/lrcred-audit`, named by each request's `bodyFile`. Authorization values are omitted. The evidence file retains selected JSON fields rather than complete lyric bodies.
+The audit captured 90 real HTTP requests with URLs, statuses and response SHA-256 hashes. Full response bodies remain locally in `/tmp/lrcred-audit`. Authorization values were omitted. Trimmed captured cases are retained as regression fixtures in `DesktopBridge/test/fixtures/lrc-red-auto.json`.
 
 The baseline harness evaluated the actual desktop lookup from `98f9195`, with its original TTML importer and the production matching and network helpers. Each lookup received only title, artist and duration. No Spotify ID or supplied ISRC was passed to lrc.red. The production function performed Deezer search, ISRC selection, `/s/{isrc}.json`, `/s/{isrc}.ttml` and text fallback when needed. Each HTTP call used the real network, sequentially with a 600 ms delay. No live lookup used mocked responses.
 
@@ -65,7 +65,7 @@ These are actual `/s/{isrc}.json` title, artist and duration values. Catalog ide
 
 ## Actual timing samples
 
-Values are line start milliseconds as `lrc.red / Spicy`. The evidence also records end times and text hashes. Rows with different text or counts are excluded from positional timing comparisons because matching line numbers do not establish matching lyrics.
+Values are line start milliseconds as `lrc.red / Spicy`. The local captures also retain end times and complete text. Rows with different text or counts are excluded from positional timing comparisons because matching line numbers do not establish matching lyrics.
 
 | Song | First line | Middle line | Last line |
 | --- | --- | --- | --- |
@@ -115,3 +115,15 @@ node DesktopBridge/scripts/compare-lrc-red-live.cjs final 5QDLhrAOJJdNAmCTJ8xMyW
 The second command reruns only the two localized-name songs against the current production lookup. Set `LRC_RED_AUDIT_DIR` to choose the capture directory. A baseline run is required first to capture playback metadata and the Spicy comparison responses. This sample does not prove general parity or cover static Spicy payloads. The two remaining upstream failures require corrected provider data or a separately verified source selection policy.
 
 No native changes, SDK changes or version bump were made. A significant future change pushed to main should bump the version across ExpoLyrics app config, mobile and DesktopBridge package files and lockfiles. Nothing is pushed by this verification.
+
+## Automatic selection follow-up
+
+Auto mode now compares lrc.red and Spicy using one shared pure picker. Both requests start in parallel with a three-second deadline per provider. Synced Spicy community lyrics win immediately. For other Spicy sources, lrc.red wins only when vocal line counts, full lead and background text, and every line boundary agree within 100 ms, with equal or finer timing granularity. Word and syllable timing have equal rank. Line timing has lower rank. Otherwise Spicy wins. A single synced result wins over static lyrics or a failed request.
+
+The chosen result is cached in the existing track-scoped source cache. Manual source choices retain their provider path. If both primary providers fail to return synced lyrics, the existing remaining source fallback runs. Debug logs include the picker's short reason.
+
+Regression fixtures use the saved responses without refetching. They retain full line text, background text and line boundaries while omitting individual word timing and unrelated metadata. Cases cover ew and Rewind choosing lrc.red, Yesterday and Billie Jean choosing Spicy, and DtMF choosing Spicy community lyrics. Additional tests cover timeout, failure, static fallback, manual choices, cached decisions and late responses.
+
+Line-synced TTML imports now receive evenly timed synthetic segments for interpolation. Korean text splits at spaces, while unspaced Japanese and Chinese text splits into characters. Original line boundaries and the line timing classification remain intact. Supplied word-synced TTML timing remains unchanged. Spicy JSON Line responses already segment words. The captured Rewind paragraph verifies the TTML fix on both platforms.
+
+Follow-up validation passed: ExpoLyrics typecheck, lint and tests, plus DesktopBridge lint and all 154 tests. Each requested check ran once after implementation. ExpoLyrics lint retained the same two existing warnings listed above. No network requests were made for this follow-up.

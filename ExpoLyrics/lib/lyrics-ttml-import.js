@@ -1,5 +1,7 @@
 "use strict";
 
+const { segmentTimedLine } = require("../../DesktopBridge/src/lyricsLineSegmentation")
+
 const ITUNES_NS = "http://itunes.apple.com/lyric-ttml-extensions";
 
 function decodeXmlEntities(value) {
@@ -494,13 +496,13 @@ function parseTranslationText(content, role = "x-translation") {
   return "";
 }
 
-function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries) {
+function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming) {
   const backgrounds = [];
   for (const span of topLevelSpans(content)) {
     if (!hasRole(span.attributes, "x-bg")) {
       if (!hasRole(span.attributes, "x-translation") &&
           !hasRole(span.attributes, "x-bg-translation")) {
-        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd, inferTimingBoundaries));
+        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming));
       }
       continue;
     }
@@ -515,7 +517,9 @@ function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries
     }
     const text = stripXmlTags(leadLyricContent(span.inner))
       .replace(/[()\uFF08\uFF09]/g, "").trim();
-    if (text) backgrounds.push({ text, startTime: bgStart, endTime: bgEnd });
+    if (text) backgrounds.push(...(useKaraokeTiming
+      ? [{ text, startTime: bgStart, endTime: bgEnd }]
+      : segmentTimedLine(text, bgStart, bgEnd)))
   }
   return backgrounds;
 }
@@ -556,7 +560,7 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
       inner,
       "x-bg-translation",
     );
-    const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd, inferTimingBoundaries);
+    const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming);
     let syllables = [];
 
     if (useKaraokeTiming) {
@@ -566,13 +570,9 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
     if (!syllables.length) {
       const plainText = stripXmlTags(leadLyricContent(inner));
       if (plainText) {
-        syllables = [
-          {
-            text: plainText,
-            startTime: lineStart,
-            endTime: lineEnd,
-          },
-        ];
+        syllables = useKaraokeTiming
+          ? [{ text: plainText, startTime: lineStart, endTime: lineEnd }]
+          : segmentTimedLine(plainText, lineStart, lineEnd)
       }
     }
 

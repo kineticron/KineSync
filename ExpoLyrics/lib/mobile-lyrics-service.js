@@ -13372,6 +13372,7 @@ async function fetchBestSyncedLyrics(
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
+    autoSourceTimeoutMs = 3000,
   } = {},
 ) {
   const failures = [];
@@ -13473,9 +13474,53 @@ async function fetchBestSyncedLyrics(
   };
 
   if (sanitizePreferredSource(preferredSource) === "auto") {
+    const { pickAutoLyrics, timingRank } = require("../../DesktopBridge/src/lyricsAutoPicker")
+    const cachedDecision = sourceCache?.get?.("auto")
+    if (cachedDecision?.lyrics?.length) return cachedDecision
+
+    // Neither provider can publish before the bounded comparison finishes.
+    // Late responses may complete their request, but cannot change this decision.
+    const fetchPairSource = async source => {
+      if (!apiAttemptOrder.includes(source)) return null
+      let timer
+      try {
+        return await Promise.race([
+          (async () => {
+            const cached = sourceCache?.get?.(source)
+            return cached?.lyrics?.length ? cached
+              : await finalizeFetchedLyricsResult(await invokeSourceFetcher(source, SOURCE_FETCHERS[source]))
+          })(),
+          new Promise(resolve => {
+            timer = setTimeout(() => resolve(null), autoSourceTimeoutMs)
+          }),
+        ])
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    const lrcTask = fetchPairSource("lrc-red")
+    const spicyTask = fetchPairSource("spicy-lyrics")
+    const pairTask = Promise.all([lrcTask, spicyTask])
+    const [lrcRed, spicy] = await spicyTask.then(result =>
+      pickAutoLyrics(null, result).reason === "spicy-community"
+        ? [null, result] : pairTask,
+    )
+    cacheSourceResult("lrc-red", lrcRed)
+    cacheSourceResult("spicy-lyrics", spicy)
+    const decision = pickAutoLyrics(lrcRed, spicy)
+    console.debug("[lyrics-auto]", decision.reason)
+    if (timingRank(decision.result)) {
+      sourceCache?.set?.("auto", decision.result)
+      return decision.result
+    }
+
     const failureBySource = new Map();
 
-    const sourceTasks = apiAttemptOrder.map(async (source) => {
+    const sourceTasks = apiAttemptOrder
+      .filter(source => source !== "lrc-red" && source !== "spicy-lyrics")
+      .map(async (source) => {
       const fetcher = SOURCE_FETCHERS[source];
       if (typeof fetcher !== "function") {
         const reason = `${source}:unknown-source`;
@@ -13553,6 +13598,9 @@ async function fetchBestSyncedLyrics(
         };
       }
     });
+    if (decision.result?.lyrics?.length) {
+      sourceTasks.unshift(Promise.resolve({ ok: true, source: "spicy-lyrics", result: decision.result }))
+    }
     try {
       if (waitForAutoCompletion) {
         const settled = await Promise.all(sourceTasks);
@@ -13783,6 +13831,7 @@ function createLyricsService({
 
   /** Map fetcher-specific labels (e.g. qq-musicu-qrc) to Expo/bridge source keys (qq-direct). */
   const canonicalSourceCacheKey = (source) => {
+    if (source === "auto") return "auto"
     const stripped = stripDesktopSourceSuffix(source).replace(
       /-instrumental$/i,
       "",
