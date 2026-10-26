@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 
 const directory = path.join(__dirname, '../components/lyrics/native');
-const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8') + '\nexport { drawVoice };',
+const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8') + '\nexport { drawVoice, glyphRowExtent, advanceReferenceWordMotion, initialWordSpringState };',
   resolveDir: directory, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', write: false,
   external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
 }).outputFiles[0].text;
@@ -45,7 +45,7 @@ function paintSpicy(text, gradient, active = true, background = false, emphasize
   const draws = [];
   const rects = [{ ...rect, width: 8 }, { ...rect, x: 8, width: 30 }, { ...rect, x: 38, width: 2 }];
   const letters = emphasized ? [text] : Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), ({ segment }) => segment);
-  const shapedWord = moduleObject.exports.shapeGlyphWords({ extendedVisit: visit => visit(0, {
+  const shapedWord = moduleObject.exports.shapeGlyphWords({ getLineMetrics: () => [{ baseline: 20, ascent: 20, descent: 4 }], extendedVisit: visit => visit(0, {
     glyphs: [42], positions: [{ x: 0, y: 20 }], origin: { x: 0, y: 0 },
     bounds: [{ x: 0, y: -16, width: 40, height: 20 }], font: { getGlyphWidths: () => [40] },
   }) }, [{ ...word, word: { ...word.word, text, emphasized, letters }, rects, letters: [rects] }])[0];
@@ -96,14 +96,60 @@ const run = { glyphs: [1, 2, 3], positions: [{ x: 0, y: 20 }, { x: 20, y: 20 }, 
   origin: { x: 0, y: 0 }, bounds: [{ x: 0, y: -16, width: 19, height: 22 },
     { x: -3, y: -16, width: 23, height: 20 }, { x: 0, y: -16, width: 19, height: 20 }],
   font: { getGlyphWidths: () => [20, 20, 20] } };
-const shaped = moduleObject.exports.shapeGlyphWords({ extendedVisit: visit => visit(0, run) },
+const getLineMetrics = () => [{ baseline: 20, ascent: 20, descent: 4 }, { baseline: 44, ascent: 20, descent: 4 }];
+const shaped = moduleObject.exports.shapeGlyphWords({ getLineMetrics, extendedVisit: visit => visit(0, run) },
   [rect, nextRect, rowBelow].map(r => ({ ...word, rects: [r], letters: [] })), false);
 assert.deepEqual(Array.from(shaped[0].runs[0][0].glyphs), [1], 'The previous syllable must not acquire the next Hangul glyph through its overhang');
 assert.deepEqual(Array.from(shaped[1].runs[0][0].glyphs), [2]);
 assert.deepEqual(Array.from(shaped[2].runs[0][0].glyphs), [3], 'A descender must not acquire a duplicate layer in the next row');
 assert.ok(shaped[1].clips[0].rects.some(r => r.x === 17 && r.width === 23), 'Owned Hangul overhang must remain visible');
-const mixed = moduleObject.exports.shapeGlyphWords({ extendedVisit: visit => visit(0, run) }, [{ ...word,
+const mixed = moduleObject.exports.shapeGlyphWords({ getLineMetrics, extendedVisit: visit => visit(0, run) }, [{ ...word,
   word: { ...word.word, text: 'a😀♡', letters: ['a', '😀', '♡'], emphasized: true },
   rects: [rect, nextRect, rowBelow], letters: [[rect], [nextRect], [rowBelow]] }])[0];
 assert.deepEqual(Array.from(mixed.emojiMask), [false, true, false], 'Only the emoji letter gets a mask, not its text neighbors');
+
+function checkCapturedLayout(fixture) {
+  const api = moduleObject.exports;
+  assert.equal(fixture.rects.length, 2, 'CanvasKit separates the fallback heart from SF Pro text');
+  const paragraph = { getLineMetrics: () => fixture.lines,
+    extendedVisit: visit => fixture.runs.forEach(run => visit(run.line, { ...run,
+      font: { getGlyphWidths: () => run.widths } })) };
+  const shaped = api.shapeGlyphWords(paragraph, [{ word: fixture.syllable, rects: fixture.rects,
+    letters: fixture.letters, width: fixture.rects.reduce((sum, rect) => sum + rect.width, 0), before: 0 }])[0];
+  const right = Math.max(...fixture.rects.map(rect => rect.x + rect.width));
+  const extent = api.glyphRowExtent(fixture.rects[0], fixture.rects, fixture.lines);
+  assert.equal(extent.x + extent.width, right, 'Actual fallback/text rects share the complete paragraph row');
+  assert.ok(extent.width > fixture.rects[0].width);
+  assert.equal(shaped.revealRects[0].width, extent.width, 'Layout caches the full extent for drawVoice');
+  assert.equal(shaped.runs[0].length, 2, 'Both real font runs belong to this syllable');
+  assert.deepEqual(Array.from(shaped.runs[0][0].glyphs), fixture.runs[0].glyphs);
+  assert.deepEqual(Array.from(shaped.runs[0][1].glyphs), fixture.runs[1].glyphs.slice(0, 6),
+    'The text run includes the comma, and excludes the later i syllables');
+  for (const rect of fixture.rects) {
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    assert.ok(shaped.clips[0].rects.some(clip => x >= clip.x && x <= clip.x + clip.width && y >= clip.y && y <= clip.y + clip.height),
+      'The syllable clip includes each actual fallback/text box');
+  }
+  const edges = [];
+  for (const time of [48014, 48190, 48366, 49000]) {
+    const motion = api.advanceReferenceWordMotion(fixture.syllable, api.initialWordSpringState(fixture.syllable), time, 1 / 60).motion;
+    if (time >= fixture.syllable.end) assert.equal(motion.gradient, 1, 'Sung state completes independently of slice geometry');
+    const draws = [];
+    const canvas = { save() {}, restore() {}, translate() {}, scale() {}, clipPath() {},
+      drawGlyphs: (glyphs, _positions, _x, _y, _font, paint) => draws.push({ glyphs, shader: paint.shader }) };
+    // Exclude decorative glow to inspect the reveal commands alone.
+    api.drawVoice(canvas, [shaped], [{ ...motion, glow: 0 }], time, true, true, false, fixture.provenance.fontSize, 50093,
+      { bright: 0.85, dark: 0.5 }, { active: true, releasePosition: 0, elapsed: 0 });
+    assert.equal(draws.length, 2, 'Both font runs draw directly without a reveal layer');
+    assert.equal(draws[0].shader.start.x, draws[1].shader.start.x, 'Heart and text use the same reveal edge');
+    if (time >= fixture.syllable.end) assert.equal(draws[1].shader.start.x, right, 'Sung yeah, is fully on the bright side');
+    edges.push({ time, gradient: motion.gradient, x: draws[1].shader.start.x });
+  }
+  return { rects: fixture.rects, lines: fixture.lines, extent, edges };
+}
+checkCapturedLayout(require('./fixtures/native-glyph-heart-layout.json'));
+const canvasKitArg = process.argv.indexOf('--canvaskit');
+if (canvasKitArg >= 0) require('./native-glyph-canvaskit.cjs')(process.argv[canvasKitArg + 1])
+  .then(fixture => console.log('Live CanvasKit layout + real shapeGlyphWords/glyphRowExtent:', JSON.stringify(checkCapturedLayout(fixture), null, 2)))
+  .catch(error => { console.error(error); process.exitCode = 1; });
 console.log('Native glyph paint checks passed: direct text/fallback drawing, per-slice emoji masking, multi-run Spicy reveal in LTR/RTL, continuous AMLL highlight release, Hangul ownership and descender isolation.');

@@ -11,7 +11,7 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[] };
+type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; revealRects: SkRect[] };
 
 // SkTypeface exposes no color-font metadata. Classify graphemes once at layout;
 // ordinary fallback text (including U+2661 ♡) still uses the glyph paint shader.
@@ -20,11 +20,18 @@ const needsEmojiMask = (grapheme: string) => !grapheme.includes('\uFE0E') &&
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
+  const lines = paragraph.getLineMetrics();
   const allRects = words.flatMap(word => word.rects);
   const shaped = words.map(word => {
     const parts = word.word.emphasized ? word.letters : [word.rects];
     const emojiMask = spicy ? word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)] : parts.map(() => false);
-    return { ...word, emojiMask, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
+    const revealRects = parts.map(rects => {
+      const rect = rects[0];
+      if (!rect) return Skia.XYWHRect(0, 0, 0, 0);
+      const extent = glyphRowExtent(rect, rects, lines);
+      return Skia.XYWHRect(extent.x, rect.y, extent.width, rect.height);
+    });
+    return { ...word, emojiMask, revealRects, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
       const path = Skia.PathBuilder.Make();
       rects.forEach(rect => {
         const onLine = allRects.filter(r => Math.min(r.y + r.height, rect.y + rect.height) - Math.max(r.y, rect.y) > Math.min(r.height, rect.height) / 2);
@@ -142,7 +149,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setAlphaf(spicy ? sung ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5 : line.dark);
       } else {
         const rtl = spicyIsRtl(word.word.text);
-        const extent = spicy ? glyphRowExtent(rect, rects) : rect;
+        const extent = spicy ? word.revealRects[letter] : rect;
         const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
         const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
         paint.setAlphaf(1);

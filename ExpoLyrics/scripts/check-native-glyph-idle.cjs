@@ -31,7 +31,7 @@ function mount(code, spicy, count = 3, start = 5000) {
     const rect = { x: index * 22, y: 0, width: 20, height: 24 };
     return { word: { text: 'sing', start: start + index * 600, end: start + index * 600 + 500,
       offset: index * 5, letters: ['s', 'i', 'n', 'g'], emphasized: false, joined: false },
-    rects: [rect], letters: [[rect]], width: 20, before: index * 20, clips: [{}], pictures: [{ glyph: index }], emojiMask: [false],
+    rects: [rect], letters: [[rect]], revealRects: [rect], width: 20, before: index * 20, clips: [{}], pictures: [{ glyph: index }], emojiMask: [false],
     runs: [[{ glyphs: [index + 1], positions: [{ x: rect.x, y: 20 }], font: 'font' }]] };
   }));
   const value = initial => {
