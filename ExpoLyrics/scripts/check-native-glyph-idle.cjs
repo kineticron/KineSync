@@ -44,6 +44,7 @@ function mount(code, spicy, count = 3, start = 5000) {
     return result;
   };
   const paint = () => ({ setAntiAlias() {}, setShader(shader) { this.shader = shader; },
+    setBlendMode(mode) { this.blendMode = mode; },
     setColor(color) { this.color = color; }, setAlphaf(alpha) { this.alpha = alpha; },
     setImageFilter(filter) { this.filter = filter; } });
   const Skia = { XYWHRect: (x, y, width, height) => ({ x, y, width, height }), Paint: paint, Color: color => color,
@@ -52,7 +53,7 @@ function mount(code, spicy, count = 3, start = 5000) {
     pictures++;
     const commands = [];
     const canvas = {};
-    for (const name of ['save', 'restore', 'translate', 'scale', 'clipPath', 'saveLayer', 'drawPicture', 'drawGlyphs'])
+    for (const name of ['save', 'restore', 'translate', 'scale', 'clipPath', 'saveLayer', 'drawPicture', 'drawGlyphs', 'drawPaint'])
       canvas[name] = (...args) => commands.push([name, ...args.map(arg => arg && typeof arg === 'object' ? { ...arg } : arg)]);
     draw(canvas);
     return JSON.stringify(commands);
@@ -65,7 +66,7 @@ function mount(code, spicy, count = 3, start = 5000) {
       ? { useSharedValue: value, useFrameCallback: fn => {
         const frame = { fn, active: false }; frames.push(frame);
         return { setActive: active => { frame.active = active; } };
-      } } : { Skia, createPicture, Picture: 'Picture', ClipOp: { Intersect: 0 }, TileMode: { Clamp: 0, Decal: 1 } } });
+      } } : { Skia, createPicture, Picture: 'Picture', BlendMode: { SrcIn: 5, SrcOver: 3 }, ClipOp: { Intersect: 0 }, TileMode: { Clamp: 0, Decal: 1 } } });
   const position = { value: 0 }, active = { value: false };
   const lineMotion = { value: { scale: 0.97, velocity: 0, bright: 0.2, dark: 0.2 } };
   moduleObject.exports.NativeGlyphPicture({ words, width: count * 22, height: 24, position, active, spicy,

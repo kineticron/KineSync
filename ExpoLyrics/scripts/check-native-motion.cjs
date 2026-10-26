@@ -141,6 +141,23 @@ for (let time = 0; time <= 1800; time += 10) {
 }
 const glyphLayout = load('export * from "./components/lyrics/native/native-glyph-layout"');
 const syllableRect = { x: 20, y: 0, width: 40, height: 20 };
+// "♡ yeah," (USUM72601821, L13, 48.014–48.366) can shape into
+// separate heart, text and punctuation boxes. Use their union, not box zero.
+const splitSyllable = [
+  { x: 20, y: -3, width: 12, height: 24 },
+  { x: 32, y: 0, width: 40, height: 20 },
+  { x: 72, y: 0, width: 6, height: 20 },
+  { x: 0, y: 20, width: 100, height: 20 },
+];
+for (const rect of splitSyllable.slice(0, 3)) {
+  const extent = glyphLayout.glyphRowExtent(rect, splitSyllable);
+  assert.equal(extent.x, 20);
+  assert.equal(extent.width, 58, 'All fallback/punctuation slices share the full row extent, excluding wrapped rows');
+}
+const rtlExtent = glyphLayout.glyphRowExtent(splitSyllable[2], [...splitSyllable].reverse());
+assert.equal(rtlExtent.x, 20, 'Extent is independent of RTL slice ordering');
+assert.equal(rtlExtent.width, 58);
+assert.equal(glyphLayout.glyphRowExtent(syllableRect, [syllableRect]).width, 40);
 for (const advanced of [0, 10, 20, 40, 80]) {
   const edges = [0, 1, 2, 3].map(letter => glyphLayout.amllRevealStart({ ...syllableRect, x: 20 + letter * 10, width: 10 }, [syllableRect], advanced, 0, 10));
   assert.ok(edges.every(x => x === edges[0]), 'Sustained letters share a syllable reveal edge instead of starting parallel reveal streams');

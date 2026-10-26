@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
+import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
-import { amllRevealStart, selectGlyphSlice } from './native-glyph-layout';
+import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
 import { advanceReferenceWordMotion, initialWordSpringState, type WordMotion } from './reference-word-motion';
 import { amllEmphasis, amllFloat, clamp01 } from './reference-motion';
@@ -101,7 +101,8 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
     transform(canvas, bounds, spicy ? motion.scale : 1, 0,
       spicy ? motion.y * (background ? fontSize / 0.75 : fontSize) : amllFloat(floatTime, word.word.start, word.word.end, background) * fontSize, word.word.origin ?? 0.5);
     word.runs.forEach((runs, letter) => {
-      const rect = (word.word.emphasized ? word.letters[letter] : word.rects)[0];
+      const rects = word.word.emphasized ? word.letters[letter] : word.rects;
+      const rect = rects[0];
       if (!rect) return;
       canvas.save();
       let glow = 0;
@@ -135,8 +136,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setAlphaf(spicy ? sung ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5 : line.dark);
       } else {
         const rtl = spicyIsRtl(word.word.text);
-        const x = spicy ? rtl ? rect.x + rect.width * (1 - gradient) : rect.x + rect.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
-        const length = spicy ? rect.width * 0.2 * (rtl ? -1 : 1) : fade;
+        const extent = spicy ? glyphRowExtent(rect, rects) : rect;
+        const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
+        const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
         paint.setAlphaf(1);
         shader = Skia.Shader.MakeLinearGradient({ x, y: rect.y }, { x: x + length, y: rect.y },
           [Skia.Color(`rgba(255,255,255,${spicy ? background ? 0.6 : 0.85 : line.bright})`),
@@ -159,7 +161,16 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         canvas.restore();
       }
       canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-      for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+      if (spicy) {
+        // Color fallback glyphs can ignore a glyph paint's shader. Apply the
+        // reveal to the recorded glyph alpha, including the inactive dim state.
+        canvas.saveLayer();
+        canvas.drawPicture(word.pictures[letter]);
+        paint.setBlendMode(BlendMode.SrcIn);
+        canvas.drawPaint(paint);
+        canvas.restore();
+        paint.setBlendMode(BlendMode.SrcOver);
+      } else for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
       canvas.restore();
     });
     canvas.restore();

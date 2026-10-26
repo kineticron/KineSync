@@ -1,5 +1,21 @@
 import type { SkPoint, SkRect } from '@shopify/react-native-skia';
 
+/** Shaping may split one syllable into fallback-font or punctuation boxes. */
+export function glyphRowExtent(rect: SkRect, rects: SkRect[]) {
+  'worklet';
+  let left = rect.x;
+  let right = rect.x + rect.width;
+  for (const slice of rects) {
+    // getRectsForRange uses tight font bounds, so fallback runs on the same
+    // baseline can have different tops/heights. Match shapeGlyphWords' rows.
+    const overlap = Math.min(slice.y + slice.height, rect.y + rect.height) - Math.max(slice.y, rect.y);
+    if (overlap <= Math.min(slice.height, rect.height) / 2) continue;
+    left = Math.min(left, slice.x);
+    right = Math.max(right, slice.x + slice.width);
+  }
+  return { x: left, width: right - left };
+}
+
 /** All letters on a syllable's row share one reveal edge, even when scaled separately. */
 export function amllRevealStart(rect: SkRect, syllableRects: SkRect[], advanced: number, before: number, fade: number) {
   'worklet';
