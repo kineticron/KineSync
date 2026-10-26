@@ -11,14 +11,20 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[] };
+type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[] };
+
+// SkTypeface exposes no color-font metadata. Classify graphemes once at layout;
+// ordinary fallback text (including U+2661 ♡) still uses the glyph paint shader.
+const needsEmojiMask = (grapheme: string) => !grapheme.includes('\uFE0E') &&
+  /[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u20E3]/u.test(grapheme);
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
   const allRects = words.flatMap(word => word.rects);
   const shaped = words.map(word => {
     const parts = word.word.emphasized ? word.letters : [word.rects];
-    return { ...word, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
+    const emojiMask = spicy ? word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)] : parts.map(() => false);
+    return { ...word, emojiMask, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
       const path = Skia.PathBuilder.Make();
       rects.forEach(rect => {
         const onLine = allRects.filter(r => Math.min(r.y + r.height, rect.y + rect.height) - Math.max(r.y, rect.y) > Math.min(r.height, rect.height) / 2);
@@ -161,7 +167,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         canvas.restore();
       }
       canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-      if (spicy) {
+      if (spicy && word.emojiMask[letter]) {
         // Color fallback glyphs can ignore a glyph paint's shader. Apply the
         // reveal to the recorded glyph alpha, including the inactive dim state.
         canvas.saveLayer();

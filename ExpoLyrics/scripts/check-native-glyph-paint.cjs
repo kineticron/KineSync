@@ -22,10 +22,12 @@ const Skia = {
 };
 const moduleObject = { exports: {} };
 vm.runInNewContext(source, { module: moduleObject, exports: moduleObject.exports,
-  require: name => name === 'react' ? { memo: fn => fn } : name === '@shopify/react-native-skia' ? { Skia, BlendMode: { SrcIn: 5, SrcOver: 3 }, TileMode: { Clamp: 0 }, ClipOp: { Intersect: 0 } } : {} });
+  require: name => name === 'react' ? { memo: fn => fn } : name === '@shopify/react-native-skia' ? { Skia,
+    createPicture: draw => { draw({ clipPath() {}, drawGlyphs() {} }); return 'glyph alpha'; },
+    BlendMode: { SrcIn: 5, SrcOver: 3 }, TileMode: { Clamp: 0 }, ClipOp: { Intersect: 0 } } : {} });
 const rect = { x: 0, y: 0, width: 20, height: 24 };
 const word = { word: { text: 'sing', start: 0, end: 1000, emphasized: false }, rects: [rect], width: 20, before: 0,
-  runs: [[{ glyphs: [42], positions: [{ x: 0, y: 20 }], font: {} }]], clips: [{}] };
+  runs: [[{ glyphs: [42], positions: [{ x: 0, y: 20 }], font: {} }]], clips: [{}], emojiMask: [false] };
 const motion = { scale: 1, y: 0, gradient: 1, glow: 0, letters: [] };
 function paintLine(active, bright) {
   const draws = [];
@@ -39,17 +41,29 @@ const before = paintLine(true, 0.9);
 const after = paintLine(false, 0.9);
 assert.deepEqual(after, before, 'AMLL deactivation must preserve the filtered highlight rather than flash to dark');
 assert.ok(paintLine(false, 0.5).shader.colors[0].includes('0.5'), 'Inactive highlights continue following the release filter');
-function paintSpicy(text, gradient, active = true, background = false, emphasized = false) {
+function paintSpicy(text, gradient, active = true, background = false, emphasized = false, masked = false) {
   const draws = [];
   const rects = [{ ...rect, width: 8 }, { ...rect, x: 8, width: 30 }, { ...rect, x: 38, width: 2 }];
+  const letters = emphasized ? [text] : Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), ({ segment }) => segment);
+  const shapedWord = moduleObject.exports.shapeGlyphWords({ extendedVisit: visit => visit(0, {
+    glyphs: [42], positions: [{ x: 0, y: 20 }], origin: { x: 0, y: 0 },
+    bounds: [{ x: 0, y: -16, width: 40, height: 20 }], font: { getGlyphWidths: () => [40] },
+  }) }, [{ ...word, word: { ...word.word, text, emphasized, letters }, rects, letters: [rects] }])[0];
+  assert.equal(shapedWord.emojiMask[0], masked, 'Layout classifies the slice before painting');
+  const snapshotPaint = paint => ({ alpha: paint.alpha, shader: paint.shader, blendMode: paint.blendMode });
   const canvas = { save() {}, translate() {}, scale() {}, clipPath() {},
     saveLayer: () => draws.push('layer'), restore: () => draws.push('restore'),
     drawPicture: picture => draws.push(picture),
-    drawPaint: paint => draws.push({ alpha: paint.alpha, shader: paint.shader, blendMode: paint.blendMode }),
-    drawGlyphs: () => assert.fail('Spicy must apply its reveal after drawing fallback glyphs') };
-  moduleObject.exports.drawVoice(canvas, [{ ...word, word: { ...word.word, text, emphasized }, rects,
-    letters: [rects], pictures: ['glyph alpha'] }], [{ ...motion, gradient }], 500, active, true, background, 36, 1000,
+    drawPaint: paint => draws.push(snapshotPaint(paint)),
+    drawGlyphs: (_glyphs, _positions, _x, _y, _font, paint) => draws.push(snapshotPaint(paint)) };
+  moduleObject.exports.drawVoice(canvas, [shapedWord], [{ ...motion, gradient }], 500, active, true, background, 36, 1000,
     { bright: 0.9, dark: 0.3 }, { active: true, releasePosition: 0, elapsed: 0 });
+  if (!masked) {
+    assert.ok(!draws.includes('layer'), 'Normal/fallback text must draw directly without a reveal layer');
+    assert.ok(!draws.includes('glyph alpha'), 'Normal text uses drawGlyphs with the shader paint');
+    assert.equal(draws.length, 3, 'One glyph draw and two restores, without a masking draw');
+    return draws[0];
+  }
   assert.equal(draws[0], 'layer');
   assert.equal(draws[1], 'glyph alpha');
   assert.equal(draws[2].blendMode, 5, 'Reveal uses SrcIn against glyph alpha, including color glyphs');
@@ -66,8 +80,16 @@ for (const emphasized of [false, true]) {
     assert.equal(rtl.end.x, 40 * (1 - gradient) - 8);
   }
 }
-assert.equal(paintSpicy('♡ yeah,', 0, false).alpha, 0.5, 'Inactive fallback glyphs are dimmed by the layer mask');
+assert.equal(paintSpicy('♡ yeah,', 0, false).alpha, 0.5, 'Inactive text fallback glyphs use paint alpha');
 assert.equal(paintSpicy('♡ yeah,', 0, false, true).alpha, 0.3);
+assert.equal(paintSpicy('sing', 0.5).shader.start.x, 20);
+for (const text of ['😀', '🇺🇸', '1️⃣', '❤️', '👩‍🎤']) {
+  for (const emphasized of [false, true]) {
+    assert.equal(paintSpicy(text, 0.5, true, false, emphasized, true).shader.start.x, 20);
+  }
+  assert.equal(paintSpicy(text, 0, false, false, false, true).alpha, 0.5);
+}
+paintSpicy('☀\uFE0E', 0.5);
 const nextRect = { ...rect, x: 20 };
 const rowBelow = { ...rect, y: 24 };
 const run = { glyphs: [1, 2, 3], positions: [{ x: 0, y: 20 }, { x: 20, y: 20 }, { x: 0, y: 44 }],
@@ -80,4 +102,8 @@ assert.deepEqual(Array.from(shaped[0].runs[0][0].glyphs), [1], 'The previous syl
 assert.deepEqual(Array.from(shaped[1].runs[0][0].glyphs), [2]);
 assert.deepEqual(Array.from(shaped[2].runs[0][0].glyphs), [3], 'A descender must not acquire a duplicate layer in the next row');
 assert.ok(shaped[1].clips[0].rects.some(r => r.x === 17 && r.width === 23), 'Owned Hangul overhang must remain visible');
-console.log('Native glyph paint checks passed: multi-run Spicy reveal in LTR/RTL, fallback glyph masking, continuous AMLL highlight release, Hangul ownership and descender isolation.');
+const mixed = moduleObject.exports.shapeGlyphWords({ extendedVisit: visit => visit(0, run) }, [{ ...word,
+  word: { ...word.word, text: 'a😀♡', letters: ['a', '😀', '♡'], emphasized: true },
+  rects: [rect, nextRect, rowBelow], letters: [[rect], [nextRect], [rowBelow]] }])[0];
+assert.deepEqual(Array.from(mixed.emojiMask), [false, true, false], 'Only the emoji letter gets a mask, not its text neighbors');
+console.log('Native glyph paint checks passed: direct text/fallback drawing, per-slice emoji masking, multi-run Spicy reveal in LTR/RTL, continuous AMLL highlight release, Hangul ownership and descender isolation.');
