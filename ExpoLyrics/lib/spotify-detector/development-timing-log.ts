@@ -14,8 +14,8 @@ let lifecycleLines = 0;
 let suppressed = 0;
 let windowSequence = 0;
 let currentTrack: string | null = null;
-const VERSION = 2;
-const BUILD_BASE = '959f855';
+const VERSION = 3;
+const BUILD_BASE = '0453f4e';
 const MAX_HOUR_LINES = 512;
 const MAX_LIFECYCLE_LINES = 64;
 let anchorSequence = 0;
@@ -31,6 +31,12 @@ export type DevelopmentTimingAnchor = Readonly<{
   playerField: 'timestamp';
   serverField: 'server_timestamp_ms';
   rawPositionMs: NumericEvidence;
+  stateFlags: Readonly<Record<'is_playing' | 'is_paused' | 'paused' | 'loading' | 'is_buffering', Readonly<{
+    present: boolean; kind: RawNumber['kind'] | 'boolean'; value: NumericEvidence | boolean;
+  }>>>;
+  flagPresenceScope: 'decoded-player-state';
+  binaryFalseDefaultsPossible: true;
+  clusterClocks: Readonly<Record<'changed_timestamp_ms' | 'transfer_data_timestamp' | 'started_playing_at_timestamp', RawNumber>>;
   player: RawNumber;
   server: RawNumber;
   receipt: ClockStamp;
@@ -54,6 +60,8 @@ type Input = {
   session: unknown;
   connection: unknown;
   generation?: number;
+  state?: Record<string, unknown>;
+  cluster?: Record<string, unknown>;
 };
 type SampleTiming = {
   developmentTiming?: DevelopmentTimingAnchor;
@@ -120,6 +128,16 @@ export function developmentTimingAnchor(input: Input): DevelopmentTimingAnchor |
   startedAt ??= performance.now();
   return Object.freeze({ anchor: ++anchorSequence, playerPath: input.playerPath, serverPath: input.serverPath,
     positionField: input.positionField, playerField: 'timestamp', serverField: 'server_timestamp_ms',
+    stateFlags: Object.freeze(Object.fromEntries(['is_playing', 'is_paused', 'paused', 'loading', 'is_buffering'].map(field => {
+      const value = input.state?.[field];
+      return [field, Object.freeze({ present: Object.prototype.hasOwnProperty.call(input.state ?? {}, field),
+        kind: typeof value === 'boolean' ? 'boolean' : rawNumber(value).kind,
+        value: typeof value === 'boolean' ? value : numericEvidence(value) })];
+    })) as DevelopmentTimingAnchor['stateFlags']),
+    flagPresenceScope: 'decoded-player-state', binaryFalseDefaultsPossible: true,
+    clusterClocks: Object.freeze({ changed_timestamp_ms: rawNumber(input.cluster?.changed_timestamp_ms),
+      transfer_data_timestamp: rawNumber(input.cluster?.transfer_data_timestamp),
+      started_playing_at_timestamp: rawNumber(input.cluster?.started_playing_at_timestamp) }),
     rawPositionMs: numericEvidence(input.position), player: rawNumber(input.player), server: rawNumber(input.server),
     receipt: Object.freeze({ ...input.receipt }), parsed: timingNow(), origin: input.origin,
     device: alias('device', input.device), session: alias('session', input.session), connection: alias('connection', input.connection),

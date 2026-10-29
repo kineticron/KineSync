@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 // playback controls, Spotify APIs, browser, or real timers are used.
 const bundle = await build({ stdin: { resolveDir: process.cwd(), contents: `
 export * from './lib/spotify-detector/development-timing-log';
-export {sampleFrom} from './lib/spotify-detector/protocol';
+export {sampleFrom,decodeStateBody} from './lib/spotify-detector/protocol';
 export {detectorPacket} from './lib/spotify-detector/packet';
 export {usePlaybackStore} from './store/playback-store';` }, bundle: true, platform: 'node', format: 'cjs', write: false,
   plugins: [{ name: 'native-stubs', setup(b) {
@@ -90,6 +90,53 @@ for (const c of cases) {
   const safe = JSON.stringify(on.logs);
   for (const value of ['private-device', 'private-session', 'private-connection', 'private-token', 'private-cookie', 'private-title', 'private-artist', 'spotify:track:']) assert(!safe.includes(value), value);
 }
+// Exact decoded flag evidence only: do not coerce strings to booleans or copy unknown keys.
+for (const flags of [
+  { is_playing: true, is_paused: true, loading: false, is_buffering: false },
+  { is_playing: true, is_paused: false, loading: true, is_buffering: 1 },
+  { is_playing: true, paused: false, loading: 'private-token', is_buffering: null },
+  { is_playing: true, is_buffering: { secret: 'private-cookie' } },
+]) {
+  const body = input(); delete body.player_state.is_paused;
+  Object.assign(body.player_state, flags, { unknown_private_field: 'private-account' });
+  body.started_playing_at_timestamp = epoch + 1000; // future evidence does NOT select a new normalization path
+  const off = runtime(false), on = runtime(true), a = sample(off, body), b = sample(on, body);
+  assert.deepEqual(publish(on, b), publish(off, a));
+  const evidence = b.developmentTiming;
+  assert(Object.isFrozen(evidence.stateFlags) && Object.isFrozen(evidence.stateFlags.loading));
+  assert.equal(evidence.stateFlags.loading.present, Object.hasOwn(flags, 'loading'));
+  assert.equal(evidence.stateFlags.paused.present, Object.hasOwn(flags, 'paused'));
+  assert.equal(evidence.stateFlags.is_playing.value, true);
+  assert.equal(evidence.flagPresenceScope, 'decoded-player-state');
+  assert.equal(evidence.binaryFalseDefaultsPossible, true);
+  assert.equal(evidence.clusterClocks.started_playing_at_timestamp.value, epoch + 1000);
+  assert.equal(on.logs.at(-1).projection, 'paired');
+  const originalFlags = evidence.stateFlags;
+  on.clock.mono += 100; on.clock.wall += 100;
+  publish(on, { ...b, title: 'Metadata', receivedAt: on.clock.wall });
+  assert.equal(b.developmentTiming.stateFlags, originalFlags);
+  assert.equal(on.logs.at(-1).raw.receipt.monotonicMs, 1000);
+  assert(!/private-token|private-cookie|private-account|unknown_private_field/.test(JSON.stringify(on.logs)));
+}
+// Actual binary decode retains known cluster clocks with DEV diagnostics, without opt-in capture.
+{
+  const varint = value => { let n = BigInt(value); const bytes = []; do { const b = Number(n & 127n); n >>= 7n; bytes.push(b | (n ? 128 : 0)); } while (n); return bytes; };
+  const number = (id, value) => [...varint(id * 8), ...varint(value)];
+  const bytes = (id, value) => [...varint(id * 8 + 2), ...varint(value.length), ...value];
+  const track = bytes(1, [...new TextEncoder().encode('spotify:track:0000000000000000000001')]);
+  const player = [...number(1, epoch), ...bytes(7, track), ...number(10, 10000), ...number(12, 1)];
+  const body = Uint8Array.from([...number(9, epoch + 250), ...number(11, epoch + 1000), ...bytes(3, player)]);
+  const on = runtime(true), off = runtime(false);
+  const decodedOn = on.api.decodeStateBody(body), decodedOff = off.api.decodeStateBody(body);
+  assert.equal(decodedOn.started_playing_at_timestamp, epoch + 1000);
+  assert.equal(decodedOff.started_playing_at_timestamp, undefined);
+  const a = sample(off, decodedOff), b = sample(on, decodedOn);
+  assert.deepEqual(publish(on, b), publish(off, a));
+  // Decoder supplies false defaults. These are NOT claimed to be wire presence.
+  assert.equal(b.developmentTiming.stateFlags.is_buffering.present, true);
+  assert.equal(b.developmentTiming.stateFlags.is_buffering.value, false);
+  assert.equal(b.developmentTiming.binaryFalseDefaultsPossible, true);
+}
 // Missing BOTH fields is not conflated with a malformed player timestamp.
 {
   const r = runtime(true), body = input(); delete body.player_state.timestamp; delete body.server_timestamp_ms;
@@ -143,7 +190,7 @@ for (const c of cases) {
   publish(r, sample(r, next, 'dealer'));
   assert.equal(r.logs.at(-1).stage, 'normalize');
   assert.notEqual(r.logs.at(-1).track, r.logs.find(l => l.stage === 'normalize').track);
-  assert.equal(r.logs[0].stage, 'js-startup'); assert.equal(r.logs[0].version, 2); assert.equal(r.logs[0].buildBase, '959f855');
+  assert.equal(r.logs[0].stage, 'js-startup'); assert.equal(r.logs[0].version, 3); assert.equal(r.logs[0].buildBase, '0453f4e');
   assert(!JSON.stringify(r.logs).includes('spotify:track:'));
 }
 {

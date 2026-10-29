@@ -1,5 +1,44 @@
 # Mobile Spotify timing provenance and replay
 
+## State-flag evidence extension (diagnostics only)
+
+Current schema is V3, `buildBase: "0453f4e"`, using the same
+`[Spotify timing bootstrap]` marker and existing bounded windows/counters.
+`raw.stateFlags` whitelists only the parser's existing `is_playing`, `is_paused`,
+`paused`, `loading`, and `is_buffering` fields. Each records decoded presence,
+kind and boolean/numeric evidence; arbitrary strings/objects become `invalid`.
+The parent `raw.playerPath` gives their field provenance. `flagPresenceScope`
+is explicitly `decoded-player-state`: binary decoding supplies false defaults,
+so `binaryFalseDefaultsPossible: true` warns that present false is NOT proof of
+wire presence. Decoder defaults and playback interpretation remain unchanged.
+`raw.clusterClocks` records existing known `changed_timestamp_ms`,
+`transfer_data_timestamp`, and `started_playing_at_timestamp`, relative to
+`raw.serverPath`. Binary fields 1/6/11 are now exposed for development diagnostics
+as well as opt-in capture; production decoding remains unchanged. No new wire
+field numbers or guessed scheduled-state flags are introduced. A future
+started-playing timestamp alone does not establish scheduling semantics.
+
+The preserved `/tmp/expo-tunnel-preserved-diagnosis.log` has 19 V1 rows, no V2.
+The user's fresh-bundle report of audible lag on new songs, corrected by
+pause/seek, stands independently of missing newer runtime logs. V1 registration
+ages 32733/20961 ms and subsequent duplicate anchors show paired projection is
+executing, not a fallback diagnosis. The zero-position candidate projects
+644.576 ms; its next anchor projects 1730.377 ms, a -105.612 ms residual over
+1191.413 ms of processing-clock advance. No track alias proves these are the
+same song. In the other run, the -1957.437 ms apparent residual crosses an
+explicit user seek; it is NOT evidence of a clock error. Later pause projects
+125597 ms without advance. No numeric audible delay is established.
+
+Proposals pending Kat approval and matching same-track phone evidence:
+if decoded buffering/loading state incorrectly suppresses progression, correct
+only that proven interpretation; if publication/replay changes anchor age,
+correct only that stage's receipt handling; if a new authoritative player state
+reveals a source/store mismatch, reanchor using its documented timing semantics.
+Compare same ephemeral track alias and raw anchor before/after the user's natural
+state changes. Audio buffering or lyric-reference mismatch cannot be inferred
+from Dealer positions alone. No fixed offset, unconditional receipt fallback,
+scheduled-start reinterpretation, or behavior correction is implemented here.
+
 ## Development terminal bootstrap evidence
 
 Automatic development-only logs use the exact marker **`[Spotify timing bootstrap]`**.

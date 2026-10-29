@@ -2,6 +2,7 @@
 // Only decode state/identity fields; skip queues, transfer data, and commands.
 // https://github.com/librespot-org/librespot/tree/dev/protocol/proto
 import { timingCaptureActive } from './timing-diagnostics';
+import { developmentTimingActive } from './development-timing-log';
 type Field = { id: number; wire: number; value: number | Uint8Array };
 function fields(bytes: Uint8Array): Field[] {
   let pos = 0;
@@ -72,7 +73,7 @@ export function decodeCluster(bytes: Uint8Array, wrapped = false): any {
   const out: any = { device: Object.create(null) };
   for (const f of outer) {
     if (f.wire === 0 && f.id === 9) out.server_timestamp_ms = f.value;
-    if (timingCaptureActive() && f.wire === 0) {
+    if ((timingCaptureActive() || developmentTimingActive()) && f.wire === 0) {
       const clock = ({ 1: 'changed_timestamp_ms', 6: 'transfer_data_timestamp', 11: 'started_playing_at_timestamp' } as Record<number, string>)[f.id];
       if (clock) out[clock] = f.value;
     }

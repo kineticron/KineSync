@@ -193,7 +193,7 @@ assert.equal(publishedSamples.at(-1).developmentTiming, evidence);
 assert.equal(publishedSamples.at(-1).positionObservedAt, receipt);
 assert.equal(publishedSamples.at(-1).receivedAt, replay.receivedAt);
 if (development) {
-  assert(developmentLogs.some(l => l.stage === 'js-startup' && l.version === 2 && l.buildBase === '959f855'));
+  assert(developmentLogs.some(l => l.stage === 'js-startup' && l.version === 3 && l.buildBase === '0453f4e'));
   assert(developmentLogs.some(l => l.stage === 'cold-mount'));
   assert(developmentLogs.some(l => l.stage === 'app-state' && l.previous === 'active' && l.next === 'background'));
   assert(developmentLogs.some(l => l.stage === 'app-state' && l.previous === 'background' && l.next === 'active'));

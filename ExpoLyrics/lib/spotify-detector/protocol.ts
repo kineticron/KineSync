@@ -202,7 +202,7 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
       serverPath: trace.serverPath, positionField, position: o[positionField], player: o.timestamp,
       server: trace.cluster.server_timestamp_ms, receipt: trace.receipt, origin: trace.context.origin ?? 'parser',
       device: trace.device ?? o.device?.device_id, session: o.session_id, connection: trace.context.connectionId,
-      generation: trace.context.generation }) : undefined;
+      generation: trace.context.generation, state: o, cluster: trace.cluster }) : undefined;
     return {
       title: track.name ?? m.title ?? 'Unknown track',
       artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
