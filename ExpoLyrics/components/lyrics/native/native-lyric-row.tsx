@@ -103,7 +103,7 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
   const fontSize = (staticLyrics || preview ? 26 : spicy || landscape ? 32 : 36) * fontScale * (!staticLyrics && spicy && (reveal === 'canvas' || reveal === 'tree') ? 1.05 : 1);
   const lineHeight = staticLyrics ? fontSize * 1.46 : (preview ? 36 : spicy ? (reveal === 'canvas' || reveal === 'tree') ? 42 * 1.05 : 42 : fontSize / fontScale * 1.2) * fontScale;
   const blur = staticLyrics || active ? 0 : spicy ? Math.min(6.83125, distance * 1.25) : Math.min(5, (distance + 1) * 0.8);
-  const right = staticLyrics ? landscape : !spicy && landscape ? !row.line.oppositeAligned : Boolean(row.line.oppositeAligned);
+  const right = staticLyrics ? landscape : landscape ? !row.line.oppositeAligned : Boolean(row.line.oppositeAligned);
   const backgroundViews = row.backgrounds.map((voice, index) => <NativeVoiceView hasDuet={hasDuet} key={getMappingKey(index, index)} voice={voice} position={position}
         fontSize={staticLyrics ? 18 * fontScale : fontSize * (spicy ? 0.75 : 0.7)} lineHeight={staticLyrics ? 25.2 * fontScale : lineHeight * (spicy ? 0.62 : 0.7)} background right={right} animate={active}
         prepared={distance <= 1} showTranslation={showTranslation} reveal={reveal} spicy={spicy} staticLyrics={staticLyrics} blur={blur} rowActive={rowActive} blurValue={blurValue} playing={playing} />);
