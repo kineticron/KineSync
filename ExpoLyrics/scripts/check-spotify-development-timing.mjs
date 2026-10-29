@@ -118,19 +118,48 @@ for (const c of cases) {
   assert.equal(r.logs.at(-1).raw.playerPath, '$.*.player_state');
   assert(!JSON.stringify(r.logs).includes('private-account-key'));
 }
-// Per-JS-runtime cap and monotonic expiry, without recurring timers or resets.
+// Detail windows expire, but foreground/track contexts reopen bounded evidence.
 {
   const r = runtime(true), s = sample(r, input());
   for (let i = 0; i < 200; i++) r.api.detectorPacket(s);
-  assert.equal(r.logs.length, 96); assert.equal(r.logs.at(-1).sequence, 96);
-  assert.equal(r.api.developmentTimingActive(), false);
-  assert.equal(sample(r, input()).developmentTiming, undefined);
+  assert.equal(r.logs.filter(l => l.stage === 'normalize').length, 96);
+  assert.equal(r.api.developmentTimingActive(), true, 'bounded raw provenance remains available for later contexts');
+  r.clock.mono += 121000;
+  r.api.logDevelopmentLifecycle('app-state', { previous: 'background', next: 'active' });
+  r.api.detectorPacket(s);
+  assert.equal(r.logs.at(-1).stage, 'normalize');
+  assert(r.logs.some(l => l.stage === 'app-state' && l.suppressedSinceLastLine > 0));
+  assert.equal(r.logs.at(-1).raw.anchor, s.developmentTiming.anchor);
 }
 {
   const r = runtime(true), s = sample(r, input()); r.api.detectorPacket(s);
+  const count = r.logs.length;
   r.clock.mono += 120000; r.api.detectorPacket(s);
-  assert.equal(r.logs.length, 1); assert.equal(r.api.developmentTimingActive(), false);
+  assert.equal(r.logs.length, count);
+  r.api.logDevelopmentLifecycle('app-state', { previous: 'background', next: 'active' });
+  r.api.detectorPacket(s); assert.equal(r.logs.at(-1).stage, 'normalize');
+  r.clock.mono += 121000;
+  const next = input(); next.player_state.track.uri = 'spotify:track:0000000000000000000002';
+  publish(r, sample(r, next, 'dealer'));
+  assert.equal(r.logs.at(-1).stage, 'normalize');
+  assert.notEqual(r.logs.at(-1).track, r.logs.find(l => l.stage === 'normalize').track);
+  assert.equal(r.logs[0].stage, 'js-startup'); assert.equal(r.logs[0].version, 2); assert.equal(r.logs[0].buildBase, '959f855');
+  assert(!JSON.stringify(r.logs).includes('spotify:track:'));
 }
+{
+  const r = runtime(true);
+  for (let window = 0; window < 80; window++) {
+    r.api.logDevelopmentLifecycle('app-state', { previous: 'background', next: 'active' });
+    const s = sample(r, input());
+    for (let i = 0; i < 100; i++) r.api.detectorPacket(s);
+  }
+  assert.equal(r.logs.filter(l => l.stage === 'normalize').length, 512);
+  assert.equal(r.logs.filter(l => l.stage !== 'normalize').length, 64);
+  r.clock.mono += 3600000;
+  r.api.logDevelopmentLifecycle('app-state', { previous: 'background', next: 'active' });
+  assert(r.logs.at(-1).suppressedSinceLastLine > 0);
+}
+
 {
   const r = runtime(true, true); assert.equal(r.api.detectorPacket(sample(r, input())).positionMs, 10250, 'console failure cannot change playback');
 }

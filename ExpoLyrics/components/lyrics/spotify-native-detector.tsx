@@ -5,6 +5,7 @@ import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 import { SpotifyDetector, SpotifyPlaybackUnavailableError } from '@/lib/spotify-detector/client';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
+import { logDevelopmentLifecycle, logDevelopmentTiming } from '@/lib/spotify-detector/development-timing-log';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
 import { clearTimingCapture, startTimingCapture, timingSnapshot } from '@/lib/spotify-detector/timing-diagnostics';
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
@@ -71,8 +72,9 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const detector = detectorRef.current;
   const canIngest = () => mounted.current && !usePlayerTourStore.getState().active && !usePlayerTourStore.getState().pending && !useSpotifySessionStore.getState().loggedOut &&
     usePlaybackStore.getState().playbackMode === 'mobile' && usePlaybackStore.getState().connectionStatus !== 'connected';
-  const publish = (s: Sample) => {
+  const publish = (s: Sample, stage: 'sample-publish' | 'metadata-publish' = 'sample-publish') => {
     if (!canIngest()) return;
+    logDevelopmentTiming(stage, s);
     const metadata = enriched.current.get(s.uri);
     const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title,
       artist: metadata.artist || s.artist, album: metadata.album || s.album,
@@ -80,6 +82,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     const store = usePlaybackStore.getState();
     const result = store.ingestPacket(packet, 'mobile');
     if (result.trackChanged) {
+      logDevelopmentTiming('store-track-change', s);
       enrichmentRun.current++;
       metadataPending.current = '';
       if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
@@ -98,7 +101,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (!match || !canIngest() || run !== enrichmentRun.current || lastSample.current?.uri !== uri) return;
         if (enriched.current.size >= 32) enriched.current.clear();
         enriched.current.set(uri, match);
-        if (lastSample.current) publish(lastSample.current);
+        if (lastSample.current) publish(lastSample.current, 'metadata-publish');
       }).catch(error => {
         if (canIngest() && run === enrichmentRun.current) {
           const message = error instanceof Error ? error.message : 'Spotify metadata lookup failed.';
@@ -185,6 +188,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
 
   useEffect(() => {
     mounted.current = true;
+    logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
     const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { remount(); detector.refresh(); }, logout: () => {
       detector.clear(); enrichmentRun.current++; enriched.current.clear(); lastSample.current = null;
@@ -199,9 +203,16 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   }, [detector, openBrowser, remount]);
   useEffect(() => {
     if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }
-    const update = () => detector.setEnabled(mobile && !loggedOut && AppState.currentState !== 'background');
+    const update = () => {
+      const enabled = mobile && !loggedOut && AppState.currentState !== 'background';
+      logDevelopmentLifecycle('observation-policy', { next: AppState.currentState, enabled, mobile, loggedOut });
+      detector.setEnabled(enabled);
+    };
     update();
+    let previous = AppState.currentState;
     const sub = AppState.addEventListener('change', next => {
+      logDevelopmentLifecycle('app-state', { previous, next });
+      previous = next;
       if (next === 'background') detector.setEnabled(false);
       else if (next === 'active') update();
     });

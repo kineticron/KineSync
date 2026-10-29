@@ -1,12 +1,23 @@
 import { numericEvidence, timingNow, type ClockStamp, type NumericEvidence, type TimingOrigin } from './timing-diagnostics';
 
 /** Automatic DEVELOPMENT-only bootstrap evidence. No timer, network, UI or
- * playback decisions. A manual JS reload starts a new bounded logging window. */
+ * playback decisions. Lifecycle/track windows remain available after bootstrap. */
 const MARKER = '[Spotify timing bootstrap]';
 const WINDOW_MS = 120_000;
 const MAX_LINES = 96;
 let startedAt: number | undefined;
 let lines = 0;
+let windowLines = 0;
+let hourStart: number | undefined;
+let hourLines = 0;
+let lifecycleLines = 0;
+let suppressed = 0;
+let windowSequence = 0;
+let currentTrack: string | null = null;
+const VERSION = 2;
+const BUILD_BASE = '959f855';
+const MAX_HOUR_LINES = 512;
+const MAX_LIFECYCLE_LINES = 64;
 let anchorSequence = 0;
 let aliasSequence = 0;
 const aliases = new Map<string, string>();
@@ -46,6 +57,7 @@ type Input = {
 };
 type SampleTiming = {
   developmentTiming?: DevelopmentTimingAnchor;
+  uri?: string;
   positionMs: number;
   positionTimestampMs?: number;
   sourceServerTimestampMs?: number;
@@ -56,17 +68,44 @@ type SampleTiming = {
 
 export function developmentTimingActive() {
   if (typeof __DEV__ === 'undefined' || !__DEV__) return false;
+  return true;
+}
+function budget(lifecycle = false) {
+  if (!developmentTimingActive()) return false;
   const now = performance.now();
-  const active = lines < MAX_LINES && (startedAt === undefined || (now >= startedAt && now - startedAt < WINDOW_MS));
-  if (!active) aliases.clear();
-  return active;
+  if (hourStart === undefined || now < hourStart || now - hourStart >= 3_600_000) {
+    hourStart = now; hourLines = 0; lifecycleLines = 0;
+  }
+  const allowed = lifecycle ? lifecycleLines < MAX_LIFECYCLE_LINES
+    : hourLines < MAX_HOUR_LINES && windowLines < MAX_LINES && startedAt !== undefined && now >= startedAt && now - startedAt < WINDOW_MS;
+  if (!allowed) { suppressed++; return false; }
+  if (lifecycle) lifecycleLines++; else { hourLines++; windowLines++; }
+  return true;
+}
+function write(event: object, lifecycle = false) {
+  if (!budget(lifecycle)) return;
+  const skipped = suppressed; suppressed = 0;
+  try { console.log(`${MARKER} ${JSON.stringify({ version: VERSION, buildBase: BUILD_BASE, sequence: ++lines,
+    window: windowSequence, suppressedSinceLastLine: skipped,
+    limits: { windowMs: WINDOW_MS, maxLines: MAX_LINES, maxDetailLinesPerHour: MAX_HOUR_LINES, maxContextLinesPerHour: MAX_LIFECYCLE_LINES }, ...event })}`); } catch { /* Logging cannot interrupt playback. */ }
+}
+function openWindow() { startedAt = performance.now(); windowLines = 0; windowSequence++; }
+export function logDevelopmentLifecycle(stage: 'cold-mount' | 'app-state' | 'observation-policy', context: {
+  previous?: string | null; next?: string | null; enabled?: boolean; mobile?: boolean; loggedOut?: boolean;
+} = {}) {
+  if (!developmentTimingActive()) return;
+  // AppState values come from native code, but serialize only known enum values.
+  const state = (value: unknown) => ['active', 'background', 'inactive', 'unknown', 'extension'].includes(value as string) ? value : null;
+  if (stage === 'cold-mount' || (stage === 'app-state' && context.next === 'active')) openWindow();
+  write({ stage, processed: timingNow(), previous: state(context.previous), next: state(context.next),
+    enabled: context.enabled, mobile: context.mobile, loggedOut: context.loggedOut }, true);
 }
 function rawNumber(value: unknown): RawNumber {
   const kind = value === undefined ? 'missing' : value === null ? 'null'
     : typeof value === 'number' ? 'number' : typeof value === 'string' ? 'string' : 'other';
   return Object.freeze({ kind, value: numericEvidence(value) });
 }
-function alias(kind: 'device' | 'session' | 'connection', value: unknown) {
+function alias(kind: 'device' | 'session' | 'connection' | 'track', value: unknown) {
   if (typeof value !== 'string' || !value) return null;
   const key = `${kind}:${value.slice(0, 256)}`;
   let label = aliases.get(key);
@@ -87,10 +126,16 @@ export function developmentTimingAnchor(input: Input): DevelopmentTimingAnchor |
     generation: input.generation ?? null });
 }
 
-type Stage = 'accepted' | 'duplicate' | 'stale' | 'registration-conflict' | 'foreground-replay' | 'normalize';
+type Stage = 'accepted' | 'duplicate' | 'stale' | 'registration-conflict' | 'foreground-replay' | 'normalize' | 'sample-publish' | 'metadata-publish' | 'store-track-change';
 type Normalization = { wallMs: number; monotonicMs: number; elapsedMs: number; positionMs: number; clusterAgeMs?: number };
 export function logDevelopmentTiming(stage: Stage, sample: SampleTiming, normalization?: Normalization) {
   if (!developmentTimingActive() || !sample.developmentTiming) return;
+  const track = alias('track', sample.uri);
+  if (track && track !== currentTrack) {
+    const previousTrack = currentTrack; currentTrack = track; openWindow();
+    write({ stage: 'track-observed', track, previousTrack, processed: timingNow(),
+      anchor: sample.developmentTiming.anchor, origin: sample.developmentTiming.origin }, true);
+  }
   const raw = sample.developmentTiming;
   const player = sample.positionTimestampMs, server = sample.sourceServerTimestampMs;
   const validPlayer = typeof player === 'number' && Number.isSafeInteger(player) && player > 1_000_000_000_000;
@@ -102,7 +147,7 @@ export function logDevelopmentTiming(stage: Stage, sample: SampleTiming, normali
   // Observational explanation only. The caller supplies the actual chosen age;
   // this function must never replace clusterPositionAge or change its guards.
   const processed = normalization ? { wallMs: normalization.wallMs, monotonicMs: normalization.monotonicMs } : timingNow();
-  const event = { version: 1, sequence: ++lines, limits: { windowMs: WINDOW_MS, maxLines: MAX_LINES }, stage, raw,
+  const event = { stage, track, raw,
     processed, playerTimestampMs: numericEvidence(player), serverTimestampMs: numericEvidence(server),
     playing: sample.playing, sourcePositionMs: numericEvidence(sample.positionMs), legacyReceivedAtMs: numericEvidence(sample.receivedAt),
     sinceOriginalReceiptMs: numericEvidence(Math.max(0, processed.monotonicMs - raw.receipt.monotonicMs)),
@@ -114,5 +159,8 @@ export function logDevelopmentTiming(stage: Stage, sample: SampleTiming, normali
       elapsedClock: normalization.clusterAgeMs === undefined ? 'wall' : sample.positionObservedAt ? 'monotonic' : 'wall-receipt-fallback',
       positionObservedAt: sample.positionObservedAt ?? null,
     } : {}) };
-  try { console.log(`${MARKER} ${JSON.stringify(event)}`); } catch { /* Logging cannot interrupt playback. */ }
+  write(event);
 }
+
+// Module evaluation proves this JS version executed, independently of detector state.
+if (developmentTimingActive()) write({ stage: 'js-startup', processed: timingNow() }, true);

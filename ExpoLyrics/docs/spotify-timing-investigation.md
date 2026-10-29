@@ -4,8 +4,16 @@
 
 Automatic development-only logs use the exact marker **`[Spotify timing bootstrap]`**.
 No phone UI action is required to enable them. The first recognizable parsed state
-opens a 120-second local monotonic window, capped at 96 lines per JS runtime.
-Reconnects do not reset the cap. A new JS bundle reload starts a new window.
+opens a 120-second local monotonic detail window, capped at 96 detail lines.
+V2 also opens windows on cold mount, foreground, and observed track-alias change.
+There are at most 512 detail lines plus 64 context lines per rolling local
+monotonic hour (the hour starts at the first log, not a calendar boundary).
+Startup/lifecycle/track contexts have a separate budget, so detail expiry does
+not permanently silence a later foreground. `suppressedSinceLastLine` reports
+omitted lines when logging next resumes; exhaustion can still suppress contexts
+until the next hour or JS reload. No recurring timers are installed.
+Raw provenance remains attached in development even outside output windows;
+only bounded alias mappings and counters are retained by the logger.
 Release/production builds emit no automatic lines. There are no new timers,
 requests, playback controls, UI changes or normalization changes in this logger.
 
@@ -16,6 +24,24 @@ sanitized schema/field paths, original receipt and parse wall/monotonic clocks,
 processing time, elapsed time, source/projected position, playing state, origin
 (`registration` or `dealer`) and temporary device/session/connection aliases.
 `raw.anchor` correlates metadata/replay publication with the same original receipt.
+V2 emits `js-startup` on module evaluation, with `version: 2` and
+`buildBase: "959f855"`. The base identifies the prior committed diagnostics;
+it deliberately does not claim the extension's own commit hash. `cold-mount`,
+`app-state` (previous/next), and `observation-policy` (existing enable decision)
+are emitted from the actual native component lifecycle. No enable/reset behavior
+changes. Background still disables observation; active still invokes the existing
+enable path, which replays cached state before reconnect/registration.
+`sample-publish` and `metadata-publish` identify the actual component publication
+calls before packet normalization. `legacyReceivedAtMs` is the sample's current
+publication receipt label; `processed` is this stage's clock, distinct from the
+immutable `raw.receipt` and `positionObservedAt`. Cached foreground callback
+relabels legacy `receivedAt` as before; paired elapsed retains original monotonic
+receipt. Async metadata still republishes the current cached sample unchanged.
+Track aliases contain no URI/title; `track-observed` is a parsed sample identity
+observation and can include rejected stale/duplicate updates. Only
+`store-track-change` means actual ingest returned `trackChanged: true`. Neither
+marker establishes explicit-start provenance, audible onset, or a user command.
+Position/playing and anchor identity distinguish same-track state updates.
 Identity labels have at most 64 retained mappings; evicted identities can get new
 labels. Raw IDs, payloads, titles, account fields, tokens and cookies are excluded.
 
@@ -28,21 +54,32 @@ identifies monotonic versus legacy wall projection, and `sinceOriginalReceiptMs`
 remains based on the original immutable receipt through metadata and replay.
 For paused state, elapsed is diagnostic only: `playing: false` prevents advance.
 
-The inspected `~/expo-tunnel.log` contained connection/control and bundling lines,
-not timing evidence sufficient to diagnose the reported iPhone bootstrap lag.
-Its startup says Metro runs with `CI=true`, which disables file watching. Saving
-source does not invalidate that server's file map/transform cache; a manual phone
-reload alone may still receive a cached bundle. Delivery must first be verified
-by checking that the served iOS development bundle contains the marker. If stale,
-coordinate a Metro cache-clearing restart with the same port/tunnel configuration,
-then verify the marker before asking the user to manually reload KineSync's JS
-bundle. Do not force a phone reload or alter Spotify playback. Missing marker
-lines from a stale bundle are not evidence that the parser/logger path is unused.
+The original Metro process started October 25 with `CI=1` and file watching
+disabled. Earlier reload records show one module, without absolute event times or
+commit identities. A later fresh bundle request failed resolving the existing
+`timing-diagnostics` file: strong stale file-map evidence, not proof of an exact
+old bundle hash. **Execution of 32ac820 on the iPhone was never established.**
+Manual reload alone could have served stale code; the earlier phone report must
+not be treated as a verified 32ac820 regression.
 
-After verified delivery, manually reload KineSync while the user controls playback
-and observe its first launch normally. Compare registration's first `normalize`
-line with subsequent Dealer lines and their fallback reasons. No pause/seek or
-new timing correction is prescribed by this diagnostic change.
+After a coordinated cache-clear restart, the actual public HTTPS iOS launch asset
+returned 200 and contained the 959f855 marker. Subsequent real-phone V1
+`accepted`/`normalize` logs prove that diagnostics and paired monotonic projection
+executed: one registration had player/server age 32733 ms, projected position
+88542.40 ms, and elapsed 32736.40 ms. A later Dealer duplicate retained the same
+player anchor while server time advanced. These are timing observations, not
+proof of audible sync, source-clock calibration, or a fallback failure. Reported
+cold/foreground/new-song lag still requires correlation with runtime evidence.
+
+The V2 extension needs a separately coordinated Metro cache-clear/bundle marker
+check before the user reloads. This task never restarts Metro, reloads the phone,
+or touches Spotify. A V2 `js-startup` line proves execution of the extension;
+a marker in a downloaded bundle proves delivery only. Inspect actual
+`app-state` -> `foreground-replay` -> `sample-publish` -> `normalize`, and
+`track-observed` -> publication -> `store-track-change`, then metadata publication.
+The offline tests execute the actual component lifecycle with mocked native state,
+transport and metadata; parser/packet/store normalization and actual detector
+cached replay have separate deterministic checks. They are not phone/audio tests.
 
 The initial instrumentation applies no clock estimate, timestamp rewrite,
 output-latency adjustment or smoothing change. The subsequent captured-bootstrap
