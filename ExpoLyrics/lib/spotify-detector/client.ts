@@ -2,6 +2,7 @@ import { Buffer } from 'buffer';
 import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
   sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
+import { recordTiming, timingCaptureActive, timingNow, type TimingContext } from './timing-diagnostics';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -36,7 +37,7 @@ export class SpotifyDetector {
   private lastSourceTimestamp = 0;
   private registered = false;
   private blocked = false;
-  private pendingState: { payload: unknown; receivedAt: number } | null = null;
+  private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext } | null = null;
   private requests = new Set<AbortController>();
   private metadataCache = new Map<string, TrackMetadata>();
   private metadataPending = new Map<string, Promise<TrackMetadata>>();
@@ -77,7 +78,11 @@ export class SpotifyDetector {
     this.enabled = enabled;
     if (enabled) {
       // Returning from suspension reprojects the last authoritative anchor.
-      if (this.lastSample) this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now() });
+      if (this.lastSample) {
+        recordTiming('foreground-replay', this.lastSample.timingProvenance);
+        // Keep legacy fallback behavior; immutable provenance retains original receipt.
+        this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now() });
+      }
       this.connectIfReady();
     } else this.disconnect();
   }
@@ -170,20 +175,23 @@ export class SpotifyDetector {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
     this.callbacks.status(message); this.callbacks.sessionNeeded();
   }
-  private emit(payload: unknown, receivedAt = Date.now()) {
-    const s = sampleFrom(payload);
+  private emit(payload: unknown, receivedAt = Date.now(), timing: TimingContext = {}) {
+    const s = sampleFrom(payload, 0, timing);
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) return false;
     s.receivedAt = receivedAt;
     // Session renewal can return an identical authoritative anchor. It still
     // proves that the new observer is ready, without resetting the lyrics clock.
     this.callbacks.ready();
     // Old registration snapshots must never rewind a more recent Dealer event.
-    if (s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) return true;
+    if (s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
+      recordTiming('stale', s.timingProvenance); return true;
+    }
     const key = stateFingerprint(s);
-    if (key === this.fingerprint) return true;
+    if (key === this.fingerprint) { recordTiming('duplicate', s.timingProvenance); return true; }
     this.fingerprint = key;
     if (s.positionTimestampMs) this.lastSourceTimestamp = s.positionTimestampMs;
     this.lastSample = s; this.reconnects = 0;
+    recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
     this.callbacks.sample(s);
     return true;
   }
@@ -209,14 +217,16 @@ export class SpotifyDetector {
     ws.onmessage = e => {
       if (!alive()) return;
       const receivedAt = Date.now();
+      const receipt = timingCaptureActive() ? timingNow(receivedAt) : undefined;
       try {
         const payload = JSON.parse(String(e.data)); lastReceived = performance.now();
         if (payload.type === 'pong') return;
         const id = connectionIdFrom(payload);
         if (id && id !== this.connectionId) { this.connectionId = id; void this.register(run, ws); }
         const decoded = decodeDealer(payload);
-        if (this.registered) this.emit(decoded, receivedAt);
-        else if (sampleFrom(decoded)) this.pendingState = { payload: decoded, receivedAt };
+        const timing: TimingContext = { receipt, origin: 'dealer', connectionId: this.connectionId, generation: run };
+        if (this.registered) this.emit(decoded, receivedAt, timing);
+        else if (sampleFrom(decoded)) this.pendingState = { payload: decoded, receivedAt, timing };
       } catch { this.callbacks.status('A Spotify update could not be decoded; awaiting the next update.'); }
     };
     ws.onerror = () => { if (alive()) this.callbacks.status('Spotify connection interrupted; reconnecting…'); };
@@ -237,6 +247,7 @@ export class SpotifyDetector {
       if (this.clientToken) headers['client-token'] = this.clientToken;
       const response = await fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal });
       const bytes = new Uint8Array(await response.arrayBuffer());
+      const receipt = timingCaptureActive() ? timingNow() : undefined;
       if (!alive()) return;
       if (response.status === 401) { this.needSession('Spotify session expired. Refreshing login…'); return; }
       if (response.status === 403 || response.status === 429) {
@@ -249,8 +260,9 @@ export class SpotifyDetector {
       // Apply any newer Dealer anchor first, so an HTTP response that was
       // generated earlier cannot undo a pause/seek received during registration.
       const pending = this.pendingState; this.pendingState = null;
-      if (pending) this.emit(pending.payload, pending.receivedAt);
-      if (bytes.length) this.emit(decodeStateBody(bytes));
+      if (pending) this.emit(pending.payload, pending.receivedAt, pending.timing);
+      if (bytes.length) this.emit(decodeStateBody(bytes), undefined,
+        { receipt, origin: 'registration', connectionId: this.connectionId, generation: run });
     } catch { if (alive()) ws.close(); }
     finally { clearTimeout(timeout); if (this.controller === controller) this.controller = null; }
   }

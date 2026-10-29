@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { SpotifyDetector, SpotifyPlaybackUnavailableError } from '@/lib/spotify-detector/client';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
+import { clearTimingCapture, startTimingCapture, timingSnapshot } from '@/lib/spotify-detector/timing-diagnostics';
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
   isAllowedSpotifyWebViewNavigation, isTrustedSpotifyWebViewMessageUrl,
@@ -151,9 +152,11 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     setBrowserOpen(true);
   }, []);
   const runDiagnostics = useCallback(() => {
-    void Share.share({ message: JSON.stringify({ detector: diagnostics.current,
-      browserMounted: !!web.current, mobileOnly: usePlaybackStore.getState().playbackMode === 'mobile',
-      positionMs: usePlaybackStore.getState().playbackPosition }, null, 2) }).catch(() => {});
+    Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
+      { text: 'Start capture', onPress: startTimingCapture },
+      { text: 'Share capture', onPress: () => { void Share.share({ message: JSON.stringify(timingSnapshot(), null, 2) }).catch(() => {}); } },
+      { text: 'Clear', style: 'destructive', onPress: clearTimingCapture },
+    ]);
   }, []);
   const sendCommand = useCallback((command: BrowserCommand) => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }

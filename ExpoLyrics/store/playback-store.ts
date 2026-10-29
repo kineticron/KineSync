@@ -7,6 +7,7 @@ import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import { getBridgeSettings } from '@/lib/bridge-settings';
 import { resolvePacketArtworkUrl } from '@/lib/artwork';
+import { numericEvidence, packetTimingAnchor, recordTiming } from '@/lib/spotify-detector/timing-diagnostics';
 import {
   shouldAcceptPlaybackPacket,
   type PlaybackMode,
@@ -273,11 +274,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const nowMono = getMonotonicNow();
     const prev = get();
     if (!shouldAcceptPlaybackPacket(prev.playbackMode, source)) {
+      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'mode' });
       return { trackChanged: false, seekDetected: false };
     }
     const sourceClockRaw = Number(packet.capturedAtMs ?? packet.timestamp ?? nowWall);
     const sourceClock = Number.isFinite(sourceClockRaw) ? sourceClockRaw : nowWall;
     if (sourceClock + 250 < prev.lastSourceClockMs) {
+      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'older-local-packet', storeSourceClockMs: numericEvidence(sourceClock) });
       return { trackChanged: false, seekDetected: false };
     }
     const observedDelta = Math.max(-60_000, Math.min(60_000, nowWall - sourceClock));
@@ -314,6 +317,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // produces visible bumps, even when the source is otherwise in sync.
     const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
       Math.abs(projected - correctedPosition) <= 80;
+    recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
+      projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
+      storeSourceClockMs: numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected });
     const metadataChanged =
       trackChanged ||
       prev.currentTrack?.title !== incomingTrack.title ||

@@ -7,6 +7,7 @@ const ts = require('typescript');
 const React = require('react');
 const platform = process.argv.includes('--android') ? 'android' : 'ios';
 const alerts = [], openedUrls = [];
+const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
@@ -41,13 +42,14 @@ const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.a
 const mocks = {
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
-    Share: { share: async () => {} }, Alert: { alert: (...args) => alerts.push(args) },
+    Share: { share: async value => timingShares.push(value) }, Alert: { alert: (...args) => alerts.push(args) },
     Linking: { openURL: async url => { openedUrls.push(url); if (rejectLaunch) throw new Error('No app'); } },
     StyleSheet: { create: x => x, absoluteFill: {} } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
   '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
   '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }) },
+  '@/lib/spotify-detector/timing-diagnostics': { startTimingCapture: () => timingCalls.push('start'), clearTimingCapture: () => timingCalls.push('clear'), timingSnapshot: () => ({ active: false, records: [] }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
     makeBrowserCommandScript: JSON.stringify, parseBrowserEvent: JSON.parse,
     isAllowedSpotifyWebViewNavigation: url => /^https:\/\/(open|accounts)\.spotify\.com\//.test(url),
@@ -90,6 +92,16 @@ instance.callbacks.sample({ uri: 'spotify:track:test', title: 'Test', artist: 'A
 instance.callbacks.ready();
 render(); assert.equal(tree, null, 'usable native state unmounts the closed browser');
 assert.equal(packets.length, 1);
+assert.equal(timingCalls.length, 0, 'timing capture is off until explicit opt-in');
+ref.current.runDiagnostics();
+assert.equal(alerts.at(-1)[0], 'Spotify timing diagnostics');
+assert.equal(timingCalls.length, 0, 'opening the dialog does not start capture');
+alerts.at(-1)[2][0].onPress();
+assert.deepEqual(timingCalls, ['start']);
+alerts.at(-1)[2][1].onPress();
+assert.deepEqual(JSON.parse(timingShares.at(-1).message), { active: false, records: [] }, 'share only the safe timing snapshot');
+alerts.at(-1)[2][2].onPress();
+assert.deepEqual(timingCalls, ['start', 'clear']);
 ref.current.togglePlayPause();
 assert.equal(commands.at(-1).type, 'toggle', 'controls target native device while browser is unmounted');
 assert.equal(find(tree), null);
