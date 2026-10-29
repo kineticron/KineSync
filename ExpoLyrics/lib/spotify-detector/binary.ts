@@ -54,7 +54,7 @@ function player(bytes: Uint8Array) {
     if (f.wire === 0 && numbers[f.id]) out[numbers[f.id]] = f.value;
     if (f.wire === 0 && bools[f.id]) out[bools[f.id]] = !!f.value;
     if (f.wire === 2 && f.id === 7) out.track = track(f.value as Uint8Array);
-    if (timingCaptureActive() && f.wire === 2 && f.id === 23) out.session_id = text(f.value as Uint8Array);
+    if (f.wire === 2 && f.id === 23) out.session_id = text(f.value as Uint8Array);
   }
   return out;
 }

@@ -4,7 +4,7 @@ import { decodeCluster } from './binary';
 import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, timingNow,
   type TimingAnchor, type TimingContext } from './timing-diagnostics';
 
-export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; activeDeviceId?: string; timingProvenance?: TimingAnchor };
+export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor };
 
 /** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
  * without rounding through a JS Number or depending on native BigInt support. */
@@ -183,6 +183,7 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
       playing: playing && !o.loading && !o.is_buffering,
       device: o.device?.name ?? o.device?.device_id ?? '', receivedAt: Date.now(),
       positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
+      playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
       ...(timingProvenance ? { timingProvenance } : {}),
     };
   }

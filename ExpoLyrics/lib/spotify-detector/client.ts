@@ -35,6 +35,9 @@ export class SpotifyDetector {
   private fingerprint = '';
   private lastSample: Sample | null = null;
   private lastSourceTimestamp = 0;
+  private orderingDeviceId: string | undefined;
+  private orderingSessionId: string | undefined;
+  private lastDealerConnection = '';
   private registered = false;
   private blocked = false;
   private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext } | null = null;
@@ -88,13 +91,13 @@ export class SpotifyDetector {
   }
   refresh() {
     this.blocked = false;
-    this.fingerprint = ''; this.lastSourceTimestamp = 0; this.reconnects = 0;
+    this.resetOrdering(); this.reconnects = 0;
     this.disconnect(); this.connectIfReady();
   }
   clear() {
     this.enabled = false; this.disconnect(); this.token = ''; this.clientToken = '';
     this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
-    this.fingerprint = ''; this.lastSourceTimestamp = 0;
+    this.resetOrdering();
     this.blocked = false;
     this.metadataCache.clear(); this.metadataPending.clear();
   }
@@ -175,18 +178,41 @@ export class SpotifyDetector {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
     this.callbacks.status(message); this.callbacks.sessionNeeded();
   }
+  private resetOrdering() {
+    this.fingerprint = ''; this.lastSourceTimestamp = 0;
+    this.orderingDeviceId = undefined; this.orderingSessionId = undefined; this.lastDealerConnection = '';
+  }
   private emit(payload: unknown, receivedAt = Date.now(), timing: TimingContext = {}) {
     const s = sampleFrom(payload, 0, timing);
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) return false;
     s.receivedAt = receivedAt;
-    // Session renewal can return an identical authoritative anchor. It still
-    // proves that the new observer is ready, without resetting the lyrics clock.
+    // Recognizable state proves observer readiness even when duplicate/stale.
     this.callbacks.ready();
-    // Old registration snapshots must never rewind a more recent Dealer event.
-    if (s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
+    const device = typeof s.activeDeviceId === 'string' && s.activeDeviceId ? s.activeDeviceId : undefined;
+    const session = s.playbackSessionId;
+    const deviceChanged = !!device && !!this.orderingDeviceId && device !== this.orderingDeviceId;
+    const sessionChanged = !!session && !!this.orderingSessionId && session !== this.orderingSessionId;
+    const identityChanged = deviceChanged || sessionChanged;
+    const connection = `${this.generation}:${this.connectionId}`;
+    // A registration snapshot can predate a Dealer handoff on a different clock.
+    // Comparing timestamps across those identities cannot order that race.
+    if (timing.origin === 'registration' && this.lastDealerConnection === connection && identityChanged) {
       recordTiming('stale', s.timingProvenance); return true;
     }
-    const key = stateFingerprint(s);
+    // Unknown identity is not evidence of a handoff. Keep the known scope and
+    // its watermark; only a positive identity change can reset source ordering.
+    if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
+      recordTiming('stale', s.timingProvenance); return true;
+    }
+    if (identityChanged) { this.lastSourceTimestamp = 0; this.fingerprint = ''; }
+    if (deviceChanged) this.orderingSessionId = undefined;
+    if (device) this.orderingDeviceId = device;
+    if (session) this.orderingSessionId = session;
+    if (timing.origin === 'dealer') this.lastDealerConnection = connection;
+    // A new connection may confirm identical state once. Within the connection,
+    // session-only handoffs must not disappear behind an equal state fingerprint.
+    const key = JSON.stringify([connection, this.orderingDeviceId, this.orderingSessionId,
+      stateFingerprint({ ...s, activeDeviceId: this.orderingDeviceId })]);
     if (key === this.fingerprint) { recordTiming('duplicate', s.timingProvenance); return true; }
     this.fingerprint = key;
     if (s.positionTimestampMs) this.lastSourceTimestamp = s.positionTimestampMs;
@@ -238,9 +264,10 @@ export class SpotifyDetector {
     };
   }
   private async register(run: number, ws: WebSocket) {
+    const connectionId = this.connectionId;
     const controller = new AbortController(); this.controller?.abort(); this.controller = controller;
     const timeout = setTimeout(() => controller.abort(), 10000);
-    const alive = () => this.enabled && run === this.generation && this.socket === ws;
+    const alive = () => this.enabled && run === this.generation && this.socket === ws && this.connectionId === connectionId;
     try {
       const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
         'content-type': 'application/json', 'x-spotify-connection-id': this.connectionId };

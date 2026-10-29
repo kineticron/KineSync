@@ -1,11 +1,12 @@
 {
   "provenance": "Derived numeric telemetry from live-results.json; reconstructed player-state inputs, NOT captured raw Dealer payloads. All epochs share a removed origin. No physical phone/audio or metadata-callback measurements.",
+  "measurementProtocol": {"startProvenance": "unknown", "primaryBaseline": "not-established", "role": "secondary-exploratory"},
   "events": [
-    {"receiptMs": 0,"sourceTimestampMs": -16609,"positionMs": 27365,"playing": true},
-    {"receiptMs": 15055,"sourceTimestampMs": -14589,"positionMs": 29324,"playing": true},
-    {"receiptMs": 17629,"sourceTimestampMs": 19027,"positionMs": 62653,"playing": false},
-    {"receiptMs": 22654,"sourceTimestampMs": 24041,"positionMs": 63443,"playing": true},
-    {"receiptMs": 38037,"sourceTimestampMs": 39286,"positionMs": 60980,"playing": true}
+    {"receiptMs": 0,"sourceTimestampMs": -16609,"positionMs": 27365,"playing": true,"startProvenance": "unknown","measurementCase": "exploratory"},
+    {"receiptMs": 15055,"sourceTimestampMs": -14589,"positionMs": 29324,"playing": true,"startProvenance": "unknown","measurementCase": "exploratory"},
+    {"receiptMs": 17629,"sourceTimestampMs": 19027,"positionMs": 62653,"playing": false,"startProvenance": "unknown","measurementCase": "exploratory"},
+    {"receiptMs": 22654,"sourceTimestampMs": 24041,"positionMs": 63443,"playing": true,"startProvenance": "unknown","measurementCase": "exploratory"},
+    {"receiptMs": 38037,"sourceTimestampMs": 39286,"positionMs": 60980,"playing": true,"startProvenance": "unknown","measurementCase": "exploratory"}
   ],
   "rows": [
     {"atMs": 41,"phase": "initial","phaseAgeMs": 605,"readMs": 15,"mprisPositionMs": 45508,"repeatedProjectionMs": 44015,"desktopPositionMs": 45502,"playing": true},

@@ -153,8 +153,9 @@ const first = accepted.at(-1), receipt = first.timingProvenance.receipt;
 at(100); live.socket.event({ payloads: [raw(10000, epoch + 50)] });
 assert.equal(accepted.length, 1, 'duplicate suppressed');
 at(150); live.socket.event({ payloads: [raw(10000, epoch + 40, true, 'other-device', 'other-session')] });
-assert.equal(accepted.length, 1, 'known failure: lower timestamp on new device/session is globally suppressed');
-assert(api.timingSnapshot().records.some(r => r.stage === 'stale' && r.anchor.device !== first.timingProvenance.device && r.anchor.session !== first.timingProvenance.session));
+assert.equal(accepted.length, 2, 'older-clock new device/session must be accepted');
+assert.notEqual(accepted.at(-1).timingProvenance.device, first.timingProvenance.device);
+assert.notEqual(accepted.at(-1).timingProvenance.session, first.timingProvenance.session);
 at(200); live.socket.event({ payloads: [raw(12000, wall, false)] });
 assert.equal(position(), 12000); at(900); assert.equal(position(), 12000);
 live.socket.event({ payloads: [raw(12000, wall, true)] }); at(1100); assert.equal(position(), 12200);
@@ -169,6 +170,82 @@ assert.equal(accepted.at(-1).timingProvenance.receipt.wallMs, epoch + 1200);
 assert.equal(receipt.wallMs, epoch + 50); live.detector.clear();
 // Wall jump changes new wall-projected packets, not an already monotonic store.
 const beforeJump = position(); wall += 60000; assert.equal(position(), beforeJump);
+
+// Ordering must work with diagnostics OFF as well as ON.
+for (const diagnostics of [false, true]) {
+  at(0); reset(); api.clearTimingCapture(); if (diagnostics) api.startTimingCapture();
+  const seen = []; live = await connect(s => { seen.push(s); publish(s); });
+  const send = (timestamp, device = 'device-A', session = 'session-A', value = 10000) => {
+    const frame = raw(value, timestamp == null ? undefined : epoch + timestamp, true, device, session);
+    if (timestamp == null) delete frame.player_state.timestamp;
+    if (device == null) delete frame.active_device_id;
+    if (session == null) delete frame.player_state.session_id;
+    live.socket.event({ payloads: [frame] });
+  };
+  send(5000); assert.equal(seen.length, 1);
+  send(4999); assert.equal(seen.length, 1, 'same-source stale suppressed');
+  send(4000, 'device-B'); assert.equal(seen.length, 2, 'device-only older-clock switch accepted');
+  send(3999, 'device-B'); assert.equal(seen.length, 2, 'new device has its own watermark');
+  send(3000, 'device-B', 'session-B'); assert.equal(seen.length, 3, 'session-only older-clock switch accepted');
+  send(2999, 'device-B', 'session-B'); assert.equal(seen.length, 3);
+  send(3000, 'device-B', 'session-C'); assert.equal(seen.length, 4, 'session transition with equal state fingerprint accepted');
+  send(3000, 'device-B', 'session-C'); assert.equal(seen.length, 4, 'same-source duplicate suppressed');
+  send(2999, null, null); send(2999, null, 'session-C'); send(2999, 'device-B', null);
+  assert.equal(seen.length, 4, 'missing identities never reset known ordering');
+  send(3000, null, null); assert.equal(seen.length, 4, 'identity-less duplicate inherits known scope');
+  send(null, 'device-C', null, 12000); assert.equal(seen.length, 5, 'known switch without epoch resets previous watermark');
+  send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, 6);
+  send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, 6);
+  const oldSocket = live.socket;
+  live.detector.setEnabled(false); live.detector.setEnabled(true);
+  live.socket = sockets.at(-1); live.socket.event({ headers: { 'Spotify-Connection-Id': 'reconnected' } }); await flush();
+  const count = seen.length;
+  oldSocket.event({ payloads: [raw(10000, epoch + 100000)] }); assert.equal(seen.length, count, 'old generation callback ignored');
+  send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, count, 'reconnect retains same-source watermark');
+  send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1, 'new connection confirms equal state once');
+  send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1);
+  live.detector.refresh(); live.socket = sockets.at(-1);
+  live.socket.event({ headers: { 'Spotify-Connection-Id': 'refreshed' } }); await flush();
+  send(500, 'device-C', 'session-D'); assert.equal(seen.length, count + 2, 'explicit refresh clears source fence');
+  live.detector.clear();
+  const unknown = []; live = await connect(s => unknown.push(s));
+  send(5000, null, null); send(4000); assert.equal(unknown.length, 1, 'identity discovery alone does not prove a switch');
+  send(5000); assert.equal(unknown.length, 2); live.detector.clear();
+  assert.equal(api.sampleFrom(api.decodeStateBody(Uint8Array.from(clusterBytes))).playbackSessionId, 'synthetic-session', 'binary session exists even with diagnostics OFF');
+  const binarySeen = []; live = await connect(s => { binarySeen.push(s); publish(s); });
+  const wire = (timestamp, session) => {
+    const player = [...numberField(1, epoch + timestamp), ...bytesField(7, textField(1, 'spotify:track:0000000000000000000001')),
+      ...numberField(10, 9000), ...numberField(11, 300000), ...numberField(12, 1), ...textField(23, session)];
+    const cluster = [...textField(2, 'binary-device'), ...bytesField(3, player)];
+    return { uri: 'hm://connect-state/v1/cluster', payloads: [bytesField(1, cluster)] };
+  };
+  live.socket.event(wire(5000, 'binary-session-A'));
+  live.socket.event(wire(4000, 'binary-session-B'));
+  live.socket.event(wire(3999, 'binary-session-B'));
+  assert.equal(binarySeen.length, 2, 'real binary decoder/detector session switch and same-session stale ordering');
+  assert.equal(position(), 9000, 'binary handoff reaches packet and store with diagnostics off/on');
+  live.detector.clear();
+  // Old-device HTTP snapshot must not switch back after pending Dealer handoff.
+  for (const [oldDevice, oldSession] of [['device-A', 'session-A'], ['device-B', 'session-A']]) {
+    let resolveRegistration;
+    fetchResponse = () => new Promise(resolve => { resolveRegistration = resolve; });
+    const raced = []; live = await connect(s => raced.push(s));
+    live.socket.event({ payloads: [raw(2000, epoch + 1000, true, 'device-B', 'session-B')] });
+    resolveRegistration({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(raw(10000, epoch + 5000, true, oldDevice, oldSession))).buffer });
+    await flush(); assert.equal(raced.length, 1); assert.equal(raced[0].activeDeviceId, 'device-B');
+    assert.equal(raced[0].playbackSessionId, 'session-B'); live.detector.clear();
+  }
+  // Abort alone is insufficient when an obsolete registration resolves anyway.
+  const registrations = [];
+  fetchResponse = () => new Promise(resolve => registrations.push(resolve));
+  const replacement = []; live = await connect(s => replacement.push(s));
+  live.socket.event({ headers: { 'Spotify-Connection-Id': 'replacement-connection' } });
+  registrations[1]({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) }); await flush();
+  live.socket.event({ payloads: [raw(2000, epoch + 1000)] });
+  registrations[0]({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(raw(10000, epoch + 5000))).buffer });
+  await flush(); assert.equal(replacement.length, 1, 'obsolete connection registration ignored'); live.detector.clear();
+  fetchResponse = async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) });
+}
 
 // Dealer received before observer registration completes keeps callback time,
 // rather than registration completion, including connection identity.
@@ -253,6 +330,64 @@ for (const diagnostics of [false, true]) for (const metadataDelay of [null, 250,
   else results.push({ metadataDelayMs: metadataDelay, perEvent });
   live.detector.clear();
 }
+// Primary eligibility is evidence-based, never inferred from a phase name.
+function primaryEligible(event, actions) {
+  if (!event.playing || event.measurementCase !== 'fresh-start' || event.startProvenance !== 'explicit-command') return false;
+  const action = actions.findLast(a => a.completedMs <= event.receiptMs);
+  return !!action && action.id === event.actionId && action.kind === 'explicit-start' &&
+    ['Next', 'OpenUri', 'PlayFromBeginning'].includes(action.command) && action.status === 'ok' && action.observedTrackChange === true;
+}
+assert.equal(fixture.measurementProtocol.startProvenance, 'unknown');
+assert.equal(fixture.measurementProtocol.primaryBaseline, 'not-established');
+assert(fixture.events.every(e => !primaryEligible(e, [])), 'old unknown-start run is secondary exploratory only');
+const fresh = JSON.parse(readFileSync(new URL('./fixtures/spotify-timing-explicit-start.json', import.meta.url), 'utf8'));
+assert.equal(fresh.measurementProtocol.sourceClockCalibration, 'not-established');
+const proven = fresh.events.find(e => primaryEligible(e, fresh.actions)); assert(proven);
+assert(!primaryEligible({ ...proven, startProvenance: 'unknown' }, fresh.actions));
+assert(!primaryEligible({ ...proven, measurementCase: 'transition' }, fresh.actions));
+assert(!primaryEligible(proven, fresh.actions.map(a => ({ ...a, status: 'failed' }))));
+assert(!primaryEligible(proven, fresh.actions.map(a => ({ ...a, observedTrackChange: false }))));
+assert(fresh.events.filter(e => ['seek', 'pause-resume', 'transition', 'exploratory'].includes(e.measurementCase)).every(e => !primaryEligible(e, fresh.actions)));
+assert(!primaryEligible({ ...proven, phase: 'fresh-start-1' }, []), 'phase label supplies no start evidence');
+at(0); reset(); api.clearTimingCapture(); let freshSample;
+live = await connect(s => { freshSample = s; publish(s); });
+let eventIndex = -1, maxReplayDifferenceMs = 0;
+const primaryRows = [];
+for (const row of fresh.rows) {
+  while (eventIndex + 1 < fresh.events.length && fresh.events[eventIndex + 1].receiptMs <= row.atMs) {
+    const e = fresh.events[++eventIndex]; at(e.receiptMs);
+    const frame = raw(e.positionMs, epoch + e.sourceTimestampMs, e.playing);
+    frame.player_state.track.uri = `spotify:track:${String(e.track).padStart(22, '0')}`;
+    live.socket.event({ payloads: [frame] });
+  }
+  at(row.atMs);
+  assert.equal(api.detectorPacket(freshSample).positionMs, row.repeatedProjectionMs, 'fresh reconstructed source projection matches captured repeated path');
+  const replayErrorMs = position() - row.mprisPositionMs;
+  maxReplayDifferenceMs = Math.max(maxReplayDifferenceMs, Math.abs(replayErrorMs - row.measuredStoreErrorMs));
+  // Capture recorded callback wall time after ingest and row monotonic time
+  // separately: these missing stage clocks prohibit exact fractional replay.
+  assert(Math.abs(replayErrorMs - row.measuredStoreErrorMs) <= 5, 'event-once reconstruction agrees within bounded missing-stage-clock tolerance');
+  const e = fresh.events[eventIndex];
+  if (primaryEligible(e, fresh.actions) && row.phaseAgeMs > 3000 && row.sameTrack && row.playing && row.mobilePlaying && row.desktopPlaying) primaryRows.push(row);
+}
+live.detector.clear();
+const freshResults = ['fresh-start-1', 'fresh-start-2', 'fresh-start-3'].map(phase => {
+  const rows = primaryRows.filter(r => r.phase === phase); assert(rows.length > 0);
+  return { phase, n: rows.length, measuredStoreMedianMs: median(rows.map(r => r.measuredStoreErrorMs)),
+    repeatedProjectionMedianMs: median(rows.map(r => r.repeatedProjectionMs - r.mprisPositionMs)),
+    desktopMedianMs: median(rows.map(r => r.desktopPositionMs - r.mprisPositionMs)) };
+});
+assert.deepEqual(freshResults.map(r => Math.round(r.measuredStoreMedianMs)), [-174, -124, -194]);
+console.log(JSON.stringify({ primaryEvidence: 'three successful explicit Next commands with observed track changes; position telemetry only', freshResults, maxReplayDifferenceMs }, null, 2));
+// Synthetic auto-advance/track-change is an independent regression case, never a
+// steady fresh-start calibration observation or evidence of audio presentation.
+at(0); reset(); live = await connect(s => publish(s));
+live.socket.event({ payloads: [raw(90000, wall)] });
+at(100); const transition = raw(400, wall); transition.player_state.track.uri = 'spotify:track:0000000000000000000002';
+live.socket.event({ payloads: [transition] });
+assert.equal(store.getState().currentTrack.spotifyTrackId, '0000000000000000000002');
+assert.equal(position(), 400); live.detector.clear();
+
 console.log(JSON.stringify({ reconstruction: fixture.provenance, results }, null, 2));
 assert.equal(timers.size, 0, 'detector cleanup leaves no timers');
 console.log('Spotify timing checks passed: actual event-once path, metadata replays, characterized failures, immutable bounded opt-in provenance and privacy.');
