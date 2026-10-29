@@ -1,7 +1,8 @@
 # Mobile Spotify timing provenance and replay
 
-Instrumentation applies no clock estimate, timestamp rewrite, output-latency
-adjustment, fallback change, or smoothing change. A subsequent scoped correctness
+The initial instrumentation applies no clock estimate, timestamp rewrite,
+output-latency adjustment or smoothing change. The subsequent captured-bootstrap
+correction described below uses paired server/player clocks, not a learned offset. A subsequent scoped correctness
 fix accepts known device/session handoffs across different source clocks and
 protects them from stale registration snapshots; it does not calibrate timing.
 
@@ -96,8 +97,8 @@ Fresh-start results disprove a generalized 1.52-second production-store lag in
 these commanded starts. A smaller 124–194 ms residual remains. The old unknown-start
 initial residual, future timestamp semantics and real metadata callback effects
 remain unresolved; none identifies a clock offset or authorizes a blind timestamp
-rewrite. There is **no justified main timestamp-level correction** from these
-observables. No fresh before/after timing improvement is claimed for the ordering
+rewrite. Those earlier observables alone did not justify a main timestamp-level correction;
+the subsequent raw bootstrap capture below supplies the missing evidence. No fresh before/after timing improvement is claimed for the ordering
 fix below; the live events do not exercise an older-clock device/session handoff.
 
 The replay's primary-eligibility guard requires a successful explicit-start action,
@@ -156,7 +157,7 @@ again. No metadata behavior is changed in this instrumentation step.
 
 ## Causal conclusion
 
-`projectedPosition` adds `max(0, localWall - sourceTimestamp)` while playing. Equal
+The legacy `projectedPosition` branch adds `max(0, localWall - sourceTimestamp)` while playing. Equal
 clocks and an old anchor already compensate delivery age exactly once. A future
 anchor adds zero at callback time; `detectorPacket` then assigns local wall time
 to `timestamp` and `capturedAtMs`. The store sees no upstream age and immediately
@@ -200,7 +201,8 @@ unavailable. Missing, malformed and nonfinite numeric values receive labels;
 unsafe finite JS numbers remain approximate evidence, not validated epochs.
 Schema paths replace dynamic keys and array indexes with `*`.
 
-Cluster clock wire fields 1/6/9/11 are decoded only while capture is active.
+Cluster diagnostic clock wire fields 1/6/11 are decoded only while capture is active.
+Server field 9 is now always decoded for paired-clock projection.
 Player session field 23 is always decoded for scoped ordering; only its temporary
 label enters an opt-in export. A session means `PlayerState.session_id`, not an
 account identity. Labels are per-capture counters, not persistent hashes; at most 64
@@ -297,3 +299,86 @@ observe that presentation directly. Audio-relative calibration must remain
 separate, per route/device and measured with uncertainty. All transition proposals
 remain design-only; no fixed offset, universal delay or transition correction is
 implemented.
+
+## Captured first-anchor bootstrap correction
+
+A later reserved-playback capture executes the **actual native detector component's
+publish/enrichment code** with React hooks, native UI, auth storage, lyrics loading
+and AppState stubbed in Node. The real detector, parser, HTTP registration, real
+Spotify metadata lookup, packet and advancing store are used together. Thus this
+covers real asynchronous metadata behavior absent from the earlier harness. It
+is still sandbox position telemetry, not a physical-phone or audio test.
+
+The first controlled reproduction observed an old-track MPRIS sample immediately
+after Next returned; that sample was not valid fresh-start matching evidence.
+That exploratory run is excluded from the matched baseline. The repeated protocol
+polls until a changed track is playing below 3000 ms before delaying observer
+mount by 4500 ms. Both verified builds observe a new track near its beginning;
+both builds verify MPRIS `xesam:url` against the raw registration Spotify URI
+(logging booleans only; baseline 261/263 and candidate 260/262 rows match, with
+all settled rows and all four callback identity checks matching in each run). The
+baseline build is compiled from `84dd5f6` files through an esbuild source override,
+without checking out or modifying the working tree. The baseline and candidate both verify changed-track playback near its beginning
+and subsequent authoritative URI agreement.
+
+The matched baseline reproduces roughly -1508 ms on bootstrap, 0 paused, -141 ms
+after resume, and -1513 ms after observer refresh. The candidate's settled medians
+are +50.456 ms bootstrap, 0 paused, +27.926 ms resume, and +28.009 ms refresh.
+Nearest-rank p95 **absolute position errors** are 60.425/38.952/36.712 ms for the
+candidate versus 1508.836/142.316/1515.237 ms for the baseline (bootstrap/resume/
+refresh). Candidate windows are 6155–15827 ms (97 rows), 18548–26291 ms (78 rows),
+and 26393–32248 ms (59 rows), relative to that capture's origin. Pause/resume
+command-to-state transients are excluded from settled comparisons. A preliminary
+candidate run measured about +10 ms; it was a different run, also versus MPRIS.
+**All these results reference MPRIS Position; DesktopBridge is a comparator,
+not an audio presentation reference.**
+
+The earlier raw reproduction supplies a clear chronology: registration receipt
+5356 ms, player timestamp 2902 ms, position 1093 ms, server timestamp 6854 ms.
+Pause receipt/source/server are 15271/16629/16793; resume 17764/19127/19290;
+reobservation 25833/19127/27370. The server reference changes while the cached
+player anchor remains fixed. Actual metadata completion follows the first callback
+by about 83 ms; it retains the original store anchor in that run. Observer refresh,
+not metadata, reintroduces the large error. Other metadata timings remain covered
+as hypothetical regression cases rather than reported phone measurements.
+
+For the initial request sent at 5188 ms and completed-body observation at 5356 ms,
+server time 6854 ms implies a server-minus-local interval [1498,1666] ms **if** the
+server reference was generated during that request. This is a causal bracketing
+assumption, not millisecond clock calibration. The header/body capture adds its
+own processing delay. The consistently future reference and refreshed server
+values support a different epoch domain from local wall time. Neither individual
+one-way latency nor actual speaker presentation is identified.
+
+The correction uses `server_timestamp_ms - player_state.timestamp` from the **same
+cluster/player envelope** as the position. Both must be safe integer epoch values,
+and the player anchor must not be later than the server reference. That age is
+normalized at original local receipt and then advances only by local monotonic
+elapsed time. No server/local offset is estimated. No fixed bias or RTT/2 is added.
+Unknown server-to-receipt transit and snapshot/reference freshness remain timing
+uncertainty. Same-envelope pairing and observed Spotify behavior support the
+shared-domain assumption for this path; arbitrary third-party producer clocks
+are not independently certified by this investigation.
+
+Missing/malformed/unsafe server clocks, non-epoch player clocks and a future
+scheduled player anchor retain legacy handling. No unrelated sibling server
+clock is paired to a selected player. Pause/buffering do not extrapolate. Metadata,
+foreground replay and cached state retain the original immutable monotonic
+observation; re-registration obtains a new paired reference. Server protobuf
+field 9 is available with diagnostics off. Store ordering, deadband and transport
+estimation are otherwise unchanged, and source timestamps remain intact for the
+reviewed device/session ordering fix.
+
+The new `spotify-bootstrap-captured.json` fixture is a **sanitized captured raw
+JSON schema subset**, not a reconstruction: original numeric string types and
+actual nesting are retained, epochs shifted to a synthetic origin, IDs/names
+replaced, and unrelated fields removed. Original full frames stay private outside
+the repo. Synthetic catalog values in deterministic tests preserve the captured
+asynchronous metadata completion times without exposing catalog identities.
+The tests replay both legacy and corrected calculations on the same captured
+frames through actual registration/Dealer parsing, detector, metadata request,
+packet and store, with diagnostics off/on. They verify normalization once, cache/
+metadata receipt preservation, pause, scheduled/future/invalid references,
+observer refresh, monotonic wall jumps and binary field 9. Phone resume-jump
+validation remains necessary; the real-device report motivated this capture and
+is not relabeled as a sandbox audio measurement.

@@ -71,8 +71,9 @@ export function decodeCluster(bytes: Uint8Array, wrapped = false): any {
   if (wrapped && nested) return { cluster: decodeCluster(nested.value as Uint8Array) };
   const out: any = { device: Object.create(null) };
   for (const f of outer) {
+    if (f.wire === 0 && f.id === 9) out.server_timestamp_ms = f.value;
     if (timingCaptureActive() && f.wire === 0) {
-      const clock = ({ 1: 'changed_timestamp_ms', 6: 'transfer_data_timestamp', 9: 'server_timestamp_ms', 11: 'started_playing_at_timestamp' } as Record<number, string>)[f.id];
+      const clock = ({ 1: 'changed_timestamp_ms', 6: 'transfer_data_timestamp', 11: 'started_playing_at_timestamp' } as Record<number, string>)[f.id];
       if (clock) out[clock] = f.value;
     }
     if (f.wire === 2 && f.id === 2) out.active_device_id = text(f.value as Uint8Array);

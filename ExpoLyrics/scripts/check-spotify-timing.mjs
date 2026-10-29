@@ -9,7 +9,7 @@ import { gzip } from 'pako';
 // storage/AppState are stubbed; wall/monotonic clocks and network are injected.
 const bundle = await build({ stdin: { resolveDir: process.cwd(), contents: `
 export * from './lib/spotify-detector/timing-diagnostics';
-export {sampleFrom,decodeDealer,decodeStateBody} from './lib/spotify-detector/protocol';
+export {sampleFrom,decodeDealer,decodeStateBody,clusterPositionAge} from './lib/spotify-detector/protocol';
 export {SpotifyDetector} from './lib/spotify-detector/client';
 export {detectorPacket} from './lib/spotify-detector/packet';
 export {usePlaybackStore} from './store/playback-store';` }, bundle: true, platform: 'node', format: 'cjs', write: false,
@@ -44,7 +44,7 @@ const api = module.exports, store = api.usePlaybackStore;
 const at = ms => { wall = epoch + ms; mono = 1000 + ms; };
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 const raw = (position = 10000, timestamp = wall, playing = true, device = 'synthetic-device', session = 'synthetic-session') => ({
-  changed_timestamp_ms: timestamp, server_timestamp_ms: timestamp + 7, transfer_data_timestamp: timestamp - 3,
+  changed_timestamp_ms: timestamp, transfer_data_timestamp: timestamp - 3,
   started_playing_at_timestamp: timestamp - 10, active_device_id: device,
   player_state: { timestamp, position_as_of_timestamp: position, duration: 300000,
     is_playing: true, is_paused: !playing, session_id: session,
@@ -73,7 +73,7 @@ at(0); reset(); api.clearTimingCapture();
 let sample = api.sampleFrom(raw()); assert.equal(sample.timingProvenance, undefined);
 at(250); const disabledPacket = publish(sample); assert.equal(position(), 10250);
 assert.equal(store.getState().driftOffset, 0, 'delivery age compensated exactly once');
-at(0); reset(); api.startTimingCapture(); sample = api.sampleFrom(raw());
+at(0); reset(); api.startTimingCapture(); sample = api.sampleFrom({ ...raw(), server_timestamp_ms: epoch });
 at(250); const enabledPacket = publish(sample);
 assert.equal(JSON.stringify(enabledPacket), JSON.stringify(disabledPacket));
 assert.equal(position(), 10250);
@@ -83,7 +83,7 @@ assert.equal(api.timingSnapshot().records[1].values.storeSourceClockMs, epoch + 
 assert.equal(api.timingSnapshot().records[1].values.latencyMs, 0);
 assert(Object.isFrozen(original) && Object.isFrozen(original.receipt) && Object.isFrozen(original.parsed));
 assert.equal(original.rawPositionMs, 10000); assert.equal(original.rawTimestampMs, epoch);
-assert.equal(original.clusterServerMs, epoch + 7); assert.equal(original.sourceMonotonicMs, null);
+assert.equal(original.clusterServerMs, epoch); assert.equal(original.sourceMonotonicMs, null);
 at(2000); publish({ ...sample, title: 'Enriched' });
 assert.equal(sample.timingProvenance, original); assert.equal(original.receipt.wallMs, epoch);
 assert.equal(position(), 12000, 'old valid anchor remains age-compensated on metadata publication');
@@ -113,7 +113,7 @@ const wrapped = api.sampleFrom(api.decodeDealer({ uri: 'hm://connect-state/v1/cl
 assert.equal(wrapped.timingProvenance.clusterServerMs, epoch + 7);
 assert.equal(wrapped.timingProvenance.schemaPath, '$.payloads[*].cluster.player_state');
 const compressed = api.sampleFrom(api.decodeDealer({ headers: { 'transfer-encoding': 'gzip' },
-  payloads: [Buffer.from(gzip(JSON.stringify(raw()))).toString('base64')] }));
+  payloads: [Buffer.from(gzip(JSON.stringify({ ...raw(), server_timestamp_ms: wall + 7 }))).toString('base64')] }));
 assert.equal(compressed.timingProvenance.clusterServerMs, wall + 7);
 
 // Known clock skew transfers directly into old playing-anchor error. This is a
@@ -387,6 +387,101 @@ at(100); const transition = raw(400, wall); transition.player_state.track.uri = 
 live.socket.event({ payloads: [transition] });
 assert.equal(store.getState().currentTrack.spotifyTrackId, '0000000000000000000002');
 assert.equal(position(), 400); live.detector.clear();
+
+// Captured JSON schema subsets: these frames include genuine server/player
+// clock pairs, unlike the older reconstructed envelopes. Synthetic metadata
+// values preserve the real asynchronous publication timing without identifiers.
+const bootstraps = JSON.parse(readFileSync(new URL('./fixtures/spotify-bootstrap-captured.json', import.meta.url), 'utf8'));
+for (const diagnostics of [false, true]) for (const capture of bootstraps.cases) for (const useClusterClock of [false, true]) {
+  at(0); reset(); api.clearTimingCapture(); if (diagnostics) api.startTimingCapture();
+  let current, catalog, metadataPending, resolveMetadata;
+  const registrationPending = [];
+  const actualPublish = s => {
+    const input = { ...s, ...(catalog ?? {}) };
+    if (!useClusterClock) { delete input.sourceServerTimestampMs; delete input.positionObservedAt; }
+    return publish(input);
+  };
+  fetchResponse = (url, options) => options.method === 'GET'
+    ? new Promise(resolve => { resolveMetadata = resolve; })
+    : new Promise(resolve => registrationPending.push(resolve));
+  live = await connect(s => {
+    current = s; actualPublish(s);
+    if (!metadataPending) metadataPending = live.detector.metadata(s.uri).then(m => { catalog = m; actualPublish(current); });
+  });
+  const events = capture.frames.map(frame => {
+    const processed = capture.stages.find(s => s.kind === 'sample-callback' && s.wallMs >= frame.receiptMs && s.wallMs <= frame.receiptMs + 20);
+    assert(processed, 'capture has an explicit callback time for every state frame');
+    return { at: processed.wallMs, frame };
+  });
+  for (const s of capture.stages) {
+    if (s.kind === 'explicit-observer-refresh') events.push({ at: s.wallMs, refresh: true });
+    if (s.kind === 'metadata-resolved') events.push({ at: s.wallMs, metadata: true });
+  }
+  events.sort((a, b) => a.at - b.at);
+  let next = 0; const errors = [];
+  for (const row of capture.rows) {
+    while (next < events.length && events[next].at <= row.wallMs) {
+      const event = events[next++]; at(event.at);
+      if (event.refresh) {
+        live.detector.refresh(); live.socket = sockets.at(-1);
+        live.socket.event({ headers: { 'Spotify-Connection-Id': 'bootstrap-refreshed' } }); await flush();
+      } else if (event.metadata) {
+        resolveMetadata({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify({
+          gid: '00000000000000000000000000000001', name: 'Synthetic', artist: [{ name: 'Synthetic' }], album: { name: 'Synthetic' },
+        })).buffer }); await flush();
+      } else if (event.frame.kind === 'registration') {
+        registrationPending.shift()({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(event.frame.body)).buffer }); await flush();
+      } else live.socket.event(event.frame.frame);
+    }
+    at(row.wallMs);
+    if (current && row.sameTrack) errors.push({ phase: row.phase, at: row.wallMs, error: position() - row.mprisPositionMs });
+  }
+  const summaries = ['bootstrap', 'resumed', 'reobserve'].map(phase => {
+    const values = errors.filter(x => x.phase === phase).map(x => x.error);
+    return { phase, medianMs: median(values) };
+  });
+  if (useClusterClock) {
+    assert(summaries.every(x => Math.abs(x.medianMs) < 150), 'captured bootstrap/resume/refresh agree without clock-offset constants');
+    assert(Math.abs(summaries[0].medianMs - summaries[2].medianMs) < 120, 'reobservation does not reintroduce the server/local clock discrepancy');
+    const originalReceipt = current.positionObservedAt;
+    at(capture.rows.at(-1).wallMs + 1000);
+    const before = api.detectorPacket(current).positionMs;
+    const replay = { ...current, receivedAt: wall }; // legacy foreground relabel
+    assert.equal(api.detectorPacket(replay).positionMs, before, 'immutable monotonic position receipt survives foreground replay');
+    wall += 60000;
+    assert.equal(api.detectorPacket(replay).positionMs, before, 'cluster-relative age ignores a local wall-clock jump');
+    assert.equal(current.positionObservedAt, originalReceipt);
+  } else assert(summaries[0].medianMs < -1300 && summaries[2].medianMs < -1300, 'same captured frames reproduce the old first-anchor/refresh lag');
+  console.log(JSON.stringify({ bootstrapCapture: capture.name, useClusterClock, summaries }));
+  live.detector.clear();
+}
+fetchResponse = async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) });
+// Explicit paired-clock guards: no extra transit correction, no invented skew,
+// no coercion of an invalid/future scheduled reference into elapsed age.
+at(250); reset();
+const pair = { ...raw(10000, epoch + 1520), server_timestamp_ms: epoch + 1770 };
+let paired; live = await connect(s => { paired = s; publish(s); });
+live.socket.event({ payloads: [pair] }); assert.equal(position(), 10250, 'server-relative age compensates exactly once despite a different local epoch');
+at(750); assert.equal(position(), 10750); assert.equal(api.detectorPacket(paired).positionMs, 10750);
+const age = api.clusterPositionAge(paired); assert.equal(age, 250);
+for (const server of [undefined, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, epoch + 1519]) {
+  assert.equal(api.clusterPositionAge({ ...paired, sourceServerTimestampMs: server }), undefined);
+}
+live.detector.clear();
+at(0); api.clearTimingCapture();
+const unrelated = api.sampleFrom({ server_timestamp_ms: epoch + 9000, data: raw(10000, epoch) });
+assert.equal(unrelated.sourceServerTimestampMs, undefined, 'server reference must belong to the selected player snapshot');
+const scheduled = api.sampleFrom({ ...raw(10000, epoch + 2000), server_timestamp_ms: epoch + 1000 });
+assert.equal(api.clusterPositionAge(scheduled), undefined);
+assert.equal(api.detectorPacket(scheduled).positionMs, 10000, 'future/scheduled pair retains legacy projection');
+for (const malformed of ['bad', '', null, false]) {
+  const invalid = api.sampleFrom({ ...raw(10000, epoch), server_timestamp_ms: malformed });
+  assert.equal(invalid.sourceServerTimestampMs, undefined);
+}
+const binaryClock = [...textField(2, 'binary-device'), ...bytesField(3, playerBytes), ...numberField(9, epoch + 250)];
+reset(); live = await connect(s => publish(s));
+live.socket.event({ uri: 'hm://connect-state/v1/cluster', payloads: [bytesField(1, binaryClock)] });
+assert.equal(position(), 10250, 'binary server field 9 works with diagnostics OFF'); live.detector.clear();
 
 console.log(JSON.stringify({ reconstruction: fixture.provenance, results }, null, 2));
 assert.equal(timers.size, 0, 'detector cleanup leaves no timers');

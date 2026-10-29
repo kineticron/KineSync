@@ -2,9 +2,9 @@ import { Buffer } from 'buffer';
 import { ungzip } from 'pako';
 import { decodeCluster } from './binary';
 import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, timingNow,
-  type TimingAnchor, type TimingContext } from './timing-diagnostics';
+  type ClockStamp, type TimingAnchor, type TimingContext } from './timing-diagnostics';
 
-export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor };
+export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor };
 
 /** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
  * without rounding through a JS Number or depending on native BigInt support. */
@@ -35,9 +35,26 @@ export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
     artworkUrl: /^[a-fA-F0-9]{40}$/.test(cover?.file_id ?? '') ? `https://i.scdn.co/image/${cover.file_id}` : '' };
 }
 
-export function projectedPosition(sample: Sample, now: number): number {
+export function clusterPositionAge(sample: Sample): number | undefined {
+  const source = sample.positionTimestampMs, server = sample.sourceServerTimestampMs;
+  // A future/scheduled player anchor is not a valid elapsed-age observation.
+  // Missing or malformed pairs retain the legacy behavior, without guessing skew.
+  if (typeof source !== 'number' || typeof server !== 'number' ||
+    !Number.isSafeInteger(source) || !Number.isSafeInteger(server) ||
+    source <= 1_000_000_000_000 || server < source) return undefined;
+  return server - source;
+}
+
+export function projectedPosition(sample: Sample, now: number, nowMonotonic = performance.now()): number {
   const basis = sample.positionTimestampMs ?? sample.receivedAt;
-  const position = sample.positionMs + (sample.playing ? Math.max(0, now - basis) : 0);
+  const clusterAge = clusterPositionAge(sample);
+  // Cluster and player timestamps come from the same state envelope. Normalize
+  // their age once at original receipt, then bridge only local monotonic time.
+  // Server-to-receipt transit remains unknown; do not add RTT/2 or a fixed bias.
+  const elapsed = clusterAge === undefined ? Math.max(0, now - basis)
+    : clusterAge + Math.max(0, sample.positionObservedAt
+      ? nowMonotonic - sample.positionObservedAt.monotonicMs : now - sample.receivedAt);
+  const position = sample.positionMs + (sample.playing ? elapsed : 0);
   return sample.durationMs > 0 ? Math.min(position, sample.durationMs) : position;
 }
 
@@ -151,7 +168,9 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
     if (s) {
       const id = o.active_device_id ?? o.activeDeviceId;
       const info = o.device?.[id] ?? o.devices?.[id];
-      return { ...s, activeDeviceId: id, device: info?.name ?? info?.device_info?.name ?? id ?? s.device };
+      const server = Number(o.server_timestamp_ms);
+      return { ...s, activeDeviceId: id, device: info?.name ?? info?.device_info?.name ?? id ?? s.device,
+        ...(Number.isSafeInteger(server) && server > 1_000_000_000_000 ? { sourceServerTimestampMs: server } : {}) };
     }
   }
   const track = o.track_window?.current_track ?? o.track ?? o.item;

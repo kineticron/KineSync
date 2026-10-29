@@ -2,7 +2,7 @@ import { Buffer } from 'buffer';
 import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
   sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
-import { recordTiming, timingCaptureActive, timingNow, type TimingContext } from './timing-diagnostics';
+import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -186,6 +186,7 @@ export class SpotifyDetector {
     const s = sampleFrom(payload, 0, timing);
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) return false;
     s.receivedAt = receivedAt;
+    if (s.sourceServerTimestampMs !== undefined) s.positionObservedAt = timing.receipt ?? timingNow(receivedAt);
     // Recognizable state proves observer readiness even when duplicate/stale.
     this.callbacks.ready();
     const device = typeof s.activeDeviceId === 'string' && s.activeDeviceId ? s.activeDeviceId : undefined;
@@ -243,7 +244,7 @@ export class SpotifyDetector {
     ws.onmessage = e => {
       if (!alive()) return;
       const receivedAt = Date.now();
-      const receipt = timingCaptureActive() ? timingNow(receivedAt) : undefined;
+      const receipt = timingNow(receivedAt);
       try {
         const payload = JSON.parse(String(e.data)); lastReceived = performance.now();
         if (payload.type === 'pong') return;
@@ -274,7 +275,7 @@ export class SpotifyDetector {
       if (this.clientToken) headers['client-token'] = this.clientToken;
       const response = await fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal });
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const receipt = timingCaptureActive() ? timingNow() : undefined;
+      const receipt = timingNow();
       if (!alive()) return;
       if (response.status === 401) { this.needSession('Spotify session expired. Refreshing login…'); return; }
       if (response.status === 403 || response.status === 429) {

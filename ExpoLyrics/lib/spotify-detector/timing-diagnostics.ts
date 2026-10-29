@@ -33,6 +33,7 @@ type TimingValues = Readonly<{
   positionMs?: NumericEvidence;
   basisMs?: NumericEvidence;
   normalizedTimestampMs?: NumericEvidence;
+  projectionBasis?: 'local-wall' | 'cluster-relative';
   storeSourceClockMs?: NumericEvidence;
   rejection?: 'mode' | 'older-local-packet';
   playing?: boolean;
