@@ -1,5 +1,49 @@
 # Mobile Spotify timing provenance and replay
 
+## Development terminal bootstrap evidence
+
+Automatic development-only logs use the exact marker **`[Spotify timing bootstrap]`**.
+No phone UI action is required to enable them. The first recognizable parsed state
+opens a 120-second local monotonic window, capped at 96 lines per JS runtime.
+Reconnects do not reset the cap. A new JS bundle reload starts a new window.
+Release/production builds emit no automatic lines. There are no new timers,
+requests, playback controls, UI changes or normalization changes in this logger.
+
+Each JSON line records accepted/stale/duplicate/registration-conflict/foreground
+events or the actual normalization result. It includes immutable raw numeric
+player/server evidence (missing, null, invalid and nonfinite distinguished), exact
+sanitized schema/field paths, original receipt and parse wall/monotonic clocks,
+processing time, elapsed time, source/projected position, playing state, origin
+(`registration` or `dealer`) and temporary device/session/connection aliases.
+`raw.anchor` correlates metadata/replay publication with the same original receipt.
+Identity labels have at most 64 retained mappings; evicted identities can get new
+labels. Raw IDs, payloads, titles, account fields, tokens and cookies are excluded.
+
+Normalization lines label `projection` as `paired` or `legacy`. `reasons` explains
+`paired`, `missing-player`, `missing-server`, `invalid-player`, `invalid-server`,
+or `future-player-relative-to-server` (a potentially scheduled/future pair).
+Multiple missing/invalid reasons can coexist. These labels explain the unchanged
+`clusterPositionAge` guards; they never select or repair a clock. `elapsedClock`
+identifies monotonic versus legacy wall projection, and `sinceOriginalReceiptMs`
+remains based on the original immutable receipt through metadata and replay.
+For paused state, elapsed is diagnostic only: `playing: false` prevents advance.
+
+The inspected `~/expo-tunnel.log` contained connection/control and bundling lines,
+not timing evidence sufficient to diagnose the reported iPhone bootstrap lag.
+Its startup says Metro runs with `CI=true`, which disables file watching. Saving
+source does not invalidate that server's file map/transform cache; a manual phone
+reload alone may still receive a cached bundle. Delivery must first be verified
+by checking that the served iOS development bundle contains the marker. If stale,
+coordinate a Metro cache-clearing restart with the same port/tunnel configuration,
+then verify the marker before asking the user to manually reload KineSync's JS
+bundle. Do not force a phone reload or alter Spotify playback. Missing marker
+lines from a stale bundle are not evidence that the parser/logger path is unused.
+
+After verified delivery, manually reload KineSync while the user controls playback
+and observe its first launch normally. Compare registration's first `normalize`
+line with subsequent Dealer lines and their fallback reasons. No pause/seek or
+new timing correction is prescribed by this diagnostic change.
+
 The initial instrumentation applies no clock estimate, timestamp rewrite,
 output-latency adjustment or smoothing change. The subsequent captured-bootstrap
 correction described below uses paired server/player clocks, not a learned offset. A subsequent scoped correctness

@@ -3,8 +3,9 @@ import { ungzip } from 'pako';
 import { decodeCluster } from './binary';
 import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, timingNow,
   type ClockStamp, type TimingAnchor, type TimingContext } from './timing-diagnostics';
+import { developmentTimingActive, developmentTimingAnchor, logDevelopmentTiming, type DevelopmentTimingAnchor } from './development-timing-log';
 
-export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor };
+export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
 
 /** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
  * without rounding through a JS Number or depending on native BigInt support. */
@@ -55,7 +56,10 @@ export function projectedPosition(sample: Sample, now: number, nowMonotonic = pe
     : clusterAge + Math.max(0, sample.positionObservedAt
       ? nowMonotonic - sample.positionObservedAt.monotonicMs : now - sample.receivedAt);
   const position = sample.positionMs + (sample.playing ? elapsed : 0);
-  return sample.durationMs > 0 ? Math.min(position, sample.durationMs) : position;
+  const result = sample.durationMs > 0 ? Math.min(position, sample.durationMs) : position;
+  logDevelopmentTiming('normalize', sample, { wallMs: now, monotonicMs: nowMonotonic, elapsedMs: elapsed,
+    positionMs: result, clusterAgeMs: clusterAge });
+  return result;
 }
 
 export function spotifyHost(raw: string, socket = false): boolean {
@@ -149,11 +153,13 @@ export function redact(value: unknown): unknown {
 
 // Accept only recognizable playback objects; arbitrary network messages aren't proof of state.
 export function sampleFrom(value: unknown, depth = 0, timing: TimingContext = {}): Sample | null {
-  return parseSample(value, depth, timingCaptureActive() ? {
-    context: timing, path: '$', receipt: timing.receipt ? Object.freeze({ ...timing.receipt }) : timingNow(), cluster: {}, device: undefined,
+  const capture = timingCaptureActive(), development = developmentTimingActive();
+  return parseSample(value, depth, capture || development ? {
+    capture, development, context: timing, path: '$', serverPath: null,
+    receipt: timing.receipt ? Object.freeze({ ...timing.receipt }) : timingNow(), cluster: {}, device: undefined,
   } : undefined);
 }
-type Trace = { context: TimingContext; path: string; receipt: TimingAnchor['receipt']; cluster: Record<string, unknown>; device: unknown };
+type Trace = { capture: boolean; development: boolean; context: TimingContext; path: string; serverPath: string | null; receipt: TimingAnchor['receipt']; cluster: Record<string, unknown>; device: unknown };
 // Schema keys only: arbitrary payload keys can contain account/device identifiers.
 const schemaKeys = new Set(['player_state', 'cluster', 'payloads', 'state', 'data', 'item']);
 function parseSample(value: unknown, depth: number, trace?: Trace): Sample | null {
@@ -161,7 +167,7 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
   if (typeof value === 'string') { try { return parseSample(JSON.parse(value), depth + 1, trace); } catch { return null; } }
   if (typeof value !== 'object') return null;
   const o = value as Record<string, any>;
-  if (trace && o.player_state) trace = { ...trace, cluster: o,
+  if (trace && o.player_state) trace = { ...trace, cluster: o, serverPath: trace.path,
     device: o.active_device_id ?? o.activeDeviceId };
   if (o.player_state) {
     const s = parseSample(o.player_state, depth + 1, trace && { ...trace, path: `${trace.path}.player_state` });
@@ -181,7 +187,7 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
   if (track && Number.isFinite(position) && playing !== undefined) {
     const m = track.metadata ?? {};
     const positionField = o.position_as_of_timestamp != null ? 'position_as_of_timestamp' : o.position != null ? 'position' : 'progress_ms';
-    const timingProvenance: TimingAnchor | undefined = trace ? Object.freeze({
+    const timingProvenance: TimingAnchor | undefined = trace?.capture ? Object.freeze({
       capture: timingCaptureId(), schemaPath: trace.path, positionField,
       rawPositionMs: numericEvidence(o[positionField]), rawTimestampMs: numericEvidence(o.timestamp),
       sourceMonotonicMs: null, receipt: trace.receipt, parsed: timingNow(), origin: trace.context.origin ?? 'parser',
@@ -192,6 +198,11 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
       clusterTransferMs: numericEvidence(trace.cluster.transfer_data_timestamp),
       clusterStartedPlayingMs: numericEvidence(trace.cluster.started_playing_at_timestamp),
     }) : undefined;
+    const developmentTiming = trace?.development ? developmentTimingAnchor({ playerPath: trace.path,
+      serverPath: trace.serverPath, positionField, position: o[positionField], player: o.timestamp,
+      server: trace.cluster.server_timestamp_ms, receipt: trace.receipt, origin: trace.context.origin ?? 'parser',
+      device: trace.device ?? o.device?.device_id, session: o.session_id, connection: trace.context.connectionId,
+      generation: trace.context.generation }) : undefined;
     return {
       title: track.name ?? m.title ?? 'Unknown track',
       artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
@@ -204,6 +215,7 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
       positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
       playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
       ...(timingProvenance ? { timingProvenance } : {}),
+      ...(developmentTiming ? { developmentTiming } : {}),
     };
   }
   for (const [key, v] of Object.entries(o)) {

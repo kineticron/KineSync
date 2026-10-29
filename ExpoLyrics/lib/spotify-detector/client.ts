@@ -3,6 +3,7 @@ import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
   sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
 import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
+import { logDevelopmentTiming } from './development-timing-log';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -83,6 +84,7 @@ export class SpotifyDetector {
       // Returning from suspension reprojects the last authoritative anchor.
       if (this.lastSample) {
         recordTiming('foreground-replay', this.lastSample.timingProvenance);
+        logDevelopmentTiming('foreground-replay', this.lastSample);
         // Keep legacy fallback behavior; immutable provenance retains original receipt.
         this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now() });
       }
@@ -198,11 +200,13 @@ export class SpotifyDetector {
     // A registration snapshot can predate a Dealer handoff on a different clock.
     // Comparing timestamps across those identities cannot order that race.
     if (timing.origin === 'registration' && this.lastDealerConnection === connection && identityChanged) {
+      logDevelopmentTiming('registration-conflict', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
     // Unknown identity is not evidence of a handoff. Keep the known scope and
     // its watermark; only a positive identity change can reset source ordering.
     if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
+      logDevelopmentTiming('stale', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
     if (identityChanged) { this.lastSourceTimestamp = 0; this.fingerprint = ''; }
@@ -214,11 +218,12 @@ export class SpotifyDetector {
     // session-only handoffs must not disappear behind an equal state fingerprint.
     const key = JSON.stringify([connection, this.orderingDeviceId, this.orderingSessionId,
       stateFingerprint({ ...s, activeDeviceId: this.orderingDeviceId })]);
-    if (key === this.fingerprint) { recordTiming('duplicate', s.timingProvenance); return true; }
+    if (key === this.fingerprint) { logDevelopmentTiming('duplicate', s); recordTiming('duplicate', s.timingProvenance); return true; }
     this.fingerprint = key;
     if (s.positionTimestampMs) this.lastSourceTimestamp = s.positionTimestampMs;
     this.lastSample = s; this.reconnects = 0;
     recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
+    logDevelopmentTiming('accepted', s);
     this.callbacks.sample(s);
     return true;
   }
