@@ -157,27 +157,29 @@ for (const mobile of [false, true]) {
       const { fetchers, run } = load(mobile)
       fetchers["lrc-red"] = async () => clone(pair.lrc)
       fetchers["spicy-lyrics"] = async () => clone(pair.spicy)
-      const result = await run()
+      const result = await run({ waitForAutoCompletion: true })
       assert.equal(result.source, pair[pair.expected].source)
     })
   }
 
-  test(`${platform}: starts both providers together and caches the selected result`, async () => {
+  test(`${platform}: publishes the first result immediately then upgrades to the captured Spicy winner`, async () => {
     const { fetchers, run } = load(mobile)
-    let resolveLrc, resolveSpicy, calls = 0, settled = false
+    let resolveLrc, resolveSpicy, calls = 0
     fetchers["lrc-red"] = () => { calls++; return new Promise(resolve => { resolveLrc = resolve }) }
     fetchers["spicy-lyrics"] = () => { calls++; return new Promise(resolve => { resolveSpicy = resolve }) }
     const sourceCache = new Map()
-    const pending = run({ sourceCache, autoSourceTimeoutMs: 1000 }).then(result => { settled = true; return result })
+    const progress = []
+    const pending = run({ sourceCache, autoSourceTimeoutMs: 1000, onProgress: packet => progress.push(packet.source) })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(calls, 2)
     resolveLrc(clone(pairs[1].lrc))
-    await new Promise(resolve => setImmediate(resolve))
-    assert.equal(settled, false, "lrc.red cannot publish on its own")
+    assert.equal((await pending).source, pairs[1].lrc.source)
+    assert.equal(sourceCache.has("auto"), false, "pending Spicy precedence prevents caching a partial choice")
     resolveSpicy(clone(pairs[1].spicy))
-    const result = await pending
-    assert.equal(result.source, "spicy-lyrics-syllable")
-    assert.equal(await run({ sourceCache }), result)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(sourceCache.get("auto").source, "spicy-lyrics-syllable")
+    assert.deepEqual(progress, [pairs[1].lrc.source, "spicy-lyrics-syllable"])
+    assert.equal((await run({ sourceCache })).source, "spicy-lyrics-syllable")
     assert.equal(calls, 2)
   })
 
@@ -215,7 +217,7 @@ for (const mobile of [false, true]) {
     assert.equal((await run()).source, "netease-yrc")
   })
 
-  test(`${platform}: late timed-out responses cannot overwrite the selected packet`, async () => {
+  test(`${platform}: a late community response upgrades the provisional result and final cache`, async () => {
     const { fetchers, run } = load(mobile)
     let resolveSpicy
     fetchers["lrc-red"] = async () => clone(pairs[0].lrc)
@@ -225,8 +227,8 @@ for (const mobile of [false, true]) {
     const result = await run({ sourceCache, onProgress: () => { progress++ } })
     resolveSpicy(clone(pairs[4].spicy))
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(sourceCache.get("auto"), result)
-    assert.equal(progress, 0)
+    assert.equal(sourceCache.get("auto")?.source, "spicy-lyrics-syllable")
+    assert.equal(progress, 2, "initial publication and one superior community upgrade")
     assert.equal(result.source, "lrc-red-karaoke")
   })
 

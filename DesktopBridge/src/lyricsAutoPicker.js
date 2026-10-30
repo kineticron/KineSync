@@ -43,4 +43,81 @@ function pickAutoLyrics(lrcRed, spicy) {
   return choose(lrcRed, "equivalent-lrc")
 }
 
-module.exports = { pickAutoLyrics, timingRank }
+// The community exception applies to syllable packets, independently of line priority.
+const isCommunitySpicy = packet => {
+  if (!String(packet?.source || "").toLowerCase().includes("spicy-lyrics-syllable")) return false
+  const attribution = packet?.metadata?.attribution
+  return Boolean(attribution?.community || ["spicy_lyrics", "spl"].includes(String(attribution?.source || "").trim().toLowerCase()))
+}
+
+// Mirrors getSourcePriorityBucket exactly; its existing service implementation is unchanged.
+function sourcePriority(packetOrSource) {
+  const source = String(typeof packetOrSource === "string" ? packetOrSource : packetOrSource?.source || "").toLowerCase()
+  if (source.includes("lrc-red-karaoke")) return 700
+  if (source.includes("lrc-red-line")) return 370
+  if (source.includes("local-vault-karaoke")) return 720
+  if (source.includes("local-vault-line")) return 380
+  if (source.includes("spicy-lyrics-syllable")) return 680
+  if (source.includes("kugou-krc")) return 620
+  if (source.includes("qq-musicu-qrc")) return 600
+  if (source.includes("netease-yrc")) return 560
+  if (source.includes("musixmatch-richsync")) return 520
+  if (source.includes("spicy-lyrics-line")) return 360
+  if (source.includes("spicy-lyrics-static")) return 180
+  if (source.includes("lrclib")) return 320
+  if (source.includes("netease-lrc")) return 300
+  if (source.includes("musixmatch") && !source.includes("richsync")) return 280
+  if (source.includes("qq-")) return 240
+  return 200
+}
+
+function shouldPreferAutoCandidate(track, current, candidate) {
+  if (!candidate?.lyrics?.length) return false
+  if (!current?.lyrics?.length) return true
+  const currentSource = String(current.source || "").toLowerCase()
+  const candidateSource = String(candidate.source || "").toLowerCase()
+  const currentVault = currentSource.includes("local-vault")
+  const candidateVault = candidateSource.includes("local-vault")
+  if (currentVault || candidateVault) return sourcePriority(candidate) > sourcePriority(current)
+  const currentCommunity = isCommunitySpicy(current)
+  const candidateCommunity = isCommunitySpicy(candidate)
+  if (currentCommunity || candidateCommunity) return candidateCommunity && !currentCommunity
+
+  const currentLrcKaraoke = currentSource.includes("lrc-red-karaoke")
+  const candidateLrcKaraoke = candidateSource.includes("lrc-red-karaoke")
+  const currentSpicy = currentSource.includes("spicy-lyrics-syllable")
+  const candidateSpicy = candidateSource.includes("spicy-lyrics-syllable")
+  if ((currentLrcKaraoke && candidateSpicy) || (candidateLrcKaraoke && currentSpicy)) {
+    const lrc = currentLrcKaraoke ? current : candidate
+    const spicy = currentSpicy ? current : candidate
+    const attribution = spicy?.metadata?.attribution || {}
+    const provider = `${attribution.source || ""} ${attribution.provider || ""}`.toLowerCase()
+    if (!provider.includes("apple")) return candidate === lrc
+    return pickAutoLyrics(lrc, spicy).result === candidate
+  }
+  const karaoke = source => !source.includes("netease-lrc") &&
+    /spicy-lyrics-syllable|kugou-krc|qq-musicu-qrc|richsync|karaoke|yrc/.test(source)
+  const currentKaraoke = karaoke(currentSource)
+  const candidateKaraoke = karaoke(candidateSource)
+  const currentSpicyLine = currentSource.includes("spicy-lyrics-line")
+  const candidateSpicyLine = candidateSource.includes("spicy-lyrics-line")
+  if (currentSpicyLine !== candidateSpicyLine) {
+    if (currentKaraoke || candidateKaraoke) return candidateKaraoke
+    // Preserve the existing lrc.red-line exception before Spicy's line rule.
+    if (currentSource.includes("lrc-red-line") || candidateSource.includes("lrc-red-line")) return candidateSource.includes("lrc-red-line")
+    return candidateSpicyLine
+  }
+  return sourcePriority(candidate) > sourcePriority(current)
+}
+
+function autoCandidateCouldOutrank(track, current, source) {
+  if (!current?.lyrics?.length) return true
+  const normalized = String(source || "").toLowerCase()
+  if (isCommunitySpicy(current)) return normalized === "local-vault"
+  // Pending Spicy can be community syllable, or non-equivalent Apple Music.
+  if (normalized === "spicy-lyrics") return true
+  const bounds = { "local-vault": 720, "lrc-red": 700, kugou: 620, "qq-direct": 600, netease: 560, musixmatch: 520, lrclib: 320 }
+  return (bounds[normalized] ?? 200) >= sourcePriority(current)
+}
+
+module.exports = { pickAutoLyrics, timingRank, shouldPreferAutoCandidate, autoCandidateCouldOutrank, sourcePriority, isCommunitySpicy }

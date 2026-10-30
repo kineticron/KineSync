@@ -7,125 +7,66 @@
 async function fetchFromNetease(track) {
   const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const rawSongs = [];
-
-  await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchNeteaseSearchJson(query, {
-          timeoutMs: 10_000,
-        });
-        const songs = Array.isArray(payload?.result?.songs)
-          ? payload.result.songs
-          : [];
-        rawSongs.push(...songs);
-      } catch {
-        // Try next query variant.
-      }
-    }),
-  );
-
-  if (!rawSongs.length) {
-    return null;
-  }
+  await Promise.all(queryVariants.map(async query => {
+    try {
+      const payload = await fetchNeteaseSearchJson(query, { timeoutMs: 10_000 });
+      const songs = Array.isArray(payload?.result?.songs) ? payload.result.songs : [];
+      rawSongs.push(...songs);
+    } catch { /* Continue with the other independent queries. */ }
+  }));
+  if (!rawSongs.length) return null;
 
   const deduped = [];
   const seen = new Set();
   for (const song of rawSongs) {
     const id = Number(song?.id || 0);
-    if (!id || seen.has(id)) {
-      continue;
-    }
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     deduped.push(song);
   }
-
-  const ranked = deduped
-    .map((song) => {
-      const title = String(song?.name || song?.title || "").trim();
-      const artist = Array.isArray(song?.artists)
-        ? song.artists.map((entry) => entry?.name || "").join(" ")
-        : String(song?.artist || "").trim();
-      let score = scoreCandidate(track, title, artist);
-      const durationMs = Number(song?.duration || song?.dt || 0);
-      score += scoreDurationBonus(track, title, artist, durationMs);
-      return { song, score, title, artist, durationMs };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  if (!ranked.length) {
-    return null;
-  }
+  const ranked = deduped.map(song => {
+    const title = String(song?.name || song?.title || "").trim();
+    const artist = Array.isArray(song?.artists)
+      ? song.artists.map(entry => entry?.name || "").join(" ")
+      : String(song?.artist || "").trim();
+    let score = scoreCandidate(track, title, artist);
+    const durationMs = Number(song?.duration || song?.dt || 0);
+    score += scoreDurationBonus(track, title, artist, durationMs);
+    return { song, score, title, artist, durationMs };
+  }).sort((a, b) => b.score - a.score);
+  const likely = ranked.filter(candidate => isLikelySameTrack(
+    track, candidate.title, candidate.artist, candidate.durationMs,
+  )).sort((left, right) => compareCandidateMatchQuality(track, left, right)).slice(0, 8);
+  const lyricResults = createRankedProbePool(likely, 4, async candidate => {
+    try {
+      const payload = await fetchNeteaseLyricsJson(candidate.song.id, { timeoutMs: 10_000 });
+      const karaokeText = payload?.yrc?.lyric || payload?.klyric?.lyric || payload?.data?.yrc?.lyric || payload?.data?.klyric?.lyric || "";
+      const karaokeLyrics = stripLeadingMetadataLines(parseNeteaseYrc(cleanNeteaseSpacing(karaokeText)), track);
+      if (karaokeLyrics.length) return {
+        source: "netease-yrc", lyrics: karaokeLyrics,
+        coverage: scoreLyricsCoverage(karaokeLyrics, track.durationMs),
+        coverageRatio: getLyricsCoverageRatio(karaokeLyrics, track.durationMs),
+      };
+      const rawTimed = payload?.lrc?.lyric || payload?.data?.lrc?.lyric || payload?.lyric || "";
+      const lyrics = stripLeadingMetadataLines(parseLrc(cleanNeteaseSpacing(rawTimed)), track);
+      return lyrics.length ? { source: "netease-lrc", lyrics, coverage: scoreLyricsCoverage(lyrics, track.durationMs) } : null;
+    } catch { return null; }
+  });
 
   let bestResult = null;
   let bestScore = -1;
-  const likelyNeteaseCandidates = ranked
-    .filter((candidate) =>
-      isLikelySameTrack(
-        track,
-        candidate.title,
-        candidate.artist,
-        candidate.durationMs,
-      ),
-    )
-    .sort((left, right) => compareCandidateMatchQuality(track, left, right))
-    .slice(0, 8);
-
-  for (const candidate of likelyNeteaseCandidates) {
-    try {
-      const lyricPayload = await fetchNeteaseLyricsJson(candidate.song.id, {
-        timeoutMs: 10_000,
-      });
-      const karaokeText =
-        lyricPayload?.yrc?.lyric ||
-        lyricPayload?.klyric?.lyric ||
-        lyricPayload?.data?.yrc?.lyric ||
-        lyricPayload?.data?.klyric?.lyric ||
-        "";
-      const karaokeLyrics = stripLeadingMetadataLines(
-        parseNeteaseYrc(cleanNeteaseSpacing(karaokeText)),
-        track,
-      );
-      if (karaokeLyrics.length) {
-        const coverage = scoreLyricsCoverage(karaokeLyrics, track.durationMs);
-        const coverageRatio = getLyricsCoverageRatio(
-          karaokeLyrics,
-          track.durationMs,
-        );
-        if (coverage > bestScore) {
-          bestScore = coverage;
-          bestResult = { lyrics: karaokeLyrics, source: "netease-yrc" };
-        }
-        if (
-          candidate.score >= MATCH_CONFIDENCE_SCORE &&
-          coverageRatio >= EARLY_RETURN_COVERAGE_RATIO
-        ) {
-          return { lyrics: karaokeLyrics, source: "netease-yrc" };
-        }
-        continue;
+  // Results are consumed in original match-rank order, preserving early-return semantics.
+  try {
+    for (let index = 0; index < likely.length; index += 1) {
+      const result = await lyricResults.read(index);
+      if (!result?.lyrics?.length) continue;
+      if (result.coverage > bestScore) { bestScore = result.coverage; bestResult = result; }
+      if (result.source === "netease-yrc" && likely[index].score >= MATCH_CONFIDENCE_SCORE && result.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO) {
+        return { lyrics: result.lyrics, source: result.source };
       }
-
-      const rawTimedLyrics =
-        lyricPayload?.lrc?.lyric ||
-        lyricPayload?.data?.lrc?.lyric ||
-        lyricPayload?.lyric ||
-        "";
-      const lyrics = stripLeadingMetadataLines(
-        parseLrc(cleanNeteaseSpacing(rawTimedLyrics)),
-        track,
-      );
-      if (lyrics.length) {
-        const coverage = scoreLyricsCoverage(lyrics, track.durationMs);
-        if (coverage > bestScore) {
-          bestScore = coverage;
-          bestResult = { lyrics, source: "netease-lrc" };
-        }
-      }
-    } catch {
-      // Try next candidate.
     }
-  }
-
-  return bestResult;
+    return bestResult ? { lyrics: bestResult.lyrics, source: bestResult.source } : null;
+  } finally { lyricResults.stop(); }
 }
 
 async function resolveQqReferenceFingerprint(track) {
