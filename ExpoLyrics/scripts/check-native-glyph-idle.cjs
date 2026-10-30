@@ -16,9 +16,9 @@ const bundle = filename => buildSync({ stdin: { contents: fs.readFileSync(filena
 const source = bundle(path.join(directory, 'native-glyph-picture.tsx'));
 const baselineSource = baselinePath && bundle(baselinePath);
 
-function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
+function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords = null, inputLineEnd = start + count * 600) {
   const frames = [], shared = [], cleanups = [];
-  let reads = 0, pictures = 0, paints = 0, blurFilters = 0, blurFilterDisposals = 0, paintSlotWrites = 0;
+  let shaderCreates = 0, reads = 0, pictures = 0, paints = 0, blurFilters = 0, blurFilterDisposals = 0, paintSlotWrites = 0;
   const countedArrays = new WeakSet();
   const counted = values => {
     if (countedArrays.has(values)) return values;
@@ -29,7 +29,7 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
     countedArrays.add(proxy);
     return proxy;
   };
-  const words = counted(Array.from({ length: count }, (_, index) => {
+  const words = inputWords ? counted(inputWords) : counted(Array.from({ length: count }, (_, index) => {
     const rect = { x: index * 22, y: 0, width: 20, height: 24 };
     const letters = Array.from({ length: letterCount }, (_, letter) => String.fromCharCode(97 + letter % 26));
     return { word: { text: letters.join(''), start: start + index * 600, end: start + index * 600 + 500,
@@ -54,7 +54,7 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
     setColor(color) { this.color = color; }, setAlphaf(alpha) { this.alpha = alpha; },
     setImageFilter(filter) { this.filter = filter; } }; };
   const Skia = { XYWHRect: (x, y, width, height) => ({ x, y, width, height }), Paint: paint, Color: color => color,
-    Shader: { MakeLinearGradient: (...args) => ({ gradient: args }) }, ImageFilter: { MakeBlur: (...args) => { blurFilters++;
+    Shader: { MakeLinearGradient: (...args) => { shaderCreates++; return { gradient: args }; } }, ImageFilter: { MakeBlur: (...args) => { blurFilters++;
       return { blur: args, dispose() { blurFilterDisposals++; } }; } } };
   const createPicture = draw => {
     pictures++;
@@ -70,18 +70,34 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
   const react = { memo: fn => fn, useMemo: fn => fn(), useCallback: fn => fn,
     useEffect: fn => cleanups.push(fn()), createElement: (_type, props) => props };
   const moduleObject = { exports: {} };
-  vm.runInNewContext(code, { module: moduleObject, exports: moduleObject.exports,
-    require: name => name === 'react' ? react : name === 'react-native-reanimated'
+  let context;
+  const hydrated = new WeakMap();
+  const onUI = fn => {
+    if (!fn.__initData) return fn;
+    if (hydrated.has(fn)) return hydrated.get(fn);
+    const worklet = vm.runInContext(fn.__initData.code, context);
+    const receiver = { __closure: (fn.__closure ?? []).map(value => typeof value === 'function' ? onUI(value) : value) };
+    const bound = worklet.bind(receiver);
+    receiver._recur = bound;
+    hydrated.set(fn, bound);
+    return bound;
+  };
+  context = vm.createContext({ module: moduleObject, exports: moduleObject.exports,
+    require: name => name === 'react/jsx-runtime' ? { jsx: (_type, props) => props } : name === 'react' ? react : name === 'react-native-reanimated'
       ? { useSharedValue: value, useFrameCallback: fn => {
-        const frame = { fn, active: false }; frames.push(frame);
+        const frame = { fn: onUI(fn), active: false }; frames.push(frame);
         return { setActive: active => { frame.active = active; } };
       } } : { Skia, createPicture, Picture: 'Picture', BlendMode: { SrcIn: 5, SrcOver: 3 }, ClipOp: { Intersect: 0 }, TileMode: { Clamp: 0, Decal: 1 } } });
+  context.global = context;
+  vm.runInContext(code, context);
   const position = { value: 0 }, active = { value: false };
   const lineMotion = { value: { scale: 0.97, velocity: 0, bright: 0.2, dark: 0.2 } };
   moduleObject.exports.NativeGlyphPicture({ words, width: count * 22, height: 24, position, active, spicy,
-    background: false, fontSize: 36, lineEnd: start + count * 600, lineMotion });
+    background: false, fontSize: 36, lineEnd: inputLineEnd, lineMotion });
   return { position, active, lineMotion,
     tick(time, dt = 1000 / 120) { position.value = time; for (const frame of frames) if (frame.active) frame.fn({ timeSincePreviousFrame: dt }); },
+    get shaderCreates() { return shaderCreates; },
+    get motionState() { return shared.find(item => item.value?.floatClock)?.value; },
     get picture() { return shared[0].value; }, get reads() { return reads; }, get pictures() { return pictures; }, get paints() { return paints; },
     get blurFilters() { return blurFilters; },
     get blurFilterDisposals() { return blurFilterDisposals; },
@@ -91,6 +107,9 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
   };
 }
 
+module.exports = { mount, bundle, source };
+
+if (require.main === module) {
 for (const spicy of [true, false]) {
   const current = mount(source, spicy, 100, 100000);
   const baseline = baselineSource && mount(baselineSource, spicy, 100, 100000);
@@ -173,3 +192,5 @@ for (const track of liveCounts.tracks) {
   live.unmount(); old?.unmount();
 }
 console.log('Native glyph idle checks passed: cached work bounds, activation, release, pause/resume, seeks and line-paint invalidation.');
+
+}

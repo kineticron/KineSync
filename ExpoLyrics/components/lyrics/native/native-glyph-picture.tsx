@@ -13,7 +13,8 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
 type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; revealRects: SkRect[] };
-type ReusableGlyphPaints = { paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
+type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
+type ReusableGlyphPaints = { revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
 
 // Glow sigma is animation-derived and continuous. Reuse only bit-exact radii,
 // with a small per-voice LRU so a long song cannot retain an unbounded filter set.
@@ -40,6 +41,31 @@ function getGlowFilter(paints: ReusableGlyphPaints, radius: number) {
   paints.blurRadii.push(radius);
   paints.blurFilters.push(filter);
   return filter;
+}
+
+// White RGB, shared endpoint Y, null positions, Clamp tiling and default
+// matrix/flags are fixed here. Compare every varying input exactly; never quantize animation values.
+const MAX_REVEAL_SHADER_CACHE_ENTRIES = 32;
+function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX: number, bright: number, dark: number) {
+  'worklet';
+  const entries = paints.revealShaders;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (Object.is(entry.x, x) && Object.is(entry.y, y) && Object.is(entry.endX, endX) &&
+        Object.is(entry.bright, bright) && Object.is(entry.dark, dark)) {
+      // Move to MRU without allocating a key, array or cache entry on a hit.
+      for (let j = i; j < entries.length - 1; j++) entries[j] = entries[j + 1];
+      entries[entries.length - 1] = entry;
+      return entry.shader;
+    }
+  }
+  const shader = Skia.Shader.MakeLinearGradient({ x, y }, { x: endX, y },
+    [Skia.Color(`rgba(255,255,255,${bright})`), Skia.Color(`rgba(255,255,255,${dark})`)], null, TileMode.Clamp);
+  // SkShaders are immutable; recorded paints retain native references. Do not
+  // explicitly dispose evicted handles while pictures may still reference them.
+  if (entries.length === MAX_REVEAL_SHADER_CACHE_ENTRIES) entries.shift();
+  entries.push({ x, y, endX, bright, dark, shader });
+  return shader;
 }
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
@@ -193,9 +219,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
         const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
         paint.setAlphaf(1);
-        shader = Skia.Shader.MakeLinearGradient({ x, y: rect.y }, { x: x + length, y: rect.y },
-          [Skia.Color(`rgba(255,255,255,${spicy ? background ? 0.6 : 0.85 : line.bright})`),
-            Skia.Color(`rgba(255,255,255,${spicy ? background ? 0.3 : 0.5 : line.dark})`)], null, TileMode.Clamp);
+        shader = getRevealShader(paints, x, rect.y, x + length,
+          spicy ? background ? 0.6 : 0.85 : line.bright,
+          spicy ? background ? 0.3 : 0.5 : line.dark);
         paint.setShader(shader);
       }
       if (glow > 0.001 && active) {
@@ -266,7 +292,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     const cachedPaints = paints.value;
-    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [] };
+    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
     // Picture recording is synchronous and snapshots paint state. Release the

@@ -38,7 +38,7 @@ vm.runInNewContext(source, { module: moduleObject, exports: moduleObject.exports
       return 'glyph alpha';
     },
     BlendMode: { SrcIn: 5, SrcOver: 3 }, TileMode: { Clamp: 0, Decal: 1 }, ClipOp: { Intersect: 0 } } : {} });
-const makePaints = () => ({ paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [] });
+const makePaints = () => ({ paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] });
 const rect = { x: 0, y: 0, width: 20, height: 24 };
 const word = { word: { text: 'sing', letters: ['s', 'i', 'n', 'g'], start: 0, end: 1000, emphasized: false }, rects: [rect], width: 20, before: 0,
   runs: [[{ glyphs: [42], positions: [{ x: 0, y: 20 }], font: {} }]], clips: [{}], emojiMask: [false] };
