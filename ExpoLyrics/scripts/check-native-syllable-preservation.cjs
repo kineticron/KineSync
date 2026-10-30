@@ -151,4 +151,23 @@ assert.equal(lyricText(cjkSpan.words), '革命道中', 'native chunk merging ret
 assert.equal(cjkSpan.paintWords[0].text, cjkSpan.paintText,
   'native Skia receives the full cross-chunk glyph run while animation retains one timing item');
 
+// Real sourceMetadata translations reach the existing native voice field in
+// both styles without changing/rebuilding the timed lead glyph inputs.
+for (const [isrc, count] of [['US5TA1500050', 54], ['ZZA0P2622376', 42], ['KRMIM2652961', 12]]) {
+  const content = fs.readFileSync(path.join(root, '../DesktopBridge/test/fixtures/lrc-red', `${isrc}.ttml`), 'utf8');
+  const { lyrics } = require('../lib/lyrics-ttml-import').parseTtmlToLyrics(content);
+  const withoutTranslation = lyrics.map(({ translatedText, ...line }) => line);
+  for (const style of ['amll', 'spicy']) {
+    const previous = buildNativeRows(withoutTranslation, style);
+    const rows = buildNativeRows(lyrics, style, false, previous);
+    assert.equal(rows.filter(row => row.lead?.translation).length, count);
+    rows.forEach((row, index) => {
+      if (!row.lead) return;
+      assert.equal(row.lead.translation, lyrics[row.index].translatedText);
+      assert.equal(row.lead.paintWords, previous[index].lead.paintWords,
+        `${isrc}: ${style} translation preserves cached shaping/timing inputs`);
+    });
+  }
+}
+
 console.log('Native syllable preservation checks passed for captured lrc.red/Spicy data, backgrounds, spacing, timing, and shaping continuity.');

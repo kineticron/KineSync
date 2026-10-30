@@ -35,6 +35,7 @@ function load(fetch, mobile) {
     extractLrcRedTtmlMetadata: require("../../ExpoLyrics/lib/lyrics-ttml-import").extractTtmlMetadata,
   });
   if (mobile) {
+    context.CryptoJS = createRequire(path.resolve(src, "../../ExpoLyrics/lib/mobile-lyrics-service.js"))("crypto-js");
     let source = fs.readFileSync(path.resolve(src, "../../ExpoLyrics/lib/mobile-lyrics-service.js"), "utf8");
     source = source.replace(/^import .*;\r?\n/gm, "");
     vm.runInContext(source.slice(0, source.indexOf("export {")), context);
@@ -46,6 +47,91 @@ function load(fetch, mobile) {
   }
   context.track = { ...track };
   return context;
+}
+
+for (const mobile of [false, true]) {
+  const platform = mobile ? "mobile" : "desktop";
+  test(`${platform}: real sourceMetadata translations survive valid or absent recording JSON`, async () => {
+    for (const [id, count, title, artist, duration] of [
+      ["US5TA1500050", 54, "Rewind", "SUNMI", 213480],
+      ["ZZA0P2622376", 42, "seesaw (Feat. IU)", "Crush", 181000],
+      ["KRMIM2652961", 12, "ew", "DPR CREAM", 125000],
+    ]) {
+      const content = fs.readFileSync(path.join(__dirname, `fixtures/lrc-red/${id}.ttml`), "utf8");
+      for (const missingJson of [false, true]) {
+        let ttmlFetches = 0;
+        const context = load(async url => {
+          if (url.endsWith(".json")) return missingJson ? new Response("missing", { status: 404 })
+            : Response.json({ title, duration: duration / 1000 });
+          assert.equal(url, `https://lrc.red/s/${id}.ttml`);
+          ttmlFetches++;
+          return new Response(content);
+        }, mobile);
+        context.track = { trackId: id, isrc: id, title, artist, durationMs: duration };
+        vm.runInContext('var service = createLyricsService()', context);
+        const result = await vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red" })', context);
+        const cached = await vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red" })', context);
+        assert.equal(ttmlFetches, 1, 'Second request uses the source cache');
+        for (const packet of [result, cached, vm.runInContext('service.getCachedLyrics(track.trackId)', context)]) {
+          assert.equal(packet.lyrics.filter(line => line.translatedText).length, count);
+          assert.equal(packet.metadata.ttml.translationTracks[0].language, 'en-US');
+          assert.equal(packet.metadata.ttml.appliedTranslations.length, count);
+        }
+        assert.equal(JSON.stringify(cached.lyrics), JSON.stringify(result.lyrics));
+        assert.equal(result.lyrics.filter(line => line.translatedText).length, count);
+        assert.equal(result.metadata.ttml.content, content);
+        assert.equal(result.metadata.ttml.translationTracks[0].lines.length, count);
+        assert.equal(result.metadata.attribution.source, "lrc-red");
+        assert.equal(result.source.split('|')[0], id === "US5TA1500050" ? "lrc-red-line" : "lrc-red-karaoke");
+        context.metadata = result.metadata;
+        assert.equal(vm.runInContext("mergeLyricsMetadata(metadata).ttml.translationTracks[0].lines.length", context), count);
+      }
+    }
+  });
+
+  test(`${platform}: requested language selects retained source tracks on cache hits; explicit AI still overrides`, async () => {
+    const content = `<tt xmlns:lrc="http://lrc.red/lyric-ttml-internal" lrc:timing="Word"><head><metadata>
+      <sourceMetadata xmlns="http://lrc.red/lyric-ttml-internal"><translations>
+      <translation xml:lang="en" type="subtitle"><text for="A">Hello world</text></translation>
+      <translation xml:lang="es" type="subtitle"><text for="A">Hola mundo</text></translation>
+      </translations></sourceMetadata></metadata></head><body><p lrc:key="A" begin="1" end="9">안녕하세요</p></body></tt>`;
+    let ttmlFetches = 0;
+    const aiLanguages = [];
+    const context = load(async (url, options) => {
+      if (url.includes("generativelanguage.googleapis.com")) {
+        const body = JSON.parse(options.body);
+        const payload = JSON.parse(body.contents[0].parts[0].text);
+        aiLanguages.push(payload.targetLanguage);
+        return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ lineCount: 1,
+          translations: [{ i: 0, t: "Bonjour le monde" }] }) }] } }] });
+      }
+      if (url.endsWith(".json")) return Response.json({});
+      assert.ok(url.endsWith(".ttml"));
+      ttmlFetches++;
+      return new Response(content);
+    }, mobile);
+    context.track = { ...track, trackId: "metadata-language", isrc };
+    vm.runInContext('var service = createLyricsService({ getGeminiApiKey: () => "test-key" })', context);
+    const fetchLanguage = language => {
+      context.language = language;
+      return vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red", translationLanguage: language })', context);
+    };
+    const english = await fetchLanguage("English");
+    assert.equal(english.lyrics[0].translatedText, "Hello world");
+    const spanish = await fetchLanguage("Spanish");
+    assert.equal(spanish.lyrics[0].translatedText, "Hola mundo");
+    const french = await fetchLanguage("French");
+    assert.equal(french.lyrics[0].translatedText, undefined);
+    assert.equal(ttmlFetches, 1, "Language switches use retained tracks without another provider request");
+    assert.deepEqual(aiLanguages, [], "Source translations do not trigger unsolicited AI requests");
+    context.published = spanish;
+    vm.runInContext('service.rememberPublishedLyrics(track.trackId, published)', context);
+    const translated = await vm.runInContext('service.translatePublishedLyrics(track, { translationLanguage: "French" })', context);
+    assert.equal(translated.lyrics[0].translatedText, "Bonjour le monde");
+    assert.deepEqual(aiLanguages, ["French"]);
+    assert.equal(translated.metadata.ttml.translationTracks.length, 2);
+    assert.equal(translated.metadata.translation.provider, "Gemini");
+  });
 }
 
 for (const mobile of [false, true]) {

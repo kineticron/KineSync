@@ -13314,6 +13314,7 @@ function createLyricsService({
   getSpotifyAccessToken = () => "",
   getSpicyLyricsPublishableKey = () => process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
 } = {}) {
+  const { selectTtmlTranslationTracks } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
   const isExpiredSpicyPacket = (packet) => packet?.metadata?.spicyApi && !(Number(packet.metadata.spicyApi.expiresAt) > Date.now());
   const lastDisplayedByTrack = new Map();
   const geminiTranslationCache = new Map();
@@ -13488,9 +13489,9 @@ function createLyricsService({
     }
     return base || null;
   };
-  const getCachedSourceLyricsPacket = (trackId, preferredSource) => {
+  const getCachedSourceLyricsPacket = (trackId, preferredSource, translationLanguage = "English") => {
     const base = getSourceBase(trackId, preferredSource);
-    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, base) : null;
+    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, selectTtmlTranslationTracks(base, translationLanguage)) : null;
   };
 
   const cloneLyricsLinesWithoutTranslations = (lyrics) => {
@@ -13718,7 +13719,7 @@ function createLyricsService({
         activeTrackSourceCache.bySource = sourceRecord.bySource;
       }
       sourceRecord.identity = recordingIdentity;
-      const requestKey = `${cacheKey}|${recordingIdentity}|${normalizedPreferredSource}`;
+      const requestKey = `${cacheKey}|${recordingIdentity}|${normalizedPreferredSource}|${translationLanguage}`;
       if (force || selectionKey !== requestKey) { selectionKey = requestKey; selectionGeneration += 1; }
       const requestGeneration = selectionGeneration;
       const isCurrentSelection = () => selectionGeneration === requestGeneration && selectionKey === requestKey;
@@ -13728,6 +13729,7 @@ function createLyricsService({
         const cachedSourcePacket = getCachedSourceLyricsPacket(
           cacheKey,
           normalizedPreferredSource,
+          translationLanguage,
         );
         if (cachedSourcePacket) {
           console.log(
@@ -13833,6 +13835,7 @@ function createLyricsService({
 
       const registerCandidate = (candidatePacket) => {
         if (!isCurrentSelection()) return false;
+        candidatePacket = selectTtmlTranslationTracks(candidatePacket, translationLanguage);
         const safeCandidate = {
           ...candidatePacket,
           lyrics: Array.isArray(candidatePacket?.lyrics)

@@ -162,7 +162,19 @@ export type LyricsAttributionMetadata = {
 export type LyricsMetadata = {
   spicyApi?: { fetchedAt: number; expiresAt: number };
   /** Original imported XML, retained for lossless TTML export. */
-  ttml?: { content: string };
+  ttml?: {
+    content: string;
+    /** Source subtitles keyed by paragraph lrc:key, including alternate languages. */
+    translationTracks?: Array<{
+      language: string;
+      type: string;
+      automaticallyCreated?: boolean;
+      lines: Array<{ key: string; text: string }>;
+    }>;
+    selectedTranslationTrack?: number;
+    /** Only translations applied from these tracks; inline/enriched text wins. */
+    appliedTranslations?: Array<{ key: string; text: string }>;
+  };
   instrumental?: boolean;
   credits?: LyricsCreditsMetadata;
   attribution?: LyricsAttributionMetadata;
@@ -196,6 +208,8 @@ export type LyricLine = {
   spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
   /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
   spicyLyricsStartTime?: number;
+  /** Stable source paragraph key used only for TTML metadata joins. */
+  ttmlKey?: string;
   translatedText?: string;
   backgroundTranslatedText?: string;
   oppositeAligned?: boolean;

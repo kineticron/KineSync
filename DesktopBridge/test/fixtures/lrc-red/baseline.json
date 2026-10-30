@@ -1,0 +1,47 @@
+{
+  "US5TA1500050": {
+    "lines": 54,
+    "lead": 196,
+    "background": 0,
+    "opposite": 0,
+    "durationMs": 194290,
+    "useKaraokeTiming": false,
+    "lyricsSha256": "14b0588953f4744a071bd9a6330138604f31330aade085a334accf26e8564fb1"
+  },
+  "ZZA0P2622376": {
+    "lines": 42,
+    "lead": 286,
+    "background": 0,
+    "opposite": 6,
+    "durationMs": 164925,
+    "useKaraokeTiming": true,
+    "lyricsSha256": "087168e64d531d2972adb60881ac29a043f8fc56888787dab79ed162ce5f54a4"
+  },
+  "KRMIM2652961": {
+    "lines": 12,
+    "lead": 81,
+    "background": 0,
+    "opposite": 0,
+    "durationMs": 94124,
+    "useKaraokeTiming": true,
+    "lyricsSha256": "6732426758238b5bc877061f787771c68ec747da2269923f9761fd2980320904"
+  },
+  "USUM72601821": {
+    "lines": 53,
+    "lead": 311,
+    "background": 26,
+    "opposite": 0,
+    "durationMs": 192667,
+    "useKaraokeTiming": true,
+    "lyricsSha256": "fded629efc47ec297ea4c8322c00f5f1107650f99e19fe6b9d62db05409d1b62"
+  },
+  "GBUM71805979": {
+    "lines": 22,
+    "lead": 102,
+    "background": 0,
+    "opposite": 0,
+    "durationMs": 117142,
+    "useKaraokeTiming": false,
+    "lyricsSha256": "b428d31b2f70173e9c24d4073b6dcf728fc47553b0dc22864da2296fa5e0d8f5"
+  }
+}

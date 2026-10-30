@@ -2,6 +2,8 @@
 
 const { segmentTimedLine } = require("../../DesktopBridge/src/lyricsLineSegmentation")
 
+const { extractTtmlTranslations, selectTtmlTranslationTracks } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
+
 const ITUNES_NS = "http://itunes.apple.com/lyric-ttml-extensions";
 
 function decodeXmlEntities(value) {
@@ -539,7 +541,7 @@ function leadLyricContent(content) {
   return result + content.slice(cursor);
 }
 
-function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
+function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, paragraphKeys) {
   const lyrics = [];
   const paraRe = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
   let match = paraRe.exec(ttmlContent);
@@ -586,6 +588,8 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries) {
       lineEndTime: lineEnd,
       syllables,
     };
+    const key = paragraphKeys.get(match.index);
+    if (key) line.ttmlKey = key;
     // Apple/AMLL TTML uses v2 for the opposite vocal lane. Background
     // agents belong to their nested spans and must not change the lead lane.
     if (readAttribute(attributes, "ttm:agent").trim() === "v2") {
@@ -617,7 +621,7 @@ function detectKaraokeTiming(ttmlContent) {
   return /<span\b[^>]*\bbegin\s*=/i.test(ttmlContent);
 }
 
-function parseTtmlToLyrics(ttmlContent) {
+function parseTtmlToLyrics(ttmlContent, { translationLanguage = "English" } = {}) {
   const content = String(ttmlContent || "");
   if (!content.trim()) {
     return { lyrics: [], durationMs: 0, useKaraokeTiming: false };
@@ -626,17 +630,19 @@ function parseTtmlToLyrics(ttmlContent) {
   // lrc.red encodes word boundaries in literal whitespace. A pause inside a
   // word must not synthesize a space between adjacent syllable spans.
   const inferTimingBoundaries = !/\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
-  const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries);
+  const translations = extractTtmlTranslations(content);
+  const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries,
+    translations.tracks.length ? translations.paragraphKeys : new Map());
   normalizeImportedLyricsTimestamps(parsed.lyrics);
-  return {
+  return selectTtmlTranslationTracks({
     lyrics: parsed.lyrics,
     durationMs: getLyricTimingExtents(parsed.lyrics).maxEnd || parsed.durationMs,
     useKaraokeTiming,
     metadata: {
-      ttml: { content },
+      ttml: { content, ...(translations.tracks.length ? { translationTracks: translations.tracks } : {}) },
       ...extractTtmlCredits(content),
     },
-  };
+  }, translationLanguage);
 }
 
 function extractTtmlMetadata(ttmlContent) {

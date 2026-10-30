@@ -20,7 +20,8 @@ function generate(input) {
     if (end < 0) end = output.indexOf('\nexport {', start);
     if (end < 0) throw new Error(`Missing end of ${name}`);
     let source = fs.readFileSync(path.join(root, 'DesktopBridge/src/lyrics/parts', name), 'utf8').replace(/^"use strict";\s*/, '').trim();
-    source = source.replaceAll('require("./lyricsAutoPicker")', 'require("../../DesktopBridge/src/lyricsAutoPicker")');
+    source = source.replaceAll('require("./lyricsAutoPicker")', 'require("../../DesktopBridge/src/lyricsAutoPicker")')
+      .replaceAll('require("./lyricsTtmlTranslations")', 'require("../../DesktopBridge/src/lyricsTtmlTranslations")');
     if (name === '07b-service-orchestration.js') {
       source = source.replaceAll('|desktop', '|mobile').replaceAll('desktop-bridge', 'mobile-app').replaceAll('on desktop.', 'on mobile.')
         .replaceAll('require("./lyricsVault")', 'mobileLyricsVaultShim').replaceAll('require("./lyricsTtmlImport")', 'mobileTtmlImportShim')
