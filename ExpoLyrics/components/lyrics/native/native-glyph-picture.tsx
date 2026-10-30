@@ -1,6 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
 import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkImageFilter, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import { needsEmojiMask } from './native-glyph-mask';
 import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
 import { advanceReferenceWordMotion, initialWordSpringState, type WordMotion } from './reference-word-motion';
@@ -40,12 +41,6 @@ function getGlowFilter(paints: ReusableGlyphPaints, radius: number) {
   paints.blurFilters.push(filter);
   return filter;
 }
-
-// SkTypeface exposes no color-font metadata. Classify graphemes once at layout;
-// Unicode properties do not identify the actual fallback font. Include ♡
-// explicitly so mixed heart/text slices use the alpha mask across runtimes.
-const needsEmojiMask = (grapheme: string) => !grapheme.includes('\uFE0E') &&
-  /[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u20E3\u2661]/u.test(grapheme);
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
