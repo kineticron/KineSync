@@ -6,6 +6,7 @@ import { recordTiming, timingNow, type TimingContext } from './timing-diagnostic
 import { logDevelopmentTiming } from './development-timing-log';
 import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
 import { isDealerDeliveryExperimentEnabled, subscribeDealerDeliveryExperiment } from './dealer-delivery-experiment-toggle';
+import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -231,12 +232,14 @@ export class SpotifyDetector {
     // A registration snapshot can predate a Dealer handoff on a different clock.
     // Comparing timestamps across those identities cannot order that race.
     if (timing.origin === 'registration' && this.lastDealerConnection === connection && identityChanged) {
+      this.logDeliveryRejection(s, timing.origin, 'registration-conflicts-with-dealer-identity');
       logDevelopmentTiming('registration-conflict', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
     // Unknown identity is not evidence of a handoff. Keep the known scope and
     // its watermark; only a positive identity change can reset source ordering.
     if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
+      this.logDeliveryRejection(s, timing.origin, 'source-timestamp-older-than-watermark');
       logDevelopmentTiming('stale', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
@@ -258,10 +261,30 @@ export class SpotifyDetector {
     // and handoff guards. A newer Dealer envelope with duplicate player state is
     // useful; duplicate envelope stamps cannot renew freshness in the model.
     if (timing.origin === 'dealer') {
-      if (observation) this.deliveryBaseline.observeDealer(observation);
+      if (observation) {
+        const diagnosticBaseline = this.experimentEnabled ? this.deliveryBaseline.fork() : null;
+        const accepted = this.deliveryBaseline.observeDealer(observation);
+        if (diagnosticBaseline) {
+          const decision = diagnosticBaseline.observeDealerDecision(observation);
+          logDealerDeliveryDecision('dealer-envelope', { ...decision, accepted });
+        }
+      } else if (this.experimentEnabled) {
+        logDealerDeliveryDecision('dealer-envelope', { accepted: false, reason: 'dealer-missing-valid-timestamp-pair', sampleCount: 0 });
+      }
     } else if (timing.origin === 'registration') {
-      s.dealerDeliveryExcessMs = observation
-        ? this.deliveryBaseline.registrationExcess(observation, s.playing) : undefined;
+      if (observation) {
+        const diagnosticBaseline = this.experimentEnabled ? this.deliveryBaseline.fork() : null;
+        s.dealerDeliveryExcessMs = this.deliveryBaseline.registrationExcess(observation, s.playing);
+        if (this.experimentEnabled) {
+          const decision = diagnosticBaseline!.registrationDecision(observation, s.playing);
+          logDealerDeliveryDecision('registration-correction', { ...decision, excessMs: s.dealerDeliveryExcessMs });
+        }
+      } else {
+        s.dealerDeliveryExcessMs = undefined;
+        if (this.experimentEnabled) logDealerDeliveryDecision('registration-correction', {
+          accepted: false, reason: 'registration-missing-valid-timestamp-pair', sampleCount: 0,
+        });
+      }
     }
     // A new connection may confirm identical state once. Within the connection,
     // session-only handoffs must not disappear behind an equal state fingerprint.
@@ -276,6 +299,17 @@ export class SpotifyDetector {
     this.lastDeliveryObservation = s;
     this.callbacks.sample({ ...s, dealerDeliveryExperimentEnabled: this.experimentEnabled });
     return true;
+  }
+  private logDeliveryRejection(sample: Sample, origin: TimingContext['origin'], reason: string) {
+    if (!this.experimentEnabled || (origin !== 'dealer' && origin !== 'registration')) return;
+    const receipt = sample.positionObservedAt;
+    const nowMono = performance.now();
+    logDealerDeliveryDecision(origin === 'dealer' ? 'dealer-envelope' : 'registration-correction', {
+      accepted: false, reason, playerTimestampMs: sample.positionTimestampMs,
+      serverMs: sample.sourceServerTimestampMs, receiptWallMs: receipt?.wallMs,
+      receiptMonotonicMs: receipt?.monotonicMs, nowMono,
+      receiptAgeMs: receipt ? nowMono - receipt.monotonicMs : undefined, sampleCount: 0,
+    });
   }
   private currentDeliveryIdentity(): DeliveryIdentity {
     return { device: this.orderingDeviceId ?? '', session: this.orderingSessionId ?? '',
