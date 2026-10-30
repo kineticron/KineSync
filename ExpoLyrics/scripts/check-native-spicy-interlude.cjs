@@ -109,15 +109,22 @@ function renderOuter() {
 }
 
 const dotElements = renderOuter();
-const firstPaint = dotElements.map(renderDot).map(result => result.opacity);
+const firstResults = dotElements.map(renderDot);
+const firstPaint = firstResults.map(result => result.opacity);
 assert.deepEqual(firstPaint, middle.map(state => state.opacity.p),
   'First recorded native animated styles reflect the mounted playback position without waiting for a frame');
+for (const result of firstResults) {
+  assert.equal(result.callbacks.length, 1, 'Each mounted dot owns one native frame callback');
+  result.callbacks[0]({ timeSincePreviousFrame: 16 });
+}
 
 sharedPosition = { value: 35_000 };
 sharedSeek = { value: 1 };
 const nearEndElements = renderOuter();
-const refreshed = nearEndElements.map(renderDot).map(result => result.opacity);
+const nearEndResults = nearEndElements.map(renderDot);
+const refreshed = nearEndResults.map(result => result.opacity);
 assert.deepEqual(refreshed, nearEnd.map(state => state.opacity.p), 'Seek/refresh reprojects every dot from the new position');
+for (const result of nearEndResults) result.callbacks[0]({ timeSincePreviousFrame: 16 });
 
 sharedPosition = { value: 24_700 }; // backward seek while the renderer stays mounted
 sharedSeek = { value: 2 };
