@@ -670,6 +670,7 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
@@ -686,7 +687,7 @@ async function fetchBestSyncedLyrics(
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
   const attemptOrder = getSourceAttemptOrder(preferredSource, {
-    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken),
+    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function",
     hasSpotifyWebToken:
       Boolean(safeSpotifyWebToken) || Boolean(safeSpotifyAccessToken),
     hasSpotifyTrackId,
@@ -752,6 +753,10 @@ async function fetchBestSyncedLyrics(
   };
 
   const invokeSourceFetcher = async (source, fetcher) => {
+    if (source === "musixmatch" && !safeMusixmatchUserToken && typeof resolveMusixmatchUserToken === "function") {
+      safeMusixmatchUserToken = String((await resolveMusixmatchUserToken()) || "").trim();
+      if (!safeMusixmatchUserToken) return null;
+    }
     const fetchWithCurrentToken = () =>
       fetcher(track, {
         musixmatchUserToken: safeMusixmatchUserToken,

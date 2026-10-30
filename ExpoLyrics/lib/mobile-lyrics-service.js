@@ -5543,6 +5543,8 @@ const MUSIXMATCH_APP_MOBILE_PROFILE = Object.freeze({
   tokenTtlMs: 6 * 60 * 60 * 1000,
   retryMs: 20 * 60 * 1000,
   headers: Object.freeze({
+    "X-User-Agent": "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
+    "X-Cookie": "x-mxm-token-guid=",
     "x-mxm-app-version": "10.1.1",
     "Accept-Language": "en-US,en;q=0.9",
   }),
@@ -9788,7 +9790,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
   const seen = new Set();
   const pushCandidate = (profile, token, tokenSource) => {
     const safeToken = String(token || "").trim();
-    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly$/i.test(safeToken)) {
+    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly/i.test(safeToken)) {
       return;
     }
     const signature = `${profile.appId}|${safeToken}`;
@@ -9827,7 +9829,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
       parsedTokenObject.appId !== MUSIXMATCH_APP_MOBILE_PROFILE.appId ||
       !looksLikeMusixmatchTokenValue(userToken) ||
       /^0+$/.test(userToken) ||
-      /^UpgradeOnly$/i.test(userToken) ||
+      /^UpgradeOnly/i.test(userToken) ||
       !Number.isFinite(acquiredAt) ||
       acquiredAt <= 0 || now - acquiredAt < 0 ||
       now - acquiredAt >= MUSIXMATCH_APP_MOBILE_PROFILE.tokenTtlMs
@@ -9835,7 +9837,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
       return [];
     }
     const profile = buildMusixmatchProfileForAppId(parsedTokenObject.appId);
-    profile.defaultParams = { guid: String(parsedTokenObject.deviceId || "").trim() || crypto.randomUUID() };
+    profile.defaultParams = {};
     pushCandidate(profile, userToken, "typed-cache");
     return resolved;
   }
@@ -10040,6 +10042,10 @@ async function fetchMusixmatchJson(
         crypto.randomUUID(),
       ...params,
     };
+    if (appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId) {
+      delete requestParams.guid;
+      delete requestParams.device_id;
+    }
     try {
       const unsignedUrl = buildMusixmatchUrlWithParams(endpoint, requestParams);
       const requestUrls = shouldSign
@@ -10049,11 +10055,11 @@ async function fetchMusixmatchJson(
         const responseText = await fetchMusixmatchText(requestUrl, {
           timeoutMs,
           headers: {
-            Accept: "application/json,text/plain,*/*",
-            "User-Agent": userAgent,
+            Accept: appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? "application/json" : "application/json,text/plain,*/*",
+            ...(appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? { "X-User-Agent": userAgent } : { "User-Agent": userAgent }),
             ...(clientHeaders || {}),
             ...(appId === "mac-ios-v2.0"
-              ? { "X-Cookie": `x-mxm-token-guid=${requestParams.guid}` }
+              ? { "X-Cookie": "x-mxm-token-guid=" }
               : {}),
             ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
@@ -13014,6 +13020,7 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
@@ -13030,7 +13037,7 @@ async function fetchBestSyncedLyrics(
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
   const attemptOrder = getSourceAttemptOrder(preferredSource, {
-    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken),
+    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function",
     hasSpotifyWebToken:
       Boolean(safeSpotifyWebToken) || Boolean(safeSpotifyAccessToken),
     hasSpotifyTrackId,
@@ -13096,6 +13103,10 @@ async function fetchBestSyncedLyrics(
   };
 
   const invokeSourceFetcher = async (source, fetcher) => {
+    if (source === "musixmatch" && !safeMusixmatchUserToken && typeof resolveMusixmatchUserToken === "function") {
+      safeMusixmatchUserToken = String((await resolveMusixmatchUserToken()) || "").trim();
+      if (!safeMusixmatchUserToken) return null;
+    }
     const fetchWithCurrentToken = () =>
       fetcher(track, {
         musixmatchUserToken: safeMusixmatchUserToken,
@@ -14063,17 +14074,6 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
-      let resolvedMusixmatchUserToken = "";
-      try {
-        resolvedMusixmatchUserToken = String(
-          (typeof getMusixmatchUserToken === "function"
-            ? await getMusixmatchUserToken()
-            : "") || "",
-        ).trim();
-      } catch {
-        // Automatic Musixmatch token provisioning failed; other sources remain available.
-      }
-
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
       // Credential/catalog setup can outlive a force refresh or source/track
       // switch. It must not replace the newer run's in-flight registry entry.
@@ -14099,7 +14099,9 @@ function createLyricsService({
           onAutoSettled: finishFlight,
           onSourceCached: (candidate, source) => sourceCache.set(source || candidate?.source, candidate),
           sourceCache,
-          musixmatchUserToken: resolvedMusixmatchUserToken,
+          // Provision only inside the Musixmatch task: a vault/final cache hit
+          // needs no issuance, and other providers never wait on token.get.
+          resolveMusixmatchUserToken: getMusixmatchUserToken,
           refreshMusixmatchUserToken,
           spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
           spotifyAccessToken: resolvedSpotifyAccessToken,

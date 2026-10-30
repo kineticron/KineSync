@@ -58,6 +58,8 @@ function createMusixmatchTokenManager({
     const rejectedHash = rejected ? crypto.createHash("sha256").update(rejected).digest("hex") : "";
 
     if (state.userToken && (!valid || (force && state.userToken === rejected))) clearToken();
+    // An old request's rejection must not discard or remint a newer valid token.
+    if (force && valid && rejected && state.userToken !== rejected) return Promise.resolve(serialize(state));
     if (!force && valid) return Promise.resolve(serialize(state));
     if (state.blockedUntil > currentTime) return Promise.resolve("");
     if (force) {
@@ -81,8 +83,10 @@ function createMusixmatchTokenManager({
           const response = await fetchImpl(`${profile.baseUrl}/token.get?app_id=${encodeURIComponent(profile.appId)}`, {
             method: "GET",
             headers: {
-              Accept: "application/json", "User-Agent": profile.userAgent,
-              ...profile.headers, "X-Cookie": `x-mxm-token-guid=${deviceId}`,
+              Accept: "application/json",
+              ...(profile.appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? {} : { "User-Agent": profile.userAgent }),
+              ...profile.headers,
+              "X-Cookie": profile.appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? "x-mxm-token-guid=" : `x-mxm-token-guid=${deviceId}`,
             },
             signal: AbortSignal.timeout(12_000),
           });

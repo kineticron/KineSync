@@ -61,7 +61,10 @@ test("actual mobile token module binds issuance and reuse to the generated share
     assert.equal(new URL(url).origin, "https://apic-appmobile.musixmatch.com");
     assert.equal(new URL(url).searchParams.get("app_id"), "mac-ios-v2.0");
     assert.equal(options.headers["x-mxm-app-version"], "10.1.1");
-    assert.match(options.headers["X-Cookie"], /^x-mxm-token-guid=.+/);
+    assert.equal(options.headers["X-Cookie"], "x-mxm-token-guid=");
+    assert.equal(options.headers["X-User-Agent"], "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0");
+    assert.equal(options.headers["User-Agent"], undefined);
+    assert.equal(new URL(url).searchParams.has("guid"), false);
     return response();
   });
   const token = JSON.parse(await api.resolveMobileMusixmatchToken());
@@ -76,6 +79,7 @@ test("actual mobile token module invalidates legacy, sentinel, wrong-profile and
   for (const patch of [
     { musixmatchAnonymousProfileId: "" }, { musixmatchAnonymousUserToken: "0".repeat(54) },
     { musixmatchAnonymousUserToken: "UpgradeOnly" }, { musixmatchAnonymousProfileId: "other-profile" },
+    { musixmatchAnonymousUserToken: "UpgradeOnlyUpgradeOnlyUpgradeOnly" },
     { musixmatchAnonymousFetchedAt: 1 }, { musixmatchAnonymousFetchedAt: timestamp + 1 },
   ]) {
     const { api, state } = load({ ...valid(), ...patch, musixmatchAnonymousLastAttemptAt: 0 }, async () => response());
@@ -130,4 +134,10 @@ test("actual mobile manual override never triggers anonymous issuance", async ()
   const { api } = load({ musixmatchUserToken: "manual-token" }, async () => { throw new Error("unexpected issuance"); });
   assert.equal(await api.resolveMobileMusixmatchToken(), "manual-token");
   assert.equal(await api.refreshMobileMusixmatchToken("", oldToken), "manual-token");
+});
+
+test("mobile preserves an unexpired newer credential when an old request is rejected", async () => {
+  const {api}=load(valid(),async()=>{throw Error("must reuse valid current token without minting");});
+  const existing=await api.resolveMobileMusixmatchToken();
+  assert.equal(await api.refreshMobileMusixmatchToken("","older-rejected-credential"),existing);
 });

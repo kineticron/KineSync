@@ -210,4 +210,21 @@ for (const mobile of [false, true]) {
     late.resolve(packet('spicy-lyrics-syllable','community',{source:'spicy_lyrics'}));await flush();
     service.clearCache();
   });
+
+  test(`${label}: token provisioning never blocks other providers or runs on final/vault cache hits`,async()=>{
+    const h=load(mobile),token=deferred();let requests=0;
+    const service=h.service({getMusixmatchUserToken:()=>{requests++;return token.promise;}});
+    h.fetchers['lrc-red']=async()=>packet('lrc-red-line');
+    h.fetchers.musixmatch=async()=>packet('musixmatch-richsync');
+    const initial=await service.fetchSyncedLyrics(baseTrack);
+    assert.equal(initial.source,'lrc-red-line|'+(mobile?'mobile':'desktop'));
+    assert.equal(requests,1,'token request starts independently of the usable initial lyric');
+    token.resolve('fixture-token');await flush();
+    assert.equal(service.getCachedSourceLyricsPacket(baseTrack.trackId,'auto').source,'musixmatch-richsync|'+(mobile?'mobile':'desktop'));
+    await service.fetchSyncedLyrics(baseTrack);assert.equal(requests,1,'final cache reuse needs no token resolution');
+    h.fetchers['local-vault']=async()=>packet('local-vault-karaoke');
+    await service.fetchSyncedLyrics({...baseTrack,trackId:'vault'});
+    assert.equal(requests,1,'vault override needs no token resolution');
+    service.clearCache();
+  });
 }

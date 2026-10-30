@@ -1,3 +1,4 @@
+/* global __dirname */
 "use strict";
 
 const fs = require("node:fs");
@@ -175,6 +176,22 @@ function preservationFingerprint(mobile) {
   edits.push({ start: scoring.start + call.start, end: scoring.start + call.end, text: "__musixmatch_renewal_call__" });
   let unowned = mobile;
   for (const edit of edits.sort((a, b) => b.start - a.start)) unowned = unowned.slice(0, edit.start) + edit.text + unowned.slice(edit.end);
+  // Narrow additional ownership for deferred token provisioning only. Match
+  // exact old/new snippets, not the whole picker or orchestration declaration.
+  // Any change to pending/finalization/guard logic still changes this fingerprint.
+  const deferredTokenSnippets = [
+    "      let resolvedMusixmatchUserToken = \"\";\n      try {\n        resolvedMusixmatchUserToken = String(\n          (typeof getMusixmatchUserToken === \"function\"\n            ? await getMusixmatchUserToken()\n            : \"\") || \"\",\n        ).trim();\n      } catch {\n        // Automatic Musixmatch token provisioning failed; other sources remain available.\n      }\n\n",
+    "    if (source === \"musixmatch\" && !safeMusixmatchUserToken && typeof resolveMusixmatchUserToken === \"function\") {\n      safeMusixmatchUserToken = String((await resolveMusixmatchUserToken()) || \"\").trim();\n      if (!safeMusixmatchUserToken) return null;\n    }\n",
+    "    resolveMusixmatchUserToken = null,\n",
+    "          musixmatchUserToken: resolvedMusixmatchUserToken,\n",
+    "          resolveMusixmatchUserToken: getMusixmatchUserToken,\n",
+    "          // Provision only inside the Musixmatch task: a vault/final cache hit\n          // needs no issuance, and other providers never wait on token.get.\n"
+];
+  for (const snippet of deferredTokenSnippets) unowned = unowned.replace(snippet, "");
+  unowned = unowned.replace(
+    'hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function"',
+    'hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken)',
+  );
   // New standalone declarations can add blank separators. Preserve every other source line exactly,
   // including comments, string literals, adapters, and the rest of invokeSourceFetcher.
   const lines = unowned.split(/\r?\n/).filter((line) => !/^\s*$/.test(line)).join("\n");

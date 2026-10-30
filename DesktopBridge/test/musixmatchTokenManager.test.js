@@ -254,3 +254,27 @@ test("captcha response enters cooldown and does not cause repeated forced token 
   assert.equal(await manager.refreshToken("another-rejected-token-123456"), "");
   assert.equal(fetchCount, 1);
 });
+
+test("canonical issuance uses exact Spicetify app headers and persists sparse reusable credentials", async () => {
+  const settingsStore=createSettingsStore();let calls=0;const now=100_000_000;
+  const options={settingsStore,now:()=>now,logger:{warn(){}},fetchImpl:async(url,options)=>{
+    calls++;
+    assert.equal(new URL(url).origin,"https://apic-appmobile.musixmatch.com");
+    assert.equal(new URL(url).search,"?app_id=mac-ios-v2.0");
+    assert.equal(options.headers["X-Cookie"],"x-mxm-token-guid=");
+    assert.equal(options.headers["X-User-Agent"],"Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0");
+    assert.equal(options.headers["User-Agent"],undefined);
+    return successfulTokenFetch("reusable-profile-token")();
+  }};
+  const manager=createMusixmatchTokenManager(options),token=await manager.getToken();
+  for(let n=0;n<100;n++)assert.equal(await manager.getToken(),token);
+  const restarted=createMusixmatchTokenManager({...options,now:()=>now+MUSIXMATCH_TOKEN_TTL_MS-1});
+  assert.equal(await restarted.getToken(),token);
+  assert.equal(await restarted.refreshToken("older-rejected-credential"),token,"old rejection must not revoke newer valid credential");
+  assert.equal(calls,1);
+});
+
+test("repeated and prefixed UpgradeOnly sentinels are never credentials",()=>{
+  const {isUsableMusixmatchToken}=require('../src/musixmatchProfile');
+  for(const token of ['', '0'.repeat(54),'UpgradeOnly','UpgradeOnlyUpgradeOnlyUpgradeOnly','upgradeonly-sentinel'])assert.equal(isUsableMusixmatchToken(token),false);
+});

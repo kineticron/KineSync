@@ -1,3 +1,4 @@
+/* global __dirname */
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -27,11 +28,20 @@ test("Musixmatch sync updates only declared source functions and constants", () 
   assert.equal(output.slice(adapterStart, adapterStart + adapter.length), adapter, "mobile request adapter stays byte-for-byte unchanged");
 });
 
-test("non-Musixmatch code and mobile adapters preserve the development 680da25 baseline", () => {
+test("non-Musixmatch code and mobile adapters preserve the approved picker bc57fe5 baseline", () => {
   const mobile = fs.readFileSync(mobilePath, "utf8");
-  // Computed from git show 680da25:ExpoLyrics/lib/mobile-lyrics-service.js after masking
-  // only the scoped declarations and refreshMusixmatchUserToken(...) call expression.
-  assert.equal(preservationFingerprint(mobile), "abda96e64140e6fa4eb71446c1b5d6488d2fce8046f1aed28eb686e762be8459");
+  // Computed from git show bc57fe5:ExpoLyrics/lib/mobile-lyrics-service.js after masking
+  // only the scoped declarations, renewal call and exact deferred token setup snippets.
+  assert.equal(preservationFingerprint(mobile), "08b4c45c3b062aa0e42768a44ecf4ed7291e11623ce73a6a70cfc2a7e540bb79");
   const changedUnrelatedBranch = mobile.replace('source !== "musixmatch"', 'source !== "unrelated-source"');
   assert.notEqual(preservationFingerprint(changedUnrelatedBranch), preservationFingerprint(mobile));
+  for (const [before, after] of [
+    ['onAutoSettled: finishFlight', 'onAutoSettled: () => {}'],
+    ['sourceCache?.set?.("auto", best)', 'sourceCache?.set?.("wrong", best)'],
+    ['if (!isCurrentSelection() || sourceCachesByTrack.get(cacheKey) !== sourceRecord)', 'if (false)'],
+  ]) {
+    const changed = mobile.replace(before, after);
+    assert.notEqual(changed, mobile, 'negative fixture must actually change its picker guard');
+    assert.notEqual(preservationFingerprint(changed), preservationFingerprint(mobile), 'deferred token exclusions must not mask picker/cache/flight guard drift');
+  }
 });

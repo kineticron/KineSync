@@ -771,17 +771,6 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
-      let resolvedMusixmatchUserToken = "";
-      try {
-        resolvedMusixmatchUserToken = String(
-          (typeof getMusixmatchUserToken === "function"
-            ? await getMusixmatchUserToken()
-            : "") || "",
-        ).trim();
-      } catch {
-        // Automatic Musixmatch token provisioning failed; other sources remain available.
-      }
-
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
       // Credential/catalog setup can outlive a force refresh or source/track
       // switch. It must not replace the newer run's in-flight registry entry.
@@ -807,7 +796,9 @@ function createLyricsService({
           onAutoSettled: finishFlight,
           onSourceCached: (candidate, source) => sourceCache.set(source || candidate?.source, candidate),
           sourceCache,
-          musixmatchUserToken: resolvedMusixmatchUserToken,
+          // Provision only inside the Musixmatch task: a vault/final cache hit
+          // needs no issuance, and other providers never wait on token.get.
+          resolveMusixmatchUserToken: getMusixmatchUserToken,
           refreshMusixmatchUserToken,
           spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
           spotifyAccessToken: resolvedSpotifyAccessToken,

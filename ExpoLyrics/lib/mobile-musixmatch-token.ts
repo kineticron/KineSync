@@ -55,6 +55,7 @@ async function requestAnonymousToken({ manualOverride = "", force = false, rejec
       const parsed = JSON.parse(rejected);
       if (parsed && typeof parsed === "object") rejected = String(parsed.userToken || "").trim();
     } catch {}
+    if (force && validCache(settings) && rejected && settings.musixmatchAnonymousUserToken !== rejected) return serialize(settings);
     if (settings.musixmatchAnonymousUserToken && (!validCache(settings) ||
         (force && settings.musixmatchAnonymousUserToken === rejected))) {
       await saveMobileLyricsSettings({
@@ -79,8 +80,7 @@ async function requestAnonymousToken({ manualOverride = "", force = false, rejec
     try {
       const response = await fetch(`${PROFILE.baseUrl}/token.get?app_id=${encodeURIComponent(PROFILE.appId)}`, {
         method: "GET", signal: controller.signal,
-        headers: { Accept: "application/json", "User-Agent": PROFILE.userAgent,
-          ...PROFILE.headers, "X-Cookie": `x-mxm-token-guid=${deviceId}` },
+        headers: { Accept: "application/json", ...PROFILE.headers },
       });
       const payload = await response.json().catch(() => null);
       const status = Number(payload?.message?.header?.status_code || 0);

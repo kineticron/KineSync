@@ -437,7 +437,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
   const seen = new Set();
   const pushCandidate = (profile, token, tokenSource) => {
     const safeToken = String(token || "").trim();
-    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly$/i.test(safeToken)) {
+    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly/i.test(safeToken)) {
       return;
     }
     const signature = `${profile.appId}|${safeToken}`;
@@ -476,7 +476,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
       parsedTokenObject.appId !== MUSIXMATCH_APP_MOBILE_PROFILE.appId ||
       !looksLikeMusixmatchTokenValue(userToken) ||
       /^0+$/.test(userToken) ||
-      /^UpgradeOnly$/i.test(userToken) ||
+      /^UpgradeOnly/i.test(userToken) ||
       !Number.isFinite(acquiredAt) ||
       acquiredAt <= 0 || now - acquiredAt < 0 ||
       now - acquiredAt >= MUSIXMATCH_APP_MOBILE_PROFILE.tokenTtlMs
@@ -484,7 +484,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
       return [];
     }
     const profile = buildMusixmatchProfileForAppId(parsedTokenObject.appId);
-    profile.defaultParams = { guid: String(parsedTokenObject.deviceId || "").trim() || crypto.randomUUID() };
+    profile.defaultParams = {};
     pushCandidate(profile, userToken, "typed-cache");
     return resolved;
   }
@@ -689,6 +689,10 @@ async function fetchMusixmatchJson(
         crypto.randomUUID(),
       ...params,
     };
+    if (appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId) {
+      delete requestParams.guid;
+      delete requestParams.device_id;
+    }
     try {
       const unsignedUrl = buildMusixmatchUrlWithParams(endpoint, requestParams);
       const requestUrls = shouldSign
@@ -698,11 +702,11 @@ async function fetchMusixmatchJson(
         const responseText = await fetchMusixmatchText(requestUrl, {
           timeoutMs,
           headers: {
-            Accept: "application/json,text/plain,*/*",
-            "User-Agent": userAgent,
+            Accept: appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? "application/json" : "application/json,text/plain,*/*",
+            ...(appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? { "X-User-Agent": userAgent } : { "User-Agent": userAgent }),
             ...(clientHeaders || {}),
             ...(appId === "mac-ios-v2.0"
-              ? { "X-Cookie": `x-mxm-token-guid=${requestParams.guid}` }
+              ? { "X-Cookie": "x-mxm-token-guid=" }
               : {}),
             ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },

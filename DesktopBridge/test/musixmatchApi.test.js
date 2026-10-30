@@ -60,6 +60,24 @@ for (const mobile of [false, true]) {
     assert.equal(context.resolveMusixmatchClientCandidates(typedToken("m".repeat(40), Date.now() - 7 * 60 * 60 * 1000)).length, 0);
     assert.equal(context.resolveMusixmatchClientCandidates(JSON.stringify({ profileId: "wrong", appId: "mac-ios-v2.0", userToken: "m".repeat(40), acquiredAt: Date.now() })).length, 0);
     assert.equal(context.resolveMusixmatchClientCandidates(typedToken("0".repeat(54))).length, 0);
+    assert.equal(context.resolveMusixmatchClientCandidates(typedToken("UpgradeOnly".repeat(4))).length, 0);
+    assert.equal(context.resolveMusixmatchClientCandidates("UpgradeOnly".repeat(4)).length, 0);
+  });
+
+  test(`${label}: lyric calls retain appmobile X-User-Agent, empty X-Cookie and no GUID`, async () => {
+    const context=load(async(rawUrl,options)=>{
+      const url=new URL(rawUrl);
+      assert.equal(url.origin,"https://apic-appmobile.musixmatch.com");
+      assert.equal(url.searchParams.get("app_id"),"mac-ios-v2.0");
+      assert.equal(url.searchParams.has("guid"),false);
+      assert.equal(url.searchParams.has("device_id"),false);
+      assert.equal(options.headers["X-User-Agent"],"Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0");
+      assert.equal(options.headers["X-Cookie"],"x-mxm-token-guid=");
+      assert.equal(options.headers["User-Agent"],undefined);
+      return jsonResponse(api(200));
+    },mobile);
+    const profile=context.resolveMusixmatchClientCandidates(typedToken())[0];
+    await context.fetchMusixmatchJson("/track.richsync.get",{commontrack_id:47012188,guid:"must-not-send"},profile);
   });
 
   test(`${label}: 401 renew and captcha stay distinct and stop repeated macro requests`, async () => {
