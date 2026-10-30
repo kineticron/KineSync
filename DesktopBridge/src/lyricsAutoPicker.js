@@ -24,7 +24,7 @@ function pickAutoLyrics(lrcRed, spicy) {
   const a = lrcRed.lyrics
   const b = spicy.lyrics
   if (a.length !== b.length) return choose(spicy, "line-count-mismatch")
-  const normalize = text => String(text || "").normalize("NFKC").replace(/\s/gu, "")
+  const normalize = text => String(text || "").normalize("NFKC").toLowerCase().replace(/[\s\p{P}]/gu, "")
   const fullText = (lines, background) => normalize(lines.map(line => {
     const parts = background ? line.backgroundSyllables : line.syllables
     return Array.isArray(parts) && parts.length

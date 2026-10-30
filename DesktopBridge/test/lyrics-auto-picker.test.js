@@ -8,6 +8,7 @@ const vm = require("node:vm")
 const { createRequire } = require("node:module")
 const { pickAutoLyrics } = require("../src/lyricsAutoPicker")
 const fixtures = require("./fixtures/lrc-red-auto.json")
+const seesawFixture = require("./fixtures/seesaw-picker.json")
 
 function packet(fixture) {
   return {
@@ -56,6 +57,53 @@ test("picker respects inclusive timing tolerance, NFKC, whitespace, background a
   assert.equal(pickAutoLyrics(lrc, spicy).result, lrc)
   spicy.metadata.attribution.source = "spl"
   assert.equal(pickAutoLyrics(lrc, spicy).reason, "spicy-community")
+})
+
+test("live seesaw sample chooses equivalent lrc.red over Apple Music Spicy and leaves community Spicy absolute", () => {
+  const packet = (fixture) => ({
+    source: fixture.source,
+    metadata: fixture.metadata || {},
+    lyrics: fixture.lyrics.map(line => ({
+      lineStartTime: line.lineStartTime,
+      lineEndTime: line.lineEndTime,
+      text: line.text,
+      syllables: [{ text: line.text }],
+    })),
+  })
+  const lrc = packet(seesawFixture.lrc)
+  const appleMusicSpicy = packet(seesawFixture.spicy)
+  const decision = pickAutoLyrics(lrc, appleMusicSpicy)
+  assert.equal(decision.reason, "equivalent-lrc")
+  assert.equal(decision.result, lrc)
+  appleMusicSpicy.metadata.attribution.source = "spicy_lyrics"
+  assert.equal(pickAutoLyrics(lrc, appleMusicSpicy).reason, "spicy-community")
+  assert.equal(pickAutoLyrics(lrc, appleMusicSpicy).result, appleMusicSpicy)
+})
+
+test("equivalence normalizes case and punctuation, ignores auxiliary romanization, and requires same-script lead text", () => {
+  const { lrc, spicy } = equivalent()
+  lrc.lyrics[0].syllables = [{ text: "ＦＯＯ, Bar!" }]
+  spicy.lyrics[0].syllables = [{ text: "foo bar?" }]
+  lrc.lyrics[0].syllables[0].romanization = "auxiliary one"
+  spicy.lyrics[0].syllables[0].romanization = "auxiliary two"
+  lrc.lyrics[0].romanization = "unrelated auxiliary form"
+  spicy.lyrics[0].romanization = "another auxiliary form"
+  lrc.lyrics[0].translations = ["translation one"]
+  spicy.lyrics[0].translations = ["translation two"]
+  assert.equal(pickAutoLyrics(lrc, spicy).reason, "equivalent-lrc")
+  spicy.lyrics[0].syllables = [{ text: "푸 바" }]
+  assert.equal(pickAutoLyrics(lrc, spicy).reason, "lead-text-mismatch", "main lyric text must never be transliterated across scripts")
+})
+
+test("background vocals compare across split storage while missing or changed text still rejects equivalence", () => {
+  const { lrc, spicy } = equivalent()
+  lrc.lyrics[0].backgroundSyllables = [{ text: "(oh" }, { text: "!)" }]
+  spicy.lyrics[0].backgroundText = "(OH!)"
+  assert.equal(pickAutoLyrics(lrc, spicy).reason, "equivalent-lrc")
+  delete spicy.lyrics[0].backgroundText
+  assert.equal(pickAutoLyrics(lrc, spicy).reason, "background-text-mismatch")
+  spicy.lyrics[0].backgroundSyllables = [{ text: "(no)" }]
+  assert.equal(pickAutoLyrics(lrc, spicy).reason, "background-text-mismatch")
 })
 
 test("picker handles absent, static and invalid timing results without mutation", () => {

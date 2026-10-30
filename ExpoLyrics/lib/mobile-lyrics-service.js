@@ -8314,12 +8314,6 @@ async function fetchFromSpicyLyrics(
       continue;
     }
 
-    // Only community syncs come from Spicy. Other recordings use lrc.red
-    // and the normal provider fallbacks, without retaining Spicy's copies.
-    if (extractSpicyPayloadMetadata(spicyLyricsData).attribution.provider !== "Spicy Lyrics") {
-      continue;
-    }
-
     const parseStartedAt = Date.now();
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,

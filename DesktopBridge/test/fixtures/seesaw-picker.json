@@ -1,0 +1,59 @@
+{
+  "note": "Four representative lines copied from the provided parsed payload; no keys, credentials, full song, or auxiliary translations included.",
+  "lrc": {
+    "source": "lrc-red-karaoke",
+    "lyrics": [
+      {
+        "lineStartTime": 11077,
+        "lineEndTime": 13170,
+        "text": "뒤죽박죽"
+      },
+      {
+        "lineStartTime": 13170,
+        "lineEndTime": 16440,
+        "text": "깍지 놓친 손은"
+      },
+      {
+        "lineStartTime": 32441,
+        "lineEndTime": 38594,
+        "text": "Now I see, I'm in love 들켰어 전부 다"
+      },
+      {
+        "lineStartTime": 38676,
+        "lineEndTime": 43484,
+        "text": "내 심장이 춤추는 걸 보니까"
+      }
+    ]
+  },
+  "spicy": {
+    "source": "spicy-lyrics-syllable",
+    "metadata": {
+      "attribution": {
+        "source": "apple_music",
+        "provider": "Spicy Lyrics"
+      }
+    },
+    "lyrics": [
+      {
+        "lineStartTime": 11057,
+        "lineEndTime": 13190,
+        "text": "뒤죽박죽"
+      },
+      {
+        "lineStartTime": 13190,
+        "lineEndTime": 16420,
+        "text": "깍지 놓친 손은"
+      },
+      {
+        "lineStartTime": 32421,
+        "lineEndTime": 38574,
+        "text": "Now I see, I'm in love 들켰어 전부 다"
+      },
+      {
+        "lineStartTime": 38656,
+        "lineEndTime": 43464,
+        "text": "내 심장이 춤추는 걸 보니까"
+      }
+    ]
+  }
+}

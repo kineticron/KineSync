@@ -88,13 +88,37 @@ for (const mobile of [false, true]) {
     assert.equal(vm.runInContext('expiryService.getMusixmatchRuntimeStatus().publishedLyricsCacheEntries', context), 0);
   });
 
-  test(`${mobile ? "mobile" : "desktop"} rejects non-community replies instead of caching commercial Spicy copies`, async () => {
+  test(`${mobile ? "mobile" : "desktop"} accepts non-community provider payloads returned by Spicy Lyrics`, async () => {
     for (const source of ['apple_music', 'spotify', 'unknown']) {
       const context = load(async () => new Response(JSON.stringify({ Body: { ...body, source }, Status: 200 })), mobile);
       context.track = { spotifyTrackId: trackId, title: 'Hello', artist: 'Artist', durationMs: 4000 };
       context.key = key;
-      await assert.rejects(vm.runInContext('fetchFromSpicyLyrics(track, { spicyLyricsPublishableKey: key })', context), error => error.sourceFailureReason?.endsWith('-no-match'));
+      const result = await vm.runInContext('fetchFromSpicyLyrics(track, { spicyLyricsPublishableKey: key })', context);
+      assert.equal(result.lyrics[0].syllables[0].text, 'Hello');
+      assert.equal(result.metadata.attribution.provider, source === 'apple_music' ? 'Apple Music' : source === 'spotify' ? 'Spotify' : 'Unknown');
     }
+  });
+
+  test(`${mobile ? "mobile" : "desktop"} manual Spicy pipeline publishes Apple Music lyrics without an lrc.red override`, async () => {
+    const calls = [];
+    const packets = [];
+    const context = load(async (url, options) => {
+      calls.push({ url, options });
+      return new Response(JSON.stringify({ Body: { ...body, source: 'apple_music' }, Status: 200 }));
+    }, mobile);
+    context.track = { trackId: 'manual-apple-song', spotifyTrackId: trackId, title: 'Hello', artist: 'Artist', durationMs: 4000 };
+    context.key = key;
+    context.onPacket = packet => packets.push(packet);
+    const result = await vm.runInContext(`
+      const appleManualService = createLyricsService({ getSpicyLyricsPublishableKey: () => key });
+      appleManualService.fetchSyncedLyrics(track, { preferredSource: 'spicy-lyrics', onSyncedLyrics: onPacket });
+    `, context);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, `https://api.spicylyrics.org/v1/lyrics/${trackId}`);
+    assert.match(result.source, /^spicy-lyrics-syllable/);
+    assert.equal(result.lyrics[0].syllables[0].text, 'Hello');
+    assert(packets.length > 0, 'manual source must publish through the actual service pipeline');
+    assert(packets.every(packet => packet.source.startsWith('spicy-lyrics-syllable') && packet.lyrics[0].syllables[0].text === 'Hello'));
   });
 
   test(`${mobile ? "mobile" : "desktop"} uses official GET with only publishable authentication`, async () => {
