@@ -30,6 +30,8 @@
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
     "test:lyrics": "node ./scripts/check-lyrics-packet-transition.cjs && node ./scripts/check-native-inactive-work.cjs && node ./scripts/check-native-glyph-idle.cjs && node ./scripts/check-spicy-attribution.cjs && node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-playback-previous.cjs && node ./scripts/check-energy-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
+    "sync:musixmatch": "node ./scripts/sync-musixmatch-core.cjs",
+    "test:musixmatch-sync": "node --test ./scripts/test-musixmatch-sync.cjs",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
     "test:vault": "node ./scripts/check-vault-sqlite.cjs && node ./scripts/check-vault-policy.cjs && node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs",
     "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs"

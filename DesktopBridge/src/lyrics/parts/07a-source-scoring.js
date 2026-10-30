@@ -770,7 +770,7 @@ async function fetchBestSyncedLyrics(
         throw error;
       }
       const refreshedToken = String(
-        (await refreshMusixmatchUserToken()) || "",
+        (await refreshMusixmatchUserToken(safeMusixmatchUserToken)) || "",
       ).trim();
       if (!refreshedToken || refreshedToken === safeMusixmatchUserToken) {
         throw error;
