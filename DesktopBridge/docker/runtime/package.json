@@ -6,7 +6,7 @@
   "dependencies": {
     "@homebridge/dbus-native": "0.7.9",
     "@ngrok/ngrok": "1.7.0",
-    "electron": "44.7.0",
+    "electron": "44.9.1",
     "electron-squirrel-startup": "1.0.1",
     "electron-store": "11.0.2",
     "qrcode": "1.5.4",
