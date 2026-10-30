@@ -25,6 +25,8 @@ export type PlaybackPacket = {
   isPlaying: boolean;
   timestamp: number;
   capturedAtMs?: number;
+  /** Dev-only Spotify detector experiment reanchor; never set by normal packets. */
+  nativeDeliveryExperimentReanchor?: boolean;
   timing?: BridgeTimingDiagnostics;
 };
 

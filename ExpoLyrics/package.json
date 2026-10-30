@@ -22,6 +22,7 @@
     "test:native-renderer-ready": "node ./scripts/check-native-renderer-ready-refresh.cjs",
     "test:native-spicy-interlude": "node ./scripts/check-native-spicy-interlude.cjs",
     "test:native-translation-toggle": "node ./scripts/check-native-translation-toggle.cjs",
+    "test:spotify-delivery-experiment": "node ./scripts/check-spotify-dealer-delivery-experiment.mjs",
     "test:android-compat": "node ./scripts/check-android-desugaring.cjs",
     "test:security": "node ./scripts/security-check.js",
     "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-spotify-seek.cjs && node ./scripts/check-tour-tracker.cjs",

@@ -5,7 +5,7 @@ import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, tim
   type ClockStamp, type TimingAnchor, type TimingContext } from './timing-diagnostics';
 import { developmentTimingActive, developmentTimingAnchor, logDevelopmentTiming, type DevelopmentTimingAnchor } from './development-timing-log';
 
-export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
+export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; dealerDeliveryExcessMs?: number; dealerDeliveryExperimentEnabled?: boolean; dealerDeliveryExperimentReanchor?: boolean; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
 
 /** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
  * without rounding through a JS Number or depending on native BigInt support. */
@@ -55,7 +55,10 @@ export function projectedPosition(sample: Sample, now: number, nowMonotonic = pe
   const elapsed = clusterAge === undefined ? Math.max(0, now - basis)
     : clusterAge + Math.max(0, sample.positionObservedAt
       ? nowMonotonic - sample.positionObservedAt.monotonicMs : now - sample.receivedAt);
-  const position = sample.positionMs + (sample.playing ? elapsed : 0);
+  const deliveryExcess = clusterAge !== undefined && sample.playing && sample.dealerDeliveryExperimentEnabled &&
+    Number.isFinite(sample.dealerDeliveryExcessMs) && sample.dealerDeliveryExcessMs! >= 0 && sample.dealerDeliveryExcessMs! <= 500
+    ? sample.dealerDeliveryExcessMs! : 0;
+  const position = sample.positionMs + (sample.playing ? elapsed + deliveryExcess : 0);
   const result = sample.durationMs > 0 ? Math.min(position, sample.durationMs) : position;
   logDevelopmentTiming('normalize', sample, { wallMs: now, monotonicMs: nowMonotonic, elapsedMs: elapsed,
     positionMs: result, clusterAgeMs: clusterAge });

@@ -4,6 +4,8 @@ import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observer
   sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
 import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
 import { logDevelopmentTiming } from './development-timing-log';
+import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
+import { isDealerDeliveryExperimentEnabled, subscribeDealerDeliveryExperiment } from './dealer-delivery-experiment-toggle';
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -46,7 +48,24 @@ export class SpotifyDetector {
   private metadataCache = new Map<string, TrackMetadata>();
   private metadataPending = new Map<string, Promise<TrackMetadata>>();
   private commandPending = false;
+  private deliveryBaseline = new DealerDeliveryBaseline();
+  private deliveryRouteEpoch = 0;
+  private deliveryAuthEpoch = 0;
+  private lastDeliveryObservation: Sample | null = null;
+  private experimentEnabled = isDealerDeliveryExperimentEnabled();
+  private removeExperimentListener: (() => void) | null = null;
   constructor(private callbacks: Callbacks) {}
+
+  private listenForExperimentToggle() {
+    if (this.removeExperimentListener) return;
+    this.experimentEnabled = isDealerDeliveryExperimentEnabled();
+    this.removeExperimentListener = subscribeDealerDeliveryExperiment(enabled => {
+      this.experimentEnabled = enabled;
+      if (!this.enabled || !this.lastDeliveryObservation) return;
+      this.callbacks.sample({ ...this.lastDeliveryObservation, dealerDeliveryExperimentEnabled: enabled,
+        dealerDeliveryExperimentReanchor: true });
+    });
+  }
 
   capture(raw: string, origin: string): boolean {
     try {
@@ -57,6 +76,7 @@ export class SpotifyDetector {
       }
       if (e.type === 'credentials' && e.authenticated === true && typeof e.token === 'string' && e.token.length > 0 && e.token.length < 4096) {
         const changed = e.token !== this.token;
+        if (changed) { this.deliveryAuthEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
         this.token = e.token;
         if (typeof e.clientToken === 'string' && e.clientToken.length < 4096) this.clientToken = e.clientToken;
         let expiresAt = Number(e.expiresAt) || 0;
@@ -70,9 +90,13 @@ export class SpotifyDetector {
       }
       if (e.type === 'observerEndpoint' && typeof e.url === 'string') {
         const route = observerEndpoint(e.url, this.deviceId);
-        if (route) { this.route = route; this.connectIfReady(); return true; }
+        if (route) {
+          if (this.route !== route) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
+          this.route = route; this.connectIfReady(); return true;
+        }
       }
       if (e.type === 'socket' && typeof e.url === 'string' && spotifyHost(e.url, true) && /(^|\.)[^.]*dealer[^.]*\./i.test(new URL(e.url).hostname)) {
+        if (this.dealer !== e.url) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
         this.dealer = e.url; this.connectIfReady(); return true;
       }
     } catch { /* Ignore untrusted/malformed bridge data. */ }
@@ -81,24 +105,29 @@ export class SpotifyDetector {
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
     if (enabled) {
+      this.listenForExperimentToggle();
       // Returning from suspension reprojects the last authoritative anchor.
       if (this.lastSample) {
         recordTiming('foreground-replay', this.lastSample.timingProvenance);
         logDevelopmentTiming('foreground-replay', this.lastSample);
         // Keep legacy fallback behavior; immutable provenance retains original receipt.
-        this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now() });
+        this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now(),
+          dealerDeliveryExperimentEnabled: this.experimentEnabled });
       }
       this.connectIfReady();
     } else this.disconnect();
   }
   refresh() {
+    this.deliveryBaseline.preserveForExplicitRefresh(performance.now(), this.currentDeliveryIdentity());
     this.blocked = false;
     this.resetOrdering(); this.reconnects = 0;
-    this.disconnect(); this.connectIfReady();
+    this.disconnect(true); this.connectIfReady();
   }
   clear() {
     this.enabled = false; this.disconnect(); this.token = ''; this.clientToken = '';
     this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
+    this.deliveryBaseline.clear(); this.lastDeliveryObservation = null;
+    this.removeExperimentListener?.(); this.removeExperimentListener = null;
     this.resetOrdering();
     this.blocked = false;
     this.metadataCache.clear(); this.metadataPending.clear();
@@ -164,8 +193,9 @@ export class SpotifyDetector {
       return new Uint8Array(bytes);
     } finally { clearTimeout(timeout); this.requests.delete(controller); }
   }
-  private disconnect() {
+  private disconnect(preserveDeliveryBaseline = false) {
     this.generation++;
+    if (!preserveDeliveryBaseline) this.deliveryBaseline.clear();
     this.controller?.abort(); this.controller = null;
     for (const controller of this.requests) controller.abort();
     this.requests.clear(); this.metadataPending.clear();
@@ -178,6 +208,7 @@ export class SpotifyDetector {
   }
   private needSession(message: string) {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
+    this.deliveryAuthEpoch++; this.lastDeliveryObservation = null;
     this.callbacks.status(message); this.callbacks.sessionNeeded();
   }
   private resetOrdering() {
@@ -209,11 +240,29 @@ export class SpotifyDetector {
       logDevelopmentTiming('stale', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
-    if (identityChanged) { this.lastSourceTimestamp = 0; this.fingerprint = ''; }
+    if (identityChanged) {
+      this.lastSourceTimestamp = 0; this.fingerprint = '';
+      this.deliveryBaseline.clear();
+    }
     if (deviceChanged) this.orderingSessionId = undefined;
     if (device) this.orderingDeviceId = device;
     if (session) this.orderingSessionId = session;
     if (timing.origin === 'dealer') this.lastDealerConnection = connection;
+    const deliveryIdentity: DeliveryIdentity = { device: device ?? '', session: session ?? '',
+      routeEpoch: this.deliveryRouteEpoch, authEpoch: this.deliveryAuthEpoch };
+    const observation = s.sourceServerTimestampMs !== undefined && s.positionTimestampMs !== undefined && s.positionObservedAt
+      ? { serverMs: s.sourceServerTimestampMs, playerTimestampMs: s.positionTimestampMs,
+          receipt: s.positionObservedAt, nowMono: performance.now(), identity: deliveryIdentity }
+      : null;
+    // The baseline is trained only by a fresh Dealer sample after source ordering
+    // and handoff guards. A newer Dealer envelope with duplicate player state is
+    // useful; duplicate envelope stamps cannot renew freshness in the model.
+    if (timing.origin === 'dealer') {
+      if (observation) this.deliveryBaseline.observeDealer(observation);
+    } else if (timing.origin === 'registration') {
+      s.dealerDeliveryExcessMs = observation
+        ? this.deliveryBaseline.registrationExcess(observation, s.playing) : undefined;
+    }
     // A new connection may confirm identical state once. Within the connection,
     // session-only handoffs must not disappear behind an equal state fingerprint.
     const key = JSON.stringify([connection, this.orderingDeviceId, this.orderingSessionId,
@@ -224,8 +273,13 @@ export class SpotifyDetector {
     this.lastSample = s; this.reconnects = 0;
     recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
     logDevelopmentTiming('accepted', s);
-    this.callbacks.sample(s);
+    this.lastDeliveryObservation = s;
+    this.callbacks.sample({ ...s, dealerDeliveryExperimentEnabled: this.experimentEnabled });
     return true;
+  }
+  private currentDeliveryIdentity(): DeliveryIdentity {
+    return { device: this.orderingDeviceId ?? '', session: this.orderingSessionId ?? '',
+      routeEpoch: this.deliveryRouteEpoch, authEpoch: this.deliveryAuthEpoch };
   }
   private connectIfReady() {
     if (!this.enabled || this.blocked || this.socket || this.reconnect) return;

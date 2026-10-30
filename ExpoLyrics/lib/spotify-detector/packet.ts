@@ -12,6 +12,7 @@ export function detectorPacket(sample: Sample, now = Date.now(), nowMonotonic = 
     title: sample.title, artist: sample.artist, album: sample.album,
     artworkUrl: sample.artworkUrl, durationMs: sample.durationMs,
     positionMs, isPlaying: sample.playing, timestamp: now, capturedAtMs: now,
+    ...(sample.dealerDeliveryExperimentReanchor ? { nativeDeliveryExperimentReanchor: true } : {}),
     timing: { anchorPositionMs: positionMs, projectedPositionMs: positionMs,
       isPlaying: sample.playing, nativeExtrapolationEnabled: true },
   };

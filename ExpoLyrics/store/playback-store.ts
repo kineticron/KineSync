@@ -312,10 +312,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const seekDetected =
       !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
     const playStateChanged = prev.isPlaying !== packet.isPlaying;
+    const forceExperimentReanchor = typeof __DEV__ !== 'undefined' && __DEV__ &&
+      packet.nativeDeliveryExperimentReanchor === true;
     // Keep a stable render anchor through ordinary source/transport jitter.
     // Restarting every token's UI animation for a few milliseconds of noise
     // produces visible bumps, even when the source is otherwise in sync.
-    const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
+    const preserveAnchor = !forceExperimentReanchor && !trackChanged && !playStateChanged && packet.isPlaying &&
       Math.abs(projected - correctedPosition) <= 80;
     recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
       projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
