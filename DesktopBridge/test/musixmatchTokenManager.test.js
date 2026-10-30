@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   ANONYMOUS_TOKEN_RETRY_MS,
+  MUSIXMATCH_TOKEN_TTL_MS,
   createMusixmatchTokenManager,
 } = require("../src/musixmatchTokenManager");
 
@@ -92,9 +93,7 @@ test("anonymous token is acquired, tagged with its app id, persisted, and reused
     ],
   });
 
-  const expected = JSON.stringify({
-    "android-player-v1.0": "anonymous-token-value",
-  });
+  const expected = JSON.stringify({ profileId: "android-player-v1.0@example.test", appId: "android-player-v1.0", userToken: "anonymous-token-value", acquiredAt: 123456 });
   assert.equal(await manager.getToken(), expected);
   assert.equal(await manager.getToken(), expected);
   assert.equal(fetchCount, 1);
@@ -109,6 +108,7 @@ test("anonymous token is acquired, tagged with its app id, persisted, and reused
     deviceId: "stable-device-id",
     fetchedAt: 123_456,
     lastAttemptAt: 123_456,
+    profileId: "android-player-v1.0@example.test",
   });
 });
 
@@ -162,7 +162,7 @@ test("refresh does not replace a manual override", async () => {
   assert.equal(await manager.refreshToken(), "manual-token");
 });
 
-test("clearing a manual override falls back to the persisted anonymous token", async () => {
+test("clearing a manual override invalidates legacy untyped cached tokens", async () => {
   const settingsStore = createSettingsStore({
     manualToken: "manual-token",
     anonymousState: {
@@ -182,8 +182,42 @@ test("clearing a manual override falls back to the persisted anonymous token", a
 
   assert.equal(await manager.getToken(), "manual-token");
   settingsStore.setMusixmatchUserToken("");
-  assert.equal(
-    await manager.getToken(),
-    JSON.stringify({ "android-player-v1.0": "anonymous-token" }),
-  );
+  assert.equal(await manager.getToken(), "");
+});
+
+test("placeholder tokens are rejected, and valid profile tokens expire after six hours", async () => {
+  let currentTime = 2_000_000;
+  const settingsStore = createSettingsStore();
+  let values = ["0".repeat(54), "UpgradeOnly", "valid-token"];
+  let fetchCount = 0;
+  const manager = createMusixmatchTokenManager({
+    settingsStore, now: () => currentTime, logger: { warn() {} },
+    profiles: ["one", "two", "three"].map(host => ({ appId: "mac-ios-v2.0", profileId: "mac-ios-v2.0@apic-appmobile", baseUrl: `https://${host}.test/ws/1.1`, userAgent: "test", headers: {} })),
+    fetchImpl: async () => { fetchCount++; return successfulTokenFetch(values.shift())(); },
+  });
+  assert.equal(JSON.parse(await manager.getToken()).userToken, "valid-token");
+  assert.equal(fetchCount, 3);
+  currentTime += MUSIXMATCH_TOKEN_TTL_MS + 1;
+  values = ["fresh-token"];
+  assert.equal(JSON.parse(await manager.getToken()).userToken, "fresh-token");
+  assert.equal(fetchCount, 4);
+});
+
+test("forced renewal bypasses cooldown once and concurrent callers share it", async () => {
+  const settingsStore = createSettingsStore();
+  let resolveFetch;
+  let fetchCount = 0;
+  const manager = createMusixmatchTokenManager({
+    settingsStore, now: () => 9_000_000, logger: { warn() {} },
+    profiles: [{ appId: "mac-ios-v2.0", profileId: "mac-ios-v2.0@apic-appmobile", baseUrl: "https://example.test/ws/1.1", userAgent: "test", headers: {} }],
+    fetchImpl: () => { fetchCount++; return new Promise(resolve => { resolveFetch = resolve; }); },
+  });
+  const first = manager.refreshToken();
+  const second = manager.refreshToken();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCount, 1);
+  resolveFetch(await successfulTokenFetch("renewed-token")());
+  assert.equal(JSON.parse(await first).userToken, "renewed-token");
+  assert.equal(await second, await first);
+  assert.equal(fetchCount, 1);
 });

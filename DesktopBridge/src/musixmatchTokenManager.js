@@ -3,34 +3,31 @@
 const crypto = require("node:crypto");
 
 const ANONYMOUS_TOKEN_RETRY_MS = 20 * 60 * 1000;
+const MUSIXMATCH_TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
+const MUSIXMATCH_PROFILE_ID = "mac-ios-v2.0@apic-appmobile";
 const TOKEN_ENDPOINT_PROFILES = [
   {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic-desktop.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
     appId: "mac-ios-v2.0",
+    profileId: MUSIXMATCH_PROFILE_ID,
     baseUrl: "https://apic-appmobile.musixmatch.com/ws/1.1",
     userAgent:
       "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
     headers: {
       "X-Cookie": "x-mxm-token-guid=",
+      "x-mxm-token-guid": "",
       "x-mxm-app-version": "10.1.1",
       "Accept-Language": "en-US,en;q=0.9",
     },
   },
 ];
 
-function buildStoredToken(appId, userToken) {
-  return JSON.stringify({ [appId]: userToken });
+function buildStoredToken(appId, userToken, profileId = MUSIXMATCH_PROFILE_ID, acquiredAt = 0) {
+  return JSON.stringify({ profileId, appId, userToken, acquiredAt });
+}
+
+function isUsableMusixmatchToken(value) {
+  const token = String(value || "").trim();
+  return Boolean(token) && !/^0+$/.test(token) && !/^UpgradeOnly$/i.test(token);
 }
 
 function createMusixmatchTokenManager({
@@ -49,6 +46,9 @@ function createMusixmatchTokenManager({
   }
 
   let inFlightRequest = null;
+  const primaryProfile = profiles[0] || {};
+  const primaryProfileId = primaryProfile.profileId ||
+    `${primaryProfile.appId || ""}@${new URL(primaryProfile.baseUrl || "https://invalid").hostname}`;
 
   const getManualToken = () =>
     String(settingsStore.getMusixmatchUserToken() || "").trim();
@@ -59,6 +59,7 @@ function createMusixmatchTokenManager({
     deviceId: "",
     fetchedAt: 0,
     lastAttemptAt: 0,
+    profileId: "",
     ...(settingsStore.getMusixmatchAnonymousTokenState?.() || {}),
   });
 
@@ -74,10 +75,10 @@ function createMusixmatchTokenManager({
 
   const getStoredAnonymousToken = () => {
     const state = readAnonymousState();
-    if (!state.userToken || !state.appId) {
+    if (!isUsableMusixmatchToken(state.userToken) || !state.appId) {
       return "";
     }
-    return buildStoredToken(state.appId, state.userToken);
+    return buildStoredToken(state.appId, state.userToken, state.profileId, state.fetchedAt);
   };
 
   const requestAnonymousToken = async ({ force = false } = {}) => {
@@ -86,14 +87,26 @@ function createMusixmatchTokenManager({
       return manualToken;
     }
 
-    const storedToken = getStoredAnonymousToken();
-    if (storedToken && !force) {
+    let storedToken = getStoredAnonymousToken();
+    const state = readAnonymousState();
+    const validStored = Boolean(
+      storedToken && state.profileId === primaryProfileId &&
+      state.appId === primaryProfile.appId && state.fetchedAt > 0 &&
+      now() - state.fetchedAt >= 0 && now() - state.fetchedAt < MUSIXMATCH_TOKEN_TTL_MS
+    );
+    if (storedToken && !validStored) {
+      settingsStore.setMusixmatchAnonymousTokenState({
+        userToken: "", appId: "", fetchedAt: 0, profileId: "",
+      });
+      storedToken = "";
+    }
+    if (validStored && !force) {
       return storedToken;
     }
 
-    const state = readAnonymousState();
     const currentTime = now();
     if (
+      !force &&
       state.lastAttemptAt &&
       currentTime - state.lastAttemptAt < ANONYMOUS_TOKEN_RETRY_MS
     ) {
@@ -142,7 +155,7 @@ function createMusixmatchTokenManager({
           const userToken = String(
             payload?.message?.body?.user_token || "",
           ).trim();
-          if (statusCode !== 200 || !userToken) {
+          if (statusCode !== 200 || !isUsableMusixmatchToken(userToken)) {
             lastError = new Error(
               `Musixmatch token endpoint returned status ${statusCode || "unknown"}.`,
             );
@@ -151,11 +164,12 @@ function createMusixmatchTokenManager({
           settingsStore.setMusixmatchAnonymousTokenState({
             userToken,
             appId: profile.appId,
+            profileId: profile.profileId || `${profile.appId}@${new URL(profile.baseUrl).hostname}`,
             deviceId,
             fetchedAt: currentTime,
             lastAttemptAt: currentTime,
           });
-          return buildStoredToken(profile.appId, userToken);
+          return buildStoredToken(profile.appId, userToken, profile.profileId || primaryProfileId, currentTime);
         } catch (error) {
           lastError = error;
         }
@@ -209,7 +223,12 @@ function createMusixmatchTokenManager({
       const manualToken = getManualToken();
       const anonymousState = readAnonymousState();
       const automaticConfigured = Boolean(
-        anonymousState.userToken && anonymousState.appId,
+        isUsableMusixmatchToken(anonymousState.userToken) &&
+        anonymousState.appId === primaryProfile.appId &&
+        anonymousState.profileId === primaryProfileId &&
+        anonymousState.fetchedAt > 0 &&
+        now() - anonymousState.fetchedAt >= 0 &&
+        now() - anonymousState.fetchedAt < MUSIXMATCH_TOKEN_TTL_MS,
       );
       const mode = manualToken
         ? "manual-override"
@@ -228,7 +247,10 @@ function createMusixmatchTokenManager({
 
 module.exports = {
   ANONYMOUS_TOKEN_RETRY_MS,
+  MUSIXMATCH_TOKEN_TTL_MS,
+  MUSIXMATCH_PROFILE_ID,
   TOKEN_ENDPOINT_PROFILES,
   buildStoredToken,
+  isUsableMusixmatchToken,
   createMusixmatchTokenManager,
 };

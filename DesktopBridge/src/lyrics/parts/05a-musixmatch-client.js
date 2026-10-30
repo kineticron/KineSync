@@ -177,10 +177,12 @@ function buildMusixmatchProfileForAppId(appId) {
       existingLower.includes("ipad");
     return {
       appId: existing.appId,
+      profileId: existing.profileId || "",
       tokenKey: existing.tokenKey,
       userAgent: existing.userAgent,
       userLanguage: existing.userLanguage,
       cookieHeader: existing.cookieHeader,
+      headers: { ...(existing.headers || {}) },
       baseUrls: Array.isArray(existing.baseUrls)
         ? [...existing.baseUrls]
         : [...MUSIXMATCH_DEFAULT_BASE_URLS],
@@ -226,10 +228,12 @@ function buildMusixmatchProfileForAppId(appId) {
 
   return {
     appId: normalizedAppId,
+    profileId: template.profileId || "",
     tokenKey: normalizedAppId,
     userAgent: template.userAgent,
     userLanguage: template.userLanguage,
     cookieHeader: template.cookieHeader,
+    headers: { ...(template.headers || {}) },
     baseUrls: Array.isArray(template.baseUrls)
       ? [...template.baseUrls]
       : [...MUSIXMATCH_DEFAULT_BASE_URLS],
@@ -453,6 +457,14 @@ function resolveMusixmatchClientCandidates(rawToken) {
       entries.push({ key: safeKey, token: safeToken });
     };
 
+    if (
+      parsedObject.profileId === "mac-ios-v2.0@apic-appmobile" &&
+      parsedObject.appId === "mac-ios-v2.0" &&
+      parsedObject.acquiredAt > 0
+    ) {
+      addEntry(parsedObject.appId, parsedObject.userToken);
+    }
+
     for (const key of MUSIXMATCH_TOKEN_PRIORITY_KEYS) {
       addEntry(key, findFirstNestedStringByKey(parsedObject, key));
     }
@@ -597,6 +609,7 @@ async function fetchMusixmatchJson(
     userAgent = "KineSyncDesktopBridge/1.0",
     userLanguage = "en",
     cookieHeader = "",
+    headers: clientHeaders = {},
     baseUrls = MUSIXMATCH_DEFAULT_BASE_URLS,
     defaultParams = {},
     requireSignature = true,
@@ -608,7 +621,8 @@ async function fetchMusixmatchJson(
       : MUSIXMATCH_DEFAULT_BASE_URLS
   ).map((baseUrl) => `${baseUrl}${path}`);
   let lastError = null;
-  const signatureSecret = requireSignature
+  const shouldSign = requireSignature && appId !== "mac-ios-v2.0";
+  const signatureSecret = shouldSign
     ? await getMusixmatchSignatureSecret()
     : "";
 
@@ -628,7 +642,7 @@ async function fetchMusixmatchJson(
     };
     try {
       const unsignedUrl = buildMusixmatchUrlWithParams(endpoint, requestParams);
-      const requestUrls = requireSignature
+      const requestUrls = shouldSign
         ? [appendMusixmatchSignature(unsignedUrl, signatureSecret), unsignedUrl]
         : [unsignedUrl];
       for (const requestUrl of requestUrls) {
@@ -637,6 +651,10 @@ async function fetchMusixmatchJson(
           headers: {
             Accept: "application/json,text/plain,*/*",
             "User-Agent": userAgent,
+            ...(clientHeaders || {}),
+            ...(appId === "mac-ios-v2.0"
+              ? { "X-Cookie": `x-mxm-token-guid=${requestParams.guid}` }
+              : {}),
             ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
         });
@@ -657,6 +675,20 @@ async function fetchMusixmatchJson(
         return payload;
       }
     } catch (error) {
+      if (error?.httpStatus) {
+        const errorPayload = parseJsonLenient(error.responseText || "");
+        const header = errorPayload?.message?.header || errorPayload?.header || {};
+        const hint = String(header.hint || "").trim();
+        const endpointError = new Error(
+          `Musixmatch ${path.slice(1)} failed with HTTP ${error.httpStatus}${hint ? ` (${hint})` : ""}.`,
+        );
+        endpointError.name = "MusixmatchEndpointError";
+        endpointError.httpStatus = error.httpStatus;
+        endpointError.apiStatus = Number(header.status_code || 0);
+        endpointError.endpoint = path;
+        lastError = endpointError;
+        continue;
+      }
       lastError = error;
     }
   }

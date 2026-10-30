@@ -302,6 +302,7 @@ function createBridgeSettingsStore({ app }) {
         deviceId: settings.musixmatchAnonymousDeviceId,
         fetchedAt: settings.musixmatchAnonymousFetchedAt,
         lastAttemptAt: settings.musixmatchAnonymousLastAttemptAt,
+        profileId: settings.musixmatchAnonymousProfileId,
       };
     },
     getSpotifyWebToken() {
@@ -369,6 +370,9 @@ function createBridgeSettingsStore({ app }) {
           "musixmatchAnonymousLastAttemptAt",
           sanitizeTimestamp(state.lastAttemptAt),
         );
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "profileId")) {
+        store.set("musixmatchAnonymousProfileId", String(state.profileId || "").trim());
       }
       return this.getMusixmatchAnonymousTokenState();
     },
