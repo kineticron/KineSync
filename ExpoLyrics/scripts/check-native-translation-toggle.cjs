@@ -12,10 +12,10 @@ const currentCode = bundle(fs.readFileSync(filename, 'utf8'));
 const baselineIndex = process.argv.indexOf('--baseline');
 const baselineCode = baselineIndex < 0 ? null : bundle(fs.readFileSync(process.argv[baselineIndex + 1], 'utf8'));
 
-function createVoiceHarness(code, spicy) {
+function createVoiceHarness(code, spicy, layouts = {}) {
   const hookSlots = [];
   let hookCursor = 0;
-  const counters = { mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
+  const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
     translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
   const fonts = { name: 'test-fonts' };
   const react = {
@@ -39,11 +39,13 @@ function createVoiceHarness(code, spicy) {
   const makeParagraph = initialText => {
     let text = initialText;
     return { addText(value) { text += value; return this; }, pushStyle() { return this; }, pop() { return this; }, build() {
+      counters.paragraphBuilds++;
+      if (text === '0 ') counters.spacingProbeBuilds++;
       if (/translation/u.test(text)) counters.translationParagraphBuilds++;
       else counters.mainParagraphBuilds++;
       return { text, layout() { counters[/translation/u.test(text) ? 'translationParagraphLayouts' : 'mainParagraphLayouts']++; },
         getHeight: () => /translation/u.test(text) ? 18 : 42,
-        getRectsForRange(start, end) { return [{ x: start * 8, y: 0, width: (end - start) * 8, height: 24 }]; } };
+        getRectsForRange(start, end) { counters.rectQueries++; return layouts.rectsForRange?.(start, end) ?? [{ x: start * 8, y: 0, width: (end - start) * 8, height: 24 }]; } };
     } };
   };
   const skia = { ParagraphBuilder: { Make: () => makeParagraph('') }, Color: color => color };
@@ -57,18 +59,18 @@ function createVoiceHarness(code, spicy) {
       useAnimatedReaction() {}, useAnimatedStyle: () => ({}), useDerivedValue: callback => ({ value: callback() }),
       useSharedValue: value => react.useMemo(() => ({ value }), []), withTiming: value => value },
     './native-glyph-model': {},
-    './reference-motion': { amllEmphasis: () => ({ scale: 1, x: 0, y: 0, glow: 0, radius: 0 }), amllFloat: () => 0, clamp01: value => value },
-    './use-reference-word-motion': { useReferenceWordMotion: () => ({ value: {} }) },
+    './reference-motion': layouts.motion ?? { amllEmphasis: () => ({ scale: 1, x: 0, y: 0, glow: 0, radius: 0 }), amllFloat: () => 0, clamp01: value => value },
+    './use-reference-word-motion': layouts.wordMotion ?? { useReferenceWordMotion: () => ({ value: {} }) },
     './native-glyph-picture': { NativeGlyphPicture, shapeGlyphWords(_paragraph, words, useSpicy) {
       counters.glyphShapePasses++;
       if (useSpicy) counters.spicyGlyphPictures += words.reduce((sum, word) => sum + (word.word.emphasized ? word.letters.length : 1), 0);
-      return words.map(word => ({ word: word.word, rects: word.rects, letters: word.letters }));
+      return words.map(word => ({ ...word }));
     } },
-    './spicy-native-layout': { wrapSpicyText: (text, words) => ({ text, words }) },
-    './spicy-text-policy': { spicyIsRtl: () => false },
-    './native-glyph-layout': { amllRevealStart: () => 0 },
+    './spicy-native-layout': layouts.spicy ?? { wrapSpicyText: (text, words) => ({ text, words }) },
+    './spicy-text-policy': layouts.textPolicy ?? { spicyIsRtl: () => false },
+    './native-glyph-layout': layouts.glyphLayout ?? { amllRevealStart: () => 0 },
     './native-lyrics-fonts': { NativeLyricsFontContext: {} },
-    './amll-native-layout': { balanceAmllText: (text, words) => ({ text, words }) },
+    './amll-native-layout': layouts.amll ?? { balanceAmllText: (text, words) => ({ text, words }) },
     'react/jsx-runtime': { jsx(type, props, key) { return { type, props: { ...props, ...(key === undefined ? {} : { key }) } }; },
       jsxs(type, props, key) { return { type, props: { ...props, ...(key === undefined ? {} : { key }) } }; } },
   };

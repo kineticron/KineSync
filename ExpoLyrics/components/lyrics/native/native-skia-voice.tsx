@@ -176,7 +176,9 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     const words = paintWords.map(word => {
       const rects = paragraph.getRectsForRange(word.offset, word.offset + (spicy ? word.text.length + Number(!!word.gapAfter) : word.text.trimEnd().length));
       let offset = word.offset;
-      const letters = word.letters.map(letter => { const start = offset; offset += letter.length; return paragraph.getRectsForRange(start, offset); });
+      // Only emphasized words draw independent letter slices. Range queries
+      // cross into SkParagraph; ordinary syllables already have their full rects.
+      const letters = word.emphasized ? word.letters.map(letter => { const start = offset; offset += letter.length; return paragraph.getRectsForRange(start, offset); }) : [];
       const wordWidth = rects.reduce((sum, r) => sum + r.width, 0);
       const shapedWord = { word, rects, letters, width: wordWidth, before };
       before += wordWidth;
