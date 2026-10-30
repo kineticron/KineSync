@@ -362,6 +362,7 @@ assert.equal(registrationLog.rawExcessMs, 40);
 assert.equal(registrationLog.frozenExcessMs, 40);
 assert.equal(registrationLog.baselineOffsetMs, 0);
 assert.equal(registrationLog.cutoffsMs.MAX_CORRECTION_MS, 500);
+assert.equal(registrationLog.cutoffsMs.CLOCK_DRIFT_TOLERANCE_MS, 10);
 assert(!JSON.stringify(registrationLog).includes('synthetic-device'));
 assert(!JSON.stringify(registrationLog).includes('synthetic-session'));
 assert(!JSON.stringify(registrationLog).includes('spotify:track:'));
