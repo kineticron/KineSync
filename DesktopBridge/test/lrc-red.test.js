@@ -115,14 +115,14 @@ for (const mobile of [false, true]) {
     assert.equal(await vm.runInContext("fetchFromLrcRed(track)", miss), null);
   });
 
-  test(`${platform}: TTML survives missing JSON metadata and Deezer supplies ISRC when lrc.red search misses`, async () => {
+  test(`${platform}: TTML survives missing JSON metadata and Deezer resolves a track without an ISRC`, async () => {
     const calls = [];
-    const crushTrack = { title: "seesaw (Feat. IU)", artist: "Crush", durationMs: 203000,
+    const crushTrack = { title: "seesaw (Feat. IU)", artist: "Crush", durationMs: 181000,
       spotifyTrackId: "3lTdjfpGVeYLeHfrczXw1a" };
     const context = load(async url => {
       calls.push(url);
       if (url.includes("api.deezer.com/search")) return Response.json({ data: [
-        { isrc: "ZZA0P2622376", title: crushTrack.title, artist: { name: "Crush" }, duration: 203 },
+        { isrc: "ZZA0P2622376", title: crushTrack.title, artist: { name: "Crush" }, duration: 181 },
       ] });
       if (url.includes("search.json")) return Response.json({ hits: [] });
       if (url.endsWith(".json")) return new Response("missing", { status: 404 });
@@ -132,11 +132,31 @@ for (const mobile of [false, true]) {
     context.track = crushTrack;
     const result = await vm.runInContext("fetchFromLrcRed(track)", context);
     assert.equal(result?.source, "lrc-red-karaoke");
-    assert.equal(result?.lyrics[0].syllables.map(s => s.text).join(""), "Seesaw again");
+    assert.equal(result?.lyrics.length, 42);
+    assert.equal(result?.lyrics.at(-1).lineEndTime, 164925);
     assert(calls.includes("https://lrc.red/s/ZZA0P2622376.json"));
     assert(calls.includes("https://lrc.red/s/ZZA0P2622376.ttml"));
     assert(!calls.some(url => url.includes("search.json")), "successful Deezer match should bypass empty lrc.red search");
     assert.equal(result.metadata.attribution.url, "https://lrc.red/s/ZZA0P2622376");
+
+    const rejectsTtml = async content => {
+      const mismatch = load(async url => {
+        if (url.includes("api.deezer.com")) return Response.json({ data: [] });
+        if (url.includes("search.json")) return Response.json({ hits: [] });
+        if (url.endsWith(".json")) return new Response("missing", { status: 404 });
+        return new Response(content);
+      }, mobile);
+      mismatch.track = { ...crushTrack, isrc: "ZZA0P2622376" };
+      return vm.runInContext("fetchFromLrcRed(track)", mismatch);
+    };
+    assert.equal(await rejectsTtml(crushSeesawTtml.replace("<head>", "<head><ttm:title>Different Song</ttm:title>")), null,
+      "TTML title mismatch must be rejected");
+    assert.equal(await rejectsTtml(crushSeesawTtml.replace("<head>", "<head><ttm:agent><ttm:name>Different Artist</ttm:name></ttm:agent>")), null,
+      "TTML artist mismatch must be rejected");
+    assert.equal(await rejectsTtml(crushSeesawTtml.replaceAll("2:44.925", "3:20.000")), null,
+      "TTML timing substantially beyond the real 181-second recording must be rejected");
+    assert.equal(await rejectsTtml("<html>not a TTML document</html>"), null,
+      "malformed TTML must be rejected");
   });
 
   for (const example of [
