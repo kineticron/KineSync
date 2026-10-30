@@ -118,7 +118,7 @@ const modules = {
   '@/lib/lyrics-timing': { detectLyricsTimingMode: () => 'synced' },
   '@/lib/lyrics-layout': { getAutoScrollTargetRange: () => null, getBackgroundActiveLines: () => [], getLyricTimingIndex: () => ({}),
     getPlaybackWindowState: () => ({ visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 }) },
-  './native-lyrics-model': { buildNativeRows: () => [{ key: 'row', line: {}, backgrounds: [], index: 0 }], nativeFollowIndex: (_rows, index) => index },
+  './native-lyrics-model': { buildNativeRows: () => [{ key: 'row', line: {}, backgrounds: [], index: 0 }], nativeFollowIndex: (_rows, index) => index, nativeScrollSourceKey: () => 'mock-source' },
   './native-lyric-row': { NativeLyricRowView: 'NativeLyricRowView' },
   './use-native-lyrics-clock': { useNativeLyricsClock: () => ({ position: { value: 0 }, running: false, seekVersion: 0 }) },
   './native-lyrics-fonts': { NativeLyricsFontContext: { Provider: 'Provider' }, useNativeLyricsFonts: () => undefined },

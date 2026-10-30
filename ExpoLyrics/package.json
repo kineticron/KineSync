@@ -34,7 +34,8 @@
     "test:musixmatch-sync": "node --test ./scripts/test-musixmatch-sync.cjs",
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
     "test:vault": "node ./scripts/check-vault-sqlite.cjs && node ./scripts/check-vault-policy.cjs && node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs",
-    "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs"
+    "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs",
+    "test:native-translation-incremental": "node ./scripts/check-native-translation-toggle.cjs && node ./scripts/check-native-translation-incremental.cjs && node ./scripts/check-native-translation-scroll.cjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",

@@ -1,4 +1,4 @@
-import React, { memo, useContext, useMemo, useState } from 'react';
+import React, { memo, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
   type SkParagraph, type SkRect } from '@shopify/react-native-skia';
@@ -109,12 +109,19 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean;
 }) {
   const fonts = useContext(NativeLyricsFontContext);
+  const voiceWords = voice.words;
+  const voicePaintWords = voice.paintWords;
+  const voicePaintText = voice.paintText;
+  const voiceStart = voice.start;
+  const voiceEnd = voice.end;
+  const translation = voice.translation;
   const [width, setWidth] = useState(0);
+  const shapeRevision = useRef(0);
   // The outer line cancels its .2em margin with padding. Duet songs replace
   // the far-side padding with 15% of the lane; the main line's 1em cancels itself.
   const textWidth = Math.max(1, !spicy && !staticLyrics ? hasDuet ? width * 0.85 - fontSize * 0.2 : width - fontSize * 0.4 : width);
   const opacity = useSharedValue(1);
-  useAnimatedReaction(() => !spicy || staticLyrics ? 1 : lineActive.value ? 1 : position.value > voice.end ? 0.497 : 0.51,
+  useAnimatedReaction(() => !spicy || staticLyrics ? 1 : lineActive.value ? 1 : position.value > voiceEnd ? 0.497 : 0.51,
     (target, previous) => { if (target !== previous) opacity.value = previous === null ? target : withTiming(target,
       { duration: 200, easing: Easing.bezier(0.61, 1, 0.88, 1) }); });
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
@@ -127,8 +134,8 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       textStyle: { fontFamilies: ['SF Pro Display'], fontSize,
         fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, color: Skia.Color('white'),
         heightMultiplier: lineHeight / fontSize, halfLeading: true, letterSpacing: staticLyrics ? 0.15 : 0 } };
-    let text = staticLyrics ? voice.words.map(w => w.text).join('') : voice.paintText;
-    let paintWords = voice.paintWords;
+    let text = staticLyrics ? voiceWords.map(w => w.text).join('') : voicePaintText;
+    let paintWords = voicePaintWords;
     if (!spicy && !staticLyrics) {
       const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText(text).build();
       unwrapped.layout(100000);
@@ -176,22 +183,23 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       return shapedWord;
     });
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-    return { paragraph, height: paragraph.getHeight(), mainPadding, words,
+    return { paragraph, height: paragraph.getHeight(), mainPadding, words, revision: ++shapeRevision.current,
       glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };
-  }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, voice, width]);
+  }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth,
+    voicePaintText, voicePaintWords, voiceWords, width]);
   const translationLayout = useMemo(() => {
-    if (width <= 0 || !fonts || staticLyrics || !showTranslation || !voice.translation) return null;
+    if (width <= 0 || !fonts || staticLyrics || !showTranslation || !translation) return null;
     const size = spicy ? fontSize * (background ? 12 / (32 * 1.05 * 0.75) : 14 / (32 * 1.05)) : Math.max(10, fontSize * 0.5);
     const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
     const paragraph = Skia.ParagraphBuilder.Make({ textAlign: right ? TextAlign.Right : TextAlign.Left,
       textStyle: { fontFamilies: ['SF Pro Display'], fontSize: size, fontStyle: { weight: spicy ? 500 : 700 },
         heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts)
-      .addText(voice.translation).build();
+      .addText(translation).build();
     paragraph.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
     return { paragraph, height: paragraph.getHeight(), margin: spicy ? background ? 2 : 4 : 0 };
-  }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, voice.translation, width]);
+  }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, translation, width]);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
-    : spicy ? position.value > voice.end ? 0.497 : 0.51 : lineMotion.value.dark);
+    : spicy ? position.value > voiceEnd ? 0.497 : 0.51 : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
   const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {
@@ -201,11 +209,11 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture key={`${voice.start}:${voice.end}:${voice.paintText}:${textWidth}:${shaped.height}:${fontSize}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
-          position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voice.end} lineMotion={lineMotion} />
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture key={`${voiceStart}:${voiceEnd}:${shaped.revision}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+          position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}
-          enabled={true} last={index === shaped.words.length - 1} words={shaped.words} lineMotion={lineMotion} lineActive={lineActive} blur={blur} lineEnd={voice.end} />)
+          enabled={true} last={index === shaped.words.length - 1} words={shaped.words} lineMotion={lineMotion} lineActive={lineActive} blur={blur} lineEnd={voiceEnd} />)
           : <Mask mask={<Rect x={-32} y={-32} width={width + 64} height={height + 64} color="white" opacity={inactiveOpacity} />}>
                 <Group layer={<Paint><Blur blur={blur} /></Paint>}>
                     <Paragraph paragraph={shaped.paragraph} x={0} y={0} width={textWidth} />

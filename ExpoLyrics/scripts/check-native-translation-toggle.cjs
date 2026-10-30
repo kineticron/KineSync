@@ -12,7 +12,7 @@ const currentCode = bundle(fs.readFileSync(filename, 'utf8'));
 const baselineIndex = process.argv.indexOf('--baseline');
 const baselineCode = baselineIndex < 0 ? null : bundle(fs.readFileSync(process.argv[baselineIndex + 1], 'utf8'));
 
-function runVoice(code, spicy, expectOptimized = true) {
+function createVoiceHarness(code, spicy) {
   const hookSlots = [];
   let hookCursor = 0;
   const counters = { mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
@@ -22,6 +22,7 @@ function runVoice(code, spicy, expectOptimized = true) {
     memo: component => component,
     createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; },
     useContext() { hookCursor++; return fonts; },
+    useRef(initial) { const index = hookCursor++; return hookSlots[index] ??= { current: initial }; },
     useState(initial) {
       const index = hookCursor++;
       const slot = hookSlots[index] ??= { value: typeof initial === 'function' ? initial() : initial };
@@ -38,10 +39,10 @@ function runVoice(code, spicy, expectOptimized = true) {
   const makeParagraph = initialText => {
     let text = initialText;
     return { addText(value) { text += value; return this; }, pushStyle() { return this; }, pop() { return this; }, build() {
-      if (text === 'translated line') counters.translationParagraphBuilds++;
+      if (/translation/u.test(text)) counters.translationParagraphBuilds++;
       else counters.mainParagraphBuilds++;
-      return { text, layout() { counters[text === 'translated line' ? 'translationParagraphLayouts' : 'mainParagraphLayouts']++; },
-        getHeight: () => text === 'translated line' ? 18 : 42,
+      return { text, layout() { counters[/translation/u.test(text) ? 'translationParagraphLayouts' : 'mainParagraphLayouts']++; },
+        getHeight: () => /translation/u.test(text) ? 18 : 42,
         getRectsForRange(start, end) { return [{ x: start * 8, y: 0, width: (end - start) * 8, height: 24 }]; } };
     } };
   };
@@ -75,16 +76,28 @@ function runVoice(code, spicy, expectOptimized = true) {
   vm.runInNewContext(code, { module: moduleObject, exports: moduleObject.exports,
     require(name) { assert(name in modules, `native-only hook harness missing import ${name}`); return modules[name]; } });
   const NativeSkiaVoice = moduleObject.exports.NativeSkiaVoice;
+  const defaults = { position: { value: 100 }, blur: { value: 0 }, lineActive: { value: true },
+    lineMotion: { value: { scale: 1, bright: 0.9, dark: 0.3 } }, fontSize: 32, lineHeight: 42,
+    right: false, background: false, staticLyrics: false, spicy, showTranslation: true, hasDuet: false, batched: true };
+  return { counters, NativeGlyphPicture, render(voice, props = {}) {
+    hookCursor = 0;
+    return NativeSkiaVoice({ ...defaults, voice, ...props });
+  } };
+}
+
+function runVoice(code, spicy, expectOptimized = true) {
+  const harness = createVoiceHarness(code, spicy);
+  const { counters, NativeGlyphPicture } = harness;
   const position = { value: 100 }, blur = { value: 0 }, lineActive = { value: true };
   const lineMotion = { value: { scale: 1, bright: 0.9, dark: 0.3 } };
   const letters = ['s', 'i', 'n', 'g'];
   const voice = { words: [{ text: 'sing', starts: [0], ends: [500], weights: [4] }], paintText: 'sing',
     paintWords: [{ text: 'sing', start: 0, end: 500, offset: 0, emphasized: true, letters, joined: false,
       group: 0, emphasis: { start: 0, end: 500, index: 0, count: 4, last: true } }],
-    start: 0, end: 500, translation: 'translated line' };
+    start: 0, end: 500, translation: 'initial translation' };
   const baseProps = { voice, position, fontSize: 32, lineHeight: 42, right: false, background: false,
     staticLyrics: false, blur, lineActive, lineMotion, spicy, showTranslation: true, hasDuet: false, batched: true };
-  function render(props) { hookCursor = 0; return NativeSkiaVoice(props); }
+  function render(props) { return harness.render(props.voice, props); }
   let tree = render(baseProps);
   tree.props.onLayout({ nativeEvent: { layout: { width: 240 } } });
   tree = render(baseProps);
@@ -127,18 +140,38 @@ function runVoice(code, spicy, expectOptimized = true) {
   assert.equal(counters.mainParagraphLayouts, initialMainLayouts, 'Main paragraph layout is not repeated by translation visibility');
   assert.equal(counters.glyphShapePasses, initialGlyphShapes, 'shapeGlyphWords is not rerun by translation visibility');
   assert.equal(counters.spicyGlyphPictures, initialGlyphPictures, 'Spicy per-letter picture inputs are not rebuilt on toggles');
+
+  const translatedVoice = { ...voice, translation: 'updated translation' };
+  tree = render({ ...baseProps, voice: translatedVoice });
+  assert.equal(translationNode().props.paragraph.text, 'updated translation', 'Updated translation reaches its own native Paragraph');
+  assert.equal(glyphNode().props.words, mainWords, 'Late translation content update preserves shaped glyph words');
+  assert.equal(glyphNode().props.key, mainKey, 'Late translation content update preserves glyph-picture identity');
+  assert.equal(counters.mainParagraphBuilds, initialMainBuilds, 'Late translation update does not rebuild the main paragraph');
+  assert.equal(counters.mainParagraphLayouts, initialMainLayouts, 'Late translation update does not relayout the main paragraph');
+  assert.equal(counters.glyphShapePasses, initialGlyphShapes, 'Late translation update does not reshape glyphs');
+  assert.equal(counters.translationParagraphBuilds, 3, 'Updated translation receives a fresh translation paragraph');
+
+  const retimedVoice = { ...translatedVoice, words: [{ ...voice.words[0], starts: [25], ends: [525] }],
+    paintWords: voice.paintWords.map(word => ({ ...word, start: 25, end: 525,
+      emphasis: { ...word.emphasis, start: 25, end: 525 } })) };
+  tree = render({ ...baseProps, voice: retimedVoice });
+  assert.notEqual(glyphNode().props.key, mainKey, 'Timing-only source update resets the animated glyph-picture state');
+  assert.equal(counters.mainParagraphBuilds, initialMainBuilds * 2, 'Timing-only update rebuilds the paragraph from fresh timed inputs');
+  assert.equal(counters.mainParagraphLayouts, initialMainLayouts * 2, 'Timing-only update lays out its fresh main inputs');
+  assert.equal(counters.glyphShapePasses, initialGlyphShapes + 1, 'Timing-only update refreshes timing-bound glyph shape inputs');
   return { counters, initialMainBuilds, initialGlyphShapes, initialGlyphPictures, mainRebuildsOnToggle: 0,
     mainLayoutsOnToggle: 0, glyphShapePassesOnToggle: 0,
     glyphPicturesOnToggle: 0, initialHeight, hiddenHeight: 42 };
 }
 
+if (require.main === module) {
 for (const spicy of [false, true]) {
   const result = runVoice(currentCode, spicy);
   assert.equal(result.mainRebuildsOnToggle, 0);
   assert.equal(result.mainLayoutsOnToggle, 0);
   assert.equal(result.glyphShapePassesOnToggle, 0);
   console.log(`${spicy ? 'Spicy' : 'AMLL'} actual NativeSkiaVoice hook toggle: main paragraph builds/layouts ` +
-    `${result.initialMainBuilds}/${result.counters.mainParagraphLayouts}, glyph shape passes ${result.initialGlyphShapes}, ` +
+    `${result.initialMainBuilds}/${result.initialMainBuilds}, glyph shape passes ${result.initialGlyphShapes}, ` +
     `modeled per-letter pictures ${result.initialGlyphPictures}; all unchanged across hide/show.`);
   if (baselineCode) {
     const baseline = runVoice(baselineCode, spicy, false);
@@ -150,3 +183,6 @@ for (const spicy of [false, true]) {
   }
 }
 console.log('Native translation-toggle checks passed: stable row-owned glyph inputs and separate translation layout; modeled hook counts only, not device frame timings.');
+
+}
+module.exports = { createVoiceHarness, bundle, currentCode };

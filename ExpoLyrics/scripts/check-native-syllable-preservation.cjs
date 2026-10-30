@@ -14,7 +14,7 @@ vm.runInNewContext(output, { module: moduleObject, exports: moduleObject.exports
 const { buildNativeRows, buildNativeVoice } = moduleObject.exports;
 const skiaVoiceSource = fs.readFileSync(path.join(root, 'components/lyrics/native/native-skia-voice.tsx'), 'utf8');
 const glyphPictureSource = fs.readFileSync(path.join(root, 'components/lyrics/native/native-glyph-picture.tsx'), 'utf8');
-assert.match(skiaVoiceSource, /staticLyrics \? voice\.words\.map\(w => w\.text\)\.join\(''\) : voice\.paintText/,
+assert.match(skiaVoiceSource, /staticLyrics \? voiceWords\.map\(w => w\.text\)\.join\(''\) : voicePaintText/,
   'native Skia lays out AMLL paint text as one continuous paragraph');
 assert.match(skiaVoiceSource, /paragraph\.getRectsForRange\(word\.offset,/,
   'native Skia maps timed segments to glyph ranges in that shared paragraph');
