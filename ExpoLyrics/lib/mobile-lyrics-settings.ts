@@ -44,6 +44,8 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
 let cachedSettings: MobileLyricsSettings = { ...DEFAULT_SETTINGS };
 let loaded = false;
 let storageAvailable = true;
+let initialLoad: Promise<MobileLyricsSettings> | null = null;
+let settingsWrites: Promise<void> = Promise.resolve();
 
 function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefined): MobileLyricsSettings {
   return {
@@ -80,7 +82,7 @@ export function getCachedMobileLyricsSettings(): MobileLyricsSettings {
   return cachedSettings;
 }
 
-export async function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
+async function loadMobileLyricsSettings(): Promise<MobileLyricsSettings> {
   if (loaded) {
     return cachedSettings;
   }
@@ -113,35 +115,55 @@ export async function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
   return cachedSettings;
 }
 
+export function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
+  if (loaded) return Promise.resolve(cachedSettings);
+  if (!initialLoad) initialLoad = loadMobileLyricsSettings().finally(() => { initialLoad = null; });
+  return initialLoad;
+}
+
 export async function saveMobileLyricsSettings(
   settings: Partial<MobileLyricsSettings>,
 ): Promise<MobileLyricsSettings> {
   if (settings.spicyLyricsPublishableKey && !/^sl_pk_\S+$/.test(settings.spicyLyricsPublishableKey.trim())) {
     throw new Error("Use a Spicy Lyrics publishable key (sl_pk_). Secret keys are not accepted.");
   }
-  const current = await getMobileLyricsSettings();
-  cachedSettings = normalizeSettings({ ...current, ...settings });
-  loaded = true;
-  if (!storageAvailable) {
-    return cachedSettings;
-  }
-  if (Platform.OS !== "web") {
-    try {
-      await SecureStore.setItemAsync(MOBILE_LYRICS_SECURE_KEY, JSON.stringify(cachedSettings));
-      await AsyncStorage.removeItem(MOBILE_LYRICS_SETTINGS_KEY);
-      return cachedSettings;
-    } catch {
-      // Never write secrets back to plaintext storage when secure storage fails.
+  // Serialize both merge and persistence, not just the final disk write. Cold
+  // readers share initialLoad so a late load cannot overwrite a newer mutation.
+  const write = settingsWrites.then(async () => {
+    await getMobileLyricsSettings();
+    const current = cachedSettings;
+    cachedSettings = normalizeSettings({ ...current, ...settings,
+      // Revocation knowledge is monotonic even if a settings form submits an old
+      // full snapshot. Token values themselves are never retained in this list.
+      musixmatchAnonymousRejectedTokenHashes: [...new Set([
+        ...current.musixmatchAnonymousRejectedTokenHashes,
+        ...(settings.musixmatchAnonymousRejectedTokenHashes || []),
+      ])],
+    });
+    loaded = true;
+    if (!storageAvailable) {
       return cachedSettings;
     }
-  }
-  try {
-    await AsyncStorage.setItem(
-      MOBILE_LYRICS_SETTINGS_KEY,
-      JSON.stringify(cachedSettings),
-    );
-  } catch {
-    storageAvailable = false;
-  }
-  return cachedSettings;
+    if (Platform.OS !== "web") {
+      try {
+        await SecureStore.setItemAsync(MOBILE_LYRICS_SECURE_KEY, JSON.stringify(cachedSettings));
+        await AsyncStorage.removeItem(MOBILE_LYRICS_SETTINGS_KEY);
+        return cachedSettings;
+      } catch {
+        // Never write secrets back to plaintext storage when secure storage fails.
+        return cachedSettings;
+      }
+    }
+    try {
+      await AsyncStorage.setItem(
+        MOBILE_LYRICS_SETTINGS_KEY,
+        JSON.stringify(cachedSettings),
+      );
+    } catch {
+      storageAvailable = false;
+    }
+    return cachedSettings;
+  });
+  settingsWrites = write.then(() => {}, () => {});
+  return write;
 }
