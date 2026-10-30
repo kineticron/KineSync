@@ -175,24 +175,25 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       before += wordWidth;
       return shapedWord;
     });
-    let translation: SkParagraph | null = null;
-    const translationMargin = spicy ? background ? 2 : 4 : 0;
-    if (showTranslation && !staticLyrics && voice.translation) {
-      const size = spicy ? fontSize * (background ? 12 / (32 * 1.05 * 0.75) : 14 / (32 * 1.05)) : Math.max(10, fontSize * 0.5);
-      const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
-      translation = Skia.ParagraphBuilder.Make({ textAlign: right ? TextAlign.Right : TextAlign.Left,
-        textStyle: { fontFamilies: paragraphStyle.textStyle.fontFamilies, fontSize: size, fontStyle: { weight: spicy ? 500 : 700 },
-          heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts).addText(voice.translation).build();
-      translation.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
-    }
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-    return { paragraph, height: paragraph.getHeight(), translation, translationMargin, mainPadding,
-      totalHeight: paragraph.getHeight() + mainPadding * 2 + (translation ? translationMargin + translation.getHeight() : 0), words, glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };
-  }, [background, batched, fonts, fontSize, lineHeight, right, showTranslation, spicy, staticLyrics, textWidth, voice, width]);
+    return { paragraph, height: paragraph.getHeight(), mainPadding, words,
+      glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };
+  }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, voice, width]);
+  const translationLayout = useMemo(() => {
+    if (width <= 0 || !fonts || staticLyrics || !showTranslation || !voice.translation) return null;
+    const size = spicy ? fontSize * (background ? 12 / (32 * 1.05 * 0.75) : 14 / (32 * 1.05)) : Math.max(10, fontSize * 0.5);
+    const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
+    const paragraph = Skia.ParagraphBuilder.Make({ textAlign: right ? TextAlign.Right : TextAlign.Left,
+      textStyle: { fontFamilies: ['SF Pro Display'], fontSize: size, fontStyle: { weight: spicy ? 500 : 700 },
+        heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts)
+      .addText(voice.translation).build();
+    paragraph.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
+    return { paragraph, height: paragraph.getHeight(), margin: spicy ? background ? 2 : 4 : 0 };
+  }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, voice.translation, width]);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
     : spicy ? position.value > voice.end ? 0.497 : 0.51 : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
-  const height = shaped?.totalHeight ?? lineHeight;
+  const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {
     const next = event.nativeEvent.layout.width;
     setWidth(previous => Math.abs(previous - next) > 0.1 ? next : previous);
@@ -210,7 +211,8 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
                     <Paragraph paragraph={shaped.paragraph} x={0} y={0} width={textWidth} />
                 </Group>
             </Mask>}</Group>
-        {shaped.translation && <Paragraph paragraph={shaped.translation} x={spicy ? 2 : 0} y={shaped.height + shaped.mainPadding * 2 + shaped.translationMargin} width={textWidth - (spicy ? 4 : 0)} />}
+        {translationLayout && <Paragraph paragraph={translationLayout.paragraph} x={spicy ? 2 : 0}
+          y={shaped.height + shaped.mainPadding * 2 + translationLayout.margin} width={textWidth - (spicy ? 4 : 0)} />}
         </Group>
       </Group></Group>
     </Canvas>}
