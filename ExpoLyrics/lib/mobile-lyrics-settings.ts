@@ -20,6 +20,7 @@ export type MobileLyricsSettings = {
   musixmatchAnonymousProfileId: string;
   musixmatchAnonymousRenewalAttemptAt: number;
   musixmatchAnonymousBlockedUntil: number;
+  musixmatchAnonymousRejectedTokenHashes: string[];
   geminiApiKey: string;
 };
 
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
   musixmatchAnonymousProfileId: "",
   musixmatchAnonymousRenewalAttemptAt: 0,
   musixmatchAnonymousBlockedUntil: 0,
+  musixmatchAnonymousRejectedTokenHashes: [],
   geminiApiKey: "",
 };
 
@@ -69,6 +71,7 @@ function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefin
     musixmatchAnonymousProfileId: String(value?.musixmatchAnonymousProfileId || ""),
     musixmatchAnonymousRenewalAttemptAt: Math.max(0, Number(value?.musixmatchAnonymousRenewalAttemptAt || 0)),
     musixmatchAnonymousBlockedUntil: Math.max(0, Number(value?.musixmatchAnonymousBlockedUntil || 0)),
+    musixmatchAnonymousRejectedTokenHashes: Array.isArray(value?.musixmatchAnonymousRejectedTokenHashes) ? [...new Set(value.musixmatchAnonymousRejectedTokenHashes.filter(hash => /^[a-f0-9]{64}$/.test(hash)))] : [],
     geminiApiKey: String(value?.geminiApiKey || "").trim(),
   };
 }

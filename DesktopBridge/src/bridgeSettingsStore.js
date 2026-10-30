@@ -239,6 +239,7 @@ function createBridgeSettingsStore({ app }) {
     musixmatchAnonymousProfileId: String(raw?.musixmatchAnonymousProfileId || "").trim(),
     musixmatchAnonymousRenewalAttemptAt: sanitizeTimestamp(raw?.musixmatchAnonymousRenewalAttemptAt),
     musixmatchAnonymousBlockedUntil: sanitizeTimestamp(raw?.musixmatchAnonymousBlockedUntil),
+    musixmatchAnonymousRejectedTokenHashes: Array.isArray(raw?.musixmatchAnonymousRejectedTokenHashes) ? [...new Set(raw.musixmatchAnonymousRejectedTokenHashes.filter(value => /^[a-f0-9]{64}$/.test(value)))] : [],
     spotifyWebToken: sanitizeSpotifyWebToken(decodeSecret(raw?.spotifyWebToken || "")),
     geminiApiKey: sanitizeGeminiApiKey(decodeSecret(raw?.geminiApiKey || raw?.openRouterApiKey || "")),
     spotifySpDcCookie: decodeSecret(raw?.spotifySpDcCookie || "").trim(),
@@ -311,6 +312,7 @@ function createBridgeSettingsStore({ app }) {
         profileId: settings.musixmatchAnonymousProfileId,
         renewalAttemptAt: settings.musixmatchAnonymousRenewalAttemptAt,
         blockedUntil: settings.musixmatchAnonymousBlockedUntil,
+        rejectedTokenHashes: settings.musixmatchAnonymousRejectedTokenHashes,
       };
     },
     getSpotifyWebToken() {
@@ -388,6 +390,7 @@ function createBridgeSettingsStore({ app }) {
       if (Object.prototype.hasOwnProperty.call(state, "blockedUntil")) {
         store.set("musixmatchAnonymousBlockedUntil", sanitizeTimestamp(state.blockedUntil));
       }
+      if (Array.isArray(state.rejectedTokenHashes)) store.set("musixmatchAnonymousRejectedTokenHashes", [...new Set(state.rejectedTokenHashes.filter(value => /^[a-f0-9]{64}$/.test(value)))]);
       return this.getMusixmatchAnonymousTokenState();
     },
     setSpotifyWebToken(token) {

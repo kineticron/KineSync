@@ -32,7 +32,7 @@ test("non-Musixmatch code and mobile adapters preserve the approved picker bc57f
   const mobile = fs.readFileSync(mobilePath, "utf8");
   // Computed from git show bc57fe5:ExpoLyrics/lib/mobile-lyrics-service.js after masking
   // only the scoped declarations, renewal call and exact deferred token setup snippets.
-  assert.equal(preservationFingerprint(mobile), "08b4c45c3b062aa0e42768a44ecf4ed7291e11623ce73a6a70cfc2a7e540bb79");
+  assert.equal(preservationFingerprint(mobile), "54951a8a517421944befc67e156bc72c9badb7715f7e96aca2231e00f5119051");
   const changedUnrelatedBranch = mobile.replace('source !== "musixmatch"', 'source !== "unrelated-source"');
   assert.notEqual(preservationFingerprint(changedUnrelatedBranch), preservationFingerprint(mobile));
   for (const [before, after] of [

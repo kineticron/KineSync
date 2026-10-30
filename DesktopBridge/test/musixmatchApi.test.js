@@ -80,6 +80,25 @@ for (const mobile of [false, true]) {
     await context.fetchMusixmatchJson("/track.richsync.get",{commontrack_id:47012188,guid:"must-not-send"},profile);
   });
 
+  test(`${label}: retry rejection invalidates renewed credential without a second renewal or resurrection`, async () => {
+    const {createMusixmatchTokenManager}=require('../src/musixmatchTokenManager');
+    const a='original-rejected-token-12345',b='renewed-rejected-token-12345';let time=Date.now(),requests=0,mints=0;
+    let stored={userToken:a,appId:'mac-ios-v2.0',profileId:'mac-ios-v2.0@apic-appmobile',fetchedAt:time,lastAttemptAt:time};
+    const settingsStore={getMusixmatchUserToken:()=>'',getMusixmatchAnonymousTokenState:()=>({...stored}),setMusixmatchAnonymousTokenState:patch=>{stored={...stored,...patch};}};
+    const tokenManager=createMusixmatchTokenManager({settingsStore,now:()=>time,logger:{warn(){}},fetchImpl:async()=>{mints++;return {ok:true,status:200,json:async()=>api(200,{user_token:b})};}});
+    const context=load(async()=>{requests++;return jsonResponse(api(401,{},'renew'));},mobile);
+    const fetchers=vm.runInContext('SOURCE_FETCHERS',context);
+    for(const key of Object.keys(fetchers))if(key!=='musixmatch')fetchers[key]=async()=>null;
+    const service=context.createLyricsService({getMusixmatchUserToken:tokenManager.getToken,refreshMusixmatchUserToken:tokenManager.refreshToken,invalidateMusixmatchUserToken:tokenManager.invalidateToken});
+    await service.fetchSyncedLyrics({trackId:'revocation',title:'Rewind',artist:'Wonder Girls',durationMs:213000},{preferredSource:'musixmatch'});
+    assert.equal(requests,2);assert.equal(mints,1,'only one renewal is permitted');
+    assert.equal(stored.userToken,'');assert.equal(stored.rejectedTokenHashes.length,2);
+    time+=21*60_000;
+    const restarted=createMusixmatchTokenManager({settingsStore,now:()=>time,logger:{warn(){}},fetchImpl:async()=>({ok:true,status:200,json:async()=>api(200,{user_token:b})})});
+    assert.equal(await restarted.getToken(),'','ordinary acquisition cannot resurrect B after restart and cooldown');
+    service.clearCache();
+  });
+
   test(`${label}: 401 renew and captcha stay distinct and stop repeated macro requests`, async () => {
     for (const [status, hint, expected] of [[401, "renew", /token was rejected.*renew/i], [401, "captcha", /captcha/i]]) {
       let requests = 0;

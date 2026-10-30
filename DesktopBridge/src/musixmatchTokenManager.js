@@ -12,6 +12,12 @@ function buildStoredToken(appId, userToken, profileId = MUSIXMATCH_PROFILE_ID, a
   return JSON.stringify({ profileId, appId, userToken, acquiredAt, deviceId });
 }
 
+function tokenValue(value) {
+  try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object") return String(parsed.userToken || "").trim(); } catch {}
+  return String(value || "").trim();
+}
+const tokenHash = value => crypto.createHash("sha256").update(tokenValue(value)).digest("hex");
+
 function createMusixmatchTokenManager({
   settingsStore,
   fetchImpl = global.fetch,
@@ -28,11 +34,12 @@ function createMusixmatchTokenManager({
   const profileId = (profile) => profile.profileId || `${profile.appId}@${new URL(profile.baseUrl).hostname}`;
   const readState = () => ({
     userToken: "", appId: "", profileId: "", deviceId: "", fetchedAt: 0,
-    lastAttemptAt: 0, renewalAttemptAt: 0, blockedUntil: 0,
+    lastAttemptAt: 0, renewalAttemptAt: 0, blockedUntil: 0, rejectedTokenHashes: [],
     ...(settingsStore.getMusixmatchAnonymousTokenState?.() || {}),
   });
   const manualToken = () => String(settingsStore.getMusixmatchUserToken() || "").trim();
   const validState = (state) => isUsableMusixmatchToken(state.userToken) &&
+    !(state.rejectedTokenHashes || []).includes(tokenHash(state.userToken)) &&
     profiles.some((profile) => profile.appId === state.appId && profileId(profile) === state.profileId) &&
     Number.isFinite(state.fetchedAt) && state.fetchedAt > 0 &&
     now() >= state.fetchedAt && now() - state.fetchedAt < MUSIXMATCH_TOKEN_TTL_MS;
@@ -41,9 +48,18 @@ function createMusixmatchTokenManager({
     userToken: "", appId: "", profileId: "", fetchedAt: 0,
   });
 
+  const invalidateToken = rejectedToken => {
+    const value = tokenValue(rejectedToken);
+    if (!value) return;
+    const state = readState();
+    const hashes = [...new Set([...(state.rejectedTokenHashes || []), tokenHash(value)])];
+    settingsStore.setMusixmatchAnonymousTokenState({ rejectedTokenHashes: hashes });
+    if (tokenValue(state.userToken) === value) clearToken();
+  };
+
   const requestToken = ({ force = false, rejectedToken = "" } = {}) => {
     const manual = manualToken();
-    if (manual) return Promise.resolve(manual);
+    if (manual) return Promise.resolve((readState().rejectedTokenHashes || []).includes(tokenHash(manual)) ? "" : manual);
     // Join before any cooldown or cache decisions, including a forced renewal.
     if (inFlightRequest) return inFlightRequest;
 
@@ -103,7 +119,7 @@ function createMusixmatchTokenManager({
             continue;
           }
           const userToken = String(payload?.message?.body?.user_token || "").trim();
-          if (status !== 200 || !isUsableMusixmatchToken(userToken) || (force && userToken === rejected)) {
+          if (status !== 200 || !isUsableMusixmatchToken(userToken) || (readState().rejectedTokenHashes || []).includes(tokenHash(userToken)) || (force && userToken === rejected)) {
             lastError = new Error(`Musixmatch token endpoint returned an unusable token (API ${status || "unknown"}).`);
             continue;
           }
@@ -128,7 +144,12 @@ function createMusixmatchTokenManager({
   };
   return {
     getToken: () => resolve({}),
-    refreshToken: (rejectedToken = "") => resolve({ force: true, rejectedToken }),
+    refreshToken: (rejectedToken = "") => {
+      const rejected = rejectedToken || readState().userToken;
+      invalidateToken(rejected);
+      return resolve({ force: true, rejectedToken: rejected });
+    },
+    invalidateToken,
     getStatus() {
       const manual = manualToken();
       const state = readState();

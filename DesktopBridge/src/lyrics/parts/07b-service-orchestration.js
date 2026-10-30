@@ -2,6 +2,7 @@
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
   refreshMusixmatchUserToken = null,
+  invalidateMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
@@ -800,6 +801,7 @@ function createLyricsService({
           // needs no issuance, and other providers never wait on token.get.
           resolveMusixmatchUserToken: getMusixmatchUserToken,
           refreshMusixmatchUserToken,
+          invalidateMusixmatchUserToken,
           spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
           spotifyAccessToken: resolvedSpotifyAccessToken,
           spicyLyricsPublishableKey: resolvedSpicyLyricsPublishableKey,

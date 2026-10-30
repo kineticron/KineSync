@@ -672,6 +672,7 @@ async function fetchBestSyncedLyrics(
     musixmatchUserToken = "",
     resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
+    invalidateMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
@@ -769,11 +770,12 @@ async function fetchBestSyncedLyrics(
     } catch (error) {
       if (
         source !== "musixmatch" ||
-        describeSourceError(error) !== "unauthorized" ||
-        typeof refreshMusixmatchUserToken !== "function"
+        describeSourceError(error) !== "unauthorized"
       ) {
         throw error;
       }
+      await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+      if (typeof refreshMusixmatchUserToken !== "function") throw error;
       const refreshedToken = String(
         (await refreshMusixmatchUserToken(safeMusixmatchUserToken)) || "",
       ).trim();
@@ -781,7 +783,12 @@ async function fetchBestSyncedLyrics(
         throw error;
       }
       safeMusixmatchUserToken = refreshedToken;
-      return fetchWithCurrentToken();
+      try {
+        return await fetchWithCurrentToken();
+      } catch (retryError) {
+        if (describeSourceError(retryError) === "unauthorized") await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+        throw retryError;
+      }
     }
   };
 

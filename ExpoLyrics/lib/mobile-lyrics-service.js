@@ -13022,6 +13022,7 @@ async function fetchBestSyncedLyrics(
     musixmatchUserToken = "",
     resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
+    invalidateMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
@@ -13119,11 +13120,12 @@ async function fetchBestSyncedLyrics(
     } catch (error) {
       if (
         source !== "musixmatch" ||
-        describeSourceError(error) !== "unauthorized" ||
-        typeof refreshMusixmatchUserToken !== "function"
+        describeSourceError(error) !== "unauthorized"
       ) {
         throw error;
       }
+      await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+      if (typeof refreshMusixmatchUserToken !== "function") throw error;
       const refreshedToken = String(
         (await refreshMusixmatchUserToken(safeMusixmatchUserToken)) || "",
       ).trim();
@@ -13131,7 +13133,12 @@ async function fetchBestSyncedLyrics(
         throw error;
       }
       safeMusixmatchUserToken = refreshedToken;
-      return fetchWithCurrentToken();
+      try {
+        return await fetchWithCurrentToken();
+      } catch (retryError) {
+        if (describeSourceError(retryError) === "unauthorized") await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+        throw retryError;
+      }
     }
   };
 
@@ -13300,6 +13307,7 @@ async function enrichTrackForVaultMatch(track, spotifyAccessToken = "") {
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
   refreshMusixmatchUserToken = null,
+  invalidateMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
@@ -14103,6 +14111,7 @@ function createLyricsService({
           // needs no issuance, and other providers never wait on token.get.
           resolveMusixmatchUserToken: getMusixmatchUserToken,
           refreshMusixmatchUserToken,
+          invalidateMusixmatchUserToken,
           spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
           spotifyAccessToken: resolvedSpotifyAccessToken,
           spicyLyricsPublishableKey: resolvedSpicyLyricsPublishableKey,

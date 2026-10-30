@@ -21,7 +21,7 @@ const response = (token = freshToken, apiStatus = 200, hint = "", httpStatus = 2
   async json() { return { message: { header: { status_code: apiStatus, hint }, body: { user_token: token } } }; },
 });
 
-function load(initial, fetchImpl) {
+function load(initial, fetchImpl, now = () => timestamp) {
   let settings = {
     musixmatchUserToken: "", musixmatchAnonymousUserToken: "", musixmatchAnonymousAppId: "",
     musixmatchAnonymousProfileId: "", musixmatchAnonymousDeviceId: "", musixmatchAnonymousFetchedAt: 0,
@@ -40,7 +40,7 @@ function load(initial, fetchImpl) {
     }).outputText;
     vm.runInNewContext(source, {
       module, exports: module.exports, require: requireImpl, fetch: fetchImpl,
-      Date: class extends Date { static now() { return timestamp; } },
+      Date: class extends Date { static now() { return now(); } },
       AbortController, setTimeout, clearTimeout, console: { warn() {} },
     }, { filename });
     return module.exports;
@@ -49,6 +49,7 @@ function load(initial, fetchImpl) {
   const api = evaluate("mobile-musixmatch-token.ts", (name) => {
     if (name === "@/lib/mobile-lyrics-settings") return storage;
     if (name === "./musixmatch-profile") return profile;
+    if (name === "crypto-js") return require("../../ExpoLyrics/node_modules/crypto-js");
     throw new Error(`Unexpected dependency ${name}`);
   });
   return { api, state: () => ({ ...settings }) };
@@ -140,4 +141,19 @@ test("mobile preserves an unexpired newer credential when an old request is reje
   const {api}=load(valid(),async()=>{throw Error("must reuse valid current token without minting");});
   const existing=await api.resolveMobileMusixmatchToken();
   assert.equal(await api.refreshMobileMusixmatchToken("","older-rejected-credential"),existing);
+});
+
+
+test("mobile revocation fingerprints survive restart and reject ordinary reacquisition", async () => {
+  let time=timestamp,calls=0;
+  const first=load(valid(),async()=>response("",401,"renew"),()=>time);
+  await first.api.refreshMobileMusixmatchToken("",oldToken);
+  const saved=first.state();
+  assert(saved.musixmatchAnonymousRejectedTokenHashes.every(hash=>/^[a-f0-9]{64}$/.test(hash)));
+  assert(!JSON.stringify(saved.musixmatchAnonymousRejectedTokenHashes).includes(oldToken));
+  time+=21*60_000;
+  const restarted=load(saved,async()=>{calls++;return response(oldToken);},()=>time);
+  assert.equal(await restarted.api.resolveMobileMusixmatchToken(),"");
+  assert.equal(restarted.state().musixmatchAnonymousUserToken,"");
+  assert.equal(calls,1);
 });

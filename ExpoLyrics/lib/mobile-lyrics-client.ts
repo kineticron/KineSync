@@ -15,6 +15,7 @@ import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import {
   refreshMobileMusixmatchToken,
+  invalidateMobileMusixmatchToken,
   resolveMobileMusixmatchToken,
 } from "@/lib/mobile-musixmatch-token";
 
@@ -58,6 +59,7 @@ const mobileLyricsService = createLyricsService({
       readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
       rejectedToken,
     ),
+  invalidateMusixmatchUserToken: invalidateMobileMusixmatchToken,
   getSpotifyWebToken: () =>
     storedSpotifyToken() ||
     readEnv("EXPO_PUBLIC_SPOTIFY_WEB_TOKEN", "SPOTIFY_WEB_TOKEN"),

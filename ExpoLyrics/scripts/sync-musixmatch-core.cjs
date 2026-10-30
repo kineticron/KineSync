@@ -192,6 +192,14 @@ function preservationFingerprint(mobile) {
     'hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function"',
     'hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken)',
   );
+  // Exact retry-invalidation additions are Musixmatch-owned; retain all other
+  // source filtering, provider scheduling and failure classification checks.
+  unowned = unowned.replace('    invalidateMusixmatchUserToken = null,\n', "")
+    .replace('  invalidateMusixmatchUserToken = null,\n', "")
+    .replace('          invalidateMusixmatchUserToken,\n', "")
+    .replace('      await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);\n      if (typeof refreshMusixmatchUserToken !== "function") throw error;\n', "")
+    .replace('describeSourceError(error) !== "unauthorized" ||\n        typeof refreshMusixmatchUserToken !== "function"', 'describeSourceError(error) !== "unauthorized"')
+    .replace('      try {\n        return await fetchWithCurrentToken();\n      } catch (retryError) {\n        if (describeSourceError(retryError) === "unauthorized") await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);\n        throw retryError;\n      }', '      return fetchWithCurrentToken();');
   // New standalone declarations can add blank separators. Preserve every other source line exactly,
   // including comments, string literals, adapters, and the rest of invokeSourceFetcher.
   const lines = unowned.split(/\r?\n/).filter((line) => !/^\s*$/.test(line)).join("\n");

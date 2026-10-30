@@ -1,3 +1,4 @@
+import CryptoJS from "crypto-js";
 import { getCachedMobileLyricsSettings, getMobileLyricsSettings, saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
 import type { MobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
 import { MUSIXMATCH_APP_MOBILE_PROFILE as PROFILE, isUsableMusixmatchToken } from "./musixmatch-profile";
@@ -12,6 +13,32 @@ export type MobileMusixmatchToken = {
 
 let inFlightRequest: Promise<string> | null = null;
 const renewedTokens = new Set<string>();
+const rejectedHashes = new Set<string>();
+let invalidationQueue: Promise<void> = Promise.resolve();
+function tokenValue(value: string) {
+  try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object") return String(parsed.userToken || "").trim(); } catch {}
+  return String(value || "").trim();
+}
+const tokenHash = (value: string) => CryptoJS.SHA256(tokenValue(value)).toString(CryptoJS.enc.Hex);
+function hydrateRejections(settings: MobileLyricsSettings) {
+  for (const hash of settings.musixmatchAnonymousRejectedTokenHashes || []) rejectedHashes.add(hash);
+}
+export function invalidateMobileMusixmatchToken(rejectedToken: string): Promise<void> {
+  const value = tokenValue(rejectedToken);
+  if (!value) return Promise.resolve();
+  rejectedHashes.add(tokenHash(value));
+  invalidationQueue = invalidationQueue.catch(() => {}).then(async () => {
+    const settings = await getMobileLyricsSettings();
+    hydrateRejections(settings);
+    await saveMobileLyricsSettings({
+      musixmatchAnonymousRejectedTokenHashes: [...rejectedHashes],
+      ...(tokenValue(settings.musixmatchAnonymousUserToken) === value ? {
+        musixmatchAnonymousUserToken: "", musixmatchAnonymousAppId: "", musixmatchAnonymousProfileId: "", musixmatchAnonymousFetchedAt: 0,
+      } : {}),
+    });
+  });
+  return invalidationQueue;
+}
 
 function createDeviceId() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (part) => {
@@ -21,8 +48,10 @@ function createDeviceId() {
 }
 
 function validCache(settings: MobileLyricsSettings) {
+  hydrateRejections(settings);
   const acquiredAt = settings.musixmatchAnonymousFetchedAt;
   return isUsableMusixmatchToken(settings.musixmatchAnonymousUserToken) &&
+    !rejectedHashes.has(tokenHash(settings.musixmatchAnonymousUserToken)) &&
     settings.musixmatchAnonymousAppId === PROFILE.appId &&
     settings.musixmatchAnonymousProfileId === PROFILE.profileId &&
     Number.isFinite(acquiredAt) && acquiredAt > 0 && Date.now() >= acquiredAt &&
@@ -43,7 +72,8 @@ function serialize(settings: MobileLyricsSettings) {
 async function requestAnonymousToken({ manualOverride = "", force = false, rejectedToken = "" } = {}) {
   const settings = await getMobileLyricsSettings();
   const manual = String(settings.musixmatchUserToken || manualOverride || "").trim();
-  if (manual) return manual;
+  hydrateRejections(settings);
+  if (manual) return rejectedHashes.has(tokenHash(manual)) ? "" : manual;
   if (inFlightRequest) return inFlightRequest;
   if (!force && validCache(settings)) return serialize(settings);
 
@@ -91,7 +121,7 @@ async function requestAnonymousToken({ manualOverride = "", force = false, rejec
       }
       if (!response.ok) throw new Error(`Musixmatch token endpoint returned HTTP ${response.status}.`);
       const userToken = String(payload?.message?.body?.user_token || "").trim();
-      if (status !== 200 || !isUsableMusixmatchToken(userToken) || (force && userToken === rejected)) {
+      if (status !== 200 || !isUsableMusixmatchToken(userToken) || rejectedHashes.has(tokenHash(userToken)) || (force && userToken === rejected)) {
         throw new Error(`Musixmatch token endpoint returned an unusable token (API ${status || "unknown"}).`);
       }
       const acquiredAt = Date.now();
@@ -114,7 +144,11 @@ export async function resolveMobileMusixmatchToken(manualOverride = "") {
 }
 
 export async function refreshMobileMusixmatchToken(manualOverride = "", rejectedToken = "") {
-  try { return await requestAnonymousToken({ manualOverride, force: true, rejectedToken }); }
+  try {
+    const rejected = rejectedToken || (await getMobileLyricsSettings()).musixmatchAnonymousUserToken;
+    await invalidateMobileMusixmatchToken(rejected);
+    return await requestAnonymousToken({ manualOverride, force: true, rejectedToken: rejected });
+  }
   catch (error) {
     console.warn("[musixmatch] Mobile anonymous token renewal failed:", error instanceof Error ? error.message : "request failed");
     return "";

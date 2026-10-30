@@ -185,6 +185,7 @@ app.whenReady().then(() => {
   const lyricsService = createLyricsService({
     getMusixmatchUserToken: () => musixmatchTokenManager.getToken(),
     refreshMusixmatchUserToken: (rejectedToken) => musixmatchTokenManager.refreshToken(rejectedToken),
+    invalidateMusixmatchUserToken: (rejectedToken) => musixmatchTokenManager.invalidateToken(rejectedToken),
     getSpotifyWebToken: () => bridgeSettingsStore.getSpotifyWebToken(),
     getGeminiApiKey: () => bridgeSettingsStore.getGeminiApiKey(),
     getSpotifyAccessToken: spotifyAccessTokenGetter,
