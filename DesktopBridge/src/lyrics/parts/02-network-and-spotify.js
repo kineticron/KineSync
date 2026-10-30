@@ -68,6 +68,8 @@ const MUSIXMATCH_DEFAULT_BASE_URLS = [
   "https://apic.musixmatch.com/ws/1.1",
   "https://www.musixmatch.com/ws/1.1",
 ];
+const MUSIXMATCH_APP_MOBILE_BASE_URL = "https://apic-appmobile.musixmatch.com/ws/1.1";
+const MUSIXMATCH_APP_MOBILE_PROFILE_ID = "mac-ios-v2.0@apic-appmobile";
 const MUSIXMATCH_TOKEN_PRIORITY_KEYS = [
   "web-desktop-app-v1.0",
   "mxm-com-v1.0",
@@ -88,15 +90,17 @@ const MUSIXMATCH_CLIENT_PROFILES = [
   },
   {
     appId: "mac-ios-v2.0",
+    profileId: MUSIXMATCH_APP_MOBILE_PROFILE_ID,
     tokenKey: "mac-ios-v2.0",
     userAgent:
-      "Musixmatch/6.8.1 (iPhone; iOS 17.0; Scale/3.00) CFNetwork/1492.0.1 Darwin/23.0.0",
+      "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
     userLanguage: "en",
-    cookieHeader: "AWSELB=0; AWSELBCORS=0",
-    baseUrls: [
-      "https://apic.musixmatch.com/ws/1.1",
-      "https://apic-desktop.musixmatch.com/ws/1.1",
-    ],
+    cookieHeader: "",
+    headers: {
+      "x-mxm-app-version": "10.1.1",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    baseUrls: [MUSIXMATCH_APP_MOBILE_BASE_URL],
   },
   {
     appId: "web-desktop-app-v1.0",
@@ -468,7 +472,11 @@ async function fetchText(url, { headers = {}, timeoutMs = 8_000 } = {}) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const responseText = await response.text().catch(() => "");
+      const error = new Error(`HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      error.responseText = responseText;
+      throw error;
     }
     return response.text();
   } finally {

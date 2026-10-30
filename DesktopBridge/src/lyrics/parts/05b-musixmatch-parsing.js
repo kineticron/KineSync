@@ -10,6 +10,11 @@ function buildMusixmatchMatcherQueries(track) {
         f_subtitle_length_max_deviation: 8,
       }
     : {};
+  const recordingFilters = {};
+  const isrc = String(track?.isrc || track?.trackIsrc || "").trim();
+  const spotifyTrackId = String(track?.spotifyTrackId || track?.spotify_track_id || "").trim();
+  if (isrc) recordingFilters.track_isrc = isrc;
+  if (spotifyTrackId) recordingFilters.track_spotify_id = `spotify:track:${spotifyTrackId.replace(/^spotify:track:/i, "")}`;
   const artistVariants = buildMusixmatchArtistVariants(track.artist);
   const primaryArtistVariants =
     artistVariants.length > 0
@@ -22,6 +27,7 @@ function buildMusixmatchMatcherQueries(track) {
       q_track: track.title,
       q_artist: artist,
       q_album: track.album || undefined,
+      ...recordingFilters,
       ...durationFilters,
     });
   }
@@ -31,6 +37,7 @@ function buildMusixmatchMatcherQueries(track) {
       queries.push({
         q_track: query,
         q_artist: artist,
+      ...recordingFilters,
         ...durationFilters,
       });
     }
@@ -62,7 +69,7 @@ async function fetchMusixmatchTrackCandidates(track, requestOptions) {
   for (const query of buildMusixmatchMatcherQueries(track)) {
     try {
       const payload = await fetchMusixmatchJson(
-        "/matcher.track.get",
+        "/macro.subtitles.get",
         query,
         requestOptions,
       );
@@ -1253,6 +1260,7 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
       userAgent: client.userAgent,
       userLanguage: client.userLanguage,
       cookieHeader: client.cookieHeader,
+      headers: client.headers || {},
       baseUrls: client.baseUrls,
       defaultParams: client.defaultParams || {},
     };
@@ -1399,9 +1407,6 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
   }
 
   if (lastError) {
-    if (sawNoMatchPath && describeSourceError(lastError) === "unauthorized") {
-      throw createSourceStageNoMatchError("musixmatch", "catalog");
-    }
     throw lastError;
   }
   return null;
