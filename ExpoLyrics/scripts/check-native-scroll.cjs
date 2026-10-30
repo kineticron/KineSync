@@ -185,6 +185,7 @@ for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true
     flatRef: {}, lastScrollTarget: { current: '' }, landscapeMode: false, fontScale: 1, showTranslatedText: true,
     viewportHeight: 800, preview: false, style: 'amll', pendingScroll: { current: null }, scrollState: command, scrollCommand: {} };
   context.latestRows = { current: context.rows };
+  context.translationOnlyLayout = { current: false };
   vm.runInNewContext(ts.transpileModule(`(${scrollCallback})(${index}, ${animated})`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   assert.equal(context.scrollCommand.value.geometry, geometry,

@@ -9,7 +9,7 @@ const code = buildSync({ entryPoints: [path.resolve(__dirname, '../components/ly
   bundle: true, platform: 'node', format: 'cjs', write: false, tsconfigRaw: { compilerOptions: { jsx: 'react' } },
   external: ['react', 'react-native', 'react-native-reanimated', 'react-native-worklets', 'zustand/react/shallow', '@/store/playback-store'],
 }).outputFiles[0].text;
-function harness(reduced = false, active = true) {
+function harness(reduced = false, active = true, options = {}) {
   let packet = { lyrics: [], lyricsSource: '', lyricsMetadata: {}, lyricsStatusMessage: '', currentTrack: { id: 'song' } };
   let cursor = 0, dirty = false, output;
   const hooks = [], effects = new Map(), timers = new Map();
@@ -58,7 +58,7 @@ function harness(reduced = false, active = true) {
     'react-native-worklets': { scheduleOnRN: (fn, ...args) => fn(...args) },
     'zustand/react/shallow': { useShallow: fn => fn }, '@/store/playback-store': { usePlaybackStore: () => packet },
   })[name], setTimeout: () => { throw new Error('Fades must finish on the UI runtime, not a JS timer'); } });
-  const Wrapped = module.exports.withLyricsPacketTransition('renderer');
+  const Wrapped = module.exports.withLyricsPacketTransition('renderer', options);
   const Live = Wrapped({}).type;
   const render = () => {
     let count = 0;
@@ -161,3 +161,37 @@ context(layers[1]).onReady(); reduced.render();
 assert.equal([...reduced.timers.values()][0].ms, 0);
 assert.equal(reduced.finish().length, 1, 'Reduced Motion releases the old layer immediately');
 console.log('Lyrics packet transition checks passed: readiness, frozen outgoing content, bursts, stale callbacks, stalled replacement, inactive cleanup, tracks, previews and Reduced Motion.');
+
+// The opt-in used only by the native list must reach an existing renderer
+// instance, otherwise row/voice memo reuse would be bypassed by the real host.
+const native = harness(false, true, { reuseSameSourcePackets: true });
+native.render();
+const original = [{ lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'source', startTime: 0, endTime: 900 }] }];
+layers = native.set({ lyrics: original, lyricsSource: 'native-provider' });
+context(layers[1]).onReady(); native.render(); layers = native.finish();
+const nativeKey = layers[0].key;
+for (const patch of [
+  { translatedText: 'late translation' },
+  { translatedText: 'updated translation' },
+  { syllables: [{ text: 'corrected source', startTime: 25, endTime: 925 }] },
+  { backgroundSyllables: [{ text: 'echo', startTime: 500, endTime: 1200 }] },
+]) {
+  const next = [{ ...context(layers[0]).packet.lyrics[0], ...patch }];
+  layers = native.set({ lyrics: next });
+  assert.equal(layers.length, 1, 'native incremental updates must not create an outgoing layer');
+  assert.equal(layers[0].key, nativeKey, 'native source/translation updates retain mounted list and row caches');
+  assert.equal(context(layers[0]).packet.lyrics, next, 'new source and translation data reach the mounted native renderer');
+  assert.equal(native.timers.size, 0, 'incremental updates introduce no fade/reset');
+}
+layers = native.set({ lyrics: original, lyricsSource: 'replacement-provider' });
+assert.equal(layers.length, 2, 'native provider replacements retain readiness transitions');
+const incomingKey = layers[1].key;
+const pendingTranslation = [{ ...original[0], translatedText: 'translation before ready' }];
+layers = native.set({ lyrics: pendingTranslation });
+assert.equal(layers[1].key, incomingKey, 'translation before readiness retains incoming generation');
+assert.equal(context(layers[1]).packet.lyrics, pendingTranslation);
+assert.equal(native.timers.size, 0, 'translation cannot reveal an unready incoming provider');
+context(layers[1]).onReady(); native.render(); native.finish();
+layers = native.set({ currentTrack: { id: 'next-native-song' }, lyrics: original });
+assert.equal(layers.length, 2, 'native track changes retain normal replacement semantics');
+console.log('Native packet opt-in PASS: same-source mounted identity, incremental updates, pending readiness, provider and track isolation.');

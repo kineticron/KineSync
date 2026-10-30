@@ -201,3 +201,15 @@ for (const style of ['amll', 'spicy']) {
   assert.notEqual(nativeScrollSourceKey(after),nativeScrollSourceKey(before));
 }
 console.log('Mode/static switches and independent background package/interlude propagation PASS.');
+
+// AMLL can paint merged backgrounds while package timing still extends the
+// active/follow window. That hidden duration must invalidate semantic cues even
+// when neither version creates an interlude.
+const hidden = [{ lineStartTime: 0, lineEndTime: 1000, syllables: [{text:'lead',startTime:0,endTime:900}],
+  spicyBackgrounds:[{lineStartTime:1000,lineEndTime:1500,syllables:[{text:'echo',startTime:1000,endTime:1500}]}] }];
+const hiddenBefore=buildNativeRows(hidden,'amll');
+const hiddenChanged=clone(hidden);hiddenChanged[0].spicyBackgrounds[0].lineEndTime=1800;
+const hiddenAfter=buildNativeRows(hiddenChanged,'amll',false,hiddenBefore);
+assert.equal(hiddenAfter[0].lead,hiddenBefore[0].lead);
+assert.notEqual(nativeScrollSourceKey(hiddenAfter),nativeScrollSourceKey(hiddenBefore),
+  'non-painted background package timing still invalidates semantic cue identity');

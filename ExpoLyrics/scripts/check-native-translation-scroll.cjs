@@ -13,7 +13,7 @@ const cues=evaluate(bundle(path.join(native,'native-cue-timeline.ts')));
 const code=bundle(path.join(native,'native-lyrics-view.tsx'),['*']);
 const clone=value=>JSON.parse(JSON.stringify(value));
 function harness(style,list){
- let cursor=0,tree,props={style,list,reveal:'canvas',tapToSeekEnabled:false};const slots=[],effects=[],commands=[];
+ let cursor=0,tree,props={style,list,reveal:'canvas',tapToSeekEnabled:false};const slots=[],effects=[],commands=[],reactions=[];
  const slot=make=>{const i=cursor++;return slots[i]??=(make());};
  const same=(a,b)=>a&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
  const react={memo:fn=>fn,
@@ -23,9 +23,10 @@ function harness(style,list){
   useCallback(fn,deps){return react.useMemo(()=>fn,deps);},
   useEffect(fn,deps){const item=slot(()=>({}));if(!same(item.deps,deps)){item.deps=deps;effects.push(()=>{item.cleanup?.();item.cleanup=fn();});}},
  };
- const state={currentTrack:{id:'track',durationMs:10000},isPlaying:false,lyricsSource:'fixture',lyricsStatusMessage:'',lyricsMetadata:{},
-  lyrics:[{lineStartTime:0,lineEndTime:1500,syllables:[{text:'fixture',startTime:0,endTime:1200}]}]};
- const position={value:500},running={value:false},seekVersion={value:0};let measuredY=500;
+ const state={currentTrack:{id:'track',durationMs:10000},isPlaying:true,lyricsSource:'fixture',lyricsStatusMessage:'',lyricsMetadata:{},
+  lyrics:[{lineStartTime:0,lineEndTime:1500,syllables:[{text:'fixture',startTime:0,endTime:1200}]},
+   {lineStartTime:2000,lineEndTime:3500,syllables:[{text:'next',startTime:2000,endTime:3200}]}]};
+ const position={value:500},running={value:true},seekVersion={value:0};let measuredY=500;
  const host={getLayout:()=>({y:measuredY}),getFirstItemOffset:()=>150,getAbsoluteLastScrollOffset:()=>0,getFirstVisibleIndex:()=>0,
   scrollToIndex:command=>commands.push(command),scrollToOffset(){}};
  const jsx=(type,props)=>({type,props:props??{}});
@@ -33,11 +34,11 @@ function harness(style,list){
   'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},FlatList:'FlatList',Linking:{openURL(){}},Pressable:'Pressable',StyleSheet:{create:x=>x},Text:'Text',View:'View'},
   'expo-image':{Image:'Image'},'@shopify/flash-list':{FlashList:'FlashList'},
   'react-native-reanimated':{
-   useAnimatedReaction(){},
+   useAnimatedReaction(prepare,react){reactions.push({prepare,react});},
    useDerivedValue:fn=>{const value=react.useMemo(()=>({value:null}),[]);value.value=fn();return value;},
    useSharedValue:initial=>react.useMemo(()=>{let value=initial;return {get value(){return value;},set value(next){value=next;if(next&&typeof next==='object'&&'serial'in next)commands.push(next);}};},[]),
   },
-  'react-native-worklets':{scheduleOnRN(){}},
+  'react-native-worklets':{scheduleOnRN:(fn,...args)=>fn(...args)},
   '../lyrics-packet-transition':{useLyricsPacketTransition:()=>null,withLyricsPacketTransition:component=>component},
   '@/store/playback-store':{usePlaybackStore:Object.assign(selector=>selector(state),{getState:()=>state})},
   '@/lib/lyrics-timing':{detectLyricsTimingMode:()=> 'synced'},'@/lib/lyrics-layout':layout,
@@ -51,21 +52,30 @@ function harness(style,list){
  };
  const {NativeLyricsView}=evaluate(code,name=>{assert(Object.hasOwn(modules,name),`Unexpected native dependency ${name}`);return modules[name];});
  function find(node,type){if(!node||typeof node!=='object')return null;if(node.type===type)return node;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const result=find(child,type);if(result)return result;}return null;}
- function render(next={}){props={...props,...next};cursor=0;tree=NativeLyricsView(props);find(tree,list==='flash'?'FlashList':'FlatList').props.ref.current=host;while(effects.length)effects.shift()();return tree;}
+ function render(next={}){props={...props,...next};cursor=0;reactions.length=0;tree=NativeLyricsView(props);find(tree,list==='flash'?'FlashList':'FlatList').props.ref.current=host;while(effects.length)effects.shift()();return tree;}
  function content(){find(tree,list==='flash'?'FlashList':'FlatList').props.onContentSizeChange();}
  function viewport(width=400){tree.props.onLayout({nativeEvent:{layout:{width,height:800}}});render();}
  render();viewport();content();
- return {state,commands,render,content,viewport,setY:value=>{measuredY=value;},row:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.data[0],drag:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.onScrollBeginDrag()};
+ return {state,commands,render,content,viewport,
+  snapshot:()=>reactions[0].prepare(), react:previous=>reactions[0].react(reactions[0].prepare(),previous),
+  cue(time,seek=false){const before=reactions[0].prepare();position.value=time;running.value=true;if(seek)seekVersion.value++;render();const after=reactions[0].prepare();reactions[0].react(after,before);},setY:value=>{measuredY=value;},row:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.data[0],drag:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.onScrollBeginDrag()};
 }
 for(const style of ['amll','spicy'])for(const list of ['flash','flat']){
- const h=harness(style,list),before=h.commands.length,row=h.row();
- h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='late translation';h.render();h.content();
+ const h=harness(style,list),before=h.commands.length,row=h.row(),oldCue=h.snapshot();
+ h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='late translation';h.render();
+ assert.equal(h.snapshot().token,oldCue.token,'translation does not reset semantic cue generation');
+ h.react(oldCue);h.content();
  assert.equal(h.commands.length,before,`${style}/${list}: late translation must not clear scroll target/reissue follow command`);
  assert.equal(h.row().key,row.key,'translation keeps native list key');assert.equal(h.row().lead.paintWords,row.lead.paintWords);
  if(list==='flash'){
+  h.cue(2200); // actual host reaction after late translation, same mounted list
+  const afterCue=h.commands.length;h.setY(540);h.content();
+  assert.equal(h.commands.length,afterCue+1,'later cue estimated layout must receive measured correction');
   h.setY(560);h.viewport(460);h.content();
-  assert.equal(h.commands.length,before+1,'a later viewport relayout must not remain suppressed by translation-only guard');
+  assert.equal(h.commands.length,afterCue+2,'a later viewport relayout must not remain suppressed by translation-only guard');
  }
+ const beforeSeek=h.commands.length;h.cue(600,true);
+ assert.equal(h.commands.length,beforeSeek+1,'seek clears translation suppression and retains instant reanchor');
  const beforeSource=h.commands.length;
  h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].syllables[0].endTime-=27;h.render();h.content();
  assert.equal(h.commands.length,beforeSource+1,'real timing input change retains ordinary source auto-follow reset');

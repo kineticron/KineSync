@@ -24,7 +24,7 @@ const rowModes = new WeakMap<NativeLyricRow[], { style: NativeLyricsStyle; stati
 export function nativeScrollSourceKey(rows: NativeLyricRow[]) {
   const source = (voice: NativeVoice) => [voice.start, voice.end, voice.words, voice.paintText, voice.paintWords];
   return JSON.stringify(rows.map(row => [row.key, row.line.oppositeAligned, row.line.spicyLyricsStartTime,
-    source(row.lead), row.backgrounds.map(source), row.interlude]));
+    source(row.lead), row.backgrounds.map(source), getBackgroundEndTime(row.line), row.interlude]));
 }
 
 /** Keep a whole shaping run in one native Text. Never split an Indic cluster or Arabic word into Views. */

@@ -173,6 +173,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     const currentRows = latestRows.current;
     index = nativeFollowIndex(currentRows, index, currentPosition.current);
     if (!following.current || !active || staticLyrics || index < 0 || index >= currentRows.length) return;
+    // A new semantic cue/seek or explicit follow request ends the one-update
+    // translation guard so later estimated-layout measurements can correct it.
+    translationOnlyLayout.current = false;
     const measured = list === 'flash' ? flashRef.current?.getLayout(index) : undefined;
     const target = `${index}:${landscapeMode}:${fontScale}:${showTranslatedText}:${viewportHeight}:${measured?.y}:${flashRef.current?.getFirstItemOffset()}`;
     if (target === lastScrollTarget.current) return;
@@ -216,7 +219,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (seek) lastScrollTarget.current = '';
     if (range) scrollTo(range.startIndex, !seek);
   }, [active, onActiveLineChange, reveal, scrollTo]);
-  const cueIdentity = useMemo(() => ({ lyrics, token: ++generation.current }), [lyrics]);
+  const cueIdentity = useMemo(() => ({ sourceKey: scrollSourceKey, token: ++generation.current }), [scrollSourceKey]);
   const token = cueIdentity.token;
   useAnimatedReaction(() => {
     if (!running.value || staticLyrics) return null;
@@ -337,7 +340,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           onTouchStart={takeOwnership} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>
   </View>;
-}));
+}), { reuseSameSourcePackets: true });
 
 const styles = StyleSheet.create({
   root: { flex: 1 }, empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 },
