@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
+import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
@@ -91,11 +91,13 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
 }
 
 function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
-  spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock) {
+  spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock,
+  paints: { paint: SkPaint; glowPaint: SkPaint }) {
   'worklet';
-  const paint = Skia.Paint();
+  const { paint, glowPaint } = paints;
   paint.setAntiAlias(true);
-  const glowPaint = Skia.Paint();
+  // A reusable Paint must begin each recording with SkPaint's native default.
+  paint.setColor(Skia.Color('black'));
   glowPaint.setAntiAlias(true);
   const fade = (words[0]?.rects[0]?.height ?? fontSize) * 0.56;
   let advanced = 0;
@@ -198,6 +200,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
+  const paints = useSharedValue<{ paint: SkPaint; glowPaint: SkPaint } | null>(null);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
@@ -232,10 +235,19 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
-    picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd, lineMotion.value, floatClock), bounds);
+    const cachedPaints = paints.value;
+    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint() };
+    picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
+      lineMotion.value, floatClock, reusablePaints), bounds);
+    // Picture recording is synchronous and snapshots paint state. Release the
+    // last frame's shader/filter refs while keeping the reusable Paint objects.
+    reusablePaints.paint.setShader(null);
+    reusablePaints.glowPaint.setShader(null);
+    reusablePaints.glowPaint.setImageFilter(null);
+    if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [active, background, bounds, fontSize, lineEnd, lineMotion, picture, position, spicy, state, words]), false);
+  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 });
