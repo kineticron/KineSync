@@ -93,7 +93,7 @@ test("anonymous token is acquired, tagged with its app id, persisted, and reused
     ],
   });
 
-  const expected = JSON.stringify({ profileId: "android-player-v1.0@example.test", appId: "android-player-v1.0", userToken: "anonymous-token-value", acquiredAt: 123456 });
+  const expected = JSON.stringify({ profileId: "android-player-v1.0@example.test", appId: "android-player-v1.0", userToken: "anonymous-token-value", acquiredAt: 123456, deviceId: "stable-device-id" });
   assert.equal(await manager.getToken(), expected);
   assert.equal(await manager.getToken(), expected);
   assert.equal(fetchCount, 1);
@@ -101,7 +101,7 @@ test("anonymous token is acquired, tagged with its app id, persisted, and reused
     capturedUrl,
     "https://example.test/ws/1.1/token.get?app_id=android-player-v1.0",
   );
-  assert.match(capturedOptions.headers.Cookie, /x-mxm-token-guid=stable-device-id/);
+  assert.match(capturedOptions.headers["X-Cookie"], /x-mxm-token-guid=stable-device-id/);
   assert.deepEqual(settingsStore.getMusixmatchAnonymousTokenState(), {
     userToken: "anonymous-token-value",
     appId: "android-player-v1.0",
@@ -219,5 +219,38 @@ test("forced renewal bypasses cooldown once and concurrent callers share it", as
   resolveFetch(await successfulTokenFetch("renewed-token")());
   assert.equal(JSON.parse(await first).userToken, "renewed-token");
   assert.equal(await second, await first);
+  assert.equal(fetchCount, 1);
+});
+
+test("a rejected cached token is invalidated and one failed forced renewal cannot return it", async () => {
+  const rejected = "rejected-token-value-123456";
+  const settingsStore = createSettingsStore({ anonymousState: {
+    userToken: rejected, appId: "mac-ios-v2.0", profileId: "mac-ios-v2.0@apic-appmobile",
+    deviceId: "stable-device-id", fetchedAt: 8_000_000, lastAttemptAt: 8_000_000,
+  } });
+  let fetchCount = 0;
+  const manager = createMusixmatchTokenManager({
+    settingsStore, now: () => 9_000_000, logger: { warn() {} },
+    fetchImpl: async () => { fetchCount++; return { ok: false, status: 503, async json() { return {}; } }; },
+  });
+  const rejectedTypedToken = JSON.stringify({ profileId: "mac-ios-v2.0@apic-appmobile", appId: "mac-ios-v2.0", userToken: rejected, acquiredAt: 8_000_000 });
+  assert.equal(await manager.refreshToken(rejectedTypedToken), "");
+  assert.equal(settingsStore.getMusixmatchAnonymousTokenState().userToken, "");
+  assert.equal(await manager.refreshToken(rejectedTypedToken), "");
+  assert.equal(fetchCount, 1, "the same rejected token must not trigger another forced issuance");
+});
+
+test("captcha response enters cooldown and does not cause repeated forced token requests", async () => {
+  const settingsStore = createSettingsStore();
+  let fetchCount = 0;
+  const manager = createMusixmatchTokenManager({
+    settingsStore, now: () => 12_000_000, logger: { warn() {} },
+    fetchImpl: async () => {
+      fetchCount++;
+      return { ok: true, status: 200, async json() { return { message: { header: { status_code: 401, hint: "captcha" }, body: {} } }; } };
+    },
+  });
+  assert.equal(await manager.refreshToken("rejected-token-value-123456"), "");
+  assert.equal(await manager.refreshToken("another-rejected-token-123456"), "");
   assert.equal(fetchCount, 1);
 });

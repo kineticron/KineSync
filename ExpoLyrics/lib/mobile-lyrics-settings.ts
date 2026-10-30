@@ -18,6 +18,8 @@ export type MobileLyricsSettings = {
   musixmatchAnonymousFetchedAt: number;
   musixmatchAnonymousLastAttemptAt: number;
   musixmatchAnonymousProfileId: string;
+  musixmatchAnonymousRenewalAttemptAt: number;
+  musixmatchAnonymousBlockedUntil: number;
   geminiApiKey: string;
 };
 
@@ -32,6 +34,8 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
   musixmatchAnonymousFetchedAt: 0,
   musixmatchAnonymousLastAttemptAt: 0,
   musixmatchAnonymousProfileId: "",
+  musixmatchAnonymousRenewalAttemptAt: 0,
+  musixmatchAnonymousBlockedUntil: 0,
   geminiApiKey: "",
 };
 
@@ -63,6 +67,8 @@ function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefin
       Number(value?.musixmatchAnonymousLastAttemptAt || 0),
     ),
     musixmatchAnonymousProfileId: String(value?.musixmatchAnonymousProfileId || ""),
+    musixmatchAnonymousRenewalAttemptAt: Math.max(0, Number(value?.musixmatchAnonymousRenewalAttemptAt || 0)),
+    musixmatchAnonymousBlockedUntil: Math.max(0, Number(value?.musixmatchAnonymousBlockedUntil || 0)),
     geminiApiKey: String(value?.geminiApiKey || "").trim(),
   };
 }

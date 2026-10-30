@@ -11,6 +11,9 @@ const SETTINGS_DEFAULTS = {
   musixmatchAnonymousDeviceId: "",
   musixmatchAnonymousFetchedAt: 0,
   musixmatchAnonymousLastAttemptAt: 0,
+  musixmatchAnonymousProfileId: "",
+  musixmatchAnonymousRenewalAttemptAt: 0,
+  musixmatchAnonymousBlockedUntil: 0,
   spotifyWebToken: "",
   geminiApiKey: "",
   spotifySpDcCookie: "",
@@ -233,6 +236,9 @@ function createBridgeSettingsStore({ app }) {
     musixmatchAnonymousLastAttemptAt: sanitizeTimestamp(
       raw?.musixmatchAnonymousLastAttemptAt,
     ),
+    musixmatchAnonymousProfileId: String(raw?.musixmatchAnonymousProfileId || "").trim(),
+    musixmatchAnonymousRenewalAttemptAt: sanitizeTimestamp(raw?.musixmatchAnonymousRenewalAttemptAt),
+    musixmatchAnonymousBlockedUntil: sanitizeTimestamp(raw?.musixmatchAnonymousBlockedUntil),
     spotifyWebToken: sanitizeSpotifyWebToken(decodeSecret(raw?.spotifyWebToken || "")),
     geminiApiKey: sanitizeGeminiApiKey(decodeSecret(raw?.geminiApiKey || raw?.openRouterApiKey || "")),
     spotifySpDcCookie: decodeSecret(raw?.spotifySpDcCookie || "").trim(),
@@ -303,6 +309,8 @@ function createBridgeSettingsStore({ app }) {
         fetchedAt: settings.musixmatchAnonymousFetchedAt,
         lastAttemptAt: settings.musixmatchAnonymousLastAttemptAt,
         profileId: settings.musixmatchAnonymousProfileId,
+        renewalAttemptAt: settings.musixmatchAnonymousRenewalAttemptAt,
+        blockedUntil: settings.musixmatchAnonymousBlockedUntil,
       };
     },
     getSpotifyWebToken() {
@@ -373,6 +381,12 @@ function createBridgeSettingsStore({ app }) {
       }
       if (Object.prototype.hasOwnProperty.call(state, "profileId")) {
         store.set("musixmatchAnonymousProfileId", String(state.profileId || "").trim());
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "renewalAttemptAt")) {
+        store.set("musixmatchAnonymousRenewalAttemptAt", sanitizeTimestamp(state.renewalAttemptAt));
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "blockedUntil")) {
+        store.set("musixmatchAnonymousBlockedUntil", sanitizeTimestamp(state.blockedUntil));
       }
       return this.getMusixmatchAnonymousTokenState();
     },
