@@ -7,24 +7,43 @@
 function normalizeMusixmatchBody(payload) {
   const header = payload?.message?.header || payload?.header || {};
   const body = payload?.message?.body || payload?.body || {};
-  const hint = String(header?.hint || "").trim();
+  const hint = redactMusixmatchDiagnostic(header?.hint || "");
   const statusCode = Number(header?.status_code || 0);
   return { statusCode, hint, body };
+}
+
+function redactMusixmatchDiagnostic(value) {
+  return String(value || "").trim()
+    .replace(/((?:user_?token|signature|cookie|authorization)\s*[:=]\s*)[^\s;&,)]+/gi, "$1[redacted]")
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted]")
+    .slice(0, 200);
 }
 
 function assertMusixmatchSuccess(payload, endpointLabel) {
   const { statusCode, hint, body } = normalizeMusixmatchBody(payload);
   const hintSuffix = hint ? ` (${hint})` : "";
+  const fail = (name, message) => {
+    const error = new Error(message);
+    error.name = name;
+    error.apiStatus = statusCode;
+    error.hint = hint;
+    error.endpoint = `/${endpointLabel}`;
+    throw error;
+  };
   if (hint.toLowerCase().includes("captcha")) {
-    throw new Error(`Musixmatch blocked request with captcha${hintSuffix}.`);
+    fail("MusixmatchCaptchaError", `Musixmatch blocked request with captcha${hintSuffix}.`);
+  }
+  if (statusCode === 429) {
+    fail("MusixmatchRateLimitError", `Musixmatch cooldown active (API 429)${hintSuffix}.`);
   }
   if (statusCode === 401 || statusCode === 403) {
-    throw new Error(`Musixmatch user token was rejected${hintSuffix}.`);
+    fail("MusixmatchAuthError", `Musixmatch user token was rejected${hintSuffix}.`);
   }
-  if (statusCode > 0 && statusCode !== 200 && statusCode !== 404) {
-    throw new Error(
-      `Musixmatch ${endpointLabel} failed with status ${statusCode}${hintSuffix}.`,
-    );
+  if (statusCode === 404 && /endpoint not found/i.test(hint)) {
+    fail("MusixmatchEndpointError", `Musixmatch ${endpointLabel} failed with API 404${hintSuffix}.`);
+  }
+  if (statusCode !== 200 && statusCode !== 404) {
+    fail("MusixmatchApiError", `Musixmatch ${endpointLabel} failed with API status ${statusCode || "unknown"}${hintSuffix}.`);
   }
   return { statusCode, hint, body };
 }
@@ -38,17 +57,16 @@ function extractMusixmatchTracks(payload) {
 }
 
 function extractMusixmatchMatchedTrack(payload) {
-  const { body } = assertMusixmatchSuccess(payload, "matcher.track.get");
+  const { body } = assertMusixmatchSuccess(payload, "macro.subtitles.get");
+  const matcher = body?.macro_calls?.["matcher.track.get"]?.message;
+  if (matcher) {
+    const { statusCode, body: matchedBody } = assertMusixmatchSuccess(matcher, "matcher.track.get");
+    if (statusCode === 404) return null;
+    const track = matchedBody?.track;
+    return track && typeof track === "object" ? track : null;
+  }
   const direct = body?.track || body?.matcher?.track;
-  if (direct && typeof direct === "object") {
-    return direct;
-  }
-  const macroTrack =
-    body?.macro_calls?.["matcher.track.get"]?.message?.body?.track;
-  if (macroTrack && typeof macroTrack === "object") {
-    return macroTrack;
-  }
-  return null;
+  return direct && typeof direct === "object" ? direct : null;
 }
 
 function toMusixmatchDurationMs(track) {
@@ -92,36 +110,20 @@ function findFirstNestedStringByKey(value, keyName, depth = 0) {
   return "";
 }
 
-function extractMusixmatchSubtitleBody(
-  payload,
-  endpointLabel = "track.subtitle.get",
-) {
-  const { body } = assertMusixmatchSuccess(payload, endpointLabel);
-  const directSubtitle = body?.subtitle?.subtitle_body;
-  if (typeof directSubtitle === "string" && directSubtitle.trim()) {
-    return directSubtitle;
+function extractMusixmatchSubtitleBody(payload, endpointLabel = "track.subtitles.get") {
+  const { statusCode, body } = assertMusixmatchSuccess(payload, endpointLabel);
+  if (statusCode === 404) return "";
+  if (body?.macro_calls) {
+    const call = body.macro_calls["track.subtitles.get"] || body.macro_calls["track.subtitle.get"];
+    if (!call?.message) return "";
+    return extractMusixmatchSubtitleBody(call.message, "track.subtitles.get");
   }
-
-  const subtitleList = Array.isArray(body?.subtitle_list)
-    ? body.subtitle_list
-    : [];
-  for (const entry of subtitleList) {
+  const direct = body?.subtitle?.subtitle_body;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  const list = Array.isArray(body?.subtitle_list) ? body.subtitle_list : [];
+  for (const entry of list) {
     const text = entry?.subtitle?.subtitle_body;
-    if (typeof text === "string" && text.trim()) {
-      return text;
-    }
-  }
-
-  const macroCalls = body?.macro_calls || {};
-  const macroSubtitle =
-    macroCalls?.["track.subtitle.get"]?.message?.body?.subtitle?.subtitle_body;
-  if (typeof macroSubtitle === "string" && macroSubtitle.trim()) {
-    return macroSubtitle;
-  }
-
-  const nestedSubtitle = findFirstNestedStringByKey(body, "subtitle_body");
-  if (nestedSubtitle) {
-    return nestedSubtitle;
+    if (typeof text === "string" && text.trim()) return text;
   }
   return "";
 }
@@ -328,7 +330,8 @@ function looksLikeMusixmatchTokenValue(value) {
 
 function shouldAbortMusixmatchTokenAttempt(error) {
   const reason = describeSourceError(error);
-  return reason === "unauthorized" || reason === "rate-limited";
+  return reason === "unauthorized" || reason === "rate-limited" ||
+    error?.name === "MusixmatchEndpointError";
 }
 
 async function getMusixmatchSignatureSecret({ timeoutMs = 6_000 } = {}) {
@@ -403,6 +406,27 @@ function appendMusixmatchSignature(unsignedUrl, signatureSecret) {
   return `${unsignedUrl}${separator}signature=${encodeURIComponent(signature)}&signature_protocol=sha1`;
 }
 
+async function fetchMusixmatchText(url, { headers = {}, timeoutMs = 12_000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const safeHeaders = typeof makeMobileSafeHeaders === "function"
+      ? makeMobileSafeHeaders(headers)
+      : headers;
+    const response = await fetch(url, { method: "GET", headers: safeHeaders, signal: controller.signal });
+    if (!response.ok) {
+      const responseText = await response.text().catch(() => "");
+      const error = new Error(`HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      error.responseText = responseText;
+      throw error;
+    }
+    return response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function resolveMusixmatchClientCandidates(rawToken) {
   const safeRaw = String(rawToken || "").trim();
   if (!safeRaw) {
@@ -413,7 +437,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
   const seen = new Set();
   const pushCandidate = (profile, token, tokenSource) => {
     const safeToken = String(token || "").trim();
-    if (!safeToken) {
+    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly$/i.test(safeToken)) {
       return;
     }
     const signature = `${profile.appId}|${safeToken}`;
@@ -439,6 +463,31 @@ function resolveMusixmatchClientCandidates(rawToken) {
       }
       return null;
     })();
+
+  if (
+    parsedTokenObject &&
+    ["profileId", "acquiredAt", "userToken", "appId"].some((key) => Object.prototype.hasOwnProperty.call(parsedTokenObject, key))
+  ) {
+    const userToken = String(parsedTokenObject.userToken || "").trim();
+    const acquiredAt = Number(parsedTokenObject.acquiredAt || 0);
+    const now = Date.now();
+    if (
+      parsedTokenObject.profileId !== MUSIXMATCH_APP_MOBILE_PROFILE.profileId ||
+      parsedTokenObject.appId !== MUSIXMATCH_APP_MOBILE_PROFILE.appId ||
+      !looksLikeMusixmatchTokenValue(userToken) ||
+      /^0+$/.test(userToken) ||
+      /^UpgradeOnly$/i.test(userToken) ||
+      !Number.isFinite(acquiredAt) ||
+      acquiredAt <= 0 || now - acquiredAt < 0 ||
+      now - acquiredAt >= MUSIXMATCH_APP_MOBILE_PROFILE.tokenTtlMs
+    ) {
+      return [];
+    }
+    const profile = buildMusixmatchProfileForAppId(parsedTokenObject.appId);
+    profile.defaultParams = { guid: String(parsedTokenObject.deviceId || "").trim() || crypto.randomUUID() };
+    pushCandidate(profile, userToken, "typed-cache");
+    return resolved;
+  }
 
   const collectPrioritizedTokenEntries = (parsedObject) => {
     const entries = [];
@@ -646,7 +695,7 @@ async function fetchMusixmatchJson(
         ? [appendMusixmatchSignature(unsignedUrl, signatureSecret), unsignedUrl]
         : [unsignedUrl];
       for (const requestUrl of requestUrls) {
-        const responseText = await fetchText(requestUrl, {
+        const responseText = await fetchMusixmatchText(requestUrl, {
           timeoutMs,
           headers: {
             Accept: "application/json,text/plain,*/*",
@@ -676,20 +725,29 @@ async function fetchMusixmatchJson(
       }
     } catch (error) {
       if (error?.httpStatus) {
-        const errorPayload = parseJsonLenient(error.responseText || "");
+        let errorPayload = null;
+        try { errorPayload = parseJsonLenient(error.responseText || ""); } catch {}
         const header = errorPayload?.message?.header || errorPayload?.header || {};
-        const hint = String(header.hint || "").trim();
-        const endpointError = new Error(
-          `Musixmatch ${path.slice(1)} failed with HTTP ${error.httpStatus}${hint ? ` (${hint})` : ""}.`,
-        );
-        endpointError.name = "MusixmatchEndpointError";
+        const hint = redactMusixmatchDiagnostic(header.hint || "");
+        const apiStatus = Number(header.status_code || 0);
+        const captcha = /captcha/i.test(hint);
+        const rateLimited = error.httpStatus === 429 || apiStatus === 429;
+        const auth = [401, 403].includes(error.httpStatus) || [401, 403].includes(apiStatus);
+        const prefix = captcha ? "Musixmatch blocked request with captcha" : rateLimited ? "Musixmatch cooldown active" :
+          auth ? "Musixmatch user token was rejected" : `Musixmatch ${path.slice(1)} failed`;
+        const endpointError = new Error(`${prefix} with HTTP ${error.httpStatus}${apiStatus ? ` / API ${apiStatus}` : ""}${hint ? ` (${hint})` : ""}.`);
+        endpointError.name = captcha ? "MusixmatchCaptchaError" : rateLimited ? "MusixmatchRateLimitError" : auth ? "MusixmatchAuthError" :
+          error.httpStatus === 404 ? "MusixmatchEndpointError" : "MusixmatchHttpError";
         endpointError.httpStatus = error.httpStatus;
-        endpointError.apiStatus = Number(header.status_code || 0);
+        endpointError.apiStatus = apiStatus;
         endpointError.endpoint = path;
+        endpointError.hint = hint;
         lastError = endpointError;
         continue;
       }
-      lastError = error;
+      lastError = new Error(`Musixmatch ${path.slice(1)} ${error?.name === "AbortError" ? "request timeout" : "network request failed"}.`);
+      lastError.name = "MusixmatchTransportError";
+      lastError.endpoint = path;
     }
   }
   throw lastError || new Error("All Musixmatch endpoint attempts failed");
