@@ -133,8 +133,13 @@ for (const bright of [0.9, 0.5, 0.3]) {
   assert.ok(masked.shader.colors[0].includes(String(bright)));
   assert.ok(masked.shader.colors[1].includes('0.15'));
 }
+// ♪ is Extended_Pictographic in Node 18's Unicode dataset but not Node 24's.
+// Derive this symbol's expectation from the runtime property rather than
+// requiring a particular Unicode version or changing production classification.
+const musicNoteMasked = /\p{Extended_Pictographic}/u.test('♪');
 for (const spicy of [false, true]) {
-  for (const text of ['?!,', '♪', '☀\uFE0E', '♡\uFE0E']) {
+  paintReveal('♪', 0.5, true, false, false, musicNoteMasked, spicy);
+  for (const text of ['?!,', '☀\uFE0E', '♡\uFE0E', '♪\uFE0E']) {
     paintReveal(text, 0.5, true, false, false, false, spicy);
   }
 }
