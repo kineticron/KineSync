@@ -42,9 +42,10 @@ function getGlowFilter(paints: ReusableGlyphPaints, radius: number) {
 }
 
 // SkTypeface exposes no color-font metadata. Classify graphemes once at layout;
-// ordinary fallback text (including U+2661 ♡) still uses the glyph paint shader.
+// Unicode properties do not identify the actual fallback font. Include ♡
+// explicitly so mixed heart/text slices use the alpha mask across runtimes.
 const needsEmojiMask = (grapheme: string) => !grapheme.includes('\uFE0E') &&
-  /[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u20E3]/u.test(grapheme);
+  /[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u20E3\u2661]/u.test(grapheme);
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
@@ -52,7 +53,7 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
   const allRects = words.flatMap(word => word.rects);
   const shaped = words.map(word => {
     const parts = word.word.emphasized ? word.letters : [word.rects];
-    const emojiMask = spicy ? word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)] : parts.map(() => false);
+    const emojiMask = word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)];
     const revealRects = parts.map(rects => {
       const rect = rects[0];
       if (!rect) return Skia.XYWHRect(0, 0, 0, 0);
@@ -101,7 +102,7 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
   const sourcePaint = Skia.Paint();
   sourcePaint.setAntiAlias(true);
   sourcePaint.setColor(Skia.Color('white'));
-  if (spicy) for (const word of shaped) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
+  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean)) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
     canvas.clipPath(word.clips[index], ClipOp.Intersect, true);
     for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, sourcePaint);
   }));
@@ -116,6 +117,20 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
   canvas.translate(ox, oy);
   canvas.scale(scale, scale);
   canvas.translate(-ox, -oy);
+}
+
+function drawGlyphSlice(canvas: SkCanvas, word: ShapedGlyphWord, letter: number, paint: SkPaint) {
+  'worklet';
+  if (word.emojiMask[letter]) {
+    // Color fallback glyphs can ignore a glyph paint's shader. Apply the
+    // reveal to the recorded glyph alpha, including the inactive dim state.
+    canvas.saveLayer();
+    canvas.drawPicture(word.pictures[letter]);
+    paint.setBlendMode(BlendMode.SrcIn);
+    canvas.drawPaint(paint);
+    canvas.restore();
+    paint.setBlendMode(BlendMode.SrcOver);
+  } else for (const run of word.runs[letter]) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
 }
 
 function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
@@ -143,7 +158,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
     const floatTime = amllWordFloatPosition(floatClock, time, word.word.start, word.word.end);
     transform(canvas, bounds, spicy ? motion.scale : 1, 0,
       spicy ? motion.y * (background ? fontSize / 0.75 : fontSize) : amllFloat(floatTime, word.word.start, word.word.end, background) * fontSize, word.word.origin ?? 0.5);
-    word.runs.forEach((runs, letter) => {
+    word.runs.forEach((_runs, letter) => {
       const rects = word.word.emphasized ? word.letters[letter] : word.rects;
       const rect = rects[0];
       if (!rect) return;
@@ -189,7 +204,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setShader(shader);
       }
       if (glow > 0.001 && active) {
-        glowPaint.setShader(spicy ? null : shader);
+        glowPaint.setShader(spicy || word.emojiMask[letter] ? null : shader);
         glowPaint.setColor(Skia.Color('white'));
         glowPaint.setAlphaf(glow);
         // Blur the clipped letter image, not each whole intersecting glyph.
@@ -200,21 +215,12 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
           canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-          for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+          drawGlyphSlice(canvas, word, letter, paint);
         }
         canvas.restore();
       }
       canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-      if (spicy && word.emojiMask[letter]) {
-        // Color fallback glyphs can ignore a glyph paint's shader. Apply the
-        // reveal to the recorded glyph alpha, including the inactive dim state.
-        canvas.saveLayer();
-        canvas.drawPicture(word.pictures[letter]);
-        paint.setBlendMode(BlendMode.SrcIn);
-        canvas.drawPaint(paint);
-        canvas.restore();
-        paint.setBlendMode(BlendMode.SrcOver);
-      } else for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+      drawGlyphSlice(canvas, word, letter, paint);
       canvas.restore();
     });
     canvas.restore();
