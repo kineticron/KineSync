@@ -17,6 +17,7 @@ export type MobileLyricsSettings = {
   musixmatchAnonymousDeviceId: string;
   musixmatchAnonymousFetchedAt: number;
   musixmatchAnonymousLastAttemptAt: number;
+  musixmatchAnonymousProfileId: string;
   geminiApiKey: string;
 };
 
@@ -30,6 +31,7 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
   musixmatchAnonymousDeviceId: "",
   musixmatchAnonymousFetchedAt: 0,
   musixmatchAnonymousLastAttemptAt: 0,
+  musixmatchAnonymousProfileId: "",
   geminiApiKey: "",
 };
 
@@ -60,6 +62,7 @@ function normalizeSettings(value: Partial<MobileLyricsSettings> | null | undefin
       0,
       Number(value?.musixmatchAnonymousLastAttemptAt || 0),
     ),
+    musixmatchAnonymousProfileId: String(value?.musixmatchAnonymousProfileId || ""),
     geminiApiKey: String(value?.geminiApiKey || "").trim(),
   };
 }
