@@ -1,4 +1,4 @@
-import { buildAmllWords } from '../amll-word-spacing';
+import { buildAmllShapingWords, buildAmllWords } from '../amll-word-spacing';
 import { repairSyllableClusters } from '../cluster-safe-syllables';
 import { getGraphemes } from '../../../lib/graphemes';
 import { getBackgroundEndTime } from '../../../lib/lyrics-layout';
@@ -29,7 +29,8 @@ function spicyWords(syllables: LyricSyllable[]): NativeWord[] {
   repaired.forEach((part, index) => {
     // Preserve literal spaces from KRC/QRC/YRC. Split only at a shaping-safe space.
     const fragments = flagged ? [part.text] : part.text.match(/\s+|\S+/gu) ?? [];
-    const total = Math.max(1, getGraphemes(part.text).length);
+    const timedGraphemeCount = (part as LyricSyllable & { timedGraphemeCount?: number }).timedGraphemeCount;
+    const total = Math.max(1, Number.isFinite(timedGraphemeCount) ? Number(timedGraphemeCount) : getGraphemes(part.text).length);
     let offset = 0;
     fragments.forEach(fragment => {
       const count = getGraphemes(fragment).length;
@@ -78,36 +79,70 @@ export function buildNativeVoice(syllables: LyricSyllable[], start: number, end:
     return word;
   });
   if (style === 'amll') {
-    const sourceWords = buildAmllWords(syllables, start, end);
+    const sourceWords = buildAmllShapingWords(syllables, start, end);
     const chunks = chunkAndSplitLyricWords(sourceWords);
+    const timedSegments = buildAmllWords(syllables, start, end);
     const emphasizes = (word: typeof sourceWords[number]) => word.endTime - word.startTime >= 1000 &&
       (isCJK(word.word) || word.word.trim().length >= 2 && word.word.trim().length <= 7);
     paintText = '';
     paintWords = [];
-    chunks.forEach((input, group) => {
+    const chunkRanges: { start: number; end: number; words: typeof sourceWords[number][] }[] = [];
+    let rangeStart = 0;
+    chunks.forEach(input => {
       const chunk = Array.isArray(input) ? input : [input];
       const text = chunk.map(word => word.word).join('');
-      const from = Math.min(...chunk.map(word => word.startTime));
-      const to = Math.max(...chunk.map(word => word.endTime));
-      const emphasized = chunk.some(emphasizes) || !isCJK(text) && emphasizes({ word: text, startTime: from, endTime: to });
-      const count = chunk.reduce((sum, word) => sum + getGraphemes(word.word.trim()).length, 0);
-      let index = 0;
-      for (const word of chunk) {
-        if (word.word.trim()) {
-          const letters = getGraphemes(word.word.trim());
-          paintWords.push({ text: word.word, offset: paintText.length, start: word.startTime, end: word.endTime,
-            emphasized, letters, joined: false, group,
-            emphasis: { start: from, end: to, index, count, last: text.includes(sourceWords.at(-1)?.word ?? '') } });
-          index += letters.length;
-        }
-        paintText += word.word;
+      chunkRanges.push({ start: rangeStart, end: rangeStart + text.length, words: chunk });
+      rangeStart += text.length;
+    });
+    // A provider timing atom cannot be split across native shaping chunks.
+    // Merge only the chunk ranges it actually overlaps so text continuity and
+    // the original animation interval are both retained.
+    let timedOffset = 0;
+    timedSegments.forEach(segment => {
+      const sourceOffset = timedOffset;
+      const endOffset = sourceOffset + segment.word.length;
+      const overlapping = chunkRanges.flatMap((range, index) =>
+        endOffset > range.start && sourceOffset < range.end ? [index] : []);
+      if (overlapping.length > 1) {
+        const first = overlapping[0];
+        const last = overlapping.at(-1)!;
+        chunkRanges.splice(first, last - first + 1, {
+          start: chunkRanges[first].start,
+          end: chunkRanges[last].end,
+          words: chunkRanges.slice(first, last + 1).flatMap(range => range.words),
+        });
       }
+      timedOffset = endOffset;
+    });
+    let sourceOffset = 0;
+    let emphasisIndex = 0;
+    timedSegments.forEach(segment => {
+      const segmentEnd = sourceOffset + segment.word.length;
+      const group = Math.max(0, chunkRanges.findIndex(range => segmentEnd > range.start && sourceOffset < range.end));
+      const range = chunkRanges[group];
+      const text = range?.words.map(word => word.word).join('') ?? segment.word;
+      const from = range ? Math.min(...range.words.map(word => word.startTime)) : segment.startTime;
+      const to = range ? Math.max(...range.words.map(word => word.endTime)) : segment.endTime;
+      const emphasized = range ? range.words.some(emphasizes) || !isCJK(text) &&
+        emphasizes({ word: text, startTime: from, endTime: to }) : false;
+      const letters = getGraphemes(segment.word.trim());
+      const count = range?.words.reduce((sum, word) => sum + getGraphemes(word.word.trim()).length, 0) ?? letters.length;
+      if (segment.word.trim()) {
+        paintWords.push({ text: segment.word, offset: paintText.length, start: segment.startTime, end: segment.endTime,
+          emphasized, letters, joined: false, group,
+          emphasis: { start: from, end: to, index: emphasisIndex, count, last: group === chunkRanges.length - 1 } });
+        emphasisIndex += letters.length;
+      }
+      paintText += segment.word;
+      sourceOffset = segmentEnd;
+      if (range && sourceOffset >= range.end) emphasisIndex = 0;
     });
   }
   return {
     start, end, translation, paintWords, paintText,
     words: style === 'amll'
-      ? spicyWords(buildAmllWords(syllables, start, end).map(word => ({ text: word.word, startTime: word.startTime, endTime: word.endTime })))
+      ? spicyWords(buildAmllWords(syllables, start, end).map(word => ({ text: word.word, startTime: word.startTime,
+        endTime: word.endTime, timedGraphemeCount: word.timedGraphemeCount })))
       : spicyWords(syllables),
   };
 }

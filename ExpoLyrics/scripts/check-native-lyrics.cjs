@@ -111,9 +111,10 @@ const line = { lineStartTime: 0, lineEndTime: 3000, syllables: [makePart('lead',
 const spicy = buildNativeRows([line], 'spicy')[0];
 const japanese = buildNativeVoice([{ text: '革命道中', startTime: 1000, endTime: 3000 }], 1000, 3000, 'amll');
 assert.equal(japanese.paintText, '革命道中');
-assert.deepEqual(Array.from(japanese.paintWords, word => word.text), ['革', '命', '道', '中']);
-assert.deepEqual(Array.from(japanese.paintWords, word => [word.start, word.end]), [[1000, 1500], [1500, 2000], [2000, 2500], [2500, 3000]]);
-assert.ok(japanese.paintWords.every(word => !word.emphasized), 'AMLL tests emphasis after splitting CJK into timed characters');
+assert.deepEqual(Array.from(japanese.paintWords, word => word.text), ['革命道中']);
+assert.deepEqual(Array.from(japanese.paintWords, word => [word.start, word.end]), [[1000, 3000]],
+  'a source syllable remains one paint timing item while AMLL chunk grouping stays internal');
+assert.ok(japanese.paintWords.every(word => !word.emphasized), 'CJK emphasis remains based on the original AMLL shaping chunks');
 const emphasized = buildNativeVoice([{ text: 'sing ', startTime: 1000, endTime: 3000 }, { text: 'along', startTime: 3000, endTime: 3500 }], 1000, 3500, 'amll');
 assert.equal(emphasized.paintWords.length, 2, 'Whitespace is layout text rather than an animated word');
 assert.equal(emphasized.paintWords[0].letters.join(''), 'sing');
