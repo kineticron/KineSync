@@ -20,6 +20,7 @@
     "profile:lyrics-native": "node ./scripts/profile-native-lyrics.cjs",
     "test:lyrics-native": "node ./scripts/check-native-lyrics.cjs && node ./scripts/check-native-motion.cjs && node ./scripts/check-native-syllable-preservation.cjs",
     "test:native-renderer-ready": "node ./scripts/check-native-renderer-ready-refresh.cjs",
+    "test:native-spicy-interlude": "node ./scripts/check-native-spicy-interlude.cjs",
     "test:native-translation-toggle": "node ./scripts/check-native-translation-toggle.cjs",
     "test:android-compat": "node ./scripts/check-android-desugaring.cjs",
     "test:security": "node ./scripts/security-check.js",
