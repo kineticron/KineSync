@@ -19,6 +19,7 @@
     "profile:android": "node ./scripts/capture-android-performance.cjs",
     "profile:lyrics-native": "node ./scripts/profile-native-lyrics.cjs",
     "test:lyrics-native": "node ./scripts/check-native-lyrics.cjs && node ./scripts/check-native-motion.cjs && node ./scripts/check-native-syllable-preservation.cjs",
+    "test:native-renderer-ready": "node ./scripts/check-native-renderer-ready-refresh.cjs",
     "test:android-compat": "node ./scripts/check-android-desugaring.cjs",
     "test:security": "node ./scripts/security-check.js",
     "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-spotify-seek.cjs && node ./scripts/check-tour-tracker.cjs",
