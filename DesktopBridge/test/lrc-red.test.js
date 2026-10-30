@@ -9,6 +9,7 @@ const test = require("node:test");
 const track = { title: "Example Song", artist: "Example Artist", durationMs: 10000 };
 const isrc = "GBUM71029604";
 const wordTtml = '<tt lrc:timing="Word"><body><div><p begin="1.000" end="9.000"><span begin="1.000" end="3.000">Hel</span><span begin="3.000" end="5.000">lo</span> <span begin="5.000" end="9.000">world</span><span ttm:role="x-bg"><span begin="6.000" end="8.000">(oh)</span></span></p></div></body></tt>';
+const crushSeesawTtml = fs.readFileSync(path.join(__dirname, "fixtures/crush-seesaw.ttml"), "utf8");
 const lineTtml = '<tt lrc:timing="Line"><body><div><p begin="1.000" end="9.000">Hello world</p></div></body></tt>';
 
 test("lrc.red TTML preserves joined syllables across pauses in lead and background vocals", () => {
@@ -31,6 +32,7 @@ function load(fetch, mobile) {
     process: { env: {} }, require: createRequire(path.join(src, "lyricsService.js")),
     parseLrcRedTtml: require("../../ExpoLyrics/lib/lyrics-ttml-import").parseTtmlToLyrics,
     parseLrcRedTime: require("../../ExpoLyrics/lib/lyrics-ttml-import").parseTtmlTimeExpression,
+    extractLrcRedTtmlMetadata: require("../../ExpoLyrics/lib/lyrics-ttml-import").extractTtmlMetadata,
   });
   if (mobile) {
     let source = fs.readFileSync(path.resolve(src, "../../ExpoLyrics/lib/mobile-lyrics-service.js"), "utf8");
@@ -100,11 +102,41 @@ for (const mobile of [false, true]) {
         assert.equal(exporter.detectLyricsTimingMode(result.lyrics, result.source), "interpolated");
       }
     }
+    const directWithTtmlIdentity = load(async url => {
+      if (url.endsWith(".json")) return new Response("missing", { status: 404 });
+      return new Response('<tt xmlns:ttm="http://www.w3.org/ns/ttml#metadata" lrc:timing="Word"><ttm:title>Example Song</ttm:title><ttm:agent><ttm:name>Example Artist</ttm:name></ttm:agent><body><p begin="1" end="9"><span begin="1" end="9">Hello</span></p></body></tt>');
+    }, mobile);
+    directWithTtmlIdentity.track.isrc = isrc;
+    assert.equal((await vm.runInContext("fetchFromLrcRed(track)", directWithTtmlIdentity))?.source, "lrc-red-karaoke");
     const context = load(async () => new Response("unavailable", { status: 503 }), mobile);
     context.track.isrc = isrc;
     await assert.rejects(vm.runInContext("fetchFromLrcRed(track)", context), /503/);
     const miss = load(async () => new Response('{"hits":[]}'), mobile);
     assert.equal(await vm.runInContext("fetchFromLrcRed(track)", miss), null);
+  });
+
+  test(`${platform}: TTML survives missing JSON metadata and Deezer supplies ISRC when lrc.red search misses`, async () => {
+    const calls = [];
+    const crushTrack = { title: "seesaw (Feat. IU)", artist: "Crush", durationMs: 203000,
+      spotifyTrackId: "3lTdjfpGVeYLeHfrczXw1a" };
+    const context = load(async url => {
+      calls.push(url);
+      if (url.includes("api.deezer.com/search")) return Response.json({ data: [
+        { isrc: "ZZA0P2622376", title: crushTrack.title, artist: { name: "Crush" }, duration: 203 },
+      ] });
+      if (url.includes("search.json")) return Response.json({ hits: [] });
+      if (url.endsWith(".json")) return new Response("missing", { status: 404 });
+      assert.equal(url, "https://lrc.red/s/ZZA0P2622376.ttml");
+      return new Response(crushSeesawTtml);
+    }, mobile);
+    context.track = crushTrack;
+    const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+    assert.equal(result?.source, "lrc-red-karaoke");
+    assert.equal(result?.lyrics[0].syllables.map(s => s.text).join(""), "Seesaw again");
+    assert(calls.includes("https://lrc.red/s/ZZA0P2622376.json"));
+    assert(calls.includes("https://lrc.red/s/ZZA0P2622376.ttml"));
+    assert(!calls.some(url => url.includes("search.json")), "successful Deezer match should bypass empty lrc.red search");
+    assert.equal(result.metadata.attribution.url, "https://lrc.red/s/ZZA0P2622376");
   });
 
   for (const example of [

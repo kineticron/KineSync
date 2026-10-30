@@ -5,7 +5,7 @@ const lrcRedIsrcCache = new Map();
 const lrcRedHeaders = { "User-Agent": "KineSync/1.2.0 (https://github.com/Kineticron/KineSync)" };
 
 async function fetchFromLrcRed(track) {
-  const { parseTtmlToLyrics, parseTtmlTimeExpression } = require("./lyricsTtmlImport");
+  const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");
   const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
     .replace(/[-\s]/g, "").toUpperCase();
   const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
@@ -87,16 +87,25 @@ async function fetchFromLrcRed(track) {
       return true;
     }).map(async (candidate, index) => {
       try {
-        const recording = await fetchJson(`https://lrc.red/s/${candidate.isrc}.json`, { headers: lrcRedHeaders });
+        let recording = null;
+        try { recording = await fetchJson(`https://lrc.red/s/${candidate.isrc}.json`, { headers: lrcRedHeaders }); }
+        catch { /* JSON is optional metadata; TTML remains the source of truth. */ }
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (recording?.title && !versionMatches(recording.title)) return null;
-        if (!["word", "line"].includes(recording?.sync)) return null;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
-        if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
+        if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
         const parsed = parseTtmlToLyrics(content);
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
+        const ttmlTrack = extractTtmlMetadata(content);
+        if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
+          { ...matchTrack, title: stripRemaster(track.title) }, stripRemaster(ttmlTrack.title),
+          ttmlTrack.artist || candidate.artist || matchTrack.artist,
+        ))) return null;
+        if (ttmlTrack.artist && !artistNamesLookRelated(matchTrack.artist, ttmlTrack.artist)) return null;
+        const trackDuration = Number(track.durationMs) || Number(candidate.durationMs) || 0;
+        if (trackDuration && parsed.durationMs > trackDuration + 10000) return null;
         const result = {
           lyrics: parsed.lyrics,
           source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
