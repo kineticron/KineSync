@@ -5,22 +5,13 @@ import {
 } from "@/lib/mobile-lyrics-settings";
 
 const ANONYMOUS_TOKEN_RETRY_MS = 20 * 60 * 1000;
+const MUSIXMATCH_TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
+const MUSIXMATCH_PROFILE_ID = "mac-ios-v2.0@apic-appmobile";
 
 const TOKEN_ENDPOINT_PROFILES = [
   {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic-desktop.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
     appId: "mac-ios-v2.0",
+    profileId: MUSIXMATCH_PROFILE_ID,
     baseUrl: "https://apic-appmobile.musixmatch.com/ws/1.1",
     userAgent:
       "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
@@ -44,12 +35,17 @@ function createDeviceId() {
 
 function storedAnonymousToken() {
   const settings = getCachedMobileLyricsSettings();
-  if (!settings.musixmatchAnonymousUserToken || !settings.musixmatchAnonymousAppId) {
+  const token = settings.musixmatchAnonymousUserToken.trim();
+  const acquiredAt = settings.musixmatchAnonymousFetchedAt;
+  if (
+    !token || /^0+$/.test(token) || /^UpgradeOnly$/i.test(token) ||
+    settings.musixmatchAnonymousAppId !== "mac-ios-v2.0" ||
+    settings.musixmatchAnonymousProfileId !== MUSIXMATCH_PROFILE_ID ||
+    !acquiredAt || Date.now() - acquiredAt < 0 || Date.now() - acquiredAt >= MUSIXMATCH_TOKEN_TTL_MS
+  ) {
     return "";
   }
-  return JSON.stringify({
-    [settings.musixmatchAnonymousAppId]: settings.musixmatchAnonymousUserToken,
-  });
+  return JSON.stringify({ profileId: MUSIXMATCH_PROFILE_ID, appId: "mac-ios-v2.0", userToken: token, acquiredAt });
 }
 
 async function fetchWithTimeout(
@@ -86,7 +82,7 @@ async function requestAnonymousToken({
   const currentTime = Date.now();
   if (
     settings.musixmatchAnonymousLastAttemptAt &&
-    currentTime - settings.musixmatchAnonymousLastAttemptAt <
+    !force && currentTime - settings.musixmatchAnonymousLastAttemptAt <
       ANONYMOUS_TOKEN_RETRY_MS
   ) {
     return storedToken;
@@ -130,7 +126,7 @@ async function requestAnonymousToken({
         const payload = await response.json();
         const statusCode = Number(payload?.message?.header?.status_code || 0);
         const userToken = String(payload?.message?.body?.user_token || "").trim();
-        if (statusCode !== 200 || !userToken) {
+        if (statusCode !== 200 || !userToken || /^0+$/.test(userToken) || /^UpgradeOnly$/i.test(userToken)) {
           lastError = new Error(
             `Musixmatch token endpoint returned status ${statusCode || "unknown"}.`,
           );
@@ -142,8 +138,9 @@ async function requestAnonymousToken({
           musixmatchAnonymousDeviceId: deviceId,
           musixmatchAnonymousFetchedAt: currentTime,
           musixmatchAnonymousLastAttemptAt: currentTime,
+          musixmatchAnonymousProfileId: profile.profileId,
         });
-        return JSON.stringify({ [profile.appId]: userToken });
+        return JSON.stringify({ profileId: profile.profileId, appId: profile.appId, userToken, acquiredAt: currentTime });
       } catch (error) {
         lastError = error;
       }
