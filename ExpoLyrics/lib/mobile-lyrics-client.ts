@@ -53,9 +53,10 @@ const mobileLyricsService = createLyricsService({
     resolveMobileMusixmatchToken(
       readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
     ),
-  refreshMusixmatchUserToken: () =>
+  refreshMusixmatchUserToken: (rejectedToken = "") =>
     refreshMobileMusixmatchToken(
       readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
+      rejectedToken,
     ),
   getSpotifyWebToken: () =>
     storedSpotifyToken() ||
