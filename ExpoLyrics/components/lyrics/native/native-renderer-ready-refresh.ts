@@ -1,21 +1,25 @@
 type RefreshRegistration = { canResync: () => boolean; resyncPlayback: () => void };
+type PendingReadyRequest = { isCurrent: () => boolean; onRejected?: () => void };
 let currentRegistration: RefreshRegistration | null = null;
-let pendingReadyRequest: (() => boolean) | null = null;
+let pendingReadyRequest: PendingReadyRequest | null = null;
 
 /** Registers the detector's existing resyncPlayback path without importing its UI/WebView module here. */
 export function registerNativeRendererReadyResync(registration: RefreshRegistration) {
   currentRegistration = registration;
   const pending = pendingReadyRequest;
   pendingReadyRequest = null;
-  if (pending?.() && registration.canResync()) registration.resyncPlayback();
+  if (pending) {
+    if (pending.isCurrent() && registration.canResync()) registration.resyncPlayback();
+    else pending.onRejected?.();
+  }
   return () => { if (currentRegistration === registration) currentRegistration = null; };
 }
 
-export function requestNativeRendererReadyResync(isCurrent: () => boolean = () => true) {
-  if (!isCurrent()) return false;
+export function requestNativeRendererReadyResync(isCurrent: () => boolean = () => true, onRejected?: () => void) {
+  if (!isCurrent()) { onRejected?.(); return false; }
   const registration = currentRegistration;
-  if (!registration) { pendingReadyRequest = isCurrent; return true; }
-  if (!registration.canResync() || !isCurrent()) return false;
+  if (!registration) { pendingReadyRequest = { isCurrent, onRejected }; return true; }
+  if (!registration.canResync() || !isCurrent()) { onRejected?.(); return false; }
   registration.resyncPlayback();
   return true;
 }
@@ -47,12 +51,17 @@ export class NativeRendererReadyRefreshGate {
 
   isCurrent(generation: number) { return this.mounted && generation === this.generation; }
 
-  onReady(generation: number, eligible: boolean, request: (isCurrent: () => boolean) => boolean) {
+  onReady(generation: number, eligible: boolean, request: (isCurrent: () => boolean, onRejected?: () => void) => boolean,
+    canDispatch: () => boolean = () => true) {
     if (!eligible || !this.isCurrent(generation) || generation === this.completedGeneration) return false;
     this.completedGeneration = generation;
-    try { if (request(() => this.isCurrent(generation))) return true; }
+    const isCurrent = () => this.isCurrent(generation) && canDispatch();
+    const onRejected = () => {
+      if (this.isCurrent(generation) && this.completedGeneration === generation) this.completedGeneration = -1;
+    };
+    try { if (request(isCurrent, onRejected)) return true; }
     catch { /* A failed detector request may retry on the next genuine ready event. */ }
-    if (this.isCurrent(generation) && this.completedGeneration === generation) this.completedGeneration = -1;
+    onRejected();
     return false;
   }
 }

@@ -9,7 +9,7 @@ const baselineIndex = process.argv.indexOf('--baseline');
 const baselinePath = baselineIndex < 0 ? null : process.argv[baselineIndex + 1];
 const bundle = filename => buildSync({ stdin: { contents: fs.readFileSync(filename, 'utf8'), resolveDir: directory, loader: 'tsx' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'],
+  external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
 }).outputFiles[0].text;
 const source = bundle(path.join(directory, 'native-glyph-picture.tsx'));
 const baselineSource = baselinePath && bundle(baselinePath);
@@ -59,11 +59,10 @@ function mount(code, spicy, count = 3, start = 5000) {
     return JSON.stringify(commands);
   };
   const react = { memo: fn => fn, useMemo: fn => fn(), useCallback: fn => fn,
-    useEffect: fn => cleanups.push(fn()), useContext: () => null, createContext: value => ({ value }), createElement: (_type, props) => props };
+    useEffect: fn => cleanups.push(fn()), createElement: (_type, props) => props };
   const moduleObject = { exports: {} };
   vm.runInNewContext(code, { module: moduleObject, exports: moduleObject.exports,
-    require: name => name === 'react' ? react : name === 'react-native' ? { AppState: { addEventListener: () => ({ remove() {} }) } }
-      : name === 'react-native-worklets' ? { scheduleOnRN() {}, scheduleOnUI() {} } : name === 'react-native-reanimated'
+    require: name => name === 'react' ? react : name === 'react-native-reanimated'
       ? { useSharedValue: value, useFrameCallback: fn => {
         const frame = { fn, active: false }; frames.push(frame);
         return { setActive: active => { frame.active = active; } };

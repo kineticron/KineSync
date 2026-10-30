@@ -9,11 +9,11 @@ const { buildSync } = require('esbuild');
 const source = buildSync({
   entryPoints: [path.join(__dirname, '../components/lyrics/native/reference-scroll.tsx')],
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native', 'react-native-reanimated', 'react-native-worklets'],
+  external: ['react', 'react-native', 'react-native-reanimated'],
 }).outputFiles[0].text;
 const cellSource = buildSync({ entryPoints: [path.join(__dirname, '../components/lyrics/native/amll-layout-cell.tsx')],
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native', 'react-native-reanimated', 'react-native-worklets', './reference-scroll'],
+  external: ['react', 'react-native', 'react-native-reanimated', './reference-scroll'],
 }).outputFiles[0].text;
 
 for (const [spicy, reverseFrames, fps] of [[false, false, 60], [false, true, 60], [false, false, 120], [false, true, 120], [true, false, 60]]) {
@@ -50,13 +50,11 @@ for (const [spicy, reverseFrames, fps] of [[false, false, 60], [false, true, 60]
   };
   // The host residual is the shared value being animated by the real scroll hook.
   host.residual = reanimated.useSharedValue(0);
-  const react = { createContext: value => ({ value }), forwardRef: fn => fn, useCallback: fn => fn, useMemo: fn => fn(),
-    useContext: context => context === referenceContext ? host : null, useEffect: fn => fn(), createElement: () => ({}) };
+  const react = { createContext: () => ({}), forwardRef: fn => fn, useCallback: fn => fn, useMemo: fn => fn(),
+    useContext: () => host, useEffect: fn => fn(), createElement: () => ({}) };
   const moduleObject = { exports: {} };
   vm.runInNewContext(source, { module: moduleObject, exports: moduleObject.exports,
-    require: name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: () => ({}) } : name === 'react-native' ? {} :
-      name === 'react-native-worklets' ? { scheduleOnRN() {}, scheduleOnUI() {} } : reanimated });
-  const referenceContext = moduleObject.exports.ReferenceScrollContext;
+    require: name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx: () => ({}) } : name === 'react-native' ? {} : reanimated });
   const { ReferenceScrollView, useReferenceRowScroll } = moduleObject.exports;
   ReferenceScrollView({}, null);
   // This harness supplies deterministic hook implementations instead of React.
@@ -114,7 +112,7 @@ for (const [spicy, reverseFrames, fps] of [[false, false, 60], [false, true, 60]
     const cellModule = { exports: {} };
     vm.runInNewContext(cellSource, { module: cellModule, exports: cellModule.exports,
       require: name => name === 'react' ? react : name === 'react/jsx-runtime'
-        ? { jsx: (type, props) => ({ type, props }) } : name === './reference-scroll' ? { ReferenceScrollContext: referenceContext } : reanimated });
+        ? { jsx: (type, props) => ({ type, props }) } : name === './reference-scroll' ? {} : reanimated });
     const layout = cellModule.exports.AmllLayoutCell({ index: 4 }, null).props.layout;
     const anchor = 80;
     let logicalY = 500 + anchor;
@@ -180,7 +178,7 @@ for (const animated of [false, true]) {
 }
 for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true, true, false], [4, false, true, false], [4, true, false, false]]) {
   const command = { current: { serial: 8, index: 4, offset: 600, snap } };
-  const context = { useCallback: fn => fn, diagnostics: null, nativeFollowIndex: (_rows, index) => index,
+  const context = { useCallback: fn => fn, nativeFollowIndex: (_rows, index) => index,
     currentPosition: { current: 14000 }, following: { current: true }, active: true, staticLyrics: false,
     rows: Array.from({ length: 10 }, (_, index) => ({ lead: { start: index * 1000, end: (index + 1) * 1000 } })),
     list: 'flash', flashRef: { current: { getLayout: () => ({ y: 500 }), getFirstItemOffset: () => 150, getFirstVisibleIndex: () => 3 } },

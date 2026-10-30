@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { Pressable } from 'react-native-gesture-handler';
 import MaskedView from '@react-native-masked-view/masked-view';
@@ -12,7 +12,6 @@ import { AmllBackground } from './amll-background';
 import { NativeInterludeView } from './native-interlude';
 import { NativeSkiaVoice } from './native-skia-voice';
 import { useReferenceRowScroll, type ReferenceScroll } from './reference-scroll';
-import { useNativeRenderDiagnostics } from './native-render-diagnostics';
 
 export type NativeReveal = 'clip' | 'mask' | 'canvas' | 'tree';
 const gradientColors = ['#fff', '#fff', '#ffffff00'] as const;
@@ -55,13 +54,6 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
   blur: number; playing: boolean; prepared: boolean; rowActive: SharedValue<boolean>; blurValue: SharedValue<number>;
 }) {
   const { getMappingKey } = useMappingHelper();
-  const diagnostics = useNativeRenderDiagnostics();
-  useEffect(() => {
-    if (!diagnostics) return;
-    const voiceKind = background ? 'backgroundVoice' : 'leadVoice';
-    diagnostics.trackMount(voiceKind, 1);
-    return () => diagnostics.trackMount(voiceKind, -1);
-  }, [background, diagnostics]);
   const lineMotion = useReferenceLineMotion(rowActive, !spicy && !staticLyrics, background, !spicy && playing);
   const voiceStyle = useAnimatedStyle(() => ({ transform: [{ scale: spicy || staticLyrics ? 1 : lineMotion.value.scale }], transformOrigin: right ? 'right center' : 'left center' }));
   const textStyle = useMemo<TextStyle>(() => ({ color: '#fff', fontSize, lineHeight, fontFamily: background ? 'KineSync-SF-Regular' : 'KineSync-SF-Bold',
@@ -95,12 +87,6 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
 }) {
   const { getMappingKey } = useMappingHelper();
   const spicy = style === 'spicy';
-  const diagnostics = useNativeRenderDiagnostics();
-  useEffect(() => {
-    if (!diagnostics) return;
-    diagnostics.trackMount('row', 1);
-    return () => diagnostics.trackMount('row', -1);
-  }, [diagnostics]);
   const scrollStyle = useReferenceRowScroll(referenceScroll, row.index, !staticLyrics);
   const rowActive = useDerivedValue(() => row.index >= presentationWindow.value.visualActiveLineStartIndex && row.index <= presentationWindow.value.visualActiveLineEndIndex);
   const blurValue = useDerivedValue(() => {

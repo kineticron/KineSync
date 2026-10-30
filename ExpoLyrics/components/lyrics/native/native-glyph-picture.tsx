@@ -8,8 +8,6 @@ import { amllEmphasis, amllFloat, clamp01 } from './reference-motion';
 import type { ReferenceLineMotion } from './use-reference-line-motion';
 import { spicyIsRtl } from './spicy-text-policy';
 import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } from './amll-float-clock';
-import { scheduleOnRN } from 'react-native-worklets';
-import { recordNativeFrame, type NativeDiagnostics } from './native-render-diagnostics';
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
@@ -193,10 +191,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
 }
 
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
-export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, diagnostics }: {
+export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
   words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
-  diagnostics: NativeDiagnostics | null;
 }) {
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
@@ -205,7 +202,6 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
-    const workStartedUiMs = diagnostics ? performance.now() : 0;
     const time = position.value;
     const previous = state.value;
     const isActive = active.value;
@@ -214,8 +210,6 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
       (time === previous.time || !isActive && (time < lineEnd) === (previous.time < lineEnd) &&
         (time < words[0].word.start || time > lineEnd + 1500))) {
       if (time !== previous.time) state.modify(s => { s.time = time; return s; }, false);
-      if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'voice', workStartedUiMs, performance.now(), info.timestamp,
-        info.timeSincePreviousFrame, { background, idle: true, cached: true });
       return;
     }
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
@@ -226,8 +220,6 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     if (settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) {
       state.modify(s => { s.cached = true; return s; }, false);
-      if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'voice', workStartedUiMs, performance.now(), info.timestamp,
-        info.timeSincePreviousFrame, { background, idle: true, cached: true });
       return;
     }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
@@ -235,8 +227,6 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
       state.modify(s => { s.time = time; s.cached = true; return s; }, false);
-      if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'voice', workStartedUiMs, performance.now(), info.timestamp,
-        info.timeSincePreviousFrame, { background, idle: true, cached: true });
       return;
     }
     const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
@@ -245,27 +235,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd, lineMotion.value, floatClock), bounds);
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-    let firstPicture = false;
-    let generation = 0;
-    if (diagnostics) {
-      const snapshot = diagnostics.stats.value;
-      if (__DEV__ && snapshot.captureEnabled) {
-        generation = snapshot.generation;
-        firstPicture = !snapshot.firstGlyphPicture;
-        if (firstPicture) diagnostics.stats.value = { ...snapshot, firstGlyphPicture: true };
-      }
-      if (firstPicture && words.length > 0) {
-        const uiNow = performance.now();
-        const clock = diagnostics.stats.value;
-        scheduleOnRN(diagnostics.reportUi, generation, 'first_skia_glyph_picture_recorded', uiNow, {
-          background, voiceKind: background ? 'background' : 'lead', evidence: 'Skia Picture recording completed; physical presentation is not measured',
-          wordCount: words.length, cachedPicture: false,
-        }, { offsetMs: clock.uiOffsetMs, errorMs: clock.offsetErrorMs });
-      }
-    }
-    if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'voice', workStartedUiMs, performance.now(), info.timestamp,
-      info.timeSincePreviousFrame, { background, pictureRebuilt: true, cachedActivation: previous.cached });
-  }, [active, background, bounds, diagnostics, fontSize, lineEnd, lineMotion, picture, position, spicy, state, words]), false);
+  }, [active, background, bounds, fontSize, lineEnd, lineMotion, picture, position, spicy, state, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 });

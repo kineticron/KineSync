@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useContext, useMemo, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
   type SkParagraph, type SkRect } from '@shopify/react-native-skia';
@@ -13,7 +13,6 @@ import { spicyIsRtl } from './spicy-text-policy';
 import { amllRevealStart } from './native-glyph-layout';
 import { NativeLyricsFontContext } from './native-lyrics-fonts';
 import { balanceAmllText } from './amll-native-layout';
-import { useNativeRenderDiagnostics } from './native-render-diagnostics';
 
 type ShapedWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
 type WordProps = { shaped: ShapedWord; paragraph: SkParagraph; width: number; position: SharedValue<number>;
@@ -110,10 +109,6 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean;
 }) {
   const fonts = useContext(NativeLyricsFontContext);
-  const diagnostics = useNativeRenderDiagnostics();
-  const diagnosticsRef = useRef(diagnostics);
-  diagnosticsRef.current = diagnostics;
-  const reportedShape = useRef<{ paragraph: SkParagraph; generation: number } | null>(null);
   const [width, setWidth] = useState(0);
   // The outer line cancels its .2em margin with padding. Duet songs replace
   // the far-side padding with 15% of the lane; the main line's 1em cancels itself.
@@ -125,7 +120,6 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const shaped = useMemo(() => {
     if (width <= 0 || !fonts) return null;
-    const diagnosticStartedAt = diagnosticsRef.current ? performance.now() : 0;
     const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
       strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
         fontFamilies: ['SF Pro Display'], fontSize,
@@ -192,31 +186,9 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       translation.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
     }
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-    const glyphWords = batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [];
-    const diagnosticCompletedAt = diagnosticsRef.current ? performance.now() : 0;
     return { paragraph, height: paragraph.getHeight(), translation, translationMargin, mainPadding,
-      totalHeight: paragraph.getHeight() + mainPadding * 2 + (translation ? translationMargin + translation.getHeight() : 0), words,
-      glyphWords,
-      diagnosticShapeDurationMs: diagnosticStartedAt ? diagnosticCompletedAt - diagnosticStartedAt : null,
-      diagnosticShapeCompletedAtJsMs: diagnosticCompletedAt };
+      totalHeight: paragraph.getHeight() + mainPadding * 2 + (translation ? translationMargin + translation.getHeight() : 0), words, glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };
   }, [background, batched, fonts, fontSize, lineHeight, right, showTranslation, spicy, staticLyrics, textWidth, voice, width]);
-  const latestShape = useRef({ shaped, background, batched, staticLyrics, textWidth });
-  latestShape.current = { shaped, background, batched, staticLyrics, textWidth };
-  const reportCurrentShape = useCallback((generation: number) => {
-    const diag = diagnosticsRef.current;
-    const current = latestShape.current;
-    if (!diag || !current.shaped || (reportedShape.current?.paragraph === current.shaped.paragraph && reportedShape.current.generation === generation)) return;
-    reportedShape.current = { paragraph: current.shaped.paragraph, generation };
-    diag.report('shape_layout_ready', { background: current.background,
-      durationMs: current.shaped.diagnosticShapeDurationMs == null ? null : Number(current.shaped.diagnosticShapeDurationMs.toFixed(2)),
-      widthPx: Number(current.textWidth.toFixed(1)), alreadyReadyAtCaptureStart: current.shaped.diagnosticShapeCompletedAtJsMs < diag.getSessionStartedAt(),
-      paintWordCount: current.shaped.words.length, evidence: current.batched && !current.staticLyrics ? 'paragraph_and_glyph_words' : 'paragraph_only' });
-  }, []);
-  useEffect(() => {
-    if (!diagnostics) return;
-    return diagnostics.registerSessionObserver(generation => reportCurrentShape(generation));
-  }, [diagnostics, reportCurrentShape]);
-  useEffect(() => { if (diagnostics) reportCurrentShape(diagnostics.getGeneration()); }, [diagnostics, reportCurrentShape, shaped]);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
     : spicy ? position.value > voice.end ? 0.497 : 0.51 : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
@@ -228,7 +200,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture key={`${voice.start}:${voice.end}:${voice.paintText}:${textWidth}:${shaped.height}:${fontSize}`} words={shaped.glyphWords} width={textWidth} height={shaped.height} diagnostics={diagnostics}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture key={`${voice.start}:${voice.end}:${voice.paintText}:${textWidth}:${shaped.height}:${fontSize}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voice.end} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}

@@ -17,7 +17,6 @@ import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView } fro
 import { AmllLayoutCell } from './amll-layout-cell';
 import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 import { buildNativeCueTimeline } from './native-cue-timeline';
-import { allocateNativeDiagnosticRunId, NativeRenderDiagnosticsProvider, useNativeRenderDiagnostics } from './native-render-diagnostics';
 import { NativeRendererReadyRefreshGate, requestNativeRendererReadyResync } from './native-renderer-ready-refresh';
 
 export type NativeLyricsViewProps = {
@@ -37,13 +36,12 @@ const maintainVisibleContentPosition = { disabled: true };
 const emptyMetadata: LyricsMetadata = {};
 
 /** Experimental native host. Both list backends deliberately use identical rows and clocks for A/B profiling. */
-const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
+export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeLyricsView({
   style, list = 'flash', reveal = 'clip', demoLyrics, demoLayout = 'preview', demoIsPlaying, demoPlayback, demoDurationMs,
   tapToSeekEnabled, showTranslatedText = true, previewPositionMs = null, autoFollowEnabled = true,
   resumeAutoFollowSignal = 0, selectedLineKeys, onLinePress, onLineLongPress, onActiveLineChange,
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
-  const diagnostics = useNativeRenderDiagnostics();
   const fonts = useNativeLyricsFonts();
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
@@ -57,7 +55,7 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
     ...(line.backgroundSyllables ?? []).map(part => part.endTime),
     ...(line.spicyBackgrounds ?? []).map(block => block.lineEndTime)))) + 1000), [demoDurationMs, demoLyrics, lyrics, trackDuration]);
   const staticLyrics = useMemo(() => detectLyricsTimingMode(lyrics, source) === 'static', [lyrics, source]);
-  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback, diagnostics });
+  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback });
   const hasDuet = useMemo(() => lyrics.some(line => landscapeMode ? !line.oppositeAligned : !!line.oppositeAligned), [landscapeMode, lyrics]);
   const rows = useMemo(() => buildNativeRows(lyrics, style, staticLyrics), [lyrics, staticLyrics, style]);
   const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);
@@ -79,6 +77,10 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
   rendererReadyState.current = { key: rendererReadyKey, generation: rendererReadyGeneration,
     ready: rendererReadyState.current.key === rendererReadyKey ? rendererReadyState.current.ready : false,
     eligible: !!active && !demoLyrics && lyrics.length > 0 };
+  const canDispatchRendererReady = useCallback((key: string, generation: number) => {
+    const current = rendererReadyState.current;
+    return current.key === key && current.generation === generation && current.eligible && AppState.currentState === 'active';
+  }, []);
   useEffect(() => {
     readyGate.setMounted(true);
     return () => readyGate.setMounted(false);
@@ -87,26 +89,27 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
     let backgrounded = false;
     const subscription = AppState.addEventListener('change', state => {
       if (state === 'background') { backgrounded = true; return; }
-      if (state !== 'active') return;
-      if (!backgrounded) return;
+      if (state !== 'active' || !backgrounded) return;
       backgrounded = false;
       const ready = rendererReadyState.current;
       const generation = rendererReadyGate.current.foreground(ready.key);
       rendererReadyState.current = { ...ready, generation };
       const playback = usePlaybackStore.getState();
       if (ready.ready) rendererReadyGate.current.onReady(generation,
-        ready.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync);
+        ready.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
+        () => canDispatchRendererReady(ready.key, generation));
     });
     return () => subscription.remove();
-  }, []);
+  }, [canDispatchRendererReady]);
   const markRendererReady = useCallback((expectedKey: string) => {
     const state = rendererReadyState.current;
     if (state.key !== expectedKey) return;
     state.ready = true;
     const playback = usePlaybackStore.getState();
     rendererReadyGate.current.onReady(state.generation,
-      state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync);
-  }, []);
+      state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
+      () => canDispatchRendererReady(state.key, state.generation));
+  }, [canDispatchRendererReady]);
   const flashRef = useRef<FlashListRef<NativeLyricRow>>(null);
   const flatRef = useRef<FlatList<NativeLyricRow>>(null);
   const scrollCommand = useSharedValue(initialScrollCommand);
@@ -168,10 +171,7 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
       scrollCommand.value = command;
     } else flatRef.current?.scrollToIndex({ index, animated, viewPosition: 0, viewOffset: -anchor });
     lastScrollTarget.current = target;
-    diagnostics?.report('auto_follow_scroll_command', { index, targetOffsetPx: Number(list === 'flash' ? scrollState.current.offset.toFixed(1) : '0'),
-      deltaPx: Number(list === 'flash' ? scrollState.current.delta.toFixed(1) : '0'), animated,
-      firstVisibleIndex: list === 'flash' ? scrollState.current.firstVisible : -1 });
-  }, [active, diagnostics, fontScale, landscapeMode, list, preview, rows, scrollCommand, showTranslatedText, staticLyrics, style, viewportHeight]);
+  }, [active, fontScale, landscapeMode, list, preview, rows, scrollCommand, showTranslatedText, staticLyrics, style, viewportHeight]);
   const updateWindow = useCallback((time: number, token: number, seek = false) => {
     if (!mounted.current || token !== generation.current || latestLyrics.current !== lyrics || !active || AppState.currentState !== 'active') return;
     currentPosition.current = time;
@@ -229,8 +229,7 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
     scrollCommand.value = command;
     onAutoFollowChange?.(false);
     onUserInteraction?.();
-    diagnostics?.report('manual_scroll_started', { startingOffsetPx: Number(command.offset.toFixed(1)) });
-  }, [diagnostics, onAutoFollowChange, onUserInteraction, scrollCommand]);
+  }, [onAutoFollowChange, onUserInteraction, scrollCommand]);
   const press = useCallback((row: NativeLyricRow) => {
     following.current = true;
     onAutoFollowChange?.(true);
@@ -292,27 +291,8 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
       if (range) scrollTo(range.startIndex, true);
     }
   }, [backgrounds, lyrics, markRendererReady, rendererReadyKey, scrollTo, timing, transition]);
-  const readiness = useRef({ fonts: false, geometry: null as { width: number; height: number } | null, generation: -1 });
-  const reportReadiness = useCallback((generation: number) => {
-    if (!diagnostics || readiness.current.generation === generation) return;
-    readiness.current.generation = generation;
-    if (readiness.current.fonts) diagnostics.report('fonts_ready', { fontProviderReady: true, cachedAtCaptureStart: true });
-    if (readiness.current.geometry) diagnostics.report('geometry_ready', { widthPx: Number(readiness.current.geometry.width.toFixed(1)),
-      heightPx: Number(readiness.current.geometry.height.toFixed(1)), cachedAtCaptureStart: true });
-  }, [diagnostics]);
-  useEffect(() => diagnostics ? diagnostics.registerSessionObserver(generation => reportReadiness(generation)) : undefined,
-    [diagnostics, reportReadiness]);
-  useEffect(() => {
-    readiness.current.fonts = !!fonts;
-    if (fonts) diagnostics?.report('fonts_ready', { fontProviderReady: true, cachedAtCaptureStart: false });
-  }, [diagnostics, fonts]);
-  if (!lyrics.length) return <View style={styles.empty} onLayout={event => { transition?.onReady?.();
-    const { width, height } = event.nativeEvent.layout; readiness.current.geometry = { width, height };
-    diagnostics?.report('geometry_ready', { widthPx: Number(width.toFixed(1)), heightPx: Number(height.toFixed(1)), empty: true });
-  }}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  return <View style={styles.root} onLayout={event => { const { width, height } = event.nativeEvent.layout;
-    setViewportHeight(height); setViewportWidth(width); readiness.current.geometry = { width, height };
-    diagnostics?.report('geometry_ready', { widthPx: Number(width.toFixed(1)), heightPx: Number(height.toFixed(1)) }); }} testID={`native-${style}-${list}-${reveal}`}>
+  if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
+  return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
@@ -329,19 +309,7 @@ const NativeLyricsViewContent = memo(function NativeLyricsViewContent({
           onTouchStart={takeOwnership} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>
   </View>;
-});
-
-const NativeLyricsViewRenderer = memo(function NativeLyricsViewRenderer(props: NativeLyricsViewProps & {
-  style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal;
-}) {
-  const runId = useRef(0);
-  if (!runId.current) runId.current = allocateNativeDiagnosticRunId();
-  const renderer = `${props.style}:${props.list ?? 'flash'}:${props.reveal ?? 'clip'}`;
-  return <NativeRenderDiagnosticsProvider enabled={__DEV__ && props.active !== false}
-    renderer={renderer} runId={runId.current} reason="native_renderer_mount"><NativeLyricsViewContent {...props} /></NativeRenderDiagnosticsProvider>;
-});
-
-export const NativeLyricsView = withLyricsPacketTransition(NativeLyricsViewRenderer);
+}));
 
 const styles = StyleSheet.create({
   root: { flex: 1 }, empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 },

@@ -3,7 +3,6 @@ import { type ScrollView, type ScrollViewProps } from 'react-native';
 import Animated, { cancelAnimation, scrollTo, useAnimatedReaction, useAnimatedRef, useAnimatedStyle,
   useFrameCallback, useScrollOffset, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { amllScrollSpring, spicyScrollDuration, spicyScrollEasing, stepAmllSpring } from './reference-motion';
-import { recordNativeFrame, useNativeRenderDiagnostics } from './native-render-diagnostics';
 
 export type ScrollCommand = { serial: number; offset: number; delta: number; index: number; firstVisible: number;
   interval: number; instant: boolean; interlude: boolean; snap: boolean; geometry?: boolean };
@@ -78,7 +77,6 @@ export const ReferenceScrollView = forwardRef<ScrollView, ScrollViewProps>(funct
 
 /** AMLL staggers the individual row springs; a single animated scroll cannot reproduce this. */
 export function useReferenceRowScroll(host: ReferenceScroll, index: number, enabled: boolean) {
-  const diagnostics = useNativeRenderDiagnostics();
   const state = useSharedValue({ p: 0, v: 0, renderedP: 0, delay: 0, stiffness: 90, damping: 15 });
   useAnimatedReaction(() => ({ command: host.command.value, index }), ({ command, index: rowIndex }, previous) => {
     if (host.spicy) return;
@@ -97,24 +95,15 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
-    const workStartedUiMs = diagnostics ? performance.now() : 0;
     const s = state.value;
-    if (s.p === 0 && s.v === 0 && s.renderedP === 0 && host.residual.value === 0) {
-      if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'row', workStartedUiMs, performance.now(), info.timestamp, info.timeSincePreviousFrame, { idle: true });
-      return;
-    }
+    if (s.p === 0 && s.v === 0 && s.renderedP === 0 && host.residual.value === 0) return;
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
-    if (s.delay > 0) {
-      state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt) };
-      if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'row', workStartedUiMs, performance.now(), info.timestamp, info.timeSincePreviousFrame);
-      return;
-    }
+    if (s.delay > 0) { state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt) }; return; }
     const next = stepAmllSpring(s, 0, 0.9, s.damping, s.stiffness, dt);
     const settled = Math.abs(next.p) < 0.01 && Math.abs(next.v) < 0.01;
     state.value = { ...s, p: settled ? 0 : next.p, v: settled ? 0 : next.v,
       renderedP: settled ? 0 : next.p };
-    if (diagnostics) recordNativeFrame(diagnostics.stats, diagnostics, 'row', workStartedUiMs, performance.now(), info.timestamp, info.timeSincePreviousFrame);
-  }, [diagnostics, host, state]), false);
+  }, [host, state]), false);
   useEffect(() => { frame.setActive(enabled && !host.spicy); return () => frame.setActive(false); }, [enabled, frame, host.spicy]);
   // Command reactions run independently. Subtracting the host residual here
   // exposes its full cue delta before the row reaction catches up, briefly

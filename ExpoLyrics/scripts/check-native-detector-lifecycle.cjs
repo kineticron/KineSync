@@ -10,6 +10,7 @@ const alerts = [], openedUrls = [];
 const development = process.argv.includes('--development');
 const developmentLogs = [], publishedSamples = [];
 const diagnosticModules = new Map();
+const nativeRendererReadyRefresh = { registerNativeRendererReadyResync: () => () => {} };
 function diagnosticModule(name) {
   if (diagnosticModules.has(name)) return diagnosticModules.get(name);
   const exports = {}; diagnosticModules.set(name, exports);
@@ -72,6 +73,7 @@ const mocks = {
   '@/lib/spotify-player-actions': { registerSpotifyPlayerActions: a => { actions = a; return () => { actions = null; }; } },
   '@/lib/mobile-lyrics-settings': { saveMobileLyricsSettings: async () => {} },
   '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack: async () => { assert(playback.currentTrack.artist); searches.push(playback.currentTrack); } },
+  './native/native-renderer-ready-refresh': nativeRendererReadyRefresh,
   '@/store/playback-store': { usePlaybackStore: callableStore(playback) },
   '@/store/spotify-session-store': { useSpotifySessionStore: callableStore(session) },
   '@/store/player-tour-store': { usePlayerTourStore: { getState: () => tour } },
