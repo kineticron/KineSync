@@ -783,6 +783,11 @@ function createLyricsService({
       }
 
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
+      // Credential/catalog setup can outlive a force refresh or source/track
+      // switch. It must not replace the newer run's in-flight registry entry.
+      if (!isCurrentSelection() || sourceCachesByTrack.get(cacheKey) !== sourceRecord) {
+        return { trackId: cacheKey, lyrics: [], source: "stale-lyrics-request" };
+      }
       let flight = !force ? sourceFetchesInFlight.get(requestKey) : null;
       if (!flight || flight.record !== sourceRecord) {
         flight = { record: sourceRecord, listeners: new Set(), latest: null, initial: null };

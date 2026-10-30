@@ -51,7 +51,7 @@ function load(mobile) {
   return { context, time, fetchers, run(options = {}, track = baseTrack) {
     context.track = track; context.options = { spicyLyricsPublishableKey: 'sl_pk_test', autoSourceTimeoutMs: 30, ...options };
     return vm.runInContext('fetchBestSyncedLyrics(track, options)', context);
-  }, service() { return vm.runInContext('createLyricsService({getSpicyLyricsPublishableKey: () => "sl_pk_test"})', context); } };
+  }, service(options = {}) { context.serviceOptions = options; return vm.runInContext('createLyricsService({getSpicyLyricsPublishableKey: () => "sl_pk_test", ...serviceOptions})', context); } };
 }
 
 for (const mobile of [false, true]) {
@@ -194,6 +194,20 @@ for (const mobile of [false, true]) {
     await service.fetchSyncedLyrics(baseTrack,{force:true,onSyncedLyrics:p=>delivered.push(p.source)});await flush();
     const count=delivered.length;stale.resolve(packet('spicy-lyrics-syllable','stale',{source:'spicy_lyrics'}));await flush();
     assert.equal(delivered.length,count);assert.equal(service.getCachedSourceLyricsPacket(baseTrack.trackId,'auto').source,'lrc-red-karaoke|'+(mobile?'mobile':'desktop'));
+    service.clearCache();
+  });
+
+  test(`${label}: stale asynchronous credential setup cannot displace a newer forced flight`,async()=>{
+    const h=load(mobile),key=deferred(),late=deferred();let keys=0,spicyCalls=0;
+    const service=h.service({getSpicyLyricsPublishableKey:()=>++keys===1?key.promise:'sl_pk_test'});
+    h.fetchers['lrc-red']=async()=>packet('lrc-red-line');
+    h.fetchers['spicy-lyrics']=()=>{spicyCalls++;return late.promise;};
+    const stale=service.fetchSyncedLyrics(baseTrack);await flush();
+    await service.fetchSyncedLyrics(baseTrack,{force:true});
+    key.resolve('sl_pk_test');assert.equal((await stale).source,'stale-lyrics-request');
+    await service.fetchSyncedLyrics(baseTrack);
+    assert.equal(spicyCalls,1,'old setup must not replace the forced run in the in-flight registry');
+    late.resolve(packet('spicy-lyrics-syllable','community',{source:'spicy_lyrics'}));await flush();
     service.clearCache();
   });
 }

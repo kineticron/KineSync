@@ -1,11 +1,10 @@
-import { clearMobileLyricsCache, fetchMobileLyricsForTrack } from "@/lib/mobile-lyrics-client";
+import { fetchMobileLyricsForTrack } from "@/lib/mobile-lyrics-client";
 import { saveMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
 import { bridgeClient } from "@/lib/bridge-client";
 import type { LyricsPacket, Track } from "@/types/bridge";
 import { usePlaybackStore } from "@/store/playback-store";
 
 let latestLyricsRequestId = 0;
-let activeMobileTrackSignature = '';
 
 function normalizeSignatureText(value: unknown) {
   return String(value || "")
@@ -96,6 +95,7 @@ function inferCurrentSourcePreference(
 
 export async function refreshLyricsForCurrentTrack(
   preferredSource: LyricsSourcePreference = "auto",
+  { force = false }: { force?: boolean } = {},
 ) {
   const { currentTrack, clearLyrics, setLyricsStatusMessage, connectionStatus } =
     usePlaybackStore.getState();
@@ -129,17 +129,10 @@ export async function refreshLyricsForCurrentTrack(
   const requestId = latestLyricsRequestId + 1;
   latestLyricsRequestId = requestId;
   const activeSignature = getTrackMetadataSignature(currentTrack);
-  if (activeMobileTrackSignature !== activeSignature) {
-    // The bundled service contains source-level result caches. They are safe
-    // only for one metadata identity, not merely a recycled playback id.
-    clearMobileLyricsCache();
-    activeMobileTrackSignature = activeSignature;
-  }
-
-
   try {
     const packet = await fetchMobileLyricsForTrack(currentTrack, {
       preferredSource,
+      force,
       onSyncedLyrics: (progressPacket) => {
         if (isCurrentTrackRequest(requestId, activeSignature)) {
           applyMobileLyricsPacket(progressPacket);
