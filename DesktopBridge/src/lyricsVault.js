@@ -146,11 +146,11 @@ function pickVaultPersistedMetadata(metadata) {
     }
     persisted.ttml = { content: metadata.ttml.content };
     // Retain source subtitle choices/provenance alongside the archived XML.
-    for (const key of ["translationTracks", "selectedTranslationTrack", "appliedTranslations"]) {
+    for (const key of ["translationTracks", "selectedTranslationTrack", "appliedTranslations", "preservedTranslations"]) {
       if (metadata.ttml[key] !== undefined) persisted.ttml[key] = JSON.parse(JSON.stringify(metadata.ttml[key]));
     }
   }
-  // An explicit enrichment remains authoritative after a compact vault reload.
+  // Retain AI provenance for per-line source selection after a compact reload.
   if (metadata.translation?.translatedLineCount > 0) {
     persisted.translation = JSON.parse(JSON.stringify(metadata.translation));
   }

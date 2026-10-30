@@ -94,6 +94,8 @@ export type Track = {
 };
 
 export type LyricsTranslationMetadata = {
+  /** Target of AI fallback text; source tracks retain their own language tags. */
+  targetLanguage?: string;
   isLoading?: boolean;
   model?: string;
   provider?: string;
@@ -172,8 +174,10 @@ export type LyricsMetadata = {
       lines: Array<{ key: string; text: string }>;
     }>;
     selectedTranslationTrack?: number;
-    /** Only translations applied from these tracks; inline/enriched text wins. */
+    /** Only text displayed from these tracks; preserved inline choices win over them. */
     appliedTranslations?: Array<{ key: string; text: string }>;
+    // Existing inline choices belong to this unchanged lyric array, not a source track.
+    preservedTranslations?: Array<{ index: number; text?: string; backgroundText?: string }>;
   };
   instrumental?: boolean;
   credits?: LyricsCreditsMetadata;

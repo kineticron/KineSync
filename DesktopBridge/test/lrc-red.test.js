@@ -50,6 +50,57 @@ function load(fetch, mobile) {
 }
 
 for (const mobile of [false, true]) {
+  test(`${mobile ? "mobile" : "desktop"}: source wins per line through fresh AI, AI cache, source cache and language switch`, async () => {
+    const content = `<tt xmlns:lrc="http://lrc.red/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" lrc:timing="Word"><head><metadata>
+      <sourceMetadata xmlns="http://lrc.red/lyric-ttml-internal"><translations>
+      <translation xml:lang="en" type="subtitle" automaticallyCreated="true"><text for="A">Source English</text><text for="orphan">Unmatched</text></translation>
+      <translation xml:lang="es" type="subtitle" automaticallyCreated="false"><text for="A">Source Spanish</text></translation>
+      </translations></sourceMetadata></metadata></head><body>
+      <p lrc:key="A" begin="1" end="3">첫번째</p>
+      <p lrc:key="B" begin="3" end="5">두번째<span ttm:role="x-translation">Inline choice</span></p>
+      <p begin="5" end="7">세번째<span ttm:role="x-translation">Unkeyed inline</span></p>
+      <p lrc:key="D" begin="7" end="9">네번째</p></body></tt>`;
+    let requests = 0;
+    let fetches = 0;
+    const context = load(async (url, options) => {
+      if (url.includes("generativelanguage.googleapis.com")) {
+        requests++;
+        const payload = JSON.parse(JSON.parse(options.body).contents[0].parts[0].text);
+        return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ lineCount: 4,
+          translations: [0, 1, 2, 3].map(i => ({ i, t: `AI ${payload.targetLanguage} ${i}` })) }) }] } }] });
+      }
+      if (url.endsWith(".json")) return Response.json({});
+      fetches++;
+      return new Response(content);
+    }, mobile);
+    context.track = { ...track, trackId: "precedence", isrc };
+    vm.runInContext('var service = createLyricsService({ getGeminiApiKey: () => "test-key" })', context);
+    const fresh = await vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red", immediateTranslation: true })', context);
+    const texts = packet => Array.from(packet.lyrics, line => line.translatedText);
+    assert.deepEqual(texts(fresh), ["Source English", "Inline choice", "Unkeyed inline", "AI English 3"]);
+    const atoms = packet => JSON.stringify(Array.from(packet.lyrics, ({ translatedText, ...line }) => line));
+    const check = (packet, source, fallback) => {
+      assert.deepEqual(texts(packet), [source, "Inline choice", "Unkeyed inline", fallback]);
+      assert.equal(atoms(packet), atoms(fresh), "All timing/lead/background atoms unchanged");
+      assert.equal(packet.metadata.ttml.translationTracks[0].automaticallyCreated, true);
+      assert.equal(packet.metadata.ttml.translationTracks[1].automaticallyCreated, false);
+    };
+    context.published = fresh;
+    vm.runInContext('service.rememberPublishedLyrics(track.trackId, published)', context);
+    const cachedAi = await vm.runInContext('service.translatePublishedLyrics(track)', context);
+    check(cachedAi, "Source English", "AI English 3");
+    assert.equal(requests, 1, "The actual AI cache is exercised");
+    check(await vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red" })', context), "Source English", "AI English 3");
+    const spanish = await vm.runInContext('service.translatePublishedLyrics(track, { translationLanguage: "Spanish" })', context);
+    check(spanish, "Source Spanish", "AI Spanish 3");
+    const switched = await vm.runInContext('service.fetchSyncedLyrics(track, { preferredSource: "lrc-red", translationLanguage: "French" })', context);
+    assert.deepEqual(texts(switched), [undefined, "Inline choice", "Unkeyed inline", undefined], "No stale AI language after switching");
+    assert.equal(requests, 2);
+    assert.equal(fetches, 1);
+  });
+}
+
+for (const mobile of [false, true]) {
   const platform = mobile ? "mobile" : "desktop";
   test(`${platform}: real sourceMetadata translations survive valid or absent recording JSON`, async () => {
     for (const [id, count, title, artist, duration] of [
@@ -89,7 +140,7 @@ for (const mobile of [false, true]) {
     }
   });
 
-  test(`${platform}: requested language selects retained source tracks on cache hits; explicit AI still overrides`, async () => {
+  test(`${platform}: requested language selects retained source tracks on cache hits; AI fills missing source lines`, async () => {
     const content = `<tt xmlns:lrc="http://lrc.red/lyric-ttml-internal" lrc:timing="Word"><head><metadata>
       <sourceMetadata xmlns="http://lrc.red/lyric-ttml-internal"><translations>
       <translation xml:lang="en" type="subtitle"><text for="A">Hello world</text></translation>

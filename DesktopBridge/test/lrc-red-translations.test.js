@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
-const { selectTtmlTranslationTracks } = require("../src/lyricsTtmlTranslations");
+const { selectTtmlTranslationTracks, mergeTtmlTranslationResult } = require("../src/lyricsTtmlTranslations");
 const importers = [require("../src/lyricsTtmlImport"), require("../../ExpoLyrics/lib/lyrics-ttml-import")];
 const baseline = require("./fixtures/lrc-red/baseline.json");
 const ns = 'xmlns="http://www.w3.org/ns/ttml" xmlns:lrc="http://lrc.red/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata"';
@@ -82,7 +82,7 @@ test("target language, exact tag, manual provenance and alternate-track preserva
   assert.equal(parse(chinese, { translationLanguage: "Chinese (Traditional)" }).lyrics[0].translatedText, "繁體");
 });
 
-test("inline lead/background translations and better enriched translations retain precedence", () => {
+test("inline lead/background choices are preserved while source subtitles win over AI", () => {
   const body = paragraph("A", 'lead<span ttm:role="x-translation">inline</span><span ttm:role="x-bg">(back)</span><span ttm:role="x-bg-translation">(background inline)</span>');
   const result = parse(document(track("en", entry("A", "metadata")) + track("es", entry("A", "español")), body));
   assert.equal(result.lyrics[0].translatedText, "inline");
@@ -92,7 +92,10 @@ test("inline lead/background translations and better enriched translations retai
   const better = { ...base, lyrics: [{ ...base.lyrics[0], translatedText: "better existing source" }] };
   assert.equal(selectTtmlTranslationTracks(better).lyrics[0].translatedText, "better existing source");
   const ai = { ...base, metadata: { ...base.metadata, translation: { provider: "Gemini", translatedLineCount: 1 } } };
-  assert.equal(selectTtmlTranslationTracks(ai, "Spanish"), ai, "Explicit AI output remains authoritative");
+  assert.equal(selectTtmlTranslationTracks(ai, "Spanish").lyrics[0].translatedText, undefined);
+  const enriched = { ...ai, lyrics: base.lyrics.map(line => ({ ...line, translatedText: "AI fallback" })) };
+  assert.deepEqual(texts(selectTtmlTranslationTracks(enriched)), ["metadata", "AI fallback"]);
+  assert.deepEqual(selectTtmlTranslationTracks(enriched).metadata.ttml.translationTracks, base.metadata.ttml.translationTracks);
 });
 
 test("namespace URI and scoped aliases, entities, nested text and CDATA", () => {
@@ -130,4 +133,21 @@ test("empty/malformed optional metadata and nonmetadata TTML remain usable", () 
   const inline = `<tt ${ns}><body>${paragraph("A", 'lead<span ttm:role="x-translation">inline</span>')}</body></tt>`;
   assert.equal(parse(inline).lyrics[0].translatedText, "inline");
   assert.equal(parse(inline).metadata.ttml.translationTracks, undefined);
+});
+
+test("AI merge preserves inline lead/background choices and leaves nonmetadata packets alone", () => {
+  const body = paragraph("A", 'lead<span ttm:role="x-translation">inline lead</span><span ttm:role="x-bg">(back)</span><span ttm:role="x-bg-translation">(inline background)</span>');
+  const base = parse(document(track("en", entry("A", "metadata"), 'automaticallyCreated="true"'), body));
+  const enriched = base.lyrics.map(line => ({ ...line, translatedText: "AI lead", backgroundTranslatedText: "AI background" }));
+  enriched.translationMeta = { provider: "Gemini", translatedLineCount: 1 };
+  const merged = mergeTtmlTranslationResult(base, enriched, "English");
+  assert.equal(merged.lyrics[0].translatedText, "inline lead");
+  assert.equal(merged.lyrics[0].backgroundTranslatedText, "inline background");
+  assert.equal(merged.metadata.ttml.translationTracks[0].automaticallyCreated, true);
+  assert.deepEqual(merged.metadata.ttml.appliedTranslations, []);
+  const plain = { lyrics: [{ text: "original" }], source: "manual-selected-other-source", metadata: { attribution: { source: "other" } } };
+  const result = mergeTtmlTranslationResult(plain, enriched, "English");
+  assert.equal(result.lyrics, enriched);
+  assert.equal(result.source, plain.source);
+  assert.deepEqual(result.metadata.attribution, plain.metadata.attribution);
 });

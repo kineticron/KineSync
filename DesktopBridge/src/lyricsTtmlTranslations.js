@@ -119,13 +119,12 @@ function languageScore(language, target) {
 }
 
 // Source caches are language-independent. Select from retained tracks on every
-// request, replacing only text previously supplied by this metadata. Inline or
-// subsequently enriched translations remain authoritative. Explicit AI requests
-// still use the existing service path and can replace source translations.
+// request. Retain inline/existing non-AI choices separately from applied source
+// text, so a later Gemini pass cannot erase them. Source tracks may themselves
+// be automatically created; their original provenance is never rewritten.
 function selectTtmlTranslationTracks(packet, translationLanguage = "English") {
   const ttml = packet?.metadata?.ttml;
-  if (!Array.isArray(ttml?.translationTracks) || !ttml.translationTracks.length || !Array.isArray(packet.lyrics) ||
-      packet.metadata?.translation?.translatedLineCount > 0 || packet.lyrics.translationMeta?.translatedLineCount > 0) return packet;
+  if (!Array.isArray(ttml?.translationTracks) || !ttml.translationTracks.length || !Array.isArray(packet.lyrics)) return packet;
   const target = languageTag(translationLanguage);
   const ranked = ttml.translationTracks.map((track, index) => ({ track, index, score: languageScore(track.language, target) }))
     .filter(entry => entry.score && (!entry.track.type || entry.track.type === "subtitle"))
@@ -139,14 +138,27 @@ function selectTtmlTranslationTracks(packet, translationLanguage = "English") {
   const counts = new Map();
   for (const line of packet.lyrics) if (line.ttmlKey) counts.set(line.ttmlKey, (counts.get(line.ttmlKey) || 0) + 1);
   const previous = new Map((ttml.appliedTranslations || []).map(line => [line.key, line.text]));
+  const translation = packet.metadata?.translation || packet.lyrics.translationMeta;
+  const isAi = translation?.provider === "Gemini";
+  const staleAi = isAi && translation.targetLanguage && languageTag(translation.targetLanguage) !== target;
+  const preserved = new Map((ttml.preservedTranslations || []).map(line => [line.index, line]));
   const appliedTranslations = [];
-  const lyrics = packet.lyrics.map(line => {
+  const lyrics = packet.lyrics.map((line, index) => {
     const current = String(line.translatedText || "").trim();
-    if (current && current !== previous.get(line.ttmlKey)) return line;
+    if (!isAi) {
+      const text = current && current !== previous.get(line.ttmlKey) ? current : "";
+      const backgroundText = String(line.backgroundTranslatedText || "").trim();
+      if (text || backgroundText) preserved.set(index, { index, ...(text ? { text } : {}), ...(backgroundText ? { backgroundText } : {}) });
+    }
     const next = { ...line };
-    delete next.translatedText;
+    if (staleAi || current === previous.get(line.ttmlKey)) delete next.translatedText;
+    if (staleAi) delete next.backgroundTranslatedText;
     const text = counts.get(line.ttmlKey) === 1 && lookup.get(line.ttmlKey);
-    if (text) { next.translatedText = text; appliedTranslations.push({ key: line.ttmlKey, text }); }
+    const choice = preserved.get(index);
+    if (text) next.translatedText = text;
+    if (choice?.text) next.translatedText = choice.text;
+    else if (text) appliedTranslations.push({ key: line.ttmlKey, text });
+    if (choice?.backgroundText) next.backgroundTranslatedText = choice.backgroundText;
     return next;
   });
   if (packet.lyrics.translationMeta) lyrics.translationMeta = packet.lyrics.translationMeta;
@@ -154,7 +166,19 @@ function selectTtmlTranslationTracks(packet, translationLanguage = "English") {
   delete original.selectedTranslationTrack;
   delete original.appliedTranslations;
   return { ...packet, lyrics, metadata: { ...packet.metadata, ttml: { ...original,
-    ...(selected ? { selectedTranslationTrack: selected.index } : {}), appliedTranslations } } };
+    ...(selected ? { selectedTranslationTrack: selected.index } : {}), appliedTranslations,
+    ...(preserved.size ? { preservedTranslations: [...preserved.values()] } : {}) } } };
 }
 
-module.exports = { extractTtmlTranslations, selectTtmlTranslationTracks };
+// Keep this boundary scoped to sourceMetadata packets. Other providers retain
+// their existing enrichment behavior. Select again after AI, including cache hits.
+function mergeTtmlTranslationResult(base, lyrics, targetLanguage) {
+  if (base.metadata?.ttml?.translationTracks?.length && lyrics.translationMeta) {
+    lyrics = Object.assign([...lyrics], { translationMeta: { ...lyrics.translationMeta, targetLanguage } });
+  }
+  const packet = { ...base, lyrics, metadata: { ...base.metadata,
+    translation: { ...base.metadata?.translation, ...lyrics.translationMeta } } };
+  return selectTtmlTranslationTracks(packet, targetLanguage);
+}
+
+module.exports = { extractTtmlTranslations, selectTtmlTranslationTracks, mergeTtmlTranslationResult };

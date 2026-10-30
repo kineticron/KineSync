@@ -13314,7 +13314,7 @@ function createLyricsService({
   getSpotifyAccessToken = () => "",
   getSpicyLyricsPublishableKey = () => process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
 } = {}) {
-  const { selectTtmlTranslationTracks } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
+  const { selectTtmlTranslationTracks, mergeTtmlTranslationResult } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
   const isExpiredSpicyPacket = (packet) => packet?.metadata?.spicyApi && !(Number(packet.metadata.spicyApi.expiresAt) > Date.now());
   const lastDisplayedByTrack = new Map();
   const geminiTranslationCache = new Map();
@@ -13517,7 +13517,9 @@ function createLyricsService({
     if (!cacheKey || !packet) {
       return;
     }
-    const lyrics = cloneLyricsLinesWithoutTranslations(packet.lyrics);
+    const hasSourceTracks = Boolean(packet.metadata?.ttml?.translationTracks?.length);
+    const lyrics = hasSourceTracks ? packet.lyrics.map(line => ({ ...line }))
+      : cloneLyricsLinesWithoutTranslations(packet.lyrics);
     if (!lyrics.length) {
       return;
     }
@@ -13525,7 +13527,7 @@ function createLyricsService({
       packet.metadata && typeof packet.metadata === "object"
         ? { ...packet.metadata }
         : {};
-    delete metadata.translation;
+    if (!hasSourceTracks) delete metadata.translation;
     publishedToFrontendCache.set(cacheKey, {
       source:
         stripDesktopSourceSuffix(packet.source) ||
@@ -13678,13 +13680,7 @@ function createLyricsService({
         },
       );
 
-      const finalBase = {
-        ...basePacket,
-        lyrics: enrichedLyrics,
-        metadata: mergeLyricsMetadata(basePacket.metadata, {
-          translation: enrichedLyrics.translationMeta,
-        }),
-      };
+      const finalBase = mergeTtmlTranslationResult(basePacket, enrichedLyrics, translationLanguage);
 
       emitToFrontend(finalBase);
       rememberSourceLyrics(cacheKey, published.source, finalBase);
@@ -13952,13 +13948,7 @@ function createLyricsService({
               targetLanguage: translationLanguage,
             },
           );
-          const translatedBase = {
-            ...latestBase,
-            lyrics: enrichedLyrics,
-            metadata: mergeLyricsMetadata(latestBase.metadata, {
-              translation: enrichedLyrics.translationMeta,
-            }),
-          };
+          const translatedBase = mergeTtmlTranslationResult(latestBase, enrichedLyrics, translationLanguage);
 
           const currentBest = getLatestBasePacket();
           if (
@@ -14200,13 +14190,7 @@ function createLyricsService({
           },
         );
 
-        finalBase = {
-          ...inputPacket,
-          lyrics: enrichedLyrics,
-          metadata: mergeLyricsMetadata(inputPacket?.metadata, {
-            translation: enrichedLyrics.translationMeta,
-          }),
-        };
+        finalBase = mergeTtmlTranslationResult(inputPacket, enrichedLyrics, translationLanguage);
         emitTranslatedPacketIfCurrentBest(finalBase);
 
         if (!isAutoPreferredSource) {

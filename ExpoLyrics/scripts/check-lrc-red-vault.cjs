@@ -8,7 +8,7 @@ const { buildSync } = require('esbuild');
 const { loadMobileVault } = require('./helpers/mobile-vault-harness.cjs');
 const { createLyricsVaultStore } = require('../../DesktopBridge/src/lyricsVault');
 const { parseTtmlToLyrics } = require('../lib/lyrics-ttml-import');
-const { selectTtmlTranslationTracks } = require('../../DesktopBridge/src/lyricsTtmlTranslations');
+const { selectTtmlTranslationTracks, mergeTtmlTranslationResult } = require('../../DesktopBridge/src/lyricsTtmlTranslations');
 
 const model = buildSync({ entryPoints: [path.join(__dirname, '../components/lyrics/native/native-lyrics-model.ts')],
   bundle: true, platform: 'node', format: 'cjs', write: false }).outputFiles[0].text;
@@ -65,23 +65,49 @@ async function check() {
       assert.equal(spanish.lyrics[0].translatedText, 'Otra perspectiva');
       assert.equal(spanish.lyrics.filter(line => line.translatedText).length, 1);
     }
-    // A completed AI translation remains authoritative even if it happens to
-    // equal the source subtitle text; do not mistake it for an applied source.
-    const parsed = saved[0].parsed;
-    const metadata = { ...parsed.metadata, translation: { provider: 'Gemini', translatedLineCount: 54 } };
-    const aiId = desktop.save({ track: { title: 'Enriched', artist: 'Fixture' }, lyrics: parsed.lyrics, metadata }).vaultId;
-    const ai = desktop.getEntry(aiId);
-    const mobileAiId = (await mobile.vault.saveMobileVaultLyrics({ track: { id: 'enriched', title: 'Enriched', artist: 'Fixture' },
-      lyrics: parsed.lyrics, metadata })).vaultId;
-    for (const entry of [ai, await mobile.vault.getMobileVaultEntry(mobileAiId)]) {
+    // Sparse sources and represented inline/manual choices survive real compact
+    // storage and SQLite close/reopen; archived XML alone cannot satisfy this.
+    const source = parseTtmlToLyrics(saved[0].parsed.metadata.ttml.content);
+    source.metadata.ttml.translationTracks[0].lines = source.metadata.ttml.translationTracks[0].lines.slice(0, 1);
+    let sparse = selectTtmlTranslationTracks(source);
+    sparse.lyrics[1] = { ...sparse.lyrics[1], translatedText: 'Explicit existing choice' };
+    sparse = selectTtmlTranslationTracks(sparse);
+    const aiLyrics = sparse.lyrics.map((line, index) => ({ ...line, translatedText: `AI fallback ${index}` }));
+    aiLyrics.translationMeta = { provider: 'Gemini', translatedLineCount: aiLyrics.length };
+    const merged = mergeTtmlTranslationResult(sparse, aiLyrics, 'English');
+    const aiTrack = { id: 'sparse-enriched', title: 'Sparse enriched', artist: 'Fixture' };
+    const aiId = desktop.save({ track: aiTrack, lyrics: merged.lyrics, metadata: merged.metadata }).vaultId;
+    const mobileAiId = (await mobile.vault.saveMobileVaultLyrics({ track: aiTrack,
+      lyrics: merged.lyrics, metadata: merged.metadata })).vaultId;
+    desktop.close();
+    mobile.close();
+    desktop = createLyricsVaultStore({ userDataPath: path.join(directory, 'desktop') });
+    mobile = loadMobileVault({ filename: path.join(directory, 'mobile.sqlite') });
+    for (const entry of [desktop.getEntry(aiId), await mobile.vault.getMobileVaultEntry(mobileAiId)]) {
       assert.equal(entry.metadata.translation.provider, 'Gemini');
-      assert.equal(selectTtmlTranslationTracks(entry, 'Spanish'), entry);
+      assert.equal(entry.metadata.translation.targetLanguage, 'English');
+      assert.deepEqual(JSON.parse(JSON.stringify(entry.metadata.ttml)), merged.metadata.ttml);
+      assert.deepEqual(JSON.parse(JSON.stringify(entry.lyrics)), JSON.parse(JSON.stringify(merged.lyrics)));
+      const selected = selectTtmlTranslationTracks(entry);
+      assert.equal(selected.lyrics[0].translatedText, source.lyrics[0].translatedText);
+      assert.equal(selected.lyrics[1].translatedText, 'Explicit existing choice');
+      assert.equal(selected.lyrics[2].translatedText, 'AI fallback 2');
+      const spanish = selectTtmlTranslationTracks(entry, 'Spanish');
+      assert.equal(spanish.lyrics[0].translatedText, undefined);
+      assert.equal(spanish.lyrics[1].translatedText, 'Explicit existing choice');
+      assert.equal(spanish.lyrics[2].translatedText, undefined);
+      assert.deepEqual(JSON.parse(JSON.stringify(selected.lyrics.map(({ translatedText, ...line }) => line))),
+        JSON.parse(JSON.stringify(sparse.lyrics.map(({ translatedText, ...line }) => line))));
+      for (const style of ['amll', 'spicy']) {
+        const rows = moduleObject.exports.buildNativeRows(selected.lyrics, style);
+        assert.equal(rows[2].lead.translation, 'AI fallback 2');
+      }
     }
   } finally {
     desktop?.close();
     mobile?.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
-  console.log('lrc.red vault checks passed: 54/42/12 subtitles, compact/save/restart/load parity, provenance, both native voice styles and AI precedence.');
+  console.log('lrc.red vault checks passed: 54/42/12 subtitles, compact/save/restart/load parity, provenance, both native voice styles and per-line source/AI precedence.');
 }
 check().catch(error => { console.error(error); process.exitCode = 1; });
