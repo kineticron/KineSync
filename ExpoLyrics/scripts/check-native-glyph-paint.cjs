@@ -6,6 +6,9 @@ const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 
 const directory = path.join(__dirname, '../components/lyrics/native');
+let blurFilterCreates = 0;
+let blurFilterDisposals = 0;
+const blurOutputRadii = [];
 const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8') + '\nexport { drawVoice, glyphRowExtent, advanceReferenceWordMotion, initialWordSpringState };',
   resolveDir: directory, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', write: false,
   external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
@@ -16,25 +19,29 @@ const Skia = {
   XYWHRect: (x, y, width, height) => ({ x, y, width, height }),
   Paint: () => ({ alpha: 1, shader: null, setAntiAlias() {}, setShader(shader) { this.shader = shader; },
     setBlendMode(mode) { this.blendMode = mode; },
-    setColor() {}, setAlphaf(alpha) { this.alpha = alpha; } }),
+    setColor() {}, setAlphaf(alpha) { this.alpha = alpha; }, setImageFilter(filter) { this.imageFilter = filter; } }),
   Color: color => color,
   Shader: { MakeLinearGradient: (start, end, colors) => ({ start, end, colors }) },
+  ImageFilter: { MakeBlur(sigmaX, sigmaY, tileMode) { blurFilterCreates++; return { sigmaX, sigmaY, tileMode,
+    dispose() { blurFilterDisposals++; } }; } },
 };
 const moduleObject = { exports: {} };
 vm.runInNewContext(source, { module: moduleObject, exports: moduleObject.exports,
   require: name => name === 'react' ? { memo: fn => fn } : name === '@shopify/react-native-skia' ? { Skia,
     createPicture: draw => { draw({ clipPath() {}, drawGlyphs() {} }); return 'glyph alpha'; },
-    BlendMode: { SrcIn: 5, SrcOver: 3 }, TileMode: { Clamp: 0 }, ClipOp: { Intersect: 0 } } : {} });
+    BlendMode: { SrcIn: 5, SrcOver: 3 }, TileMode: { Clamp: 0, Decal: 1 }, ClipOp: { Intersect: 0 } } : {} });
+const makePaints = () => ({ paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [] });
 const rect = { x: 0, y: 0, width: 20, height: 24 };
 const word = { word: { text: 'sing', start: 0, end: 1000, emphasized: false }, rects: [rect], width: 20, before: 0,
   runs: [[{ glyphs: [42], positions: [{ x: 0, y: 20 }], font: {} }]], clips: [{}], emojiMask: [false] };
 const motion = { scale: 1, y: 0, gradient: 1, glow: 0, letters: [] };
 function paintLine(active, bright) {
   const draws = [];
+  const paints = makePaints();
   const canvas = { save() {}, restore() {}, translate() {}, scale() {}, clipPath() {},
     drawGlyphs: (_glyphs, _positions, _x, _y, _font, paint) => draws.push({ alpha: paint.alpha, shader: paint.shader }) };
   moduleObject.exports.drawVoice(canvas, [word], [motion], 1100, active, false, false, 36, 1000,
-    { bright, dark: 0.3 }, { active: false, releasePosition: 1000, elapsed: 100 });
+    { bright, dark: 0.3 }, { active: false, releasePosition: 1000, elapsed: 100 }, paints);
   return draws[0];
 }
 const before = paintLine(true, 0.9);
@@ -57,7 +64,7 @@ function paintSpicy(text, gradient, active = true, background = false, emphasize
     drawPaint: paint => draws.push(snapshotPaint(paint)),
     drawGlyphs: (_glyphs, _positions, _x, _y, _font, paint) => draws.push(snapshotPaint(paint)) };
   moduleObject.exports.drawVoice(canvas, [shapedWord], [{ ...motion, gradient }], 500, active, true, background, 36, 1000,
-    { bright: 0.9, dark: 0.3 }, { active: true, releasePosition: 0, elapsed: 0 });
+    { bright: 0.9, dark: 0.3 }, { active: true, releasePosition: 0, elapsed: 0 }, makePaints());
   if (!masked) {
     assert.ok(!draws.includes('layer'), 'Normal/fallback text must draw directly without a reveal layer');
     assert.ok(!draws.includes('glyph alpha'), 'Normal text uses drawGlyphs with the shader paint');
@@ -139,7 +146,7 @@ function checkCapturedLayout(fixture) {
       drawGlyphs: (glyphs, _positions, _x, _y, _font, paint) => draws.push({ glyphs, shader: paint.shader }) };
     // Exclude decorative glow to inspect the reveal commands alone.
     api.drawVoice(canvas, [shaped], [{ ...motion, glow: 0 }], time, true, true, false, fixture.provenance.fontSize, 50093,
-      { bright: 0.85, dark: 0.5 }, { active: true, releasePosition: 0, elapsed: 0 });
+      { bright: 0.85, dark: 0.5 }, { active: true, releasePosition: 0, elapsed: 0 }, makePaints());
     assert.equal(draws.length, 2, 'Both font runs draw directly without a reveal layer');
     assert.equal(draws[0].shader.start.x, draws[1].shader.start.x, 'Heart and text use the same reveal edge');
     if (time >= fixture.syllable.end) assert.equal(draws[1].shader.start.x, right, 'Sung yeah, is fully on the bright side');
@@ -148,8 +155,59 @@ function checkCapturedLayout(fixture) {
   return { rects: fixture.rects, lines: fixture.lines, extent, edges };
 }
 checkCapturedLayout(require('./fixtures/native-glyph-heart-layout.json'));
+// Exercise exact-radius reuse and eviction through the real drawVoice path.
+const cachePaints = makePaints();
+const glowWord = { ...word, revealRects: [rect], pictures: ['glyph alpha'], emojiMask: [false] };
+const glowCanvas = { save() {}, restore() {}, translate() {}, scale() {}, clipPath() {},
+  saveLayer(paint) { blurOutputRadii.push(paint.imageFilter.sigmaX); },
+  drawPicture() {}, drawGlyphs() {} };
+const drawGlow = glow => moduleObject.exports.drawVoice(glowCanvas, [glowWord], [{ ...motion, glow }], 100, true, true, false,
+  36, 1000, { bright: 1, dark: 0 }, { active: true, releasePosition: 0, elapsed: 0 }, cachePaints);
+drawGlow(1);
+const firstFilter = cachePaints.blurFilters[0];
+const createsAfterFirstRadius = blurFilterCreates;
+drawGlow(1);
+assert.equal(blurFilterCreates, createsAfterFirstRadius, 'Identical sigma reuses the same native blur filter');
+assert.equal(cachePaints.blurFilters[0], firstFilter);
+drawGlow(0.999999);
+assert.equal(blurFilterCreates, createsAfterFirstRadius + 1, 'Distinct exact sigma values are never quantized together');
+assert.equal(blurOutputRadii.at(-1), 2 + 0.999999, 'The distinct exact sigma reaches the recorded glow unchanged');
+for (let index = 2; index < 80; index++) drawGlow(index / 80);
+assert.equal(cachePaints.blurRadii.length, 32, 'The per-voice blur cache stays within its fixed capacity');
+assert.equal(cachePaints.blurFilters.length, cachePaints.blurRadii.length);
+assert.ok(cachePaints.blurRadii.every((radius, index, radii) => radii.indexOf(radius) === index), 'LRU has no duplicate exact keys');
+const beforeEvictionReuse = blurFilterCreates;
+drawGlow(1);
+assert.equal(blurFilterCreates, beforeEvictionReuse + 1, 'An evicted exact sigma is recreated safely on demand');
+const longRunPaints = makePaints();
+const drawLongRunGlow = glow => moduleObject.exports.drawVoice(glowCanvas, [glowWord], [{ ...motion, glow }], 100, true, true, false,
+  36, 1000, { bright: 1, dark: 0 }, { active: true, releasePosition: 0, elapsed: 0 }, longRunPaints);
+const beforeLongRun = blurFilterCreates;
+drawLongRunGlow(100 / 10000);
+const evictedFilterHeldByRecordedDraw = longRunPaints.blurFilters[0];
+for (let index = 101; index < 10100; index++) drawLongRunGlow(index / 10000);
+assert.equal(blurFilterCreates - beforeLongRun, 10000, 'A fresh 10,000-radius sequence creates each distinct exact radius once');
+assert.equal(longRunPaints.blurRadii.length, 32, 'The cache remains bounded after 10,000 changing radii');
+assert.equal(longRunPaints.blurFilters.length, 32);
+assert.deepEqual(longRunPaints.blurRadii, Array.from({ length: 32 }, (_, index) => 2 + (10068 + index) / 10000),
+  'The bounded cache retains the 32 newest exact sigma values');
+assert.deepEqual(blurOutputRadii.slice(-10000), Array.from({ length: 10000 }, (_, index) => 2 + (100 + index) / 10000),
+  'All changing radii reach recorded paint commands without quantization');
+assert.equal(longRunPaints.blurFilters.includes(evictedFilterHeldByRecordedDraw), false, 'The oldest radius is evicted from the bounded cache');
+longRunPaints.glowPaint.setImageFilter(evictedFilterHeldByRecordedDraw);
+assert.equal(longRunPaints.glowPaint.imageFilter, evictedFilterHeldByRecordedDraw,
+  'A paint can continue referencing the evicted filter without cache ownership');
+assert.equal(evictedFilterHeldByRecordedDraw.sigmaX, 2 + 100 / 10000,
+  'The separately retained filter remains usable after cache eviction');
+assert.equal(blurFilterDisposals, 0, 'Evicting a cache entry never disposes the referenced native filter');
+const afterLongRun = blurFilterCreates;
+drawLongRunGlow(10099 / 10000);
+assert.equal(blurFilterCreates, afterLongRun, 'The most recently used exact radius survives in the LRU');
+drawLongRunGlow(100 / 10000);
+assert.equal(blurFilterCreates, afterLongRun + 1, 'The oldest exact radius is evicted and recreated on demand');
+assert.equal(blurFilterDisposals, 0, 'Eviction never explicitly disposes filters still potentially referenced by recorded pictures');
 const canvasKitArg = process.argv.indexOf('--canvaskit');
 if (canvasKitArg >= 0) require('./native-glyph-canvaskit.cjs')(process.argv[canvasKitArg + 1])
   .then(fixture => console.log('Live CanvasKit layout + real shapeGlyphWords/glyphRowExtent:', JSON.stringify(checkCapturedLayout(fixture), null, 2)))
   .catch(error => { console.error(error); process.exitCode = 1; });
-console.log('Native glyph paint checks passed: direct text/fallback drawing, per-slice emoji masking, multi-run Spicy reveal in LTR/RTL, continuous AMLL highlight release, Hangul ownership and descender isolation.');
+console.log('Native glyph paint checks passed: direct text/fallback drawing, exact bounded blur caching, per-slice emoji masking, multi-run Spicy reveal in LTR/RTL, continuous AMLL highlight release, Hangul ownership and descender isolation.');

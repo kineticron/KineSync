@@ -18,7 +18,7 @@ const baselineSource = baselinePath && bundle(baselinePath);
 
 function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
   const frames = [], shared = [], cleanups = [];
-  let reads = 0, pictures = 0, paints = 0, blurFilters = 0, paintSlotWrites = 0;
+  let reads = 0, pictures = 0, paints = 0, blurFilters = 0, blurFilterDisposals = 0, paintSlotWrites = 0;
   const countedArrays = new WeakSet();
   const counted = values => {
     if (countedArrays.has(values)) return values;
@@ -54,7 +54,8 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
     setColor(color) { this.color = color; }, setAlphaf(alpha) { this.alpha = alpha; },
     setImageFilter(filter) { this.filter = filter; } }; };
   const Skia = { XYWHRect: (x, y, width, height) => ({ x, y, width, height }), Paint: paint, Color: color => color,
-    Shader: { MakeLinearGradient: (...args) => ({ gradient: args }) }, ImageFilter: { MakeBlur: (...args) => { blurFilters++; return { blur: args }; } } };
+    Shader: { MakeLinearGradient: (...args) => ({ gradient: args }) }, ImageFilter: { MakeBlur: (...args) => { blurFilters++;
+      return { blur: args, dispose() { blurFilterDisposals++; } }; } } };
   const createPicture = draw => {
     pictures++;
     const commands = [];
@@ -83,6 +84,7 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4) {
     tick(time, dt = 1000 / 120) { position.value = time; for (const frame of frames) if (frame.active) frame.fn({ timeSincePreviousFrame: dt }); },
     get picture() { return shared[0].value; }, get reads() { return reads; }, get pictures() { return pictures; }, get paints() { return paints; },
     get blurFilters() { return blurFilters; },
+    get blurFilterDisposals() { return blurFilterDisposals; },
     get paintSlotWrites() { return paintSlotWrites; },
     get reusablePaints() { return shared.find(item => item.value?.paint)?.value ?? null; },
     unmount() { for (const cleanup of cleanups) cleanup?.(); },
@@ -112,6 +114,7 @@ for (const spicy of [true, false]) {
   const paintsAtStart = live.paints;
   const picturesAtStart = live.pictures;
   const blurFiltersAtStart = live.blurFilters;
+  const baselineBlurFiltersAtStart = old?.blurFilters;
   const legacyPaintsAtStart = old?.paints;
   active(true);
   for (let frame = 600; frame < 975; frame++) tick(frame * 8);
@@ -123,8 +126,17 @@ for (const spicy of [true, false]) {
   assert.equal(live.pictures - picturesAtStart, 375, 'The active voice still records a new picture for each changing animation frame');
   if (old) assert.equal(old.paints - legacyPaintsAtStart, 750, 'legacy renderer allocates two paints on each active picture rebuild');
   assert(live.blurFilters > blurFiltersAtStart, 'Active glow frames record blurred letter layers');
+  const currentGlowFilters = live.blurFilters - blurFiltersAtStart;
+  const baselineGlowFilters = old ? old.blurFilters - baselineBlurFiltersAtStart : null;
+  assert(live.reusablePaints.blurRadii.length <= 32, 'Mounted voice retains at most 32 exact-radius filters');
+  assert.equal(live.reusablePaints.blurFilters.length, live.reusablePaints.blurRadii.length);
+  assert.equal(live.blurFilterDisposals, 0, 'No cached filter is explicitly disposed while recorded pictures may retain it');
+  if (old) {
+    if (spicy) assert.equal(currentGlowFilters, baselineGlowFilters, 'Spicy playback preserves its existing exact-radius filter count');
+    else assert(currentGlowFilters < baselineGlowFilters, 'AMLL reuses repeated exact radii without reducing distinct values');
+  }
   console.log(`${spicy ? 'Spicy' : 'AMLL'} active 375-frame probe: ${live.pictures - picturesAtStart} recorded pictures, ` +
-    `${live.blurFilters - blurFiltersAtStart} blur filters, ${live.paints - paintsAtStart} new paint objects`);
+    `${currentGlowFilters} blur filters${old ? ` (baseline ${baselineGlowFilters})` : ''}, ${live.paints - paintsAtStart} new paint objects`);
   active(false);
   for (let frame = 975; frame < 1400; frame++) tick(frame * 8);
   // Backward seek into an already cached voice, pause, then resume normal playback.

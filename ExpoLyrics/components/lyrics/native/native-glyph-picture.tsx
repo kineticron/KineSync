@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
+import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkImageFilter, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
@@ -12,6 +12,34 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
 type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; revealRects: SkRect[] };
+type ReusableGlyphPaints = { paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
+
+// Glow sigma is animation-derived and continuous. Reuse only bit-exact radii,
+// with a small per-voice LRU so a long song cannot retain an unbounded filter set.
+const MAX_GLOW_FILTER_CACHE_ENTRIES = 32;
+
+function getGlowFilter(paints: ReusableGlyphPaints, radius: number) {
+  'worklet';
+  const existing = paints.blurRadii.indexOf(radius);
+  if (existing >= 0) {
+    const filter = paints.blurFilters[existing];
+    if (existing !== paints.blurRadii.length - 1) {
+      paints.blurRadii.splice(existing, 1);
+      paints.blurFilters.splice(existing, 1);
+      paints.blurRadii.push(radius);
+      paints.blurFilters.push(filter);
+    }
+    return filter;
+  }
+  const filter = Skia.ImageFilter.MakeBlur(radius, radius, TileMode.Decal);
+  if (paints.blurRadii.length === MAX_GLOW_FILTER_CACHE_ENTRIES) {
+    paints.blurRadii.shift();
+    paints.blurFilters.shift();
+  }
+  paints.blurRadii.push(radius);
+  paints.blurFilters.push(filter);
+  return filter;
+}
 
 // SkTypeface exposes no color-font metadata. Classify graphemes once at layout;
 // ordinary fallback text (including U+2661 ♡) still uses the glyph paint shader.
@@ -92,7 +120,7 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
 
 function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
   spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock,
-  paints: { paint: SkPaint; glowPaint: SkPaint }) {
+  paints: ReusableGlyphPaints) {
   'worklet';
   const { paint, glowPaint } = paints;
   paint.setAntiAlias(true);
@@ -166,7 +194,8 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         glowPaint.setAlphaf(glow);
         // Blur the clipped letter image, not each whole intersecting glyph.
         // Ligatures shared by two slices must not emit their full glow twice.
-        glowPaint.setImageFilter(Skia.ImageFilter.MakeBlur(Math.max(0.01, radius), Math.max(0.01, radius), TileMode.Decal));
+        const sigma = Math.max(0.01, radius);
+        glowPaint.setImageFilter(getGlowFilter(paints, sigma));
         canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
@@ -200,7 +229,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
-  const paints = useSharedValue<{ paint: SkPaint; glowPaint: SkPaint } | null>(null);
+  const paints = useSharedValue<ReusableGlyphPaints | null>(null);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
@@ -236,7 +265,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     const cachedPaints = paints.value;
-    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint() };
+    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [] };
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
     // Picture recording is synchronous and snapshots paint state. Release the
