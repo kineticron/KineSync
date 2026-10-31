@@ -326,8 +326,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId;
     const projected =
       prev.anchorPositionMs + (prev.isPlaying ? nowMono - prev.anchorMonotonicMs : 0);
-    const seekDetected =
-      !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
     const playStateChanged = prev.isPlaying !== packet.isPlaying;
     const forceExperimentReanchor = typeof __DEV__ !== 'undefined' && __DEV__ &&
       packet.nativeDeliveryExperimentReanchor === true;
@@ -338,14 +336,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     const isSameSourceAnchor =
       !trackChanged &&
+      !metadataChanged &&
       !playStateChanged &&
-      !seekDetected &&
       packet.isPlaying &&
       incomingPositionTimestamp !== undefined &&
       prev.lastSourcePositionTimestampMs !== undefined &&
       incomingPositionTimestamp === prev.lastSourcePositionTimestampMs &&
       incomingSourcePosition === prev.lastSourcePositionMs &&
       (incomingUri ? incomingUri === prev.lastSourceTrackUri : true);
+
+    const seekDetected =
+      !trackChanged &&
+      !isSameSourceAnchor &&
+      Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
 
     // Keep a stable render anchor through ordinary source/transport jitter.
     // Restarting every token's UI animation for a few milliseconds of noise

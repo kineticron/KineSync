@@ -398,7 +398,7 @@ for (const diagnostics of [false, true]) for (const capture of bootstraps.cases)
   const registrationPending = [];
   const actualPublish = s => {
     const input = { ...s, ...(catalog ?? {}) };
-    if (!useClusterClock) { delete input.sourceServerTimestampMs; delete input.positionObservedAt; }
+    if (!useClusterClock) { delete input.sourceServerTimestampMs; delete input.positionObservedAt; delete input.positionTimestampMs; }
     return publish(input);
   };
   fetchResponse = (url, options) => options.method === 'GET'

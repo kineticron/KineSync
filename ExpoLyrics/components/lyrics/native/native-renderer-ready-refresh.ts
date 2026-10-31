@@ -30,6 +30,7 @@ export class NativeRendererReadyRefreshGate {
   private generation = 0;
   private completedGeneration = -1;
   private mounted = true;
+  private mountCount = 0;
 
   begin(key: string) {
     if (key !== this.currentKey) {
@@ -40,7 +41,24 @@ export class NativeRendererReadyRefreshGate {
     return this.generation;
   }
 
-  setMounted(mounted: boolean) { this.mounted = mounted; }
+  mount() {
+    this.mountCount += 1;
+    this.mounted = true;
+  }
+
+  unmount() {
+    this.mountCount = Math.max(0, this.mountCount - 1);
+    if (this.mountCount === 0) this.mounted = false;
+  }
+
+  setMounted(mounted: boolean) {
+    this.mounted = mounted;
+    if (mounted) {
+      if (this.mountCount <= 0) this.mountCount = 1;
+    } else {
+      this.mountCount = 0;
+    }
+  }
 
   foreground(key: string) {
     this.begin(key);
@@ -64,4 +82,48 @@ export class NativeRendererReadyRefreshGate {
     onRejected();
     return false;
   }
+}
+
+export type RendererContentIdentity = {
+  demo: boolean;
+  trackId: string | null;
+  source: string;
+  lyrics: unknown;
+};
+
+let sharedGate: NativeRendererReadyRefreshGate | null = null;
+let sharedContentIdentity: RendererContentIdentity | null = null;
+let sharedContentGeneration = 0;
+
+export function getSharedNativeRendererReadyRefreshGate(): NativeRendererReadyRefreshGate {
+  if (!sharedGate) {
+    sharedGate = new NativeRendererReadyRefreshGate();
+  }
+  return sharedGate;
+}
+
+export function getRendererContentKey(identity: RendererContentIdentity): string {
+  const isChanged = !sharedContentIdentity ||
+    sharedContentIdentity.demo !== identity.demo ||
+    sharedContentIdentity.trackId !== identity.trackId ||
+    sharedContentIdentity.source !== identity.source ||
+    sharedContentIdentity.lyrics !== identity.lyrics;
+  if (isChanged) {
+    sharedContentGeneration += 1;
+    sharedContentIdentity = {
+      demo: identity.demo,
+      trackId: identity.trackId,
+      source: identity.source,
+      lyrics: identity.lyrics,
+    };
+  }
+  return `content-${sharedContentGeneration}`;
+}
+
+export function resetNativeRendererReadyRefreshForTests() {
+  sharedGate = null;
+  sharedContentIdentity = null;
+  sharedContentGeneration = 0;
+  currentRegistration = null;
+  pendingReadyRequest = null;
 }
