@@ -3,6 +3,7 @@ import { saveMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
 import { bridgeClient } from "@/lib/bridge-client";
 import type { LyricsPacket, Track } from "@/types/bridge";
 import { usePlaybackStore } from "@/store/playback-store";
+import { emitPickerTrace } from "../../DesktopBridge/src/lyricsAutoPicker";
 
 let latestLyricsRequestId = 0;
 
@@ -44,12 +45,7 @@ export type LyricsSourcePreference =
   | "lrclib"
   | "spicy-lyrics";
 
-function emitPickerTrace(stage: string, payload: Record<string, unknown>) {
-  if (typeof __DEV__ === "undefined" || !__DEV__) return;
-  try {
-    console.log("[PickerTrace]", JSON.stringify({ stage, ...payload }));
-  } catch {}
-}
+
 
 function formatDisplayCredit(metadata?: Record<string, unknown> | null) {
   if (!metadata) return null;

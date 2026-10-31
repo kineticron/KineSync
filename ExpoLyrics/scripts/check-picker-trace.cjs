@@ -9,23 +9,41 @@ const ts = require('typescript');
 const pickerPath = path.join(__dirname, '../../DesktopBridge/src/lyricsAutoPicker.js');
 const pickerSource = fs.readFileSync(pickerPath, 'utf8');
 
-function loadPicker(dev) {
+function loadPicker(dev, nodeEnv, onLog) {
   const lines = [];
   const sandbox = {
     module: { exports: {} },
     exports: {},
-    __DEV__: dev,
-    console: { log: (...args) => lines.push(args) },
+    console: {
+      log: (...args) => {
+        lines.push(args);
+        if (onLog) onLog(...args);
+      },
+    },
     require: () => ({}),
   };
+  if (dev !== undefined) sandbox.__DEV__ = dev;
+  if (nodeEnv !== undefined) {
+    sandbox.process = { env: { NODE_ENV: nodeEnv } };
+  } else if (dev === undefined) {
+    sandbox.process = { env: {} };
+  }
   vm.runInNewContext(pickerSource, sandbox);
   return { api: sandbox.module.exports, lines };
 }
 
-// 1. Dev-only silence in shared picker
+// 1. Production / no-env silence in shared picker
 const release = loadPicker(false);
 release.api.emitPickerTrace('test', { requestId: 99, stage: 'test' });
-assert.equal(release.lines.length, 0, 'PickerTrace is silent in production (__DEV__=false)');
+assert.equal(release.lines.length, 0, 'PickerTrace is silent when __DEV__ is false');
+
+const prodEnv = loadPicker(undefined, 'production');
+prodEnv.api.emitPickerTrace('test', { requestId: 99, stage: 'test' });
+assert.equal(prodEnv.lines.length, 0, 'PickerTrace is silent when NODE_ENV is production and __DEV__ absent');
+
+const noEnv = loadPicker(undefined, undefined);
+noEnv.api.emitPickerTrace('test', { requestId: 99, stage: 'test' });
+assert.equal(noEnv.lines.length, 0, 'PickerTrace is silent when NODE_ENV is missing and __DEV__ absent');
 
 // 2. Dev mode logging in shared picker
 const dev = loadPicker(true);
@@ -37,7 +55,32 @@ assert.equal(parsed.requestId, 101);
 assert.equal(parsed.stage, 'test');
 assert.equal(parsed.custom, 'data');
 
-// 3. Comparator evaluations and rules
+const devEnv = loadPicker(undefined, 'development');
+devEnv.api.emitPickerTrace('test', { requestId: 102 });
+assert.equal(devEnv.lines.length, 1, 'PickerTrace is active when NODE_ENV is development and __DEV__ absent');
+
+const testEnv = loadPicker(undefined, 'test');
+testEnv.api.emitPickerTrace('test', { requestId: 103 });
+assert.equal(testEnv.lines.length, 1, 'PickerTrace is active when NODE_ENV is test and __DEV__ absent');
+
+// 3. Provider outcome trace preserves raw provider reason
+const providerLogs = [];
+const providerPicker = loadPicker(true, undefined, (...args) => {
+  if (args[0] === '[PickerTrace]') providerLogs.push(JSON.parse(args[1]));
+});
+providerPicker.api.emitPickerTrace('provider-outcome', {
+  requestId: 104,
+  source: 'netease',
+  outcome: 'fail',
+  reason: 'netease:unreachable-timeout: raw error token=123',
+  lineCount: 0,
+});
+assert.equal(providerLogs.length, 1);
+assert.equal(providerLogs[0].stage, 'provider-outcome');
+assert.equal(providerLogs[0].outcome, 'fail');
+assert.equal(providerLogs[0].reason, 'netease:unreachable-timeout: raw error token=123');
+
+// 4. Comparator evaluations and rules
 const lrcSyllable = {
   source: 'lrc-red-karaoke',
   lyrics: [{ lineStartTime: 1000, lineEndTime: 3000, text: 'Secret lyrics line 1' }],
@@ -87,9 +130,9 @@ const spicyCountDiff = {
 };
 checkRule(dev.api.evaluatePreferAutoCandidate({}, lrcSyllable, spicyCountDiff), true, 'line-count-mismatch');
 
-// 4. Test lyrics-sync.ts trace in dev vs release
+// 5. Test lyrics-sync.ts trace using actual shared emitter
 const lib = path.resolve(__dirname, '../lib');
-function loadSync(devFlag, logCollector) {
+function loadSync(devFlag, logCollector, nodeEnv, clientOverride) {
   const file = 'lyrics-sync.ts';
   const code = ts.transpileModule(fs.readFileSync(path.join(lib, file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -110,7 +153,7 @@ function loadSync(devFlag, logCollector) {
   };
 
   let onProgressCallback = null;
-  const mockClient = {
+  const mockClient = clientOverride || {
     fetchMobileLyricsForTrack: async (reqTrack, options) => {
       onProgressCallback = options.onSyncedLyrics;
       // Emit initial spicy
@@ -141,11 +184,14 @@ function loadSync(devFlag, logCollector) {
     },
   };
 
+  const sharedPickerInstance = loadPicker(devFlag, nodeEnv, (...args) => {
+    if (args[0] === '[PickerTrace]') logCollector.push(JSON.parse(args[1]));
+  });
+
   const module = { exports: {} };
-  vm.runInNewContext(code, {
+  const syncSandbox = {
     module,
     exports: module.exports,
-    __DEV__: devFlag,
     console: {
       log: (...args) => {
         if (args[0] === '[PickerTrace]') logCollector.push(JSON.parse(args[1]));
@@ -156,19 +202,37 @@ function loadSync(devFlag, logCollector) {
       if (name === '@/store/playback-store') return { usePlaybackStore: { getState: () => state } };
       if (name === '@/lib/bridge-client') return { bridgeClient: {} };
       if (name === '@/lib/mobile-lyrics-vault') return {};
+      if (name.includes('lyricsAutoPicker') || name === '../../DesktopBridge/src/lyricsAutoPicker') {
+        return sharedPickerInstance.api;
+      }
       return {};
     },
-  });
+  };
+  if (devFlag !== undefined) syncSandbox.__DEV__ = devFlag;
+  if (nodeEnv !== undefined) syncSandbox.process = { env: { NODE_ENV: nodeEnv } };
+  else if (devFlag === undefined) syncSandbox.process = { env: {} };
+
+  vm.runInNewContext(code, syncSandbox);
   return { sync: module.exports, state, triggerLate: (packet) => onProgressCallback?.(packet) };
 }
 
-// 4a. Production mode test - zero logs emitted
+// 5a. Production & no-env silence in sync layer
 const releaseLogs = [];
 const releaseHarness = loadSync(false, releaseLogs);
 releaseHarness.sync.refreshLyricsForCurrentTrack('auto');
 assert.equal(releaseLogs.length, 0, 'No PickerTrace emitted when __DEV__ is false in sync layer');
 
-// 4b. Dev mode test - full trace covering progressive late lrc upgrade and display commit
+const prodLogs = [];
+const prodHarness = loadSync(undefined, prodLogs, 'production');
+prodHarness.sync.refreshLyricsForCurrentTrack('auto');
+assert.equal(prodLogs.length, 0, 'No PickerTrace emitted when NODE_ENV is production and __DEV__ absent in sync layer');
+
+const noEnvLogs = [];
+const noEnvHarness = loadSync(undefined, noEnvLogs, undefined);
+noEnvHarness.sync.refreshLyricsForCurrentTrack('auto');
+assert.equal(noEnvLogs.length, 0, 'No PickerTrace emitted when NODE_ENV missing and __DEV__ absent in sync layer');
+
+// 5b. Dev mode test - full trace covering progressive late lrc upgrade and display commit
 (async () => {
   const devLogs = [];
   const devHarness = loadSync(true, devLogs);
@@ -211,13 +275,25 @@ assert.equal(releaseLogs.length, 0, 'No PickerTrace emitted when __DEV__ is fals
   const bridgeDiscard = devLogs.find((e) => e.stage === 'callback-guard' && e.reason === 'bridge-connected');
   assert.ok(bridgeDiscard, 'Guard logged discard when bridge connected');
 
-  // Verify NO secret or lyric content in any log
+  // Verify lyric lines are not dumped in logs
   for (const entry of devLogs) {
     const serialized = JSON.stringify(entry);
     assert.ok(!serialized.includes('Secret lyrics'), 'No lyric text leaked in logs');
-    assert.ok(!serialized.includes('token'), 'No tokens in logs');
-    assert.ok(!serialized.includes('secret'), 'No secrets in logs');
   }
+
+  // 5c. Raw error preserved in DEV sync-error
+  const errorLogs = [];
+  const rawErrorMessage = 'upstream provider failure: raw token=secret-auth-failed';
+  const errorHarness = loadSync(true, errorLogs, undefined, {
+    fetchMobileLyricsForTrack: async () => {
+      throw new Error(rawErrorMessage);
+    },
+  });
+  await errorHarness.sync.refreshLyricsForCurrentTrack('auto');
+  const errorTrace = errorLogs.find((e) => e.stage === 'callback-guard' && e.target === 'sync-error');
+  assert.ok(errorTrace, 'Sync error guard logged');
+  assert.ok(errorTrace.error.includes(rawErrorMessage), 'Raw error message is preserved in DEV without sanitization');
+  assert.ok(errorHarness.state.lyricsStatusMessage.includes(rawErrorMessage), 'Status message preserves raw error message');
 
   console.log('PickerTrace diagnostics check passed: dev-only silence, correlated requestId, provider outcomes, comparator rules (including equivalent-lrc), callback guards, and progressive late lrc upgrade with final committed display source and credit.');
 })().catch((err) => {

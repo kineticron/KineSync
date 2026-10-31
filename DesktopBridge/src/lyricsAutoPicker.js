@@ -74,7 +74,7 @@ function sourcePriority(packetOrSource) {
 function emitPickerTrace(stage, payload) {
   const isDev = typeof __DEV__ !== "undefined"
     ? Boolean(__DEV__)
-    : (typeof process !== "undefined" && process?.env?.NODE_ENV !== "production");
+    : (typeof process !== "undefined" && (process?.env?.NODE_ENV === "development" || process?.env?.NODE_ENV === "test"));
   if (!isDev) return;
   try {
     console.log("[PickerTrace]", JSON.stringify({
