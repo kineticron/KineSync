@@ -5,7 +5,7 @@ import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, tim
   type ClockStamp, type TimingAnchor, type TimingContext } from './timing-diagnostics';
 import { developmentTimingActive, developmentTimingAnchor, logDevelopmentTiming, type DevelopmentTimingAnchor } from './development-timing-log';
 
-export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; dealerDeliveryExcessMs?: number; dealerDeliveryExperimentEnabled?: boolean; dealerDeliveryExperimentReanchor?: boolean; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
+export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; sourceClockScope?: string; dealerDeliveryExcessMs?: number; dealerDeliveryExperimentEnabled?: boolean; dealerDeliveryExperimentReanchor?: boolean; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
 
 /** Spotify IDs use this base62 alphabet. Convert to the 128-bit metadata GID
  * without rounding through a JS Number or depending on native BigInt support. */

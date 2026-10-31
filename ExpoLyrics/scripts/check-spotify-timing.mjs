@@ -69,11 +69,14 @@ async function connect(sample) {
 }
 
 // Diagnostics must not change projection, store corrections or wire packet shape.
+// Use identical source inputs: the packet now preserves the source timestamp
+// pair even when diagnostics are disabled. Captured legacy fixtures below stay intact.
+const neutralityInput = { ...raw(), server_timestamp_ms: epoch };
 at(0); reset(); api.clearTimingCapture();
-let sample = api.sampleFrom(raw()); assert.equal(sample.timingProvenance, undefined);
+let sample = api.sampleFrom(neutralityInput); assert.equal(sample.timingProvenance, undefined);
 at(250); const disabledPacket = publish(sample); assert.equal(position(), 10250);
 assert.equal(store.getState().driftOffset, 0, 'delivery age compensated exactly once');
-at(0); reset(); api.startTimingCapture(); sample = api.sampleFrom({ ...raw(), server_timestamp_ms: epoch });
+at(0); reset(); api.startTimingCapture(); sample = api.sampleFrom(neutralityInput);
 at(250); const enabledPacket = publish(sample);
 assert.equal(JSON.stringify(enabledPacket), JSON.stringify(disabledPacket));
 assert.equal(position(), 10250);

@@ -9,6 +9,7 @@ import { isDealerDeliveryExperimentEnabled, subscribeDealerDeliveryExperiment } 
 import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
 import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureActive } from '../native-clock-diagnostics';
 const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
+let nextSourceClockScope = 0;
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -23,6 +24,10 @@ export class SpotifyPlaybackUnavailableError extends Error {}
 /** One non-playing Connect observer. Credentials/routes are memory-only.
  * No polling clock: the playback store owns interpolation between events. */
 export class SpotifyDetector {
+  private readonly sourceClockInstance = ++nextSourceClockScope;
+  private get sourceClockScope() {
+    return `${this.sourceClockInstance}:${this.deliveryAuthEpoch}:${this.deliveryRouteEpoch}`;
+  }
   private token = '';
   private clientToken = '';
   private expiresAt = 0;
@@ -46,7 +51,7 @@ export class SpotifyDetector {
   private lastDealerConnection = '';
   private registered = false;
   private blocked = false;
-  private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext } | null = null;
+  private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext; sourceClockScope: string } | null = null;
   private requests = new Set<AbortController>();
   private metadataCache = new Map<string, TrackMetadata>();
   private metadataPending = new Map<string, Promise<TrackMetadata>>();
@@ -115,6 +120,8 @@ export class SpotifyDetector {
         logDevelopmentTiming('foreground-replay', this.lastSample);
         // Keep legacy fallback behavior; immutable provenance retains original receipt.
         this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now(),
+          // A cached replay cannot certify a newly authenticated/routed source.
+          sourceClockScope: this.lastSample.sourceClockScope === this.sourceClockScope ? this.sourceClockScope : undefined,
           dealerDeliveryExperimentEnabled: this.experimentEnabled });
       }
       this.connectIfReady();
@@ -135,6 +142,7 @@ export class SpotifyDetector {
     this.enabled = false; this.disconnect(); this.token = ''; this.clientToken = '';
     this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
     this.deliveryBaseline.clear(); this.lastDeliveryObservation = null;
+    this.deliveryAuthEpoch++;
     this.removeExperimentListener?.(); this.removeExperimentListener = null;
     this.resetOrdering();
     this.blocked = false;
@@ -227,7 +235,7 @@ export class SpotifyDetector {
     this.fingerprint = ''; this.lastSourceTimestamp = 0;
     this.orderingDeviceId = undefined; this.orderingSessionId = undefined; this.lastDealerConnection = '';
   }
-  private emit(payload: unknown, receivedAt = Date.now(), timing: TimingContext = {}) {
+  private emit(payload: unknown, receivedAt = Date.now(), timing: TimingContext = {}, authorityScope = this.sourceClockScope) {
     const s = sampleFrom(payload, 0, timing);
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) return false;
     if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
@@ -236,6 +244,9 @@ export class SpotifyDetector {
       playing: s.playing, experiment: this.experimentEnabled,
       ...this.deliveryBaseline.diagnosticSummary() });
     s.receivedAt = receivedAt;
+    // Reconnect generations do not change source authority. Positive auth/route
+    // changes and a new detector instance do; never compare their raw anchors.
+    s.sourceClockScope = authorityScope === this.sourceClockScope ? authorityScope : undefined;
     if (s.sourceServerTimestampMs !== undefined) s.positionObservedAt = timing.receipt ?? timingNow(receivedAt);
     // Recognizable state proves observer readiness even when duplicate/stale.
     this.callbacks.ready();
@@ -336,6 +347,7 @@ export class SpotifyDetector {
     if (!this.token || !this.route || !this.dealer) { this.callbacks.sessionNeeded(); return; }
     if (Date.now() >= this.expiresAt - 30_000) { this.needSession('Refreshing Spotify session…'); return; }
     const run = ++this.generation;
+    const sourceClockScope = this.sourceClockScope;
     const url = new URL(this.dealer);
     url.searchParams.set('access_token', this.token);
     const ws = new WebSocket(url.toString());
@@ -358,11 +370,11 @@ export class SpotifyDetector {
         const payload = JSON.parse(String(e.data)); lastReceived = performance.now();
         if (payload.type === 'pong') return;
         const id = connectionIdFrom(payload);
-        if (id && id !== this.connectionId) { this.connectionId = id; void this.register(run, ws); }
+        if (id && id !== this.connectionId) { this.connectionId = id; void this.register(run, ws, sourceClockScope); }
         const decoded = decodeDealer(payload);
         const timing: TimingContext = { receipt, origin: 'dealer', connectionId: this.connectionId, generation: run };
-        if (this.registered) this.emit(decoded, receivedAt, timing);
-        else if (sampleFrom(decoded)) this.pendingState = { payload: decoded, receivedAt, timing };
+        if (this.registered) this.emit(decoded, receivedAt, timing, sourceClockScope);
+        else if (sampleFrom(decoded)) this.pendingState = { payload: decoded, receivedAt, timing, sourceClockScope };
       } catch { this.callbacks.status('A Spotify update could not be decoded; awaiting the next update.'); }
     };
     ws.onerror = () => { if (alive()) this.callbacks.status('Spotify connection interrupted; reconnecting…'); };
@@ -373,7 +385,7 @@ export class SpotifyDetector {
       else this.needSession('Reconnecting Spotify session…');
     };
   }
-  private async register(run: number, ws: WebSocket) {
+  private async register(run: number, ws: WebSocket, sourceClockScope = this.sourceClockScope) {
     const connectionId = this.connectionId;
     const requestCapture = nativeDiagnosticsEnabled ? getNativeClockCapture() : null;
     const requestStarted = nativeDiagnosticsEnabled ? performance.now() : 0;
@@ -419,9 +431,9 @@ export class SpotifyDetector {
       // Apply any newer Dealer anchor first, so an HTTP response that was
       // generated earlier cannot undo a pause/seek received during registration.
       const pending = this.pendingState; this.pendingState = null;
-      if (pending) this.emit(pending.payload, pending.receivedAt, pending.timing);
+      if (pending) this.emit(pending.payload, pending.receivedAt, pending.timing, pending.sourceClockScope);
       if (bytes.length) this.emit(decodeStateBody(bytes), undefined,
-        { receipt, origin: 'registration', connectionId: this.connectionId, generation: run });
+        { receipt, origin: 'registration', connectionId: this.connectionId, generation: run }, sourceClockScope);
     } catch { if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
       requestGeneration: run, currentGeneration: this.generation, alive: alive(), elapsedMs: performance.now() - requestStarted,
       cacheProvenance: 'no-state-emitted' }); if (alive()) ws.close(); }

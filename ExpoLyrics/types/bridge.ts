@@ -25,6 +25,16 @@ export type PlaybackPacket = {
   isPlaying: boolean;
   timestamp: number;
   capturedAtMs?: number;
+  /** Original Spotify anchor, separate from the locally normalized position. */
+  positionTimestampMs?: number;
+  sourcePositionMs?: number;
+  trackUri?: string;
+  uri?: string;
+  sourceServerTimestampMs?: number;
+  activeDeviceId?: string;
+  playbackSessionId?: string;
+  /** Detector instance/auth/route scope; contains no credentials. */
+  sourceClockScope?: string;
   /** Dev-only Spotify detector experiment reanchor; never set by normal packets. */
   nativeDeliveryExperimentReanchor?: boolean;
   timing?: BridgeTimingDiagnostics;

@@ -13,6 +13,8 @@ const babel = require('@babel/core');
 const root = path.resolve(__dirname, '..');
 const baselineIndex = process.argv.indexOf('--baseline');
 const baselineClock = baselineIndex < 0 ? null : path.resolve(process.argv[baselineIndex + 1]);
+const baselineStoreIndex = process.argv.indexOf('--baseline-store');
+const baselineStore = baselineStoreIndex < 0 ? null : path.resolve(process.argv[baselineStoreIndex + 1]);
 const transformed = new Map();
 function compile(filename) {
   if (!transformed.has(filename)) transformed.set(filename, babel.transformSync(fs.readFileSync(filename, 'utf8'), {
@@ -25,19 +27,19 @@ const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected
   `${message}: actual=${actual}, expected=${expected}`);
 const reanimatedRoot = path.join(root, 'node_modules/react-native-reanimated/src');
 
-function scenario() {
+function scenario({ initialPacket, development = false } = {}) {
   let now = 10000, currentInstance, renderDirty = false, frameId = 0, definitionTransfers = 0, hostTransfers = 0;
-  let tree, rootElement;
+  let tree, rootElement, layoutWidth = 360;
   const modules = new Map(), instances = new Map(), uiQueue = [], rnQueue = [], raf = new Map(), frameHooks = new Set();
   const sharedValues = new WeakSet(), nativeObjects = new WeakSet(), nativeFunctions = new Set(), hydrated = new WeakMap();
   const appListeners = new Set(), subscriptions = new Set(), storeEvents = [], glyphFrames = [];
   const nativeNow = () => now;
   nativeFunctions.add(nativeNow);
-  const ui = vm.createContext({ __DEV__: false, __RUNTIME_KIND: 2, performance: { now: () => now + 900000 }, console,
+  const ui = vm.createContext({ __DEV__: development, __RUNTIME_KIND: 2, performance: { now: () => now + 900000 }, console,
     requestAnimationFrame: fn => { const id = ++frameId; raf.set(id, fn); return id; } });
   ui.global = ui;
   ui._getAnimationTimestamp = () => now + 420000;
-  const rn = vm.createContext({ __DEV__: false, __RUNTIME_KIND: 1, performance: { now: nativeNow }, console,
+  const rn = vm.createContext({ __DEV__: development, __RUNTIME_KIND: 1, performance: { now: nativeNow }, console,
     process: { env: { EXPO_PUBLIC_NATIVE_LYRICS: '1' } },
     Date: { now: () => 1700000000000 + now }, setInterval: () => 1, clearInterval() {} });
   rn.global = rn;
@@ -231,7 +233,8 @@ function scenario() {
       if (name.startsWith('.')) return load(path.resolve(path.dirname(filename), name));
       return require(name);
     };
-    const source = baselineClock && relative === 'components/lyrics/native/use-native-lyrics-clock.ts' ? baselineClock : filename;
+    const source = baselineClock && relative === 'components/lyrics/native/use-native-lyrics-clock.ts' ? baselineClock
+      : baselineStore && relative === 'store/playback-store.ts' ? baselineStore : filename;
     vm.runInContext(`(function(require,module,exports){${compile(source)}\n})`, rn)(localRequire, module, module.exports);
     return module.exports;
   }
@@ -250,7 +253,7 @@ function scenario() {
     storeEvents.push({ before: before.anchorPositionMs, after: store.getState().anchorPositionMs, now, ...result });
     return result;
   };
-  ingest();
+  ingest(initialPacket);
   const lyrics = [{ lineStartTime: 19000, lineEndTime: 80000,
     syllables: [{ text: 'clock', startTime: 19000, endTime: 80000 }] }];
   store.setState({ lyrics, lyricsSource: 'fixture-syllable' });
@@ -287,7 +290,7 @@ function scenario() {
     if (type === 'FlashList') return { ...element, children: props.data.map((item, index) => walk(props.renderItem({ item, index }), `${key}/row-${index}`)) };
     // A deterministic native layout report drives the actual SkiaVoice width
     // state, so the real row/voice/glyph-picture prop plumbing runs end to end.
-    if (props.onLayout && type === 'Animated.View') props.onLayout({ nativeEvent: { layout: { width: 360, height: 120 } } });
+    if (props.onLayout && type === 'Animated.View') props.onLayout({ nativeEvent: { layout: { width: layoutWidth, height: 120 } } });
     return { ...element, children: walk(props.children, `${key}/children`) };
   }
   function render() {
@@ -303,9 +306,10 @@ function scenario() {
     }
     throw Error('Renderer integration did not settle');
   }
-  function mount(style) {
+  function mount(style, { landscapeMode = false, width = 360 } = {}) {
     assert.equal(instances.size, 0, 'Switch mounts fresh wrapper after outgoing cleanup');
-    rootElement = jsx(wrappers[style], { active: true, tapToSeekEnabled: true, autoFollowEnabled: false });
+    layoutWidth = width;
+    rootElement = jsx(wrappers[style], { active: true, tapToSeekEnabled: true, autoFollowEnabled: false, landscapeMode });
     render();
     assert(glyphFrames.length > 0, 'Actual NativeSkiaVoice must mount actual NativeGlyphPicture');
     const rowPositions = [...instances.values()].filter(instance => instance.type === NativeLyricRowView).map(instance => instance.rowPosition);
@@ -350,14 +354,18 @@ function scenario() {
     });
   }
   return { store, ingest, mount, unmount, flush, frame, observed, get now() { return now; }, advance: ms => { now += ms; },
+    packet: sample => load(path.join(root, 'lib/spotify-detector/packet.ts')).detectorPacket(sample, 1700000000000 + now, now),
     get definitionTransfers() { return definitionTransfers; }, get hostTransfers() { return hostTransfers; },
     get refreshes() { return refreshes; }, get subscriptions() { return subscriptions.size; },
     get appListeners() { return appListeners.size; },
     onRefresh: callback => { nextRefresh = callback; }, ready: () => findFlash(tree).props.onLoad(),
+    getReadyCallback: () => findFlash(tree).props.onLoad,
     stop() { unmount(); flush(); unregister(); },
   };
 }
 
+module.exports = { scenario, near };
+if (require.main === module) {
 const results = [];
 for (const [from, to] of [['spicy', 'amll'], ['amll', 'spicy']]) for (const blockedMs of [1000, 2000, 3000]) for (const refreshMode of ['preserved', 'regressed']) {
   const run = scenario();
@@ -412,3 +420,4 @@ console.log(JSON.stringify({ implementation: baselineClock ? 'old-native-clock' 
   consumption: 'native-wrapper/view/row/voice/glyph-picture', rendererSwitch: results }));
 console.log('Both native switch directions passed: outgoing cleanup, real animation-definition handoff, 1-3s blocked mount, 30fps, actual glyph time consumption, preserved readiness refresh and accepted/rejected stale-source controls.');
 console.log('Limits: modeled native transport and Skia geometry; no device runtime, LPM, Bluetooth, source-clock accuracy or visual-fidelity claim.');
+}

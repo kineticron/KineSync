@@ -41,6 +41,9 @@ type TimingValues = Readonly<{
   projectedBeforeMs?: NumericEvidence;
   preserveAnchor?: boolean;
   seekDetected?: boolean;
+  sourceIdentityComplete?: boolean;
+  sameSourceAnchor?: boolean;
+  forceExperimentReanchor?: boolean;
 }>;
 type TimingStage = 'accepted' | 'duplicate' | 'stale' | 'foreground-replay' | 'packet' | 'store' | 'store-rejected';
 type TimingRecord = Readonly<{ stage: TimingStage; anchor: TimingAnchor; processed: ClockStamp; values: TimingValues }>;

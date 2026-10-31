@@ -96,6 +96,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         beforeAnchorPosition: store.anchorPositionMs, beforeAnchorMono: store.anchorMonotonicMs,
         afterAnchorPosition: after.anchorPositionMs, afterAnchorMono: after.anchorMonotonicMs,
         beforeProjected, afterProjected, sourceCorrectionMs: afterProjected - beforeProjected,
+        sourceIdentityComplete: after.sourceAnchorProof !== null,
+        sourceAnchorPreserved: store.sourceAnchorProof !== null &&
+          store.sourceAnchorProof?.key === after.sourceAnchorProof?.key &&
+          store.anchorPositionMs === after.anchorPositionMs && store.anchorMonotonicMs === after.anchorMonotonicMs,
         trackChanged: result.trackChanged, seekDetected: result.seekDetected, ingestMs: now - beforeMono });
     }
     if (result.trackChanged) {
