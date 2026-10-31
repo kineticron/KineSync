@@ -3,6 +3,7 @@ import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanva
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { reportNativePicture } from '@/lib/native-clock-diagnostics';
+import { recordPerfStage } from '@/lib/perf-stages';
 import { needsEmojiMask } from './native-glyph-mask';
 import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
@@ -72,6 +73,7 @@ function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
+  const shapeStart = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof performance !== 'undefined') ? performance.now() : 0;
   const lines = paragraph.getLineMetrics();
   const allRects = words.flatMap(word => word.rects);
   const shaped = words.map(word => {
@@ -129,6 +131,12 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
     canvas.clipPath(word.clips[index], ClipOp.Intersect, true);
     for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, sourcePaint);
   }));
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && shapeStart) {
+    recordPerfStage('glyph shaping', performance.now() - shapeStart, {
+      spicy,
+      wordCount: words.length,
+    });
+  }
   return shaped;
 }
 
@@ -301,6 +309,22 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && isActive) {
+      const pictureDuration = performance.now() - pictureStarted;
+      let devNativeNow: number | null = null;
+      try { devNativeNow = pictureNativeMonotonicNow ? pictureNativeMonotonicNow() : null; } catch { /* Report unavailable native transfer explicitly. */ }
+      scheduleOnRN(recordPerfStage, 'first-active-picture', pictureDuration, {
+        spicy,
+        background,
+        isActive,
+        ...(devNativeNow !== null ? { pictureNativeMonotonicNow: devNativeNow } : {}),
+      });
+      scheduleOnRN(recordPerfStage, 'picture build', pictureDuration, {
+        spicy,
+        background,
+        isActive,
+      });
+    }
     if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
       traceFrames.value++;
       let nativeNow: number | null = null;

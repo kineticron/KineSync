@@ -14,6 +14,7 @@ import type {
 } from "@/types/bridge";
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
 import { validateInboundBridgePacket } from "@/lib/bridge-validation";
+import { recordPerfStage, createArrival, associateArrival } from "@/lib/perf-stages";
 
 type BridgeClientOptions = {
   onTrackChange?: (packet: PlaybackPacket) => void;
@@ -538,6 +539,21 @@ class BridgeClient {
   }
 
   private applyLyricsPacket(packet: LyricsPacket) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      const isRejected = (packet.lyrics || []).length === 0;
+      const isTranslation = !!packet.metadata?.translation || (packet.source || '').includes('translation');
+      const kind = isRejected ? 'rejected' : isTranslation ? 'translation' : 'new-song';
+      const trackLabel = packet.trackId ? packet.trackId.slice(0, 48) : 'bridge-track';
+      const arrivalId = createArrival(trackLabel, kind);
+      associateArrival(packet, arrivalId);
+      if (packet.lyrics) {
+        associateArrival(packet.lyrics, arrivalId);
+      }
+      recordPerfStage('packet-ingestion', 0, {
+        source: packet.source || 'bridge',
+        lineCount: (packet.lyrics || []).length,
+      }, arrivalId);
+    }
     const receivedAt = Date.now();
     this.pendingLyricsRefetch = false;
     const state = usePlaybackStore.getState();

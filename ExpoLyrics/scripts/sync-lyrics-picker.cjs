@@ -8,7 +8,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const mobileFile = path.join(root, 'ExpoLyrics/lib/mobile-lyrics-service.js');
 const parts = ['03-qq-sources.js', '04-netease-spicy-lrclib-sources.js', '04-kugou-source.js',
-  '07a-source-scoring.js', '07b-service-orchestration.js'];
+  '04-lrc-red-source.js', '07a-source-scoring.js', '07b-service-orchestration.js'];
 function generate(input) {
   let output = input;
   for (const name of parts) {
@@ -22,6 +22,10 @@ function generate(input) {
     let source = fs.readFileSync(path.join(root, 'DesktopBridge/src/lyrics/parts', name), 'utf8').replace(/^"use strict";\s*/, '').trim();
     source = source.replaceAll('require("./lyricsAutoPicker")', 'require("../../DesktopBridge/src/lyricsAutoPicker")')
       .replaceAll('require("./lyricsTtmlTranslations")', 'require("../../DesktopBridge/src/lyricsTtmlTranslations")');
+    if (name === '04-lrc-red-source.js') {
+      source = source.replace('const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");',
+        'const parseTtmlToLyrics = parseLrcRedTtml;\n  const parseTtmlTimeExpression = parseLrcRedTime;\n  const extractTtmlMetadata = extractLrcRedTtmlMetadata;');
+    }
     if (name === '07b-service-orchestration.js') {
       source = source.replaceAll('|desktop', '|mobile').replaceAll('desktop-bridge', 'mobile-app').replaceAll('on desktop.', 'on mobile.')
         .replaceAll('require("./lyricsVault")', 'mobileLyricsVaultShim').replaceAll('require("./lyricsTtmlImport")', 'mobileTtmlImportShim')

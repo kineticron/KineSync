@@ -1,4 +1,5 @@
 import { fetchMobileLyricsForTrack } from "@/lib/mobile-lyrics-client";
+import { recordPerfStage, createArrival, associateArrival, getArrivalForObject } from "@/lib/perf-stages";
 import { saveMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
 import { bridgeClient } from "@/lib/bridge-client";
 import type { LyricsPacket, Track } from "@/types/bridge";
@@ -45,6 +46,19 @@ export type LyricsSourcePreference =
   | "spicy-lyrics";
 
 function applyMobileLyricsPacket(packet: LyricsPacket) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const arrivalId = getArrivalForObject(packet) || 'uncorrelated';
+    if (arrivalId !== 'uncorrelated') {
+      associateArrival(packet, arrivalId);
+      if (packet.lyrics) {
+        associateArrival(packet.lyrics, arrivalId);
+      }
+    }
+    recordPerfStage('packet-ingestion', 0, {
+      source: packet.source || 'mobile-app',
+      lineCount: (packet.lyrics || []).length,
+    }, arrivalId);
+  }
   const state = usePlaybackStore.getState();
   // A request can outlive the browser fallback that started it. Once the
   // bridge reconnects it is the authoritative lyrics publisher again.
@@ -126,6 +140,15 @@ export async function refreshLyricsForCurrentTrack(
       : `Switching to ${sourceLabel} on mobile...`,
   );
 
+  let currentArrivalId: string | undefined;
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const trackLabel = currentTrack?.id ? currentTrack.id.slice(0, 48) : 'mobile-track';
+    currentArrivalId = createArrival(trackLabel, 'new-song') || undefined;
+    if (currentTrack && currentArrivalId) {
+      associateArrival(currentTrack, currentArrivalId);
+    }
+  }
+
   const requestId = latestLyricsRequestId + 1;
   latestLyricsRequestId = requestId;
   const activeSignature = getTrackMetadataSignature(currentTrack);
@@ -135,11 +158,23 @@ export async function refreshLyricsForCurrentTrack(
       force,
       onSyncedLyrics: (progressPacket) => {
         if (isCurrentTrackRequest(requestId, activeSignature)) {
+          if (typeof __DEV__ !== 'undefined' && __DEV__ && currentArrivalId) {
+            associateArrival(progressPacket, currentArrivalId);
+            if (progressPacket.lyrics) {
+              associateArrival(progressPacket.lyrics, currentArrivalId);
+            }
+          }
           applyMobileLyricsPacket(progressPacket);
         }
       },
     });
     if (isCurrentTrackRequest(requestId, activeSignature)) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && currentArrivalId) {
+        associateArrival(packet, currentArrivalId);
+        if (packet.lyrics) {
+          associateArrival(packet.lyrics, currentArrivalId);
+        }
+      }
       applyMobileLyricsPacket(packet);
     }
   } catch (error) {
@@ -190,17 +225,37 @@ export function requestImmediateTranslationForCurrentSource() {
   const activeSignature = getTrackMetadataSignature(currentTrack);
   setLyricsStatusMessage("Translating on-screen lyrics on mobile...");
   beginTranslationRequest();
+  let translationArrivalId: string | undefined;
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const trackLabel = currentTrack?.id ? currentTrack.id.slice(0, 48) : 'mobile-track';
+    translationArrivalId = createArrival(trackLabel, 'translation') || undefined;
+    if (currentTrack && translationArrivalId) {
+      associateArrival(currentTrack, translationArrivalId);
+    }
+  }
   void fetchMobileLyricsForTrack(currentTrack, {
     preferredSource: inferCurrentSourcePreference(lyricsSource),
     immediateTranslation: true,
     onSyncedLyrics: (packet) => {
       if (isCurrentTrackRequest(requestId, activeSignature)) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && translationArrivalId) {
+          associateArrival(packet, translationArrivalId);
+          if (packet.lyrics) {
+            associateArrival(packet.lyrics, translationArrivalId);
+          }
+        }
         applyMobileLyricsPacket(packet);
       }
     },
   })
     .then((packet) => {
       if (isCurrentTrackRequest(requestId, activeSignature)) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && translationArrivalId) {
+          associateArrival(packet, translationArrivalId);
+          if (packet.lyrics) {
+            associateArrival(packet.lyrics, translationArrivalId);
+          }
+        }
         applyMobileLyricsPacket(packet);
       }
     })

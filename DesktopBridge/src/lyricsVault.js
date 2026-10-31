@@ -429,7 +429,16 @@ function parseJsonLyricsImport(content) {
 }
 
 function parseTtmlLyricsImport(content) {
-  const parsed = parseTtmlToLyrics(content);
+  let parsed;
+  try {
+    parsed = parseTtmlToLyrics(content);
+  } finally {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+        globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+      }
+    }
+  }
   if (!parsed?.lyrics?.length) {
     throw new Error("TTML file did not contain any lyric lines.");
   }
@@ -742,7 +751,16 @@ function createLyricsVaultStore({ userDataPath }) {
       includeTranslations = false,
       sourceLabel = "",
     } = {}) {
-      const parsed = parseTtmlToLyrics(ttmlContent);
+      let parsed;
+      try {
+        parsed = parseTtmlToLyrics(ttmlContent);
+      } finally {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+            globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+          }
+        }
+      }
       if (!parsed?.lyrics?.length) {
         throw new Error("TTML file did not contain any lyric lines.");
       }

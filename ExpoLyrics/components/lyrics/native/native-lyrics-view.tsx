@@ -19,6 +19,7 @@ import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 import { buildNativeCueTimeline } from './native-cue-timeline';
 import { NativeRendererReadyRefreshGate, requestNativeRendererReadyResync } from './native-renderer-ready-refresh';
 import { emitNativeClockDiagnostic } from '@/lib/native-clock-diagnostics';
+import { recordPerfStage } from '@/lib/perf-stages';
 
 export type NativeLyricsViewProps = {
   demoLyrics?: LyricLine[]; demoLayout?: 'preview' | 'player'; demoIsPlaying?: boolean;
@@ -117,8 +118,15 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (state.key !== expectedKey) return;
     state.ready = true;
     const playback = usePlaybackStore.getState();
-    if (__DEV__) emitNativeClockDiagnostic('renderer-ready', { rendererKey: state.key, rendererGeneration: state.generation,
-      style, eligible: state.eligible, anchorPosition: playback.anchorPositionMs, anchorMono: playback.anchorMonotonicMs });
+    if (__DEV__) {
+      recordPerfStage('renderer-ready-layout-marker', 0, {
+        rendererKey: state.key,
+        style,
+        note: 'layout marker; indicates component readiness, may fire before active picture exists and not a hardware presented frame',
+      });
+      emitNativeClockDiagnostic('renderer-ready', { rendererKey: state.key, rendererGeneration: state.generation,
+        style, eligible: state.eligible, anchorPosition: playback.anchorPositionMs, anchorMono: playback.anchorMonotonicMs });
+    }
     rendererReadyGate.current.onReady(state.generation,
       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
       () => canDispatchRendererReady(state.key, state.generation));
@@ -240,6 +248,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   });
   useEffect(() => {
     mounted.current = true;
+    if (__DEV__) {
+      recordPerfStage('React mount', 0, { component: 'NativeLyricsView', style });
+    }
     return () => { mounted.current = false; };
   }, []);
   useEffect(() => {

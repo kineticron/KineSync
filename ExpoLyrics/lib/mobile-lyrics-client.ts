@@ -205,10 +205,14 @@ export async function fetchMobileLyricsForTrack(
     onSyncedLyrics?: (packet: LyricsPacket) => void;
   } = {},
 ): Promise<LyricsPacket> {
+  const requestArrivalId = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.getArrivalForObject?.(track)) || null;
   const translationLanguage = usePlaybackStore.getState().translationLanguage;
   const current = usePlaybackStore.getState();
   if (immediateTranslation && current.currentTrack?.id === track.id && current.lyrics.length) {
     const mobileTrack = toMobileTrack(track);
+    if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+      (globalThis as any).__kinesyncPerf.associateArrival(mobileTrack, requestArrivalId);
+    }
     mobileLyricsService.rememberPublishedLyrics(mobileTrack.trackId, {
       trackId: mobileTrack.trackId,
       lyrics: current.lyrics,
@@ -217,13 +221,32 @@ export async function fetchMobileLyricsForTrack(
     });
     const translated = await mobileLyricsService.translatePublishedLyrics(mobileTrack, {
       translationLanguage,
-      onSyncedLyrics: packet => onSyncedLyrics?.(toActiveLyricsPacket(track, packet)),
+      onSyncedLyrics: packet => {
+        const activePacket = toActiveLyricsPacket(track, packet);
+        if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+          (globalThis as any).__kinesyncPerf.associateArrival(activePacket, requestArrivalId);
+          if (activePacket.lyrics) (globalThis as any).__kinesyncPerf.associateArrival(activePacket.lyrics, requestArrivalId);
+        }
+        onSyncedLyrics?.(activePacket);
+      },
     });
-    return toActiveLyricsPacket(track, translated);
+    const resultPacket = toActiveLyricsPacket(track, translated);
+    if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+      (globalThis as any).__kinesyncPerf.associateArrival(resultPacket, requestArrivalId);
+      if (resultPacket.lyrics) (globalThis as any).__kinesyncPerf.associateArrival(resultPacket.lyrics, requestArrivalId);
+    }
+    return resultPacket;
   }
   const vaultPacket = await lookupMobileVaultLyrics(track);
   if (vaultPacket && (preferredSource === "auto" || preferredSource === "local-vault")) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.mark) {
+      (globalThis as any).__kinesyncPerf.mark('raw-body-available', 0, { source: 'local-vault' }, requestArrivalId || 'uncorrelated');
+    }
     const packet = { type: "lyrics" as const, ...vaultPacket };
+    if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+      (globalThis as any).__kinesyncPerf.associateArrival(packet, requestArrivalId);
+      if (packet.lyrics) (globalThis as any).__kinesyncPerf.associateArrival(packet.lyrics, requestArrivalId);
+    }
     onSyncedLyrics?.(packet);
     return packet;
   }
@@ -238,24 +261,46 @@ export async function fetchMobileLyricsForTrack(
   }
 
   const mobileTrack = toMobileTrack(track);
+  if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+    (globalThis as any).__kinesyncPerf.associateArrival(mobileTrack, requestArrivalId);
+  }
   const result = await mobileLyricsService.fetchSyncedLyrics(mobileTrack, {
     force,
     preferredSource,
     immediateTranslation,
     translationLanguage,
     onSyncedLyrics: onSyncedLyrics
-      ? (packet) => onSyncedLyrics(toActiveLyricsPacket(track, packet))
+      ? (packet) => {
+          const activePacket = toActiveLyricsPacket(track, packet);
+          if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+            (globalThis as any).__kinesyncPerf.associateArrival(activePacket, requestArrivalId);
+            if (activePacket.lyrics) (globalThis as any).__kinesyncPerf.associateArrival(activePacket.lyrics, requestArrivalId);
+          }
+          onSyncedLyrics(activePacket);
+        }
       : undefined,
   });
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.mark) {
+    (globalThis as any).__kinesyncPerf.mark('raw-body-available', 0, { source: result?.source || 'mobile-lyrics-client' }, requestArrivalId || 'uncorrelated');
+  }
   if (!result.lyrics?.length) {
-    return toActiveLyricsPacket(track, {
+    const emptyPacket = toActiveLyricsPacket(track, {
       ...result,
       statusMessage:
         result.statusMessage ||
         `No synced lyrics found for "${mobileTrack.title}" by "${mobileTrack.artist}" (${result.source || "mobile-app"}).`,
     });
+    if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+      (globalThis as any).__kinesyncPerf.associateArrival(emptyPacket, requestArrivalId);
+    }
+    return emptyPacket;
   }
-  return toActiveLyricsPacket(track, result);
+  const activeResultPacket = toActiveLyricsPacket(track, result);
+  if (requestArrivalId && typeof globalThis !== 'undefined' && (globalThis as any).__kinesyncPerf?.associateArrival) {
+    (globalThis as any).__kinesyncPerf.associateArrival(activeResultPacket, requestArrivalId);
+    if (activeResultPacket.lyrics) (globalThis as any).__kinesyncPerf.associateArrival(activeResultPacket.lyrics, requestArrivalId);
+  }
+  return activeResultPacket;
 }
 
 export type SpotifyCatalogMatch = {

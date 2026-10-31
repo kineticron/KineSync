@@ -127,6 +127,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const shaped = useMemo(() => {
     if (width <= 0 || !fonts) return null;
+    const voicePrepareStart = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof performance !== 'undefined') ? performance.now() : 0;
     const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
       strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
         fontFamilies: ['SF Pro Display'], fontSize,
@@ -171,7 +172,16 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       paintWords = wrapped.words;
     }
     const paragraph = makeParagraph(text, paintWords);
+    const layoutStart = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof performance !== 'undefined') ? performance.now() : 0;
     paragraph.layout(textWidth);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && layoutStart && typeof globalThis !== 'undefined') {
+      (globalThis as unknown as { __kinesyncPerf?: { mark?: (s: string, d?: number, m?: Record<string, unknown>) => void } }).__kinesyncPerf?.mark?.(
+        'paragraph layout', performance.now() - layoutStart, {
+          spicy,
+          textWidth: Math.round(textWidth),
+        }
+      );
+    }
     let before = 0;
     const words = paintWords.map(word => {
       const rects = paragraph.getRectsForRange(word.offset, word.offset + (spicy ? word.text.length + Number(!!word.gapAfter) : word.text.trimEnd().length));
@@ -184,6 +194,15 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       before += wordWidth;
       return shapedWord;
     });
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && voicePrepareStart && typeof globalThis !== 'undefined') {
+      (globalThis as unknown as { __kinesyncPerf?: { mark?: (s: string, d?: number, m?: Record<string, unknown>) => void } }).__kinesyncPerf?.mark?.(
+        'voice-prepare', performance.now() - voicePrepareStart, {
+          spicy,
+          textWidth: Math.round(textWidth),
+          wordCount: words.length,
+        }
+      );
+    }
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
     return { paragraph, height: paragraph.getHeight(), mainPadding, words, revision: ++shapeRevision.current,
       glyphWords: batched && !staticLyrics ? shapeGlyphWords(paragraph, words, spicy) : [] };

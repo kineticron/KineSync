@@ -621,28 +621,74 @@ function detectKaraokeTiming(ttmlContent) {
   return /<span\b[^>]*\bbegin\s*=/i.test(ttmlContent);
 }
 
-function parseTtmlToLyrics(ttmlContent, { translationLanguage = "English" } = {}) {
-  const content = String(ttmlContent || "");
-  if (!content.trim()) {
-    return { lyrics: [], durationMs: 0, useKaraokeTiming: false };
+let devPendingParseArrivalId = null;
+
+function setPendingParseArrivalId(arrivalId) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    devPendingParseArrivalId = arrivalId || null;
+    if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.setPendingParseArrivalId) {
+      globalThis.__kinesyncPerf.setPendingParseArrivalId(arrivalId);
+    }
   }
-  const useKaraokeTiming = detectKaraokeTiming(content);
-  // lrc.red encodes word boundaries in literal whitespace. A pause inside a
-  // word must not synthesize a space between adjacent syllable spans.
-  const inferTimingBoundaries = !/\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
-  const translations = extractTtmlTranslations(content);
-  const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries,
-    translations.tracks.length ? translations.paragraphKeys : new Map());
-  normalizeImportedLyricsTimestamps(parsed.lyrics);
-  return selectTtmlTranslationTracks({
-    lyrics: parsed.lyrics,
-    durationMs: getLyricTimingExtents(parsed.lyrics).maxEnd || parsed.durationMs,
-    useKaraokeTiming,
-    metadata: {
-      ttml: { content, ...(translations.tracks.length ? { translationTracks: translations.tracks } : {}) },
-      ...extractTtmlCredits(content),
-    },
-  }, translationLanguage);
+}
+
+function clearPendingParseArrivalId() {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    devPendingParseArrivalId = null;
+    if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+      globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+    }
+  }
+}
+
+function parseTtmlToLyrics(ttmlContent, { translationLanguage = "English" } = {}) {
+  try {
+    const content = String(ttmlContent || "");
+    if (!content.trim()) {
+      return { lyrics: [], durationMs: 0, useKaraokeTiming: false };
+    }
+    const parseStart = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof performance !== 'undefined') ? performance.now() : 0;
+    const useKaraokeTiming = detectKaraokeTiming(content);
+    // lrc.red encodes word boundaries in literal whitespace. A pause inside a
+    // word must not synthesize a space between adjacent syllable spans.
+    const inferTimingBoundaries = !/\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
+    const translations = extractTtmlTranslations(content);
+    const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries,
+      translations.tracks.length ? translations.paragraphKeys : new Map());
+    normalizeImportedLyricsTimestamps(parsed.lyrics);
+    const result = selectTtmlTranslationTracks({
+      lyrics: parsed.lyrics,
+      durationMs: getLyricTimingExtents(parsed.lyrics).maxEnd || parsed.durationMs,
+      useKaraokeTiming,
+      metadata: {
+        ttml: { content, ...(translations.tracks.length ? { translationTracks: translations.tracks } : {}) },
+        ...extractTtmlCredits(content),
+      },
+    }, translationLanguage);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && parseStart) {
+      const durationMs = performance.now() - parseStart;
+      if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+        const activeArrId = devPendingParseArrivalId ||
+          globalThis.__kinesyncPerf.getPendingParseArrivalId?.() ||
+          'uncorrelated';
+        globalThis.__kinesyncPerf.mark('parser CPU (lyrics-ttml-import)', durationMs, {
+          lineCount: result.lyrics?.length || 0,
+        }, activeArrId);
+        if (activeArrId !== 'uncorrelated' && globalThis.__kinesyncPerf.associateArrival) {
+          if (result) globalThis.__kinesyncPerf.associateArrival(result, activeArrId);
+          if (result.lyrics) globalThis.__kinesyncPerf.associateArrival(result.lyrics, activeArrId);
+        }
+      }
+    }
+    return result;
+  } finally {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      devPendingParseArrivalId = null;
+      if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+        globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+      }
+    }
+  }
 }
 
 function extractTtmlMetadata(ttmlContent) {
@@ -696,3 +742,12 @@ module.exports = {
   parseTtmlTimeExpression,
   parseTtmlToLyrics,
 };
+
+if (typeof __DEV__ !== 'undefined' && __DEV__) {
+  module.exports.setPendingParseArrivalId = setPendingParseArrivalId;
+  module.exports.clearPendingParseArrivalId = clearPendingParseArrivalId;
+  if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf) {
+    globalThis.__kinesyncPerf.setPendingParseArrivalId = setPendingParseArrivalId;
+    globalThis.__kinesyncPerf.clearPendingParseArrivalId = clearPendingParseArrivalId;
+  }
+}

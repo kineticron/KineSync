@@ -6,6 +6,7 @@ const lrcRedHeaders = { "User-Agent": "KineSync/1.2.0 (https://github.com/Kineti
 
 async function fetchFromLrcRed(track) {
   const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");
+  const devArrivalId = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.getArrivalForObject?.(track)) || null;
   const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
     .replace(/[-\s]/g, "").toUpperCase();
   const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
@@ -93,10 +94,27 @@ async function fetchFromLrcRed(track) {
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (recording?.title && !versionMatches(recording.title)) return null;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+          globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: 'lrc-red' }, devArrivalId || 'uncorrelated');
+        }
         if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
-        const parsed = parseTtmlToLyrics(content);
+        let parsed;
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          if (devArrivalId && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.setPendingParseArrivalId) {
+            globalThis.__kinesyncPerf.setPendingParseArrivalId(devArrivalId);
+          }
+        }
+        try {
+          parsed = parseTtmlToLyrics(content);
+        } finally {
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+              globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+            }
+          }
+        }
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
         if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
@@ -114,6 +132,10 @@ async function fetchFromLrcRed(track) {
             attribution: { source: "lrc-red", provider: "lrc.red", url: `https://lrc.red/s/${candidate.isrc}` },
           },
         };
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && devArrivalId && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.associateArrival) {
+          globalThis.__kinesyncPerf.associateArrival(result, devArrivalId);
+          if (result.lyrics) globalThis.__kinesyncPerf.associateArrival(result.lyrics, devArrivalId);
+        }
         return { candidate, result };
       } catch (error) {
         if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;

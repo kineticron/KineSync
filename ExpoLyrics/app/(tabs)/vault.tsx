@@ -53,7 +53,14 @@ export default function VaultScreen() {
     if (file.size > MAX_IMPORT_BYTES) throw new Error('This file is too large (maximum 2 MB).');
     const content = await file.text();
     if (content.length > MAX_IMPORT_BYTES || !/<(?:\w+:)?tt[\s>]/i.test(content)) throw new Error('This is not a valid TTML document.');
-    const parsed = parseTtmlToLyrics(content);
+    let parsed;
+    try {
+      parsed = parseTtmlToLyrics(content);
+    } finally {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        (globalThis as any).__kinesyncPerf?.clearPendingParseArrivalId?.();
+      }
+    }
     if (!parsed.lyrics.length) throw new Error('This file contains no readable lyrics.');
     const metadata = extractTtmlMetadata(content);
     setEditing(null);

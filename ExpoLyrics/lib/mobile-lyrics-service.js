@@ -8289,6 +8289,12 @@ async function fetchFromSpicyLyrics(
       continue;
     }
 
+    const devArrivalId = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.getArrivalForObject?.(track)) || null;
+
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+      globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: 'spicy-lyrics' }, devArrivalId || 'uncorrelated');
+    }
+
     const parseStartedAt = Date.now();
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,
@@ -9199,8 +9205,6 @@ async function fetchFromKugou(track) {
 }
 
 // ---- DesktopBridge/src/lyrics/parts/04-lrc-red-source.js ----
-"use strict";
-
 // Resolve catalog ISRCs before text search. Keep supplied TTML timing intact.
 const lrcRedIsrcCache = new Map();
 const lrcRedHeaders = { "User-Agent": "KineSync/1.2.0 (https://github.com/Kineticron/KineSync)" };
@@ -9209,6 +9213,7 @@ async function fetchFromLrcRed(track) {
   const parseTtmlToLyrics = parseLrcRedTtml;
   const parseTtmlTimeExpression = parseLrcRedTime;
   const extractTtmlMetadata = extractLrcRedTtmlMetadata;
+  const devArrivalId = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.getArrivalForObject?.(track)) || null;
   const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
     .replace(/[-\s]/g, "").toUpperCase();
   const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
@@ -9296,10 +9301,27 @@ async function fetchFromLrcRed(track) {
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (recording?.title && !versionMatches(recording.title)) return null;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+          globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: 'lrc-red' }, devArrivalId || 'uncorrelated');
+        }
         if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
-        const parsed = parseTtmlToLyrics(content);
+        let parsed;
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          if (devArrivalId && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.setPendingParseArrivalId) {
+            globalThis.__kinesyncPerf.setPendingParseArrivalId(devArrivalId);
+          }
+        }
+        try {
+          parsed = parseTtmlToLyrics(content);
+        } finally {
+          if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+              globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+            }
+          }
+        }
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
         if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
@@ -9317,6 +9339,10 @@ async function fetchFromLrcRed(track) {
             attribution: { source: "lrc-red", provider: "lrc.red", url: `https://lrc.red/s/${candidate.isrc}` },
           },
         };
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && devArrivalId && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.associateArrival) {
+          globalThis.__kinesyncPerf.associateArrival(result, devArrivalId);
+          if (result.lyrics) globalThis.__kinesyncPerf.associateArrival(result.lyrics, devArrivalId);
+        }
         return { candidate, result };
       } catch (error) {
         if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;
@@ -14075,6 +14101,13 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.associateArrival) {
+        const arrId = track && globalThis.__kinesyncPerf.getArrivalForObject?.(track);
+        if (arrId) {
+          globalThis.__kinesyncPerf.associateArrival(matchTrack, arrId);
+        }
+      }
+
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
       // Credential/catalog setup can outlive a force refresh or source/track
       // switch. It must not replace the newer run's in-flight registry entry.
@@ -14115,6 +14148,16 @@ function createLyricsService({
       flight.listeners.add(handleProgressPacket);
       if (flight.latest) handleProgressPacket(flight.latest);
       const base = await flight.initial;
+      if (base && typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+        const arrId = (track && globalThis.__kinesyncPerf.getArrivalForObject?.(track)) ||
+          globalThis.__kinesyncPerf.getArrivalForObject?.(base) ||
+          'uncorrelated';
+        globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: base.source || 'service' }, arrId);
+        if (arrId !== 'uncorrelated' && globalThis.__kinesyncPerf.associateArrival) {
+          globalThis.__kinesyncPerf.associateArrival(base, arrId);
+          if (base.lyrics) globalThis.__kinesyncPerf.associateArrival(base.lyrics, arrId);
+        }
+      }
 
       initialBaseCandidate = {
         ...base,
@@ -14351,7 +14394,16 @@ function createLyricsService({
         throw new Error("Lyrics vault is not initialized.");
       }
 
-      const parsed = parseTtmlToLyrics(ttmlContent);
+      let parsed;
+      try {
+        parsed = parseTtmlToLyrics(ttmlContent);
+      } finally {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+            globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+          }
+        }
+      }
       if (!parsed?.lyrics?.length) {
         throw new Error("TTML file did not contain any lyric lines.");
       }

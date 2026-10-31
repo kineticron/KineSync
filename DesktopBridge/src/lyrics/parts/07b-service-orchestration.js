@@ -765,6 +765,13 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.associateArrival) {
+        const arrId = track && globalThis.__kinesyncPerf.getArrivalForObject?.(track);
+        if (arrId) {
+          globalThis.__kinesyncPerf.associateArrival(matchTrack, arrId);
+        }
+      }
+
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
       // Credential/catalog setup can outlive a force refresh or source/track
       // switch. It must not replace the newer run's in-flight registry entry.
@@ -805,6 +812,16 @@ function createLyricsService({
       flight.listeners.add(handleProgressPacket);
       if (flight.latest) handleProgressPacket(flight.latest);
       const base = await flight.initial;
+      if (base && typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+        const arrId = (track && globalThis.__kinesyncPerf.getArrivalForObject?.(track)) ||
+          globalThis.__kinesyncPerf.getArrivalForObject?.(base) ||
+          'uncorrelated';
+        globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: base.source || 'service' }, arrId);
+        if (arrId !== 'uncorrelated' && globalThis.__kinesyncPerf.associateArrival) {
+          globalThis.__kinesyncPerf.associateArrival(base, arrId);
+          if (base.lyrics) globalThis.__kinesyncPerf.associateArrival(base.lyrics, arrId);
+        }
+      }
 
       initialBaseCandidate = {
         ...base,
@@ -1041,7 +1058,16 @@ function createLyricsService({
         throw new Error("Lyrics vault is not initialized.");
       }
 
-      const parsed = parseTtmlToLyrics(ttmlContent);
+      let parsed;
+      try {
+        parsed = parseTtmlToLyrics(ttmlContent);
+      } finally {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          if (typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.clearPendingParseArrivalId) {
+            globalThis.__kinesyncPerf.clearPendingParseArrivalId();
+          }
+        }
+      }
       if (!parsed?.lyrics?.length) {
         throw new Error("TTML file did not contain any lyric lines.");
       }

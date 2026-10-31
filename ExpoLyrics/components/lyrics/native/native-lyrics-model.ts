@@ -8,6 +8,7 @@ import { chunkAndSplitLyricWords } from './amll-reference-word-split';
 import { isCJK } from './amll-reference-is-cjk';
 import type { NativeInterlude } from './native-interlude-motion';
 import { spicyIsRtl, spicyPaintText, spicyWordOrigin } from './spicy-text-policy';
+import { recordPerfStage, getArrivalForObject, associateArrival } from '@/lib/perf-stages';
 
 export type NativeLyricsStyle = 'amll' | 'spicy';
 export type NativeWord = { text: string; starts: number[]; ends: number[]; weights: number[] };
@@ -219,6 +220,7 @@ function reuseVoice(previous: NativeVoice | undefined, parts: LyricSyllable[], s
 /** Reuse unchanged row/voice inputs across immutable lyric packets, including translation-only clones. */
 export function buildNativeRows(lyrics: LyricLine[], style: NativeLyricsStyle, staticLyrics = false,
   previousRows?: NativeLyricRow[]): NativeLyricRow[] {
+  const modelStart = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof performance !== 'undefined') ? performance.now() : 0;
   const priorMode = previousRows && rowModes.get(previousRows);
   if (priorMode?.style !== style || priorMode?.staticLyrics !== staticLyrics) previousRows = undefined;
   const previousByKey = new Map(previousRows?.map(row => [row.key, row]) ?? []);
@@ -256,6 +258,18 @@ export function buildNativeRows(lyrics: LyricLine[], style: NativeLyricsStyle, s
     result.push(interlude ? { line: row.line, index: row.index, key: row.key, lead: row.lead,
       backgrounds: row.backgrounds, interlude } : { line: row.line, index: row.index, key: row.key,
       lead: row.lead, backgrounds: row.backgrounds });
+  }
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && modelStart) {
+    const durationMs = performance.now() - modelStart;
+    const arrivalId = getArrivalForObject(lyrics) || 'uncorrelated';
+    recordPerfStage('model build (native-lyrics-model)', durationMs, {
+      style,
+      rowCount: result.length,
+      staticLyrics,
+    }, arrivalId);
+    if (arrivalId !== 'uncorrelated') {
+      associateArrival(result, arrivalId);
+    }
   }
   if (previousRows && result.length === previousRows.length && result.every((row, index) => row === previousRows[index])) return previousRows;
   rowModes.set(result, { style, staticLyrics });

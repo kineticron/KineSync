@@ -197,6 +197,12 @@ async function fetchFromSpicyLyrics(
       continue;
     }
 
+    const devArrivalId = (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.getArrivalForObject?.(track)) || null;
+
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof globalThis !== 'undefined' && globalThis.__kinesyncPerf?.mark) {
+      globalThis.__kinesyncPerf.mark('raw-body-available', 0, { source: 'spicy-lyrics' }, devArrivalId || 'uncorrelated');
+    }
+
     const parseStartedAt = Date.now();
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,
