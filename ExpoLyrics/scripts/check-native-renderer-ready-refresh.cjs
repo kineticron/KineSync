@@ -109,6 +109,7 @@ const react = {
 };
 const modules = {
   react,
+  '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {} },
   'react-native': { AppState: appState, FlatList: 'FlatList', Linking: { openURL() {} }, Pressable: 'Pressable', StyleSheet: { create: x => x }, Text: 'Text', View: 'View' },
   'expo-image': { Image: 'Image' }, '@shopify/flash-list': { FlashList: 'FlashList' },
   'react-native-reanimated': { useAnimatedReaction() {}, useDerivedValue: fn => ({ value: fn() }), useSharedValue: value => ({ value }) },
@@ -131,7 +132,7 @@ const modules = {
   'react/jsx-runtime': { jsx, jsxs: jsx },
 };
 const viewModule = { exports: {} };
-vm.runInNewContext(viewCode, { module: viewModule, exports: viewModule.exports,
+vm.runInNewContext(viewCode, { __DEV__: false, module: viewModule, exports: viewModule.exports,
   require: name => { assert(name in modules, `native view mock missing ${name}`); return modules[name]; } });
 const NativeLyricsView = viewModule.exports.NativeLyricsView;
 const lyrics = [{ lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'x', startTime: 0, endTime: 1000 }] }];

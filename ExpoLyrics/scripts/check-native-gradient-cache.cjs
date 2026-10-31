@@ -11,7 +11,7 @@ const native = path.join(__dirname, '../components/lyrics/native');
 const contents = fs.readFileSync(path.join(native, 'native-glyph-picture.tsx'), 'utf8');
 const code = buildSync({ stdin: { contents: contents + '\nexport { getRevealShader };', resolveDir: native, loader: 'tsx' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'] }).outputFiles[0].text;
+  external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'] }).outputFiles[0].text;
 let creates = 0, disposals = 0;
 const m = { exports: {} };
 vm.runInNewContext(code, { module: m, exports: m.exports, require: name => name === 'react' ? { memo: fn => fn }
@@ -65,7 +65,7 @@ if (at < 0) {
       filename: path.join(native, 'native-glyph-picture.tsx'), presets: ['babel-preset-expo'],
     }).code;
     return buildSync({ stdin: { contents: babel, resolveDir: native, loader: 'js' }, bundle: true,
-      platform: 'node', format: 'cjs', write: false, external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'] }).outputFiles[0].text;
+      platform: 'node', format: 'cjs', write: false, external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'] }).outputFiles[0].text;
   }
   const baselineCode = transformed(baseline), source = transformed(contents);
   function load(file) {

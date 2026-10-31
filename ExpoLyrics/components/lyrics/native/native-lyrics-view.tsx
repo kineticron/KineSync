@@ -18,6 +18,7 @@ import { AmllLayoutCell } from './amll-layout-cell';
 import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 import { buildNativeCueTimeline } from './native-cue-timeline';
 import { NativeRendererReadyRefreshGate, requestNativeRendererReadyResync } from './native-renderer-ready-refresh';
+import { emitNativeClockDiagnostic } from '@/lib/native-clock-diagnostics';
 
 export type NativeLyricsViewProps = {
   demoLyrics?: LyricLine[]; demoLayout?: 'preview' | 'player'; demoIsPlaying?: boolean;
@@ -55,7 +56,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     ...(line.backgroundSyllables ?? []).map(part => part.endTime),
     ...(line.spicyBackgrounds ?? []).map(block => block.lineEndTime)))) + 1000), [demoDurationMs, demoLyrics, lyrics, trackDuration]);
   const staticLyrics = useMemo(() => detectLyricsTimingMode(lyrics, source) === 'static', [lyrics, source]);
-  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback });
+  const { position, running, seekVersion } = useNativeLyricsClock({ active: active && !staticLyrics, duration, preview: previewPositionMs, demo: !!demoLyrics, playing: demoIsPlaying, demoPlayback, diagnosticStyle: `${style}/${list}/${reveal}` });
   const hasDuet = useMemo(() => lyrics.some(line => landscapeMode ? !line.oppositeAligned : !!line.oppositeAligned), [landscapeMode, lyrics]);
   const previousRows = useRef<NativeLyricRow[] | undefined>(undefined);
   const rows = useMemo(() => buildNativeRows(lyrics, style, staticLyrics, previousRows.current), [lyrics, staticLyrics, style]);
@@ -116,10 +117,12 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (state.key !== expectedKey) return;
     state.ready = true;
     const playback = usePlaybackStore.getState();
+    if (__DEV__) emitNativeClockDiagnostic('renderer-ready', { rendererKey: state.key, rendererGeneration: state.generation,
+      style, eligible: state.eligible, anchorPosition: playback.anchorPositionMs, anchorMono: playback.anchorMonotonicMs });
     rendererReadyGate.current.onReady(state.generation,
       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
       () => canDispatchRendererReady(state.key, state.generation));
-  }, [canDispatchRendererReady]);
+  }, [canDispatchRendererReady, style]);
   const flashRef = useRef<FlashListRef<NativeLyricRow>>(null);
   const flatRef = useRef<FlatList<NativeLyricRow>>(null);
   const scrollCommand = useSharedValue(initialScrollCommand);
@@ -200,6 +203,12 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   }, [active, fontScale, landscapeMode, list, preview, scrollCommand, showTranslatedText, staticLyrics, style, viewportHeight]);
   const updateWindow = useCallback((time: number, token: number, seek = false) => {
     if (!mounted.current || token !== generation.current || !active || AppState.currentState !== 'active') return;
+    if (__DEV__) {
+      const state = usePlaybackStore.getState();
+      const projected = state.anchorPositionMs + (state.isPlaying ? Math.max(0, performance.now() - state.anchorMonotonicMs) : 0);
+      emitNativeClockDiagnostic('rn-cue-received', { style, token, sampledPosition: time, projectedAtReceipt: projected,
+        sampledMinusStoreMs: time - projected, seek });
+    }
     const currentLyrics = latestLyrics.current;
     const currentBackgrounds = latestBackgrounds.current;
     const currentTiming = latestTiming.current;
@@ -218,7 +227,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     const range = getAutoScrollTargetRange(next, time, currentLyrics);
     if (seek) lastScrollTarget.current = '';
     if (range) scrollTo(range.startIndex, !seek);
-  }, [active, onActiveLineChange, reveal, scrollTo]);
+  }, [active, onActiveLineChange, reveal, scrollTo, style]);
   const cueIdentity = useMemo(() => ({ sourceKey: scrollSourceKey, token: ++generation.current }), [scrollSourceKey]);
   const token = cueIdentity.token;
   useAnimatedReaction(() => {

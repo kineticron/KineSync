@@ -34,7 +34,7 @@ function glyphApi(contents) {
   const glyphCode = buildSync({ stdin: { contents: contents +
     '\nexport { drawVoice, advanceReferenceWordMotion, initialWordSpringState };', resolveDir: native, loader: 'tsx' },
     bundle: true, platform: 'node', format: 'cjs', write: false,
-    external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'] }).outputFiles[0].text;
+    external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'] }).outputFiles[0].text;
   const moduleObject = { exports: {} };
   vm.runInNewContext(glyphCode, { module: moduleObject, exports: moduleObject.exports,
     require: name => name === 'react' ? { memo: fn => fn } : name === '@shopify/react-native-skia' ? { Skia,

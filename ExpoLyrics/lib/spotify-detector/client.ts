@@ -7,6 +7,8 @@ import { logDevelopmentTiming } from './development-timing-log';
 import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
 import { isDealerDeliveryExperimentEnabled, subscribeDealerDeliveryExperiment } from './dealer-delivery-experiment-toggle';
 import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
+import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureActive } from '../native-clock-diagnostics';
+const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -119,7 +121,12 @@ export class SpotifyDetector {
     } else this.disconnect();
   }
   refresh() {
+    if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
+      generation: this.generation, reason: 'explicit-refresh', registered: this.registered, experiment: this.experimentEnabled,
+      ...this.deliveryBaseline.diagnosticSummary() });
     this.deliveryBaseline.preserveForExplicitRefresh(performance.now(), this.currentDeliveryIdentity());
+    if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-preserved', {
+      generation: this.generation, ...this.deliveryBaseline.diagnosticSummary() });
     this.blocked = false;
     this.resetOrdering(); this.reconnects = 0;
     this.disconnect(true); this.connectIfReady();
@@ -174,6 +181,7 @@ export class SpotifyDetector {
   private async request(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Uint8Array> {
     if (!this.enabled || this.blocked || !this.token || !this.route || !this.connectionId) throw new Error('Spotify session is not ready.');
     const run = this.generation;
+    const started = nativeDiagnosticsEnabled ? performance.now() : 0;
     const controller = new AbortController(); this.requests.add(controller);
     const timeout = setTimeout(() => controller.abort(), 10000);
     const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
@@ -183,6 +191,9 @@ export class SpotifyDetector {
     try {
       const response = await fetch(new URL(path, this.route).toString(), { method, headers, signal: controller.signal,
         ...(body !== undefined ? { body: Uint8Array.from(gzip(JSON.stringify(body))).buffer } : {}) });
+      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('spotify-http-response', { endpoint: method === 'GET' ? 'metadata' : 'player-control',
+        method, status: response.status, requestGeneration: run, currentGeneration: this.generation,
+        elapsedMs: performance.now() - started, staleGeneration: run !== this.generation, cacheProvenance: 'network-response' });
       if (run !== this.generation) throw new Error('Spotify session changed during request.');
       if (response.status === 401) this.needSession('Spotify session expired. Refreshing login…');
       if (response.status === 429) { this.blocked = true; this.disconnect(); }
@@ -219,6 +230,11 @@ export class SpotifyDetector {
   private emit(payload: unknown, receivedAt = Date.now(), timing: TimingContext = {}) {
     const s = sampleFrom(payload, 0, timing);
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) return false;
+    if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
+      rawPosition: s.positionMs, playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
+      receiptWall: timing.receipt?.wallMs, receiptMono: timing.receipt?.monotonicMs, receivedAt,
+      playing: s.playing, experiment: this.experimentEnabled,
+      ...this.deliveryBaseline.diagnosticSummary() });
     s.receivedAt = receivedAt;
     if (s.sourceServerTimestampMs !== undefined) s.positionObservedAt = timing.receipt ?? timingNow(receivedAt);
     // Recognizable state proves observer readiness even when duplicate/stale.
@@ -359,6 +375,11 @@ export class SpotifyDetector {
   }
   private async register(run: number, ws: WebSocket) {
     const connectionId = this.connectionId;
+    const requestCapture = nativeDiagnosticsEnabled ? getNativeClockCapture() : null;
+    const requestStarted = nativeDiagnosticsEnabled ? performance.now() : 0;
+    if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-request', { endpoint: 'connect-state-registration', method: 'PUT',
+      requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
+      registered: this.registered, cacheProvenance: 'network-request' });
     const controller = new AbortController(); this.controller?.abort(); this.controller = controller;
     const timeout = setTimeout(() => controller.abort(), 10000);
     const alive = () => this.enabled && run === this.generation && this.socket === ws && this.connectionId === connectionId;
@@ -367,8 +388,25 @@ export class SpotifyDetector {
         'content-type': 'application/json', 'x-spotify-connection-id': this.connectionId };
       if (this.clientToken) headers['client-token'] = this.clientToken;
       const response = await fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal });
+      const headersAt = nativeDiagnosticsEnabled ? performance.now() : 0;
+      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-headers', { endpoint: 'connect-state-registration', status: response.status,
+        requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
+        currentGeneration: this.generation, alive: alive(), elapsedMs: headersAt - requestStarted });
       const bytes = new Uint8Array(await response.arrayBuffer());
       const receipt = timingNow();
+      let errorTag: string | null = null;
+      if (nativeDiagnosticsEnabled && !response.ok && nativeClockCaptureActive()) {
+        // Classify existing response bytes without logging the body or changing error handling.
+        const text = new TextDecoder().decode(bytes.subarray(0, 8192));
+        errorTag = /expired.?id/i.test(text) ? 'expired-id' : /connection.{0,8}not.{0,8}found/i.test(text) ? 'connection-not-found'
+          : /device.{0,8}not.{0,8}found/i.test(text) ? 'device-not-found' : /gone/i.test(text) ? 'gone' : 'unclassified';
+      }
+      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-body', { endpoint: 'connect-state-registration', status: response.status,
+        requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null, currentGeneration: this.generation, alive: alive(), errorTag,
+        requestMs: receipt.monotonicMs - requestStarted, bodyMs: receipt.monotonicMs - headersAt,
+        bytes: bytes.length, pendingDealer: !!this.pendingState, cacheProvenance: 'network-response',
+        receiptWall: receipt.wallMs, receiptMono: receipt.monotonicMs,
+        responseAction: !response.ok ? 'no-state-emitted-existing-error-path' : 'pending-dealer-then-response-state' });
       if (!alive()) return;
       if (response.status === 401) { this.needSession('Spotify session expired. Refreshing login…'); return; }
       if (response.status === 403 || response.status === 429) {
@@ -384,7 +422,9 @@ export class SpotifyDetector {
       if (pending) this.emit(pending.payload, pending.receivedAt, pending.timing);
       if (bytes.length) this.emit(decodeStateBody(bytes), undefined,
         { receipt, origin: 'registration', connectionId: this.connectionId, generation: run });
-    } catch { if (alive()) ws.close(); }
+    } catch { if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
+      requestGeneration: run, currentGeneration: this.generation, alive: alive(), elapsedMs: performance.now() - requestStarted,
+      cacheProvenance: 'no-state-emitted' }); if (alive()) ws.close(); }
     finally { clearTimeout(timeout); if (this.controller === controller) this.controller = null; }
   }
 }

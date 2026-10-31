@@ -55,6 +55,7 @@ class Detector {
 const callableStore = state => Object.assign(fn => fn(state), { getState: () => state });
 const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } };
 const mocks = {
+  '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {}, nativeClockCaptureActive: () => false, NATIVE_CLOCK_HTTP_TRACE_SCRIPT: '' },
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
     Share: { share: async value => timingShares.push(value) }, Alert: { alert: (...args) => alerts.push(args) },

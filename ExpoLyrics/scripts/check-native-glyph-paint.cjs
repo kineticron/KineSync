@@ -12,7 +12,7 @@ const blurOutputRadii = [];
 const recordedGlyphPictures = [];
 const source = buildSync({ stdin: { contents: fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8') + '\nexport { drawVoice, glyphRowExtent, advanceReferenceWordMotion, initialWordSpringState };',
   resolveDir: directory, loader: 'tsx' }, bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
+  external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'],
 }).outputFiles[0].text;
 assert.ok(!source.includes('\\p{') && !source.includes('\\P{'),
   'The transformed glyph-picture module must not require runtime Unicode property escapes');

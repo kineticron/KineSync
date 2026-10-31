@@ -43,7 +43,7 @@ function hooks() {
     View: 'View', Text: 'Text', TextInput: 'TextInput', FlatList: 'FlatList', ScrollView: 'ScrollView', Modal: 'Modal',
     KeyboardAvoidingView: 'KeyboardAvoidingView', ActivityIndicator: 'ActivityIndicator', Platform: { OS: 'ios' },
     useWindowDimensions: () => ({ width: 390, height: 844 }) };
-  const timerGlobals = { performance: { now: () => now },
+  const timerGlobals = { __DEV__: false, performance: { now: () => now },
     setTimeout(fn, delay) { const id = {}; timers.set(id, { fn, at: now + delay }); return id; },
     clearTimeout: id => timers.delete(id), setInterval() { throw new Error('A continuous React preview timer is forbidden'); } };
   return { react, native, app, timers, get writes() { return writes; }, get callbacks() { return callbacks; },
@@ -115,6 +115,7 @@ function checkDemoClocks() {
 function checkNativeClock() {
   const h = hooks(), animations = [], subscriptions = new Set();
   const { useNativeLyricsClock } = load('components/lyrics/native/use-native-lyrics-clock.ts', { ...h.mocks,
+    '@/lib/native-clock-diagnostics': {}, 'react-native-worklets': {},
     '@/store/playback-store': { usePlaybackStore: { getState: () => ({ anchorPositionMs: 99999, isPlaying: true }),
       subscribe: fn => { subscriptions.add(fn); return () => subscriptions.delete(fn); } } },
     'react-native-reanimated': {

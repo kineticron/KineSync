@@ -4,6 +4,9 @@ import { useFocusEffect } from 'expo-router';
 import { cancelAnimation, defineAnimation, useSharedValue, type AnimationObject } from 'react-native-reanimated';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
+import { beginNativeClockCapture, emitNativeClockDiagnostic, nextNativeClockInstance, reportNativeUiClock,
+  setNativeClockStoreReader, type NativeClockCapture } from '@/lib/native-clock-diagnostics';
+import { scheduleOnRN } from 'react-native-worklets';
 
 // Keep the raw RN NativePerformance.now HostFunction. Worklets transports native
 // HostFunctions directly; wrapping/binding this would lose that property. UI's
@@ -17,7 +20,7 @@ function projectAnchor(anchor: PreviewPlaybackAnchor, duration: number, now: num
 }
 
 /** A media clock, independent of dispatch latency, frame cadence and Reduce Motion. */
-function withNativePlaybackClock(anchor: PreviewPlaybackAnchor, duration: number, sampledAt: number) {
+function withNativePlaybackClock(anchor: PreviewPlaybackAnchor, duration: number, sampledAt: number, capture: NativeClockCapture | null) {
   'worklet';
   return defineAnimation<AnimationObject<number>>(0, () => {
     'worklet';
@@ -30,11 +33,16 @@ function withNativePlaybackClock(anchor: PreviewPlaybackAnchor, duration: number
       nativeClock: true,
       fallbackPosition: 0,
       fallbackTime: 0,
+      traceFrames: 0,
+      traceStarted: 0,
       onStart(animation: AnimationObject<number>) {
         try {
           const now = nativeMonotonicNow();
           if (!Number.isFinite(now)) throw new Error('Native monotonic clock unavailable');
           animation.current = projectAnchor(anchor, duration, now);
+          if (capture) scheduleOnRN(reportNativeUiClock, capture, 'ui-clock-start', { nativeNow: now,
+            uiNow: performance.now(), position: animation.current, playing: anchor.isPlaying, fallback: false,
+            anchorPosition: anchor.anchorPositionMs, anchorMono: anchor.anchorMonotonicMs, sampledAt });
         } catch {
           // Defensive compatibility path for runtimes that wrap RN's native
           // clock in a remote JS function. Stay in one UI-local time domain;
@@ -44,13 +52,24 @@ function withNativePlaybackClock(anchor: PreviewPlaybackAnchor, duration: number
           animation.fallbackTime = performance.now();
           animation.current = animation.fallbackPosition;
           if (__DEV__) console.warn('[NativeLyricsClock] Native uptime unavailable on UI; using receipt-relative fallback.');
+          if (capture) scheduleOnRN(reportNativeUiClock, capture, 'ui-clock-start', { nativeNow: null,
+            uiNow: performance.now(), position: animation.current, playing: anchor.isPlaying, fallback: true,
+            anchorPosition: anchor.anchorPositionMs, anchorMono: anchor.anchorMonotonicMs, sampledAt });
         }
+        if (capture) animation.traceStarted = performance.now();
       },
-      onFrame(animation: AnimationObject<number>) {
+      onFrame(animation: AnimationObject<number>, frameTimestamp: number) {
+        const nativeNow = animation.nativeClock ? nativeMonotonicNow() : null;
         animation.current = animation.nativeClock
-          ? projectAnchor(anchor, duration, nativeMonotonicNow())
+          ? projectAnchor(anchor, duration, nativeNow!)
           : Math.max(0, Math.min(duration, animation.fallbackPosition +
             (anchor.isPlaying ? Math.max(0, performance.now() - animation.fallbackTime) : 0)));
+        if (capture && animation.traceFrames < 3 && performance.now() - animation.traceStarted >= animation.traceFrames * 1000) {
+          animation.traceFrames++;
+          scheduleOnRN(reportNativeUiClock, capture, 'ui-clock-frame', { nativeNow, uiNow: performance.now(), frameTimestamp,
+            position: animation.current, playing: anchor.isPlaying, fallback: !animation.nativeClock,
+            anchorPosition: anchor.anchorPositionMs, anchorMono: anchor.anchorMonotonicMs });
+        }
         return !anchor.isPlaying || animation.current >= duration;
       },
     };
@@ -58,18 +77,23 @@ function withNativePlaybackClock(anchor: PreviewPlaybackAnchor, duration: number
 }
 
 /** No playback-position React subscription and no JS frame/tick loop. */
-export function useNativeLyricsClock({ active, duration, preview, demo, playing, demoPlayback }: {
+export function useNativeLyricsClock({ active, duration, preview, demo, playing, demoPlayback, diagnosticStyle = 'unknown' }: {
   active: boolean; duration: number; preview?: number | null; demo: boolean; playing?: boolean; demoPlayback?: PreviewPlaybackAnchor;
+  diagnosticStyle?: string;
 }) {
   const position = useSharedValue(0);
   const running = useSharedValue(false);
   const seekVersion = useSharedValue(0);
+  const diagnosticInstance = useRef(0);
+  if (__DEV__ && !diagnosticInstance.current) diagnosticInstance.current = nextNativeClockInstance();
   const lastSync = useRef({ position: 0, monotonic: 0, playing: false, serial: 0, trackId: null as string | null });
   const sync = useCallback(() => {
     cancelAnimation(position);
     const visible = active && AppState.currentState === 'active';
     running.value = visible;
     if (!visible) return;
+    if (__DEV__) setNativeClockStoreReader(usePlaybackStore.getState);
+    const capture = __DEV__ && !demo ? beginNativeClockCapture(diagnosticStyle, diagnosticInstance.current) : null;
     const state = usePlaybackStore.getState();
     const source = demoPlayback ?? state;
     const isPlaying = demo ? demoPlayback ? demoPlayback.isPlaying && preview == null : (playing ?? true) : state.isPlaying && preview == null;
@@ -84,8 +108,10 @@ export function useNativeLyricsClock({ active, duration, preview, demo, playing,
       (trackId !== previous.trackId || Math.abs(current - expected) > 1000));
     lastSync.current = { position: current, monotonic: now, playing: isPlaying, serial, trackId };
     seekVersion.value = serial;
-    position.value = withNativePlaybackClock(anchor, duration, now);
-  }, [active, demo, demoPlayback, duration, playing, position, preview, running, seekVersion]);
+    if (capture) emitNativeClockDiagnostic('js-clock-sync', { anchorPosition: anchor.anchorPositionMs,
+      anchorMono: anchor.anchorMonotonicMs, sampledAt: now, projected: current, playing: isPlaying, preview: preview ?? null, seekSerial: serial }, capture);
+    position.value = withNativePlaybackClock(anchor, duration, now, capture);
+  }, [active, demo, demoPlayback, diagnosticStyle, duration, playing, position, preview, running, seekVersion]);
   useFocusEffect(useCallback(() => {
     sync();
     const unsubscribe = demo ? () => {} : usePlaybackStore.subscribe((state, previous) => {

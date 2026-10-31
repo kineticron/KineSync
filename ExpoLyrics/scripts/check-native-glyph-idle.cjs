@@ -11,7 +11,7 @@ const compareOnly = compareIndex >= 0;
 const baselinePath = compareOnly ? process.argv[compareIndex + 1] : baselineIndex < 0 ? null : process.argv[baselineIndex + 1];
 const bundle = filename => buildSync({ stdin: { contents: fs.readFileSync(filename, 'utf8'), resolveDir: directory, loader: 'tsx' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native-reanimated', '@shopify/react-native-skia'],
+  external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'],
 }).outputFiles[0].text;
 const source = bundle(path.join(directory, 'native-glyph-picture.tsx'));
 const baselineSource = baselinePath && bundle(baselinePath);

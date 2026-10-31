@@ -104,6 +104,8 @@ function mount(initial = {}, options = {}) {
   } };
   const mocks = {
     react, 'react-native': { AppState: appState },
+    'react-native-worklets': { scheduleOnRN() { throw Error('Production clock must not enqueue diagnostic callbacks'); } },
+    '@/lib/native-clock-diagnostics': {},
     'expo-router': { useFocusEffect: fn => effect(fn, [fn]) },
     'react-native-reanimated': { useSharedValue: value => slot(() => shared(value)),
       cancelAnimation: value => queue.push(() => valueSetter(value, value._value)),

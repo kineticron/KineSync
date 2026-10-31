@@ -52,6 +52,13 @@ export class DealerDeliveryBaseline {
 
   clear() { this.state = null; this.carry = null; }
 
+  /** Read-only counts/times for bounded development switch traces; no identities. */
+  diagnosticSummary() {
+    return { dealerSamples: this.state?.entries.length ?? 0, carrySamples: this.carry?.state.entries.length ?? 0,
+      carryExpiresAtMono: this.carry?.expiresAtMono ?? null,
+      dealerLatestReceiptMono: this.state?.latestReceipt.monotonicMs ?? this.carry?.state.latestReceipt.monotonicMs ?? null };
+  }
+
   /** Snapshot the bounded model so diagnostics can evaluate without driving playback state. */
   fork() {
     const snapshot = new DealerDeliveryBaseline();
