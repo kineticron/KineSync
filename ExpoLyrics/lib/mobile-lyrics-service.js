@@ -13006,16 +13006,28 @@ function isValidLyricsCandidate(track, candidate) {
     line.lineStartTime >= 0 && line.lineEndTime >= line.lineStartTime);
 }
 
+function evaluateCandidateUpgrade(track, currentBest, candidate) {
+  if (!isValidLyricsCandidate(track, candidate)) return { upgrade: false, rule: "invalid-candidate" };
+  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return { upgrade: true, rule: "spicy-featured-variant-failure" };
+  const autoPicker = require("../../DesktopBridge/src/lyricsAutoPicker");
+  if (typeof autoPicker.evaluatePreferAutoCandidate === "function") {
+    return autoPicker.evaluatePreferAutoCandidate(track, currentBest, candidate);
+  }
+  return {
+    upgrade: autoPicker.shouldPreferAutoCandidate(track, currentBest, candidate),
+    rule: "source-priority",
+  };
+}
+
 function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
-  if (!isValidLyricsCandidate(track, candidate)) return false;
-  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return true;
-  return require("../../DesktopBridge/src/lyricsAutoPicker").shouldPreferAutoCandidate(track, currentBest, candidate);
+  return evaluateCandidateUpgrade(track, currentBest, candidate).upgrade;
 }
 
 async function fetchBestSyncedLyrics(
   track,
   {
     preferredSource = "auto",
+    requestId = 0,
     onProgress = null,
     onSourceCached = null,
     sourceCache = null,
@@ -13055,6 +13067,7 @@ async function fetchBestSyncedLyrics(
     (preferred === "auto" && attemptOrder.includes("local-vault"));
 
   if (tryLocalVaultOnly) {
+    const { emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
     const vaultFetcher = SOURCE_FETCHERS["local-vault"];
     if (typeof vaultFetcher === "function") {
       try {
@@ -13066,6 +13079,13 @@ async function fetchBestSyncedLyrics(
         if (vaultResult?.lyrics?.length) {
           const finalizedVault = await finalizeFetchedLyricsResult(vaultResult);
           if (isValidLyricsCandidate(track, finalizedVault)) {
+            emitPickerTrace?.("provider-outcome", {
+              requestId,
+              source: "local-vault",
+              outcome: "ok",
+              reason: "ok",
+              lineCount: finalizedVault.lyrics.length,
+            });
             if (typeof sourceCache?.set === "function") {
               sourceCache.set("local-vault", finalizedVault);
             }
@@ -13076,7 +13096,19 @@ async function fetchBestSyncedLyrics(
             return finalizedVault;
           }
         }
-      } catch {
+        emitPickerTrace?.("provider-outcome", {
+          requestId,
+          source: "local-vault",
+          outcome: "empty",
+          reason: "local-vault:no-match",
+        });
+      } catch (vaultError) {
+        emitPickerTrace?.("provider-outcome", {
+          requestId,
+          source: "local-vault",
+          outcome: "fail",
+          reason: classifySourceFailure("local-vault", vaultError),
+        });
         // Vault miss or read error — fall through to API sources when auto.
       }
       if (preferred === "local-vault") {
@@ -13143,9 +13175,16 @@ async function fetchBestSyncedLyrics(
   };
 
   if (preferred === "auto") {
-    const { autoCandidateCouldOutrank } = require("../../DesktopBridge/src/lyricsAutoPicker");
+    const { autoCandidateCouldOutrank, emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
     const cachedDecision = sourceCache?.get?.("auto");
     if (cachedDecision?.lyrics?.length && isValidLyricsCandidate(track, cachedDecision)) {
+      emitPickerTrace?.("provider-outcome", {
+        requestId,
+        source: "auto-cache",
+        outcome: "ok",
+        reason: "cache-hit",
+        lineCount: cachedDecision.lyrics.length,
+      });
       onAutoComplete?.();
       onAutoSettled?.();
       return cachedDecision;
@@ -13183,7 +13222,15 @@ async function fetchBestSyncedLyrics(
       onAutoComplete?.();
     };
     const consider = candidate => {
-      if (!shouldUpgradeLyricsCandidate(track, best, candidate)) return;
+      const evaluation = evaluateCandidateUpgrade(track, best, candidate);
+      emitPickerTrace?.("comparator", {
+        requestId,
+        currentSource: best?.source || "none",
+        candidateSource: candidate?.source || "unknown",
+        decision: evaluation.upgrade ? "accepted" : "rejected",
+        rule: evaluation.rule,
+      });
+      if (!evaluation.upgrade) return;
       best = candidate;
       // First usable lyrics are delivered immediately; pending superior sources
       // affect finalization only, and may publish a later guarded upgrade.
@@ -13219,6 +13266,12 @@ async function fetchBestSyncedLyrics(
       timer = setTimeout(() => {
         boundedPending.delete(source);
         outcomes.set(source, { source, ok: false, timedOut: true, failureReason: `${source}:timeout` });
+        emitPickerTrace?.("provider-outcome", {
+          requestId,
+          source,
+          outcome: "fail",
+          reason: `${source}:timeout`,
+        });
         // Keep the raw source pending: a late possible winner must not poison
         // the final cache, and may still upgrade while this auto run is active.
         maybeFinalize();
@@ -13228,7 +13281,7 @@ async function fetchBestSyncedLyrics(
         const fetcher = SOURCE_FETCHERS[source];
         if (typeof fetcher !== "function") return { source, ok: false, failureReason: `${source}:unknown-source` };
         const cached = sourceCache?.get?.(source);
-        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached };
+        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached, cached: true };
         try {
           const result = await invokeSourceFetcher(source, fetcher);
           if (!result) return { source, ok: false, failureReason: `${source}:no-match` };
@@ -13243,6 +13296,19 @@ async function fetchBestSyncedLyrics(
         pending.delete(source);
         boundedPending.delete(source);
         outcomes.set(source, outcome);
+        const outcomeStatus = outcome.ok
+          ? "ok"
+          : (outcome.instrumental || outcome.failureReason?.endsWith(":no-match") ? "empty" : "fail");
+        const outcomeReason = outcome.ok
+          ? (outcome.cached ? "cache-hit" : "ok")
+          : (outcome.failureReason || "unknown");
+        emitPickerTrace?.("provider-outcome", {
+          requestId,
+          source,
+          outcome: outcomeStatus,
+          reason: outcomeReason,
+          lineCount: outcome.result?.lyrics?.length ?? 0,
+        });
         if (outcome.ok) consider(outcome.result);
         maybeFinalize();
       });
@@ -13252,6 +13318,7 @@ async function fetchBestSyncedLyrics(
     return waitForAutoCompletion ? completionResult : initialResult;
   }
 
+  const { emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
   for (const source of apiAttemptOrder) {
     const fetcher = SOURCE_FETCHERS[source];
     if (typeof fetcher !== "function") {
@@ -13260,6 +13327,13 @@ async function fetchBestSyncedLyrics(
     const cachedResult =
       typeof sourceCache?.get === "function" ? sourceCache.get(source) : null;
     if (cachedResult?.lyrics?.length) {
+      emitPickerTrace?.("provider-outcome", {
+        requestId,
+        source,
+        outcome: "ok",
+        reason: "cache-hit",
+        lineCount: cachedResult.lyrics.length,
+      });
       cacheSourceResult(source, cachedResult);
       return cachedResult;
     }
@@ -13267,6 +13341,12 @@ async function fetchBestSyncedLyrics(
       const result = await invokeSourceFetcher(source, fetcher);
       if (result) {
         if (result?.metadata?.instrumental && !result?.lyrics?.length) {
+          emitPickerTrace?.("provider-outcome", {
+            requestId,
+            source,
+            outcome: "empty",
+            reason: `${source}:instrumental`,
+          });
           return {
             lyrics: [],
             source: `${source}-instrumental`,
@@ -13278,15 +13358,43 @@ async function fetchBestSyncedLyrics(
         }
         const finalized = await finalizeFetchedLyricsResult(result);
         if (isValidLyricsCandidate(track, finalized)) {
+          emitPickerTrace?.("provider-outcome", {
+            requestId,
+            source,
+            outcome: "ok",
+            reason: "ok",
+            lineCount: finalized.lyrics.length,
+          });
           cacheSourceResult(source, finalized);
           return finalized;
         }
-        failures.push(`${source}:invalid-candidate`);
+        const failureReason = `${source}:invalid-candidate`;
+        emitPickerTrace?.("provider-outcome", {
+          requestId,
+          source,
+          outcome: "fail",
+          reason: failureReason,
+        });
+        failures.push(failureReason);
         continue;
       }
-      failures.push(classifySourceFailure(source, new Error("__NO_MATCH__")));
+      const failureReason = classifySourceFailure(source, new Error("__NO_MATCH__"));
+      emitPickerTrace?.("provider-outcome", {
+        requestId,
+        source,
+        outcome: "empty",
+        reason: failureReason,
+      });
+      failures.push(failureReason);
     } catch (error) {
-      failures.push(classifySourceFailure(source, error));
+      const failureReason = classifySourceFailure(source, error);
+      emitPickerTrace?.("provider-outcome", {
+        requestId,
+        source,
+        outcome: failureReason.endsWith(":no-match") ? "empty" : "fail",
+        reason: failureReason,
+      });
+      failures.push(failureReason);
     }
   }
 
@@ -13694,6 +13802,7 @@ function createLyricsService({
         onSyncedLyrics = null,
         immediateTranslation = false,
         translationLanguage = "English",
+        requestId = 0,
       } = {},
     ) {
       if (!track?.trackId || !track?.title) {
@@ -13778,7 +13887,23 @@ function createLyricsService({
       };
 
       const emitPacket = (basePacket) => {
-        if (!isCurrentSelection() || !basePacket) {
+        const { emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
+        if (!isCurrentSelection()) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "stale-selection-generation",
+          });
+          return;
+        }
+        if (!basePacket) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "empty-packet",
+          });
           return;
         }
         const safeLyrics = Array.isArray(basePacket?.lyrics)
@@ -13811,9 +13936,22 @@ function createLyricsService({
           String(basePacket?.metadata?.translation?.model || ""),
         ].join("|");
         if (signature === lastEmittedSignature) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "duplicate-signature",
+          });
           return;
         }
         lastEmittedSignature = signature;
+        emitPickerTrace?.("callback-guard", {
+          requestId,
+          target: "service-emitPacket",
+          decision: "accept",
+          reason: "new-signature",
+          source: basePacket.source,
+        });
         onSyncedLyrics({
           trackId: track.trackId,
           lyrics: safeLyrics,
@@ -13830,7 +13968,16 @@ function createLyricsService({
       };
 
       const registerCandidate = (candidatePacket) => {
-        if (!isCurrentSelection()) return false;
+        const { emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
+        if (!isCurrentSelection()) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-registerCandidate",
+            decision: "discard",
+            reason: "stale-selection-generation",
+          });
+          return false;
+        }
         candidatePacket = selectTtmlTranslationTracks(candidatePacket, translationLanguage);
         const safeCandidate = {
           ...candidatePacket,
@@ -13839,15 +13986,37 @@ function createLyricsService({
             : [],
         };
         if (!safeCandidate.lyrics.length) {
+          emitPickerTrace?.("comparator", {
+            requestId,
+            currentSource: bestBasePacket?.source || "none",
+            candidateSource: safeCandidate?.source || "unknown",
+            decision: "rejected",
+            rule: "no-candidate-lyrics",
+          });
           return false;
         }
         if (!bestBasePacket?.lyrics?.length) {
           bestBasePacket = safeCandidate;
+          emitPickerTrace?.("comparator", {
+            requestId,
+            currentSource: "none",
+            candidateSource: safeCandidate.source,
+            decision: "accepted",
+            rule: "initial-candidate",
+          });
           return true;
         }
-        if (
-          shouldUpgradeLyricsCandidate(matchTrack, bestBasePacket, safeCandidate)
-        ) {
+        const evaluation = typeof evaluateCandidateUpgrade === "function"
+          ? evaluateCandidateUpgrade(matchTrack, bestBasePacket, safeCandidate)
+          : { upgrade: shouldUpgradeLyricsCandidate(matchTrack, bestBasePacket, safeCandidate), rule: "upgrade-check" };
+        emitPickerTrace?.("comparator", {
+          requestId,
+          currentSource: bestBasePacket.source,
+          candidateSource: safeCandidate.source,
+          decision: evaluation.upgrade ? "accepted" : "rejected",
+          rule: evaluation.rule,
+        });
+        if (evaluation.upgrade) {
           bestBasePacket = safeCandidate;
           return true;
         }
@@ -14037,8 +14206,16 @@ function createLyricsService({
       };
 
       const handleProgressPacket = (candidatePacket) => {
+        const { emitPickerTrace } = require("../../DesktopBridge/src/lyricsAutoPicker");
         const upgraded = registerCandidate(candidatePacket);
         if (upgraded) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-handleProgress",
+            decision: "accept",
+            reason: "candidate-upgraded",
+            source: bestBasePacket?.source,
+          });
           emitPacket(bestBasePacket);
           const shouldTranslateImmediately = shouldTranslate();
           if (
@@ -14057,6 +14234,14 @@ function createLyricsService({
           } else {
             scheduleAutoTranslationQuietWindow();
           }
+        } else {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-handleProgress",
+            decision: "discard",
+            reason: "candidate-not-upgrade",
+            candidateSource: candidatePacket?.source,
+          });
         }
       };
 
@@ -14091,6 +14276,7 @@ function createLyricsService({
         };
         currentFlight.initial = fetchBestSyncedLyrics(matchTrack, {
           preferredSource,
+          requestId,
           onProgress: candidate => {
             currentFlight.latest = candidate;
             for (const listener of currentFlight.listeners) listener(candidate);

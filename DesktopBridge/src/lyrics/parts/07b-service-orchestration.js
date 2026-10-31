@@ -384,6 +384,7 @@ function createLyricsService({
         onSyncedLyrics = null,
         immediateTranslation = false,
         translationLanguage = "English",
+        requestId = 0,
       } = {},
     ) {
       if (!track?.trackId || !track?.title) {
@@ -468,7 +469,23 @@ function createLyricsService({
       };
 
       const emitPacket = (basePacket) => {
-        if (!isCurrentSelection() || !basePacket) {
+        const { emitPickerTrace } = require("./lyricsAutoPicker");
+        if (!isCurrentSelection()) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "stale-selection-generation",
+          });
+          return;
+        }
+        if (!basePacket) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "empty-packet",
+          });
           return;
         }
         const safeLyrics = Array.isArray(basePacket?.lyrics)
@@ -501,9 +518,22 @@ function createLyricsService({
           String(basePacket?.metadata?.translation?.model || ""),
         ].join("|");
         if (signature === lastEmittedSignature) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-emitPacket",
+            decision: "discard",
+            reason: "duplicate-signature",
+          });
           return;
         }
         lastEmittedSignature = signature;
+        emitPickerTrace?.("callback-guard", {
+          requestId,
+          target: "service-emitPacket",
+          decision: "accept",
+          reason: "new-signature",
+          source: basePacket.source,
+        });
         onSyncedLyrics({
           trackId: track.trackId,
           lyrics: safeLyrics,
@@ -520,7 +550,16 @@ function createLyricsService({
       };
 
       const registerCandidate = (candidatePacket) => {
-        if (!isCurrentSelection()) return false;
+        const { emitPickerTrace } = require("./lyricsAutoPicker");
+        if (!isCurrentSelection()) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-registerCandidate",
+            decision: "discard",
+            reason: "stale-selection-generation",
+          });
+          return false;
+        }
         candidatePacket = selectTtmlTranslationTracks(candidatePacket, translationLanguage);
         const safeCandidate = {
           ...candidatePacket,
@@ -529,15 +568,37 @@ function createLyricsService({
             : [],
         };
         if (!safeCandidate.lyrics.length) {
+          emitPickerTrace?.("comparator", {
+            requestId,
+            currentSource: bestBasePacket?.source || "none",
+            candidateSource: safeCandidate?.source || "unknown",
+            decision: "rejected",
+            rule: "no-candidate-lyrics",
+          });
           return false;
         }
         if (!bestBasePacket?.lyrics?.length) {
           bestBasePacket = safeCandidate;
+          emitPickerTrace?.("comparator", {
+            requestId,
+            currentSource: "none",
+            candidateSource: safeCandidate.source,
+            decision: "accepted",
+            rule: "initial-candidate",
+          });
           return true;
         }
-        if (
-          shouldUpgradeLyricsCandidate(matchTrack, bestBasePacket, safeCandidate)
-        ) {
+        const evaluation = typeof evaluateCandidateUpgrade === "function"
+          ? evaluateCandidateUpgrade(matchTrack, bestBasePacket, safeCandidate)
+          : { upgrade: shouldUpgradeLyricsCandidate(matchTrack, bestBasePacket, safeCandidate), rule: "upgrade-check" };
+        emitPickerTrace?.("comparator", {
+          requestId,
+          currentSource: bestBasePacket.source,
+          candidateSource: safeCandidate.source,
+          decision: evaluation.upgrade ? "accepted" : "rejected",
+          rule: evaluation.rule,
+        });
+        if (evaluation.upgrade) {
           bestBasePacket = safeCandidate;
           return true;
         }
@@ -727,8 +788,16 @@ function createLyricsService({
       };
 
       const handleProgressPacket = (candidatePacket) => {
+        const { emitPickerTrace } = require("./lyricsAutoPicker");
         const upgraded = registerCandidate(candidatePacket);
         if (upgraded) {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-handleProgress",
+            decision: "accept",
+            reason: "candidate-upgraded",
+            source: bestBasePacket?.source,
+          });
           emitPacket(bestBasePacket);
           const shouldTranslateImmediately = shouldTranslate();
           if (
@@ -747,6 +816,14 @@ function createLyricsService({
           } else {
             scheduleAutoTranslationQuietWindow();
           }
+        } else {
+          emitPickerTrace?.("callback-guard", {
+            requestId,
+            target: "service-handleProgress",
+            decision: "discard",
+            reason: "candidate-not-upgrade",
+            candidateSource: candidatePacket?.source,
+          });
         }
       };
 
@@ -781,6 +858,7 @@ function createLyricsService({
         };
         currentFlight.initial = fetchBestSyncedLyrics(matchTrack, {
           preferredSource,
+          requestId,
           onProgress: candidate => {
             currentFlight.latest = candidate;
             for (const listener of currentFlight.listeners) listener(candidate);
