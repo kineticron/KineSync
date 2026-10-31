@@ -197,11 +197,13 @@ export async function fetchMobileLyricsForTrack(
     preferredSource = "auto",
     force = false,
     immediateTranslation = false,
+    requestId = 0,
     onSyncedLyrics,
   }: {
     preferredSource?: LyricsSourcePreference;
     force?: boolean;
     immediateTranslation?: boolean;
+    requestId?: number;
     onSyncedLyrics?: (packet: LyricsPacket) => void;
   } = {},
 ): Promise<LyricsPacket> {
@@ -243,6 +245,7 @@ export async function fetchMobileLyricsForTrack(
     preferredSource,
     immediateTranslation,
     translationLanguage,
+    requestId,
     onSyncedLyrics: onSyncedLyrics
       ? (packet) => onSyncedLyrics(toActiveLyricsPacket(track, packet))
       : undefined,
