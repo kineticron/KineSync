@@ -28,6 +28,10 @@ export type PlaybackPacket = {
   /** Dev-only Spotify detector experiment reanchor; never set by normal packets. */
   nativeDeliveryExperimentReanchor?: boolean;
   timing?: BridgeTimingDiagnostics;
+  positionTimestampMs?: number;
+  sourcePositionMs?: number;
+  trackUri?: string;
+  uri?: string;
 };
 
 export type LyricsPacket = {

@@ -239,3 +239,5 @@ fallback.advance(2000); fallback.flush(); fallback.frame(1000);
 assert.equal(fallback.result.position.value, 22000, 'Fallback still honors delayed pause exactly');
 fallback.stop(); fallback.flush(); assert.equal(fallback.subscriptions, 0);
 console.log('Native clock checks passed: raw HostFunction closure, separate epochs, delayed pause/resume/seek, deadband stability, song identity, queued replacements, foreground, preview, inactive/end/unmount, demo and unsupported-runtime fallback (documented 3000ms lag).');
+require('./check-native-same-anchor-clock.cjs');
+

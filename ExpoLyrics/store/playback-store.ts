@@ -133,6 +133,9 @@ type PlaybackState = {
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
+  lastSourcePositionTimestampMs?: number;
+  lastSourcePositionMs?: number;
+  lastSourceTrackUri?: string;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setPlaybackMode: (mode: PlaybackMode) => void;
   setServerUrl: (url: string) => void;
@@ -250,6 +253,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
+  lastSourcePositionTimestampMs: undefined,
+  lastSourcePositionMs: undefined,
+  lastSourceTrackUri: undefined,
   setConnectionStatus: (status) =>
     set((state) =>
       status === 'connected'
@@ -261,6 +267,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       playbackMode,
       clockSkewBaselineMs: Number.NaN,
       lastSourceClockMs: 0,
+      lastSourcePositionTimestampMs: undefined,
+      lastSourcePositionMs: undefined,
+      lastSourceTrackUri: undefined,
     }),
   setServerUrl: (url) => {
     set({ serverUrl: url.trim() });
@@ -307,21 +316,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     };
 
     const trackChanged = prev.currentTrack?.id !== incomingTrack.id;
-    const projected =
-      prev.anchorPositionMs + (prev.isPlaying ? nowMono - prev.anchorMonotonicMs : 0);
-    const seekDetected =
-      !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
-    const playStateChanged = prev.isPlaying !== packet.isPlaying;
-    const forceExperimentReanchor = typeof __DEV__ !== 'undefined' && __DEV__ &&
-      packet.nativeDeliveryExperimentReanchor === true;
-    // Keep a stable render anchor through ordinary source/transport jitter.
-    // Restarting every token's UI animation for a few milliseconds of noise
-    // produces visible bumps, even when the source is otherwise in sync.
-    const preserveAnchor = !forceExperimentReanchor && !trackChanged && !playStateChanged && packet.isPlaying &&
-      Math.abs(projected - correctedPosition) <= 80;
-    recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
-      projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
-      storeSourceClockMs: numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected });
     const metadataChanged =
       trackChanged ||
       prev.currentTrack?.title !== incomingTrack.title ||
@@ -330,6 +324,39 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       prev.currentTrack?.artworkUrl !== incomingTrack.artworkUrl ||
       prev.currentTrack?.durationMs !== incomingTrack.durationMs ||
       prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId;
+    const projected =
+      prev.anchorPositionMs + (prev.isPlaying ? nowMono - prev.anchorMonotonicMs : 0);
+    const seekDetected =
+      !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
+    const playStateChanged = prev.isPlaying !== packet.isPlaying;
+    const forceExperimentReanchor = typeof __DEV__ !== 'undefined' && __DEV__ &&
+      packet.nativeDeliveryExperimentReanchor === true;
+
+    const incomingPositionTimestamp = packet.positionTimestampMs;
+    const incomingSourcePosition = packet.sourcePositionMs ?? packet.positionMs;
+    const incomingUri = packet.uri ?? packet.trackUri ?? packet.spotifyTrackId ?? packet.trackId;
+
+    const isSameSourceAnchor =
+      !trackChanged &&
+      !playStateChanged &&
+      !seekDetected &&
+      packet.isPlaying &&
+      incomingPositionTimestamp !== undefined &&
+      prev.lastSourcePositionTimestampMs !== undefined &&
+      incomingPositionTimestamp === prev.lastSourcePositionTimestampMs &&
+      incomingSourcePosition === prev.lastSourcePositionMs &&
+      (incomingUri ? incomingUri === prev.lastSourceTrackUri : true);
+
+    // Keep a stable render anchor through ordinary source/transport jitter.
+    // Restarting every token's UI animation for a few milliseconds of noise
+    // produces visible bumps, even when the source is otherwise in sync.
+    // When an incoming sample repeats the identical source anchor and would move
+    // the running anchor backward, preserve the running store anchor.
+    const preserveAnchor = !forceExperimentReanchor && !trackChanged && !playStateChanged && packet.isPlaying &&
+      (Math.abs(projected - correctedPosition) <= 80 || (isSameSourceAnchor && correctedPosition < projected));
+    recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
+      projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
+      storeSourceClockMs: numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected });
     const stationaryDuplicate =
       !metadataChanged &&
       !playStateChanged &&
@@ -361,6 +388,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           : prev.bridgeTiming,
       clockSkewBaselineMs: baseline,
       lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
+      lastSourcePositionTimestampMs: incomingPositionTimestamp !== undefined
+        ? incomingPositionTimestamp
+        : (trackChanged ? undefined : prev.lastSourcePositionTimestampMs),
+      lastSourcePositionMs: incomingSourcePosition !== undefined
+        ? incomingSourcePosition
+        : (trackChanged ? undefined : prev.lastSourcePositionMs),
+      lastSourceTrackUri: incomingUri !== undefined
+        ? incomingUri
+        : (trackChanged ? undefined : prev.lastSourceTrackUri),
     });
     if (packet.isPlaying) {
       schedulePlaybackClockTick();

@@ -75,11 +75,16 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const readyGate = rendererReadyGate.current;
   const rendererIdentity = useRef({ style, list, reveal, demo: !!demoLyrics, trackId: liveTrackId, source, lyrics, generation: 0 });
   const priorRendererIdentity = rendererIdentity.current;
-  if (priorRendererIdentity.style !== style || priorRendererIdentity.list !== list || priorRendererIdentity.reveal !== reveal ||
-    priorRendererIdentity.demo !== !!demoLyrics || priorRendererIdentity.trackId !== liveTrackId ||
-    priorRendererIdentity.source !== source || priorRendererIdentity.lyrics !== lyrics) {
+  const isContentIdentityChanged = priorRendererIdentity.demo !== !!demoLyrics ||
+    priorRendererIdentity.trackId !== liveTrackId ||
+    priorRendererIdentity.source !== source ||
+    priorRendererIdentity.lyrics !== lyrics;
+  const isPresentationChanged = priorRendererIdentity.style !== style ||
+    priorRendererIdentity.list !== list ||
+    priorRendererIdentity.reveal !== reveal;
+  if (isContentIdentityChanged || isPresentationChanged) {
     rendererIdentity.current = { style, list, reveal, demo: !!demoLyrics, trackId: liveTrackId, source, lyrics,
-      generation: priorRendererIdentity.generation + 1 };
+      generation: isContentIdentityChanged ? priorRendererIdentity.generation + 1 : priorRendererIdentity.generation };
   }
   const rendererReadyKey = `renderer-${rendererIdentity.current.generation}`;
   const rendererReadyGeneration = rendererReadyGate.current.begin(rendererReadyKey);
