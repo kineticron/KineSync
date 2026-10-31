@@ -55,7 +55,6 @@ export function createLyricsService(options?: {
       preferredSource?: MobileLyricsSourcePreference;
       immediateTranslation?: boolean;
       translationLanguage?: string;
-      requestId?: number;
       onSyncedLyrics?: (packet: MobileLyricsPacket) => void;
     },
   ): Promise<MobileLyricsPacket>;

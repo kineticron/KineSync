@@ -44,7 +44,6 @@ const sync=load('lyrics-sync.ts',{
  '@/lib/mobile-lyrics-client':client,'@/lib/mobile-lyrics-vault':{saveMobileVaultLyrics:async()=>({})},
  '@/lib/bridge-client':{bridgeClient:new Proxy({}, {get:()=>()=>{bridgeCalls++;}})},
  '@/store/playback-store':{usePlaybackStore:{getState:()=>state}},
- '../../DesktopBridge/src/lyricsAutoPicker':require('../../DesktopBridge/src/lyricsAutoPicker'),
 });
 const packet=source=>({source,metadata:{attribution:{source:'spicy_lyrics'}},lyrics:[{
  lineStartTime:1000,lineEndTime:9000,syllables:[{text:'Fixture',startTime:1000,endTime:9000}],

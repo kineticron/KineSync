@@ -3,7 +3,6 @@ import { saveMobileVaultLyrics } from "@/lib/mobile-lyrics-vault";
 import { bridgeClient } from "@/lib/bridge-client";
 import type { LyricsPacket, Track } from "@/types/bridge";
 import { usePlaybackStore } from "@/store/playback-store";
-import { emitPickerTrace } from "../../DesktopBridge/src/lyricsAutoPicker";
 
 let latestLyricsRequestId = 0;
 
@@ -45,49 +44,17 @@ export type LyricsSourcePreference =
   | "lrclib"
   | "spicy-lyrics";
 
-
-
-function formatDisplayCredit(metadata?: Record<string, unknown> | null) {
-  if (!metadata) return null;
-  const attribution = (metadata.attribution as Record<string, unknown> | undefined) || null;
-  const credits = (metadata.credits as Record<string, unknown> | undefined) || null;
-  return {
-    provider: attribution?.provider ?? null,
-    attributionSource: attribution?.source ?? null,
-    community: Boolean(attribution?.community),
-    songwriters: Array.isArray(credits?.songwriters) ? credits.songwriters : [],
-  };
-}
-
-function applyMobileLyricsPacket(packet: LyricsPacket, requestId = 0) {
+function applyMobileLyricsPacket(packet: LyricsPacket) {
   const state = usePlaybackStore.getState();
   // A request can outlive the browser fallback that started it. Once the
   // bridge reconnects it is the authoritative lyrics publisher again.
   if (state.connectionStatus === "connected") {
-    emitPickerTrace("callback-guard", {
-      requestId,
-      target: "applyMobileLyricsPacket",
-      decision: "discard",
-      reason: "bridge-connected",
-    });
     return;
   }
   const activeTrackId = state.currentTrack?.id ?? "";
   if (packet.trackId && activeTrackId && packet.trackId !== activeTrackId) {
-    emitPickerTrace("callback-guard", {
-      requestId,
-      target: "applyMobileLyricsPacket",
-      decision: "discard",
-      reason: "track-id-mismatch",
-    });
     return;
   }
-  emitPickerTrace("callback-guard", {
-    requestId,
-    target: "applyMobileLyricsPacket",
-    decision: "accept",
-    reason: "commit-accepted",
-  });
   state.setLyrics(packet.lyrics || [], packet.source || "mobile-app");
   state.setLyricsMetadata(packet.metadata || {});
   state.setLyricsStatusMessage(
@@ -96,12 +63,6 @@ function applyMobileLyricsPacket(packet: LyricsPacket, requestId = 0) {
         ? `Fetched ${(packet.lyrics || []).length} lines from ${packet.source || "mobile-app"}.`
         : "No synced lyrics available."),
   );
-  emitPickerTrace("display-commit", {
-    requestId,
-    source: packet.source || "mobile-app",
-    credit: formatDisplayCredit(packet.metadata as Record<string, unknown> | undefined),
-    lineCount: (packet.lyrics || []).length,
-  });
 }
 function inferCurrentSourcePreference(
   lyricsSource: string,
@@ -172,48 +133,17 @@ export async function refreshLyricsForCurrentTrack(
     const packet = await fetchMobileLyricsForTrack(currentTrack, {
       preferredSource,
       force,
-      requestId,
       onSyncedLyrics: (progressPacket) => {
-        const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-        emitPickerTrace("callback-guard", {
-          requestId,
-          target: "sync-onSyncedLyrics",
-          decision: isCurrent ? "accept" : "discard",
-          reason: isCurrent
-            ? "current-track-request-match"
-            : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-          source: progressPacket.source,
-        });
-        if (isCurrent) {
-          applyMobileLyricsPacket(progressPacket, requestId);
+        if (isCurrentTrackRequest(requestId, activeSignature)) {
+          applyMobileLyricsPacket(progressPacket);
         }
       },
     });
-    const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-    emitPickerTrace("callback-guard", {
-      requestId,
-      target: "sync-completion",
-      decision: isCurrent ? "accept" : "discard",
-      reason: isCurrent
-        ? "current-track-request-match"
-        : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-      source: packet.source,
-    });
-    if (isCurrent) {
-      applyMobileLyricsPacket(packet, requestId);
+    if (isCurrentTrackRequest(requestId, activeSignature)) {
+      applyMobileLyricsPacket(packet);
     }
   } catch (error) {
-    const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-    emitPickerTrace("callback-guard", {
-      requestId,
-      target: "sync-error",
-      decision: isCurrent ? "accept" : "discard",
-      reason: isCurrent
-        ? "current-track-request-match"
-        : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    if (!isCurrent) {
+    if (!isCurrentTrackRequest(requestId, activeSignature)) {
       return;
     }
     setLyricsStatusMessage(
@@ -263,50 +193,19 @@ export function requestImmediateTranslationForCurrentSource() {
   void fetchMobileLyricsForTrack(currentTrack, {
     preferredSource: inferCurrentSourcePreference(lyricsSource),
     immediateTranslation: true,
-    requestId,
     onSyncedLyrics: (packet) => {
-      const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-      emitPickerTrace("callback-guard", {
-        requestId,
-        target: "sync-translation-progress",
-        decision: isCurrent ? "accept" : "discard",
-        reason: isCurrent
-          ? "current-track-request-match"
-          : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-        source: packet.source,
-      });
-      if (isCurrent) {
-        applyMobileLyricsPacket(packet, requestId);
+      if (isCurrentTrackRequest(requestId, activeSignature)) {
+        applyMobileLyricsPacket(packet);
       }
     },
   })
     .then((packet) => {
-      const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-      emitPickerTrace("callback-guard", {
-        requestId,
-        target: "sync-translation-completion",
-        decision: isCurrent ? "accept" : "discard",
-        reason: isCurrent
-          ? "current-track-request-match"
-          : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-        source: packet.source,
-      });
-      if (isCurrent) {
-        applyMobileLyricsPacket(packet, requestId);
+      if (isCurrentTrackRequest(requestId, activeSignature)) {
+        applyMobileLyricsPacket(packet);
       }
     })
     .catch((error) => {
-      const isCurrent = isCurrentTrackRequest(requestId, activeSignature);
-      emitPickerTrace("callback-guard", {
-        requestId,
-        target: "sync-translation-error",
-        decision: isCurrent ? "accept" : "discard",
-        reason: isCurrent
-          ? "current-track-request-match"
-          : (requestId !== latestLyricsRequestId ? "stale-request-id" : "track-metadata-signature-mismatch"),
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (isCurrent) {
+      if (isCurrentTrackRequest(requestId, activeSignature)) {
         usePlaybackStore
           .getState()
           .setLyricsStatusMessage(error instanceof Error ? error.message : String(error));
@@ -365,8 +264,7 @@ export async function saveCurrentTrackToVault({
     const translatedPacket = await fetchMobileLyricsForTrack(currentTrack, {
       preferredSource: inferCurrentSourcePreference(lyricsSource),
       immediateTranslation: true,
-      requestId: latestLyricsRequestId,
-      onSyncedLyrics: (packet) => applyMobileLyricsPacket(packet, latestLyricsRequestId),
+      onSyncedLyrics: applyMobileLyricsPacket,
     });
     if (translatedPacket.lyrics?.length) {
       lyricsToSave = translatedPacket.lyrics;

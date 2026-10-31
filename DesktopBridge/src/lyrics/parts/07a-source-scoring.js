@@ -656,28 +656,16 @@ function isValidLyricsCandidate(track, candidate) {
     line.lineStartTime >= 0 && line.lineEndTime >= line.lineStartTime);
 }
 
-function evaluateCandidateUpgrade(track, currentBest, candidate) {
-  if (!isValidLyricsCandidate(track, candidate)) return { upgrade: false, rule: "invalid-candidate" };
-  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return { upgrade: true, rule: "spicy-featured-variant-failure" };
-  const autoPicker = require("./lyricsAutoPicker");
-  if (typeof autoPicker.evaluatePreferAutoCandidate === "function") {
-    return autoPicker.evaluatePreferAutoCandidate(track, currentBest, candidate);
-  }
-  return {
-    upgrade: autoPicker.shouldPreferAutoCandidate(track, currentBest, candidate),
-    rule: "source-priority",
-  };
-}
-
 function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
-  return evaluateCandidateUpgrade(track, currentBest, candidate).upgrade;
+  if (!isValidLyricsCandidate(track, candidate)) return false;
+  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return true;
+  return require("./lyricsAutoPicker").shouldPreferAutoCandidate(track, currentBest, candidate);
 }
 
 async function fetchBestSyncedLyrics(
   track,
   {
     preferredSource = "auto",
-    requestId = 0,
     onProgress = null,
     onSourceCached = null,
     sourceCache = null,
@@ -717,7 +705,6 @@ async function fetchBestSyncedLyrics(
     (preferred === "auto" && attemptOrder.includes("local-vault"));
 
   if (tryLocalVaultOnly) {
-    const { emitPickerTrace } = require("./lyricsAutoPicker");
     const vaultFetcher = SOURCE_FETCHERS["local-vault"];
     if (typeof vaultFetcher === "function") {
       try {
@@ -729,13 +716,6 @@ async function fetchBestSyncedLyrics(
         if (vaultResult?.lyrics?.length) {
           const finalizedVault = await finalizeFetchedLyricsResult(vaultResult);
           if (isValidLyricsCandidate(track, finalizedVault)) {
-            emitPickerTrace?.("provider-outcome", {
-              requestId,
-              source: "local-vault",
-              outcome: "ok",
-              reason: "ok",
-              lineCount: finalizedVault.lyrics.length,
-            });
             if (typeof sourceCache?.set === "function") {
               sourceCache.set("local-vault", finalizedVault);
             }
@@ -746,19 +726,7 @@ async function fetchBestSyncedLyrics(
             return finalizedVault;
           }
         }
-        emitPickerTrace?.("provider-outcome", {
-          requestId,
-          source: "local-vault",
-          outcome: "empty",
-          reason: "local-vault:no-match",
-        });
-      } catch (vaultError) {
-        emitPickerTrace?.("provider-outcome", {
-          requestId,
-          source: "local-vault",
-          outcome: "fail",
-          reason: classifySourceFailure("local-vault", vaultError),
-        });
+      } catch {
         // Vault miss or read error — fall through to API sources when auto.
       }
       if (preferred === "local-vault") {
@@ -825,16 +793,9 @@ async function fetchBestSyncedLyrics(
   };
 
   if (preferred === "auto") {
-    const { autoCandidateCouldOutrank, emitPickerTrace } = require("./lyricsAutoPicker");
+    const { autoCandidateCouldOutrank } = require("./lyricsAutoPicker");
     const cachedDecision = sourceCache?.get?.("auto");
     if (cachedDecision?.lyrics?.length && isValidLyricsCandidate(track, cachedDecision)) {
-      emitPickerTrace?.("provider-outcome", {
-        requestId,
-        source: "auto-cache",
-        outcome: "ok",
-        reason: "cache-hit",
-        lineCount: cachedDecision.lyrics.length,
-      });
       onAutoComplete?.();
       onAutoSettled?.();
       return cachedDecision;
@@ -872,15 +833,7 @@ async function fetchBestSyncedLyrics(
       onAutoComplete?.();
     };
     const consider = candidate => {
-      const evaluation = evaluateCandidateUpgrade(track, best, candidate);
-      emitPickerTrace?.("comparator", {
-        requestId,
-        currentSource: best?.source || "none",
-        candidateSource: candidate?.source || "unknown",
-        decision: evaluation.upgrade ? "accepted" : "rejected",
-        rule: evaluation.rule,
-      });
-      if (!evaluation.upgrade) return;
+      if (!shouldUpgradeLyricsCandidate(track, best, candidate)) return;
       best = candidate;
       // First usable lyrics are delivered immediately; pending superior sources
       // affect finalization only, and may publish a later guarded upgrade.
@@ -916,12 +869,6 @@ async function fetchBestSyncedLyrics(
       timer = setTimeout(() => {
         boundedPending.delete(source);
         outcomes.set(source, { source, ok: false, timedOut: true, failureReason: `${source}:timeout` });
-        emitPickerTrace?.("provider-outcome", {
-          requestId,
-          source,
-          outcome: "fail",
-          reason: `${source}:timeout`,
-        });
         // Keep the raw source pending: a late possible winner must not poison
         // the final cache, and may still upgrade while this auto run is active.
         maybeFinalize();
@@ -931,7 +878,7 @@ async function fetchBestSyncedLyrics(
         const fetcher = SOURCE_FETCHERS[source];
         if (typeof fetcher !== "function") return { source, ok: false, failureReason: `${source}:unknown-source` };
         const cached = sourceCache?.get?.(source);
-        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached, cached: true };
+        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached };
         try {
           const result = await invokeSourceFetcher(source, fetcher);
           if (!result) return { source, ok: false, failureReason: `${source}:no-match` };
@@ -946,19 +893,6 @@ async function fetchBestSyncedLyrics(
         pending.delete(source);
         boundedPending.delete(source);
         outcomes.set(source, outcome);
-        const outcomeStatus = outcome.ok
-          ? "ok"
-          : (outcome.instrumental || outcome.failureReason?.endsWith(":no-match") ? "empty" : "fail");
-        const outcomeReason = outcome.ok
-          ? (outcome.cached ? "cache-hit" : "ok")
-          : (outcome.failureReason || "unknown");
-        emitPickerTrace?.("provider-outcome", {
-          requestId,
-          source,
-          outcome: outcomeStatus,
-          reason: outcomeReason,
-          lineCount: outcome.result?.lyrics?.length ?? 0,
-        });
         if (outcome.ok) consider(outcome.result);
         maybeFinalize();
       });
@@ -968,7 +902,6 @@ async function fetchBestSyncedLyrics(
     return waitForAutoCompletion ? completionResult : initialResult;
   }
 
-  const { emitPickerTrace } = require("./lyricsAutoPicker");
   for (const source of apiAttemptOrder) {
     const fetcher = SOURCE_FETCHERS[source];
     if (typeof fetcher !== "function") {
@@ -977,13 +910,6 @@ async function fetchBestSyncedLyrics(
     const cachedResult =
       typeof sourceCache?.get === "function" ? sourceCache.get(source) : null;
     if (cachedResult?.lyrics?.length) {
-      emitPickerTrace?.("provider-outcome", {
-        requestId,
-        source,
-        outcome: "ok",
-        reason: "cache-hit",
-        lineCount: cachedResult.lyrics.length,
-      });
       cacheSourceResult(source, cachedResult);
       return cachedResult;
     }
@@ -991,12 +917,6 @@ async function fetchBestSyncedLyrics(
       const result = await invokeSourceFetcher(source, fetcher);
       if (result) {
         if (result?.metadata?.instrumental && !result?.lyrics?.length) {
-          emitPickerTrace?.("provider-outcome", {
-            requestId,
-            source,
-            outcome: "empty",
-            reason: `${source}:instrumental`,
-          });
           return {
             lyrics: [],
             source: `${source}-instrumental`,
@@ -1008,43 +928,15 @@ async function fetchBestSyncedLyrics(
         }
         const finalized = await finalizeFetchedLyricsResult(result);
         if (isValidLyricsCandidate(track, finalized)) {
-          emitPickerTrace?.("provider-outcome", {
-            requestId,
-            source,
-            outcome: "ok",
-            reason: "ok",
-            lineCount: finalized.lyrics.length,
-          });
           cacheSourceResult(source, finalized);
           return finalized;
         }
-        const failureReason = `${source}:invalid-candidate`;
-        emitPickerTrace?.("provider-outcome", {
-          requestId,
-          source,
-          outcome: "fail",
-          reason: failureReason,
-        });
-        failures.push(failureReason);
+        failures.push(`${source}:invalid-candidate`);
         continue;
       }
-      const failureReason = classifySourceFailure(source, new Error("__NO_MATCH__"));
-      emitPickerTrace?.("provider-outcome", {
-        requestId,
-        source,
-        outcome: "empty",
-        reason: failureReason,
-      });
-      failures.push(failureReason);
+      failures.push(classifySourceFailure(source, new Error("__NO_MATCH__")));
     } catch (error) {
-      const failureReason = classifySourceFailure(source, error);
-      emitPickerTrace?.("provider-outcome", {
-        requestId,
-        source,
-        outcome: failureReason.endsWith(":no-match") ? "empty" : "fail",
-        reason: failureReason,
-      });
-      failures.push(failureReason);
+      failures.push(classifySourceFailure(source, error));
     }
   }
 

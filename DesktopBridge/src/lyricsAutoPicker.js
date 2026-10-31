@@ -71,76 +71,43 @@ function sourcePriority(packetOrSource) {
   return 200
 }
 
-function emitPickerTrace(stage, payload) {
-  const isDev = typeof __DEV__ !== "undefined"
-    ? Boolean(__DEV__)
-    : (typeof process !== "undefined" && (process?.env?.NODE_ENV === "development" || process?.env?.NODE_ENV === "test"));
-  if (!isDev) return;
-  try {
-    console.log("[PickerTrace]", JSON.stringify({
-      stage,
-      ...payload,
-    }));
-  } catch {}
-}
+function shouldPreferAutoCandidate(track, current, candidate) {
+  if (!candidate?.lyrics?.length) return false
+  if (!current?.lyrics?.length) return true
+  const currentSource = String(current.source || "").toLowerCase()
+  const candidateSource = String(candidate.source || "").toLowerCase()
+  const currentVault = currentSource.includes("local-vault")
+  const candidateVault = candidateSource.includes("local-vault")
+  if (currentVault || candidateVault) return sourcePriority(candidate) > sourcePriority(current)
+  const currentCommunity = isCommunitySpicy(current)
+  const candidateCommunity = isCommunitySpicy(candidate)
+  if (currentCommunity || candidateCommunity) return candidateCommunity && !currentCommunity
 
-function evaluatePreferAutoCandidate(track, current, candidate) {
-  if (!candidate?.lyrics?.length) return { upgrade: false, rule: "no-candidate-lyrics" };
-  if (!current?.lyrics?.length) return { upgrade: true, rule: "initial-candidate" };
-  const currentSource = String(current.source || "").toLowerCase();
-  const candidateSource = String(candidate.source || "").toLowerCase();
-  const currentVault = currentSource.includes("local-vault");
-  const candidateVault = candidateSource.includes("local-vault");
-  if (currentVault || candidateVault) {
-    const upgrade = sourcePriority(candidate) > sourcePriority(current);
-    return { upgrade, rule: "local-vault-priority" };
-  }
-  const currentCommunity = isCommunitySpicy(current);
-  const candidateCommunity = isCommunitySpicy(candidate);
-  if (currentCommunity || candidateCommunity) {
-    const upgrade = candidateCommunity && !currentCommunity;
-    return { upgrade, rule: "community-spicy-priority" };
-  }
-
-  const currentLrcKaraoke = currentSource.includes("lrc-red-karaoke");
-  const candidateLrcKaraoke = candidateSource.includes("lrc-red-karaoke");
-  const currentSpicy = currentSource.includes("spicy-lyrics-syllable");
-  const candidateSpicy = candidateSource.includes("spicy-lyrics-syllable");
+  const currentLrcKaraoke = currentSource.includes("lrc-red-karaoke")
+  const candidateLrcKaraoke = candidateSource.includes("lrc-red-karaoke")
+  const currentSpicy = currentSource.includes("spicy-lyrics-syllable")
+  const candidateSpicy = candidateSource.includes("spicy-lyrics-syllable")
   if ((currentLrcKaraoke && candidateSpicy) || (candidateLrcKaraoke && currentSpicy)) {
-    const lrc = currentLrcKaraoke ? current : candidate;
-    const spicy = currentSpicy ? current : candidate;
-    const attribution = spicy?.metadata?.attribution || {};
-    const provider = `${attribution.source || ""} ${attribution.provider || ""}`.toLowerCase();
-    if (!provider.includes("apple")) {
-      const upgrade = candidate === lrc;
-      return { upgrade, rule: "lrc-over-non-apple-spicy" };
-    }
-    const pick = pickAutoLyrics(lrc, spicy);
-    const upgrade = pick.result === candidate;
-    return { upgrade, rule: pick.reason };
+    const lrc = currentLrcKaraoke ? current : candidate
+    const spicy = currentSpicy ? current : candidate
+    const attribution = spicy?.metadata?.attribution || {}
+    const provider = `${attribution.source || ""} ${attribution.provider || ""}`.toLowerCase()
+    if (!provider.includes("apple")) return candidate === lrc
+    return pickAutoLyrics(lrc, spicy).result === candidate
   }
   const karaoke = source => !source.includes("netease-lrc") &&
-    /spicy-lyrics-syllable|kugou-krc|qq-musicu-qrc|richsync|karaoke|yrc/.test(source);
-  const currentKaraoke = karaoke(currentSource);
-  const candidateKaraoke = karaoke(candidateSource);
-  const currentSpicyLine = currentSource.includes("spicy-lyrics-line");
-  const candidateSpicyLine = candidateSource.includes("spicy-lyrics-line");
+    /spicy-lyrics-syllable|kugou-krc|qq-musicu-qrc|richsync|karaoke|yrc/.test(source)
+  const currentKaraoke = karaoke(currentSource)
+  const candidateKaraoke = karaoke(candidateSource)
+  const currentSpicyLine = currentSource.includes("spicy-lyrics-line")
+  const candidateSpicyLine = candidateSource.includes("spicy-lyrics-line")
   if (currentSpicyLine !== candidateSpicyLine) {
-    if (currentKaraoke || candidateKaraoke) {
-      return { upgrade: Boolean(candidateKaraoke), rule: "karaoke-over-spicy-line" };
-    }
+    if (currentKaraoke || candidateKaraoke) return candidateKaraoke
     // Preserve the existing lrc.red-line exception before Spicy's line rule.
-    if (currentSource.includes("lrc-red-line") || candidateSource.includes("lrc-red-line")) {
-      return { upgrade: candidateSource.includes("lrc-red-line"), rule: "lrc-red-line-priority" };
-    }
-    return { upgrade: candidateSpicyLine, rule: "spicy-line-priority" };
+    if (currentSource.includes("lrc-red-line") || candidateSource.includes("lrc-red-line")) return candidateSource.includes("lrc-red-line")
+    return candidateSpicyLine
   }
-  const upgrade = sourcePriority(candidate) > sourcePriority(current);
-  return { upgrade, rule: "source-priority" };
-}
-
-function shouldPreferAutoCandidate(track, current, candidate) {
-  return evaluatePreferAutoCandidate(track, current, candidate).upgrade;
+  return sourcePriority(candidate) > sourcePriority(current)
 }
 
 function autoCandidateCouldOutrank(track, current, source) {
@@ -153,4 +120,4 @@ function autoCandidateCouldOutrank(track, current, source) {
   return (bounds[normalized] ?? 200) >= sourcePriority(current)
 }
 
-module.exports = { pickAutoLyrics, timingRank, shouldPreferAutoCandidate, evaluatePreferAutoCandidate, autoCandidateCouldOutrank, sourcePriority, isCommunitySpicy, emitPickerTrace }
+module.exports = { pickAutoLyrics, timingRank, shouldPreferAutoCandidate, autoCandidateCouldOutrank, sourcePriority, isCommunitySpicy }
