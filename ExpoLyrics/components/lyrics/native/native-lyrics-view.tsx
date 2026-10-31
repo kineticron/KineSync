@@ -122,7 +122,18 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     rendererReadyGate.current.onReady(state.generation,
       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
       () => canDispatchRendererReady(state.key, state.generation));
-  }, [canDispatchRendererReady, style]);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { notifySimulatorRendererReady } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      notifySimulatorRendererReady({
+        key: state.key,
+        generation: state.generation,
+        style,
+        linesCount: latestLyrics.current.length,
+        trackId: liveTrackId,
+      });
+    }
+  }, [canDispatchRendererReady, liveTrackId, style]);
   const flashRef = useRef<FlashListRef<NativeLyricRow>>(null);
   const flatRef = useRef<FlatList<NativeLyricRow>>(null);
   const scrollCommand = useSharedValue(initialScrollCommand);
@@ -332,7 +343,17 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
   }, [markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
+  return <View style={styles.root} onLayout={event => {
+    const w = event.nativeEvent.layout.width;
+    const h = event.nativeEvent.layout.height;
+    setViewportHeight(h);
+    setViewportWidth(w);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      notifySimulatorLayout({ width: w, height: h, style });
+    }
+  }} testID={`native-${style}-${list}-${reveal}`}>
     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}

@@ -158,6 +158,12 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       return;
     }
 
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      setShowOnboarding(false);
+      setOnboardingChecked(true);
+      return;
+    }
+
     // Check if onboarding was completed before, then connect only when desktop mode is configured.
     (async () => {
       try {

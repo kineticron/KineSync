@@ -16,6 +16,12 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
+function SimulatorMount() {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { SimulatorTestController } = require('@/components/simulator-test-controller') as typeof import('@/components/simulator-test-controller');
+  return <SimulatorTestController />;
+}
+
 export default function RootLayout() {
   const touring = usePlayerTourStore(state => state.active || state.pending);
   const portraitOnly = usePlayerTourStore(state => state.active || state.pending);
@@ -28,6 +34,9 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
               <Stack.Screen name="modal" options={_stableOptions2} />
             </Stack>
+            {typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
+              <SimulatorMount />
+            )}
           </BridgeProvider>
           {Platform.OS !== 'ios' && <StatusBar style="light" hidden={false} />}
         </ThemeProvider>

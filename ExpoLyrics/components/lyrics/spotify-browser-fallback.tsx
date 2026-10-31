@@ -117,6 +117,19 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
 
 export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
   function SpotifyBrowserFallback(_props, ref) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      useImperativeHandle(ref, () => ({
+        openBrowser: () => {},
+        reload: () => {},
+        togglePlayPause: () => {},
+        resyncPlayback: () => {},
+        skipPrevious: () => {},
+        skipNext: () => {},
+        seekTo: () => {},
+        runDiagnostics: () => {},
+      }));
+      return null;
+    }
     const disposedRef = useRef(false);
     const trackingAllowed = useCallback(() => {
       const tour = usePlayerTourStore.getState();
