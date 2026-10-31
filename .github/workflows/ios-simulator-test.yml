@@ -104,7 +104,8 @@ jobs:
           if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
             ccache --zero-stats
           fi
-          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}"
+          mkdir -p .expo
+          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
 
       - name: Run iOS Simulator Test Harness
         working-directory: ExpoLyrics
@@ -165,7 +166,8 @@ jobs:
           npx expo prebuild --clean --platform ios
 
           # Build baseline simulator app using consistent discovery and actual xcodebuild
-          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_BASELINE}"
+          mkdir -p "${GITHUB_WORKSPACE}/ExpoLyrics/.expo"
+          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_BASELINE}" 2>&1 | tee "${GITHUB_WORKSPACE}/ExpoLyrics/.expo/build-baseline-simulator.log"
           BASELINE_APP="$(cat ios/.built_app_path)"
 
           node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15
@@ -190,4 +192,5 @@ jobs:
           path: |
             ExpoLyrics/.expo/simulator-test-output/
             ExpoLyrics/.expo/comparison-report.md
+            ExpoLyrics/.expo/*.log
           retention-days: 14
