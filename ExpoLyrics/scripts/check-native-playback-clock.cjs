@@ -30,12 +30,12 @@ function mount(initial = {}, options = {}) {
   let context, cursor = 0, result;
   const slots = [], queue = [], frames = new Map(), listeners = new Set(), appListeners = new Set();
   const animations = new Set();
-  let frameId = 0;
+  let frameId = 0, hostTransfers = 0;
   const nativeNow = () => now;
-  const nativeFunctions = new Set([nativeNow]);
+  const nativeFunctions = new Set(options.nativeHostFunction === false ? [] : [nativeNow]);
   const hydrated = new WeakMap();
   const onUI = fn => {
-    if (nativeFunctions.has(fn)) return fn; // JSI HostFunction transport.
+    if (nativeFunctions.has(fn)) { if (fn === nativeNow) hostTransfers++; return fn; } // JSI HostFunction transport.
     if (!fn.__initData) return { remote: fn }; // Ordinary RN callbacks are NOT callable on UI.
     if (hydrated.has(fn)) return hydrated.get(fn);
     const array = Array.isArray(fn.__closure);
@@ -66,7 +66,14 @@ function mount(initial = {}, options = {}) {
     vm.runInContext(`(function(require,module,exports){${code}\n})`, context)(require, module, module.exports);
     return module.exports;
   };
-  const defineAnimation = (_initial, factory) => factory.__initData ? onUI(factory)() : factory();
+  const defineAnimation = (_initial, factory) => {
+    const animation = factory.__initData ? onUI(factory)() : factory();
+    if (!baseline && factory.__initData) {
+      assert.equal(animation.reduceMotion, false, 'Media time must continue under system Reduce Motion');
+      assert.equal(animation.isHigherOrder, true, 'A zero-position start must not be skipped by valueSetter');
+    }
+    return animation;
+  };
   nativeFunctions.add(defineAnimation);
   const util = { defineAnimation, Easing: { inOut: fn => fn, quad: x => x * x },
     getReduceMotionForAnimation: () => false, assertEasingIsWorklet() {} };
@@ -109,7 +116,8 @@ function mount(initial = {}, options = {}) {
   // RN performance.now is a native HostFunction in this version. The UI global
   // deliberately has a completely different epoch, as it does on Apple devices.
   vm.runInContext(`(function(require,module,exports,performance){${transformed}\n})`, context)(
-    name => { assert(name in mocks, `Missing native clock mock: ${name}`); return mocks[name]; },
+    name => { if (name.startsWith('@babel/runtime/')) return require(name);
+      assert(name in mocks, `Missing native clock mock: ${name}`); return mocks[name]; },
     module, module.exports, { now: nativeNow });
   function render(patch = {}) {
     props = { ...props, ...patch }; cursor = 0;
@@ -121,6 +129,7 @@ function mount(initial = {}, options = {}) {
   render();
   return {
     get result() { return result; }, get now() { return now; }, get state() { return state; },
+    get hostTransfers() { return hostTransfers; },
     get subscriptions() { return listeners.size + appListeners.size; },
     get animating() { return [...animations].some(value => value._animation && !value._animation.finished && !value._animation.cancelled); },
     flush() { while (queue.length) queue.shift()(); },
@@ -167,6 +176,7 @@ console.log('Mid-animation 3000ms gap + 30s at 30fps: 0ms drift.');
 if (baseline) process.exit(0);
 
 const live = mount(); live.flush();
+assert.ok(live.hostTransfers > 0, 'Production Babel closure must preserve the exact raw RN native function reference');
 const project = () => Math.max(0, Math.min(180000, live.state.anchorPositionMs +
   (live.state.isPlaying ? live.now - live.state.anchorMonotonicMs : 0)));
 const expectProjected = message => assert.ok(Math.abs(live.result.position.value - project()) < 0.00001, message);
@@ -217,4 +227,13 @@ live.stop(); live.flush(); assert.equal(live.subscriptions, 0); assert.equal(liv
 const demo = mount({}, { demo: true }); demo.advance(2000); demo.flush();
 assert.equal(demo.result.position.value, 2000, 'Unanchored demo starts at its JS timestamp');
 demo.stop(); demo.flush();
-console.log('Native clock checks passed: separate epochs, delayed pause/resume/seek, deadband stability, song identity, queued replacements, foreground, preview, inactive/end/unmount and demo.');
+const fallback = mount({}, { nativeHostFunction: false });
+fallback.advance(3000); fallback.flush();
+assert.equal(fallback.result.position.value, 20000, 'Unsupported native function falls back without a crash or epoch subtraction');
+fallback.frame(1000);
+assert.equal(fallback.result.position.value, 21000, 'Fallback advances on UI-local elapsed time with its documented 3000ms handoff lag');
+fallback.update({ anchorPositionMs: 22000, anchorMonotonicMs: fallback.now, isPlaying: false });
+fallback.advance(2000); fallback.flush(); fallback.frame(1000);
+assert.equal(fallback.result.position.value, 22000, 'Fallback still honors delayed pause exactly');
+fallback.stop(); fallback.flush(); assert.equal(fallback.subscriptions, 0);
+console.log('Native clock checks passed: raw HostFunction closure, separate epochs, delayed pause/resume/seek, deadband stability, song identity, queued replacements, foreground, preview, inactive/end/unmount, demo and unsupported-runtime fallback (documented 3000ms lag).');
