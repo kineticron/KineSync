@@ -1,0 +1,230 @@
+# Automated iOS simulator testing harness with deterministic fake playback clock
+# Builds unsigned Debug simulator .app bundle, boots simulator, executes scenario,
+# captures real screenshots and perf metrics, and validates visual assertions.
+
+name: iOS Simulator Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: 'Optional baseline git ref for screenshot comparison'
+        required: false
+        default: ''
+        type: string
+  push:
+    branches:
+      - 'ci-sim*'
+      - 'perf*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-simulator-test-${{ github.ref }}-${{ github.event.inputs.baseline_ref || 'nobase' }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ios-simulator-test:
+    runs-on: xcode-27
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ExpoLyrics/package-lock.json
+
+      - name: Install ccache
+        run: |
+          set -euo pipefail
+          if ! command -v ccache >/dev/null 2>&1; then
+            brew install ccache
+          fi
+          ccache --version
+          REAL_CLANG="$(xcrun --sdk iphonesimulator -f clang)"
+          WRAP_DIR="${RUNNER_TEMP}/ccache-wrap"
+          mkdir -p "${WRAP_DIR}"
+          printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "${REAL_CLANG}" > "${WRAP_DIR}/clang"
+          chmod +x "${WRAP_DIR}/clang"
+          "${WRAP_DIR}/clang" --version
+          {
+            echo "KINESYNC_USE_CCACHE=1"
+            echo "KINESYNC_CC_WRAPPER=${WRAP_DIR}/clang"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_MAXSIZE=2G"
+            echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
+          } >> "${GITHUB_ENV}"
+
+      - name: Verify iOS 27 simulator toolchain
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcrun simctl list devices available -j >/dev/null
+
+      - name: Install JS dependencies
+        working-directory: ExpoLyrics
+        run: npm ci
+
+      - name: Expo prebuild (iOS)
+        working-directory: ExpoLyrics
+        run: npx expo prebuild --clean --platform ios
+
+      - name: Restore DerivedData, ccache and CocoaPods caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}/../kinesync-ios-derived-sim
+            ${{ env.HOME }}/Library/Caches/ccache
+            ${{ env.HOME }}/.cocoapods
+            ${{ env.HOME }}/Library/Caches/CocoaPods
+          key: ios-sim-xcode27-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
+          restore-keys: |
+            ios-sim-xcode27-caches-${{ runner.os }}-
+
+      - name: Build Debug simulator app bundle
+        env:
+          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-sim
+        run: |
+          set -euo pipefail
+          if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
+            ccache --zero-stats
+          fi
+          node <<'NODE'
+          const { execSync } = require("child_process");
+          const fs = require("fs");
+          const path = require("path");
+
+          const iosDir = path.join(process.env.GITHUB_WORKSPACE, "ExpoLyrics", "ios");
+          const derived = process.env.DERIVED_DATA_PATH || path.join(iosDir, "build");
+          const ws = fs.readdirSync(iosDir).find((f) => f.endsWith(".xcworkspace"));
+          if (!ws) throw new Error("No .xcworkspace in ios/");
+
+          const listJson = execSync(`xcodebuild -workspace "${path.join(iosDir, ws)}" -list -json`, { encoding: "utf8", cwd: iosDir });
+          const schemes = JSON.parse(listJson).workspace.schemes || [];
+          const scheme = schemes.find((s) => !String(s).startsWith("Pods")) || schemes[0];
+
+          const signing = [
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "CODE_SIGN_STYLE=Manual",
+            "DEVELOPMENT_TEAM=",
+            "PROVISIONING_PROFILE_SPECIFIER=",
+            "PROVISIONING_PROFILE=",
+            "EXPANDED_CODE_SIGN_IDENTITY=",
+            "COMPILER_INDEX_STORE_ENABLE=NO",
+          ];
+
+          const ccache = process.env.KINESYNC_USE_CCACHE === "1" && process.env.KINESYNC_CC_WRAPPER
+            ? [`CC=${process.env.KINESYNC_CC_WRAPPER}`]
+            : [];
+
+          const args = [
+            "-workspace", path.join(iosDir, ws),
+            "-scheme", scheme,
+            "-configuration", "Debug",
+            "-sdk", "iphonesimulator",
+            "-destination", "generic/platform=iOS Simulator",
+            "-derivedDataPath", derived,
+            "FORCE_BUNDLING=1",
+            "EXPO_PUBLIC_SIMULATOR_TEST=1",
+            ...signing,
+            ...ccache,
+            "build",
+          ];
+
+          console.log("Building Debug iphonesimulator app...");
+          execSync(`xcodebuild ${args.map((a) => `"${a}"`).join(" ")}`, { stdio: "inherit", cwd: iosDir });
+
+          function findApp(dir) {
+            for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, f.name);
+              if (f.isDirectory()) {
+                if (f.name.endsWith(".app")) return full;
+                const nested = findApp(full);
+                if (nested) return nested;
+              }
+            }
+            return null;
+          }
+
+          const appPath = findApp(path.join(derived, "Build", "Products"));
+          if (!appPath) throw new Error("Failed to find built .app bundle");
+          console.log("Found built simulator app:", appPath);
+
+          // Ad-hoc codesign the simulator app bundle
+          execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: "inherit" });
+          fs.writeFileSync(path.join(iosDir, ".built_app_path"), appPath, "utf8");
+          NODE
+
+      - name: Run iOS Simulator Test Harness
+        working-directory: ExpoLyrics
+        run: |
+          set -euo pipefail
+          APP_PATH="$(cat ios/.built_app_path)"
+          node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 15
+
+      - name: Run Baseline Comparison (if requested)
+        if: ${{ github.event.inputs.baseline_ref != '' }}
+        run: |
+          set -euo pipefail
+          BASELINE_REF="${{ github.event.inputs.baseline_ref }}"
+          echo "Preparing baseline reference: ${BASELINE_REF}"
+          git fetch origin "${BASELINE_REF}"
+          git worktree add ../kinesync-baseline "${BASELINE_REF}"
+
+          # If baseline lacks simulator test harness, apply current harness files
+          if [ ! -f "../kinesync-baseline/ExpoLyrics/lib/simulator-test-harness.ts" ]; then
+            echo "Baseline lacks simulator test harness. Applying harness files to baseline checkout."
+            mkdir -p ../kinesync-baseline/ExpoLyrics/lib/fixtures
+            cp -r ExpoLyrics/lib/simulator-test-harness.ts ../kinesync-baseline/ExpoLyrics/lib/
+            cp -r ExpoLyrics/lib/simulator-playback-clock.ts ../kinesync-baseline/ExpoLyrics/lib/
+            cp -r ExpoLyrics/lib/simulator-test-bridge.ts ../kinesync-baseline/ExpoLyrics/lib/
+            cp -r ExpoLyrics/lib/fixtures/ ../kinesync-baseline/ExpoLyrics/lib/fixtures/
+            cp -r ExpoLyrics/components/simulator-test-controller.tsx ../kinesync-baseline/ExpoLyrics/components/
+            cp -r ExpoLyrics/scripts/ ../kinesync-baseline/ExpoLyrics/scripts/
+          fi
+
+          pushd ../kinesync-baseline/ExpoLyrics
+          npm ci
+          npx expo prebuild --clean --platform ios
+          # Build baseline simulator app
+          DERIVED_BASELINE="${GITHUB_WORKSPACE}/../kinesync-ios-derived-baseline"
+          npx xcodebuild -workspace ios/KineSync.xcworkspace -scheme KineSync -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath "${DERIVED_BASELINE}" FORCE_BUNDLING=1 EXPO_PUBLIC_SIMULATOR_TEST=1 CODE_SIGNING_ALLOWED=NO CODE_SIGN_STYLE=Manual build
+          BASELINE_APP="$(find "${DERIVED_BASELINE}/Build/Products" -name "*.app" | head -n 1)"
+          codesign --force --deep --sign - "${BASELINE_APP}"
+          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15
+          popd
+
+          # Compare branch vs baseline screenshots
+          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md
+          cat ExpoLyrics/.expo/comparison-report.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Publish Step Summary
+        if: always()
+        run: |
+          if [ -f ExpoLyrics/.expo/simulator-test-output/simulator-summary.md ]; then
+            cat ExpoLyrics/.expo/simulator-test-output/simulator-summary.md >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload Simulator Test Artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-simulator-test-artifacts
+          path: |
+            ExpoLyrics/.expo/simulator-test-output/
+            ExpoLyrics/.expo/comparison-report.md
+          retention-days: 14
