@@ -108,19 +108,6 @@ async function main() {
   const parser = new SimulatorLogParser();
   const rawLogStream = fs.createWriteStream(rawLogFile, { flags: 'a' });
 
-  console.log('[RUNNER] Starting unified log stream...');
-  const logProcess = spawn('xcrun', [
-    'simctl',
-    'spawn',
-    device.udid,
-    'log',
-    'stream',
-    '--style',
-    'compact',
-    '--predicate',
-    'processImagePath ENDSWITH "KineSync"',
-  ]);
-
   let scenarioFinished = false;
   let scenarioResolve = null;
   const scenarioPromise = new Promise((res) => {
@@ -128,25 +115,26 @@ async function main() {
   });
 
   const verifiedScreenshots = new Map();
+  const processedScreenshotStages = new Set();
 
-  logProcess.stdout.on('data', (chunk) => {
-    const text = chunk.toString();
-    rawLogStream.write(text);
-    const lines = text.split('\n');
+  function processIncomingLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return;
+    rawLogStream.write(trimmed + '\n');
+    parser.processLine(trimmed);
 
-    for (const line of lines) {
-      parser.processLine(line);
+    // Handle simulator rotation trigger
+    const rotMatch = trimmed.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
+    if (rotMatch) {
+      rotateSimulator(rotMatch[1]);
+    }
 
-      // Handle simulator rotation trigger
-      const rotMatch = line.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
-      if (rotMatch) {
-        rotateSimulator(rotMatch[1]);
-      }
-
-      // Handle screenshot request
-      const shotMatch = line.match(/\[KINESYNC_SIM\] READY_FOR_SCREENSHOT\s+stage=(\w+)/);
-      if (shotMatch) {
-        const stage = shotMatch[1];
+    // Handle screenshot request with authentic bidirectional handshake
+    const shotMatch = trimmed.match(/\[KINESYNC_SIM\] READY_FOR_SCREENSHOT\s+stage=(\w+)/);
+    if (shotMatch) {
+      const stage = shotMatch[1];
+      if (!processedScreenshotStages.has(stage)) {
+        processedScreenshotStages.add(stage);
         const shotPath = path.join(outputDir, `${stage}.png`);
         try {
           runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath]);
@@ -165,31 +153,97 @@ async function main() {
 
           verifiedScreenshots.set(stage, { valid, analysis, shotPath });
           console.log(`[RUNNER] Captured screenshot for ${stage}: ${notes}`);
+
+          // Send screenshot acknowledgement file into app container if screenshot is valid
+          if (valid) {
+            try {
+              const containerPath = runCommand('xcrun', [
+                'simctl',
+                'get_app_container',
+                device.udid,
+                'dev.kineticron.KineSync',
+                'data',
+              ]).trim();
+              if (containerPath && fs.existsSync(containerPath)) {
+                const cachesDir = path.join(containerPath, 'Library', 'Caches');
+                if (fs.existsSync(cachesDir)) {
+                  const ackFile = path.join(cachesDir, `kinesync_sim_ack_${stage}.json`);
+                  fs.writeFileSync(ackFile, JSON.stringify({ stage, timestamp: Date.now() }), 'utf8');
+                  console.log(`[RUNNER] Wrote screenshot ACK for ${stage}`);
+                }
+              }
+            } catch (ackErr) {
+              console.warn(`[RUNNER] Warning: Failed to write screenshot ACK to app container: ${ackErr.message}`);
+            }
+          }
         } catch (err) {
           console.error(`[RUNNER] Failed to capture screenshot for ${stage}: ${err.message}`);
           verifiedScreenshots.set(stage, { valid: false, error: err.message });
         }
       }
-
-      if (line.includes('[KINESYNC_SIM] SCENARIO_COMPLETE')) {
-        scenarioFinished = true;
-        scenarioResolve();
-      }
     }
+
+    if (trimmed.includes('[KINESYNC_SIM] SCENARIO_COMPLETE')) {
+      scenarioFinished = true;
+      scenarioResolve();
+    }
+  }
+
+  function createLineBufferConsumer() {
+    let buffer = '';
+    return (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        processIncomingLine(line);
+      }
+    };
+  }
+
+  console.log('[RUNNER] Starting unified log stream with debug level...');
+  const logProcess = spawn('xcrun', [
+    'simctl',
+    'spawn',
+    device.udid,
+    'log',
+    'stream',
+    '--level',
+    'debug',
+    '--style',
+    'compact',
+    '--predicate',
+    '(processImagePath ENDSWITH "KineSync" OR process == "KineSync" OR eventMessage CONTAINS "KINESYNC_SIM")',
+  ]);
+
+  const logConsumer = createLineBufferConsumer();
+  logProcess.stdout.on('data', logConsumer);
+  logProcess.stderr.on('data', (chunk) => rawLogStream.write(chunk.toString()));
+
+  console.log('[RUNNER] Launching app dev.kineticron.KineSync via console-pty with EXPO_PUBLIC_SIMULATOR_TEST=1...');
+  const appProcess = spawn('xcrun', [
+    'simctl',
+    'launch',
+    '--console-pty',
+    device.udid,
+    'dev.kineticron.KineSync',
+  ], {
+    env: {
+      ...process.env,
+      SIMCTL_CHILD_EXPO_PUBLIC_SIMULATOR_TEST: '1',
+    },
   });
 
-  logProcess.stderr.on('data', (chunk) => {
-    rawLogStream.write(chunk.toString());
-  });
-
-  console.log('[RUNNER] Launching app dev.kineticron.KineSync with EXPO_PUBLIC_SIMULATOR_TEST=1...');
-  runCommand('xcrun', ['simctl', 'launch', device.udid, 'dev.kineticron.KineSync']);
+  const appConsumer = createLineBufferConsumer();
+  appProcess.stdout.on('data', appConsumer);
+  appProcess.stderr.on('data', (chunk) => rawLogStream.write(chunk.toString()));
 
   console.log(`[RUNNER] Waiting for scenario completion (timeout: ${timeoutMinutes}m)...`);
   const timeoutHandle = setTimeout(() => {
     if (!scenarioFinished) {
       console.error('[RUNNER] Hard timeout reached waiting for test scenario!');
       logProcess.kill();
+      appProcess.kill();
       scenarioResolve();
     }
   }, timeoutMinutes * 60 * 1000);
@@ -197,6 +251,7 @@ async function main() {
   await scenarioPromise;
   clearTimeout(timeoutHandle);
   logProcess.kill();
+  appProcess.kill();
   rawLogStream.end();
 
   console.log('[RUNNER] Test scenario completed. Validating assertions...');

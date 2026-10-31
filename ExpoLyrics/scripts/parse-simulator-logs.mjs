@@ -73,7 +73,13 @@ export class SimulatorLogParser {
 
     const rendererMatch = trimmed.match(/\[KINESYNC_SIM\] RENDERER_ACTIVE\s+style=(\w+)\s+generation=(\d+)\s+lines=(\d+)\s+track=([^\s]+)/);
     if (rendererMatch) {
-      this.renderers.add(rendererMatch[1]);
+      const lines = Number(rendererMatch[3]);
+      const track = rendererMatch[4];
+      if (lines > 0 && track && track !== 'null' && track !== 'undefined') {
+        this.renderers.add(rendererMatch[1]);
+      } else {
+        this.errors.push(`Invalid RENDERER_ACTIVE with zero lines or invalid track: ${trimmed}`);
+      }
       return;
     }
 
@@ -154,6 +160,9 @@ export class SimulatorLogParser {
     if (!this.landscapeConfirmed) {
       failures.push('Rotation stage did not produce confirmed native landscape viewport with width > height');
     }
+    if (!this.portraitConfirmed) {
+      failures.push('Rotation stage did not produce confirmed native portrait viewport with height > width');
+    }
     const failedStages = this.stages.filter((s) => s.status === 'FAIL');
     if (failedStages.length > 0) {
       for (const fs of failedStages) {
@@ -166,6 +175,23 @@ export class SimulatorLogParser {
     if (this.errors.length > 0) {
       for (const err of this.errors) {
         failures.push(`Execution error: ${err}`);
+      }
+    }
+    if (!this.heartbeat || !this.heartbeat.samples || this.heartbeat.samples <= 0) {
+      failures.push('Missing or empty heartbeat performance metrics');
+    }
+    const requiredScreenshots = [
+      'stage_1_launch',
+      'stage_2_playback',
+      'stage_3_seek',
+      'stage_4_switch_amll',
+      'stage_5_skip_song',
+      'stage_6_switch_spicy',
+      'stage_7_rotation',
+    ];
+    for (const req of requiredScreenshots) {
+      if (!this.screenshotRequests.includes(req)) {
+        failures.push(`Missing screenshot request for ${req}`);
       }
     }
     if (!this.summary) {

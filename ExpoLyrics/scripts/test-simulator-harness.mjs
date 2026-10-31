@@ -1,5 +1,5 @@
 // Unit and integration tests for simulator test harness components
-// Validates clock monotonicity, log parser assertions, and screenshot comparison
+// Validates clock monotonicity, log parser assertions, adversarial log detection, and screenshot comparison
 
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -54,7 +54,7 @@ function createTextMockPng(width, height) {
 }
 
 function testLogParser() {
-  console.log('Testing SimulatorLogParser...');
+  console.log('Testing SimulatorLogParser (happy path)...');
   const parser = new SimulatorLogParser();
 
   const sampleLogs = [
@@ -109,12 +109,92 @@ function testLogParser() {
   assert.strictEqual(parser.renderers.has('spicy'), true);
   assert.strictEqual(parser.renderers.has('amll'), true);
   assert.strictEqual(parser.landscapeConfirmed, true);
+  assert.strictEqual(parser.portraitConfirmed, true);
   assert.strictEqual(parser.summary.success, true);
 
   const report = parser.generateMarkdownReport();
   assert.ok(report.includes('Status: PASSED'), 'Report should indicate PASSED');
   assert.ok(report.includes('Landscape Viewport Confirmed: Yes'), 'Report should show landscape confirmation');
-  console.log('SimulatorLogParser tests passed.');
+  console.log('SimulatorLogParser happy path passed.');
+}
+
+function testAdversarialLogParser() {
+  console.log('Testing SimulatorLogParser adversarial and fail-closed cases...');
+
+  // Case 1: Missing summary record
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] INIT_READY');
+    parser.processLine('[KINESYNC_SIM] HEARTBEAT_METRICS {"samples":50}');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('Missing SCENARIO_COMPLETE')), 'Must fail if summary record is missing');
+  }
+
+  // Case 2: Summary reports success=false
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] SCENARIO_COMPLETE {"success":false}');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('success=false')), 'Must fail if summary success is false');
+  }
+
+  // Case 3: Missing heartbeat metrics
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] SCENARIO_COMPLETE {"success":true}');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('heartbeat')), 'Must fail if heartbeat metrics are missing');
+  }
+
+  // Case 4: Zero samples in heartbeat
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] HEARTBEAT_METRICS {"samples":0}');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('heartbeat')), 'Must fail if heartbeat has 0 samples');
+  }
+
+  // Case 5: Fake intent log with 0 lines or null track
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] RENDERER_ACTIVE style=spicy generation=1 lines=0 track=null');
+    assert.strictEqual(parser.renderers.has('spicy'), false, 'Fake intent with 0 lines must not register renderer');
+    assert.ok(parser.errors.length > 0, 'Fake intent must log an execution error');
+  }
+
+  // Case 6: Incomplete stages (< 8 stages)
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=100');
+    parser.processLine('[KINESYNC_SIM] STAGE_END stage_1_launch status=PASS durationMs=100');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('Incomplete scenario')), 'Must fail if fewer than 8 stages');
+  }
+
+  // Case 7: Stage failure
+  {
+    const parser = new SimulatorLogParser();
+    parser.processLine('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=100');
+    parser.processLine('[KINESYNC_SIM] STAGE_FAIL stage_1_launch error=SimulatedFailure');
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('SimulatedFailure')), 'Must fail if stage reports error');
+  }
+
+  // Case 8: Missing screenshot requests
+  {
+    const parser = new SimulatorLogParser();
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('Missing screenshot request')), 'Must fail if required screenshots were not requested');
+  }
+
+  // Case 9: Missing landscape confirmation
+  {
+    const parser = new SimulatorLogParser();
+    const failures = parser.validateAssertions();
+    assert.ok(failures.some((f) => f.includes('Rotation stage did not produce confirmed native landscape')), 'Must fail if rotation unconfirmed');
+  }
+
+  console.log('SimulatorLogParser adversarial tests passed.');
 }
 
 function testScreenshotAnalysis() {
@@ -125,10 +205,18 @@ function testScreenshotAnalysis() {
   const blankAnalysis = analyzeScreenshotContent(solidBlack);
   assert.strictEqual(blankAnalysis.nonBlank, false, 'Solid black image should be rejected as blank');
 
+  const solidWhite = createSolidPng(200, 400, 255, 255, 255);
+  const whiteAnalysis = analyzeScreenshotContent(solidWhite);
+  assert.strictEqual(whiteAnalysis.nonBlank, false, 'Solid white image should be rejected as blank');
+
   const lyricsMock = createTextMockPng(200, 400);
   const lyricsAnalysis = analyzeScreenshotContent(lyricsMock);
   assert.strictEqual(lyricsAnalysis.nonBlank, true, 'Image with mock text stripes should be recognized as non-blank');
   assert.ok(lyricsAnalysis.stdDev > 10.0, 'Variance should be substantially greater than blank');
+
+  // Corrupted / zero-byte buffer
+  const corruptAnalysis = analyzeScreenshotContent(Buffer.from([0, 1, 2, 3]));
+  assert.strictEqual(corruptAnalysis.nonBlank, false, 'Corrupted buffer should return nonBlank=false');
 
   console.log('Screenshot Content Analysis tests passed.');
 }
@@ -162,7 +250,46 @@ function testScreenshotComparison() {
   assert.strictEqual(res2.status, 'DIFFERENT');
   assert.ok(res2.differingPixels > 0);
 
+  // Test empty branch dir fail-closed
+  const emptyDir = path.join(tempDir, 'empty');
+  fs.mkdirSync(emptyDir, { recursive: true });
+  const emptyComp = compareScreenshots(emptyDir, baselineDir);
+  assert.ok(emptyComp.error, 'Empty directory must return comparison error');
+
   console.log('Screenshot Comparison tests passed.');
+}
+
+function testGitRefValidationRules() {
+  console.log('Testing Git ref validation security rules...');
+
+  function isValidRef(ref) {
+    if (!ref || typeof ref !== 'string') return false;
+    // Reject leading hyphen to prevent option injection
+    if (ref.startsWith('-')) return false;
+    // 40-char full sha
+    if (/^[0-9a-fA-F]{40}$/.test(ref)) return true;
+    // Strict branch naming rules: alphanumeric, slash, dash, dot, underscore, no illegal sequences
+    if (/^[a-zA-Z0-9_./-]+$/.test(ref) && !ref.includes('..') && !ref.includes('@{') && !ref.endsWith('/') && !ref.startsWith('/')) {
+      return true;
+    }
+    return false;
+  }
+
+  // Valid refs
+  assert.strictEqual(isValidRef('main'), true);
+  assert.strictEqual(isValidRef('ci-sim'), true);
+  assert.strictEqual(isValidRef('feat/native-lyrics'), true);
+  assert.strictEqual(isValidRef('c2aaa20ec0493aa55f0337cbe4d6aa04f267f4cc'), true);
+
+  // Dangerous / injection refs
+  assert.strictEqual(isValidRef('-u'), false, 'Must reject leading hyphen');
+  assert.strictEqual(isValidRef('--upload-pack=evil'), false, 'Must reject options');
+  assert.strictEqual(isValidRef('main; rm -rf /'), false, 'Must reject command injection');
+  assert.strictEqual(isValidRef('main$(whoami)'), false, 'Must reject command substitution');
+  assert.strictEqual(isValidRef('main`id`'), false, 'Must reject backticks');
+  assert.strictEqual(isValidRef('../escape'), false, 'Must reject directory traversal');
+
+  console.log('Git ref validation security rules passed.');
 }
 
 function cleanTemp() {
@@ -175,8 +302,10 @@ function cleanTemp() {
 
 try {
   testLogParser();
+  testAdversarialLogParser();
   testScreenshotAnalysis();
   testScreenshotComparison();
+  testGitRefValidationRules();
   cleanTemp();
   console.log('\nAll simulator harness tests PASSED.');
 } catch (err) {

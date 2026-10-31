@@ -95,79 +95,16 @@ jobs:
             ios-sim-xcode27-caches-${{ runner.os }}-
 
       - name: Build Debug simulator app bundle
+        working-directory: ExpoLyrics
         env:
           DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-sim
+          EXPO_PUBLIC_SIMULATOR_TEST: "1"
         run: |
           set -euo pipefail
           if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then
             ccache --zero-stats
           fi
-          node <<'NODE'
-          const { execSync } = require("child_process");
-          const fs = require("fs");
-          const path = require("path");
-
-          const iosDir = path.join(process.env.GITHUB_WORKSPACE, "ExpoLyrics", "ios");
-          const derived = process.env.DERIVED_DATA_PATH || path.join(iosDir, "build");
-          const ws = fs.readdirSync(iosDir).find((f) => f.endsWith(".xcworkspace"));
-          if (!ws) throw new Error("No .xcworkspace in ios/");
-
-          const listJson = execSync(`xcodebuild -workspace "${path.join(iosDir, ws)}" -list -json`, { encoding: "utf8", cwd: iosDir });
-          const schemes = JSON.parse(listJson).workspace.schemes || [];
-          const scheme = schemes.find((s) => !String(s).startsWith("Pods")) || schemes[0];
-
-          const signing = [
-            "CODE_SIGNING_ALLOWED=NO",
-            "CODE_SIGNING_REQUIRED=NO",
-            "CODE_SIGN_STYLE=Manual",
-            "DEVELOPMENT_TEAM=",
-            "PROVISIONING_PROFILE_SPECIFIER=",
-            "PROVISIONING_PROFILE=",
-            "EXPANDED_CODE_SIGN_IDENTITY=",
-            "COMPILER_INDEX_STORE_ENABLE=NO",
-          ];
-
-          const ccache = process.env.KINESYNC_USE_CCACHE === "1" && process.env.KINESYNC_CC_WRAPPER
-            ? [`CC=${process.env.KINESYNC_CC_WRAPPER}`]
-            : [];
-
-          const args = [
-            "-workspace", path.join(iosDir, ws),
-            "-scheme", scheme,
-            "-configuration", "Debug",
-            "-sdk", "iphonesimulator",
-            "-destination", "generic/platform=iOS Simulator",
-            "-derivedDataPath", derived,
-            "FORCE_BUNDLING=1",
-            "EXPO_PUBLIC_SIMULATOR_TEST=1",
-            ...signing,
-            ...ccache,
-            "build",
-          ];
-
-          console.log("Building Debug iphonesimulator app...");
-          execSync(`xcodebuild ${args.map((a) => `"${a}"`).join(" ")}`, { stdio: "inherit", cwd: iosDir });
-
-          function findApp(dir) {
-            for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
-              const full = path.join(dir, f.name);
-              if (f.isDirectory()) {
-                if (f.name.endsWith(".app")) return full;
-                const nested = findApp(full);
-                if (nested) return nested;
-              }
-            }
-            return null;
-          }
-
-          const appPath = findApp(path.join(derived, "Build", "Products"));
-          if (!appPath) throw new Error("Failed to find built .app bundle");
-          console.log("Found built simulator app:", appPath);
-
-          // Ad-hoc codesign the simulator app bundle
-          execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: "inherit" });
-          fs.writeFileSync(path.join(iosDir, ".built_app_path"), appPath, "utf8");
-          NODE
+          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}"
 
       - name: Run iOS Simulator Test Harness
         working-directory: ExpoLyrics
@@ -178,33 +115,59 @@ jobs:
 
       - name: Run Baseline Comparison (if requested)
         if: ${{ github.event.inputs.baseline_ref != '' }}
+        env:
+          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+          DERIVED_BASELINE: ${{ github.workspace }}/../kinesync-ios-derived-baseline
         run: |
           set -euo pipefail
-          BASELINE_REF="${{ github.event.inputs.baseline_ref }}"
-          echo "Preparing baseline reference: ${BASELINE_REF}"
-          git fetch origin "${BASELINE_REF}"
-          git worktree add ../kinesync-baseline "${BASELINE_REF}"
-
-          # If baseline lacks simulator test harness, apply current harness files
-          if [ ! -f "../kinesync-baseline/ExpoLyrics/lib/simulator-test-harness.ts" ]; then
-            echo "Baseline lacks simulator test harness. Applying harness files to baseline checkout."
-            mkdir -p ../kinesync-baseline/ExpoLyrics/lib/fixtures
-            cp -r ExpoLyrics/lib/simulator-test-harness.ts ../kinesync-baseline/ExpoLyrics/lib/
-            cp -r ExpoLyrics/lib/simulator-playback-clock.ts ../kinesync-baseline/ExpoLyrics/lib/
-            cp -r ExpoLyrics/lib/simulator-test-bridge.ts ../kinesync-baseline/ExpoLyrics/lib/
-            cp -r ExpoLyrics/lib/fixtures/ ../kinesync-baseline/ExpoLyrics/lib/fixtures/
-            cp -r ExpoLyrics/components/simulator-test-controller.tsx ../kinesync-baseline/ExpoLyrics/components/
-            cp -r ExpoLyrics/scripts/ ../kinesync-baseline/ExpoLyrics/scripts/
+          if [ -z "${BASELINE_REF}" ]; then
+            echo "No baseline ref provided."
+            exit 0
           fi
+
+          # Reject leading hyphen to prevent option injection
+          case "${BASELINE_REF}" in
+            -* )
+              echo "Error: Baseline ref cannot start with a hyphen: ${BASELINE_REF}" >&2
+              exit 1
+              ;;
+          esac
+
+          # Validate strict refs via git check-ref-format --branch or full sha regex
+          VALID_REF=0
+          if [[ "${BASELINE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            VALID_REF=1
+          elif git check-ref-format --branch "${BASELINE_REF}" >/dev/null 2>&1; then
+            VALID_REF=1
+          fi
+
+          if [ "${VALID_REF}" -ne 1 ]; then
+            echo "Error: Baseline ref failed strict format validation: ${BASELINE_REF}" >&2
+            exit 1
+          fi
+
+          echo "Fetching validated baseline ref: ${BASELINE_REF}"
+          git fetch origin -- "${BASELINE_REF}"
+          BASELINE_COMMIT="$(git rev-parse --verify -q FETCH_HEAD^{commit})"
+          if [ -z "${BASELINE_COMMIT}" ]; then
+            echo "Error: Failed to resolve FETCH_HEAD to a valid commit" >&2
+            exit 1
+          fi
+          echo "Resolved baseline commit: ${BASELINE_COMMIT}"
+
+          git worktree add ../kinesync-baseline "${BASELINE_COMMIT}"
+
+          # Apply minimal harness protocol and integration patch to baseline
+          node ExpoLyrics/scripts/prepare-baseline-harness.mjs --baseline-dir ../kinesync-baseline
 
           pushd ../kinesync-baseline/ExpoLyrics
           npm ci
           npx expo prebuild --clean --platform ios
-          # Build baseline simulator app
-          DERIVED_BASELINE="${GITHUB_WORKSPACE}/../kinesync-ios-derived-baseline"
-          npx xcodebuild -workspace ios/KineSync.xcworkspace -scheme KineSync -configuration Debug -sdk iphonesimulator -destination "generic/platform=iOS Simulator" -derivedDataPath "${DERIVED_BASELINE}" FORCE_BUNDLING=1 EXPO_PUBLIC_SIMULATOR_TEST=1 CODE_SIGNING_ALLOWED=NO CODE_SIGN_STYLE=Manual build
-          BASELINE_APP="$(find "${DERIVED_BASELINE}/Build/Products" -name "*.app" | head -n 1)"
-          codesign --force --deep --sign - "${BASELINE_APP}"
+
+          # Build baseline simulator app using consistent discovery and actual xcodebuild
+          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_BASELINE}"
+          BASELINE_APP="$(cat ios/.built_app_path)"
+
           node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15
           popd
 

@@ -125,15 +125,16 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { notifySimulatorRendererReady } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      const currentTrackId = demoLyrics ? null : (transition?.packet.currentTrack?.id ?? usePlaybackStore.getState().currentTrack?.id ?? null);
       notifySimulatorRendererReady({
         key: state.key,
         generation: state.generation,
         style,
         linesCount: latestLyrics.current.length,
-        trackId: liveTrackId,
+        trackId: currentTrackId,
       });
     }
-  }, [canDispatchRendererReady, liveTrackId, style]);
+  }, [canDispatchRendererReady, style]);
   const flashRef = useRef<FlashListRef<NativeLyricRow>>(null);
   const flatRef = useRef<FlatList<NativeLyricRow>>(null);
   const scrollCommand = useSharedValue(initialScrollCommand);
@@ -351,7 +352,10 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
-      notifySimulatorLayout({ width: w, height: h, style });
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Dimensions } = require('react-native') as typeof import('react-native');
+      const win = Dimensions.get('window');
+      notifySimulatorLayout({ width: w, height: h, windowWidth: win.width, windowHeight: win.height, style });
     }
   }} testID={`native-${style}-${list}-${reveal}`}>
     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'

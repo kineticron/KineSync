@@ -6,7 +6,12 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 
 export function analyzeScreenshotContent(buffer) {
-  const png = PNG.sync.read(buffer);
+  let png;
+  try {
+    png = PNG.sync.read(buffer);
+  } catch (err) {
+    return { width: 0, height: 0, nonBlank: false, variance: 0, error: err.message };
+  }
   const { width, height, data } = png;
   const totalPixels = width * height;
 
@@ -60,6 +65,9 @@ export function compareScreenshots(branchDir, baselineDir) {
   }
 
   const branchFiles = fs.readdirSync(branchDir).filter((f) => f.endsWith('.png'));
+  if (branchFiles.length === 0) {
+    return { error: `No PNG screenshot files found in branch directory: ${branchDir}`, results: [] };
+  }
 
   for (const filename of branchFiles) {
     const branchPath = path.join(branchDir, filename);
@@ -202,5 +210,16 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
     console.log(`Wrote screenshot comparison report to ${output}`);
   } else {
     console.log(markdown);
+  }
+
+  if (comparison.error || comparison.results.length === 0) {
+    console.error(`[COMPARATOR] Screenshot comparison failed: ${comparison.error || 'No results'}`);
+    process.exit(1);
+  }
+
+  const blankScreenshots = comparison.results.filter((r) => !r.branchNonBlank);
+  if (blankScreenshots.length > 0) {
+    console.error(`[COMPARATOR] Found ${blankScreenshots.length} blank screenshots in branch`);
+    process.exit(1);
   }
 }

@@ -1,0 +1,137 @@
+diff --git a/ExpoLyrics/app/_layout.tsx b/ExpoLyrics/app/_layout.tsx
+index 7dfb957..c86f715 100644
+--- a/ExpoLyrics/app/_layout.tsx
++++ b/ExpoLyrics/app/_layout.tsx
+@@ -16,6 +16,12 @@ export const unstable_settings = {
+   anchor: '(tabs)',
+ };
+ 
++function SimulatorMount() {
++  // eslint-disable-next-line @typescript-eslint/no-require-imports
++  const { SimulatorTestController } = require('@/components/simulator-test-controller') as typeof import('@/components/simulator-test-controller');
++  return <SimulatorTestController />;
++}
++
+ export default function RootLayout() {
+   const touring = usePlayerTourStore(state => state.active || state.pending);
+   const portraitOnly = usePlayerTourStore(state => state.active || state.pending);
+@@ -28,6 +34,9 @@ export default function RootLayout() {
+               <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
+               <Stack.Screen name="modal" options={_stableOptions2} />
+             </Stack>
++            {typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
++              <SimulatorMount />
++            )}
+           </BridgeProvider>
+           {Platform.OS !== 'ios' && <StatusBar style="light" hidden={false} />}
+         </ThemeProvider>
+diff --git a/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx b/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx
+index a3ba9ad..c615dc8 100644
+--- a/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx
++++ b/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx
+@@ -122,6 +122,18 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
+     rendererReadyGate.current.onReady(state.generation,
+       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
+       () => canDispatchRendererReady(state.key, state.generation));
++    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++      // eslint-disable-next-line @typescript-eslint/no-require-imports
++      const { notifySimulatorRendererReady } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
++      const currentTrackId = demoLyrics ? null : (transition?.packet.currentTrack?.id ?? usePlaybackStore.getState().currentTrack?.id ?? null);
++      notifySimulatorRendererReady({
++        key: state.key,
++        generation: state.generation,
++        style,
++        linesCount: latestLyrics.current.length,
++        trackId: currentTrackId,
++      });
++    }
+   }, [canDispatchRendererReady, style]);
+   const flashRef = useRef<FlashListRef<NativeLyricRow>>(null);
+   const flatRef = useRef<FlatList<NativeLyricRow>>(null);
+@@ -332,7 +344,20 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
+     }
+   }, [markRendererReady, rendererReadyKey, scrollTo, transition]);
+   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
+-  return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
++  return <View style={styles.root} onLayout={event => {
++    const w = event.nativeEvent.layout.width;
++    const h = event.nativeEvent.layout.height;
++    setViewportHeight(h);
++    setViewportWidth(w);
++    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++      // eslint-disable-next-line @typescript-eslint/no-require-imports
++      const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
++      // eslint-disable-next-line @typescript-eslint/no-require-imports
++      const { Dimensions } = require('react-native') as typeof import('react-native');
++      const win = Dimensions.get('window');
++      notifySimulatorLayout({ width: w, height: h, windowWidth: win.width, windowHeight: win.height, style });
++    }
++  }} testID={`native-${style}-${list}-${reveal}`}>
+     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
+       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
+           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
+diff --git a/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx b/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx
+index ad835f2..580215d 100644
+--- a/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx
++++ b/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx
+@@ -117,6 +117,19 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
+ 
+ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
+   function SpotifyBrowserFallback(_props, ref) {
++    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++      useImperativeHandle(ref, () => ({
++        openBrowser: () => {},
++        reload: () => {},
++        togglePlayPause: () => {},
++        resyncPlayback: () => {},
++        skipPrevious: () => {},
++        skipNext: () => {},
++        seekTo: () => {},
++        runDiagnostics: () => {},
++      }));
++      return null;
++    }
+     const disposedRef = useRef(false);
+     const trackingAllowed = useCallback(() => {
+       const tour = usePlayerTourStore.getState();
+diff --git a/ExpoLyrics/components/lyrics/spotify-native-detector.tsx b/ExpoLyrics/components/lyrics/spotify-native-detector.tsx
+index ff81a18..2de8c42 100644
+--- a/ExpoLyrics/components/lyrics/spotify-native-detector.tsx
++++ b/ExpoLyrics/components/lyrics/spotify-native-detector.tsx
+@@ -46,6 +46,19 @@ const USER_AGENT = Platform.OS === 'android'
+ /** Native mobile-only: WebView bootstraps/renews login, Dealer owns detection.
+  * Controls and metadata use the captured spclient session directly. */
+ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
++  if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++    useImperativeHandle(ref, () => ({
++      openBrowser: () => {},
++      reload: () => {},
++      togglePlayPause: () => {},
++      resyncPlayback: () => {},
++      skipPrevious: () => {},
++      skipNext: () => {},
++      seekTo: () => {},
++      runDiagnostics: () => {},
++    }));
++    return null;
++  }
+   const mobile = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
+   const loggedOut = useSpotifySessionStore(s => s.loggedOut);
+   const [browserOpen, setBrowserOpen] = useState(false);
+diff --git a/ExpoLyrics/providers/bridge-provider.tsx b/ExpoLyrics/providers/bridge-provider.tsx
+index f555835..5dd771d 100644
+--- a/ExpoLyrics/providers/bridge-provider.tsx
++++ b/ExpoLyrics/providers/bridge-provider.tsx
+@@ -158,6 +158,12 @@ export function BridgeProvider({ children }: PropsWithChildren) {
+       return;
+     }
+ 
++    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++      setShowOnboarding(false);
++      setOnboardingChecked(true);
++      return;
++    }
++
+     // Check if onboarding was completed before, then connect only when desktop mode is configured.
+     (async () => {
+       try {

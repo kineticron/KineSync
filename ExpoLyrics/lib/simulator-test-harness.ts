@@ -9,6 +9,7 @@ import {
   isSimulatorTestActive,
   waitForSimulatorRendererReady,
   waitForSimulatorOrientation,
+  waitForSimulatorScreenshotAck,
   resetSimulatorBridge,
 } from './simulator-test-bridge';
 
@@ -269,12 +270,14 @@ export class SimulatorTestHarness {
     try {
       // Stage 1: Launch and Song 1 initial load with Spicy renderer
       this.beginStage('stage_1_launch');
+      // Set up readiness listener BEFORE triggering state change
+      const readyPromise1 = waitForSimulatorRendererReady({ style: 'spicy', timeoutMs: 12000 });
       this.switchRenderer('spicy');
       const track1 = this.loadTrack(0);
       if (!track1) throw new Error('Failed to load track 1');
 
       // Await real native renderer readiness verification
-      const ready1 = await waitForSimulatorRendererReady({ style: 'spicy', trackId: track1.id, timeoutMs: 12000 });
+      const ready1 = await readyPromise1;
       this.renderersConfirmed.add(ready1.style);
 
       // Advance playback deterministically using monotonic clock to 5000ms
@@ -283,9 +286,9 @@ export class SimulatorTestHarness {
       this.clock.pause();
       this.clock.seek(5000);
 
-      // Emit screenshot readiness marker and pause deterministically
+      // Emit screenshot readiness marker and await handshake acknowledgement
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_1_launch style=spicy track=${track1.id} positionMs=5000`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_1_launch', 12000);
       this.endStage('stage_1_launch', 'PASS', { trackId: track1.id, style: 'spicy', lines: track1.linesCount });
 
       // Stage 2: Normal playback progression
@@ -295,7 +298,7 @@ export class SimulatorTestHarness {
       this.clock.pause();
       const pos2 = this.clock.getPositionMs();
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_2_playback style=spicy track=${track1.id} positionMs=${pos2}`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_2_playback', 12000);
       this.endStage('stage_2_playback', 'PASS', { positionMs: pos2 });
 
       // Stage 3: Seek forward
@@ -306,57 +309,63 @@ export class SimulatorTestHarness {
       this.clock.pause();
       const pos3 = this.clock.getPositionMs();
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_3_seek style=spicy track=${track1.id} positionMs=${pos3}`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_3_seek', 12000);
       this.endStage('stage_3_seek', 'PASS', { positionMs: pos3 });
 
       // Stage 4: Switch renderer to AMLL
       this.beginStage('stage_4_switch_amll');
+      const readyPromiseAmll = waitForSimulatorRendererReady({ style: 'amll', timeoutMs: 12000 });
       this.switchRenderer('amll');
-      const readyAmll = await waitForSimulatorRendererReady({ style: 'amll', timeoutMs: 12000 });
+      const readyAmll = await readyPromiseAmll;
       this.renderersConfirmed.add(readyAmll.style);
       this.clock.pause();
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_4_switch_amll style=amll track=${track1.id} positionMs=${this.clock.getPositionMs()}`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_4_switch_amll', 12000);
       this.endStage('stage_4_switch_amll', 'PASS', { style: 'amll', generation: readyAmll.generation });
 
       // Stage 5: Skip song to Song 2 (exercises parse, row build, and mount bottleneck)
       this.beginStage('stage_5_skip_song');
+      const readyPromiseTrack2 = waitForSimulatorRendererReady({ style: 'amll', timeoutMs: 12000 });
       const track2 = this.loadTrack(1);
       if (!track2) throw new Error('Failed to load track 2');
-      const readyTrack2 = await waitForSimulatorRendererReady({ style: 'amll', trackId: track2.id, timeoutMs: 12000 });
+      const readyTrack2 = await readyPromiseTrack2;
       this.renderersConfirmed.add(readyTrack2.style);
       this.clock.play(0);
       await this.delay(2000);
       this.clock.pause();
       this.clock.seek(5000);
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_5_skip_song style=amll track=${track2.id} positionMs=5000`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_5_skip_song', 12000);
       this.endStage('stage_5_skip_song', 'PASS', { trackId: track2.id, lines: track2.linesCount });
 
       // Stage 6: Switch renderer back to Spicy
       this.beginStage('stage_6_switch_spicy');
+      const readyPromiseSpicy2 = waitForSimulatorRendererReady({ style: 'spicy', timeoutMs: 12000 });
       this.switchRenderer('spicy');
-      const readySpicy2 = await waitForSimulatorRendererReady({ style: 'spicy', trackId: track2.id, timeoutMs: 12000 });
+      const readySpicy2 = await readyPromiseSpicy2;
       this.renderersConfirmed.add(readySpicy2.style);
       this.clock.pause();
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_6_switch_spicy style=spicy track=${track2.id} positionMs=5000`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_6_switch_spicy', 12000);
       this.endStage('stage_6_switch_spicy', 'PASS', { style: 'spicy', generation: readySpicy2.generation });
 
       // Stage 7: Orientation rotation stage
       this.beginStage('stage_7_rotation');
+      const landscapePromise = waitForSimulatorOrientation('landscape', 12000);
       console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape');
-      const landscapeLayout = await waitForSimulatorOrientation('landscape', 12000);
+      const landscapeLayout = await landscapePromise;
       if (landscapeLayout.width <= landscapeLayout.height) {
         throw new Error(`Landscape viewport invariant failed: width=${landscapeLayout.width} <= height=${landscapeLayout.height}`);
       }
       this.clock.pause();
       console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_7_rotation style=spicy track=${track2.id} positionMs=5000 orientation=landscape width=${Math.round(landscapeLayout.width)} height=${Math.round(landscapeLayout.height)}`);
-      await this.delay(2500);
+      await waitForSimulatorScreenshotAck('stage_7_rotation', 12000);
 
       // Return back to portrait orientation
+      const portraitPromise = waitForSimulatorOrientation('portrait', 12000);
       console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait');
-      await waitForSimulatorOrientation('portrait', 12000);
+      await portraitPromise;
+      this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });
       this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });
 
       // Stage 8: Finish scenario and report
