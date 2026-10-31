@@ -20,4 +20,4 @@ export function pickAutoLyrics(
   lrcPacket: unknown,
   spicyPacket: unknown,
 ): { result: unknown; reason: string };
-export function timingRank(source: string): number;
+export function timingRank(packet: unknown): number;
