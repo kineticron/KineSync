@@ -355,6 +355,8 @@ function scenario({ initialPacket, development = false } = {}) {
   }
   return { store, ingest, mount, unmount, flush, frame, observed, get now() { return now; }, advance: ms => { now += ms; },
     packet: sample => load(path.join(root, 'lib/spotify-detector/packet.ts')).detectorPacket(sample, 1700000000000 + now, now),
+    rowSeekVersions: () => [...instances.values()].filter(instance => instance.type === NativeLyricRowView)
+      .map(instance => instance.props.seekVersion.value),
     get definitionTransfers() { return definitionTransfers; }, get hostTransfers() { return hostTransfers; },
     get refreshes() { return refreshes; }, get subscriptions() { return subscriptions.size; },
     get appListeners() { return appListeners.size; },

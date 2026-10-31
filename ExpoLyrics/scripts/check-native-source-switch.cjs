@@ -78,3 +78,28 @@ const failures = results.filter(result => [result.afterRefreshDriftMs, result.af
   result.after30fpsDriftMs].some(drift => Math.abs(drift) > 0.00001));
 assert.equal(failures.length, 0, `${failures.length}/${results.length} native switch/rotation scenarios drifted`);
 console.log(`PASS ${results.length} native switch/rotation scenarios; modeled JSI/Skia, no device claim.`);
+
+// The store's seekDetected result is diagnostic on the native path. Consumers
+// receive the hook's independent seekVersion when a store anchor moves. Prove
+// that an identical raw tuple's accepted FORWARD correction still resets it.
+for (const style of ['spicy', 'amll']) for (const correctionMs of [1800, 3000]) {
+  const run = scenario({ initialPacket });
+  run.mount(style); run.flush(); run.frame();
+  const beforeSeek = run.rowSeekVersions();
+  assert(beforeSeek.length > 0, 'Inspect actual row seek shared values');
+  run.advance(1273.152);
+  const expected = 20000 + run.now - 10000 + correctionMs;
+  const result = run.ingest(run.packet({ ...source,
+    sourceServerTimestampMs: epoch + 10000 + correctionMs,
+    receivedAt: epoch + run.now,
+    positionObservedAt: { wallMs: epoch + 10000, monotonicMs: 10000 } }));
+  assert.equal(result.seekDetected, false, 'Same-source store result is suppressed (diagnostic only)');
+  run.flush(); run.frame();
+  for (const output of run.observed()) near(output.consumed, expected, 'Forward correction reaches actual glyph consumer');
+  const afterSeek = run.rowSeekVersions();
+  assert.deepEqual(afterSeek, beforeSeek.map(serial => serial + 1), 'Actual hook publishes one seek reset to every native row');
+  console.log(JSON.stringify({ forwardCorrectionConsumer: { style, correctionMs,
+    storeSeekDetected: result.seekDetected, beforeSeek, afterSeek, consumedPositionMs: run.observed()[0].consumed,
+    driftMs: run.observed()[0].consumed - expected } }));
+  run.stop();
+}
