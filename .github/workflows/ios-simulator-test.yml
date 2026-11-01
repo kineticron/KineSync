@@ -116,6 +116,20 @@ jobs:
           pod install
           test -s Podfile.lock
 
+      # Save validated Pods before expensive native work; this cost is inside the work budget.
+      - name: Save CocoaPods cache
+        if: ${{ !cancelled() && steps.install_pods.outcome == 'success' && steps.pods_cache.outputs.cache-primary-key != '' }}
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ExpoLyrics/ios/Pods
+            ExpoLyrics/ios/Podfile.lock
+            ~/.cocoapods
+            ~/Library/Caches/CocoaPods
+          key: ${{ steps.pods_cache.outputs.cache-primary-key }}
+
       - name: Restore Release arm64 compiler cache
         id: compiler_cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -147,6 +161,19 @@ jobs:
           set -euo pipefail
           APP_PATH="$(cat ios/.built_app_path)"
           node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 6
+
+      # Save partial candidate work even after failure. One minute here plus the
+      # two-minute artifact cap leaves margin beyond the 26-minute work deadline.
+      - name: Save partial Release arm64 compiler cache
+        if: ${{ !cancelled() && steps.candidate_build.outcome != 'skipped' && steps.compiler_cache.outputs.cache-primary-key != '' }}
+        timeout-minutes: 1
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}/../kinesync-ios-derived-sim
+            ${{ github.workspace }}/../kinesync-ios-ccache
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
 
       - name: Run Baseline Comparison (if requested)
         # A candidate scenario failure must not skip the requested baseline evidence.
@@ -212,27 +239,3 @@ jobs:
             ExpoLyrics/.expo/baseline-test-output/
           include-hidden-files: true
           retention-days: 14
-
-      # Explicit save runs after build/scenario failure; cache's default post hook only saves on success.
-      # Unique immutable keys allow incremental failed builds to improve the next compatible restore.
-      - name: Save CocoaPods cache
-        if: ${{ !cancelled() && steps.install_pods.outcome == 'success' && steps.pods_cache.outputs.cache-primary-key != '' }}
-        timeout-minutes: 1
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ExpoLyrics/ios/Pods
-            ExpoLyrics/ios/Podfile.lock
-            ~/.cocoapods
-            ~/Library/Caches/CocoaPods
-          key: ${{ steps.pods_cache.outputs.cache-primary-key }}
-
-      - name: Save partial Release arm64 compiler cache
-        if: ${{ !cancelled() && steps.candidate_build.outcome != 'skipped' && steps.compiler_cache.outputs.cache-primary-key != '' }}
-        timeout-minutes: 1
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ${{ github.workspace }}/../kinesync-ios-derived-sim
-            ${{ github.workspace }}/../kinesync-ios-ccache
-          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}

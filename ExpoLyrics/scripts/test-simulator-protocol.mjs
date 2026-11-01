@@ -282,9 +282,21 @@ function testManualWorkflow() {
     assert.match(save.if, /!cancelled\(\)/);
     assert.ok(!save.if.includes('success()'), 'Failed builds must still save');
     assert.equal(save['timeout-minutes'], 1);
+    assert.equal(save['continue-on-error'], true, 'Optional cache saves must not gate builds or evidence');
     assert.ok(!cache.with.path.includes('env.HOME'));
     assert.ok(!cache.with.path.includes('baseline'));
   }
+  const podsSave = steps.find(step => step.name === 'Save CocoaPods cache');
+  const compilerSave = steps.find(step => step.name === 'Save partial Release arm64 compiler cache');
+  const harness = steps.find(step => step.name === 'Run iOS Simulator Test Harness');
+  const baselineStep = steps.find(step => step.name.startsWith('Run Baseline Comparison'));
+  const artifacts = steps.find(step => step.name === 'Upload Simulator Test Artifacts');
+  assert.ok(steps.indexOf(podsSave) > steps.findIndex(step => step.id === 'install_pods'));
+  assert.ok(steps.indexOf(podsSave) < steps.indexOf(compiler));
+  assert.ok(steps.indexOf(compilerSave) > steps.indexOf(harness));
+  assert.ok(steps.indexOf(compilerSave) < steps.indexOf(baselineStep));
+  assert.ok(steps.indexOf(compilerSave) < steps.indexOf(artifacts));
+  assert.ok(steps.slice(steps.indexOf(artifacts) + 1).every(step => !step.uses?.startsWith('actions/cache/save@')), 'No cache saves may consume the final artifact/cleanup window');
   assert.match(compiler.with.key, /Podfile.lock/);
   assert.match(compiler.with.key, /release-arm64-v2/);
   assert.match(compiler.with.path, /kinesync-ios-derived-sim/);
