@@ -6,7 +6,7 @@ import { PNG } from 'pngjs';
 import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
-import { resolveSimulatorGUI, startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
+import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
@@ -44,7 +44,7 @@ export function createLineBufferConsumer(onLine, onChunk = () => {}) {
 function runCommand(cmd, args, options = {}) {
   try {
     lifecycle?.check();
-    return execFileSync(cmd, args, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 5000, lifecycle?.remaining() ?? 5000)), killSignal: 'SIGKILL', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    return execFileSync(cmd, args, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 5000, lifecycle?.remaining() ?? 5000)), killSignal: 'SIGKILL', encoding: 'utf8', stdio: options.stdio ?? ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : '';
     throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stderr || err.message}`);
@@ -73,51 +73,21 @@ export function rotateSimulator(targetOrientation, udid, command = runCommand) {
   if (!process.env.DEVELOPER_DIR) throw new Error('Explicit DEVELOPER_DIR required for Simulator GUI');
   if (!['portrait', 'landscape'].includes(targetOrientation)) throw new Error('Invalid rotation orientation');
   const inventory = JSON.parse(command('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']));
-  const booted = Object.values(inventory.devices || {}).flat().filter(d => d.state === 'Booted');
+  const booted = Object.values(inventory.devices || {}).flat().filter(d => ['Booted', 'Booting'].includes(d.state));
   if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
-  const simulator = resolveSimulatorGUI(process.env.DEVELOPER_DIR, command);
-  // Expo CLI uses Device Hub's URL scheme to focus the selected device.
-  // -a pins the URL handler to the validated selected-Xcode bundle.
-  command('open', path.basename(simulator) === 'DeviceHub.app'
-    ? ['-a', simulator, `devices://device/open?id=${encodeURIComponent(udid)}`]
-    : ['-a', simulator, '--args', '-CurrentDeviceUDID', udid]);
-  const processName = path.basename(simulator, '.app');
-  const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
-  const script = `
-tell application "${simulator}" to activate
-tell application "System Events"
-  repeat 20 times
-    if (count of (every application process whose name is "${processName}")) is greater than 0 then exit repeat
-    delay 0.1
-  end repeat
-  set simulatorProcesses to every application process whose name is "${processName}"
-  if (count of simulatorProcesses) is not 1 then error "Ambiguous Simulator GUI process"
-  set simulatorPath to POSIX path of (application file of item 1 of simulatorProcesses as alias)
-  if simulatorPath is not "${simulator}/" then error "Simulator GUI belongs to another Xcode"
-  tell process "${processName}"
-    set frontmost to true
-    repeat 20 times
-      if exists menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1 then exit repeat
-      delay 0.1
-    end repeat
-    if not (exists menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1) then error "Selected device orientation menu unavailable; inspect Device Hub selection and Accessibility permission"
-    if not (enabled of menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1) then error "Selected device orientation menu disabled"
-    tell menu bar 1
-      tell menu bar item "Device"
-        tell menu 1
-          tell menu item "Orientation"
-            tell menu 1
-              click menu item "${menuItem}"
-            end tell
-          end tell
-        end tell
-      end tell
-    end tell
-  end tell
-end tell
-`;
-  command('osascript', ['-e', script]);
-  console.log(`[RUNNER] Triggered simulator rotation to ${targetOrientation}`);
+  const started = Date.now();
+  let output, failure;
+  const stderrFd = lifecycle ? fs.openSync(path.join(lifecycle.outputDir, 'rotation-native-stderr.log'), 'a') : undefined;
+  try {
+    output = command('node', [new URL('./simulator-rotation-worker.mjs', import.meta.url).pathname, udid, targetOrientation], { timeout: 15000, ...(stderrFd === undefined ? {} : { stdio: ['pipe', 'pipe', stderrFd] }) });
+    const result = JSON.parse(output);
+    if (result.accepted !== true || result.udid !== udid || result.orientation !== targetOrientation || result.version !== '0.13.0') throw Error('Invalid native rotation acknowledgment');
+  } catch (error) { failure = error.message; throw error; }
+  finally {
+    if (stderrFd !== undefined) fs.closeSync(stderrFd);
+    if (lifecycle) fs.appendFileSync(path.join(lifecycle.outputDir, 'rotation-commands.jsonl'), JSON.stringify({ udid, orientation: targetOrientation, started, duration: Date.now() - started, output, error: failure }) + '\n');
+  }
+  console.log(`[RUNNER] Requested native rotation to ${targetOrientation}; awaiting rendered orientation evidence`);
 }
 
 async function main() {
@@ -139,12 +109,23 @@ async function main() {
   const summaryReportFile = path.join(outputDir, 'simulator-summary.md');
   const perfJsonFile = path.join(outputDir, 'simulator-perf.json');
 
+  if (process.env.SIMULATOR_ROTATION_TOOL_DIR) fs.copyFileSync(path.join(process.env.SIMULATOR_ROTATION_TOOL_DIR, 'provenance.json'), path.join(outputDir, 'rotation-tool-provenance.json'));
   await selectToolchain(lifecycle);
   const device = await prepareSimulator(lifecycle, selectSimulatorDevice);
-  lifecycle.update('startup:GUI-preflight');
+  lifecycle.update('startup:rotation-preflight');
   // Startup enumeration is async with a 30s command cap and absolute lifecycle deadline.
   const inventory = JSON.stringify(lifecycle.readyInventory);
-  rotateSimulator('portrait', device.udid, (cmd, args) => cmd === 'xcrun' ? inventory : runCommand(cmd, args));
+  rotateSimulator('portrait', device.udid, (cmd, args, options) => cmd === 'xcrun' ? inventory : runCommand(cmd, args, options));
+  fs.mkdirSync(path.join(outputDir, 'diagnostics'), { recursive: true });
+  const portraitPath = path.join(outputDir, 'diagnostics/initial-portrait.png');
+  let portraitReady = false;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await startupCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', portraitPath], lifecycle, undefined, 5000);
+    const image = PNG.sync.read(fs.readFileSync(portraitPath));
+    if (image.height > image.width) { portraitReady = true; break; }
+    await runStartupCommand('/bin/sleep', ['0.25']);
+  }
+  if (!portraitReady) throw Error('Initial native portrait orientation not observed');
   await runStartupCommand('xcrun', ['simctl', 'status_bar', device.udid, 'override', '--time', '9:41', '--dataNetwork', 'wifi', '--wifiMode', 'active', '--wifiBars', '3', '--batteryState', 'charged', '--batteryLevel', '100']);
 
   try { runCommand('xcrun', ['simctl', 'terminate', device.udid, 'dev.kineticron.KineSync']); }
@@ -177,7 +158,20 @@ async function main() {
     // Handle simulator rotation trigger
     const rotMatch = trimmed.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
     if (rotMatch) {
-      try { rotateSimulator(rotMatch[1], device.udid); }
+      try {
+        rotateSimulator(rotMatch[1], device.udid);
+        if (rotMatch[1] === 'portrait') {
+          const restored = path.join(outputDir, 'diagnostics/restored-portrait.png');
+          let observed = false;
+          for (let attempt = 0; attempt < 8; attempt++) {
+            runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', restored], { timeout: 1500 });
+            const image = PNG.sync.read(fs.readFileSync(restored));
+            if (image.height > image.width) { observed = true; break; }
+            runCommand('/bin/sleep', ['0.25']);
+          }
+          if (!observed) throw Error('Restored native portrait orientation not observed');
+        }
+      }
       catch (err) { parser.errors.push(`Rotation command failed: ${err.message}`); scenarioResolve(); }
     }
 
@@ -207,6 +201,7 @@ async function main() {
           let valid = analysis.nonBlank;
           let notes = `dims=${analysis.width}x${analysis.height} stdDev=${analysis.stdDev} nonBlank=${analysis.nonBlank}`;
 
+          if (stage !== 'stage_7_rotation' && analysis.height <= analysis.width) { valid = false; notes += ' (FAIL: expected portrait height > width)'; }
           if (stage === 'stage_7_rotation') {
             if (analysis.width <= analysis.height) {
               valid = false;

@@ -142,16 +142,3 @@ export async function startupDiagnostics(state, run = execute) {
     } catch (error) { fs.writeFileSync(path.join(state.outputDir, `${name}.txt`), `${error.code}: ${error.message}`); }
   }
 }
-
-// GUI is required for rotation. Xcode 27 uses Contents/Applications/DeviceHub.app
-// (WebKit simulated_device.py, 5700209bda3315d69a0751325bebdf3eca41c07a).
-// Search only the selected Xcode, never LaunchServices defaults.
-export function resolveSimulatorGUI(developer, command) {
-  const canonical = fs.realpathSync(developer);
-  const root = path.dirname(canonical);
-  const output = command('/usr/bin/find', [root, '(', '-name', 'Simulator.app', '-o', '-name', 'DeviceHub.app', ')', '-prune']);
-  const candidates = [...new Set(output.trim().split('\n').filter(Boolean).map(candidate => fs.realpathSync(candidate)))];
-  const valid = candidates.filter(candidate => candidate.startsWith(root + '/') && fs.existsSync(path.join(candidate, 'Contents/MacOS', path.basename(candidate, '.app'))));
-  if (valid.length !== 1) throw new Error(`Rotation requires one runnable Simulator or Device Hub GUI in selected Xcode ${root}; found ${JSON.stringify(candidates)}. Inspect GUI bundle installation and bounded discovery results; headless simctl cannot rotate. Xcode 27 uses DeviceHub.app; verify its installation and GUI accessibility.`);
-  return valid[0];
-}

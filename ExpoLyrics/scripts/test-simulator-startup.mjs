@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import { enumerateRuntimes, startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
+import { verifyArchive, verifyNative, verifyFramework } from './prepare-simulator-rotation.mjs';
 import { selectSimulatorDevice, rotateSimulator } from './run-ios-simulator-test.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-test-'));
 const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
@@ -17,6 +18,11 @@ const make = (budget = 300000) => {
   return { state, advance: ms => { time += ms; } };
 };
 try {
+  const tampered = path.join(dir, 'tampered.node');
+  fs.writeFileSync(tampered, 'untrusted');
+  assert.throws(() => verifyArchive(fs.readFileSync(tampered)), /integrity mismatch/);
+  assert.throws(() => verifyNative(tampered), /hash mismatch/);
+  assert.throws(() => verifyFramework(tampered), /hash mismatch/);
   for (const mode of ['retry', 'exhausted', 'nontransport']) {
     const { state, advance } = make(); let attempts = 0;
     const deadline = state.deadline;
@@ -197,29 +203,20 @@ try {
   fs.mkdirSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS'), { recursive: true });
   fs.writeFileSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS/Simulator'), 'fixture');
   await assert.rejects(selectToolchain(make().state, async (cmd, args, options) => args.includes('runtimes') ? { stdout: JSON.stringify({ runtimes: [] }) } : fake('Xcode 27.1')(cmd, args, options), developer), /runtime unavailable/);
-  const selected = await selectToolchain(tool.state, fake('Xcode 27.1'), developer);
+  await selectToolchain(tool.state, fake('Xcode 27.1'), developer);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tool.state.outputDir, 'toolchain.json'), 'utf8')).runtimePolicy, SUPPORTED_RUNTIME_POLICY);
   const calls = [];
-  rotateSimulator('portrait', phone.udid, (cmd, args) => { calls.push([cmd, args]); if (cmd === '/usr/bin/find') return path.join(developer, 'Applications/Simulator.app'); return inventory({ ...phone, state: 'Booted' }); });
-  assert.equal(calls[2][1][1], path.join(developer, 'Applications/Simulator.app'));
-  const alternate = path.join(developer, '../Applications/DeviceHub.app');
-  fs.mkdirSync(path.dirname(alternate), { recursive: true });
-  fs.renameSync(path.join(developer, 'Applications/Simulator.app'), alternate);
-  fs.renameSync(path.join(alternate, 'Contents/MacOS/Simulator'), path.join(alternate, 'Contents/MacOS/DeviceHub'));
-  const alternateCalls = [];
-  rotateSimulator('landscape', phone.udid, (cmd, args) => { alternateCalls.push([cmd, args]); return cmd === '/usr/bin/find' ? alternate : inventory({ ...phone, state: 'Booted' }); });
-  assert.deepEqual(alternateCalls[2], ['open', ['-a', fs.realpathSync(alternate), `devices://device/open?id=${phone.udid}`]]);
-  assert.ok(!alternateCalls[2][1].includes('-CurrentDeviceUDID'));
-  assert.throws(() => rotateSimulator('portrait', phone.udid, (cmd) => {
-    if (cmd === '/usr/bin/find') return alternate;
-    if (cmd === 'open') throw Error('Device Hub URL handler failed');
-    return inventory({ ...phone, state: 'Booted' });
-  }), /URL handler failed/);
-  assert.ok(alternateCalls[3][1][1].includes('tell process "DeviceHub"'));
-  assert.ok(alternateCalls[3][1][1].includes('Landscape Right'));
-  fs.rmSync(alternate, { recursive: true });
+  rotateSimulator('portrait', phone.udid, (cmd, args) => {
+    calls.push([cmd, args]);
+    return cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : JSON.stringify({ version: '0.13.0', udid: phone.udid, orientation: 'portrait', accepted: true });
+  });
+  assert.equal(calls[1][0], 'node');
+  assert.deepEqual(calls[1][1].slice(1), [phone.udid, 'portrait']);
+  assert.ok(calls.every(([cmd]) => !['open', 'osascript', '/usr/bin/find'].includes(cmd)));
+  for (const result of [{ accepted: false }, { version: '0.13.0', udid: 'wrong', orientation: 'portrait', accepted: true }]) {
+    assert.throws(() => rotateSimulator('portrait', phone.udid, cmd => cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : JSON.stringify(result)), /acknowledgment/);
+  }
   fs.rmSync(path.join(developer, 'Applications'), { recursive: true });
-  await selectToolchain(make().state, fake('Xcode 27.1'), developer); // Headless toolchain needs no GUI.
-  assert.throws(() => rotateSimulator('portrait', phone.udid, (cmd) => cmd === '/usr/bin/find' ? '' : inventory({ ...phone, state: 'Booted' })), /headless simctl cannot rotate/);
+  await selectToolchain(make().state, fake('Xcode 27.1'), developer);
   console.log('Simulator startup fake-command tests passed.');
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

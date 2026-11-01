@@ -312,7 +312,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 const dir = ${JSON.stringify(dir)};
 const name = path.basename(process.argv[1]), args = process.argv.slice(2);
-if (name === 'osascript' && args.join(' ').includes('Landscape Right') && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
+if (name === 'node') {
+ if (args.at(-1) === 'landscape' && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
+ if (process.env.SIM_CASE === 'rotation-hang') { setInterval(() => {}, 1000); return; }
+ if (process.env.SIM_CASE === 'rotation-rejected') { console.log(JSON.stringify({ accepted: false })); process.exit(0); }
+ console.log(JSON.stringify({ version: '0.13.0', udid: args.at(-2), orientation: args.at(-1), accepted: true })); process.exit(0);
+}
 if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 27.1'); process.exit(0); }
 if (name !== 'xcrun') process.exit(0);
 if (args.includes('--show-sdk-version')) console.log('27.1');
@@ -324,13 +329,15 @@ if (args.includes('get_app_container')) console.log(dir);
 if (args.includes('screenshot')) {
  const dest = args.at(-1);
  if (process.env.SIM_CASE === 'capture-failure' && dest.endsWith('failure.png')) process.exit(2);
+ if (dest.includes('restored-portrait') && process.env.SIM_CASE === 'portrait-noop') { fs.copyFileSync(path.join(dir, 'landscape.png'), dest); return; }
+ if (dest.includes('initial-portrait') && process.env.SIM_CASE === 'initial-landscape') { fs.copyFileSync(path.join(dir, 'landscape.png'), dest); return; }
  if (process.env.SIM_CASE === 'unstable') {
   const counter = dest + '.count';
   const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
   fs.writeFileSync(counter, String(count + 1));
   fs.copyFileSync(path.join(dir, count % 2 ? 'blank.png' : 'portrait.png'), dest); return;
  }
- fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') ? 'landscape.png' : 'portrait.png'), dest);
+ fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') && process.env.SIM_CASE !== 'rotation-noop' ? 'landscape.png' : 'portrait.png'), dest);
 }
 if (args.includes('stream')) {
  if (!args.includes('--level') || args[args.indexOf('--level') + 1] !== 'debug' || args[args.indexOf('--predicate') + 1] !== 'process == "KineSync"') process.exit(98);
@@ -374,19 +381,23 @@ if (args.includes('launch')) {
  setInterval(() => {}, 1000);
 }
 `;
-  for (const name of ['xcrun', 'xcodebuild', 'open', 'osascript']) {
+  for (const name of ['xcrun', 'xcodebuild', 'node']) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
+  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
     for (const file of ['launched', 'stream-ready']) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
     const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
     const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
-    if (!['signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (shouldPass) {
+      assert.equal(fs.readdirSync(output).filter(name => name.endsWith('.png')).length, 7);
+      assert.ok(fs.existsSync(path.join(output, 'diagnostics/initial-portrait.png')));
+      assert.ok(fs.existsSync(path.join(output, 'diagnostics/restored-portrait.png')));
+      assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('0.13.0'));
       const raw = fs.readFileSync(path.join(output, 'simulator-raw-log.txt'), 'utf8');
       assert.equal(raw.split('[KINESYNC_SIM] SCENARIO_START').length - 1, 1, 'Canonical stream must not merge launch-console duplicates');
       assert.ok(raw.includes('[com.facebook.react.log:javascript]'));
@@ -404,6 +415,8 @@ if (args.includes('launch')) {
       assert.ok(fs.existsSync(path.join(output, 'failure.png')) || /Command failed|ETIMEDOUT|SIGKILL/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
+      if (scenario === 'rotation-hang') { assert.ok(Date.now() - started < 25000); assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('error')); }
+      if (scenario === 'initial-landscape') assert.match(state.error, /Initial native portrait/);
       if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
       if (['stream-exit', 'stream-eof-banner', 'stream-dies'].includes(scenario)) assert.match(state.error, /Unified log stream exited/);
       if (scenario === 'stream-exit') assert.ok(fs.readFileSync(path.join(output, 'device-stream.log'), 'utf8').includes('unified subscription failed'), 'Stream failure stderr must survive startup failure');

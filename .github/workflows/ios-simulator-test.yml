@@ -79,6 +79,14 @@ jobs:
             echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 46 * 60 * 1000 ))"
           } >> "${GITHUB_ENV}"
 
+      - name: Prepare pinned CI-only native rotation tool
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          TOOL_DIR="${RUNNER_TEMP}/kinesync-rotation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs node ExpoLyrics/scripts/prepare-simulator-rotation.mjs "${TOOL_DIR}" 2>&1 | tee ExpoLyrics/.expo/rotation-tool-prepare.log
+          echo "SIMULATOR_ROTATION_TOOL_DIR=${TOOL_DIR}" >> "${GITHUB_ENV}"
+
       - name: Prepare trusted baseline source
         id: baseline_prep
         if: matrix.variant == 'baseline'
@@ -313,6 +321,7 @@ jobs:
         with:
           name: ios-simulator-${{ matrix.variant }}-artifacts
           path: |
+            ExpoLyrics/.expo/rotation-tool-prepare.log
             ExpoLyrics/.expo/simulator-test-output/
             ExpoLyrics/.expo/comparison-report.md
             ExpoLyrics/.expo/*.log

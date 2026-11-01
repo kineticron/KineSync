@@ -100,22 +100,17 @@ export async function testSimulatorProtocol() {
   await files.waitForSimulatorScreenshotAck('stage', 'nonce', 10);
   assert.equal(deleted, true);
 
-  const guiRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-gui-'));
-  process.env.DEVELOPER_DIR = path.join(guiRoot, 'Xcode.app/Contents/Developer');
-  const gui = path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app');
-  fs.mkdirSync(path.join(gui, 'Contents/MacOS'), { recursive: true });
-  fs.writeFileSync(path.join(gui, 'Contents/MacOS/Simulator'), 'fixture');
+  process.env.DEVELOPER_DIR = '/explicit/Xcode.app/Contents/Developer';
   const calls = [];
   rotateSimulator('landscape', 'chosen-udid', (cmd, args) => {
     calls.push([cmd, args]);
-    if (cmd === '/usr/bin/find') return gui;
     if (cmd === 'xcrun') return JSON.stringify({ devices: { iOS: [{ udid: 'chosen-udid', state: 'Booted' }] } });
+    return JSON.stringify({ version: '0.13.0', udid: 'chosen-udid', orientation: 'landscape', accepted: true });
   });
-  assert.ok(calls[2][1].includes('chosen-udid'));
-  assert.equal(calls[3][0], 'osascript');
+  assert.deepEqual(calls[1][1].slice(1), ['chosen-udid', 'landscape']);
+  assert.equal(calls[1][0], 'node');
   assert.throws(() => rotateSimulator('landscape', 'chosen-udid', () => JSON.stringify({ devices: { iOS: [{ udid: 'other', state: 'Booted' }] } })), /only booted simulator/);
-  assert.throws(() => rotateSimulator('portrait', 'chosen-udid', () => { throw Error('Accessibility denied'); }), /Accessibility denied/);
-  fs.rmSync(guiRoot, { recursive: true, force: true });
+  assert.throws(() => rotateSimulator('portrait', 'chosen-udid', () => { throw Error('native unavailable'); }), /native unavailable/);
   testNativePublication();
   testHarnessStages();
   await testSnapshotAnchors();
@@ -260,6 +255,7 @@ function testMainBaselinePreparation() {
     for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Adapter must preserve main renderer logic: ${file}`);
     assert.equal(execFileSync('git', ['diff', '--exit-code'], { cwd: dir, encoding: 'utf8' }), '', 'Reversing observation must leave no tracked production diff');
     assert.ok(fs.existsSync(path.join(dir, 'ExpoLyrics/scripts/test-simulator-protocol.mjs')));
+    for (const file of ['simulator-rotation-worker.mjs', 'prepare-simulator-rotation.mjs']) assert.equal(fs.readFileSync(path.join(dir, 'ExpoLyrics/scripts', file), 'utf8'), fs.readFileSync(path.join(root, 'scripts', file), 'utf8'), 'Baseline must receive identical pinned rotation adapter');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
