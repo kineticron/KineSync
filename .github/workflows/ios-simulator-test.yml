@@ -126,35 +126,9 @@ jobs:
             exit 0
           fi
 
-          # Reject leading hyphen to prevent option injection
-          case "${BASELINE_REF}" in
-            -* )
-              echo "Error: Baseline ref cannot start with a hyphen: ${BASELINE_REF}" >&2
-              exit 1
-              ;;
-          esac
-
-          # Validate strict refs via git check-ref-format --branch or full sha regex
-          VALID_REF=0
-          if [[ "${BASELINE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            VALID_REF=1
-          elif git check-ref-format --branch "${BASELINE_REF}" >/dev/null 2>&1; then
-            VALID_REF=1
-          fi
-
-          if [ "${VALID_REF}" -ne 1 ]; then
-            echo "Error: Baseline ref failed strict format validation: ${BASELINE_REF}" >&2
-            exit 1
-          fi
-
-          echo "Fetching validated baseline ref: ${BASELINE_REF}"
-          git fetch origin -- "${BASELINE_REF}"
-          BASELINE_COMMIT="$(git rev-parse --verify -q FETCH_HEAD^{commit})"
-          if [ -z "${BASELINE_COMMIT}" ]; then
-            echo "Error: Failed to resolve FETCH_HEAD to a valid commit" >&2
-            exit 1
-          fi
-          echo "Resolved baseline commit: ${BASELINE_COMMIT}"
+          # Ref syntax is insufficient: baseline scripts execute only from trusted main history.
+          BASELINE_COMMIT="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
+          echo "Resolved trusted baseline commit: ${BASELINE_COMMIT}"
 
           git worktree add ../kinesync-baseline "${BASELINE_COMMIT}"
 
@@ -193,4 +167,6 @@ jobs:
             ExpoLyrics/.expo/simulator-test-output/
             ExpoLyrics/.expo/comparison-report.md
             ExpoLyrics/.expo/*.log
+            ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output/
+          include-hidden-files: true
           retention-days: 14
