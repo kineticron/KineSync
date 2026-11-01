@@ -42,12 +42,27 @@ export async function selectToolchain(state, run = execute, developer = process.
   const sdkPath = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'])).trim();
   if (sdk !== SUPPORTED_RUNTIME_POLICY.sdk || !sdkPath.startsWith(canonical + '/')) throw new Error('Wrong simulator SDK/toolchain');
   await command('xcodebuild', ['-checkFirstLaunchStatus']);
-  const runtimes = JSON.parse(await command('xcrun', ['simctl', 'list', 'runtimes', '-j']));
+  const runtimes = JSON.parse(await enumerateRuntimes(state, run));
   if (!runtimes.runtimes?.some(runtime => runtime.identifier === SUPPORTED_RUNTIME_POLICY.runtime && runtime.isAvailable === true)) throw new Error('Configured iOS runtime unavailable');
   state.runtimePolicy = SUPPORTED_RUNTIME_POLICY;
   const info = { developer: canonical, version, sdk, sdkPath, runtimePolicy: SUPPORTED_RUNTIME_POLICY };
   fs.writeFileSync(path.join(state.outputDir, 'toolchain.json'), JSON.stringify(info, null, 2));
   return info;
+}
+
+// No device ownership exists at toolchain preflight: retry transport failures,
+// collect non-simctl diagnostics, but never restart the service here.
+export async function enumerateRuntimes(state, run = execute) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await startupCommand('xcrun', ['simctl', 'list', 'runtimes', '-j'], state, run);
+    } catch (error) {
+      if (!(error.killed || error.code === 'ETIMEDOUT' || error.code === 'ERR_CHILD_PROCESS_TIMEOUT')) throw error;
+      await startupDiagnostics(state, run);
+      state.check();
+      if (attempt === 2) throw error;
+    }
+  }
 }
 
 export function verifySelected(inventory, selected, ready = false) {
@@ -128,13 +143,15 @@ export async function startupDiagnostics(state, run = execute) {
   }
 }
 
-// GUI is required only for rotation. Search only the selected Xcode, never LaunchServices defaults.
+// GUI is required for rotation. Xcode 27 uses Contents/Applications/DeviceHub.app
+// (WebKit simulated_device.py, 5700209bda3315d69a0751325bebdf3eca41c07a).
+// Search only the selected Xcode, never LaunchServices defaults.
 export function resolveSimulatorGUI(developer, command) {
   const canonical = fs.realpathSync(developer);
   const root = path.dirname(canonical);
-  const output = command('/usr/bin/find', [root, '-name', 'Simulator.app', '-prune']);
+  const output = command('/usr/bin/find', [root, '(', '-name', 'Simulator.app', '-o', '-name', 'DeviceHub.app', ')', '-prune']);
   const candidates = [...new Set(output.trim().split('\n').filter(Boolean).map(candidate => fs.realpathSync(candidate)))];
-  const valid = candidates.filter(candidate => candidate.startsWith(root + '/') && fs.existsSync(path.join(candidate, 'Contents/MacOS/Simulator')));
-  if (valid.length !== 1) throw new Error(`Rotation requires one runnable Simulator GUI in selected Xcode ${root}; found ${JSON.stringify(candidates)}. Inspect GUI bundle installation and logged bounded find command; headless simctl cannot rotate.`);
+  const valid = candidates.filter(candidate => candidate.startsWith(root + '/') && fs.existsSync(path.join(candidate, 'Contents/MacOS', path.basename(candidate, '.app'))));
+  if (valid.length !== 1) throw new Error(`Rotation requires one runnable Simulator or Device Hub GUI in selected Xcode ${root}; found ${JSON.stringify(candidates)}. Inspect GUI bundle installation and bounded discovery results; headless simctl cannot rotate. Xcode 27 uses DeviceHub.app; verify its installation and GUI accessibility.`);
   return valid[0];
 }

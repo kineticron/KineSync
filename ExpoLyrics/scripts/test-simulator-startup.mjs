@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
-import { startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
+import { enumerateRuntimes, startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { selectSimulatorDevice, rotateSimulator } from './run-ios-simulator-test.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-test-'));
 const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
@@ -17,6 +17,24 @@ const make = (budget = 300000) => {
   return { state, advance: ms => { time += ms; } };
 };
 try {
+  for (const mode of ['retry', 'exhausted', 'nontransport']) {
+    const { state, advance } = make(); let attempts = 0;
+    const deadline = state.deadline;
+    const run = async (cmd, args, options) => {
+      assert.notEqual(cmd, '/usr/bin/killall');
+      if (cmd !== 'xcrun') return { stdout: '' };
+      attempts++;
+      assert.deepEqual(args, ['simctl', 'list', 'runtimes', '-j']);
+      assert.ok(options.timeout <= 30000 && options.timeout <= state.remaining());
+      if (mode === 'nontransport') throw Error('permission denied');
+      if (mode === 'exhausted' || attempts === 1) { advance(options.timeout); throw timeout(); }
+      return { stdout: 'runtime inventory' };
+    };
+    if (mode === 'retry') assert.equal(await enumerateRuntimes(state, run), 'runtime inventory');
+    else await assert.rejects(enumerateRuntimes(state, run), mode === 'exhausted' ? /timeout/ : /permission/);
+    assert.equal(attempts, mode === 'retry' ? 2 : mode === 'exhausted' ? 3 : 1);
+    assert.equal(state.deadline, deadline);
+  }
   for (const failure of ['list', 'boot', 'bootstatus', 'postboot', 'none', 'exhausted']) {
     const { state, advance } = make();
     const calls = [];
@@ -174,12 +192,15 @@ try {
   const calls = [];
   rotateSimulator('portrait', phone.udid, (cmd, args) => { calls.push([cmd, args]); if (cmd === '/usr/bin/find') return path.join(developer, 'Applications/Simulator.app'); return inventory({ ...phone, state: 'Booted' }); });
   assert.equal(calls[2][1][1], path.join(developer, 'Applications/Simulator.app'));
-  const alternate = path.join(developer, '../Applications/Simulator.app');
+  const alternate = path.join(developer, '../Applications/DeviceHub.app');
   fs.mkdirSync(path.dirname(alternate), { recursive: true });
   fs.renameSync(path.join(developer, 'Applications/Simulator.app'), alternate);
+  fs.renameSync(path.join(alternate, 'Contents/MacOS/Simulator'), path.join(alternate, 'Contents/MacOS/DeviceHub'));
   const alternateCalls = [];
   rotateSimulator('landscape', phone.udid, (cmd, args) => { alternateCalls.push([cmd, args]); return cmd === '/usr/bin/find' ? alternate : inventory({ ...phone, state: 'Booted' }); });
   assert.equal(alternateCalls[2][1][1], fs.realpathSync(alternate));
+  assert.ok(alternateCalls[3][1][1].includes('tell process "DeviceHub"'));
+  assert.ok(alternateCalls[3][1][1].includes('Landscape Right'));
   fs.rmSync(alternate, { recursive: true });
   fs.rmSync(path.join(developer, 'Applications'), { recursive: true });
   await selectToolchain(make().state, fake('Xcode 27.1'), developer); // Headless toolchain needs no GUI.

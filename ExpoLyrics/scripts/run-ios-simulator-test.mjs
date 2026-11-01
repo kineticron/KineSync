@@ -77,15 +77,16 @@ export function rotateSimulator(targetOrientation, udid, command = runCommand) {
   if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
   const simulator = resolveSimulatorGUI(process.env.DEVELOPER_DIR, command);
   command('open', ['-a', simulator, '--args', '-CurrentDeviceUDID', udid]);
+  const processName = path.basename(simulator, '.app');
   const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
   const script = `
 tell application "${simulator}" to activate
 tell application "System Events"
-  set simulatorProcesses to every application process whose name is "Simulator"
+  set simulatorProcesses to every application process whose name is "${processName}"
   if (count of simulatorProcesses) is not 1 then error "Ambiguous Simulator GUI process"
   set simulatorPath to POSIX path of (application file of item 1 of simulatorProcesses as alias)
   if simulatorPath is not "${simulator}/" then error "Simulator GUI belongs to another Xcode"
-  tell process "Simulator"
+  tell process "${processName}"
     tell menu bar 1
       tell menu bar item "Device"
         tell menu 1
