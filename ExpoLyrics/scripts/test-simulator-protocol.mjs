@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import YAML from 'yaml';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import vm from 'node:vm';
 import { transformSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
-import { rotateSimulator } from './run-ios-simulator-test.mjs';
+import { rotateSimulator, createLineBufferConsumer } from './run-ios-simulator-test.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function loadBridge(fileSystem, logs = [], development = true, env = { EXPO_PUBLIC_SIMULATOR_TEST: '1' }) {
@@ -23,6 +24,16 @@ function loadBridge(fileSystem, logs = [], development = true, env = { EXPO_PUBL
 }
 
 export async function testSimulatorProtocol() {
+  // Byte-by-byte includes a split UTF-8 character, split marker, and final no-LF record.
+  const framed = [], recorded = [];
+  const consume = createLineBufferConsumer(line => framed.push(line), chunk => recorded.push(chunk));
+  const payload = Buffer.from('préface\n[KINESYNC_SIM] INIT_READY\n[KINESYNC_SIM] FINAL');
+  for (const byte of payload) consume(Buffer.from([byte]));
+  assert.deepEqual(framed, ['préface', '[KINESYNC_SIM] INIT_READY']);
+  consume.flush(); consume.flush();
+  assert.deepEqual(framed, ['préface', '[KINESYNC_SIM] INIT_READY', '[KINESYNC_SIM] FINAL']);
+  assert.deepEqual(Buffer.concat(recorded), payload);
+
   // Compile-time Release opt-in requires both flags; runtime simctl env cannot enable a bundle.
   for (const [development, env, active] of [
     [false, {}, false],

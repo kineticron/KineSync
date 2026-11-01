@@ -2,6 +2,7 @@
 // Boots simulator, installs Release app, streams logs, handles rotation, captures screenshots, and asserts results
 
 import fs from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +11,34 @@ import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
 
 let lifecycle;
+
+// One decoder per transport preserves UTF-8 across byte chunks. Flush only once
+// at pipe EOF so an unterminated final protocol record is neither lost nor repeated.
+export function createLineBufferConsumer(onLine, onChunk = () => {}) {
+  const decoder = new StringDecoder('utf8');
+  let buffer = '';
+  let ended = false;
+  const consumeText = text => {
+    buffer += text;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) onLine(line);
+  };
+  const consume = chunk => {
+    if (ended) return;
+    onChunk(chunk);
+    consumeText(decoder.write(chunk));
+  };
+  consume.flush = () => {
+    if (ended) return;
+    ended = true;
+    consumeText(decoder.end());
+    if (buffer) onLine(buffer);
+    buffer = '';
+  };
+  return consume;
+}
+
 
 function runCommand(cmd, args, options = {}) {
   try {
@@ -211,19 +240,6 @@ async function main() {
     }
   }
 
-  function createLineBufferConsumer(onLine, record = true) {
-    let buffer = '';
-    return (chunk) => {
-      if (record) fs.appendFileSync(rawLogFile, chunk);
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        onLine(line);
-      }
-    };
-  }
-
   lifecycle.update('startup:unified-log-readiness');
   const deviceLog = path.join(outputDir, 'device-stream.log');
   fs.writeFileSync(deviceLog, '');
@@ -249,13 +265,15 @@ async function main() {
   const streamConsumer = createLineBufferConsumer(line => {
     observeReadiness(line);
     if (protocolArmed) processIncomingLine(line);
-  });
-  const stderrConsumer = createLineBufferConsumer(observeReadiness, false);
+  }, chunk => fs.appendFileSync(rawLogFile, chunk));
+  const stderrConsumer = createLineBufferConsumer(observeReadiness);
   deviceProcess.stdout.on('data', chunk => { fs.appendFileSync(deviceLog, chunk); streamConsumer(chunk); });
   // stderr is evidence only, never an alternate protocol source.
   deviceProcess.stderr.on('data', chunk => { fs.appendFileSync(deviceLog, chunk); stderrConsumer(chunk); });
   deviceProcess.on('error', err => failStream(`Unified log stream failed: ${err.message}`));
   deviceProcess.on('close', (code, signal) => {
+    streamConsumer.flush();
+    stderrConsumer.flush();
     if (!scenarioFinished && !transportStopping) failStream(`Unified log stream exited before completion: ${code ?? signal}`);
   });
   const readinessTimeout = setInterval(() => {

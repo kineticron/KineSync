@@ -319,6 +319,7 @@ if (args.includes('screenshot')) {
 }
 if (args.includes('stream')) {
  if (!args.includes('--level') || args[args.indexOf('--level') + 1] !== 'debug' || args[args.indexOf('--predicate') + 1] !== 'process == "KineSync"') process.exit(98);
+ if (process.env.SIM_CASE === 'stream-eof-banner') { process.stdout.write('Filtering the log data using process == KineSync', () => process.exit(0)); return; }
  if (process.env.SIM_CASE === 'stream-exit') { console.error('unified subscription failed'); process.exit(2); }
  if (process.env.SIM_CASE === 'stream-not-ready') { setInterval(() => {}, 1000); return; }
  // Split the banner to exercise streaming line framing before launch.
@@ -335,9 +336,12 @@ if (args.includes('stream')) {
   const logs = ${JSON.stringify(runLogs)}.map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
-  if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs);
+  if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs.trimEnd());
   process.stdout.write(logs.slice(0, split));
-  setTimeout(() => process.stdout.write(logs.slice(split)), 10);
+  setTimeout(() => {
+   if (process.env.SIM_CASE === 'unterminated-complete') { process.stdout.write(logs.slice(split).trimEnd(), () => process.exit(0)); }
+   else process.stdout.write(logs.slice(split));
+  }, 10);
  }, 10);
  setInterval(() => {}, 1000);
 }
@@ -359,13 +363,14 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'console-duplicate', 'stderr-banner', 'blank', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-not-ready', 'stream-dies']) {
+  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
     for (const file of ['launched', 'stream-ready']) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
-    const shouldPass = ['pass', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const started = Date.now();
     const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
-    if (!['signal', 'install-failure', 'stream-exit', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (!['signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (shouldPass) {
       const raw = fs.readFileSync(path.join(output, 'simulator-raw-log.txt'), 'utf8');
       assert.equal(raw.split('[KINESYNC_SIM] SCENARIO_START').length - 1, 1, 'Canonical stream must not merge launch-console duplicates');
@@ -383,13 +388,16 @@ if (args.includes('launch')) {
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
       if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
-      if (['stream-exit', 'stream-dies'].includes(scenario)) assert.match(state.error, /Unified log stream exited/);
+      if (['stream-exit', 'stream-eof-banner', 'stream-dies'].includes(scenario)) assert.match(state.error, /Unified log stream exited/);
       if (scenario === 'stream-exit') assert.ok(fs.readFileSync(path.join(output, 'device-stream.log'), 'utf8').includes('unified subscription failed'), 'Stream failure stderr must survive startup failure');
-      if (['stream-exit', 'stream-not-ready'].includes(scenario)) {
+      if (['stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) {
         assert.equal(state.stage, 'startup:unified-log-readiness');
         assert.ok(!fs.existsSync(path.join(dir, 'launched')), 'Readiness failure must prevent app launch');
       }
-      if (scenario === 'stream-not-ready') assert.match(state.error, /Startup timeout/);
+      if (scenario === 'stream-not-ready') {
+        assert.match(state.error, /Startup timeout/);
+        assert.ok(Date.now() - started < 20000, 'Readiness rejection plus bounded failure evidence must finish promptly');
+      }
     }
   }
 }
