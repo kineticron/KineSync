@@ -3,10 +3,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { runStartupCommand } from './run-ios-simulator-test.mjs';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-deadlines-'));
 try {
   let now = 1000;
+  const capped = new SimulatorRunLifecycle(path.join(dir, 'capped'), { now: () => now, ciDeadlineMs: 1150 });
+  assert.equal(capped.overallDeadline, 1150);
+  capped.line('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1');
+  now = 1150; assert.throws(() => capped.check(), /Overall timeout/);
+  const expired = new SimulatorRunLifecycle(path.join(dir, 'expired'), { now: () => now, ciDeadlineMs: 1100 });
+  assert.throws(() => expired.check(), /Overall timeout/);
+  now = 1000;
+  const startup = new SimulatorRunLifecycle(path.join(dir, 'install'), { now: () => now, ciDeadlineMs: Infinity });
+  now += 40000;
+  await runStartupCommand('xcrun', ['simctl', 'install', 'fake', '/mock.app'], startup, (_cmd, _args, options) => {
+    assert.equal(options.timeout, 140000, 'Healthy 76-second install must retain remaining startup budget');
+    const pending = Promise.resolve({ stdout: '' }); pending.child = { kill() {} }; return pending;
+  });
+  now = 1000;
   const lifecycle = new SimulatorRunLifecycle(dir, { startupMs: 100, stageMs: 50, overallMs: 200, now: () => now, command: () => { throw new Error('device unavailable'); } });
   now = 1100; assert.throws(() => lifecycle.check(), /Startup timeout/);
   now = 1050; lifecycle.line('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1');
@@ -18,6 +33,13 @@ try {
   assert.match(fs.readFileSync(path.join(dir, 'device-log.txt'), 'utf8'), /device unavailable/);
   assert.match(fs.readFileSync(path.join(dir, 'runner-failure.md'), 'utf8'), /stalled/);
   assert.match(fs.readFileSync(path.join(dir, 'failure-screenshot.log'), 'utf8'), /device unavailable/);
+  const candidateOutput = path.join(dir, 'candidate-expired');
+  const candidate = spawnSync(process.execPath, [new URL('./run-ios-simulator-test.mjs', import.meta.url).pathname, '--output-dir', candidateOutput, '--timeout-minutes', '6'], {
+    encoding: 'utf8', timeout: 5000, env: { ...process.env, SIMULATOR_CI_DEADLINE_MS: String(Date.now() - 1000) },
+  });
+  assert.equal(candidate.status, 1, candidate.stderr);
+  assert.match(JSON.parse(fs.readFileSync(path.join(candidateOutput, 'runner-state.json'), 'utf8')).error, /Overall timeout at startup:discovery/);
+  assert.ok(fs.existsSync(path.join(candidateOutput, 'runner-failure.md')), 'Expired candidate must retain evidence without starting simulator work');
   const budget = spawnSync(process.execPath, [new URL('./run-with-ci-budget.mjs', import.meta.url).pathname, process.execPath, '-e', 'setInterval(() => {}, 1000)'], { env: { ...process.env, SIMULATOR_CI_DEADLINE_MS: String(Date.now() + 200) }, timeout: 8000, encoding: 'utf8' });
   assert.equal(budget.status, 1); assert.match(budget.stderr, /budget exhausted/);
   const workflow = fs.readFileSync(new URL('../../.github/workflows/ios-simulator-test.yml', import.meta.url), 'utf8');

@@ -22,10 +22,10 @@ function runCommand(cmd, args, options = {}) {
 }
 
 const execFileAsync = promisify(execFile);
-async function runStartupCommand(cmd, args) {
-  lifecycle.check();
-  const pending = execFileAsync(cmd, args, { encoding: 'utf8', timeout: Math.max(1, lifecycle.remaining()), killSignal: 'SIGKILL' });
-  lifecycle.children.push(pending.child);
+export async function runStartupCommand(cmd, args, state = lifecycle, execute = execFileAsync) {
+  state.check();
+  const pending = execute(cmd, args, { encoding: 'utf8', timeout: Math.max(1, state.remaining()), killSignal: 'SIGKILL' });
+  state.children.push(pending.child);
   const { stdout } = await pending;
   return stdout;
 }
@@ -86,7 +86,7 @@ async function main() {
   const outputDir = outputDirIndex >= 0 ? process.argv[outputDirIndex + 1] : '.expo/simulator-test-output';
   const timeoutMinutes = timeoutIndex >= 0 ? Number(process.argv[timeoutIndex + 1]) : 6;
   const seconds = (flag, fallback) => { const i = process.argv.indexOf(flag); return i < 0 ? fallback : Number(process.argv[i + 1]) * 1000; };
-  lifecycle = new SimulatorRunLifecycle(outputDir, { startupMs: seconds('--startup-seconds', 180000), stageMs: seconds('--stage-seconds', 60000), overallMs: Math.min(timeoutMinutes * 60000, process.env.SIMULATOR_CI_DEADLINE_MS ? Math.max(1, Number(process.env.SIMULATOR_CI_DEADLINE_MS) - Date.now()) : Infinity) });
+  lifecycle = new SimulatorRunLifecycle(outputDir, { startupMs: seconds('--startup-seconds', 180000), stageMs: seconds('--stage-seconds', 60000), overallMs: timeoutMinutes * 60000 });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     lifecycle.fail(new Error(`Received ${signal}`)); lifecycle.capture(true); lifecycle.cleanup(); process.exit(1);
   });

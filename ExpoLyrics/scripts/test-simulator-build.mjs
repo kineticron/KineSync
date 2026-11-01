@@ -2,11 +2,14 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {
   parseXcodebuildJson,
   findApplicationTarget,
   discoverApplicationScheme,
   buildSimulatorApp,
+  configureStandaloneSimulator,
 } from './build-simulator-app.mjs';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-build-'));
 
@@ -392,7 +395,6 @@ function testSchemeDiscovery() {
         ]);
       }
       if (cmd === 'xcodebuild' && args.includes('build')) {
-        assert.ok(args.includes('SKIP_BUNDLING='));
         assert.ok(args.includes('FORCE_BUNDLING=1'));
         if (fs.existsSync(expectedAppDir)) fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'test bundle');
         builtScheme = args[args.indexOf('-scheme') + 1];
@@ -440,4 +442,31 @@ function testSchemeDiscovery() {
 }
 
 
-try { testSchemeDiscovery(); } finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
+function testInstalledTemplateShell() {
+  const template = fileURLToPath(new URL('../node_modules/expo/template.tgz', import.meta.url));
+  const project = execFileSync('tar', ['-xOzf', template, 'package/ios/HelloWorld.xcodeproj/project.pbxproj'], { encoding: 'utf8' });
+  const phase = [...project.matchAll(/shellScript = ("(?:\\.|[^"\\])*");/g)]
+    .map(match => JSON.parse(match[1])).find(script => script.includes('export SKIP_BUNDLING=1'));
+  assert.ok(phase, 'Installed Expo template must expose the actual Debug bundle phase');
+  const ios = path.join(tempDir, 'actual-template');
+  fs.mkdirSync(path.join(ios, 'HelloWorld'), { recursive: true });
+  fs.writeFileSync(path.join(ios, 'HelloWorld/AppDelegate.swift'), execFileSync('tar', ['-xOzf', template, 'package/ios/HelloWorld/AppDelegate.swift']));
+  fs.writeFileSync(path.join(ios, '.xcode.env.local'), 'export PRESERVED_LOCAL=local\n');
+  fs.writeFileSync(path.join(ios, '.xcode.env.updates'), 'export PRESERVED_UPDATES=updates\nexport SKIP_BUNDLING=1\n');
+  const fakeRN = path.join(ios, 'fake-rn');
+  fs.mkdirSync(path.join(fakeRN, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(fakeRN, 'scripts/react-native-xcode.sh'), '#!/bin/bash\nprintf "%s|%s|%s|%s" "${SKIP_BUNDLING-unset}" "$FORCE_BUNDLING" "$PRESERVED_LOCAL" "$PRESERVED_UPDATES"\n', { mode: 0o755 });
+  const nodeShim = path.join(ios, 'node-shim');
+  fs.writeFileSync(nodeShim, '#!/bin/bash\nprintf "%s" "$TEST_RN_PATH"\n', { mode: 0o755 });
+  const execute = () => execFileSync('bash', ['-e', '-c', phase], { encoding: 'utf8', env: { ...process.env, SRCROOT: ios, PROJECT_DIR: ios, CONFIGURATION: 'Debug', SKIP_BUNDLING: '', FORCE_BUNDLING: '1', ENTRY_FILE: '/mock/index.js', CLI_PATH: '/mock/cli', BUNDLE_COMMAND: 'export:embed', NODE_BINARY: nodeShim, TEST_RN_PATH: path.join(fakeRN, 'scripts/react-native-xcode.sh') } });
+  assert.equal(execute(), '1|1|local|updates', 'Xcode arg alone must lose to actual generated phase');
+  configureStandaloneSimulator(ios);
+  assert.equal(execute(), 'unset|1|local|updates', 'Late local override must win after Debug and updates exports');
+  const first = fs.readFileSync(path.join(ios, '.xcode.env.local'), 'utf8');
+  configureStandaloneSimulator(ios);
+  assert.equal(fs.readFileSync(path.join(ios, '.xcode.env.local'), 'utf8'), first, 'Override must be idempotent');
+  assert.equal(execute(), 'unset|1|local|updates');
+  console.log('Installed Expo template shell override tests passed.');
+}
+
+try { testSchemeDiscovery(); testInstalledTemplateShell(); } finally { fs.rmSync(tempDir, { recursive: true, force: true }); }

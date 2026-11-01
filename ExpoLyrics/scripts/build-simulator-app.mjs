@@ -243,7 +243,6 @@ export function buildSimulatorApp(options = {}) {
     '-destination', 'generic/platform=iOS Simulator',
     '-derivedDataPath', derivedDataPath,
     'FORCE_BUNDLING=1',
-    'SKIP_BUNDLING=',
     'EXPO_PUBLIC_SIMULATOR_TEST=1',
     ...signing,
     ...ccache,

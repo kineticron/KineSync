@@ -4,13 +4,14 @@ import { execFileSync } from 'node:child_process';
 
 // Deadlines are absolute: heartbeats and repeated stage markers cannot extend them.
 export class SimulatorRunLifecycle {
-  constructor(outputDir, { startupMs = 180000, stageMs = 60000, overallMs = 360000, now = Date.now, command = execFileSync } = {}) {
+  constructor(outputDir, { startupMs = 180000, stageMs = 60000, overallMs = 360000, now = Date.now, command = execFileSync, ciDeadlineMs = process.env.SIMULATOR_CI_DEADLINE_MS ? Number(process.env.SIMULATOR_CI_DEADLINE_MS) : Infinity } = {}) {
     for (const value of [startupMs, stageMs, overallMs]) {
       if (!Number.isFinite(value) || value <= 0) throw new Error('Timeouts must be finite positive numbers');
     }
     Object.assign(this, { outputDir, startupMs, stageMs, now, command });
     this.started = now();
-    this.overallDeadline = this.started + overallMs;
+    if (ciDeadlineMs !== Infinity && !Number.isFinite(ciDeadlineMs)) throw new Error('Invalid CI deadline');
+    this.overallDeadline = Math.min(this.started + overallMs, ciDeadlineMs);
     this.deadline = this.started + startupMs;
     this.stage = 'startup:discovery';
     this.children = [];
