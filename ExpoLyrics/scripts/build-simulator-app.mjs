@@ -40,6 +40,19 @@ export function parseXcodebuildJson(output) {
   }
 }
 
+function applicationIdentity(application) {
+  const settings = application.buildSettings;
+  // Extension schemes can expose the host app as a dependency. Compare the app,
+  // not the scheme that happened to expose it. Keep distinct projects/products separate.
+  return JSON.stringify([
+    settings.PROJECT_FILE_PATH || settings.PROJECT_NAME || '',
+    application.target,
+    settings.PRODUCT_BUNDLE_IDENTIFIER || '',
+    settings.FULL_PRODUCT_NAME || '',
+    settings.TARGET_BUILD_DIR ? path.normalize(settings.TARGET_BUILD_DIR) : '',
+  ]);
+}
+
 export function findApplicationTarget(targetList) {
   if (!targetList) return null;
   const targets = Array.isArray(targetList)
@@ -65,12 +78,14 @@ export function findApplicationTarget(targetList) {
       });
     }
   }
-  if (matches.length > 1) throw new Error('Ambiguous application targets within scheme');
-  return matches[0] || null;
+  const identities = new Map(matches.map(app => [applicationIdentity(app), app]));
+  if (identities.size > 1) throw new Error('Ambiguous application targets within scheme');
+  return identities.values().next().value || null;
 }
 
 export function discoverApplicationScheme(workspacePath, options = {}) {
   const {
+    applicationScheme = 'KineSync',
     configuration = 'Debug',
     sdk = 'iphonesimulator',
     destination = 'generic/platform=iOS Simulator',
@@ -136,15 +151,18 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
     );
   }
 
-  if (matchingSchemes.length > 1) {
+  const identities = new Set(matchingSchemes.map(applicationIdentity));
+  if (identities.size > 1) {
     const ambiguousNames = matchingSchemes.map((m) => `${m.scheme} (target: ${m.target})`).join(', ');
     throw new Error(
       `Ambiguous application schemes found in workspace ${wsName}: ${ambiguousNames}. ` +
-      'Expected exactly one application scheme.'
+      'Expected exactly one application target/product identity.'
     );
   }
 
-  const selected = matchingSchemes[0];
+  // The intended host scheme must exist even when widget/utility schemes expose it.
+  const selected = matchingSchemes.find(app => app.scheme === applicationScheme);
+  if (!selected) throw new Error(`Intended application scheme ${applicationScheme} was not found among application schemes: ${matchingSchemes.map(app => app.scheme).join(', ')}`);
   console.log(`[BUILD] Selected application scheme: ${selected.scheme} (target: ${selected.target})`);
   return selected;
 }

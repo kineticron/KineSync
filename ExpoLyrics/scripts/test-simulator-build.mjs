@@ -204,6 +204,41 @@ function testSchemeDiscovery() {
     assert.strictEqual(discovered.buildSettings.TARGET_BUILD_DIR, '/derived/Build/Products/Debug-iphonesimulator');
   }
 
+  // Real run 41290266075: widget scheme also reports the KineSync host app.
+  {
+    const app = { target: 'KineSync', action: 'build', buildSettings: {
+      WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'com.apple.product-type.application',
+      PROJECT_FILE_PATH: '/repo/ios/KineSync.xcodeproj', PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync',
+      TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator', FULL_PRODUCT_NAME: 'KineSync.app',
+    } };
+    const widget = { target: 'KineSyncLyricsWidget', buildSettings: {
+      WRAPPER_EXTENSION: 'appex', PRODUCT_TYPE: 'com.apple.product-type.app-extension',
+      FULL_PRODUCT_NAME: 'KineSyncLyricsWidget.appex',
+    } };
+    const run = (schemes, host = app) => discoverApplicationScheme('/repo/ios/KineSync.xcworkspace', {
+      execCommand: (_cmd, args) => args.includes('-list') ? JSON.stringify({ workspace: { schemes } }) :
+        JSON.stringify(args[args.indexOf('-scheme') + 1] === 'KineSyncLyricsWidget' ? [widget, host] : [app]),
+    });
+    for (const schemes of [['KineSyncLyricsWidget', 'KineSync'], ['KineSync', 'KineSyncLyricsWidget']]) {
+      const selected = run(schemes);
+      assert.equal(selected.scheme, 'KineSync', 'Select intended host scheme regardless of enumeration order');
+      assert.equal(selected.target, 'KineSync');
+      assert.equal(selected.buildSettings.FULL_PRODUCT_NAME, 'KineSync.app');
+    }
+    assert.throws(() => run(['KineSyncLyricsWidget']), /Intended application scheme KineSync was not found/);
+    assert.equal(findApplicationTarget([app, structuredClone(app)]).target, 'KineSync', 'Repeated identical app settings are one identity');
+    for (const changed of [
+      { PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.Other' },
+      { FULL_PRODUCT_NAME: 'Other.app' },
+      { PROJECT_FILE_PATH: '/other/KineSync.xcodeproj' },
+      { TARGET_BUILD_DIR: '/other/Debug-iphonesimulator' },
+    ]) {
+      const other = { ...app, buildSettings: { ...app.buildSettings, ...changed } };
+      assert.throws(() => run(['KineSync', 'KineSyncLyricsWidget'], other), /Ambiguous application schemes/);
+      assert.throws(() => findApplicationTarget([app, other]), /Ambiguous application targets/);
+    }
+  }
+
   // 4. Regression test: no app in scheme inventory (only pods / wrong build products)
   {
     const mockInventoryOnlyPods = ['boost', 'DoubleConversion', 'fmt'];
@@ -333,7 +368,7 @@ function testSchemeDiscovery() {
         return JSON.stringify({
           workspace: {
             name: 'KineSync',
-            schemes: ['boost', 'KineSync'],
+            schemes: ['boost', 'KineSyncLyricsWidget', 'KineSync'],
           },
         });
       }
