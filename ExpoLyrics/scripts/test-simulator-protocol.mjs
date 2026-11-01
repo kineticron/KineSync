@@ -117,9 +117,12 @@ function testBaselineIntegration() {
     }
     execFileSync('git', ['apply', '--reverse', patch], { cwd: dir });
     prepareBaselineHarness({ candidateDir: candidate, baselineDir: dir });
+    for (const file of ['test-simulator-timeouts.mjs', 'run-with-ci-budget.mjs', 'simulator-run-lifecycle.mjs']) {
+      assert.equal(fs.readFileSync(path.join(dir, 'ExpoLyrics/scripts', file), 'utf8'), fs.readFileSync(path.join(root, 'scripts', file), 'utf8'), `Prepared baseline must include current ${file}`);
+    }
     for (const file of fs.readdirSync(path.join(dir, 'ExpoLyrics/scripts')).filter(f => f.endsWith('.mjs'))) {
       const script = path.join(dir, 'ExpoLyrics/scripts', file);
-      for (const match of fs.readFileSync(script, 'utf8').matchAll(/from ['"](\.\/[^'"]+)['"]/g)) assert.ok(fs.existsSync(path.resolve(path.dirname(script), match[1])), `${file} imports missing ${match[1]}`);
+      for (const match of fs.readFileSync(script, 'utf8').matchAll(/(?:from\s+|import\s*)['"](\.\/[^'"]+)['"]/g)) assert.ok(fs.existsSync(path.resolve(path.dirname(script), match[1])), `${file} imports missing ${match[1]}`);
     }
     for (const file of paths) assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), fs.readFileSync(path.join(candidate, file), 'utf8'), file);
     prepareBaselineHarness({ candidateDir: candidate, baselineDir: dir });
@@ -249,6 +252,8 @@ if (process.argv[2].includes('compare-simulator')) {
  fs.writeFileSync('ExpoLyrics/.expo/comparison-report.md', 'comparison attempted');
  process.exit(Number(process.env.COMPARE_EXIT));
 }
+const outputIndex = process.argv.indexOf('--output-dir');
+if (process.argv[outputIndex + 1] !== process.env.GITHUB_WORKSPACE + '/ExpoLyrics/.expo/baseline-test-output') process.exit(97);
 process.exit(Number(process.env.BASELINE_EXIT));
 `;
     fs.writeFileSync(path.join(dir, 'node'), shim, { mode: 0o755 });
