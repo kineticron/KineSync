@@ -319,12 +319,12 @@ if (name === 'node') {
  console.log('native optional-symbol warning');
  console.log('KINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: args.at(-2), orientation: args.at(-1), accepted: true })); process.exit(0);
 }
-if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 27.1'); process.exit(0); }
+if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 26.6'); process.exit(0); }
 if (name !== 'xcrun') process.exit(0);
-if (args.includes('--show-sdk-version')) console.log('27.1');
-if (args.includes('--show-sdk-path')) console.log(process.env.DEVELOPER_DIR + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk');
-if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0', isAvailable: true }] }));
-else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
+if (args.includes('--show-sdk-version')) console.log('26.5');
+if (args.includes('--show-sdk-path')) console.log(process.env.DEVELOPER_DIR + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator26.5.sdk');
+if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', isAvailable: true }] }));
+else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) console.log(dir);
 if (args.includes('screenshot')) {

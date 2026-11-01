@@ -24,10 +24,10 @@ function loadBridge(fileSystem, logs = [], development = true, env = { EXPO_PUBL
 }
 
 export async function testSimulatorProtocol() {
-  const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
+  const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-5';
   const phone = { name: 'iPhone Test', udid: 'b', state: 'Shutdown', isAvailable: true };
   assert.equal(selectSimulatorDevice({ devices: { [runtime]: [phone, { ...phone, udid: 'a' }] } }).udid, 'a');
-  assert.throws(() => selectSimulatorDevice({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [phone] } }), /iOS 27/);
+  assert.throws(() => selectSimulatorDevice({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [phone] } }), /iOS 26/);
   assert.throws(() => selectSimulatorDevice({ devices: { [runtime]: [phone, { ...phone, name: 'iPad', udid: 'other', state: 'Booted' }] } }), /Conflicting booted/);
   // Byte-by-byte includes a split UTF-8 character, split marker, and final no-LF record.
   const framed = [], recorded = [];
@@ -284,7 +284,8 @@ function testManualWorkflow() {
   const workflow = YAML.parse(fs.readFileSync(path.join(root, '../.github/workflows/ios-simulator-test.yml'), 'utf8'));
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   const job = workflow.jobs['ios-simulator-test'];
-  assert.equal(job['timeout-minutes'], 60);
+  assert.equal(job['timeout-minutes'], 90);
+  assert.equal(job['runs-on'], 'macos-26');
   assert.equal(job.strategy['fail-fast'], false, 'Candidate failure must not cancel baseline');
   assert.ok(job.strategy.matrix.variant.includes('candidate') && job.strategy.matrix.variant.includes('baseline'));
   for (const job of Object.values(workflow.jobs)) for (const step of job.steps.filter(step => step.run)) {
@@ -292,14 +293,14 @@ function testManualWorkflow() {
     assert.equal(parsed.status, 0, `${step.name}: ${parsed.stderr}`);
   }
   const steps = job.steps;
-  const selection = steps.findIndex(step => step.name === 'Select installed Xcode 27 explicitly');
+  const selection = steps.findIndex(step => step.name === 'Select installed Xcode 26 explicitly');
   const rotationTool = steps.findIndex(step => step.name === 'Prepare pinned CI-only native rotation tool');
   assert.ok(selection >= 0 && selection < rotationTool, 'Native load preflight must inherit canonical Xcode selection');
   assert.ok(rotationTool < steps.findIndex(step => step.id === 'baseline_prep'));
   assert.ok(rotationTool < steps.findIndex(step => step.id === 'candidate_build'));
   assert.match(steps[selection].run, /DEVELOPER_DIR=.*pwd -P/);
   const paths = steps.find(step => step.id === 'paths');
-  assert.match(paths.run, /46 \* 60 \* 1000/);
+  assert.match(paths.run, /75 \* 60 \* 1000/);
   assert.match(paths.run, /pwd -P/);
   assert.match(steps.find(step => step.name === 'Expo prebuild (iOS)').run, /--no-install/);
   for (const [id, minutes] of [['pods_cache', 4], ['compiler_cache', 8]]) {

@@ -3,11 +3,10 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 const execute = promisify(execFile);
-// Reproduce run4's intended OS, not whichever 27.x runtime happens to sort first.
-// SDK 27.1 can build for iOS 27.0; runtime and SDK versions are deliberately distinct.
+// Stable macos-26 image: Xcode 26.6 ships SDK/runtime 26.5.
 export const SUPPORTED_RUNTIME_POLICY = Object.freeze({
-  sdk: '27.1', runtimeVersion: '27.0',
-  runtime: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0',
+  sdk: '26.5', runtimeVersion: '26.5',
+  runtime: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5',
 });
 
 export async function startupCommand(cmd, args, state, run = execute, cap = 30000) {
@@ -31,13 +30,13 @@ export async function startupCommand(cmd, args, state, run = execute, cap = 3000
 
 export async function selectToolchain(state, run = execute, developer = process.env.DEVELOPER_DIR) {
   state.check();
-  if (!developer) throw new Error('Explicit DEVELOPER_DIR required (Xcode 27)');
+  if (!developer) throw new Error('Explicit DEVELOPER_DIR required (Xcode 26)');
   const canonical = fs.realpathSync(developer);
   if (!canonical.endsWith('.app/Contents/Developer')) throw new Error('Invalid Xcode developer directory');
   process.env.DEVELOPER_DIR = canonical;
   const command = (cmd, args, cap) => startupCommand(cmd, args, state, run, cap);
   const version = await command('xcodebuild', ['-version']);
-  if (!/^Xcode 27\.1(?:\s|$)/.test(version)) throw new Error('Xcode 27.1 required');
+  if (!/^Xcode 26\.6(?:\s|$)/.test(version)) throw new Error('Xcode 26.6 required');
   const sdk = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version'])).trim();
   const sdkPath = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'])).trim();
   if (sdk !== SUPPORTED_RUNTIME_POLICY.sdk || !sdkPath.startsWith(canonical + '/')) throw new Error('Wrong simulator SDK/toolchain');

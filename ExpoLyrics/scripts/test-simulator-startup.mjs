@@ -7,7 +7,7 @@ import { enumerateRuntimes, startupCommand, prepareSimulator, verifySelected, st
 import { preflightNative, verifyArchive, verifyNative, verifyFramework } from './prepare-simulator-rotation.mjs';
 import { selectSimulatorDevice, rotateSimulator } from './run-ios-simulator-test.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-test-'));
-const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
+const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-5';
 const phone = { udid: 'known', name: 'iPhone 17', state: 'Shutdown', isAvailable: true };
 const inventory = device => JSON.stringify({ devices: { [runtime]: [device] } });
 const timeout = () => Object.assign(new Error('fake timeout'), { code: 'ETIMEDOUT', killed: true });
@@ -154,9 +154,9 @@ try {
     await assert.rejects(prepareSimulator(state, selectSimulatorDevice, run, true), service === 'present' ? /denied/ : /timeout/);
     assert.equal(lists, 3, 'Failed service recovery must not begin another inventory attempt');
   }
-  const otherRuntime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-1';
+  const otherRuntime = 'com.apple.CoreSimulator.SimRuntime.iOS-26-4';
   const mixed = { devices: { [otherRuntime]: [{ ...phone, udid: 'newer' }], [runtime]: [phone] } };
-  assert.equal(selectSimulatorDevice(mixed).udid, phone.udid, 'Explicit policy selects 27.0 even with 27.1 installed');
+  assert.equal(selectSimulatorDevice(mixed).udid, phone.udid, 'Explicit policy selects 26.5 even with 26.4 installed');
   assert.throws(() => selectSimulatorDevice({ devices: { [otherRuntime]: [phone] } }), /supported runtime policy/);
   for (const active of ['Booted', 'Booting']) {
     assert.throws(() => selectSimulatorDevice({ devices: { [otherRuntime]: [{ ...phone, udid: 'wrong-os', state: active }], [runtime]: [phone] } }), /Conflicting/);
@@ -208,16 +208,16 @@ try {
   const developer = path.join(dir, 'Xcode.app/Contents/Developer');
   fs.mkdirSync(path.join(developer, 'Applications/Simulator.app'), { recursive: true });
   const tool = make();
-  const fake = version => async (cmd, args) => ({ stdout: cmd === 'xcodebuild' ? (args.includes('-version') ? version : '') : args.includes('--show-sdk-path') ? developer + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk' : args.includes('runtimes') ? JSON.stringify({ runtimes: [{ identifier: runtime, isAvailable: true }] }) : '27.1' });
-  for (const version of ['Xcode 26.1', 'Xcode 27.0', 'Xcode 27.2']) await assert.rejects(selectToolchain(tool.state, fake(version), developer), /Xcode 27/);
-  await assert.rejects(selectToolchain(tool.state, async (cmd) => ({ stdout: cmd === 'xcodebuild' ? 'Xcode 27.1' : '26.0' }), developer), /SDK/);
-  for (const sdk of ['27.0', '27.2']) {
-    await assert.rejects(selectToolchain(tool.state, async (cmd, args, options) => cmd === 'xcrun' && args.includes('--show-sdk-version') ? { stdout: sdk } : fake('Xcode 27.1')(cmd, args, options), developer), /SDK/);
+  const fake = version => async (cmd, args) => ({ stdout: cmd === 'xcodebuild' ? (args.includes('-version') ? version : '') : args.includes('--show-sdk-path') ? developer + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator26.5.sdk' : args.includes('runtimes') ? JSON.stringify({ runtimes: [{ identifier: runtime, isAvailable: true }] }) : '26.5' });
+  for (const version of ['Xcode 26.1', 'Xcode 26.5', 'Xcode 26.2']) await assert.rejects(selectToolchain(tool.state, fake(version), developer), /Xcode 26/);
+  await assert.rejects(selectToolchain(tool.state, async (cmd) => ({ stdout: cmd === 'xcodebuild' ? 'Xcode 26.6' : '26.0' }), developer), /SDK/);
+  for (const sdk of ['26.4', '26.6']) {
+    await assert.rejects(selectToolchain(tool.state, async (cmd, args, options) => cmd === 'xcrun' && args.includes('--show-sdk-version') ? { stdout: sdk } : fake('Xcode 26.6')(cmd, args, options), developer), /SDK/);
   }
   fs.mkdirSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS'), { recursive: true });
   fs.writeFileSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS/Simulator'), 'fixture');
-  await assert.rejects(selectToolchain(make().state, async (cmd, args, options) => args.includes('runtimes') ? { stdout: JSON.stringify({ runtimes: [] }) } : fake('Xcode 27.1')(cmd, args, options), developer), /runtime unavailable/);
-  await selectToolchain(tool.state, fake('Xcode 27.1'), developer);
+  await assert.rejects(selectToolchain(make().state, async (cmd, args, options) => args.includes('runtimes') ? { stdout: JSON.stringify({ runtimes: [] }) } : fake('Xcode 26.6')(cmd, args, options), developer), /runtime unavailable/);
+  await selectToolchain(tool.state, fake('Xcode 26.6'), developer);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tool.state.outputDir, 'toolchain.json'), 'utf8')).runtimePolicy, SUPPORTED_RUNTIME_POLICY);
   const calls = [];
   rotateSimulator('portrait', phone.udid, (cmd, args) => {
@@ -235,6 +235,6 @@ try {
     assert.throws(() => rotateSimulator('portrait', phone.udid, cmd => cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : output));
   }
   fs.rmSync(path.join(developer, 'Applications'), { recursive: true });
-  await selectToolchain(make().state, fake('Xcode 27.1'), developer);
+  await selectToolchain(make().state, fake('Xcode 26.6'), developer);
   console.log('Simulator startup fake-command tests passed.');
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

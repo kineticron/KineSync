@@ -66,7 +66,7 @@ export function selectSimulatorDevice(data, policy = SUPPORTED_RUNTIME_POLICY) {
     .flatMap(([runtime, list]) => list.filter(dev => dev.isAvailable && dev.name.includes('iPhone')).map(dev => ({ ...dev, runtime })))
     .sort((a, b) => a.runtime.localeCompare(b.runtime) || a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid));
   const candidate = candidates.find(dev => ['Booted', 'Booting'].includes(dev.state)) || candidates[0];
-  if (!candidate) throw new Error('No available iOS 27.0 iPhone simulator (supported runtime policy)');
+  if (!candidate) throw new Error('No available iOS 26.5 iPhone simulator (supported runtime policy)');
   if (booted.some(dev => dev.udid !== candidate.udid)) throw new Error('Conflicting booted or booting simulator; refusing GUI automation');
   return candidate;
 }

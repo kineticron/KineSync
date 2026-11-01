@@ -28,8 +28,8 @@ defaults:
 
 jobs:
   ios-simulator-test:
-    runs-on: xcode-27
-    timeout-minutes: 60
+    runs-on: macos-26
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -49,7 +49,7 @@ jobs:
         with:
           node-version: 22
 
-      # Each cold build gets its own job: 46m preparation/build/scenario,
+      # Each cold build gets its own job: 75m preparation/build/scenario,
       # 8m compiler save, 2m verification, 2m upload, 2m cleanup margin.
       - name: Canonical paths and independent work budget
         id: paths
@@ -76,23 +76,25 @@ jobs:
           {
             echo "DERIVED_DATA_PATH=${DERIVED}"
             echo "CCACHE_DIR=${COMPILER}"
-            echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 46 * 60 * 1000 ))"
+            echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 75 * 60 * 1000 ))"
           } >> "${GITHUB_ENV}"
 
-      - name: Select installed Xcode 27 explicitly
+      - name: Select installed Xcode 26 explicitly
         timeout-minutes: 2
         run: |
           set -euo pipefail
-          # Pin the installed image identity used by run4, before even the ccache xcrun.
-          DEVELOPER_DIR="/Applications/Xcode_27.1.app/Contents/Developer"
+          # Stable runner inventory: image 20261026.0455.2; select before native loading.
+          DEVELOPER_DIR="/Applications/Xcode_26.6.app/Contents/Developer"
           test -d "${DEVELOPER_DIR}"
           DEVELOPER_DIR="$(cd "${DEVELOPER_DIR}" && pwd -P)"
           export DEVELOPER_DIR
+          sudo xcode-select --switch "${DEVELOPER_DIR}"
+          test "$(xcode-select -p)" = "${DEVELOPER_DIR}"
           echo "DEVELOPER_DIR=${DEVELOPER_DIR}" >> "${GITHUB_ENV}"
           echo "SIMULATOR_DISPOSABLE_CI=1" >> "${GITHUB_ENV}"
           node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -checkFirstLaunchStatus
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep '^Xcode 27\.'
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '27.1'
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep -Fx 'Xcode 26.6'
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '26.5'
 
       - name: Prepare pinned CI-only native rotation tool
         timeout-minutes: 2
@@ -149,7 +151,7 @@ jobs:
             echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
           } >> "${GITHUB_ENV}"
 
-      - name: Verify iOS 27 simulator toolchain
+      - name: Verify iOS 26 simulator toolchain
         run: |
           set -euo pipefail
           test "$(uname -m)" = arm64 # arm64-only simulator product requires an Apple Silicon host
