@@ -76,17 +76,32 @@ export function rotateSimulator(targetOrientation, udid, command = runCommand) {
   const booted = Object.values(inventory.devices || {}).flat().filter(d => d.state === 'Booted');
   if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
   const simulator = resolveSimulatorGUI(process.env.DEVELOPER_DIR, command);
-  command('open', ['-a', simulator, '--args', '-CurrentDeviceUDID', udid]);
+  // Expo CLI uses Device Hub's URL scheme to focus the selected device.
+  // -a pins the URL handler to the validated selected-Xcode bundle.
+  command('open', path.basename(simulator) === 'DeviceHub.app'
+    ? ['-a', simulator, `devices://device/open?id=${encodeURIComponent(udid)}`]
+    : ['-a', simulator, '--args', '-CurrentDeviceUDID', udid]);
   const processName = path.basename(simulator, '.app');
   const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
   const script = `
 tell application "${simulator}" to activate
 tell application "System Events"
+  repeat 20 times
+    if (count of (every application process whose name is "${processName}")) is greater than 0 then exit repeat
+    delay 0.1
+  end repeat
   set simulatorProcesses to every application process whose name is "${processName}"
   if (count of simulatorProcesses) is not 1 then error "Ambiguous Simulator GUI process"
   set simulatorPath to POSIX path of (application file of item 1 of simulatorProcesses as alias)
   if simulatorPath is not "${simulator}/" then error "Simulator GUI belongs to another Xcode"
   tell process "${processName}"
+    set frontmost to true
+    repeat 20 times
+      if exists menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1 then exit repeat
+      delay 0.1
+    end repeat
+    if not (exists menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1) then error "Selected device orientation menu unavailable; inspect Device Hub selection and Accessibility permission"
+    if not (enabled of menu item "${menuItem}" of menu 1 of menu item "Orientation" of menu 1 of menu bar item "Device" of menu bar 1) then error "Selected device orientation menu disabled"
     tell menu bar 1
       tell menu bar item "Device"
         tell menu 1

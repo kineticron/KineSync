@@ -35,6 +35,16 @@ try {
     assert.equal(attempts, mode === 'retry' ? 2 : mode === 'exhausted' ? 3 : 1);
     assert.equal(state.deadline, deadline);
   }
+  {
+    const { state, advance } = make(100); let attempts = 0;
+    await assert.rejects(enumerateRuntimes(state, async (_cmd, _args, options) => {
+      attempts++;
+      assert.equal(options.timeout, 100);
+      advance(options.timeout);
+      throw timeout();
+    }), /timeout/i);
+    assert.equal(attempts, 1, 'Expired absolute deadline must prevent another preflight attempt');
+  }
   for (const failure of ['list', 'boot', 'bootstatus', 'postboot', 'none', 'exhausted']) {
     const { state, advance } = make();
     const calls = [];
@@ -198,7 +208,13 @@ try {
   fs.renameSync(path.join(alternate, 'Contents/MacOS/Simulator'), path.join(alternate, 'Contents/MacOS/DeviceHub'));
   const alternateCalls = [];
   rotateSimulator('landscape', phone.udid, (cmd, args) => { alternateCalls.push([cmd, args]); return cmd === '/usr/bin/find' ? alternate : inventory({ ...phone, state: 'Booted' }); });
-  assert.equal(alternateCalls[2][1][1], fs.realpathSync(alternate));
+  assert.deepEqual(alternateCalls[2], ['open', ['-a', fs.realpathSync(alternate), `devices://device/open?id=${phone.udid}`]]);
+  assert.ok(!alternateCalls[2][1].includes('-CurrentDeviceUDID'));
+  assert.throws(() => rotateSimulator('portrait', phone.udid, (cmd) => {
+    if (cmd === '/usr/bin/find') return alternate;
+    if (cmd === 'open') throw Error('Device Hub URL handler failed');
+    return inventory({ ...phone, state: 'Booted' });
+  }), /URL handler failed/);
   assert.ok(alternateCalls[3][1][1].includes('tell process "DeviceHub"'));
   assert.ok(alternateCalls[3][1][1].includes('Landscape Right'));
   fs.rmSync(alternate, { recursive: true });
