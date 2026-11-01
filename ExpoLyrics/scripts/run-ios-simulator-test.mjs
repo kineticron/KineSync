@@ -128,6 +128,7 @@ async function main() {
   fs.writeFileSync(rawLogFile, '');
 
   let scenarioFinished = false;
+  let transportStopping = false;
   let scenarioResolve = null;
   const scenarioPromise = new Promise((res) => {
     scenarioResolve = res;
@@ -223,7 +224,7 @@ async function main() {
     };
   }
 
-  lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');
+  lifecycle.update('startup:unified-log-readiness');
   const deviceLog = path.join(outputDir, 'device-stream.log');
   fs.writeFileSync(deviceLog, '');
   // RN Release's default JS logger uses os_log, not the launch console. Parse
@@ -254,8 +255,8 @@ async function main() {
   // stderr is evidence only, never an alternate protocol source.
   deviceProcess.stderr.on('data', chunk => { fs.appendFileSync(deviceLog, chunk); stderrConsumer(chunk); });
   deviceProcess.on('error', err => failStream(`Unified log stream failed: ${err.message}`));
-  deviceProcess.on('exit', (code, signal) => {
-    if (!scenarioFinished) failStream(`Unified log stream exited before completion: ${code ?? signal}`);
+  deviceProcess.on('close', (code, signal) => {
+    if (!scenarioFinished && !transportStopping) failStream(`Unified log stream exited before completion: ${code ?? signal}`);
   });
   const readinessTimeout = setInterval(() => {
     try { lifecycle.check(); }
@@ -266,6 +267,7 @@ async function main() {
     await streamReadyPromise;
     if (!streamReady || parser.errors.length) throw new Error(parser.errors.join('; ') || 'Unified log stream not ready');
   } finally { clearInterval(readinessTimeout); }
+  lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');
   protocolArmed = true;
   console.log('[RUNNER] Launching app dev.kineticron.KineSync via console-pty with EXPO_PUBLIC_SIMULATOR_TEST=1...');
   const appProcess = spawn('xcrun', [
@@ -288,7 +290,7 @@ async function main() {
   appProcess.stdout.on('data', saveLaunchOutput);
   appProcess.stderr.on('data', saveLaunchOutput);
   appProcess.on('error', err => { parser.errors.push(`Launch failed: ${err.message}`); scenarioResolve(); });
-  appProcess.on('exit', code => { if (!scenarioFinished) { parser.errors.push(`App console exited before completion: ${code}`); scenarioResolve(); } });
+  appProcess.on('close', code => { if (!scenarioFinished && !transportStopping) { parser.errors.push(`App console exited before completion: ${code}`); scenarioResolve(); } });
 
   console.log(`[RUNNER] Waiting for scenario completion (timeout: ${timeoutMinutes}m)...`);
   const timeoutHandle = setInterval(() => {
@@ -298,7 +300,15 @@ async function main() {
 
   await scenarioPromise;
   clearInterval(timeoutHandle);
-  appProcess.kill('SIGKILL');
+  // A completion record can arrive before queued console/stderr data callbacks.
+  // Drain both child pipes before process.exit so ordinary diagnostics survive.
+  transportStopping = true;
+  await Promise.all([appProcess, deviceProcess].map(child => new Promise(resolve => {
+    const timeout = setTimeout(resolve, 1000);
+    child.once('close', () => { clearTimeout(timeout); resolve(); });
+    child.kill('SIGKILL');
+  })));
+
   if (parser.errors.length || !scenarioFinished) {
     lifecycle.fail(new Error(parser.errors.join('; ') || 'Scenario did not complete'));
     lifecycle.capture();
