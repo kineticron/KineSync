@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
-import { startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain } from './simulator-startup.mjs';
+import { startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { selectSimulatorDevice, rotateSimulator } from './run-ios-simulator-test.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-test-'));
 const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
@@ -106,6 +106,43 @@ try {
     await assert.rejects(prepareSimulator(state, selectSimulatorDevice, run, true), service === 'present' ? /denied/ : /timeout/);
     assert.equal(lists, 3, 'Failed service recovery must not begin another inventory attempt');
   }
+  const otherRuntime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-1';
+  const mixed = { devices: { [otherRuntime]: [{ ...phone, udid: 'newer' }], [runtime]: [phone] } };
+  assert.equal(selectSimulatorDevice(mixed).udid, phone.udid, 'Explicit policy selects 27.0 even with 27.1 installed');
+  assert.throws(() => selectSimulatorDevice({ devices: { [otherRuntime]: [phone] } }), /supported runtime policy/);
+  for (const active of ['Booted', 'Booting']) {
+    assert.throws(() => selectSimulatorDevice({ devices: { [otherRuntime]: [{ ...phone, udid: 'wrong-os', state: active }], [runtime]: [phone] } }), /Conflicting/);
+    assert.throws(() => verifySelected({ devices: { [otherRuntime]: [{ ...phone, state: active }] } }, { ...phone, runtime: otherRuntime }), /UDID\/runtime/);
+    for (const conflictAt of [1, 2, 3, 4]) {
+      const { state } = make(); let lists = 0;
+      const calls = [];
+      const record = (cmd, args) => { calls.push([cmd, args]); return ''; };
+      state.command = record;
+      const run = async (cmd, args) => {
+        record(cmd, args);
+        if (cmd !== 'xcrun') return { stdout: '' };
+        if (args[1] === 'list') {
+          lists++;
+          if (lists === conflictAt) return { stdout: JSON.stringify({ devices: { [runtime]: [{ ...phone, state: lists > 1 ? 'Booted' : 'Shutdown' }], [otherRuntime]: [{ ...phone, udid: 'unrelated', state: active }] } }) };
+          if (lists > 1) throw timeout();
+          return { stdout: inventory(phone) };
+        }
+        return { stdout: '' };
+      };
+      await assert.rejects(prepareSimulator(state, selectSimulatorDevice, run, true), /Conflicting/);
+      const beforeCleanup = calls.length;
+      state.cleanup();
+      assert.equal(calls.filter(([cmd]) => cmd.includes('killall')).length, conflictAt === 4 ? 1 : 0, 'No restart after observing a conflict; fourth inventory follows the earlier recovery');
+      assert.ok(!calls.some(([, args]) => args.includes('unrelated')), 'No command may address unrelated device');
+      if (conflictAt === 1) {
+        assert.equal(state.device, undefined, 'Initial conflict must not assign ownership');
+        assert.equal(calls.length, beforeCleanup, 'Initial conflict cleanup must not mutate any device');
+        assert.ok(!calls.some(([, args]) => args.includes('boot')));
+      } else {
+        assert.ok(calls.slice(beforeCleanup).every(([, args]) => args.includes(phone.udid)), 'Cleanup addresses selected device only');
+      }
+    }
+  }
   // Exercise a real asynchronous child timeout as well as deterministic fake clocks.
   const real = new SimulatorRunLifecycle(path.join(dir, 'real'), { startupMs: 1000, overallMs: 1000, ciDeadlineMs: Infinity });
   await assert.rejects(startupCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], real, undefined, 100), error => error.killed);
@@ -126,7 +163,11 @@ try {
   const fake = version => async (cmd, args) => ({ stdout: cmd === 'xcodebuild' ? (args.includes('-version') ? version : '') : args.includes('--show-sdk-path') ? developer + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk' : '27.1' });
   await assert.rejects(selectToolchain(tool.state, fake('Xcode 26.1'), developer), /Xcode 27/);
   await assert.rejects(selectToolchain(tool.state, async (cmd) => ({ stdout: cmd === 'xcodebuild' ? 'Xcode 27.1' : '26.0' }), developer), /SDK/);
+  for (const sdk of ['27.0', '27.2']) {
+    await assert.rejects(selectToolchain(tool.state, async (cmd, args, options) => cmd === 'xcrun' && args.includes('--show-sdk-version') ? { stdout: sdk } : fake('Xcode 27.1')(cmd, args, options), developer), /SDK/);
+  }
   const selected = await selectToolchain(tool.state, fake('Xcode 27.1'), developer);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tool.state.outputDir, 'toolchain.json'), 'utf8')).runtimePolicy, SUPPORTED_RUNTIME_POLICY);
   const calls = [];
   rotateSimulator('portrait', phone.udid, (cmd, args) => { calls.push([cmd, args]); return inventory({ ...phone, state: 'Booted' }); });
   assert.equal(calls[1][1][1], selected.simulator);

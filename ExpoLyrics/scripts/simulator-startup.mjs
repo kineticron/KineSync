@@ -3,6 +3,12 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 const execute = promisify(execFile);
+// Reproduce run4's intended OS, not whichever 27.x runtime happens to sort first.
+// SDK 27.1 can build for iOS 27.0; runtime and SDK versions are deliberately distinct.
+export const SUPPORTED_RUNTIME_POLICY = Object.freeze({
+  sdk: '27.1', runtimeVersion: '27.0',
+  runtime: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0',
+});
 
 export async function startupCommand(cmd, args, state, run = execute, cap = 30000) {
   state.check();
@@ -34,11 +40,12 @@ export async function selectToolchain(state, run = execute, developer = process.
   if (!/^Xcode 27(?:\.|\s)/.test(version)) throw new Error('Xcode 27 required');
   const sdk = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version'])).trim();
   const sdkPath = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'])).trim();
-  if (!/^27(?:\.|$)/.test(sdk) || !sdkPath.startsWith(canonical + '/')) throw new Error('Wrong simulator SDK/toolchain');
+  if (sdk !== SUPPORTED_RUNTIME_POLICY.sdk || !sdkPath.startsWith(canonical + '/')) throw new Error('Wrong simulator SDK/toolchain');
   await command('xcodebuild', ['-checkFirstLaunchStatus']);
   const simulator = path.join(canonical, 'Applications/Simulator.app');
   if (!fs.existsSync(simulator)) throw new Error('Selected Xcode has no Simulator.app');
-  const info = { developer: canonical, simulator, version, sdk, sdkPath };
+  state.runtimePolicy = SUPPORTED_RUNTIME_POLICY;
+  const info = { developer: canonical, simulator, version, sdk, sdkPath, runtimePolicy: SUPPORTED_RUNTIME_POLICY };
   fs.writeFileSync(path.join(state.outputDir, 'toolchain.json'), JSON.stringify(info, null, 2));
   return info;
 }
@@ -46,8 +53,8 @@ export async function selectToolchain(state, run = execute, developer = process.
 export function verifySelected(inventory, selected, ready = false) {
   const entries = Object.entries(inventory.devices || {}).flatMap(([runtime, devices]) => devices.map(device => ({ ...device, runtime })));
   const device = entries.find(device => device.udid === selected.udid);
-  if (!device || device.runtime !== selected.runtime || !device.isAvailable || (ready && device.state !== 'Booted')) throw new Error('Selected UDID/runtime unavailable or mismatched');
-  if (entries.some(device => device.state === 'Booted' && device.udid !== selected.udid)) throw new Error('Conflicting booted simulator');
+  if (!device || selected.runtime !== SUPPORTED_RUNTIME_POLICY.runtime || device.runtime !== selected.runtime || !device.isAvailable || (ready && device.state !== 'Booted')) throw new Error('Selected UDID/runtime unavailable or mismatched');
+  if (entries.some(device => ['Booted', 'Booting'].includes(device.state) && device.udid !== selected.udid)) throw new Error('Conflicting booted or booting simulator');
   return device;
 }
 
@@ -60,7 +67,8 @@ export async function prepareSimulator(state, select, run = execute, disposable 
       state.update('startup:inventory');
       const inventory = JSON.parse(await command(['list', 'devices', 'available', '-j']));
       if (!selected) {
-        selected = select(inventory);
+        selected = select(inventory, state.runtimePolicy || SUPPORTED_RUNTIME_POLICY);
+        verifySelected(inventory, selected);
         state.device = selected.udid;
         state.ownsDevice = selected.state === 'Shutdown';
         fs.writeFileSync(path.join(state.outputDir, 'device-selection.json'), JSON.stringify(selected, null, 2));

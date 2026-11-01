@@ -6,7 +6,7 @@ import { PNG } from 'pngjs';
 import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
-import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics } from './simulator-startup.mjs';
+import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
@@ -55,17 +55,17 @@ export async function runStartupCommand(cmd, args, state = lifecycle, execute) {
   return startupCommand(cmd, args, state, execute, args.includes('install') ? 90000 : 30000);
 }
 
-export function selectSimulatorDevice(data) {
+export function selectSimulatorDevice(data, policy = SUPPORTED_RUNTIME_POLICY) {
   const devices = data.devices || {};
 
-  const booted = Object.values(devices).flat().filter(dev => dev.state === 'Booted');
+  const booted = Object.values(devices).flat().filter(dev => ['Booted', 'Booting'].includes(dev.state));
   const candidates = Object.entries(devices)
-    .filter(([runtime]) => /^com\.apple\.CoreSimulator\.SimRuntime\.iOS-27(?:-|$)/.test(runtime))
+    .filter(([runtime]) => runtime === policy.runtime)
     .flatMap(([runtime, list]) => list.filter(dev => dev.isAvailable && dev.name.includes('iPhone')).map(dev => ({ ...dev, runtime })))
     .sort((a, b) => a.runtime.localeCompare(b.runtime) || a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid));
-  const candidate = candidates.find(dev => dev.state === 'Booted') || candidates[0];
-  if (!candidate) throw new Error('No available iOS 27 iPhone simulator');
-  if (booted.some(dev => dev.udid !== candidate.udid)) throw new Error('Conflicting booted simulator; refusing GUI automation');
+  const candidate = candidates.find(dev => ['Booted', 'Booting'].includes(dev.state)) || candidates[0];
+  if (!candidate) throw new Error('No available iOS 27.0 iPhone simulator (supported runtime policy)');
+  if (booted.some(dev => dev.udid !== candidate.udid)) throw new Error('Conflicting booted or booting simulator; refusing GUI automation');
   return candidate;
 }
 

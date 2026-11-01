@@ -117,7 +117,7 @@ jobs:
           echo "SIMULATOR_DISPOSABLE_CI=1" >> "${GITHUB_ENV}"
           node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -checkFirstLaunchStatus
           node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep '^Xcode 27\.'
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep '^27\.'
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '27.1'
 
       - name: Install ccache
         timeout-minutes: 5
