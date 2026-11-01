@@ -6,7 +6,7 @@ import { PNG } from 'pngjs';
 import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
-import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
+import { resolveSimulatorGUI, startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
@@ -75,15 +75,16 @@ export function rotateSimulator(targetOrientation, udid, command = runCommand) {
   const inventory = JSON.parse(command('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']));
   const booted = Object.values(inventory.devices || {}).flat().filter(d => d.state === 'Booted');
   if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
-  command('open', ['-a', path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app'), '--args', '-CurrentDeviceUDID', udid]);
+  const simulator = resolveSimulatorGUI(process.env.DEVELOPER_DIR, command);
+  command('open', ['-a', simulator, '--args', '-CurrentDeviceUDID', udid]);
   const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
   const script = `
-tell application "${path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app')}" to activate
+tell application "${simulator}" to activate
 tell application "System Events"
   set simulatorProcesses to every application process whose name is "Simulator"
   if (count of simulatorProcesses) is not 1 then error "Ambiguous Simulator GUI process"
   set simulatorPath to POSIX path of (application file of item 1 of simulatorProcesses as alias)
-  if simulatorPath is not "${path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app')}/" then error "Simulator GUI belongs to another Xcode"
+  if simulatorPath is not "${simulator}/" then error "Simulator GUI belongs to another Xcode"
   tell process "Simulator"
     tell menu bar 1
       tell menu bar item "Device"

@@ -160,16 +160,29 @@ try {
   const developer = path.join(dir, 'Xcode.app/Contents/Developer');
   fs.mkdirSync(path.join(developer, 'Applications/Simulator.app'), { recursive: true });
   const tool = make();
-  const fake = version => async (cmd, args) => ({ stdout: cmd === 'xcodebuild' ? (args.includes('-version') ? version : '') : args.includes('--show-sdk-path') ? developer + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk' : '27.1' });
-  await assert.rejects(selectToolchain(tool.state, fake('Xcode 26.1'), developer), /Xcode 27/);
+  const fake = version => async (cmd, args) => ({ stdout: cmd === 'xcodebuild' ? (args.includes('-version') ? version : '') : args.includes('--show-sdk-path') ? developer + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk' : args.includes('runtimes') ? JSON.stringify({ runtimes: [{ identifier: runtime, isAvailable: true }] }) : '27.1' });
+  for (const version of ['Xcode 26.1', 'Xcode 27.0', 'Xcode 27.2']) await assert.rejects(selectToolchain(tool.state, fake(version), developer), /Xcode 27/);
   await assert.rejects(selectToolchain(tool.state, async (cmd) => ({ stdout: cmd === 'xcodebuild' ? 'Xcode 27.1' : '26.0' }), developer), /SDK/);
   for (const sdk of ['27.0', '27.2']) {
     await assert.rejects(selectToolchain(tool.state, async (cmd, args, options) => cmd === 'xcrun' && args.includes('--show-sdk-version') ? { stdout: sdk } : fake('Xcode 27.1')(cmd, args, options), developer), /SDK/);
   }
+  fs.mkdirSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS'), { recursive: true });
+  fs.writeFileSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS/Simulator'), 'fixture');
+  await assert.rejects(selectToolchain(make().state, async (cmd, args, options) => args.includes('runtimes') ? { stdout: JSON.stringify({ runtimes: [] }) } : fake('Xcode 27.1')(cmd, args, options), developer), /runtime unavailable/);
   const selected = await selectToolchain(tool.state, fake('Xcode 27.1'), developer);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tool.state.outputDir, 'toolchain.json'), 'utf8')).runtimePolicy, SUPPORTED_RUNTIME_POLICY);
   const calls = [];
-  rotateSimulator('portrait', phone.udid, (cmd, args) => { calls.push([cmd, args]); return inventory({ ...phone, state: 'Booted' }); });
-  assert.equal(calls[1][1][1], selected.simulator);
+  rotateSimulator('portrait', phone.udid, (cmd, args) => { calls.push([cmd, args]); if (cmd === '/usr/bin/find') return path.join(developer, 'Applications/Simulator.app'); return inventory({ ...phone, state: 'Booted' }); });
+  assert.equal(calls[2][1][1], path.join(developer, 'Applications/Simulator.app'));
+  const alternate = path.join(developer, '../Applications/Simulator.app');
+  fs.mkdirSync(path.dirname(alternate), { recursive: true });
+  fs.renameSync(path.join(developer, 'Applications/Simulator.app'), alternate);
+  const alternateCalls = [];
+  rotateSimulator('landscape', phone.udid, (cmd, args) => { alternateCalls.push([cmd, args]); return cmd === '/usr/bin/find' ? alternate : inventory({ ...phone, state: 'Booted' }); });
+  assert.equal(alternateCalls[2][1][1], fs.realpathSync(alternate));
+  fs.rmSync(alternate, { recursive: true });
+  fs.rmSync(path.join(developer, 'Applications'), { recursive: true });
+  await selectToolchain(make().state, fake('Xcode 27.1'), developer); // Headless toolchain needs no GUI.
+  assert.throws(() => rotateSimulator('portrait', phone.udid, (cmd) => cmd === '/usr/bin/find' ? '' : inventory({ ...phone, state: 'Booted' })), /headless simctl cannot rotate/);
   console.log('Simulator startup fake-command tests passed.');
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

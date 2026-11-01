@@ -100,16 +100,22 @@ export async function testSimulatorProtocol() {
   await files.waitForSimulatorScreenshotAck('stage', 'nonce', 10);
   assert.equal(deleted, true);
 
-  process.env.DEVELOPER_DIR = '/Applications/Xcode_27.1.app/Contents/Developer';
+  const guiRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-gui-'));
+  process.env.DEVELOPER_DIR = path.join(guiRoot, 'Xcode.app/Contents/Developer');
+  const gui = path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app');
+  fs.mkdirSync(path.join(gui, 'Contents/MacOS'), { recursive: true });
+  fs.writeFileSync(path.join(gui, 'Contents/MacOS/Simulator'), 'fixture');
   const calls = [];
   rotateSimulator('landscape', 'chosen-udid', (cmd, args) => {
     calls.push([cmd, args]);
+    if (cmd === '/usr/bin/find') return gui;
     if (cmd === 'xcrun') return JSON.stringify({ devices: { iOS: [{ udid: 'chosen-udid', state: 'Booted' }] } });
   });
-  assert.ok(calls[1][1].includes('chosen-udid'));
-  assert.equal(calls[2][0], 'osascript');
+  assert.ok(calls[2][1].includes('chosen-udid'));
+  assert.equal(calls[3][0], 'osascript');
   assert.throws(() => rotateSimulator('landscape', 'chosen-udid', () => JSON.stringify({ devices: { iOS: [{ udid: 'other', state: 'Booted' }] } })), /only booted simulator/);
   assert.throws(() => rotateSimulator('portrait', 'chosen-udid', () => { throw Error('Accessibility denied'); }), /Accessibility denied/);
+  fs.rmSync(guiRoot, { recursive: true, force: true });
   testNativePublication();
   testHarnessStages();
   await testSnapshotAnchors();

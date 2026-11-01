@@ -37,15 +37,15 @@ export async function selectToolchain(state, run = execute, developer = process.
   process.env.DEVELOPER_DIR = canonical;
   const command = (cmd, args, cap) => startupCommand(cmd, args, state, run, cap);
   const version = await command('xcodebuild', ['-version']);
-  if (!/^Xcode 27(?:\.|\s)/.test(version)) throw new Error('Xcode 27 required');
+  if (!/^Xcode 27\.1(?:\s|$)/.test(version)) throw new Error('Xcode 27.1 required');
   const sdk = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version'])).trim();
   const sdkPath = (await command('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'])).trim();
   if (sdk !== SUPPORTED_RUNTIME_POLICY.sdk || !sdkPath.startsWith(canonical + '/')) throw new Error('Wrong simulator SDK/toolchain');
   await command('xcodebuild', ['-checkFirstLaunchStatus']);
-  const simulator = path.join(canonical, 'Applications/Simulator.app');
-  if (!fs.existsSync(simulator)) throw new Error('Selected Xcode has no Simulator.app');
+  const runtimes = JSON.parse(await command('xcrun', ['simctl', 'list', 'runtimes', '-j']));
+  if (!runtimes.runtimes?.some(runtime => runtime.identifier === SUPPORTED_RUNTIME_POLICY.runtime && runtime.isAvailable === true)) throw new Error('Configured iOS runtime unavailable');
   state.runtimePolicy = SUPPORTED_RUNTIME_POLICY;
-  const info = { developer: canonical, simulator, version, sdk, sdkPath, runtimePolicy: SUPPORTED_RUNTIME_POLICY };
+  const info = { developer: canonical, version, sdk, sdkPath, runtimePolicy: SUPPORTED_RUNTIME_POLICY };
   fs.writeFileSync(path.join(state.outputDir, 'toolchain.json'), JSON.stringify(info, null, 2));
   return info;
 }
@@ -126,4 +126,15 @@ export async function startupDiagnostics(state, run = execute) {
       fs.writeFileSync(path.join(state.outputDir, `${name}.txt`), stdout);
     } catch (error) { fs.writeFileSync(path.join(state.outputDir, `${name}.txt`), `${error.code}: ${error.message}`); }
   }
+}
+
+// GUI is required only for rotation. Search only the selected Xcode, never LaunchServices defaults.
+export function resolveSimulatorGUI(developer, command) {
+  const canonical = fs.realpathSync(developer);
+  const root = path.dirname(canonical);
+  const output = command('/usr/bin/find', [root, '-name', 'Simulator.app', '-prune']);
+  const candidates = [...new Set(output.trim().split('\n').filter(Boolean).map(candidate => fs.realpathSync(candidate)))];
+  const valid = candidates.filter(candidate => candidate.startsWith(root + '/') && fs.existsSync(path.join(candidate, 'Contents/MacOS/Simulator')));
+  if (valid.length !== 1) throw new Error(`Rotation requires one runnable Simulator GUI in selected Xcode ${root}; found ${JSON.stringify(candidates)}. Inspect GUI bundle installation and logged bounded find command; headless simctl cannot rotate.`);
+  return valid[0];
 }

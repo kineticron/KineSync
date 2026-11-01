@@ -305,7 +305,8 @@ function testRunnerCli(logs, parser) {
   const summary = JSON.stringify({ ...parser.summary, stages: parser.summary.stages.map(({ stage, status, durationMs }) => [stage, status, durationMs]), heartbeat: { samples: parser.heartbeat.samples } });
   const runLogs = logs.map(line => line.includes('SCENARIO_COMPLETE') ? `[KINESYNC_SIM] SCENARIO_COMPLETE ${summary}` : line.replace(/READY_FOR_SCREENSHOT stage=(\w+)/, 'READY_FOR_SCREENSHOT stage=$1 token=run_$1'));
   const developer = path.join(dir, 'Xcode.app/Contents/Developer');
-  fs.mkdirSync(path.join(developer, 'Applications/Simulator.app'), { recursive: true });
+  fs.mkdirSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS'), { recursive: true });
+  fs.writeFileSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS/Simulator'), 'fixture');
   const shim = `#!${process.execPath}
 import fs from 'node:fs';
 import path from 'node:path';
@@ -316,7 +317,8 @@ if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 2
 if (name !== 'xcrun') process.exit(0);
 if (args.includes('--show-sdk-version')) console.log('27.1');
 if (args.includes('--show-sdk-path')) console.log(process.env.DEVELOPER_DIR + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk');
-if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
+if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0', isAvailable: true }] }));
+else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) console.log(dir);
 if (args.includes('screenshot')) {
