@@ -4,12 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 function runCommand(cmd, args, options = {}) {
   try {

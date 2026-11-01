@@ -2,6 +2,7 @@
 // Validates clock monotonicity, log parser assertions, adversarial log detection, and screenshot comparison
 
 import assert from 'node:assert';
+import { Buffer } from 'node:buffer';
 import { testSimulatorProtocol } from './test-simulator-protocol.mjs';
 import fs from 'node:fs';
 import path from 'node:path';

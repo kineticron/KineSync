@@ -5,7 +5,7 @@ index 7dfb957..c86f715 100644
 @@ -16,6 +16,12 @@ export const unstable_settings = {
    anchor: '(tabs)',
  };
- 
+
 +function SimulatorMount() {
 +  // eslint-disable-next-line @typescript-eslint/no-require-imports
 +  const { SimulatorTestController } = require('@/components/simulator-test-controller') as typeof import('@/components/simulator-test-controller');
@@ -93,7 +93,7 @@ index ad835f2..580215d 100644
 --- a/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx
 +++ b/ExpoLyrics/components/lyrics/spotify-browser-fallback.tsx
 @@ -117,6 +117,19 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
- 
+
  export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
    function SpotifyBrowserFallback(_props, ref) {
 +    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
@@ -143,7 +143,7 @@ index f555835..5dd771d 100644
 @@ -158,6 +158,12 @@ export function BridgeProvider({ children }: PropsWithChildren) {
        return;
      }
- 
+
 +    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
 +      setShowOnboarding(false);
 +      setOnboardingChecked(true);
