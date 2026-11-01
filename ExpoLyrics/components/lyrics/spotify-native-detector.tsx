@@ -46,7 +46,7 @@ const USER_AGENT = Platform.OS === 'android'
 /** Native mobile-only: WebView bootstraps/renews login, Dealer owns detection.
  * Controls and metadata use the captured spclient session directly. */
 export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
-  if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+  if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
     useImperativeHandle(ref, () => ({
       openBrowser: () => {},
       reload: () => {},

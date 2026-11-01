@@ -112,7 +112,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     });
     return () => subscription.remove();
   }, [canDispatchRendererReady]);
-  const simulatorReadyGeneration = typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
+  const simulatorReadyGeneration = ((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
     ? rendererReadyGeneration : 0;
   const markRendererReady = useCallback((expectedKey: string, simulatorGeneration?: number) => {
     const state = rendererReadyState.current;
@@ -124,7 +124,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     rendererReadyGate.current.onReady(state.generation,
       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
       () => canDispatchRendererReady(state.key, state.generation));
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
       state.generation === simulatorGeneration && rendererReadyGate.current.isCurrent(state.generation) &&
       canDispatchRendererReady(expectedKey, state.generation)) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -353,7 +353,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     const h = event.nativeEvent.layout.height;
     setViewportHeight(h);
     setViewportWidth(w);
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
       // eslint-disable-next-line @typescript-eslint/no-require-imports

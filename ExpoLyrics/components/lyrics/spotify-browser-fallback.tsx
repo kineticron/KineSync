@@ -117,7 +117,7 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
 
 export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
   function SpotifyBrowserFallback(_props, ref) {
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
       useImperativeHandle(ref, () => ({
         openBrowser: () => {},
         reload: () => {},

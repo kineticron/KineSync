@@ -41,7 +41,7 @@ function testSchemeDiscovery() {
       buildSettings: {
         WRAPPER_EXTENSION: 'app',
         PRODUCT_TYPE: 'com.apple.product-type.application',
-        TARGET_BUILD_DIR: '/DerivedData/Build/Products/Debug-iphonesimulator',
+        TARGET_BUILD_DIR: '/DerivedData/Build/Products/Release-iphonesimulator',
         FULL_PRODUCT_NAME: 'KineSync.app',
       },
     };
@@ -51,7 +51,7 @@ function testSchemeDiscovery() {
     assert.throws(() => findApplicationTarget([appEntry, { ...appEntry, target: 'OtherApp' }]), /Ambiguous application targets/);
     assert.strictEqual(findApplicationTarget([{ buildSettings: { WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'fake-application' } }]), null);
     assert.strictEqual(foundApp.buildSettings.FULL_PRODUCT_NAME, 'KineSync.app');
-    assert.strictEqual(foundApp.buildSettings.TARGET_BUILD_DIR, '/DerivedData/Build/Products/Debug-iphonesimulator');
+    assert.strictEqual(foundApp.buildSettings.TARGET_BUILD_DIR, '/DerivedData/Build/Products/Release-iphonesimulator');
 
     // Wrong build products
     const frameworkEntry = {
@@ -125,6 +125,9 @@ function testSchemeDiscovery() {
         });
       }
       if (args.includes('-showBuildSettings')) {
+        assert.equal(args[args.indexOf('-configuration') + 1], 'Release');
+        assert.ok(args.includes('ONLY_ACTIVE_ARCH=YES'));
+        assert.ok(args.includes('ARCHS=arm64'));
         const schemeIdx = args.indexOf('-scheme');
         const scheme = args[schemeIdx + 1];
         if (scheme === 'boost') {
@@ -135,7 +138,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: '',
                 PRODUCT_TYPE: 'com.apple.product-type.library.static',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator/boost',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator/boost',
               },
             },
           ]);
@@ -148,7 +151,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: 'framework',
                 PRODUCT_TYPE: 'com.apple.product-type.framework',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator/DoubleConversion',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator/DoubleConversion',
               },
             },
           ]);
@@ -161,7 +164,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: 'a',
                 PRODUCT_TYPE: 'com.apple.product-type.library.static',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator/fmt',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator/fmt',
               },
             },
           ]);
@@ -174,7 +177,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: 'framework',
                 PRODUCT_TYPE: 'com.apple.product-type.framework',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator/Pods-KineSync',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator/Pods-KineSync',
               },
             },
           ]);
@@ -187,7 +190,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: 'app',
                 PRODUCT_TYPE: 'com.apple.product-type.application',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
                 FULL_PRODUCT_NAME: 'KineSync.app',
               },
             },
@@ -204,7 +207,7 @@ function testSchemeDiscovery() {
     assert.strictEqual(discovered.scheme, 'KineSync', 'Must select KineSync and not earlier pod scheme boost');
     assert.strictEqual(discovered.target, 'KineSync');
     assert.strictEqual(discovered.buildSettings.FULL_PRODUCT_NAME, 'KineSync.app');
-    assert.strictEqual(discovered.buildSettings.TARGET_BUILD_DIR, '/derived/Build/Products/Debug-iphonesimulator');
+    assert.strictEqual(discovered.buildSettings.TARGET_BUILD_DIR, '/derived/Build/Products/Release-iphonesimulator');
   }
 
   // Real run 41290266075: widget scheme also reports the KineSync host app.
@@ -212,7 +215,7 @@ function testSchemeDiscovery() {
     const app = { target: 'KineSync', action: 'build', buildSettings: {
       WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'com.apple.product-type.application',
       PROJECT_FILE_PATH: '/repo/ios/KineSync.xcodeproj', PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync',
-      TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator', FULL_PRODUCT_NAME: 'KineSync.app',
+      TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator', FULL_PRODUCT_NAME: 'KineSync.app',
     } };
     const widget = { target: 'KineSyncLyricsWidget', buildSettings: {
       WRAPPER_EXTENSION: 'appex', PRODUCT_TYPE: 'com.apple.product-type.app-extension',
@@ -234,7 +237,7 @@ function testSchemeDiscovery() {
       { PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.Other' },
       { FULL_PRODUCT_NAME: 'Other.app' },
       { PROJECT_FILE_PATH: '/other/KineSync.xcodeproj' },
-      { TARGET_BUILD_DIR: '/other/Debug-iphonesimulator' },
+      { TARGET_BUILD_DIR: '/other/Release-iphonesimulator' },
     ]) {
       const other = { ...app, buildSettings: { ...app.buildSettings, ...changed } };
       assert.throws(() => run(['KineSync', 'KineSyncLyricsWidget'], other), /Ambiguous application schemes/);
@@ -289,6 +292,9 @@ function testSchemeDiscovery() {
         });
       }
       if (args.includes('-showBuildSettings')) {
+        assert.equal(args[args.indexOf('-configuration') + 1], 'Release');
+        assert.ok(args.includes('ONLY_ACTIVE_ARCH=YES'));
+        assert.ok(args.includes('ARCHS=arm64'));
         const schemeIdx = args.indexOf('-scheme');
         const scheme = args[schemeIdx + 1];
         return JSON.stringify([
@@ -298,7 +304,7 @@ function testSchemeDiscovery() {
             buildSettings: {
               WRAPPER_EXTENSION: 'app',
               PRODUCT_TYPE: 'com.apple.product-type.application',
-              TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator',
+              TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
               FULL_PRODUCT_NAME: `${scheme}.app`,
             },
           },
@@ -327,6 +333,9 @@ function testSchemeDiscovery() {
         });
       }
       if (args.includes('-showBuildSettings')) {
+        assert.equal(args[args.indexOf('-configuration') + 1], 'Release');
+        assert.ok(args.includes('ONLY_ACTIVE_ARCH=YES'));
+        assert.ok(args.includes('ARCHS=arm64'));
         const schemeIdx = args.indexOf('-scheme');
         const scheme = args[schemeIdx + 1];
         if (scheme === 'failing-pod') {
@@ -340,7 +349,7 @@ function testSchemeDiscovery() {
               buildSettings: {
                 WRAPPER_EXTENSION: 'app',
                 PRODUCT_TYPE: 'com.apple.product-type.application',
-                TARGET_BUILD_DIR: '/derived/Build/Products/Debug-iphonesimulator',
+                TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
                 FULL_PRODUCT_NAME: 'KineSync.app',
               },
             },
@@ -360,13 +369,13 @@ function testSchemeDiscovery() {
   {
     const testIosDir = path.join(tempDir, 'mock-ios');
     const testDerivedDir = path.join(tempDir, 'mock-derived');
-    const expectedAppDir = path.join(testDerivedDir, 'Build', 'Products', 'Debug-iphonesimulator', 'KineSync.app');
+    const expectedAppDir = path.join(testDerivedDir, 'Build', 'Products', 'Release-iphonesimulator', 'KineSync.app');
     fs.mkdirSync(path.join(testIosDir, 'KineSync.xcworkspace'), { recursive: true });
     fs.mkdirSync(expectedAppDir, { recursive: true });
 
     let builtScheme = null;
     fs.mkdirSync(path.join(testIosDir, 'KineSync'), { recursive: true });
-    fs.writeFileSync(path.join(testIosDir, 'KineSync/AppDelegate.swift'), 'return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")');
+    fs.writeFileSync(path.join(testIosDir, 'KineSync/AppDelegate.swift'), '#if DEBUG\nreturn RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")\n#else\n    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")\n#endif');
     let signedPath = null;
     const mockRunner = (cmd, args) => {
       if (cmd === 'xcodebuild' && args.includes('-list')) {
@@ -388,14 +397,17 @@ function testSchemeDiscovery() {
             buildSettings: {
               WRAPPER_EXTENSION: 'app',
               PRODUCT_TYPE: 'com.apple.product-type.application',
-              TARGET_BUILD_DIR: path.join(testDerivedDir, 'Build', 'Products', 'Debug-iphonesimulator'),
+              TARGET_BUILD_DIR: path.join(testDerivedDir, 'Build', 'Products', 'Release-iphonesimulator'),
               FULL_PRODUCT_NAME: 'KineSync.app',
             },
           },
         ]);
       }
       if (cmd === 'xcodebuild' && args.includes('build')) {
-        assert.ok(args.includes('FORCE_BUNDLING=1'));
+        assert.equal(args[args.indexOf('-configuration') + 1], 'Release');
+        for (const flag of ['ONLY_ACTIVE_ARCH=YES', 'ARCHS=arm64', 'EXPO_PUBLIC_SIMULATOR_TEST_BUILD=release-arm64', 'FORCE_BUNDLING=1']) assert.ok(args.includes(flag), flag);
+        assert.equal(process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD, 'release-arm64');
+        assert.ok(!fs.existsSync(path.join(tempDir, '.env.local')));
         if (fs.existsSync(expectedAppDir)) fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'test bundle');
         builtScheme = args[args.indexOf('-scheme') + 1];
         return '';
@@ -420,9 +432,14 @@ function testSchemeDiscovery() {
     assert.strictEqual(builtScheme, 'KineSync', 'Must invoke xcodebuild build for application scheme KineSync');
     assert.strictEqual(signedPath, expectedAppDir, 'Must codesign exact derived app path');
     assert.strictEqual(appResult, expectedAppDir, 'Must return exact derived app path');
-    fs.unlinkSync(path.join(expectedAppDir, 'main.jsbundle'));
+    fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'stale cached bundle');
     const missingBundle = (cmd, args) => cmd === 'xcodebuild' && args.includes('build') ? '' : mockRunner(cmd, args);
     assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: missingBundle }), /no main.jsbundle/);
+    const emptyBundle = (cmd, args) => {
+      if (cmd === 'xcodebuild' && args.includes('build')) { fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), ''); return ''; }
+      return mockRunner(cmd, args);
+    };
+    assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: emptyBundle }), /no main.jsbundle/);
     fs.rmSync(expectedAppDir, { recursive: true });
     fs.mkdirSync(path.join(testDerivedDir, 'Build/Products/Release-iphoneos/Stale.app'), { recursive: true });
     assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: mockRunner }), /Expected built application does not exist/);
@@ -458,14 +475,18 @@ function testInstalledTemplateShell() {
   fs.writeFileSync(path.join(fakeRN, 'scripts/react-native-xcode.sh'), '#!/bin/bash\nprintf "%s|%s|%s|%s" "${SKIP_BUNDLING-unset}" "$FORCE_BUNDLING" "$PRESERVED_LOCAL" "$PRESERVED_UPDATES"\n', { mode: 0o755 });
   const nodeShim = path.join(ios, 'node-shim');
   fs.writeFileSync(nodeShim, '#!/bin/bash\nprintf "%s" "$TEST_RN_PATH"\n', { mode: 0o755 });
-  const execute = () => execFileSync('bash', ['-e', '-c', phase], { encoding: 'utf8', env: { ...process.env, SRCROOT: ios, PROJECT_DIR: ios, CONFIGURATION: 'Debug', SKIP_BUNDLING: '', FORCE_BUNDLING: '1', ENTRY_FILE: '/mock/index.js', CLI_PATH: '/mock/cli', BUNDLE_COMMAND: 'export:embed', NODE_BINARY: nodeShim, TEST_RN_PATH: path.join(fakeRN, 'scripts/react-native-xcode.sh') } });
+  const execute = (configuration = 'Debug') => execFileSync('bash', ['-e', '-c', phase], { encoding: 'utf8', env: { ...process.env, SRCROOT: ios, PROJECT_DIR: ios, CONFIGURATION: configuration, SKIP_BUNDLING: '', FORCE_BUNDLING: '1', ENTRY_FILE: '/mock/index.js', CLI_PATH: '/mock/cli', BUNDLE_COMMAND: 'export:embed', NODE_BINARY: nodeShim, TEST_RN_PATH: path.join(fakeRN, 'scripts/react-native-xcode.sh') } });
   assert.equal(execute(), '1|1|local|updates', 'Xcode arg alone must lose to actual generated phase');
   configureStandaloneSimulator(ios);
+  assert.equal(execute('Release'), 'unset|1|local|updates', 'Release embed phase must override updates skip flag too');
   assert.equal(execute(), 'unset|1|local|updates', 'Late local override must win after Debug and updates exports');
   const first = fs.readFileSync(path.join(ios, '.xcode.env.local'), 'utf8');
   configureStandaloneSimulator(ios);
   assert.equal(fs.readFileSync(path.join(ios, '.xcode.env.local'), 'utf8'), first, 'Override must be idempotent');
   assert.equal(execute(), 'unset|1|local|updates');
+  const delegate = path.join(ios, 'HelloWorld/AppDelegate.swift');
+  fs.writeFileSync(delegate, fs.readFileSync(delegate, 'utf8').replace('#else', '#elseif UNKNOWN'));
+  assert.throws(() => configureStandaloneSimulator(ios), /Unsupported generated Release bundle URL/);
   console.log('Installed Expo template shell override tests passed.');
 }
 

@@ -1,6 +1,6 @@
 // Dev/test-only monotonic playback clock for simulator test harness
 // Anchors playback to performance.now to eliminate drift under JS stalls
-// Excluded from production builds by compile-time __DEV__ check
+// Enabled only by explicit compile-time test flags (including a separate Release opt-in).
 
 export type ClockTickCallback = (positionMs: number, isPlaying: boolean) => void;
 

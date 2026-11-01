@@ -34,7 +34,7 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
               <Stack.Screen name="modal" options={_stableOptions2} />
             </Stack>
-            {typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
+            {((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
               <SimulatorMount />
             )}
           </BridgeProvider>

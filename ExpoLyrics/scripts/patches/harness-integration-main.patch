@@ -19,7 +19,7 @@ index 7dfb957..c86f715 100644
                <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
                <Stack.Screen name="modal" options={_stableOptions2} />
              </Stack>
-+            {typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
++            {((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' && (
 +              <SimulatorMount />
 +            )}
            </BridgeProvider>
@@ -43,12 +43,12 @@ diff --git a/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx b/ExpoLy
    }, []);
 +  const simulatorProbe = useRef({ style, list, reveal, trackId: simulatorTrackId, lyrics, generation: 1, eligible: false });
 +  const previousProbe = simulatorProbe.current;
-+  const simulatorGeneration = typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
++  const simulatorGeneration = ((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
 +    ? previousProbe.generation + Number(previousProbe.style !== style || previousProbe.list !== list || previousProbe.reveal !== reveal || previousProbe.trackId !== simulatorTrackId || previousProbe.lyrics !== lyrics) : 0;
 +  simulatorProbe.current = { style, list, reveal, trackId: simulatorTrackId, lyrics, generation: simulatorGeneration,
 +    eligible: active && !demoLyrics && lyrics.length > 0 };
 +  const publishSimulatorReady = useCallback(() => {
-+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
++    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
 +      mounted.current && simulatorProbe.current.eligible && simulatorProbe.current.generation === simulatorGeneration &&
 +      AppState.currentState === 'active' && simulatorTrackId && latestLyrics.current === lyrics) {
 +      // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -76,7 +76,7 @@ diff --git a/ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx b/ExpoLy
 +    const h = event.nativeEvent.layout.height;
 +    setViewportHeight(h);
 +    setViewportWidth(w);
-+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
 +      // eslint-disable-next-line @typescript-eslint/no-require-imports
 +      const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
 +      // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -96,7 +96,7 @@ index ad835f2..580215d 100644
 
  export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
    function SpotifyBrowserFallback(_props, ref) {
-+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
 +      useImperativeHandle(ref, () => ({
 +        openBrowser: () => {},
 +        reload: () => {},
@@ -120,7 +120,7 @@ index ff81a18..2de8c42 100644
  /** Native mobile-only: WebView bootstraps/renews login, Dealer owns detection.
   * Controls and metadata use the captured spclient session directly. */
  export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
-+  if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++  if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
 +    useImperativeHandle(ref, () => ({
 +      openBrowser: () => {},
 +      reload: () => {},
@@ -144,7 +144,7 @@ index f555835..5dd771d 100644
        return;
      }
 
-+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
++    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
 +      setShowOnboarding(false);
 +      setOnboardingChecked(true);
 +      return;

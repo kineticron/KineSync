@@ -1,5 +1,5 @@
 # Automated iOS simulator testing harness with deterministic fake playback clock
-# Builds unsigned Debug simulator .app bundle, boots simulator, executes scenario,
+# Builds unsigned Release arm64 simulator .app bundle, boots simulator, executes scenario,
 # captures real screenshots and perf metrics, and validates visual assertions.
 
 name: iOS Simulator Test
@@ -70,6 +70,7 @@ jobs:
       - name: Verify iOS 27 simulator toolchain
         run: |
           set -euo pipefail
+          test "$(uname -m)" = arm64 # arm64-only simulator product requires an Apple Silicon host
           xcodebuild -version
           xcodebuild -showsdks
           xcrun simctl list devices available -j >/dev/null
@@ -79,24 +80,54 @@ jobs:
         timeout-minutes: 5
         run: npm ci
 
+      - name: Cache compatibility
+        id: compatibility
+        run: |
+          set -euo pipefail
+          # Exact compiler/SDK/CocoaPods/ccache identity, not a moving runner label.
+          ID="$( { xcodebuild -version; xcrun --sdk iphonesimulator --show-sdk-version; pod --version; ccache --version; uname -m; } | shasum -a 256 | cut -d ' ' -f 1)"
+          echo "id=${ID}" >> "${GITHUB_OUTPUT}"
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/../kinesync-ios-ccache" >> "${GITHUB_ENV}"
+
       - name: Expo prebuild (iOS)
         timeout-minutes: 5
         working-directory: ExpoLyrics
-        run: npx expo prebuild --clean --platform ios
+        run: npx expo prebuild --clean --platform ios --no-install
 
-      - name: Restore DerivedData, ccache and CocoaPods caches
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore CocoaPods cache
+        id: pods_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ExpoLyrics/ios/Pods
+            ExpoLyrics/ios/Podfile.lock
+            ~/.cocoapods
+            ~/Library/Caches/CocoaPods
+          key: ios-sim-pods-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-sim-pods-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json') }}-
+
+      - name: Install Pods
+        id: install_pods
+        working-directory: ExpoLyrics/ios
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          pod install
+          test -s Podfile.lock
+
+      - name: Restore Release arm64 compiler cache
+        id: compiler_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ${{ github.workspace }}/../kinesync-ios-derived-sim
-            ${{ env.HOME }}/Library/Caches/ccache
-            ${{ env.HOME }}/.cocoapods
-            ${{ env.HOME }}/Library/Caches/CocoaPods
-          key: ios-sim-xcode27-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
+            ${{ github.workspace }}/../kinesync-ios-ccache
+          key: ios-sim-release-arm64-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/app.json', 'ExpoLyrics/scripts/build-simulator-app.mjs') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ios-sim-xcode27-caches-${{ runner.os }}-
+            ios-sim-release-arm64-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/app.json', 'ExpoLyrics/scripts/build-simulator-app.mjs') }}-
 
-      - name: Build Debug simulator app bundle
+      - name: Build Release arm64 simulator app bundle
         id: candidate_build
         working-directory: ExpoLyrics
         env:
@@ -181,3 +212,27 @@ jobs:
             ExpoLyrics/.expo/baseline-test-output/
           include-hidden-files: true
           retention-days: 14
+
+      # Explicit save runs after build/scenario failure; cache's default post hook only saves on success.
+      # Unique immutable keys allow incremental failed builds to improve the next compatible restore.
+      - name: Save CocoaPods cache
+        if: ${{ !cancelled() && steps.install_pods.outcome == 'success' && steps.pods_cache.outputs.cache-primary-key != '' }}
+        timeout-minutes: 1
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ExpoLyrics/ios/Pods
+            ExpoLyrics/ios/Podfile.lock
+            ~/.cocoapods
+            ~/Library/Caches/CocoaPods
+          key: ${{ steps.pods_cache.outputs.cache-primary-key }}
+
+      - name: Save partial Release arm64 compiler cache
+        if: ${{ !cancelled() && steps.candidate_build.outcome != 'skipped' && steps.compiler_cache.outputs.cache-primary-key != '' }}
+        timeout-minutes: 1
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ github.workspace }}/../kinesync-ios-derived-sim
+            ${{ github.workspace }}/../kinesync-ios-ccache
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}

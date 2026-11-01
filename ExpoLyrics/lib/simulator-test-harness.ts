@@ -1,5 +1,5 @@
 // Dev/test-only simulator testing harness and fake Spotify playback clock
-// Excluded from production builds by compile-time __DEV__ check
+// Enabled only by explicit compile-time test flags (including a separate Release opt-in).
 
 import type { PlaybackPacket } from '@/types/bridge';
 import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';

@@ -158,7 +158,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
       setShowOnboarding(false);
       setOnboardingChecked(true);
       return;

@@ -1,5 +1,5 @@
 // Dev/test-only communication bridge for observing real native renderer readiness and layout
-// Excluded from production builds by compile-time __DEV__ check
+// Enabled only by explicit compile-time test flags (including a separate Release opt-in).
 
 export type RendererReadyEvent = {
   key: string;
@@ -47,7 +47,7 @@ const readyWaiters: Set<ReadyWaiter> = new Set();
 const layoutWaiters: Set<LayoutWaiter> = new Set();
 
 export function isSimulatorTestActive(): boolean {
-  return typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1';
+  return ((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1';
 }
 
 export function notifySimulatorRendererReady(data: {

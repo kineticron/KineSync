@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import YAML from 'yaml';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -43,7 +44,7 @@ try {
   const budget = spawnSync(process.execPath, [new URL('./run-with-ci-budget.mjs', import.meta.url).pathname, process.execPath, '-e', 'setInterval(() => {}, 1000)'], { env: { ...process.env, SIMULATOR_CI_DEADLINE_MS: String(Date.now() + 200) }, timeout: 8000, encoding: 'utf8' });
   assert.equal(budget.status, 1); assert.match(budget.stderr, /budget exhausted/);
   const workflow = fs.readFileSync(new URL('../../.github/workflows/ios-simulator-test.yml', import.meta.url), 'utf8');
-  const artifactPaths = workflow.split('          path: |').at(-1).split('          include-hidden-files:')[0].trim().split('\n').map(p => p.trim());
+  const artifactPaths = YAML.parse(workflow).jobs['ios-simulator-test'].steps.find(step => step.name === 'Upload Simulator Test Artifacts').with.path.trim().split('\n').map(p => p.trim());
   assert.ok(artifactPaths.includes('ExpoLyrics/.expo/baseline-test-output/'));
   for (const p of artifactPaths) assert.ok(!p.split('/').some(part => ['.', '..'].includes(part)) && !path.isAbsolute(p), p);
   assert.match(workflow, /--output-dir "\$\{GITHUB_WORKSPACE\}\/ExpoLyrics\/\.expo\/baseline-test-output"/);
