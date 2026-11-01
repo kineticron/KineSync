@@ -313,10 +313,11 @@ import path from 'node:path';
 const dir = ${JSON.stringify(dir)};
 const name = path.basename(process.argv[1]), args = process.argv.slice(2);
 if (name === 'node') {
- if (args.at(-1) === 'landscape' && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
+ if (args.at(-1) === 'landscape' && process.env.SIM_CASE === 'rotation-failure') { console.log('native stdout before failure'); console.error('native stderr before failure'); process.exit(2); }
  if (process.env.SIM_CASE === 'rotation-hang') { setInterval(() => {}, 1000); return; }
- if (process.env.SIM_CASE === 'rotation-rejected') { console.log(JSON.stringify({ accepted: false })); process.exit(0); }
- console.log(JSON.stringify({ version: '0.13.0', udid: args.at(-2), orientation: args.at(-1), accepted: true })); process.exit(0);
+ if (process.env.SIM_CASE === 'rotation-rejected') { console.log('KINESYNC_ROTATION_RESULT ' + JSON.stringify({ accepted: false })); process.exit(0); }
+ console.log('native optional-symbol warning');
+ console.log('KINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: args.at(-2), orientation: args.at(-1), accepted: true })); process.exit(0);
 }
 if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 27.1'); process.exit(0); }
 if (name !== 'xcrun') process.exit(0);
@@ -354,7 +355,7 @@ if (args.includes('stream')) {
   if (process.env.SIM_CASE === 'stream-dies') process.exit(2);
   if (process.env.SIM_CASE === 'stalled-startup') return;
   if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
-  if (['early-exit', 'signal'].includes(process.env.SIM_CASE)) return;
+  if (['early-exit', 'capture-failure', 'signal'].includes(process.env.SIM_CASE)) return;
   const logs = ${JSON.stringify(runLogs)}.map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
@@ -397,7 +398,9 @@ if (args.includes('launch')) {
       assert.equal(fs.readdirSync(output).filter(name => name.endsWith('.png')).length, 7);
       assert.ok(fs.existsSync(path.join(output, 'diagnostics/initial-portrait.png')));
       assert.ok(fs.existsSync(path.join(output, 'diagnostics/restored-portrait.png')));
-      assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('0.13.0'));
+      const rotationEvidence = fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8');
+      assert.ok(rotationEvidence.includes('0.13.0'));
+      assert.ok(rotationEvidence.includes('native optional-symbol warning'));
       const raw = fs.readFileSync(path.join(output, 'simulator-raw-log.txt'), 'utf8');
       assert.equal(raw.split('[KINESYNC_SIM] SCENARIO_START').length - 1, 1, 'Canonical stream must not merge launch-console duplicates');
       assert.ok(raw.includes('[com.facebook.react.log:javascript]'));
@@ -416,6 +419,10 @@ if (args.includes('launch')) {
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
       if (scenario === 'rotation-hang') { assert.ok(Date.now() - started < 25000); assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('error')); }
+      if (scenario === 'rotation-failure') {
+        assert.ok(fs.readFileSync(path.join(output, 'rotation-native-stdout.log'), 'utf8').includes('native stdout before failure'));
+        assert.ok(fs.readFileSync(path.join(output, 'rotation-native-stderr.log'), 'utf8').includes('native stderr before failure'));
+      }
       if (scenario === 'initial-landscape') assert.match(state.error, /Initial native portrait/);
       if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
       if (['stream-exit', 'stream-eof-banner', 'stream-dies'].includes(scenario)) assert.match(state.error, /Unified log stream exited/);

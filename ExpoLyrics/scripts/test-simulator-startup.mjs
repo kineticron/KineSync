@@ -208,13 +208,17 @@ try {
   const calls = [];
   rotateSimulator('portrait', phone.udid, (cmd, args) => {
     calls.push([cmd, args]);
-    return cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : JSON.stringify({ version: '0.13.0', udid: phone.udid, orientation: 'portrait', accepted: true });
+    return cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : 'native optional-symbol warning\nKINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: phone.udid, orientation: 'portrait', accepted: true });
   });
   assert.equal(calls[1][0], 'node');
   assert.deepEqual(calls[1][1].slice(1), [phone.udid, 'portrait']);
   assert.ok(calls.every(([cmd]) => !['open', 'osascript', '/usr/bin/find'].includes(cmd)));
   for (const result of [{ accepted: false }, { version: '0.13.0', udid: 'wrong', orientation: 'portrait', accepted: true }]) {
-    assert.throws(() => rotateSimulator('portrait', phone.udid, cmd => cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : JSON.stringify(result)), /acknowledgment/);
+    assert.throws(() => rotateSimulator('portrait', phone.udid, cmd => cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : 'KINESYNC_ROTATION_RESULT ' + JSON.stringify(result)), /acknowledgment/);
+  }
+  const acknowledgment = 'KINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: phone.udid, orientation: 'portrait', accepted: true });
+  for (const output of ['native warnings only', acknowledgment + '\n' + acknowledgment, 'KINESYNC_ROTATION_RESULT invalid-json']) {
+    assert.throws(() => rotateSimulator('portrait', phone.udid, cmd => cmd === 'xcrun' ? inventory({ ...phone, state: 'Booted' }) : output));
   }
   fs.rmSync(path.join(developer, 'Applications'), { recursive: true });
   await selectToolchain(make().state, fake('Xcode 27.1'), developer);

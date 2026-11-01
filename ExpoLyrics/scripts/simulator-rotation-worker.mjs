@@ -22,6 +22,6 @@ try {
   // UIDeviceOrientation: portrait=1, landscapeRight=3, as in the pinned native source.
   const accepted = await hid.orientation(orientation === 'portrait' ? 1 : 3);
   if (accepted !== true) throw Error('Native orientation delivery rejected');
-  console.log(JSON.stringify({ version: VERSION, udid, orientation, accepted, developer }));
+  fs.writeSync(1, '\nKINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: VERSION, udid, orientation, accepted, developer }) + '\n');
   process.exit(0); // Native resources belong only to this process; no daemon to leave behind.
-} catch (error) { console.error(`@expo/serve-sim ${VERSION}: ${error.stack}`); process.exit(1); }
+} catch (error) { fs.writeSync(2, `@expo/serve-sim ${VERSION}: ${error.stack}\n`); process.exit(1); }

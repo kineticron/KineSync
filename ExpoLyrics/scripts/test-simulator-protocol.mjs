@@ -105,7 +105,7 @@ export async function testSimulatorProtocol() {
   rotateSimulator('landscape', 'chosen-udid', (cmd, args) => {
     calls.push([cmd, args]);
     if (cmd === 'xcrun') return JSON.stringify({ devices: { iOS: [{ udid: 'chosen-udid', state: 'Booted' }] } });
-    return JSON.stringify({ version: '0.13.0', udid: 'chosen-udid', orientation: 'landscape', accepted: true });
+    return 'native warning\nKINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: 'chosen-udid', orientation: 'landscape', accepted: true });
   });
   assert.deepEqual(calls[1][1].slice(1), ['chosen-udid', 'landscape']);
   assert.equal(calls[1][0], 'node');

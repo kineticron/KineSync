@@ -47,7 +47,9 @@ function runCommand(cmd, args, options = {}) {
     return execFileSync(cmd, args, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 5000, lifecycle?.remaining() ?? 5000)), killSignal: 'SIGKILL', encoding: 'utf8', stdio: options.stdio ?? ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : '';
-    throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stderr || err.message}`);
+    const failure = new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stderr || err.message}`);
+    failure.stdout = err.stdout?.toString();
+    throw failure;
   }
 }
 
@@ -80,11 +82,15 @@ export function rotateSimulator(targetOrientation, udid, command = runCommand) {
   const stderrFd = lifecycle ? fs.openSync(path.join(lifecycle.outputDir, 'rotation-native-stderr.log'), 'a') : undefined;
   try {
     output = command('node', [new URL('./simulator-rotation-worker.mjs', import.meta.url).pathname, udid, targetOrientation], { timeout: 15000, ...(stderrFd === undefined ? {} : { stdio: ['pipe', 'pipe', stderrFd] }) });
-    const result = JSON.parse(output);
+    const prefix = 'KINESYNC_ROTATION_RESULT ';
+    const acknowledgments = output.split(/\r?\n/).filter(line => line.startsWith(prefix));
+    if (acknowledgments.length !== 1) throw Error('Expected one native rotation acknowledgment');
+    const result = JSON.parse(acknowledgments[0].slice(prefix.length));
     if (result.accepted !== true || result.udid !== udid || result.orientation !== targetOrientation || result.version !== '0.13.0') throw Error('Invalid native rotation acknowledgment');
-  } catch (error) { failure = error.message; throw error; }
+  } catch (error) { output ??= error.stdout; failure = error.message; throw error; }
   finally {
     if (stderrFd !== undefined) fs.closeSync(stderrFd);
+    if (lifecycle && output !== undefined) fs.appendFileSync(path.join(lifecycle.outputDir, 'rotation-native-stdout.log'), output + '\n');
     if (lifecycle) fs.appendFileSync(path.join(lifecycle.outputDir, 'rotation-commands.jsonl'), JSON.stringify({ udid, orientation: targetOrientation, started, duration: Date.now() - started, output, error: failure }) + '\n');
   }
   console.log(`[RUNNER] Requested native rotation to ${targetOrientation}; awaiting rendered orientation evidence`);
