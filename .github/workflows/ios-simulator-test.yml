@@ -79,6 +79,21 @@ jobs:
             echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 46 * 60 * 1000 ))"
           } >> "${GITHUB_ENV}"
 
+      - name: Select installed Xcode 27 explicitly
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # Pin the installed image identity used by run4, before even the ccache xcrun.
+          DEVELOPER_DIR="/Applications/Xcode_27.1.app/Contents/Developer"
+          test -d "${DEVELOPER_DIR}"
+          DEVELOPER_DIR="$(cd "${DEVELOPER_DIR}" && pwd -P)"
+          export DEVELOPER_DIR
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}" >> "${GITHUB_ENV}"
+          echo "SIMULATOR_DISPOSABLE_CI=1" >> "${GITHUB_ENV}"
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -checkFirstLaunchStatus
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep '^Xcode 27\.'
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '27.1'
+
       - name: Prepare pinned CI-only native rotation tool
         timeout-minutes: 2
         run: |
@@ -111,21 +126,6 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ExpoLyrics/package-lock.json
-
-      - name: Select installed Xcode 27 explicitly
-        timeout-minutes: 2
-        run: |
-          set -euo pipefail
-          # Pin the installed image identity used by run4, before even the ccache xcrun.
-          DEVELOPER_DIR="/Applications/Xcode_27.1.app/Contents/Developer"
-          test -d "${DEVELOPER_DIR}"
-          DEVELOPER_DIR="$(cd "${DEVELOPER_DIR}" && pwd -P)"
-          export DEVELOPER_DIR
-          echo "DEVELOPER_DIR=${DEVELOPER_DIR}" >> "${GITHUB_ENV}"
-          echo "SIMULATOR_DISPOSABLE_CI=1" >> "${GITHUB_ENV}"
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -checkFirstLaunchStatus
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep '^Xcode 27\.'
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '27.1'
 
       - name: Install ccache
         timeout-minutes: 5

@@ -292,6 +292,12 @@ function testManualWorkflow() {
     assert.equal(parsed.status, 0, `${step.name}: ${parsed.stderr}`);
   }
   const steps = job.steps;
+  const selection = steps.findIndex(step => step.name === 'Select installed Xcode 27 explicitly');
+  const rotationTool = steps.findIndex(step => step.name === 'Prepare pinned CI-only native rotation tool');
+  assert.ok(selection >= 0 && selection < rotationTool, 'Native load preflight must inherit canonical Xcode selection');
+  assert.ok(rotationTool < steps.findIndex(step => step.id === 'baseline_prep'));
+  assert.ok(rotationTool < steps.findIndex(step => step.id === 'candidate_build'));
+  assert.match(steps[selection].run, /DEVELOPER_DIR=.*pwd -P/);
   const paths = steps.find(step => step.id === 'paths');
   assert.match(paths.run, /46 \* 60 \* 1000/);
   assert.match(paths.run, /pwd -P/);
