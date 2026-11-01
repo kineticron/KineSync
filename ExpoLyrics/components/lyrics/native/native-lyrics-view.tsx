@@ -112,7 +112,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     });
     return () => subscription.remove();
   }, [canDispatchRendererReady]);
-  const markRendererReady = useCallback((expectedKey: string) => {
+  const simulatorReadyGeneration = typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
+    ? rendererReadyGeneration : 0;
+  const markRendererReady = useCallback((expectedKey: string, simulatorGeneration?: number) => {
     const state = rendererReadyState.current;
     if (state.key !== expectedKey) return;
     state.ready = true;
@@ -122,10 +124,12 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     rendererReadyGate.current.onReady(state.generation,
       state.eligible && playback.playbackMode === 'mobile' && playback.connectionStatus !== 'connected', requestNativeRendererReadyResync,
       () => canDispatchRendererReady(state.key, state.generation));
-    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
+      state.generation === simulatorGeneration && rendererReadyGate.current.isCurrent(state.generation) &&
+      canDispatchRendererReady(expectedKey, state.generation)) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { notifySimulatorRendererReady } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
-      const currentTrackId = demoLyrics ? null : (transition?.packet.currentTrack?.id ?? usePlaybackStore.getState().currentTrack?.id ?? null);
+      const currentTrackId = rendererIdentity.current.demo ? null : rendererIdentity.current.trackId;
       notifySimulatorRendererReady({
         key: state.key,
         generation: state.generation,
@@ -328,7 +332,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   }, []);
   const onContentSizeChange = useCallback(() => {
     transition?.onReady();
-    markRendererReady(rendererReadyKey);
+    markRendererReady(rendererReadyKey, simulatorReadyGeneration);
     if (pendingScroll.current && following.current) {
       const { index, animated } = pendingScroll.current;
       pendingScroll.current = null;
@@ -342,7 +346,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
       const range = getAutoScrollTargetRange(current, currentPosition.current, currentLyrics);
       if (range) scrollTo(range.startIndex, true);
     }
-  }, [markRendererReady, rendererReadyKey, scrollTo, transition]);
+  }, [markRendererReady, rendererReadyKey, scrollTo, transition, simulatorReadyGeneration]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
   return <View style={styles.root} onLayout={event => {
     const w = event.nativeEvent.layout.width;

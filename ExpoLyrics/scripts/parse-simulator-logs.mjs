@@ -1,3 +1,7 @@
+export const REQUIRED_STAGES = ['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation', 'stage_8_complete'];
+const TRACKS = ['spotify-connect:sim_rewind_track', 'spotify-connect:sim_seesaw_track'];
+const STYLES = ['spicy', 'spicy', 'spicy', 'amll', 'amll', 'spicy', 'spicy'];
+const READY_STAGES = new Set([REQUIRED_STAGES[0], REQUIRED_STAGES[3], REQUIRED_STAGES[4], REQUIRED_STAGES[5]]);
 // Generic simulator log parser for KineSync test metrics
 // Extracts stage timers, heartbeat delays, renderer readiness, and viewport orientation
 
@@ -16,6 +20,12 @@ export class SimulatorLogParser {
     this.rotationTriggers = [];
     this.errors = [];
     this.rawLines = [];
+    this.activeStage = null;
+    this.ready = null;
+    this.pendingRotation = null;
+    this.currentTrack = null;
+    this.trackIds = new Set();
+    this.scenarioStarted = false;
   }
 
   processLine(line) {
@@ -27,8 +37,17 @@ export class SimulatorLogParser {
       this.appLaunched = true;
     }
 
+    if (trimmed.includes('[KINESYNC_SIM] SCENARIO_START')) {
+      if (this.scenarioStarted) this.errors.push('Repeated scenario start');
+      this.scenarioStarted = true;
+      return;
+    }
+
     const stageBeginMatch = trimmed.match(/\[KINESYNC_SIM\] STAGE_BEGIN\s+(\w+)\s+timestamp=(\d+)/);
     if (stageBeginMatch) {
+      if (!this.scenarioStarted || this.activeStage || stageBeginMatch[1] !== REQUIRED_STAGES[this.stages.length]) this.errors.push('Invalid stage order or overlapping stage');
+      this.activeStage = stageBeginMatch[1];
+      this.ready = null;
       this.stages.push({
         stage: stageBeginMatch[1],
         status: 'RUNNING',
@@ -55,6 +74,8 @@ export class SimulatorLogParser {
           }
         }
       }
+      if (!stage || status !== 'PASS' || this.activeStage !== stageName) this.errors.push('Invalid or unmatched stage end');
+      this.activeStage = null;
       return;
     }
 
@@ -77,42 +98,60 @@ export class SimulatorLogParser {
       const track = rendererMatch[4];
       if (lines > 0 && track && track !== 'null' && track !== 'undefined') {
         this.renderers.add(rendererMatch[1]);
+        this.ready = { style: rendererMatch[1], track, stage: this.activeStage };
       } else {
         this.errors.push(`Invalid RENDERER_ACTIVE with zero lines or invalid track: ${trimmed}`);
       }
       return;
     }
 
-    const layoutMatch = trimmed.match(/\[KINESYNC_SIM\] VIEWPORT_LAYOUT\s+width=(\d+)\s+height=(\d+)\s+orientation=(\w+)\s+style=(\w+)/);
-    if (layoutMatch) {
-      const width = Number(layoutMatch[1]);
-      const height = Number(layoutMatch[2]);
-      const orientation = layoutMatch[3];
-      if (orientation === 'landscape' && width > height) {
-        this.landscapeConfirmed = true;
-        this.landscapeDimensions = { width, height };
-      }
-      if (orientation === 'portrait' && height > width) {
-        this.portraitConfirmed = true;
+    if (trimmed.includes('[KINESYNC_SIM] VIEWPORT_LAYOUT')) {
+      const fields = Object.fromEntries([...trimmed.matchAll(/(\w+)=([^\s]+)/g)].map(m => [m[1], m[2]]));
+      const { orientation } = fields;
+      const width = Number(fields.width), height = Number(fields.height);
+      const windowWidth = Number(fields.windowWidth), windowHeight = Number(fields.windowHeight);
+      const valid = [width, height, windowWidth, windowHeight].every(n => Number.isFinite(n) && n > 0);
+      if (valid && this.activeStage === 'stage_7_rotation' && this.pendingRotation === orientation) {
+        if (orientation === 'landscape' && width > height && windowWidth > windowHeight) {
+          this.landscapeConfirmed = true;
+          this.landscapeDimensions = { width, height };
+          this.pendingRotation = null;
+        }
+        if (orientation === 'portrait' && this.landscapeConfirmed && height > width && windowHeight > windowWidth) {
+          this.portraitConfirmed = true;
+          this.pendingRotation = null;
+        }
       }
       return;
     }
 
     const screenshotMatch = trimmed.match(/\[KINESYNC_SIM\] READY_FOR_SCREENSHOT\s+stage=(\w+)/);
     if (screenshotMatch) {
-      this.screenshotRequests.push(screenshotMatch[1]);
+      const stage = screenshotMatch[1];
+      const fields = Object.fromEntries([...trimmed.matchAll(/(\w+)=([^\s]+)/g)].map(m => [m[1], m[2]]));
+      if (stage !== this.activeStage || this.screenshotRequests.includes(stage)) this.errors.push('Invalid screenshot stage');
+      const index = REQUIRED_STAGES.indexOf(stage);
+      const expectedTrack = TRACKS[index < 4 ? 0 : 1];
+      if (fields.track !== this.currentTrack || fields.track !== expectedTrack || fields.style !== STYLES[index]) this.errors.push('Screenshot track/style does not match scenario');
+      if (READY_STAGES.has(stage) && (!this.ready || this.ready.stage !== stage || this.ready.track !== fields.track || this.ready.style !== fields.style)) this.errors.push(`Missing fresh per-track renderer readiness for ${stage}`);
+      this.screenshotRequests.push(stage);
       return;
     }
 
     const rotationMatch = trimmed.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
     if (rotationMatch) {
       this.rotationTriggers.push(rotationMatch[1]);
+      if (this.activeStage !== 'stage_7_rotation') this.errors.push('Rotation outside rotation stage');
+      this.pendingRotation = rotationMatch[1];
       return;
     }
 
     const trackMatch = trimmed.match(/\[KINESYNC_SIM\] TRACK_LOADED\s+id=([^\s]+)\s+lines=(\d+)\s+parseMs=([\d.]+)/);
     if (trackMatch) {
-      this.tracksLoaded++;
+      this.currentTrack = trackMatch[1];
+      this.trackIds.add(this.currentTrack);
+      this.tracksLoaded = this.trackIds.size;
+      this.ready = null;
       return;
     }
 
@@ -128,6 +167,7 @@ export class SimulatorLogParser {
 
     const summaryMatch = trimmed.match(/\[KINESYNC_SIM\] SCENARIO_COMPLETE\s+(.*)/);
     if (summaryMatch) {
+      if (this.summary) this.errors.push('Repeated scenario summary');
       try {
         this.summary = JSON.parse(summaryMatch[1]);
       } catch (err) {
@@ -145,7 +185,7 @@ export class SimulatorLogParser {
 
   validateAssertions() {
     const failures = [];
-    if (!this.appLaunched && this.stages.length === 0) {
+    if (!this.appLaunched) {
       failures.push('App did not launch or failed to initialize test harness');
     }
     if (!this.renderers.has('spicy')) {
@@ -154,8 +194,8 @@ export class SimulatorLogParser {
     if (!this.renderers.has('amll')) {
       failures.push('AMLL renderer was not confirmed active via native readiness callback');
     }
-    if (this.tracksLoaded < 2) {
-      failures.push(`Expected at least 2 tracks loaded, found ${this.tracksLoaded}`);
+    if (this.tracksLoaded !== 2) {
+      failures.push(`Expected exactly 2 tracks loaded, found ${this.tracksLoaded}`);
     }
     if (!this.landscapeConfirmed) {
       failures.push('Rotation stage did not produce confirmed native landscape viewport with width > height');
@@ -163,21 +203,21 @@ export class SimulatorLogParser {
     if (!this.portraitConfirmed) {
       failures.push('Rotation stage did not produce confirmed native portrait viewport with height > width');
     }
-    const failedStages = this.stages.filter((s) => s.status === 'FAIL');
+    const failedStages = this.stages.filter((s) => s.status !== 'PASS');
     if (failedStages.length > 0) {
       for (const fs of failedStages) {
         failures.push(`Stage ${fs.stage} failed: ${fs.error || 'unspecified error'}`);
       }
     }
-    if (this.stages.length < 8) {
-      failures.push(`Incomplete scenario: expected at least 8 stages, got ${this.stages.length}`);
+    if (this.stages.length !== 8 || this.stages.some((s, i) => s.stage !== REQUIRED_STAGES[i])) {
+      failures.push(`Incomplete scenario: expected 8 ordered completed stages, got ${this.stages.length}`);
     }
     if (this.errors.length > 0) {
       for (const err of this.errors) {
         failures.push(`Execution error: ${err}`);
       }
     }
-    if (!this.heartbeat || !this.heartbeat.samples || this.heartbeat.samples <= 0) {
+    if (!this.heartbeat || !Number.isInteger(this.heartbeat.samples) || this.heartbeat.samples <= 0) {
       failures.push('Missing or empty heartbeat performance metrics');
     }
     const requiredScreenshots = [
@@ -198,6 +238,14 @@ export class SimulatorLogParser {
       failures.push('Missing SCENARIO_COMPLETE summary record');
     } else if (this.summary.success !== true) {
       failures.push('Summary reported success=false');
+    }
+    if (this.rotationTriggers.join(',') !== 'landscape,portrait' || this.pendingRotation) failures.push('Incomplete or repeated rotation transitions');
+    if (this.summary?.success === true) {
+      const reported = this.summary.stages;
+      if (!Array.isArray(reported) || reported.length !== this.stages.length || reported.some((s, i) => !s || s.stage !== this.stages[i]?.stage || s.status !== this.stages[i]?.status || s.durationMs !== this.stages[i]?.durationMs) ||
+          this.summary.tracksLoaded !== this.tracksLoaded || !Array.isArray(this.summary.errors) || this.summary.errors.length !== 0 ||
+          !Array.isArray(this.summary.renderersExercised) || this.summary.renderersExercised.length !== this.renderers.size || [...this.renderers].some(r => !this.summary.renderersExercised.includes(r)) ||
+          this.summary.heartbeat?.samples !== this.heartbeat?.samples) failures.push('Summary contradicts observed evidence');
     }
     return failures;
   }

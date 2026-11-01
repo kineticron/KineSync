@@ -7,6 +7,7 @@ export type RendererReadyEvent = {
   style: string;
   linesCount: number;
   trackId: string | null;
+  sequence: number;
   timestamp: number;
 };
 
@@ -17,12 +18,14 @@ export type LayoutChangeEvent = {
   windowHeight?: number;
   orientation: 'portrait' | 'landscape';
   style: string;
+  sequence: number;
   timestamp: number;
 };
 
 type ReadyWaiter = {
   style?: string;
   trackId?: string;
+  afterSequence?: number;
   minGeneration?: number;
   resolve: (event: RendererReadyEvent) => void;
   reject: (err: Error) => void;
@@ -31,11 +34,13 @@ type ReadyWaiter = {
 
 type LayoutWaiter = {
   orientation: 'portrait' | 'landscape';
+  afterSequence: number;
   resolve: (event: LayoutChangeEvent) => void;
   reject: (err: Error) => void;
   timeoutHandle: ReturnType<typeof setTimeout>;
 };
 
+let eventSequence = 0;
 let latestReadyEvent: RendererReadyEvent | null = null;
 let latestLayoutEvent: LayoutChangeEvent | null = null;
 const readyWaiters: Set<ReadyWaiter> = new Set();
@@ -56,6 +61,7 @@ export function notifySimulatorRendererReady(data: {
 
   const event: RendererReadyEvent = {
     ...data,
+    sequence: ++eventSequence,
     timestamp: Date.now(),
   };
   latestReadyEvent = event;
@@ -67,7 +73,7 @@ export function notifySimulatorRendererReady(data: {
     const trackMatches = !waiter.trackId || waiter.trackId === data.trackId;
     const genMatches = waiter.minGeneration === undefined || data.generation >= waiter.minGeneration;
     const hasLyrics = data.linesCount > 0;
-    if (styleMatches && trackMatches && genMatches && hasLyrics) {
+    if (styleMatches && trackMatches && genMatches && hasLyrics && event.sequence > (waiter.afterSequence ?? -1)) {
       clearTimeout(waiter.timeoutHandle);
       readyWaiters.delete(waiter);
       waiter.resolve(event);
@@ -84,11 +90,14 @@ export function notifySimulatorLayout(data: {
 }): void {
   if (!isSimulatorTestActive()) return;
 
-  const isLandscape = data.width > data.height && (!data.windowWidth || data.windowWidth > (data.windowHeight ?? 0));
+  if (![data.width, data.height, data.windowWidth, data.windowHeight].every(n => typeof n === 'number' && Number.isFinite(n) && n > 0)) return;
+  if ((data.width > data.height) !== (data.windowWidth! > data.windowHeight!)) return;
+  const isLandscape = data.width > data.height;
   const orientation: 'portrait' | 'landscape' = isLandscape ? 'landscape' : 'portrait';
   const event: LayoutChangeEvent = {
     ...data,
     orientation,
+    sequence: ++eventSequence,
     timestamp: Date.now(),
   };
   latestLayoutEvent = event;
@@ -96,7 +105,7 @@ export function notifySimulatorLayout(data: {
   console.info(`[KINESYNC_SIM] VIEWPORT_LAYOUT width=${Math.round(data.width)} height=${Math.round(data.height)} windowWidth=${Math.round(data.windowWidth || 0)} windowHeight=${Math.round(data.windowHeight || 0)} orientation=${orientation} style=${data.style}`);
 
   for (const waiter of Array.from(layoutWaiters)) {
-    if (waiter.orientation === orientation) {
+    if (waiter.orientation === orientation && event.sequence > waiter.afterSequence) {
       clearTimeout(waiter.timeoutHandle);
       layoutWaiters.delete(waiter);
       waiter.resolve(event);
@@ -105,20 +114,20 @@ export function notifySimulatorLayout(data: {
 }
 
 export function waitForSimulatorRendererReady(
-  options: { style?: string; trackId?: string; minGeneration?: number; timeoutMs?: number } = {}
+  options: { style?: string; trackId?: string; afterSequence?: number; minGeneration?: number; timeoutMs?: number } = {}
 ): Promise<RendererReadyEvent> {
   if (!isSimulatorTestActive()) {
     return Promise.reject(new Error('Simulator test mode is not active'));
   }
 
-  const { style, trackId, minGeneration, timeoutMs = 12000 } = options;
+  const { style, trackId, afterSequence = eventSequence, minGeneration, timeoutMs = 12000 } = options;
 
   if (latestReadyEvent) {
     const styleMatches = !style || latestReadyEvent.style === style;
     const trackMatches = !trackId || latestReadyEvent.trackId === trackId;
     const genMatches = minGeneration === undefined || latestReadyEvent.generation >= minGeneration;
     const hasLyrics = latestReadyEvent.linesCount > 0;
-    if (styleMatches && trackMatches && genMatches && hasLyrics) {
+    if (styleMatches && trackMatches && genMatches && hasLyrics && latestReadyEvent.sequence > afterSequence) {
       return Promise.resolve(latestReadyEvent);
     }
   }
@@ -132,6 +141,7 @@ export function waitForSimulatorRendererReady(
     const waiter: ReadyWaiter = {
       style,
       trackId,
+      afterSequence,
       minGeneration,
       resolve,
       reject,
@@ -149,9 +159,7 @@ export function waitForSimulatorOrientation(
     return Promise.reject(new Error('Simulator test mode is not active'));
   }
 
-  if (latestLayoutEvent && latestLayoutEvent.orientation === orientation) {
-    return Promise.resolve(latestLayoutEvent);
-  }
+  const afterSequence = eventSequence;
 
   return new Promise((resolve, reject) => {
     const timeoutHandle = setTimeout(() => {
@@ -161,6 +169,7 @@ export function waitForSimulatorOrientation(
 
     const waiter: LayoutWaiter = {
       orientation,
+      afterSequence,
       resolve,
       reject,
       timeoutHandle,
@@ -171,6 +180,7 @@ export function waitForSimulatorOrientation(
 
 export async function waitForSimulatorScreenshotAck(
   stage: string,
+  token: string,
   timeoutMs: number = 12000
 ): Promise<void> {
   if (!isSimulatorTestActive()) {
@@ -190,9 +200,7 @@ export async function waitForSimulatorScreenshotAck(
   }
 
   if (!FileClass || !PathsClass || !PathsClass.cache) {
-    console.info(`[KINESYNC_SIM] SCREENSHOT_ACK_FALLBACK stage=${stage}`);
-    await new Promise((r) => setTimeout(r, 200));
-    return;
+    throw new Error('SCREENSHOT_ACK_TRANSPORT_UNAVAILABLE');
   }
 
   const ackFileName = `kinesync_sim_ack_${stage}.json`;
@@ -202,6 +210,8 @@ export async function waitForSimulatorScreenshotAck(
   while (Date.now() - startTime < timeoutMs) {
     try {
       if (file.exists) {
+        const ack = JSON.parse(file.textSync());
+        if (ack.stage !== stage || ack.token !== token) throw new Error('Stale screenshot ACK');
         try {
           file.delete();
         } catch {

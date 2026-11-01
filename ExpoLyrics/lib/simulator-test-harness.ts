@@ -114,7 +114,14 @@ export class SimulatorTestHarness {
   private scenarioStartTime: number = 0;
   private activeTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
   private errors: string[] = [];
+  private runToken = '';
   private onCompleteCallback: ((summary: ScenarioSummary) => void) | null = null;
+
+  private async screenshot(stage: string, details: string): Promise<void> {
+    const token = `${this.runToken}_${stage}`;
+    console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=${stage} token=${token} ${details}`);
+    await waitForSimulatorScreenshotAck(stage, token, 12000);
+  }
 
   constructor() {
     this.clock = new SimulatorPlaybackClock((posMs, isPlaying) => {
@@ -140,7 +147,7 @@ export class SimulatorTestHarness {
 
   public beginStage(stage: string): StageTimer {
     if (this.currentStage) {
-      this.endStage(this.currentStage.stage, 'PASS');
+      throw new Error(`Cannot begin ${stage}: ${this.currentStage.stage} is unfinished`);
     }
     const timer: StageTimer = {
       stage,
@@ -265,13 +272,16 @@ export class SimulatorTestHarness {
     this.errors = [];
     this.renderersConfirmed.clear();
 
+    this.runToken = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    this.stageTimers = [];
+    this.tracksLoadedCount = 0;
     console.info('[KINESYNC_SIM] SCENARIO_START');
 
     try {
       // Stage 1: Launch and Song 1 initial load with Spicy renderer
       this.beginStage('stage_1_launch');
       // Set up readiness listener BEFORE triggering state change
-      const readyPromise1 = waitForSimulatorRendererReady({ style: 'spicy', timeoutMs: 12000 });
+      const readyPromise1 = waitForSimulatorRendererReady({ style: 'spicy', trackId: 'spotify-connect:sim_rewind_track', timeoutMs: 12000 });
       this.switchRenderer('spicy');
       const track1 = this.loadTrack(0);
       if (!track1) throw new Error('Failed to load track 1');
@@ -287,8 +297,7 @@ export class SimulatorTestHarness {
       this.clock.seek(5000);
 
       // Emit screenshot readiness marker and await handshake acknowledgement
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_1_launch style=spicy track=${track1.id} positionMs=5000`);
-      await waitForSimulatorScreenshotAck('stage_1_launch', 12000);
+      await this.screenshot('stage_1_launch', `style=spicy track=${track1.id} positionMs=5000`);
       this.endStage('stage_1_launch', 'PASS', { trackId: track1.id, style: 'spicy', lines: track1.linesCount });
 
       // Stage 2: Normal playback progression
@@ -296,9 +305,9 @@ export class SimulatorTestHarness {
       this.clock.play(5000);
       await this.delay(3000);
       this.clock.pause();
+      this.clock.seek(8000);
       const pos2 = this.clock.getPositionMs();
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_2_playback style=spicy track=${track1.id} positionMs=${pos2}`);
-      await waitForSimulatorScreenshotAck('stage_2_playback', 12000);
+      await this.screenshot('stage_2_playback', `style=spicy track=${track1.id} positionMs=${pos2}`);
       this.endStage('stage_2_playback', 'PASS', { positionMs: pos2 });
 
       // Stage 3: Seek forward
@@ -307,25 +316,24 @@ export class SimulatorTestHarness {
       this.clock.play(45000);
       await this.delay(1000);
       this.clock.pause();
+      this.clock.seek(46000);
       const pos3 = this.clock.getPositionMs();
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_3_seek style=spicy track=${track1.id} positionMs=${pos3}`);
-      await waitForSimulatorScreenshotAck('stage_3_seek', 12000);
+      await this.screenshot('stage_3_seek', `style=spicy track=${track1.id} positionMs=${pos3}`);
       this.endStage('stage_3_seek', 'PASS', { positionMs: pos3 });
 
       // Stage 4: Switch renderer to AMLL
       this.beginStage('stage_4_switch_amll');
-      const readyPromiseAmll = waitForSimulatorRendererReady({ style: 'amll', timeoutMs: 12000 });
+      const readyPromiseAmll = waitForSimulatorRendererReady({ style: 'amll', trackId: track1.id, timeoutMs: 12000 });
       this.switchRenderer('amll');
       const readyAmll = await readyPromiseAmll;
       this.renderersConfirmed.add(readyAmll.style);
       this.clock.pause();
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_4_switch_amll style=amll track=${track1.id} positionMs=${this.clock.getPositionMs()}`);
-      await waitForSimulatorScreenshotAck('stage_4_switch_amll', 12000);
+      await this.screenshot('stage_4_switch_amll', `style=amll track=${track1.id} positionMs=${this.clock.getPositionMs()}`);
       this.endStage('stage_4_switch_amll', 'PASS', { style: 'amll', generation: readyAmll.generation });
 
       // Stage 5: Skip song to Song 2 (exercises parse, row build, and mount bottleneck)
       this.beginStage('stage_5_skip_song');
-      const readyPromiseTrack2 = waitForSimulatorRendererReady({ style: 'amll', timeoutMs: 12000 });
+      const readyPromiseTrack2 = waitForSimulatorRendererReady({ style: 'amll', trackId: 'spotify-connect:sim_seesaw_track', timeoutMs: 12000 });
       const track2 = this.loadTrack(1);
       if (!track2) throw new Error('Failed to load track 2');
       const readyTrack2 = await readyPromiseTrack2;
@@ -334,19 +342,17 @@ export class SimulatorTestHarness {
       await this.delay(2000);
       this.clock.pause();
       this.clock.seek(5000);
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_5_skip_song style=amll track=${track2.id} positionMs=5000`);
-      await waitForSimulatorScreenshotAck('stage_5_skip_song', 12000);
+      await this.screenshot('stage_5_skip_song', `style=amll track=${track2.id} positionMs=5000`);
       this.endStage('stage_5_skip_song', 'PASS', { trackId: track2.id, lines: track2.linesCount });
 
       // Stage 6: Switch renderer back to Spicy
       this.beginStage('stage_6_switch_spicy');
-      const readyPromiseSpicy2 = waitForSimulatorRendererReady({ style: 'spicy', timeoutMs: 12000 });
+      const readyPromiseSpicy2 = waitForSimulatorRendererReady({ style: 'spicy', trackId: track2.id, timeoutMs: 12000 });
       this.switchRenderer('spicy');
       const readySpicy2 = await readyPromiseSpicy2;
       this.renderersConfirmed.add(readySpicy2.style);
       this.clock.pause();
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_6_switch_spicy style=spicy track=${track2.id} positionMs=5000`);
-      await waitForSimulatorScreenshotAck('stage_6_switch_spicy', 12000);
+      await this.screenshot('stage_6_switch_spicy', `style=spicy track=${track2.id} positionMs=5000`);
       this.endStage('stage_6_switch_spicy', 'PASS', { style: 'spicy', generation: readySpicy2.generation });
 
       // Stage 7: Orientation rotation stage
@@ -358,14 +364,12 @@ export class SimulatorTestHarness {
         throw new Error(`Landscape viewport invariant failed: width=${landscapeLayout.width} <= height=${landscapeLayout.height}`);
       }
       this.clock.pause();
-      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_7_rotation style=spicy track=${track2.id} positionMs=5000 orientation=landscape width=${Math.round(landscapeLayout.width)} height=${Math.round(landscapeLayout.height)}`);
-      await waitForSimulatorScreenshotAck('stage_7_rotation', 12000);
+      await this.screenshot('stage_7_rotation', `style=spicy track=${track2.id} positionMs=5000 orientation=landscape width=${Math.round(landscapeLayout.width)} height=${Math.round(landscapeLayout.height)}`);
 
       // Return back to portrait orientation
       const portraitPromise = waitForSimulatorOrientation('portrait', 12000);
       console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait');
       await portraitPromise;
-      this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });
       this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });
 
       // Stage 8: Finish scenario and report
@@ -374,7 +378,7 @@ export class SimulatorTestHarness {
       const heartbeatMetrics = this.heartbeat.stop();
       this.endStage('stage_8_complete', 'PASS');
 
-      const allStagesPassed = this.stageTimers.length >= 8 && this.stageTimers.every((s) => s.status === 'PASS');
+      const allStagesPassed = this.stageTimers.length === 8 && this.stageTimers.every((s) => s.status === 'PASS' && s.endWallMs !== undefined);
       const allRenderersConfirmed = this.renderersConfirmed.has('spicy') && this.renderersConfirmed.has('amll');
       const tracksAdequate = this.tracksLoadedCount >= 2;
       const success = allStagesPassed && allRenderersConfirmed && tracksAdequate && this.errors.length === 0;
@@ -426,7 +430,7 @@ export class SimulatorTestHarness {
   }
 
   public getSummary(): ScenarioSummary {
-    const allStagesPassed = this.stageTimers.length >= 8 && this.stageTimers.every((s) => s.status === 'PASS');
+    const allStagesPassed = this.stageTimers.length === 8 && this.stageTimers.every((s) => s.status === 'PASS' && s.endWallMs !== undefined);
     const allRenderersConfirmed = this.renderersConfirmed.has('spicy') && this.renderersConfirmed.has('amll');
     const tracksAdequate = this.tracksLoadedCount >= 2;
     const success = allStagesPassed && allRenderersConfirmed && tracksAdequate && this.errors.length === 0;

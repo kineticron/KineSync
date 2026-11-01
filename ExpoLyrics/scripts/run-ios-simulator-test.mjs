@@ -38,7 +38,12 @@ function getAvailableSimulatorDevice() {
   return candidate;
 }
 
-function rotateSimulator(targetOrientation) {
+export function rotateSimulator(targetOrientation, udid, command = runCommand) {
+  if (!['portrait', 'landscape'].includes(targetOrientation)) throw new Error('Invalid rotation orientation');
+  const inventory = JSON.parse(command('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']));
+  const booted = Object.values(inventory.devices || {}).flat().filter(d => d.state === 'Booted');
+  if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
+  command('open', ['-a', 'Simulator', '--args', '-CurrentDeviceUDID', udid]);
   const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
   const script = `
 tell application "Simulator" to activate
@@ -58,12 +63,8 @@ tell application "System Events"
   end tell
 end tell
 `;
-  try {
-    runCommand('osascript', ['-e', script]);
-    console.log(`[RUNNER] Triggered simulator rotation to ${targetOrientation}`);
-  } catch (err) {
-    console.warn(`[RUNNER] Warning: Failed to trigger AppleScript rotation: ${err.message}`);
-  }
+  command('osascript', ['-e', script]);
+  console.log(`[RUNNER] Triggered simulator rotation to ${targetOrientation}`);
 }
 
 async function main() {
@@ -106,7 +107,7 @@ async function main() {
   console.log('[RUNNER] App installed.');
 
   const parser = new SimulatorLogParser();
-  const rawLogStream = fs.createWriteStream(rawLogFile, { flags: 'a' });
+  const rawLogStream = fs.createWriteStream(rawLogFile, { flags: 'w' });
 
   let scenarioFinished = false;
   let scenarioResolve = null;
@@ -126,11 +127,12 @@ async function main() {
     // Handle simulator rotation trigger
     const rotMatch = trimmed.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
     if (rotMatch) {
-      rotateSimulator(rotMatch[1]);
+      try { rotateSimulator(rotMatch[1], device.udid); }
+      catch (err) { parser.errors.push(`Rotation command failed: ${err.message}`); scenarioResolve(); }
     }
 
     // Handle screenshot request with authentic bidirectional handshake
-    const shotMatch = trimmed.match(/\[KINESYNC_SIM\] READY_FOR_SCREENSHOT\s+stage=(\w+)/);
+    const shotMatch = trimmed.match(/\[KINESYNC_SIM\] READY_FOR_SCREENSHOT\s+stage=(\w+)\s+token=([\w]+)/);
     if (shotMatch) {
       const stage = shotMatch[1];
       if (!processedScreenshotStages.has(stage)) {
@@ -168,7 +170,7 @@ async function main() {
                 const cachesDir = path.join(containerPath, 'Library', 'Caches');
                 if (fs.existsSync(cachesDir)) {
                   const ackFile = path.join(cachesDir, `kinesync_sim_ack_${stage}.json`);
-                  fs.writeFileSync(ackFile, JSON.stringify({ stage, timestamp: Date.now() }), 'utf8');
+                  fs.writeFileSync(ackFile, JSON.stringify({ stage, token: shotMatch[2], timestamp: Date.now() }), 'utf8');
                   console.log(`[RUNNER] Wrote screenshot ACK for ${stage}`);
                 }
               }
@@ -201,25 +203,6 @@ async function main() {
     };
   }
 
-  console.log('[RUNNER] Starting unified log stream with debug level...');
-  const logProcess = spawn('xcrun', [
-    'simctl',
-    'spawn',
-    device.udid,
-    'log',
-    'stream',
-    '--level',
-    'debug',
-    '--style',
-    'compact',
-    '--predicate',
-    '(processImagePath ENDSWITH "KineSync" OR process == "KineSync" OR eventMessage CONTAINS "KINESYNC_SIM")',
-  ]);
-
-  const logConsumer = createLineBufferConsumer();
-  logProcess.stdout.on('data', logConsumer);
-  logProcess.stderr.on('data', (chunk) => rawLogStream.write(chunk.toString()));
-
   console.log('[RUNNER] Launching app dev.kineticron.KineSync via console-pty with EXPO_PUBLIC_SIMULATOR_TEST=1...');
   const appProcess = spawn('xcrun', [
     'simctl',
@@ -236,13 +219,15 @@ async function main() {
 
   const appConsumer = createLineBufferConsumer();
   appProcess.stdout.on('data', appConsumer);
-  appProcess.stderr.on('data', (chunk) => rawLogStream.write(chunk.toString()));
+  appProcess.stderr.on('data', createLineBufferConsumer());
+  appProcess.on('error', err => { parser.errors.push(`Launch failed: ${err.message}`); scenarioResolve(); });
+  appProcess.on('exit', code => { if (!scenarioFinished) { parser.errors.push(`App console exited before completion: ${code}`); scenarioResolve(); } });
 
   console.log(`[RUNNER] Waiting for scenario completion (timeout: ${timeoutMinutes}m)...`);
   const timeoutHandle = setTimeout(() => {
     if (!scenarioFinished) {
       console.error('[RUNNER] Hard timeout reached waiting for test scenario!');
-      logProcess.kill();
+      parser.errors.push('Hard timeout waiting for scenario completion');
       appProcess.kill();
       scenarioResolve();
     }
@@ -250,9 +235,11 @@ async function main() {
 
   await scenarioPromise;
   clearTimeout(timeoutHandle);
-  logProcess.kill();
   appProcess.kill();
-  rawLogStream.end();
+  await new Promise((resolve, reject) => {
+    rawLogStream.on('error', reject);
+    rawLogStream.end(resolve);
+  });
 
   console.log('[RUNNER] Test scenario completed. Validating assertions...');
 
@@ -278,6 +265,7 @@ async function main() {
     }
   }
 
+  parser.errors.push(...assertionFailures.filter(f => f.startsWith('Missing screenshot capture') || f.startsWith('Invalid/blank screenshot')));
   const markdownReport = parser.generateMarkdownReport();
   fs.writeFileSync(summaryReportFile, markdownReport, 'utf8');
 

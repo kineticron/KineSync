@@ -4,6 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
+import { REQUIRED_STAGES } from './parse-simulator-logs.mjs';
+
+export const REQUIRED_SCREENSHOTS = REQUIRED_STAGES.slice(0, 7).map(s => `${s}.png`);
 
 export function analyzeScreenshotContent(buffer) {
   let png;
@@ -69,10 +72,16 @@ export function compareScreenshots(branchDir, baselineDir) {
     return { error: `No PNG screenshot files found in branch directory: ${branchDir}`, results: [] };
   }
 
-  for (const filename of branchFiles) {
+  const baselineFiles = fs.readdirSync(baselineDir).filter(f => f.endsWith('.png'));
+  const files = [...new Set([...branchFiles, ...baselineFiles])];
+  for (const filename of files) {
     const branchPath = path.join(branchDir, filename);
     const baselinePath = path.join(baselineDir, filename);
 
+    if (!fs.existsSync(branchPath)) {
+      results.push({ filename, status: 'MISSING_IN_BRANCH', branchNonBlank: false, baselineNonBlank: false, differenceRatio: 1 });
+      continue;
+    }
     const branchBuf = fs.readFileSync(branchPath);
     const branchAnalysis = analyzeScreenshotContent(branchBuf);
 
@@ -95,6 +104,10 @@ export function compareScreenshots(branchDir, baselineDir) {
     const baselineBuf = fs.readFileSync(baselinePath);
     const baselineAnalysis = analyzeScreenshotContent(baselineBuf);
 
+    if (branchAnalysis.error || baselineAnalysis.error) {
+      results.push({ filename, status: 'INVALID_PNG', branchNonBlank: branchAnalysis.nonBlank, baselineNonBlank: baselineAnalysis.nonBlank, differenceRatio: 1 });
+      continue;
+    }
     const branchPng = PNG.sync.read(branchBuf);
     const baselinePng = PNG.sync.read(baselineBuf);
 
@@ -105,6 +118,7 @@ export function compareScreenshots(branchDir, baselineDir) {
         branchWidth: branchPng.width,
         branchHeight: branchPng.height,
         branchNonBlank: branchAnalysis.nonBlank,
+        baselineNonBlank: baselineAnalysis.nonBlank,
         baselineWidth: baselinePng.width,
         baselineHeight: baselinePng.height,
         differingPixels: 0,
@@ -140,11 +154,12 @@ export function compareScreenshots(branchDir, baselineDir) {
       branchWidth: branchPng.width,
       branchHeight: branchPng.height,
       branchNonBlank: branchAnalysis.nonBlank,
+      baselineNonBlank: baselineAnalysis.nonBlank,
       baselineWidth: baselinePng.width,
       baselineHeight: baselinePng.height,
       differingPixels: diffPixels,
       totalPixels,
-      differenceRatio: Math.round(diffRatio * 1000) / 1000,
+      differenceRatio: diffRatio,
     });
   }
 
@@ -181,12 +196,25 @@ export function generateComparisonMarkdown(comparison, baselineRef = 'baseline')
     '## Documentation of Comparison Limits',
     '',
     '* When the baseline reference lacks the simulator test harness, the test harness files are applied to the baseline workspace for visual testing.',
-    '* If the baseline branch lacks native lyrics renderer implementation, comparison is limited to available baseline rendering pipelines.',
+    '* Baseline harness integration must apply successfully. Incompatible baselines fail closed.',
+    '* Acceptance requires all seven nonblank image pairs with matching dimensions. The default maximum differing-pixel ratio is zero after channel tolerance.',
     '* Minor anti-aliasing and subpixel differences across independent builds can result in non-zero byte divergence even when layouts match visually.',
     '',
   );
 
   return lines.join('\n');
+}
+
+export function validateComparison(comparison, maxDifferenceRatio = 0) {
+  const failures = [];
+  if (!Number.isFinite(maxDifferenceRatio) || maxDifferenceRatio < 0 || maxDifferenceRatio > 1) return ['Invalid maximum difference ratio'];
+  if (comparison.error) failures.push(comparison.error);
+  const names = comparison.results.map(r => r.filename);
+  if (names.length !== REQUIRED_SCREENSHOTS.length || REQUIRED_SCREENSHOTS.some(f => !names.includes(f))) failures.push('Expected exactly seven screenshot pairs');
+  for (const r of comparison.results) {
+    if (!['IDENTICAL', 'DIFFERENT'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank || r.differenceRatio > maxDifferenceRatio) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
+  }
+  return failures;
 }
 
 // CLI entrypoint
@@ -212,14 +240,11 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
     console.log(markdown);
   }
 
-  if (comparison.error || comparison.results.length === 0) {
-    console.error(`[COMPARATOR] Screenshot comparison failed: ${comparison.error || 'No results'}`);
-    process.exit(1);
-  }
-
-  const blankScreenshots = comparison.results.filter((r) => !r.branchNonBlank);
-  if (blankScreenshots.length > 0) {
-    console.error(`[COMPARATOR] Found ${blankScreenshots.length} blank screenshots in branch`);
+  const thresholdIndex = process.argv.indexOf('--max-difference-ratio');
+  const threshold = thresholdIndex >= 0 ? Number(process.argv[thresholdIndex + 1]) : 0;
+  const failures = validateComparison(comparison, threshold);
+  if (failures.length) {
+    console.error(`[COMPARATOR] ${failures.join('\n')}`);
     process.exit(1);
   }
 }
