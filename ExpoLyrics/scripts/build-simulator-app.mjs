@@ -232,7 +232,14 @@ export function buildSimulatorApp(options = {}) {
   const bundleId = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', plistPath], { encoding: 'utf8' })).trim();
   const platforms = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleSupportedPlatforms', plistPath], { encoding: 'utf8' }));
   if (bundleId !== 'dev.kineticron.KineSync' || !/\biPhoneSimulator\b/.test(platforms)) throw new Error('Built product is not the expected KineSync simulator application');
-  console.log(`[BUILD] Located built simulator app: ${appPath}`);
+  const executableName = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', plistPath], { encoding: 'utf8' })).trim();
+  if (!executableName || path.basename(executableName) !== executableName) throw new Error('Invalid CFBundleExecutable');
+  const executable = path.join(appPath, executableName);
+  if (!fs.existsSync(executable) || !fs.statSync(executable).isFile()) throw new Error('Missing built executable');
+  const architectures = String(execCommand('xcrun', ['lipo', '-archs', executable], { encoding: 'utf8', timeout: 15000 })).trim();
+  const loadCommands = String(execCommand('xcrun', ['vtool', '-show-build', executable], { encoding: 'utf8', timeout: 15000 }));
+  if (architectures !== 'arm64' || !/platform\s+IOSSIMULATOR\b/.test(loadCommands)) throw new Error('Executable must be exactly arm64 IOSSIMULATOR');
+  console.log(`[BUILD] Verified product ${appPath}; executable=${executableName}; archs=${architectures}; ${loadCommands.trim()}`);
 
   if (!fs.existsSync(path.join(appPath, 'main.jsbundle')) || fs.statSync(path.join(appPath, 'main.jsbundle')).size === 0) throw new Error('Simulator app has no main.jsbundle: bundling was skipped despite FORCE_BUNDLING; inspect generated Xcode bundle phase and .xcode.env files');
 

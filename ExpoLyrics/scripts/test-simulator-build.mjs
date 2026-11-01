@@ -406,11 +406,12 @@ function testSchemeDiscovery() {
         for (const flag of ['ONLY_ACTIVE_ARCH=YES', 'ARCHS=arm64', 'EXPO_PUBLIC_SIMULATOR_TEST_BUILD=release-arm64', 'FORCE_BUNDLING=1']) assert.ok(args.includes(flag), flag);
         assert.equal(process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD, 'release-arm64');
         assert.ok(!fs.existsSync(path.join(tempDir, '.env.local')));
-        if (fs.existsSync(expectedAppDir)) fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'test bundle');
+        if (fs.existsSync(expectedAppDir)) { fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'test bundle'); fs.writeFileSync(path.join(expectedAppDir, 'KineSync'), 'mock executable'); }
         builtScheme = args[args.indexOf('-scheme') + 1];
         return '';
       }
-      if (cmd === '/usr/libexec/PlistBuddy') return args[1].includes('Identifier') ? 'dev.kineticron.KineSync' : 'Array { iPhoneSimulator }';
+      if (cmd === '/usr/libexec/PlistBuddy') return args[1].includes('Identifier') ? 'dev.kineticron.KineSync' : args[1].includes('Executable') ? 'KineSync' : 'Array { iPhoneSimulator }';
+      if (cmd === 'xcrun') return args[0] === 'lipo' ? 'arm64' : 'platform IOSSIMULATOR';
       if (cmd === 'codesign') {
         signedPath = args[args.length - 1];
         return '';
@@ -430,6 +431,10 @@ function testSchemeDiscovery() {
     assert.strictEqual(builtScheme, 'KineSync', 'Must invoke xcodebuild build for application scheme KineSync');
     assert.strictEqual(signedPath, expectedAppDir, 'Must codesign exact derived app path');
     assert.strictEqual(appResult, expectedAppDir, 'Must return exact derived app path');
+    for (const bad of ['arm64 x86_64', 'x86_64', 'platform IOS']) {
+      const runner = (cmd, args) => cmd === 'xcrun' ? (args[0] === 'lipo' ? (bad.startsWith('platform') ? 'arm64' : bad) : (bad.startsWith('platform') ? bad : 'platform IOSSIMULATOR')) : mockRunner(cmd, args);
+      assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: runner }), /exactly arm64 IOSSIMULATOR/);
+    }
     fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'stale cached bundle');
     const missingBundle = (cmd, args) => cmd === 'xcodebuild' && args.includes('build') ? '' : mockRunner(cmd, args);
     assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: missingBundle }), /no main.jsbundle/);
