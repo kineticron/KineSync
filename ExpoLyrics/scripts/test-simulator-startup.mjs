@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import { enumerateRuntimes, startupCommand, prepareSimulator, verifySelected, startupDiagnostics, selectToolchain, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
-import { verifyArchive, verifyNative, verifyFramework } from './prepare-simulator-rotation.mjs';
+import { preflightNative, verifyArchive, verifyNative, verifyFramework } from './prepare-simulator-rotation.mjs';
 import { selectSimulatorDevice, rotateSimulator } from './run-ios-simulator-test.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-test-'));
 const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
@@ -18,6 +18,20 @@ const make = (budget = 300000) => {
   return { state, advance: ms => { time += ms; } };
 };
 try {
+  // Real child processes test the load boundary, without claiming Mach-O loads on Linux.
+  const probeFixture = path.join(dir, 'probe.cjs');
+  fs.writeFileSync(probeFixture, "console.error('fixture optional-symbol warning'); exports.SimHID = class {};");
+  const probe = preflightNative(probeFixture);
+  assert.ok(probe.includes('SimHID export verified'));
+  assert.ok(probe.includes('fixture optional-symbol warning'));
+  assert.equal(JSON.parse(probe.split('\n')[0]).arch, process.arch);
+  assert.ok(probe.includes(process.versions.napi));
+  fs.writeFileSync(probeFixture, 'module.exports = {};');
+  assert.throws(() => preflightNative(probeFixture), /SimHID constructor/);
+  fs.writeFileSync(probeFixture, "throw Error('fixture dyld error');");
+  assert.throws(() => preflightNative(probeFixture), /fixture dyld error/);
+  fs.writeFileSync(probeFixture, 'while (true) {}');
+  assert.throws(() => preflightNative(probeFixture, 100), error => error.signal === 'SIGKILL');
   const tampered = path.join(dir, 'tampered.node');
   fs.writeFileSync(tampered, 'untrusted');
   assert.throws(() => verifyArchive(fs.readFileSync(tampered)), /integrity mismatch/);
