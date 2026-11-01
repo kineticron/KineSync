@@ -362,6 +362,8 @@ function testSchemeDiscovery() {
     fs.mkdirSync(expectedAppDir, { recursive: true });
 
     let builtScheme = null;
+    fs.mkdirSync(path.join(testIosDir, 'KineSync'), { recursive: true });
+    fs.writeFileSync(path.join(testIosDir, 'KineSync/AppDelegate.swift'), 'return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")');
     let signedPath = null;
     const mockRunner = (cmd, args) => {
       if (cmd === 'xcodebuild' && args.includes('-list')) {
@@ -390,6 +392,9 @@ function testSchemeDiscovery() {
         ]);
       }
       if (cmd === 'xcodebuild' && args.includes('build')) {
+        assert.ok(args.includes('SKIP_BUNDLING='));
+        assert.ok(args.includes('FORCE_BUNDLING=1'));
+        if (fs.existsSync(expectedAppDir)) fs.writeFileSync(path.join(expectedAppDir, 'main.jsbundle'), 'test bundle');
         builtScheme = args[args.indexOf('-scheme') + 1];
         return '';
       }
@@ -408,9 +413,14 @@ function testSchemeDiscovery() {
       execCommand: mockRunner,
     });
 
+    assert.match(fs.readFileSync(path.join(testIosDir, 'KineSync/AppDelegate.swift'), 'utf8'), /standalone simulator harness/);
+    assert.match(fs.readFileSync(path.join(testIosDir, '.xcode.env.local'), 'utf8'), /unset SKIP_BUNDLING/);
     assert.strictEqual(builtScheme, 'KineSync', 'Must invoke xcodebuild build for application scheme KineSync');
     assert.strictEqual(signedPath, expectedAppDir, 'Must codesign exact derived app path');
     assert.strictEqual(appResult, expectedAppDir, 'Must return exact derived app path');
+    fs.unlinkSync(path.join(expectedAppDir, 'main.jsbundle'));
+    const missingBundle = (cmd, args) => cmd === 'xcodebuild' && args.includes('build') ? '' : mockRunner(cmd, args);
+    assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: missingBundle }), /no main.jsbundle/);
     fs.rmSync(expectedAppDir, { recursive: true });
     fs.mkdirSync(path.join(testDerivedDir, 'Build/Products/Release-iphoneos/Stale.app'), { recursive: true });
     assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: mockRunner }), /Expected built application does not exist/);

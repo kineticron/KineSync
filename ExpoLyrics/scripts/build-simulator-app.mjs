@@ -167,6 +167,25 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
   return selected;
 }
 
+// Generated files only: standalone Debug keeps __DEV__ while avoiding an absent Metro.
+export function configureStandaloneSimulator(iosDirectory) {
+  const delegates = fs.readdirSync(iosDirectory, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !['Pods', 'build'].includes(entry.name))
+    .map(entry => path.join(iosDirectory, entry.name, 'AppDelegate.swift'))
+    .filter(file => fs.existsSync(file));
+  if (delegates.length !== 1) throw new Error('Expected one generated AppDelegate.swift for standalone simulator');
+  const delegate = delegates[0];
+  const source = fs.readFileSync(delegate, 'utf8');
+  const metro = 'return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")';
+  const embedded = 'return Bundle.main.url(forResource: "main", withExtension: "jsbundle") // standalone simulator harness';
+  if (!source.includes(metro) && !source.includes(embedded)) throw new Error('Unsupported generated Debug bundle URL; refusing an unverified startup path');
+  fs.writeFileSync(delegate, source.replace(metro, embedded));
+  // Expo sources this file again AFTER its unconditional Debug SKIP_BUNDLING=1.
+  const envFile = path.join(iosDirectory, '.xcode.env.local');
+  const envSource = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  if (!envSource.includes('# Standalone simulator harness')) fs.appendFileSync(envFile, '\n# Standalone simulator harness\nunset SKIP_BUNDLING\nexport FORCE_BUNDLING=1\n');
+}
+
 export function buildSimulatorApp(options = {}) {
   const derivedDataPath = options.derivedDataPath || process.env.DERIVED_DATA_PATH || path.join(iosDir, 'build');
   const iosDirectory = options.iosDirectory || iosDir;
@@ -182,6 +201,8 @@ export function buildSimulatorApp(options = {}) {
   if (!fs.existsSync(iosDirectory)) {
     throw new Error(`iOS directory not found at ${iosDirectory}. Run npx expo prebuild first.`);
   }
+
+  configureStandaloneSimulator(iosDirectory);
 
   const ws = fs.readdirSync(iosDirectory).find((f) => f.endsWith('.xcworkspace'));
   if (!ws) {
@@ -222,6 +243,7 @@ export function buildSimulatorApp(options = {}) {
     '-destination', 'generic/platform=iOS Simulator',
     '-derivedDataPath', derivedDataPath,
     'FORCE_BUNDLING=1',
+    'SKIP_BUNDLING=',
     'EXPO_PUBLIC_SIMULATOR_TEST=1',
     ...signing,
     ...ccache,
@@ -246,6 +268,8 @@ export function buildSimulatorApp(options = {}) {
   const platforms = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleSupportedPlatforms', plistPath], { encoding: 'utf8' }));
   if (bundleId !== 'dev.kineticron.KineSync' || !/\biPhoneSimulator\b/.test(platforms)) throw new Error('Built product is not the expected KineSync simulator application');
   console.log(`[BUILD] Located built simulator app: ${appPath}`);
+
+  if (!fs.existsSync(path.join(appPath, 'main.jsbundle'))) throw new Error('Simulator app has no main.jsbundle: bundling was skipped despite FORCE_BUNDLING; inspect generated Xcode bundle phase and .xcode.env files');
 
   // Ad-hoc codesign app bundle for simulator execution
   console.log('[BUILD] Ad-hoc codesigning app bundle...');

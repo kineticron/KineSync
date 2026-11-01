@@ -252,13 +252,13 @@ if (process.argv[2].includes('compare-simulator')) {
 process.exit(Number(process.env.BASELINE_EXIT));
 `;
     fs.writeFileSync(path.join(dir, 'node'), shim, { mode: 0o755 });
-    const script = baseline.run.slice(baseline.run.indexOf('BASELINE_STATUS=0')).replace(/^popd$/m, ':');
+    const script = baseline.run.slice(baseline.run.indexOf('BASELINE_STATUS=0')).replace(/^popd$/m, ':').replace(/^BASELINE$/m, '');
     for (const [baselineExit, compareExit] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
       const summary = path.join(dir, 'summary');
       fs.writeFileSync(summary, '');
       const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
         cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`,
-          BASELINE_APP: '/mock.app', BASELINE_REF: 'main', BASELINE_EXIT: String(baselineExit), COMPARE_EXIT: String(compareExit), GITHUB_STEP_SUMMARY: summary },
+          GITHUB_WORKSPACE: dir, BASELINE_APP: '/mock.app', BASELINE_REF: 'main', BASELINE_EXIT: String(baselineExit), COMPARE_EXIT: String(compareExit), GITHUB_STEP_SUMMARY: summary },
       });
       assert.equal(result.status, baselineExit || compareExit ? 1 : 0, result.stderr);
       assert.ok(fs.readFileSync(summary, 'utf8').includes('comparison attempted'), 'Comparison must run and publish even when baseline scenario fails');

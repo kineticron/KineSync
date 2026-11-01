@@ -14,6 +14,7 @@ import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent, compareScreenshots } from './compare-simulator-screenshots.mjs';
 import './test-simulator-build.mjs';
 import './test-simulator-baseline.mjs';
+import './test-simulator-timeouts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -310,12 +311,16 @@ const name = path.basename(process.argv[1]), args = process.argv.slice(2);
 if (name === 'osascript' && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
 if (name !== 'xcrun') process.exit(0);
 if (args.includes('list')) console.log(JSON.stringify({ devices: { iOS: [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
+if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) console.log(dir);
 if (args.includes('screenshot')) {
  const dest = args.at(-1);
  fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') ? 'landscape.png' : 'portrait.png'), dest);
 }
 if (args.includes('launch')) {
+ if (process.env.SIM_CASE === 'stalled-startup') { setInterval(() => {}, 1000); return; }
+ if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); setInterval(() => {}, 1000); return; }
+ if (process.env.SIM_CASE === 'signal') { process.kill(process.ppid, 'SIGTERM'); setInterval(() => {}, 1000); return; }
  if (process.env.SIM_CASE === 'early-exit') process.exit(1);
  console.log(${JSON.stringify(runLogs.join('\n'))});
 }
@@ -324,11 +329,19 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'blank', 'early-exit', 'rotation-failure']) {
+  for (const scenario of ['pass', 'blank', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure']) {
     const output = path.join(dir, scenario);
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', scenario === 'stalled-startup' ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario } });
     assert.equal(result.status, scenario === 'pass' ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
-    assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${scenario === 'pass' ? 'PASSED' : 'FAILED'}`));
+    if (!['signal', 'install-failure'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${scenario === 'pass' ? 'PASSED' : 'FAILED'}`));
+    if (scenario !== 'pass') {
+      const state = JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'), 'utf8'));
+      assert.ok(state.error);
+      for (const name of ['failure.png', 'device-log.txt', 'metro-status.txt']) assert.ok(fs.existsSync(path.join(output, name)), name);
+      if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
+      if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
+      if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
+    }
   }
 }
 

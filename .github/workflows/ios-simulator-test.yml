@@ -36,6 +36,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Reserve cleanup and upload time
+        run: echo "SIMULATOR_CI_DEADLINE_MS=$(( $(date +%s) * 1000 + 26 * 60 * 1000 ))" >> "${GITHUB_ENV}"
+
       - name: Setup Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -73,9 +76,11 @@ jobs:
 
       - name: Install JS dependencies
         working-directory: ExpoLyrics
+        timeout-minutes: 5
         run: npm ci
 
       - name: Expo prebuild (iOS)
+        timeout-minutes: 5
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
 
@@ -103,14 +108,14 @@ jobs:
             ccache --zero-stats
           fi
           mkdir -p .expo
-          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
+          node scripts/run-with-ci-budget.mjs node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
 
       - name: Run iOS Simulator Test Harness
         working-directory: ExpoLyrics
         run: |
           set -euo pipefail
           APP_PATH="$(cat ios/.built_app_path)"
-          node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 15
+          node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 6
 
       - name: Run Baseline Comparison (if requested)
         # A candidate scenario failure must not skip the requested baseline evidence.
@@ -119,6 +124,7 @@ jobs:
           BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
           DERIVED_BASELINE: ${{ github.workspace }}/../kinesync-ios-derived-baseline
         run: |
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs bash <<'BASELINE'
           set -euo pipefail
           if [ -z "${BASELINE_REF}" ]; then
             echo "No baseline ref provided."
@@ -144,23 +150,26 @@ jobs:
           BASELINE_APP="$(cat ios/.built_app_path)"
 
           BASELINE_STATUS=0
-          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15 || BASELINE_STATUS=$?
+          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir "${GITHUB_WORKSPACE}/ExpoLyrics/.expo/baseline-test-output" --timeout-minutes 6 || BASELINE_STATUS=$?
           popd
 
           # Compare branch vs baseline screenshots
           COMPARISON_STATUS=0
-          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md || COMPARISON_STATUS=$?
+          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md || COMPARISON_STATUS=$?
           cat ExpoLyrics/.expo/comparison-report.md >> "${GITHUB_STEP_SUMMARY}"
           if [ "${BASELINE_STATUS}" -ne 0 ] || [ "${COMPARISON_STATUS}" -ne 0 ]; then exit 1; fi
+
+          BASELINE
 
       - name: Publish Step Summary
         if: always()
         run: |
-          if [ -f ExpoLyrics/.expo/simulator-test-output/simulator-summary.md ]; then
-            cat ExpoLyrics/.expo/simulator-test-output/simulator-summary.md >> "${GITHUB_STEP_SUMMARY}"
-          fi
+          for report in ExpoLyrics/.expo/{simulator,baseline}-test-output/{simulator-summary,runner-failure}.md; do
+            if [ -f "${report}" ]; then cat "${report}" >> "${GITHUB_STEP_SUMMARY}"; fi
+          done
 
       - name: Upload Simulator Test Artifacts
+        timeout-minutes: 2
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -169,6 +178,6 @@ jobs:
             ExpoLyrics/.expo/simulator-test-output/
             ExpoLyrics/.expo/comparison-report.md
             ExpoLyrics/.expo/*.log
-            ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output/
+            ExpoLyrics/.expo/baseline-test-output/
           include-hidden-files: true
           retention-days: 14
