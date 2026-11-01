@@ -20,12 +20,18 @@ class Recorder:
         self.lock = threading.Lock()
         self.sequence = 0
 
-    def run(self, name, argv, deadline, stop=None):
+    def run(self, name, argv, deadline, stop=None, limit=32 * 1024 * 1024):
         with self.lock:
             self.sequence += 1
             stem = self.root / f"{self.sequence:03d}-{name}"
         record = dict(argv=argv, wall_start=time.time(), monotonic_start=time.monotonic(),
                       exit=None, timedout=False, stopped=False, truncated=False)
+        record.update(effective_timeout=max(0, deadline - record["monotonic_start"]),
+                      stdout=str(stem) + ".stdout", stderr=str(stem) + ".stderr",
+                      state="running")
+        ledger = Path(str(stem) + ".json")
+        ledger.write_text(json.dumps(record, indent=2))
+        print(f"[{stem.name}] start {argv}", flush=True)
         process = None
         selector = selectors.DefaultSelector()
         size = 0
@@ -44,9 +50,8 @@ class Recorder:
                 while selector.get_map() or process.poll() is None:
                     expired = time.monotonic() >= deadline
                     stopped = stop is not None and stop.is_set()
-                    if expired or stopped or size >= 8 * 1024 * 1024:
-                        record.update(timedout=expired, stopped=stopped,
-                                      truncated=size >= 8 * 1024 * 1024)
+                    if expired or stopped:
+                        record.update(timedout=expired, stopped=stopped)
                         # Only this command's isolated process group, never a service.
                         try:
                             os.killpg(process.pid, signal.SIGKILL)
@@ -58,8 +63,15 @@ class Recorder:
                         if not chunk:
                             selector.unregister(key.fileobj)
                         else:
-                            key.data.write(chunk)
+                            retained = chunk if limit is None else chunk[:max(0, limit - size)]
+                            if retained:
+                                key.data.write(retained)
+                                stream = "stdout" if key.data is out else "stderr"
+                                print(f"[{stem.name} {stream}] " +
+                                      retained.decode("utf-8", errors="replace"),
+                                      end="", flush=True)
                             size += len(chunk)
+                            record["truncated"] = limit is not None and size > limit
                 process.wait(timeout=2)
                 record["exit"] = process.returncode
         except Exception as exc:
@@ -67,17 +79,24 @@ class Recorder:
         finally:
             selector.close()
             if process:
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=2)
+                    except (ProcessLookupError, subprocess.TimeoutExpired):
+                        pass
+                record["exit"] = process.poll()
                 for pipe in (process.stdout, process.stderr):
                     pipe.close()
             record.update(wall_end=time.time(), monotonic_end=time.monotonic())
             record["duration"] = record["monotonic_end"] - record["monotonic_start"]
-            record["stdout"] = str(stem) + ".stdout"
-            Path(str(stem) + ".json").write_text(json.dumps(record, indent=2))
+            record["state"] = "finished"
+            ledger.write_text(json.dumps(record, indent=2))
         return record
 
 
 def checked(rec, name, argv, deadline):
-    result = rec.run(name, argv, deadline)
+    result = rec.run(name, argv, deadline, limit=None)
     if result["exit"] != 0 or result["timedout"] or result.get("truncated"):
         raise RuntimeError(f"{name} failed: {result}")
     return Path(result["stdout"]).read_text()
@@ -112,7 +131,7 @@ def main():
             ("sdk", ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"], "26.5"),
             ("sdk-path", ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"], None)):
             output = checked(rec, name, argv, min(overall, time.monotonic() + 20))
-            if expected and expected not in output:
+            if expected and (output.strip().splitlines()[0] if name == "xcode" else output.strip()) != expected:
                 raise RuntimeError(f"unexpected {name}: {output}")
         if os.environ.get("DEVELOPER_DIR") != "/Applications/Xcode_26.6.app/Contents/Developer":
             raise RuntimeError("DEVELOPER_DIR mismatch")
@@ -148,18 +167,40 @@ def main():
     finally:
         # Separate final collection budget; cannot change simulator result.
         final = min(overall, time.monotonic() + 80)
+        if status == 0:
+            summary["postboot_inventory"] = rec.run("postboot-inventory",
+                ["xcrun", "simctl", "list", "devices", "-j"],
+                min(final, time.monotonic() + 15), limit=None)
+            summary["springboard_screenshot"] = rec.run("springboard-not-kinesync",
+                ["xcrun", "simctl", "io", summary["selection"]["udid"], "screenshot",
+                 str(rec.root / "springboard-not-kinesync.png")],
+                min(final, time.monotonic() + 15), limit=None)
         rec.run("final-log", ["/usr/bin/log", "show", "--last", "2m", "--style",
                 "ndjson", "--predicate", 'process CONTAINS "CoreSimulator"'],
                 min(final, time.monotonic() + 20))
         rec.run("final-processes", ["ps", "-axo", "pid,ppid,state,%cpu,%mem,rss,wchan,comm"],
                 min(final, time.monotonic() + 10))
         reports = []
+        crash_bytes = 0
+        crash_count = 0
         for directory in (Path.home() / "Library/Logs/DiagnosticReports",
                           Path("/Library/Logs/DiagnosticReports")):
             try:
                 for path in list(directory.iterdir())[:200]:
                     stat = path.stat()
                     reports.append(dict(path=str(path), size=stat.st_size, mtime=stat.st_mtime))
+                    if (time.monotonic() < final and path.is_file() and
+                            stat.st_mtime >= time.time() - 1800 and crash_count < 5 and
+                            stat.st_size <= 1024 * 1024 and
+                            crash_bytes + stat.st_size <= 4 * 1024 * 1024 and
+                            any(word in path.name.lower() for word in
+                                ("simulator", "simctl", "springboard", "launchd_sim"))):
+                        content = path.open("rb")
+                        with content:
+                            data = content.read(1024 * 1024)
+                        (rec.root / f"crash-{crash_count}-{path.name}").write_bytes(data)
+                        crash_count += 1
+                        crash_bytes += len(data)
             except OSError:
                 pass
         (rec.root / "crash-metadata.json").write_text(json.dumps(reports, indent=2))
