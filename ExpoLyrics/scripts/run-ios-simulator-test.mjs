@@ -1,5 +1,5 @@
 // iOS Simulator Test Runner for KineSync
-// Boots simulator, installs debug app, streams logs, handles rotation, captures screenshots, and asserts results
+// Boots simulator, installs Release app, streams logs, handles rotation, captures screenshots, and asserts results
 
 import fs from 'node:fs';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
@@ -82,7 +82,7 @@ async function main() {
   const outputDirIndex = process.argv.indexOf('--output-dir');
   const timeoutIndex = process.argv.indexOf('--timeout-minutes');
 
-  const appPath = appPathIndex >= 0 ? process.argv[appPathIndex + 1] : 'ios/build/Build/Products/Debug-iphonesimulator/KineSync.app';
+  const appPath = appPathIndex >= 0 ? process.argv[appPathIndex + 1] : 'ios/build/Build/Products/Release-iphonesimulator/KineSync.app';
   const outputDir = outputDirIndex >= 0 ? process.argv[outputDirIndex + 1] : '.expo/simulator-test-output';
   const timeoutMinutes = timeoutIndex >= 0 ? Number(process.argv[timeoutIndex + 1]) : 6;
   const seconds = (flag, fallback) => { const i = process.argv.indexOf(flag); return i < 0 ? fallback : Number(process.argv[i + 1]) * 1000; };
@@ -210,25 +210,63 @@ async function main() {
     }
   }
 
-  function createLineBufferConsumer() {
+  function createLineBufferConsumer(onLine, record = true) {
     let buffer = '';
     return (chunk) => {
-      fs.appendFileSync(rawLogFile, chunk);
+      if (record) fs.appendFileSync(rawLogFile, chunk);
       buffer += chunk.toString();
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) {
-        processIncomingLine(line);
+        onLine(line);
       }
     };
   }
 
   lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');
-  const deviceLog = fs.openSync(path.join(outputDir, 'device-stream.log'), 'w');
-  const deviceProcess = spawn('xcrun', ['simctl', 'spawn', device.udid, 'log', 'stream', '--style', 'compact', '--level', 'debug', '--predicate', 'process == "KineSync"'], { stdio: ['ignore', deviceLog, deviceLog] });
-  fs.closeSync(deviceLog);
-  deviceProcess.on('error', err => fs.appendFileSync(path.join(outputDir, 'device-stream.log'), err.message));
+  const deviceLog = path.join(outputDir, 'device-stream.log');
+  fs.writeFileSync(deviceLog, '');
+  // RN Release's default JS logger uses os_log, not the launch console. Parse
+  // exactly one source so a console mirror cannot duplicate stages or ACKs.
+  const deviceProcess = spawn('xcrun', ['simctl', 'spawn', device.udid, 'log', 'stream', '--style', 'compact', '--level', 'debug', '--predicate', 'process == "KineSync"'], { stdio: ['ignore', 'pipe', 'pipe'] });
   lifecycle.children.push(deviceProcess);
+  let streamReady = false;
+  let protocolArmed = false;
+  let readyResolve, readyReject;
+  const streamReadyPromise = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+  const failStream = message => {
+    parser.errors.push(message);
+    readyReject(new Error(message));
+    scenarioResolve();
+  };
+  const observeReadiness = line => {
+    if (line.startsWith('Filtering the log data using ') || /^Timestamp\s+/.test(line)) {
+      streamReady = true;
+      readyResolve();
+    }
+  };
+  const streamConsumer = createLineBufferConsumer(line => {
+    observeReadiness(line);
+    if (protocolArmed) processIncomingLine(line);
+  });
+  const stderrConsumer = createLineBufferConsumer(observeReadiness, false);
+  deviceProcess.stdout.on('data', chunk => { fs.appendFileSync(deviceLog, chunk); streamConsumer(chunk); });
+  // stderr is evidence only, never an alternate protocol source.
+  deviceProcess.stderr.on('data', chunk => { fs.appendFileSync(deviceLog, chunk); stderrConsumer(chunk); });
+  deviceProcess.on('error', err => failStream(`Unified log stream failed: ${err.message}`));
+  deviceProcess.on('exit', (code, signal) => {
+    if (!scenarioFinished) failStream(`Unified log stream exited before completion: ${code ?? signal}`);
+  });
+  const readinessTimeout = setInterval(() => {
+    try { lifecycle.check(); }
+    catch (err) { readyReject(err); }
+  }, 100);
+  try {
+    // Fail closed if log's subscription/banner never arrives; don't race app init.
+    await streamReadyPromise;
+    if (!streamReady || parser.errors.length) throw new Error(parser.errors.join('; ') || 'Unified log stream not ready');
+  } finally { clearInterval(readinessTimeout); }
+  protocolArmed = true;
   console.log('[RUNNER] Launching app dev.kineticron.KineSync via console-pty with EXPO_PUBLIC_SIMULATOR_TEST=1...');
   const appProcess = spawn('xcrun', [
     'simctl',
@@ -244,9 +282,11 @@ async function main() {
   });
 
   lifecycle.children.push(appProcess);
-  const appConsumer = createLineBufferConsumer();
-  appProcess.stdout.on('data', appConsumer);
-  appProcess.stderr.on('data', createLineBufferConsumer());
+  const launchLog = path.join(outputDir, 'launch-console.log');
+  fs.writeFileSync(launchLog, '');
+  const saveLaunchOutput = chunk => fs.appendFileSync(launchLog, chunk);
+  appProcess.stdout.on('data', saveLaunchOutput);
+  appProcess.stderr.on('data', saveLaunchOutput);
   appProcess.on('error', err => { parser.errors.push(`Launch failed: ${err.message}`); scenarioResolve(); });
   appProcess.on('exit', code => { if (!scenarioFinished) { parser.errors.push(`App console exited before completion: ${code}`); scenarioResolve(); } });
 
