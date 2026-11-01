@@ -216,7 +216,7 @@ function testSchemeDiscovery() {
   {
     const app = { target: 'KineSync', action: 'build', buildSettings: {
       PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'com.apple.product-type.application',
-      PROJECT_FILE_PATH: '/repo/ios/KineSync.xcodeproj', PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync',
+      PROJECT_FILE_PATH: '/repo/ios/KineSync.xcodeproj',
       TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator', FULL_PRODUCT_NAME: 'KineSync.app',
     } };
     const widget = { target: 'KineSyncLyricsWidget', buildSettings: {
