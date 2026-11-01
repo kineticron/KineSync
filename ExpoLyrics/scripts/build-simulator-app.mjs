@@ -46,6 +46,7 @@ export function findApplicationTarget(targetList) {
     ? targetList
     : (targetList.targets || [targetList]);
 
+  const matches = [];
   for (const entry of targets) {
     const settings = entry?.buildSettings || entry;
     if (!settings || typeof settings !== 'object') continue;
@@ -54,18 +55,18 @@ export function findApplicationTarget(targetList) {
     const productType = settings.PRODUCT_TYPE;
 
     const isAppWrapper = wrapperExt === 'app';
-    const isAppProductType = productType === 'com.apple.product-type.application' ||
-      (typeof productType === 'string' && productType.includes('application'));
+    const isAppProductType = productType === 'com.apple.product-type.application';
 
     if (isAppWrapper && isAppProductType) {
-      return {
+      matches.push({
         target: entry.target || settings.TARGET_NAME || settings.PRODUCT_NAME || '',
         action: entry.action || 'build',
         buildSettings: settings,
-      };
+      });
     }
   }
-  return null;
+  if (matches.length > 1) throw new Error('Ambiguous application targets within scheme');
+  return matches[0] || null;
 }
 
 export function discoverApplicationScheme(workspacePath, options = {}) {
@@ -123,6 +124,7 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
       }
     } catch (err) {
       // Scheme may not support simulator destination or build settings query (e.g. internal pods or utility targets)
+      if (err.message.includes('Ambiguous application targets')) throw err;
       console.log(`[BUILD] Scheme ${scheme} showBuildSettings skipped: ${err.message}`);
     }
   }
@@ -145,19 +147,6 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
   const selected = matchingSchemes[0];
   console.log(`[BUILD] Selected application scheme: ${selected.scheme} (target: ${selected.target})`);
   return selected;
-}
-
-export function findApp(dir) {
-  if (!fs.existsSync(dir)) return null;
-  for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, f.name);
-    if (f.isDirectory()) {
-      if (f.name.endsWith('.app')) return full;
-      const nested = findApp(full);
-      if (nested) return nested;
-    }
-  }
-  return null;
 }
 
 export function buildSimulatorApp(options = {}) {
@@ -231,26 +220,13 @@ export function buildSimulatorApp(options = {}) {
     },
   });
 
-  let appPath = null;
-  if (targetBuildDir && fullProductName) {
-    const directPath = path.join(targetBuildDir, fullProductName);
-    if (fs.existsSync(directPath)) {
-      appPath = directPath;
-    }
-  }
-
-  if (!appPath) {
-    const productsDir = path.join(derivedDataPath, 'Build', 'Products');
-    appPath = findApp(productsDir);
-  }
-
-  if (!appPath) {
-    throw new Error(
-      `Failed to locate built .app bundle. Derived target path ` +
-      `${targetBuildDir && fullProductName ? path.join(targetBuildDir, fullProductName) : 'unknown'} does not exist, ` +
-      `and recursive search in ${path.join(derivedDataPath, 'Build', 'Products')} found no .app bundle.`
-    );
-  }
+  if (!targetBuildDir || !fullProductName || path.basename(fullProductName) !== fullProductName || !fullProductName.endsWith('.app')) throw new Error('Missing exact application product path');
+  const appPath = path.join(targetBuildDir, fullProductName);
+  if (!fs.existsSync(appPath)) throw new Error(`Expected built application does not exist: ${appPath}`);
+  const plistPath = path.join(appPath, 'Info.plist');
+  const bundleId = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', plistPath], { encoding: 'utf8' })).trim();
+  const platforms = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleSupportedPlatforms', plistPath], { encoding: 'utf8' }));
+  if (bundleId !== 'dev.kineticron.KineSync' || !/\biPhoneSimulator\b/.test(platforms)) throw new Error('Built product is not the expected KineSync simulator application');
   console.log(`[BUILD] Located built simulator app: ${appPath}`);
 
   // Ad-hoc codesign app bundle for simulator execution
