@@ -188,14 +188,21 @@ function testMainBaselinePreparation() {
       fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
       fs.writeFileSync(path.join(dir, file), source);
     }
-    const output = execFileSync(process.execPath, [path.join(root, 'scripts/prepare-baseline-harness.mjs'), '--baseline-dir', dir], { encoding: 'utf8' });
+    // Exercise Git checkout semantics, not only git-apply's no-repository fallback.
+    execFileSync('git', ['init', '--quiet'], { cwd: dir });
+    execFileSync('git', ['add', '--', ...paths], { cwd: dir });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'Exact main integration sources'], { cwd: dir });
+    const output = execFileSync(process.execPath, [path.join(root, 'scripts/prepare-baseline-harness.mjs'), '--candidate-dir', path.dirname(root), '--baseline-dir', dir], { encoding: 'utf8' });
     assert.ok(output.includes('harness-integration-main.patch'));
     const nativePath = path.join(dir, 'ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx');
     testMainPublication(fs.readFileSync(nativePath, 'utf8'));
+    const changed = execFileSync('git', ['diff', '--name-only'], { cwd: dir, encoding: 'utf8' }).trim().split('\n').sort();
+    assert.deepEqual(changed, [...paths].sort(), 'Only the five explicit observation/integration files may change');
     prepareBaselineHarness({ candidateDir: path.dirname(root), baselineDir: dir });
     // Reversing only the instrumentation must restore every main production file exactly.
     execFileSync('git', ['apply', '--reverse', path.join(root, 'scripts/patches/harness-integration-main.patch')], { cwd: dir });
     for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Adapter must preserve main renderer logic: ${file}`);
+    assert.equal(execFileSync('git', ['diff', '--exit-code'], { cwd: dir, encoding: 'utf8' }), '', 'Reversing observation must leave no tracked production diff');
     assert.ok(fs.existsSync(path.join(dir, 'ExpoLyrics/scripts/test-simulator-protocol.mjs')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
