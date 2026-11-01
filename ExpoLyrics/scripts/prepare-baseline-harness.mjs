@@ -46,6 +46,7 @@ export function prepareBaselineHarness(options = {}) {
     'ExpoLyrics/scripts/build-simulator-app.mjs',
     'ExpoLyrics/scripts/prepare-baseline-harness.mjs',
     'ExpoLyrics/scripts/patches/harness-integration.patch',
+    'ExpoLyrics/scripts/patches/harness-integration-main.patch',
   ];
 
   console.log('[PREPARE_BASELINE] Copying standalone harness protocol files...');
@@ -60,53 +61,23 @@ export function prepareBaselineHarness(options = {}) {
   }
   console.log(`[PREPARE_BASELINE] Successfully copied ${standaloneFiles.length} harness files.`);
 
-  // 2. Check and apply minimal harness integration patch
-  const patchPath = path.join(candidateDir, 'ExpoLyrics/scripts/patches/harness-integration.patch');
-  if (!fs.existsSync(patchPath)) {
-    throw new Error(`Harness integration patch not found at ${patchPath}`);
-  }
-
-  // Check if patch is already applied in baseline
-  let alreadyApplied = false;
-  try {
-    execFileSync('git', ['apply', '--reverse', '--check', patchPath], {
-      cwd: baselineDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    alreadyApplied = true;
-  } catch {
-    alreadyApplied = false;
-  }
-
-  if (alreadyApplied) {
-    console.log('[PREPARE_BASELINE] Harness integration patch is already applied in baseline.');
-  } else {
-    console.log('[PREPARE_BASELINE] Testing harness integration patch compatibility with git apply --check...');
+  // Select an observation-only adapter for either the newer ready gate or main's older native host.
+  // Check the entire patch before applying any integration changes. Unsupported baselines fail closed.
+  const patches = ['harness-integration.patch', 'harness-integration-main.patch'].map(name =>
+    path.join(candidateDir, 'ExpoLyrics/scripts/patches', name));
+  const compatible = reverse => patches.filter(patch => {
     try {
-      execFileSync('git', ['apply', '--check', patchPath], {
-        cwd: baselineDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
+      execFileSync('git', ['apply', ...(reverse ? ['--reverse'] : []), '--check', patch], {
+        cwd: baselineDir, stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } catch (checkErr) {
-      const errOut = checkErr.stderr ? checkErr.stderr.toString() : checkErr.message;
-      throw new Error(
-        `Baseline codebase is incompatible with harness integration patch.\n` +
-        `git apply --check failed with:\n${errOut}\n` +
-        `Failing closed rather than producing a silently invalid comparison.`
-      );
-    }
-
-    console.log('[PREPARE_BASELINE] Applying minimal harness integration patch...');
-    try {
-      execFileSync('git', ['apply', patchPath], {
-        cwd: baselineDir,
-        stdio: 'inherit',
-      });
-      console.log('[PREPARE_BASELINE] Harness integration patch applied successfully.');
-    } catch (applyErr) {
-      throw new Error(`Failed to apply harness integration patch: ${applyErr.message}`);
-    }
-  }
+      return true;
+    } catch { return false; }
+  });
+  const applied = compatible(true);
+  const matches = applied.length ? applied : compatible(false);
+  if (matches.length !== 1) throw new Error(`Baseline codebase is incompatible or ambiguous with harness integration patches (${matches.length} matches). Failing closed.`);
+  if (!applied.length) execFileSync('git', ['apply', matches[0]], { cwd: baselineDir, stdio: 'inherit' });
+  console.log(`[PREPARE_BASELINE] Integration adapter: ${path.basename(matches[0])}${applied.length ? ' (already applied)' : ''}`);
 
   console.log('[PREPARE_BASELINE] Baseline harness preparation COMPLETE.');
 }

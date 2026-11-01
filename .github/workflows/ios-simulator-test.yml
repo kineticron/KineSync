@@ -4,6 +4,7 @@
 
 name: iOS Simulator Test
 
+# Manual only: review and push ci-sim first, then dispatch once with baseline_ref=main.
 on:
   workflow_dispatch:
     inputs:
@@ -12,10 +13,6 @@ on:
         required: false
         default: ''
         type: string
-  push:
-    branches:
-      - 'ci-sim*'
-      - 'perf*'
 
 permissions:
   contents: read
@@ -95,6 +92,7 @@ jobs:
             ios-sim-xcode27-caches-${{ runner.os }}-
 
       - name: Build Debug simulator app bundle
+        id: candidate_build
         working-directory: ExpoLyrics
         env:
           DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-sim
@@ -115,7 +113,8 @@ jobs:
           node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 15
 
       - name: Run Baseline Comparison (if requested)
-        if: ${{ github.event.inputs.baseline_ref != '' }}
+        # A candidate scenario failure must not skip the requested baseline evidence.
+        if: ${{ !cancelled() && steps.candidate_build.outcome == 'success' && github.event.inputs.baseline_ref != '' }}
         env:
           BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
           DERIVED_BASELINE: ${{ github.workspace }}/../kinesync-ios-derived-baseline
@@ -144,12 +143,15 @@ jobs:
           node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_BASELINE}" 2>&1 | tee "${GITHUB_WORKSPACE}/ExpoLyrics/.expo/build-baseline-simulator.log"
           BASELINE_APP="$(cat ios/.built_app_path)"
 
-          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15
+          BASELINE_STATUS=0
+          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir .expo/baseline-test-output --timeout-minutes 15 || BASELINE_STATUS=$?
           popd
 
           # Compare branch vs baseline screenshots
-          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md
+          COMPARISON_STATUS=0
+          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ../kinesync-baseline/ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md || COMPARISON_STATUS=$?
           cat ExpoLyrics/.expo/comparison-report.md >> "${GITHUB_STEP_SUMMARY}"
+          if [ "${BASELINE_STATUS}" -ne 0 ] || [ "${COMPARISON_STATUS}" -ne 0 ]; then exit 1; fi
 
       - name: Publish Step Summary
         if: always()

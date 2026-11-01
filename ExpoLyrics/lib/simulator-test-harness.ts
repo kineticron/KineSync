@@ -13,6 +13,14 @@ import {
   resetSimulatorBridge,
 } from './simulator-test-bridge';
 
+// Older trusted baselines omit these clock fields from their public packet type.
+// Keep the simulator protocol identical without changing baseline production types.
+type SimulatorPlaybackPacket = PlaybackPacket & {
+  sourcePositionMs: number;
+  positionTimestampMs: number;
+  sourceServerTimestampMs: number;
+};
+
 export type HeartbeatMetrics = {
   samples: number;
   delays: number[];
@@ -211,7 +219,7 @@ export class SimulatorTestHarness {
     console.info(`[KINESYNC_SIM] TRACK_LOADED id=${track.id} lines=${parsed.lyrics.length} parseMs=${parseDurationMs}`);
 
     const store = usePlaybackStore.getState();
-    const packet: PlaybackPacket = {
+    const packet: SimulatorPlaybackPacket = {
       type: 'playback',
       trackId: track.id,
       title: track.title,
@@ -246,7 +254,7 @@ export class SimulatorTestHarness {
     const { SIMULATOR_FIXTURE_TRACKS } = require('@/lib/fixtures/simulator-test-fixtures') as typeof import('@/lib/fixtures/simulator-test-fixtures');
     const track = SIMULATOR_FIXTURE_TRACKS[this.trackIndex % SIMULATOR_FIXTURE_TRACKS.length];
 
-    const packet: PlaybackPacket = {
+    const packet: SimulatorPlaybackPacket = {
       type: 'playback',
       trackId: track.id,
       title: track.title,

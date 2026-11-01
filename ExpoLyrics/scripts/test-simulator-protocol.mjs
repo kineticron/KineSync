@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import YAML from 'yaml';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { prepareBaselineHarness } from './prepare-baseline-harness.mjs';
 import vm from 'node:vm';
 import { transformSync } from 'esbuild';
@@ -74,7 +75,8 @@ export async function testSimulatorProtocol() {
   testHarnessStages();
   await testSnapshotAnchors();
   testBaselineIntegration();
-  testMainBaselineRejection();
+  testMainBaselinePreparation();
+  testManualWorkflow();
   console.log('Simulator protocol, native publication, and rotation tests passed.');
 }
 
@@ -172,7 +174,7 @@ async function testSnapshotAnchors() {
   }
 }
 
-function testMainBaselineRejection() {
+function testMainBaselinePreparation() {
   // Immutable main snapshot used for this audit, not the candidate renderer.
   const mainCommit = 'e9abf50510b84db9f9f3a20c6f45ceb11685771f';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-main-baseline-'));
@@ -186,8 +188,74 @@ function testMainBaselineRejection() {
       fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
       fs.writeFileSync(path.join(dir, file), source);
     }
-    assert.throws(() => execFileSync(process.execPath, [path.join(root, 'scripts/prepare-baseline-harness.mjs'), '--baseline-dir', dir], { stdio: ['ignore', 'pipe', 'pipe'] }), err => err.status === 1 && /incompatible/.test(String(err.stderr)));
-    for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Failed preparation must preserve main source: ${file}`);
+    const output = execFileSync(process.execPath, [path.join(root, 'scripts/prepare-baseline-harness.mjs'), '--baseline-dir', dir], { encoding: 'utf8' });
+    assert.ok(output.includes('harness-integration-main.patch'));
+    const nativePath = path.join(dir, 'ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx');
+    testMainPublication(fs.readFileSync(nativePath, 'utf8'));
+    prepareBaselineHarness({ candidateDir: path.dirname(root), baselineDir: dir });
+    // Reversing only the instrumentation must restore every main production file exactly.
+    execFileSync('git', ['apply', '--reverse', path.join(root, 'scripts/patches/harness-integration-main.patch')], { cwd: dir });
+    for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Adapter must preserve main renderer logic: ${file}`);
     assert.ok(fs.existsSync(path.join(dir, 'ExpoLyrics/scripts/test-simulator-protocol.mjs')));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+function testMainPublication(source) {
+  const start = source.indexOf('const publishSimulatorReady = useCallback(') + 'const publishSimulatorReady = useCallback('.length;
+  const end = source.indexOf('\n  const onContentSizeChange', start);
+  const callback = source.slice(start, end);
+  const expression = callback.slice(0, callback.lastIndexOf(', ['));
+  for (const scenario of ['live', 'inactive', 'background', 'stale-generation', 'unmounted', 'old-lyrics', 'production']) {
+    const lyrics = [{}], events = [];
+    const context = {
+      __DEV__: scenario !== 'production', process: { env: { EXPO_PUBLIC_SIMULATOR_TEST: '1' } },
+      mounted: { current: scenario !== 'unmounted' },
+      simulatorProbe: { current: { eligible: scenario !== 'inactive', generation: scenario === 'stale-generation' ? 3 : 2 } },
+      simulatorGeneration: 2, AppState: { currentState: scenario === 'background' ? 'background' : 'active' },
+      simulatorTrackId: 'baseline-song', style: 'amll', lyrics, latestLyrics: { current: scenario === 'old-lyrics' ? [] : lyrics },
+      require: () => ({ notifySimulatorRendererReady: event => events.push(event) }),
+    };
+    vm.runInNewContext(transformSync(`(${expression})()`, { loader: 'ts' }).code, context);
+    assert.equal(events.length, scenario === 'live' ? 1 : 0, scenario);
+    if (events.length) assert.equal(events[0].trackId, 'baseline-song');
+  }
+}
+
+function testManualWorkflow() {
+  const workflow = YAML.parse(fs.readFileSync(path.join(root, '../.github/workflows/ios-simulator-test.yml'), 'utf8'));
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'], 'Pushes must never trigger this dedicated harness');
+  assert.ok(workflow.on.workflow_dispatch.inputs.baseline_ref);
+  const steps = workflow.jobs['ios-simulator-test'].steps;
+  assert.ok(steps.some(step => step.id === 'candidate_build'));
+  const baseline = steps.find(step => step.name.startsWith('Run Baseline Comparison'));
+  assert.ok(baseline.if.includes('!cancelled()') && baseline.if.includes("steps.candidate_build.outcome == 'success'"));
+  assert.ok(baseline.run.includes('resolve-trusted-simulator-baseline.mjs'));
+  assert.ok(baseline.run.includes('|| BASELINE_STATUS=$?'));
+  assert.ok(baseline.run.includes('|| COMPARISON_STATUS=$?'));
+  assert.ok(baseline.run.includes('[ "${BASELINE_STATUS}" -ne 0 ] || [ "${COMPARISON_STATUS}" -ne 0 ]'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-workflow-'));
+  try {
+    const shim = `#!${process.execPath}
+const fs = require('node:fs');
+if (process.argv[2].includes('compare-simulator')) {
+ fs.mkdirSync('ExpoLyrics/.expo', { recursive: true });
+ fs.writeFileSync('ExpoLyrics/.expo/comparison-report.md', 'comparison attempted');
+ process.exit(Number(process.env.COMPARE_EXIT));
+}
+process.exit(Number(process.env.BASELINE_EXIT));
+`;
+    fs.writeFileSync(path.join(dir, 'node'), shim, { mode: 0o755 });
+    const script = baseline.run.slice(baseline.run.indexOf('BASELINE_STATUS=0')).replace(/^popd$/m, ':');
+    for (const [baselineExit, compareExit] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const summary = path.join(dir, 'summary');
+      fs.writeFileSync(summary, '');
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+        cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`,
+          BASELINE_APP: '/mock.app', BASELINE_REF: 'main', BASELINE_EXIT: String(baselineExit), COMPARE_EXIT: String(compareExit), GITHUB_STEP_SUMMARY: summary },
+      });
+      assert.equal(result.status, baselineExit || compareExit ? 1 : 0, result.stderr);
+      assert.ok(fs.readFileSync(summary, 'utf8').includes('comparison attempted'), 'Comparison must run and publish even when baseline scenario fails');
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+
 }
