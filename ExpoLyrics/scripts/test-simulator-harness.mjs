@@ -285,6 +285,9 @@ function testEvidenceMutations(logs) {
   check(lines => lines, /Summary contradicts/);
   check(lines => lines.map(l => l.includes('SCENARIO_COMPLETE') ? '[KINESYNC_SIM] SCENARIO_COMPLETE {\"success\":true,\"stages\":[null]}' : l), /Summary contradicts/);
   check(lines => lines.map(l => l.includes('stage_6_switch_spicy style=spicy') ? l.replace('style=spicy', 'style=amll') : l), /track\/style/);
+  // Even mutually consistent load/readiness/screenshot identities must match the fixed scenario.
+  check(lines => lines.map(l => l.replaceAll('spotify-connect:sim_rewind_track', 'arbitrary-song')), /track\/style/);
+  check(lines => lines.map(l => l.includes('RENDERER_ACTIVE style=spicy generation=4') || l.includes('stage_6_switch_spicy style=spicy') ? l.replace('style=spicy', 'style=amll') : l), /track\/style/);
   const p = new SimulatorLogParser();
   p.processLine('[KINESYNC_SIM] VIEWPORT_LAYOUT width=844 height=390 windowWidth=844 windowHeight=390 orientation=landscape style=spicy');
   assert.equal(p.landscapeConfirmed, false, 'Startup layout is not rotation evidence');

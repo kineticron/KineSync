@@ -72,7 +72,9 @@ export async function testSimulatorProtocol() {
   assert.throws(() => rotateSimulator('portrait', 'chosen-udid', () => { throw Error('Accessibility denied'); }), /Accessibility denied/);
   testNativePublication();
   testHarnessStages();
+  await testSnapshotAnchors();
   testBaselineIntegration();
+  testMainBaselineRejection();
   console.log('Simulator protocol, native publication, and rotation tests passed.');
 }
 
@@ -113,6 +115,10 @@ function testBaselineIntegration() {
     }
     execFileSync('git', ['apply', '--reverse', patch], { cwd: dir });
     prepareBaselineHarness({ candidateDir: candidate, baselineDir: dir });
+    for (const file of fs.readdirSync(path.join(dir, 'ExpoLyrics/scripts')).filter(f => f.endsWith('.mjs'))) {
+      const script = path.join(dir, 'ExpoLyrics/scripts', file);
+      for (const match of fs.readFileSync(script, 'utf8').matchAll(/from ['"](\.\/[^'"]+)['"]/g)) assert.ok(fs.existsSync(path.resolve(path.dirname(script), match[1])), `${file} imports missing ${match[1]}`);
+    }
     for (const file of paths) assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), fs.readFileSync(path.join(candidate, file), 'utf8'), file);
     prepareBaselineHarness({ candidateDir: candidate, baselineDir: dir });
     fs.writeFileSync(path.join(dir, 'ExpoLyrics/app/_layout.tsx'), '// incompatible baseline');
@@ -130,4 +136,58 @@ function testHarnessStages() {
   const harness = new module.exports.SimulatorTestHarness();
   harness.beginStage('stage_1_launch');
   assert.throws(() => harness.beginStage('stage_2_playback'), /unfinished/);
+}
+
+async function testSnapshotAnchors() {
+  const source = fs.readFileSync(path.join(root, 'lib/simulator-test-harness.ts'), 'utf8');
+  const clockSource = fs.readFileSync(path.join(root, 'lib/simulator-playback-clock.ts'), 'utf8');
+  const clocks = { exports: {} };
+  let now = 0;
+  vm.runInNewContext(transformSync(clockSource, { loader: 'ts', format: 'cjs' }).code, {
+    module: clocks, exports: clocks.exports, performance: { now: () => now }, setInterval: () => 1, clearInterval() {},
+  });
+  const module = { exports: {} }, markers = [];
+  const supported = { isSimulatorTestActive: () => true, waitForSimulatorScreenshotAck: async () => {} };
+  vm.runInNewContext(transformSync(source, { loader: 'ts', format: 'cjs' }).code, {
+    module, exports: module.exports, console: { info: line => markers.push(line) },
+    require: name => name.includes('simulator-playback-clock') ? clocks.exports : name.includes('playback-store') ? { usePlaybackStore: { getState: () => ({ ingestPacket() {} }) } } : name.includes('fixtures') ? { SIMULATOR_FIXTURE_TRACKS: [{ id: 'test' }] } : supported,
+  });
+  const harness = new module.exports.SimulatorTestHarness();
+  const expected = { stage_1_launch: 5000, stage_2_playback: 8000, stage_3_seek: 46000, stage_4_switch_amll: 46000, stage_5_skip_song: 5000, stage_6_switch_spicy: 5000, stage_7_rotation: 5000 };
+  for (const drift of [0, 137, 9000]) {
+    for (const [stage, position] of Object.entries(expected)) {
+      harness.clock.play(1234); now += drift;
+      const before = markers.length;
+      harness.delay = async ms => {
+        assert.equal(ms, 1000);
+        assert.equal(harness.clock.isPlaying(), false);
+        assert.equal(harness.clock.getPositionMs(), position);
+        assert.equal(markers.length, before, 'No capture marker before settlement');
+        now += ms + drift;
+      };
+      await harness.screenshot(stage, `positionMs=${position}`);
+      assert.equal(harness.clock.getPositionMs(), position);
+      assert.equal(markers.length, before + 1);
+    }
+  }
+}
+
+function testMainBaselineRejection() {
+  // Immutable main snapshot used for this audit, not the candidate renderer.
+  const mainCommit = 'e9abf50510b84db9f9f3a20c6f45ceb11685771f';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-main-baseline-'));
+  const patch = fs.readFileSync(path.join(root, 'scripts/patches/harness-integration.patch'), 'utf8');
+  const paths = [...patch.matchAll(/^diff --git a\/(.+) b\//gm)].map(m => m[1]);
+  const original = new Map();
+  try {
+    for (const file of paths) {
+      const source = execFileSync('git', ['show', `${mainCommit}:${file}`], { cwd: path.dirname(root) });
+      original.set(file, source);
+      fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      fs.writeFileSync(path.join(dir, file), source);
+    }
+    assert.throws(() => execFileSync(process.execPath, [path.join(root, 'scripts/prepare-baseline-harness.mjs'), '--baseline-dir', dir], { stdio: ['ignore', 'pipe', 'pipe'] }), err => err.status === 1 && /incompatible/.test(String(err.stderr)));
+    for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Failed preparation must preserve main source: ${file}`);
+    assert.ok(fs.existsSync(path.join(dir, 'ExpoLyrics/scripts/test-simulator-protocol.mjs')));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }

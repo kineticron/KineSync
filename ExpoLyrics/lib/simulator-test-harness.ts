@@ -118,6 +118,19 @@ export class SimulatorTestHarness {
   private onCompleteCallback: ((summary: ScenarioSummary) => void) | null = null;
 
   private async screenshot(stage: string, details: string): Promise<void> {
+    // Freeze the exact snapshot anchor, then allow native seek/layout animations to settle.
+    // Playback-stage timers measure progression, not the snapshot position.
+    const snapshotPositions: Record<string, number> = {
+      stage_1_launch: 5000, stage_2_playback: 8000, stage_3_seek: 46000,
+      stage_4_switch_amll: 46000, stage_5_skip_song: 5000,
+      stage_6_switch_spicy: 5000, stage_7_rotation: 5000,
+    };
+    const positionMs = snapshotPositions[stage];
+    if (positionMs === undefined) throw new Error(`Unknown screenshot stage: ${stage}`);
+    this.clock.pause();
+    this.clock.seek(positionMs);
+    await this.delay(1000);
+    if (this.clock.isPlaying() || this.clock.getPositionMs() !== positionMs) throw new Error('Screenshot playback anchor changed');
     const token = `${this.runToken}_${stage}`;
     console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=${stage} token=${token} ${details}`);
     await waitForSimulatorScreenshotAck(stage, token, 12000);
