@@ -23,7 +23,6 @@ type SimulatorPlaybackPacket = PlaybackPacket & {
 
 export type HeartbeatMetrics = {
   samples: number;
-  delays: number[];
   p50Ms: number;
   p95Ms: number;
   maxDelayMs: number;
@@ -83,7 +82,6 @@ export class SimulatorHeartbeat {
     if (this.delays.length === 0) {
       return {
         samples: 0,
-        delays: [],
         p50Ms: 0,
         p95Ms: 0,
         maxDelayMs: 0,
@@ -99,7 +97,6 @@ export class SimulatorHeartbeat {
     const blocks100 = this.delays.filter((d) => d >= 100).length;
     return {
       samples: this.delays.length,
-      delays: this.delays,
       p50Ms: Math.round(p50 * 10) / 10,
       p95Ms: Math.round(p95 * 10) / 10,
       maxDelayMs: Math.round(max * 10) / 10,
@@ -415,7 +412,7 @@ export class SimulatorTestHarness {
       };
 
       console.info(`[KINESYNC_SIM] HEARTBEAT_METRICS ${JSON.stringify(heartbeatMetrics)}`);
-      console.info(`[KINESYNC_SIM] SCENARIO_COMPLETE ${JSON.stringify(summary)}`);
+      console.info(`[KINESYNC_SIM] SCENARIO_COMPLETE ${JSON.stringify(this.transportSummary(summary))}`);
 
       this.isRunningScenario = false;
       if (this.onCompleteCallback) {
@@ -441,13 +438,23 @@ export class SimulatorTestHarness {
       };
 
       console.error(`[KINESYNC_SIM] SCENARIO_FAILED error=${errMsg}`);
-      console.info(`[KINESYNC_SIM] SCENARIO_COMPLETE ${JSON.stringify(summary)}`);
+      console.info(`[KINESYNC_SIM] SCENARIO_COMPLETE ${JSON.stringify(this.transportSummary(summary))}`);
 
       this.isRunningScenario = false;
       if (this.onCompleteCallback) {
         this.onCompleteCallback(summary);
       }
     }
+  }
+
+  private transportSummary(summary: ScenarioSummary) {
+    // Wall clocks and renderer metadata already travel in individual stage records.
+    // Keep native os_log completion independent of sample count and error size.
+    return { ...summary,
+      stages: summary.stages.slice(0, 8).map(({ stage, status, durationMs }) => [stage, status, durationMs]),
+      heartbeat: { samples: summary.heartbeat.samples },
+      errors: summary.errors.slice(0, 1).map(error => error.slice(0, 120)),
+    };
   }
 
   public getSummary(): ScenarioSummary {

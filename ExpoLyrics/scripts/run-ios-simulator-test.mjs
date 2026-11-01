@@ -2,6 +2,7 @@
 // Boots simulator, installs Release app, streams logs, handles rotation, captures screenshots, and asserts results
 
 import fs from 'node:fs';
+import { PNG } from 'pngjs';
 import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
@@ -61,19 +62,20 @@ export async function runStartupCommand(cmd, args, state = lifecycle, execute = 
 
 async function getAvailableSimulatorDevice() {
   const jsonStr = await runStartupCommand('xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
-  const data = JSON.parse(jsonStr);
+  return selectSimulatorDevice(JSON.parse(jsonStr));
+}
+
+export function selectSimulatorDevice(data) {
   const devices = data.devices || {};
 
-  let candidate = null;
-  for (const [runtime, list] of Object.entries(devices)) {
-    if (!runtime.includes('iOS')) continue;
-    for (const dev of list) {
-      if (dev.isAvailable && dev.name.includes('iPhone')) {
-        if (dev.state === 'Booted') return dev;
-        if (!candidate) candidate = dev;
-      }
-    }
-  }
+  const booted = Object.values(devices).flat().filter(dev => dev.state === 'Booted');
+  const candidates = Object.entries(devices)
+    .filter(([runtime]) => /^com\.apple\.CoreSimulator\.SimRuntime\.iOS-27(?:-|$)/.test(runtime))
+    .flatMap(([runtime, list]) => list.filter(dev => dev.isAvailable && dev.name.includes('iPhone')).map(dev => ({ ...dev, runtime })))
+    .sort((a, b) => a.runtime.localeCompare(b.runtime) || a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid));
+  const candidate = candidates.find(dev => dev.state === 'Booted') || candidates[0];
+  if (!candidate) throw new Error('No available iOS 27 iPhone simulator');
+  if (booted.some(dev => dev.udid !== candidate.udid)) throw new Error('Conflicting booted simulator; refusing GUI automation');
   return candidate;
 }
 
@@ -133,6 +135,8 @@ async function main() {
   console.log(`[RUNNER] Using device: ${device.name} (${device.udid}) - state: ${device.state}`);
 
   lifecycle.device = device.udid;
+  lifecycle.ownsDevice = device.state !== 'Booted';
+  fs.writeFileSync(path.join(outputDir, 'device-selection.json'), JSON.stringify(device, null, 2));
   lifecycle.update('startup:boot');
   if (device.state !== 'Booted') {
     console.log(`[RUNNER] Booting simulator ${device.udid}...`);
@@ -141,13 +145,13 @@ async function main() {
     console.log('[RUNNER] Simulator booted successfully.');
   }
 
-  // Ensure Simulator.app is open for GUI events like rotation
-  try {
-    await runStartupCommand('open', ['-a', 'Simulator']);
-  } catch {
-    // Simulator app launch optional in headless environments
-  }
+  lifecycle.update('startup:GUI-preflight');
+  // The real orientation menu is also the bounded accessibility/session preflight.
+  rotateSimulator('portrait', device.udid);
+  await runStartupCommand('xcrun', ['simctl', 'status_bar', device.udid, 'override', '--time', '9:41', '--dataNetwork', 'wifi', '--wifiMode', 'active', '--wifiBars', '3', '--batteryState', 'charged', '--batteryLevel', '100']);
 
+  try { runCommand('xcrun', ['simctl', 'terminate', device.udid, 'dev.kineticron.KineSync']); }
+  catch (error) { fs.writeFileSync(path.join(outputDir, 'preinstall-terminate.log'), error.message); }
   lifecycle.update('startup:install');
   console.log(`[RUNNER] Installing app bundle: ${appPath}...`);
   await runStartupCommand('xcrun', ['simctl', 'install', device.udid, appPath]);
@@ -189,7 +193,18 @@ async function main() {
         const shotPath = path.join(outputDir, `${stage}.png`);
         try {
           runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath]);
-          const buf = fs.readFileSync(shotPath);
+          let buf = fs.readFileSync(shotPath);
+          let settled = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            runCommand('sleep', ['0.25']);
+            runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath], { timeout: 1500 });
+            const next = fs.readFileSync(shotPath);
+            const before = PNG.sync.read(buf), after = PNG.sync.read(next);
+            settled = before.width === after.width && before.height === after.height && before.data.equals(after.data);
+            buf = next;
+            if (settled) break;
+          }
+          if (!settled) throw new Error('Native snapshot did not settle to identical consecutive frames');
           const analysis = analyzeScreenshotContent(buf);
 
           let valid = analysis.nonBlank;
@@ -291,6 +306,7 @@ async function main() {
   const appProcess = spawn('xcrun', [
     'simctl',
     'launch',
+    '--terminate-running-process',
     '--console-pty',
     device.udid,
     'dev.kineticron.KineSync',

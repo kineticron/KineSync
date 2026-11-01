@@ -60,5 +60,17 @@ export class SimulatorRunLifecycle {
     evidence('metro-status.txt', 'curl', ['--max-time', '1', '-sS', 'http://127.0.0.1:8081/status']);
     fs.writeFileSync(path.join(this.outputDir, 'runner-failure.md'), `# Simulator runner failure\n\nStage: ${this.stage}\n\n${this.error || 'Unknown failure'}\n`);
   }
-  cleanup() { for (const child of this.children) { try { child.kill('SIGKILL'); } catch { /* best effort */ } } }
+  cleanup() {
+    for (const child of this.children) { try { child.kill('SIGKILL'); } catch { /* best effort */ } }
+    if (!this.device || this.cleaned) return;
+    this.cleaned = true;
+    for (const args of [
+      ['terminate', this.device, 'dev.kineticron.KineSync'],
+      ['status_bar', this.device, 'clear'],
+      ...(this.ownsDevice ? [['shutdown', this.device]] : []),
+    ]) {
+      try { this.command('xcrun', ['simctl', ...args], { timeout: 1500, killSignal: 'SIGKILL', stdio: 'pipe' }); }
+      catch { /* bounded best effort; never shut down a pre-existing device */ }
+    }
+  }
 }

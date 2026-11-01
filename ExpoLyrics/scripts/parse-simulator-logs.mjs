@@ -170,6 +170,8 @@ export class SimulatorLogParser {
       if (this.summary) this.errors.push('Repeated scenario summary');
       try {
         this.summary = JSON.parse(summaryMatch[1]);
+        // Compact native transport tuples preserve the same observed-stage cross-check.
+        if (Array.isArray(this.summary?.stages)) this.summary.stages = this.summary.stages.map(stage => Array.isArray(stage) ? { stage: stage[0], status: stage[1], durationMs: stage[2] } : stage);
       } catch (err) {
         this.errors.push(`Failed to parse scenario summary: ${err.message}`);
       }
