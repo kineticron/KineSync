@@ -100,6 +100,7 @@ export async function testSimulatorProtocol() {
   await files.waitForSimulatorScreenshotAck('stage', 'nonce', 10);
   assert.equal(deleted, true);
 
+  process.env.DEVELOPER_DIR = '/Applications/Xcode_27.1.app/Contents/Developer';
   const calls = [];
   rotateSimulator('landscape', 'chosen-udid', (cmd, args) => {
     calls.push([cmd, args]);

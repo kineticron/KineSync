@@ -19,7 +19,7 @@ try {
   const startup = new SimulatorRunLifecycle(path.join(dir, 'install'), { now: () => now, ciDeadlineMs: Infinity });
   now += 40000;
   await runStartupCommand('xcrun', ['simctl', 'install', 'fake', '/mock.app'], startup, (_cmd, _args, options) => {
-    assert.equal(options.timeout, 140000, 'Healthy 76-second install must retain remaining startup budget');
+    assert.equal(options.timeout, 90000, 'Install has a separate bounded command deadline');
     const pending = Promise.resolve({ stdout: '' }); pending.child = { kill() {} }; return pending;
   });
   now = 1000;

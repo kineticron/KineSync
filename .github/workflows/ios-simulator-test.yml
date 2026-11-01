@@ -104,6 +104,21 @@ jobs:
           cache: npm
           cache-dependency-path: ExpoLyrics/package-lock.json
 
+      - name: Select installed Xcode 27 explicitly
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          # Pin the installed image identity used by run4, before even the ccache xcrun.
+          DEVELOPER_DIR="/Applications/Xcode_27.1.app/Contents/Developer"
+          test -d "${DEVELOPER_DIR}"
+          DEVELOPER_DIR="$(cd "${DEVELOPER_DIR}" && pwd -P)"
+          export DEVELOPER_DIR
+          echo "DEVELOPER_DIR=${DEVELOPER_DIR}" >> "${GITHUB_ENV}"
+          echo "SIMULATOR_DISPOSABLE_CI=1" >> "${GITHUB_ENV}"
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -checkFirstLaunchStatus
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcodebuild -version | grep '^Xcode 27\.'
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep '^27\.'
+
       - name: Install ccache
         timeout-minutes: 5
         run: |
@@ -132,7 +147,7 @@ jobs:
           test "$(uname -m)" = arm64 # arm64-only simulator product requires an Apple Silicon host
           xcodebuild -version
           xcodebuild -showsdks
-          xcrun simctl list devices available -j >/dev/null
+          # Inventory and boot checks run asynchronously inside the lifecycle budget.
 
       - name: Install JS dependencies
         id: dependencies

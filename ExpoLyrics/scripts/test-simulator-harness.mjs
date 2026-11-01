@@ -304,13 +304,18 @@ function testRunnerCli(logs, parser) {
   fs.writeFileSync(path.join(dir, 'blank.png'), createSolidPng(100, 200, 0, 0, 0));
   const summary = JSON.stringify({ ...parser.summary, stages: parser.summary.stages.map(({ stage, status, durationMs }) => [stage, status, durationMs]), heartbeat: { samples: parser.heartbeat.samples } });
   const runLogs = logs.map(line => line.includes('SCENARIO_COMPLETE') ? `[KINESYNC_SIM] SCENARIO_COMPLETE ${summary}` : line.replace(/READY_FOR_SCREENSHOT stage=(\w+)/, 'READY_FOR_SCREENSHOT stage=$1 token=run_$1'));
+  const developer = path.join(dir, 'Xcode.app/Contents/Developer');
+  fs.mkdirSync(path.join(developer, 'Applications/Simulator.app'), { recursive: true });
   const shim = `#!${process.execPath}
 import fs from 'node:fs';
 import path from 'node:path';
 const dir = ${JSON.stringify(dir)};
 const name = path.basename(process.argv[1]), args = process.argv.slice(2);
 if (name === 'osascript' && args.join(' ').includes('Landscape Right') && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
+if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 27.1'); process.exit(0); }
 if (name !== 'xcrun') process.exit(0);
+if (args.includes('--show-sdk-version')) console.log('27.1');
+if (args.includes('--show-sdk-path')) console.log(process.env.DEVELOPER_DIR + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator27.1.sdk');
 if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) console.log(dir);
@@ -367,7 +372,7 @@ if (args.includes('launch')) {
  setInterval(() => {}, 1000);
 }
 `;
-  for (const name of ['xcrun', 'open', 'osascript']) {
+  for (const name of ['xcrun', 'xcodebuild', 'open', 'osascript']) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
@@ -376,7 +381,7 @@ if (args.includes('launch')) {
     const output = path.join(dir, scenario);
     const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (shouldPass) {

@@ -36,6 +36,8 @@ export function prepareBaselineHarness(options = {}) {
     'ExpoLyrics/components/simulator-test-controller.tsx',
     'ExpoLyrics/scripts/run-ios-simulator-test.mjs',
     'ExpoLyrics/scripts/simulator-run-lifecycle.mjs',
+    'ExpoLyrics/scripts/simulator-startup.mjs',
+    'ExpoLyrics/scripts/test-simulator-startup.mjs',
     'ExpoLyrics/scripts/run-with-ci-budget.mjs',
     'ExpoLyrics/scripts/verify-ci-cache.mjs',
     'ExpoLyrics/scripts/test-ci-cache.mjs',

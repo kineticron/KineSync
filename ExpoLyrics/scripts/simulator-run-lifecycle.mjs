@@ -53,6 +53,10 @@ export class SimulatorRunLifecycle {
         fs.writeFileSync(path.join(this.outputDir, name), `${err.stdout || ''}\n${err.stderr || ''}\n${err.message}`);
       }
     };
+    evidence('failure-processes.txt', '/bin/ps', ['-axo', 'pid,ppid,uid,state,%cpu,%mem,etime,comm']);
+    evidence('failure-memory.txt', '/usr/bin/vm_stat', []);
+    evidence('failure-services.txt', '/bin/launchctl', ['list']);
+    fs.writeFileSync(path.join(this.outputDir, 'failure-toolchain.json'), JSON.stringify({ developer: process.env.DEVELOPER_DIR || null }));
     if (this.device) {
       evidence('failure-screenshot.log', 'xcrun', ['simctl', 'io', this.device, 'screenshot', path.resolve(this.outputDir, 'failure.png')]);
       evidence('device-log.txt', 'xcrun', ['simctl', 'spawn', this.device, 'log', 'show', '--last', '3m', '--style', 'compact', '--predicate', 'process == "KineSync" OR process == "SpringBoard"']);

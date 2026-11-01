@@ -6,8 +6,8 @@ import { PNG } from 'pngjs';
 import { StringDecoder } from 'node:string_decoder';
 import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import path from 'node:path';
-import { promisify } from 'node:util';
-import { spawn, execFile, execFileSync } from 'node:child_process';
+import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics } from './simulator-startup.mjs';
+import { spawn, execFileSync } from 'node:child_process';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
 
@@ -44,25 +44,15 @@ export function createLineBufferConsumer(onLine, onChunk = () => {}) {
 function runCommand(cmd, args, options = {}) {
   try {
     lifecycle?.check();
-    return execFileSync(cmd, args, { timeout: Math.max(1, Math.min(5000, lifecycle?.remaining() ?? 5000)), killSignal: 'SIGKILL', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...options });
+    return execFileSync(cmd, args, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 5000, lifecycle?.remaining() ?? 5000)), killSignal: 'SIGKILL', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString() : '';
     throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${stderr || err.message}`);
   }
 }
 
-const execFileAsync = promisify(execFile);
-export async function runStartupCommand(cmd, args, state = lifecycle, execute = execFileAsync) {
-  state.check();
-  const pending = execute(cmd, args, { encoding: 'utf8', timeout: Math.max(1, state.remaining()), killSignal: 'SIGKILL' });
-  state.children.push(pending.child);
-  const { stdout } = await pending;
-  return stdout;
-}
-
-async function getAvailableSimulatorDevice() {
-  const jsonStr = await runStartupCommand('xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
-  return selectSimulatorDevice(JSON.parse(jsonStr));
+export async function runStartupCommand(cmd, args, state = lifecycle, execute) {
+  return startupCommand(cmd, args, state, execute, args.includes('install') ? 90000 : 30000);
 }
 
 export function selectSimulatorDevice(data) {
@@ -80,15 +70,20 @@ export function selectSimulatorDevice(data) {
 }
 
 export function rotateSimulator(targetOrientation, udid, command = runCommand) {
+  if (!process.env.DEVELOPER_DIR) throw new Error('Explicit DEVELOPER_DIR required for Simulator GUI');
   if (!['portrait', 'landscape'].includes(targetOrientation)) throw new Error('Invalid rotation orientation');
   const inventory = JSON.parse(command('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']));
   const booted = Object.values(inventory.devices || {}).flat().filter(d => d.state === 'Booted');
   if (booted.length !== 1 || booted[0].udid !== udid) throw new Error('Rotation requires the selected device to be the only booted simulator');
-  command('open', ['-a', 'Simulator', '--args', '-CurrentDeviceUDID', udid]);
+  command('open', ['-a', path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app'), '--args', '-CurrentDeviceUDID', udid]);
   const menuItem = targetOrientation === 'landscape' ? 'Landscape Right' : 'Portrait';
   const script = `
-tell application "Simulator" to activate
+tell application "${path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app')}" to activate
 tell application "System Events"
+  set simulatorProcesses to every application process whose name is "Simulator"
+  if (count of simulatorProcesses) is not 1 then error "Ambiguous Simulator GUI process"
+  set simulatorPath to POSIX path of (application file of item 1 of simulatorProcesses as alias)
+  if simulatorPath is not "${path.join(process.env.DEVELOPER_DIR, 'Applications/Simulator.app')}/" then error "Simulator GUI belongs to another Xcode"
   tell process "Simulator"
     tell menu bar 1
       tell menu bar item "Device"
@@ -117,7 +112,7 @@ async function main() {
   const outputDir = outputDirIndex >= 0 ? process.argv[outputDirIndex + 1] : '.expo/simulator-test-output';
   const timeoutMinutes = timeoutIndex >= 0 ? Number(process.argv[timeoutIndex + 1]) : 6;
   const seconds = (flag, fallback) => { const i = process.argv.indexOf(flag); return i < 0 ? fallback : Number(process.argv[i + 1]) * 1000; };
-  lifecycle = new SimulatorRunLifecycle(outputDir, { startupMs: seconds('--startup-seconds', 180000), stageMs: seconds('--stage-seconds', 60000), overallMs: timeoutMinutes * 60000 });
+  lifecycle = new SimulatorRunLifecycle(outputDir, { startupMs: seconds('--startup-seconds', 300000), stageMs: seconds('--stage-seconds', 60000), overallMs: timeoutMinutes * 60000 });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     lifecycle.fail(new Error(`Received ${signal}`)); lifecycle.capture(true); lifecycle.cleanup(); process.exit(1);
   });
@@ -127,27 +122,12 @@ async function main() {
   const summaryReportFile = path.join(outputDir, 'simulator-summary.md');
   const perfJsonFile = path.join(outputDir, 'simulator-perf.json');
 
-  console.log('[RUNNER] Locating iOS Simulator...');
-  const device = await getAvailableSimulatorDevice();
-  if (!device) {
-    throw new Error('No available iOS simulator device found');
-  }
-  console.log(`[RUNNER] Using device: ${device.name} (${device.udid}) - state: ${device.state}`);
-
-  lifecycle.device = device.udid;
-  lifecycle.ownsDevice = device.state !== 'Booted';
-  fs.writeFileSync(path.join(outputDir, 'device-selection.json'), JSON.stringify(device, null, 2));
-  lifecycle.update('startup:boot');
-  if (device.state !== 'Booted') {
-    console.log(`[RUNNER] Booting simulator ${device.udid}...`);
-    await runStartupCommand('xcrun', ['simctl', 'boot', device.udid]);
-    await runStartupCommand('xcrun', ['simctl', 'bootstatus', device.udid, '-b']);
-    console.log('[RUNNER] Simulator booted successfully.');
-  }
-
+  await selectToolchain(lifecycle);
+  const device = await prepareSimulator(lifecycle, selectSimulatorDevice);
   lifecycle.update('startup:GUI-preflight');
-  // The real orientation menu is also the bounded accessibility/session preflight.
-  rotateSimulator('portrait', device.udid);
+  // Startup enumeration is async with a 30s command cap and absolute lifecycle deadline.
+  const inventory = JSON.stringify(lifecycle.readyInventory);
+  rotateSimulator('portrait', device.udid, (cmd, args) => cmd === 'xcrun' ? inventory : runCommand(cmd, args));
   await runStartupCommand('xcrun', ['simctl', 'status_bar', device.udid, 'override', '--time', '9:41', '--dataNetwork', 'wifi', '--wifiMode', 'active', '--wifiBars', '3', '--batteryState', 'charged', '--batteryLevel', '100']);
 
   try { runCommand('xcrun', ['simctl', 'terminate', device.udid, 'dev.kineticron.KineSync']); }
@@ -406,9 +386,9 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
-  main().catch((err) => {
+  main().catch(async (err) => {
     console.error(`[RUNNER] Fatal runner error: ${err.message}`);
-    if (lifecycle) { lifecycle.fail(err); lifecycle.capture(); lifecycle.cleanup(); }
+    if (lifecycle) { await startupDiagnostics(lifecycle); lifecycle.fail(err); lifecycle.capture(); lifecycle.cleanup(); }
     process.exit(1);
   });
 }
