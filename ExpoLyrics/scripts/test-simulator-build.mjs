@@ -39,7 +39,7 @@ function testSchemeDiscovery() {
       target: 'KineSync',
       action: 'build',
       buildSettings: {
-        WRAPPER_EXTENSION: 'app',
+        PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
         PRODUCT_TYPE: 'com.apple.product-type.application',
         TARGET_BUILD_DIR: '/DerivedData/Build/Products/Release-iphonesimulator',
         FULL_PRODUCT_NAME: 'KineSync.app',
@@ -49,7 +49,7 @@ function testSchemeDiscovery() {
     assert.ok(foundApp, 'Must find valid application target');
     assert.strictEqual(foundApp.target, 'KineSync');
     assert.throws(() => findApplicationTarget([appEntry, { ...appEntry, target: 'OtherApp' }]), /Ambiguous application targets/);
-    assert.strictEqual(findApplicationTarget([{ buildSettings: { WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'fake-application' } }]), null);
+    assert.strictEqual(findApplicationTarget([{ buildSettings: { PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'fake-application' } }]), null);
     assert.strictEqual(foundApp.buildSettings.FULL_PRODUCT_NAME, 'KineSync.app');
     assert.strictEqual(foundApp.buildSettings.TARGET_BUILD_DIR, '/DerivedData/Build/Products/Release-iphonesimulator');
 
@@ -78,7 +78,7 @@ function testSchemeDiscovery() {
       target: 'FakeApp',
       action: 'build',
       buildSettings: {
-        WRAPPER_EXTENSION: 'app',
+        PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
         PRODUCT_TYPE: 'com.apple.product-type.bundle',
       },
     };
@@ -114,7 +114,8 @@ function testSchemeDiscovery() {
   // This mirrors the root cause of GitHub Actions run 41233371227 where 'boost' was selected alphabetically
   {
     const mockInventory = ['boost', 'DoubleConversion', 'fmt', 'KineSync', 'Pods-KineSync'];
-    const mockExec = (cmd, args) => {
+    const mockExec = (cmd, args, options) => {
+      assert.equal(options.timeout, 60000);
       assert.strictEqual(cmd, 'xcodebuild');
       if (args.includes('-list')) {
         return JSON.stringify({
@@ -130,6 +131,7 @@ function testSchemeDiscovery() {
         assert.ok(args.includes('ARCHS=arm64'));
         const schemeIdx = args.indexOf('-scheme');
         const scheme = args[schemeIdx + 1];
+        assert.equal(scheme, 'KineSync', 'Never probe dependency or widget schemes');
         if (scheme === 'boost') {
           return JSON.stringify([
             {
@@ -188,7 +190,7 @@ function testSchemeDiscovery() {
               target: 'KineSync',
               action: 'build',
               buildSettings: {
-                WRAPPER_EXTENSION: 'app',
+                PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
                 PRODUCT_TYPE: 'com.apple.product-type.application',
                 TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
                 FULL_PRODUCT_NAME: 'KineSync.app',
@@ -213,7 +215,7 @@ function testSchemeDiscovery() {
   // Real run 41290266075: widget scheme also reports the KineSync host app.
   {
     const app = { target: 'KineSync', action: 'build', buildSettings: {
-      WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'com.apple.product-type.application',
+      PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app', PRODUCT_TYPE: 'com.apple.product-type.application',
       PROJECT_FILE_PATH: '/repo/ios/KineSync.xcodeproj', PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync',
       TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator', FULL_PRODUCT_NAME: 'KineSync.app',
     } };
@@ -240,7 +242,7 @@ function testSchemeDiscovery() {
       { TARGET_BUILD_DIR: '/other/Release-iphonesimulator' },
     ]) {
       const other = { ...app, buildSettings: { ...app.buildSettings, ...changed } };
-      assert.throws(() => run(['KineSync', 'KineSyncLyricsWidget'], other), /Ambiguous application schemes/);
+      assert.equal(run(['KineSync', 'KineSyncLyricsWidget'], other).scheme, 'KineSync');
       assert.throws(() => findApplicationTarget([app, other]), /Ambiguous application targets/);
     }
   }
@@ -274,7 +276,7 @@ function testSchemeDiscovery() {
 
     assert.throws(
       () => discoverApplicationScheme('/path/to/TestWs.xcworkspace', { execCommand: mockExec }),
-      /No application scheme found in workspace TestWs/,
+      /Intended application scheme KineSync was not found/,
       'Must throw explicit error when no application scheme is found'
     );
   }
@@ -302,7 +304,7 @@ function testSchemeDiscovery() {
             target: scheme,
             action: 'build',
             buildSettings: {
-              WRAPPER_EXTENSION: 'app',
+              PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
               PRODUCT_TYPE: 'com.apple.product-type.application',
               TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
               FULL_PRODUCT_NAME: `${scheme}.app`,
@@ -313,11 +315,7 @@ function testSchemeDiscovery() {
       throw new Error(`Unexpected command args: ${args.join(' ')}`);
     };
 
-    assert.throws(
-      () => discoverApplicationScheme('/path/to/KineSync.xcworkspace', { execCommand: mockExec }),
-      /Ambiguous application schemes found in workspace KineSync\.xcworkspace: KineSync \(target: KineSync\), KineSyncBeta \(target: KineSyncBeta\)/,
-      'Must fail explicitly when multiple application schemes exist'
-    );
+    assert.equal(discoverApplicationScheme('/path/to/KineSync.xcworkspace', { execCommand: mockExec }).scheme, 'KineSync');
   }
 
   // 6. Regression test: pod scheme query failure is tolerated during discovery
@@ -347,7 +345,7 @@ function testSchemeDiscovery() {
               target: 'KineSync',
               action: 'build',
               buildSettings: {
-                WRAPPER_EXTENSION: 'app',
+                PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
                 PRODUCT_TYPE: 'com.apple.product-type.application',
                 TARGET_BUILD_DIR: '/derived/Build/Products/Release-iphonesimulator',
                 FULL_PRODUCT_NAME: 'KineSync.app',
@@ -395,7 +393,7 @@ function testSchemeDiscovery() {
           {
             target: 'KineSync',
             buildSettings: {
-              WRAPPER_EXTENSION: 'app',
+              PRODUCT_BUNDLE_IDENTIFIER: 'dev.kineticron.KineSync', WRAPPER_EXTENSION: 'app',
               PRODUCT_TYPE: 'com.apple.product-type.application',
               TARGET_BUILD_DIR: path.join(testDerivedDir, 'Build', 'Products', 'Release-iphonesimulator'),
               FULL_PRODUCT_NAME: 'KineSync.app',
@@ -448,11 +446,7 @@ function testSchemeDiscovery() {
       const wrongRunner = (cmd, args) => cmd === '/usr/libexec/PlistBuddy' ? badMetadata : mockRunner(cmd, args);
       assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: wrongRunner }), /not the expected/);
     }
-    assert.strictEqual(
-      fs.readFileSync(path.join(testIosDir, '.built_app_path'), 'utf8'),
-      expectedAppDir,
-      'Must record exact app path in .built_app_path'
-    );
+    assert.ok(!fs.existsSync(path.join(testIosDir, '.built_app_path')), 'Failed build must invalidate stale product record');
   }
 
   console.log('Xcode scheme discovery and validation rules passed.');

@@ -99,7 +99,7 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
 
   const listRaw = execCommand('xcodebuild', ['-workspace', workspacePath, '-list', '-json'], {
     encoding: 'utf8',
-    cwd,
+    cwd, timeout: 60000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024,
   });
   const listData = parseXcodebuildJson(listRaw);
   const schemes = listData.workspace?.schemes || [];
@@ -108,61 +108,21 @@ export function discoverApplicationScheme(workspacePath, options = {}) {
     throw new Error(`No build schemes found in workspace ${wsName}`);
   }
 
-  const matchingSchemes = [];
-
-  for (const scheme of schemes) {
-    const showArgs = [
-      '-workspace', workspacePath,
-      '-scheme', String(scheme),
-      '-configuration', configuration,
-      '-sdk', sdk,
-      '-destination', destination,
-    ];
-    if (derivedDataPath) {
-      showArgs.push('-derivedDataPath', derivedDataPath);
-    }
-    showArgs.push('ONLY_ACTIVE_ARCH=YES', 'ARCHS=arm64', '-showBuildSettings', '-json');
-
-    try {
-      const settingsRaw = execCommand('xcodebuild', showArgs, {
-        encoding: 'utf8',
-        cwd,
-      });
-      const parsedSettings = parseXcodebuildJson(settingsRaw);
-      const appTarget = findApplicationTarget(parsedSettings);
-      if (appTarget) {
-        matchingSchemes.push({
-          scheme: String(scheme),
-          target: appTarget.target,
-          buildSettings: appTarget.buildSettings,
-        });
-      }
-    } catch (err) {
-      // Scheme may not support simulator destination or build settings query (e.g. internal pods or utility targets)
-      if (err.message.includes('Ambiguous application targets')) throw err;
-      console.log(`[BUILD] Scheme ${scheme} showBuildSettings skipped: ${err.message}`);
-    }
+  if (!schemes.includes(applicationScheme)) throw new Error(`Intended application scheme ${applicationScheme} was not found`);
+  const started = Date.now();
+  const showArgs = ['-workspace', workspacePath, '-scheme', applicationScheme,
+    '-configuration', configuration, '-sdk', sdk, '-destination', destination];
+  if (derivedDataPath) showArgs.push('-derivedDataPath', path.resolve(derivedDataPath));
+  showArgs.push('ONLY_ACTIVE_ARCH=YES', 'ARCHS=arm64', '-showBuildSettings', '-json');
+  const app = findApplicationTarget(parseXcodebuildJson(execCommand('xcodebuild', showArgs, {
+    encoding: 'utf8', cwd, timeout: 60000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024,
+  })));
+  if (!app || app.target !== 'KineSync' || app.buildSettings.FULL_PRODUCT_NAME !== 'KineSync.app' ||
+      app.buildSettings.PRODUCT_BUNDLE_IDENTIFIER !== 'dev.kineticron.KineSync') {
+    throw new Error('Intended scheme does not produce the exact KineSync application identity');
   }
-
-  if (matchingSchemes.length === 0) {
-    throw new Error(
-      `No application scheme found in workspace ${wsName}. Evaluated schemes: [${schemes.join(', ')}]. ` +
-      'None produced WRAPPER_EXTENSION=app and PRODUCT_TYPE application.'
-    );
-  }
-
-  const identities = new Set(matchingSchemes.map(applicationIdentity));
-  if (identities.size > 1) {
-    const ambiguousNames = matchingSchemes.map((m) => `${m.scheme} (target: ${m.target})`).join(', ');
-    throw new Error(
-      `Ambiguous application schemes found in workspace ${wsName}: ${ambiguousNames}. ` +
-      'Expected exactly one application target/product identity.'
-    );
-  }
-
-  // The intended host scheme must exist even when widget/utility schemes expose it.
-  const selected = matchingSchemes.find(app => app.scheme === applicationScheme);
-  if (!selected) throw new Error(`Intended application scheme ${applicationScheme} was not found among application schemes: ${matchingSchemes.map(app => app.scheme).join(', ')}`);
+  const selected = { scheme: applicationScheme, ...app };
+  console.log(`[BUILD] Direct scheme validation completed in ${Date.now() - started}ms`);
   console.log(`[BUILD] Selected application scheme: ${selected.scheme} (target: ${selected.target})`);
   return selected;
 }
@@ -189,7 +149,7 @@ export function configureStandaloneSimulator(iosDirectory) {
 }
 
 export function buildSimulatorApp(options = {}) {
-  const derivedDataPath = options.derivedDataPath || process.env.DERIVED_DATA_PATH || path.join(iosDir, 'build');
+  const derivedDataPath = path.resolve(options.derivedDataPath || process.env.DERIVED_DATA_PATH || path.join(iosDir, 'build'));
   const iosDirectory = options.iosDirectory || iosDir;
   const execCommand = options.execCommand || execFileSync;
 
@@ -253,7 +213,9 @@ export function buildSimulatorApp(options = {}) {
   ];
 
   if (!targetBuildDir || !fullProductName || path.basename(fullProductName) !== fullProductName || !fullProductName.endsWith('.app')) throw new Error('Missing exact application product path');
-  const appPath = path.join(targetBuildDir, fullProductName);
+  const appPath = path.resolve(targetBuildDir, fullProductName);
+  if (!appPath.startsWith(`${derivedDataPath}${path.sep}`)) throw new Error('Application product escapes the canonical DerivedData path');
+  fs.rmSync(path.join(iosDirectory, '.built_app_path'), { force: true });
   fs.rmSync(path.join(appPath, 'main.jsbundle'), { force: true });
   console.log(`[BUILD] Invoking actual xcodebuild for ${scheme} (Release arm64 iphonesimulator)...`);
   execCommand('xcodebuild', args, {
