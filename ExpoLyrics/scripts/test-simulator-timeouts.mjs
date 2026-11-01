@@ -45,9 +45,9 @@ try {
   assert.equal(budget.status, 1); assert.match(budget.stderr, /budget exhausted/);
   const workflow = fs.readFileSync(new URL('../../.github/workflows/ios-simulator-test.yml', import.meta.url), 'utf8');
   const artifactPaths = YAML.parse(workflow).jobs['ios-simulator-test'].steps.find(step => step.name === 'Upload Simulator Test Artifacts').with.path.trim().split('\n').map(p => p.trim());
-  assert.ok(artifactPaths.includes('ExpoLyrics/.expo/baseline-test-output/'));
+  assert.ok(artifactPaths.includes('ExpoLyrics/.expo/cache-verification-*.json'));
   for (const p of artifactPaths) assert.ok(!p.split('/').some(part => ['.', '..'].includes(part)) && !path.isAbsolute(p), p);
-  assert.match(workflow, /--output-dir "\$\{GITHUB_WORKSPACE\}\/ExpoLyrics\/\.expo\/baseline-test-output"/);
+
   assert.match(workflow, /Upload Simulator Test Artifacts\n        timeout-minutes: 2\n        if: always\(\)/);
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 console.log('Simulator deadline and artifact tests passed.');

@@ -10,7 +10,7 @@ import vm from 'node:vm';
 import { transformSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
-import { rotateSimulator, createLineBufferConsumer } from './run-ios-simulator-test.mjs';
+import { rotateSimulator, createLineBufferConsumer, selectSimulatorDevice } from './run-ios-simulator-test.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 function loadBridge(fileSystem, logs = [], development = true, env = { EXPO_PUBLIC_SIMULATOR_TEST: '1' }) {
@@ -24,6 +24,11 @@ function loadBridge(fileSystem, logs = [], development = true, env = { EXPO_PUBL
 }
 
 export async function testSimulatorProtocol() {
+  const runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-27-0';
+  const phone = { name: 'iPhone Test', udid: 'b', state: 'Shutdown', isAvailable: true };
+  assert.equal(selectSimulatorDevice({ devices: { [runtime]: [phone, { ...phone, udid: 'a' }] } }).udid, 'a');
+  assert.throws(() => selectSimulatorDevice({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [phone] } }), /iOS 27/);
+  assert.throws(() => selectSimulatorDevice({ devices: { [runtime]: [phone, { ...phone, name: 'iPad', udid: 'other', state: 'Booted' }] } }), /Conflicting booted/);
   // Byte-by-byte includes a split UTF-8 character, split marker, and final no-LF record.
   const framed = [], recorded = [];
   const consume = createLineBufferConsumer(line => framed.push(line), chunk => recorded.push(chunk));
@@ -172,6 +177,14 @@ function testHarnessStages() {
     require: name => name.includes('simulator-playback-clock') ? { SimulatorPlaybackClock: class {} } : {},
   });
   const harness = new module.exports.SimulatorTestHarness();
+  const heartbeat = new module.exports.SimulatorHeartbeat();
+  heartbeat.delays = Array.from({ length: 18000 }, (_, i) => i / 17);
+  const metrics = heartbeat.getMetrics();
+  assert.equal(metrics.samples, 18000);
+  assert.ok(!('delays' in metrics));
+  assert.ok(Buffer.byteLength(JSON.stringify(metrics)) < 256);
+  const summary = harness.transportSummary({ success: true, stages: Array.from({ length: 8 }, (_, i) => ({ stage: `stage_${i + 1}_switch_spicy`, status: 'PASS', durationMs: 1234, metadata: { huge: 'x'.repeat(10000) } })), heartbeat: metrics, renderersExercised: ['spicy', 'amll'], tracksLoaded: 2, totalDurationMs: 50000, errors: ['x'.repeat(10000)] });
+  assert.ok(Buffer.byteLength('[KINESYNC_SIM] SCENARIO_COMPLETE ' + JSON.stringify(summary)) < 1024);
   harness.beginStage('stage_1_launch');
   assert.throws(() => harness.beginStage('stage_2_playback'), /unfinished/);
 }
@@ -266,87 +279,45 @@ function testMainPublication(source) {
 
 function testManualWorkflow() {
   const workflow = YAML.parse(fs.readFileSync(path.join(root, '../.github/workflows/ios-simulator-test.yml'), 'utf8'));
-  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch'], 'Pushes must never trigger this dedicated harness');
-  assert.ok(workflow.on.workflow_dispatch.inputs.baseline_ref);
-  assert.equal(workflow.jobs['ios-simulator-test']['timeout-minutes'], 30);
-  const steps = workflow.jobs['ios-simulator-test'].steps;
-  for (const step of steps.filter(step => step.run)) {
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
+  const job = workflow.jobs['ios-simulator-test'];
+  assert.equal(job['timeout-minutes'], 60);
+  assert.equal(job.strategy['fail-fast'], false, 'Candidate failure must not cancel baseline');
+  assert.ok(job.strategy.matrix.variant.includes('candidate') && job.strategy.matrix.variant.includes('baseline'));
+  for (const job of Object.values(workflow.jobs)) for (const step of job.steps.filter(step => step.run)) {
     const parsed = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' });
     assert.equal(parsed.status, 0, `${step.name}: ${parsed.stderr}`);
   }
-  const prebuild = steps.find(step => step.name === 'Expo prebuild (iOS)');
-  assert.match(prebuild.run, /--no-install/);
-  const pods = steps.find(step => step.id === 'pods_cache');
-  const compiler = steps.find(step => step.id === 'compiler_cache');
-  assert.ok(steps.indexOf(pods) < steps.findIndex(step => step.id === 'install_pods'));
-  assert.ok(steps.findIndex(step => step.id === 'install_pods') < steps.indexOf(compiler));
-  for (const cache of [pods, compiler]) {
-    assert.match(cache.uses, /^actions\/cache\/restore@/);
-    assert.match(cache.with.key, /package-lock.json/);
-    assert.match(cache.with.key, /steps.compatibility.outputs.id/);
-    assert.match(cache.with.key, /runner.arch/);
-    assert.match(cache.with.key, /github.run_id/);
-    assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}$/, '-'));
-    const save = steps.find(step => step.uses?.startsWith('actions/cache/save@') && step.with.key.includes(`steps.${cache.id}.outputs.cache-primary-key`));
-    assert.ok(save);
-    assert.equal(save.with.path, cache.with.path);
-    assert.match(save.if, /!cancelled\(\)/);
-    assert.ok(!save.if.includes('success()'), 'Failed builds must still save');
-    assert.equal(save['timeout-minutes'], 1);
-    assert.equal(save['continue-on-error'], true, 'Optional cache saves must not gate builds or evidence');
-    assert.ok(!cache.with.path.includes('env.HOME'));
-    assert.ok(!cache.with.path.includes('baseline'));
+  const steps = job.steps;
+  const paths = steps.find(step => step.id === 'paths');
+  assert.match(paths.run, /46 \* 60 \* 1000/);
+  assert.match(paths.run, /pwd -P/);
+  assert.match(steps.find(step => step.name === 'Expo prebuild (iOS)').run, /--no-install/);
+  for (const [id, minutes] of [['pods_cache', 4], ['compiler_cache', 8]]) {
+    const cache = steps.find(step => step.id === id);
+    const save = steps.find(step => step.uses?.startsWith('actions/cache/save@') && step.with.key.includes(`steps.${id}.outputs.cache-primary-key`));
+    assert.equal(cache.with.path, save.with.path);
+    assert.ok(!cache.with.path.includes('..') && !cache.with.path.includes('~'));
+    assert.ok(cache.with.key.includes('steps.compatibility.outputs.id'));
+    assert.ok(cache.with.key.includes('matrix.variant'));
+    assert.equal(save['timeout-minutes'], minutes);
+    assert.ok(!save['continue-on-error'], 'Cache failures must not be falsely green');
+    assert.ok(save.if.includes('!cancelled()'));
+    assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ matrix.variant \}\}$/, '-'));
   }
-  const podsSave = steps.find(step => step.name === 'Save CocoaPods cache');
-  const compilerSave = steps.find(step => step.name === 'Save partial Release arm64 compiler cache');
-  const harness = steps.find(step => step.name === 'Run iOS Simulator Test Harness');
-  const baselineStep = steps.find(step => step.name.startsWith('Run Baseline Comparison'));
-  const artifacts = steps.find(step => step.name === 'Upload Simulator Test Artifacts');
-  assert.ok(steps.indexOf(podsSave) > steps.findIndex(step => step.id === 'install_pods'));
-  assert.ok(steps.indexOf(podsSave) < steps.indexOf(compiler));
-  assert.ok(steps.indexOf(compilerSave) > steps.indexOf(harness));
-  assert.ok(steps.indexOf(compilerSave) < steps.indexOf(baselineStep));
-  assert.ok(steps.indexOf(compilerSave) < steps.indexOf(artifacts));
-  assert.ok(steps.slice(steps.indexOf(artifacts) + 1).every(step => !step.uses?.startsWith('actions/cache/save@')), 'No cache saves may consume the final artifact/cleanup window');
-  assert.match(compiler.with.key, /Podfile.lock/);
-  assert.match(compiler.with.key, /release-arm64-v2/);
-  assert.match(compiler.with.path, /kinesync-ios-derived-sim/);
-  assert.match(compiler.with.path, /kinesync-ios-ccache/);
-  assert.match(pods.with.path, /ios\/Pods/);
-  const identity = steps.find(step => step.id === 'compatibility');
-  for (const command of ['xcodebuild -version', '--show-sdk-version', 'pod --version', 'ccache --version', 'uname -m']) assert.ok(identity.run.includes(command));
-  assert.ok(steps.some(step => step.id === 'candidate_build'));
-  const baseline = steps.find(step => step.name.startsWith('Run Baseline Comparison'));
-  assert.ok(baseline.if.includes('!cancelled()') && baseline.if.includes("steps.candidate_build.outcome == 'success'"));
-  assert.ok(baseline.run.includes('resolve-trusted-simulator-baseline.mjs'));
-  assert.ok(baseline.run.includes('|| BASELINE_STATUS=$?'));
-  assert.ok(baseline.run.includes('|| COMPARISON_STATUS=$?'));
-  assert.ok(baseline.run.includes('[ "${BASELINE_STATUS}" -ne 0 ] || [ "${COMPARISON_STATUS}" -ne 0 ]'));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-workflow-'));
-  try {
-    const shim = `#!${process.execPath}
-const fs = require('node:fs');
-if (process.argv[2].includes('compare-simulator')) {
- fs.mkdirSync('ExpoLyrics/.expo', { recursive: true });
- fs.writeFileSync('ExpoLyrics/.expo/comparison-report.md', 'comparison attempted');
- process.exit(Number(process.env.COMPARE_EXIT));
-}
-const outputIndex = process.argv.indexOf('--output-dir');
-if (process.argv[outputIndex + 1] !== process.env.GITHUB_WORKSPACE + '/ExpoLyrics/.expo/baseline-test-output') process.exit(97);
-process.exit(Number(process.env.BASELINE_EXIT));
-`;
-    fs.writeFileSync(path.join(dir, 'node'), shim, { mode: 0o755 });
-    const script = baseline.run.slice(baseline.run.indexOf('BASELINE_STATUS=0')).replace(/^popd$/m, ':').replace(/^BASELINE$/m, '');
-    for (const [baselineExit, compareExit] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-      const summary = path.join(dir, 'summary');
-      fs.writeFileSync(summary, '');
-      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
-        cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`,
-          GITHUB_WORKSPACE: dir, BASELINE_APP: '/mock.app', BASELINE_REF: 'main', BASELINE_EXIT: String(baselineExit), COMPARE_EXIT: String(compareExit), GITHUB_STEP_SUMMARY: summary },
-      });
-      assert.equal(result.status, baselineExit || compareExit ? 1 : 0, result.stderr);
-      assert.ok(fs.readFileSync(summary, 'utf8').includes('comparison attempted'), 'Comparison must run and publish even when baseline scenario fails');
-    }
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-
+  assert.match(steps.find(step => step.id === 'pods_cache').with.key, /ios-sim-pods-v2-/);
+  for (const id of ['pods_verified', 'compiler_verified']) {
+    const verify = steps.find(step => step.id === id);
+    assert.match(verify.run, /verify-ci-cache.mjs/);
+    assert.ok(verify.if.includes('!cancelled()'));
+  }
+  const baseline = steps.find(step => step.name === 'Prepare trusted baseline source');
+  assert.equal(baseline.if, "matrix.variant == 'baseline'");
+  assert.match(baseline.run, /resolve-trusted-simulator-baseline.mjs/);
+  assert.match(baseline.run, /prepare-baseline-harness.mjs/);
+  assert.ok(steps.indexOf(baseline) < steps.findIndex(step => step.name === 'Install JS dependencies'));
+  const compare = workflow.jobs.compare;
+  assert.ok(compare.if.includes('always()'));
+  assert.ok(compare.steps.some(step => step.name === 'Publish comparison summary' && step.if === 'always()'));
+  assert.ok(steps.find(step => step.name === 'Upload Simulator Test Artifacts').if === 'always()');
 }

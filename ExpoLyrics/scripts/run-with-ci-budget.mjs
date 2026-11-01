@@ -1,4 +1,4 @@
-// Leave three minutes of the unchanged job timeout for summaries and artifact upload.
+// Enforce the per-job absolute work deadline; workflow reserves cache save and evidence time.
 import { spawn } from 'node:child_process';
 const deadline = Number(process.env.SIMULATOR_CI_DEADLINE_MS);
 if (!Number.isFinite(deadline)) throw new Error('Missing SIMULATOR_CI_DEADLINE_MS');

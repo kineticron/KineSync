@@ -13,6 +13,7 @@ import { PNG } from 'pngjs';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent, compareScreenshots } from './compare-simulator-screenshots.mjs';
 import './test-simulator-build.mjs';
+import './test-ci-cache.mjs';
 import './test-simulator-baseline.mjs';
 import './test-simulator-timeouts.mjs';
 
@@ -101,7 +102,7 @@ function testLogParser() {
     '[KINESYNC_SIM] STAGE_END stage_7_rotation status=PASS durationMs=2600',
     '[KINESYNC_SIM] STAGE_BEGIN stage_8_complete timestamp=15000',
     '[KINESYNC_SIM] STAGE_END stage_8_complete status=PASS durationMs=50',
-    '[KINESYNC_SIM] HEARTBEAT_METRICS {"samples":100,"delays":[],"p50Ms":1.2,"p95Ms":3.4,"maxDelayMs":8.1,"blocksOver50Ms":0,"blocksOver100Ms":0}',
+    '[KINESYNC_SIM] HEARTBEAT_METRICS {"samples":100,"p50Ms":1.2,"p95Ms":3.4,"maxDelayMs":8.1,"blocksOver50Ms":0,"blocksOver100Ms":0}',
     '[KINESYNC_SIM] SCENARIO_COMPLETE {"success":true,"stages":[],"heartbeat":{"samples":100},"renderersExercised":["spicy","amll"],"totalDurationMs":15050,"tracksLoaded":2,"errors":[]}',
   ];
 
@@ -301,20 +302,27 @@ function testRunnerCli(logs, parser) {
   fs.writeFileSync(path.join(dir, 'portrait.png'), createTextMockPng(100, 200));
   fs.writeFileSync(path.join(dir, 'landscape.png'), createTextMockPng(200, 100));
   fs.writeFileSync(path.join(dir, 'blank.png'), createSolidPng(100, 200, 0, 0, 0));
-  const summary = JSON.stringify(parser.summary);
+  const summary = JSON.stringify({ ...parser.summary, stages: parser.summary.stages.map(({ stage, status, durationMs }) => [stage, status, durationMs]), heartbeat: { samples: parser.heartbeat.samples } });
   const runLogs = logs.map(line => line.includes('SCENARIO_COMPLETE') ? `[KINESYNC_SIM] SCENARIO_COMPLETE ${summary}` : line.replace(/READY_FOR_SCREENSHOT stage=(\w+)/, 'READY_FOR_SCREENSHOT stage=$1 token=run_$1'));
   const shim = `#!${process.execPath}
 import fs from 'node:fs';
 import path from 'node:path';
 const dir = ${JSON.stringify(dir)};
 const name = path.basename(process.argv[1]), args = process.argv.slice(2);
-if (name === 'osascript' && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
+if (name === 'osascript' && args.join(' ').includes('Landscape Right') && process.env.SIM_CASE === 'rotation-failure') process.exit(2);
 if (name !== 'xcrun') process.exit(0);
-if (args.includes('list')) console.log(JSON.stringify({ devices: { iOS: [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
+if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) console.log(dir);
 if (args.includes('screenshot')) {
  const dest = args.at(-1);
+ if (process.env.SIM_CASE === 'capture-failure' && dest.endsWith('failure.png')) process.exit(2);
+ if (process.env.SIM_CASE === 'unstable') {
+  const counter = dest + '.count';
+  const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) : 0;
+  fs.writeFileSync(counter, String(count + 1));
+  fs.copyFileSync(path.join(dir, count % 2 ? 'blank.png' : 'portrait.png'), dest); return;
+ }
  fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') ? 'landscape.png' : 'portrait.png'), dest);
 }
 if (args.includes('stream')) {
@@ -349,7 +357,7 @@ if (args.includes('launch')) {
  if (!fs.existsSync(path.join(dir, 'stream-ready'))) process.exit(97);
  fs.writeFileSync(path.join(dir, 'launched'), '1');
  if (process.env.SIM_CASE === 'signal') { process.kill(process.ppid, 'SIGTERM'); setInterval(() => {}, 1000); return; }
- if (process.env.SIM_CASE === 'early-exit') process.exit(1);
+ if (['early-exit', 'capture-failure'].includes(process.env.SIM_CASE)) process.exit(1);
  if (process.env.SIM_CASE === 'console-duplicate') {
   console.log('ordinary launch stdout');
   console.error('ordinary launch stderr');
@@ -363,7 +371,7 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
+  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
     for (const file of ['launched', 'stream-ready']) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
     const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
@@ -384,7 +392,9 @@ if (args.includes('launch')) {
     } else {
       const state = JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'), 'utf8'));
       assert.ok(state.error);
-      for (const name of ['failure.png', 'device-log.txt', 'metro-status.txt']) assert.ok(fs.existsSync(path.join(output, name)), name);
+      for (const name of ['failure-screenshot.log', 'device-log.txt', 'metro-status.txt']) assert.ok(fs.existsSync(path.join(output, name)), `${scenario}: ${name}`);
+      const screenshotLog = fs.readFileSync(path.join(output, 'failure-screenshot.log'), 'utf8');
+      assert.ok(fs.existsSync(path.join(output, 'failure.png')) || /Command failed|ETIMEDOUT|SIGKILL/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
       if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
@@ -446,7 +456,7 @@ try {
   cleanTemp();
   console.log('\nAll simulator harness tests PASSED.');
 } catch (err) {
-  cleanTemp();
+  console.error(`Retained failing fixtures: ${tempDir}`);
   console.error(`Test failure: ${err.stack}`);
   process.exit(1);
 }

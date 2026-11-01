@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ios-simulator-test-${{ github.ref }}-${{ github.event.inputs.baseline_ref || 'nobase' }}
@@ -28,16 +29,73 @@ defaults:
 jobs:
   ios-simulator-test:
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.event.inputs.baseline_ref != '' && '["candidate","baseline"]' || '["candidate"]') }}
 
     steps:
+      - name: Record job work start
+        run: echo "SIMULATOR_CI_STARTED_MS=$(( $(date +%s) * 1000 ))" >> "${GITHUB_ENV}"
+
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
-      - name: Reserve cleanup and upload time
-        run: echo "SIMULATOR_CI_DEADLINE_MS=$(( $(date +%s) * 1000 + 26 * 60 * 1000 ))" >> "${GITHUB_ENV}"
+      - name: Setup build tools Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      # Each cold build gets its own job: 46m preparation/build/scenario,
+      # 8m compiler save, 2m verification, 2m upload, 2m cleanup margin.
+      - name: Canonical paths and independent work budget
+        id: paths
+        run: |
+          set -euo pipefail
+          ROOT="$(cd "${GITHUB_WORKSPACE}/.." && pwd -P)"
+          mkdir -p "${ROOT}/kinesync-ios-derived-sim" "${ROOT}/kinesync-ios-ccache"
+          DERIVED="$(cd "${ROOT}/kinesync-ios-derived-sim" && pwd -P)"
+          COMPILER="$(cd "${ROOT}/kinesync-ios-ccache" && pwd -P)"
+          WORKSPACE="$(cd "${GITHUB_WORKSPACE}" && pwd -P)"
+          USER_HOME="$(cd "${HOME}" && pwd -P)"
+          mkdir -p ExpoLyrics/.expo
+          git rev-parse HEAD > ExpoLyrics/.expo/candidate-commit.txt
+          {
+            echo "workspace=${WORKSPACE}"
+            echo "pods=${WORKSPACE}/ExpoLyrics/ios/Pods"
+            echo "lock=${WORKSPACE}/ExpoLyrics/ios/Podfile.lock"
+            echo "cocoapods=${USER_HOME}/.cocoapods"
+            echo "pods_downloads=${USER_HOME}/Library/Caches/CocoaPods"
+            echo "derived=${DERIVED}"
+            echo "ccache=${COMPILER}"
+            echo "baseline=${RUNNER_TEMP}/kinesync-baseline"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "DERIVED_DATA_PATH=${DERIVED}"
+            echo "CCACHE_DIR=${COMPILER}"
+            echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 46 * 60 * 1000 ))"
+          } >> "${GITHUB_ENV}"
+
+      - name: Prepare trusted baseline source
+        id: baseline_prep
+        if: matrix.variant == 'baseline'
+        env:
+          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+          BASELINE_DIR: ${{ steps.paths.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          node ExpoLyrics/scripts/run-with-ci-budget.mjs bash <<'BASELINE' 2>&1 | tee ExpoLyrics/.expo/baseline-preparation.log
+          set -euo pipefail
+          COMMIT="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
+          printf '%s\n' "${COMMIT}" > ExpoLyrics/.expo/baseline-commit.txt
+          git worktree add --detach "${BASELINE_DIR}" "${COMMIT}"
+          node ExpoLyrics/scripts/prepare-baseline-harness.mjs --baseline-dir "${BASELINE_DIR}"
+          # Keep canonical build/cache/hashFiles paths identical in both jobs.
+          rsync -a --delete --exclude .expo "${BASELINE_DIR}/ExpoLyrics/" "${GITHUB_WORKSPACE}/ExpoLyrics/"
+          BASELINE
 
       - name: Setup Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -47,6 +105,7 @@ jobs:
           cache-dependency-path: ExpoLyrics/package-lock.json
 
       - name: Install ccache
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           if ! command -v ccache >/dev/null 2>&1; then
@@ -62,7 +121,7 @@ jobs:
           {
             echo "KINESYNC_USE_CCACHE=1"
             echo "KINESYNC_CC_WRAPPER=${WRAP_DIR}/clang"
-            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_BASEDIR=${{ steps.paths.outputs.workspace }}"
             echo "CCACHE_MAXSIZE=2G"
             echo "CCACHE_SLOPPINESS=pch_defines,time_macros"
           } >> "${GITHUB_ENV}"
@@ -76,9 +135,12 @@ jobs:
           xcrun simctl list devices available -j >/dev/null
 
       - name: Install JS dependencies
+        id: dependencies
         working-directory: ExpoLyrics
         timeout-minutes: 5
-        run: npm ci
+        run: |
+          set -euo pipefail
+          node scripts/run-with-ci-budget.mjs npm ci 2>&1 | tee .expo/dependencies.log
 
       - name: Cache compatibility
         id: compatibility
@@ -87,23 +149,25 @@ jobs:
           # Exact compiler/SDK/CocoaPods/ccache identity, not a moving runner label.
           ID="$( { xcodebuild -version; xcrun --sdk iphonesimulator --show-sdk-version; pod --version; ccache --version; uname -m; } | shasum -a 256 | cut -d ' ' -f 1)"
           echo "id=${ID}" >> "${GITHUB_OUTPUT}"
-          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/../kinesync-ios-ccache" >> "${GITHUB_ENV}"
 
       - name: Expo prebuild (iOS)
+        id: prebuild
         timeout-minutes: 5
         working-directory: ExpoLyrics
-        run: npx expo prebuild --clean --platform ios --no-install
+        run: |
+          set -euo pipefail
+          node scripts/run-with-ci-budget.mjs npx expo prebuild --clean --platform ios --no-install 2>&1 | tee .expo/prebuild.log
 
       - name: Restore CocoaPods cache
         id: pods_cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ExpoLyrics/ios/Pods
-            ExpoLyrics/ios/Podfile.lock
-            ~/.cocoapods
-            ~/Library/Caches/CocoaPods
-          key: ios-sim-pods-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+            ${{ steps.paths.outputs.pods }}
+            ${{ steps.paths.outputs.lock }}
+            ${{ steps.paths.outputs.cocoapods }}
+            ${{ steps.paths.outputs.pods_downloads }}
+          key: ios-sim-pods-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
           restore-keys: |
             ios-sim-pods-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json') }}-
 
@@ -113,31 +177,40 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          pod install
+          node ../scripts/run-with-ci-budget.mjs pod install 2>&1 | tee ../.expo/pods-install.log
           test -s Podfile.lock
 
       # Save validated Pods before expensive native work; this cost is inside the work budget.
       - name: Save CocoaPods cache
+        id: pods_save
         if: ${{ !cancelled() && steps.install_pods.outcome == 'success' && steps.pods_cache.outputs.cache-primary-key != '' }}
-        timeout-minutes: 1
-        continue-on-error: true
+        timeout-minutes: 4
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ExpoLyrics/ios/Pods
-            ExpoLyrics/ios/Podfile.lock
-            ~/.cocoapods
-            ~/Library/Caches/CocoaPods
+            ${{ steps.paths.outputs.pods }}
+            ${{ steps.paths.outputs.lock }}
+            ${{ steps.paths.outputs.cocoapods }}
+            ${{ steps.paths.outputs.pods_downloads }}
           key: ${{ steps.pods_cache.outputs.cache-primary-key }}
+
+      - name: Verify CocoaPods cache save on server
+        if: ${{ !cancelled() && steps.pods_save.outcome != 'skipped' }}
+        id: pods_verified
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ steps.pods_cache.outputs.cache-primary-key }}
+        run: node ExpoLyrics/scripts/verify-ci-cache.mjs
 
       - name: Restore Release arm64 compiler cache
         id: compiler_cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ${{ github.workspace }}/../kinesync-ios-derived-sim
-            ${{ github.workspace }}/../kinesync-ios-ccache
-          key: ios-sim-release-arm64-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/app.json', 'ExpoLyrics/scripts/build-simulator-app.mjs') }}-${{ github.run_id }}-${{ github.run_attempt }}
+            ${{ steps.paths.outputs.derived }}
+            ${{ steps.paths.outputs.ccache }}
+          key: ios-sim-release-arm64-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/app.json', 'ExpoLyrics/scripts/build-simulator-app.mjs') }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
           restore-keys: |
             ios-sim-release-arm64-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.compatibility.outputs.id }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/app.json', 'ExpoLyrics/scripts/build-simulator-app.mjs') }}-
 
@@ -145,7 +218,7 @@ jobs:
         id: candidate_build
         working-directory: ExpoLyrics
         env:
-          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-sim
+          DERIVED_DATA_PATH: ${{ steps.paths.outputs.derived }}
           EXPO_PUBLIC_SIMULATOR_TEST: "1"
         run: |
           set -euo pipefail
@@ -153,75 +226,67 @@ jobs:
             ccache --zero-stats
           fi
           mkdir -p .expo
-          node scripts/run-with-ci-budget.mjs node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
+          # Leave six minutes of the work allocation for the scenario.
+          SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_DEADLINE_MS - 6 * 60 * 1000 )) node scripts/run-with-ci-budget.mjs node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
 
       - name: Run iOS Simulator Test Harness
+        id: scenario
         working-directory: ExpoLyrics
         run: |
           set -euo pipefail
           APP_PATH="$(cat ios/.built_app_path)"
           node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 6
 
-      # Save partial candidate work even after failure. One minute here plus the
-      # two-minute artifact cap leaves margin beyond the 26-minute work deadline.
+      # Always save partial native work within a separate eight-minute reserve.
       - name: Save partial Release arm64 compiler cache
+        id: compiler_save
         if: ${{ !cancelled() && steps.candidate_build.outcome != 'skipped' && steps.compiler_cache.outputs.cache-primary-key != '' }}
-        timeout-minutes: 1
-        continue-on-error: true
+        timeout-minutes: 8
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ${{ github.workspace }}/../kinesync-ios-derived-sim
-            ${{ github.workspace }}/../kinesync-ios-ccache
+            ${{ steps.paths.outputs.derived }}
+            ${{ steps.paths.outputs.ccache }}
           key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
 
-      - name: Run Baseline Comparison (if requested)
-        # A candidate scenario failure must not skip the requested baseline evidence.
-        if: ${{ !cancelled() && steps.candidate_build.outcome == 'success' && github.event.inputs.baseline_ref != '' }}
+      - name: Verify compiler cache save on server
+        if: ${{ !cancelled() && steps.compiler_save.outcome != 'skipped' }}
+        id: compiler_verified
+        timeout-minutes: 2
         env:
-          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
-          DERIVED_BASELINE: ${{ github.workspace }}/../kinesync-ios-derived-baseline
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+        run: node ExpoLyrics/scripts/verify-ci-cache.mjs
+
+      - name: Cache diagnostics and baseline cleanup
+        if: always()
+        timeout-minutes: 1
+        env:
+          BASELINE_DIR: ${{ steps.paths.outputs.baseline }}
         run: |
-          node ExpoLyrics/scripts/run-with-ci-budget.mjs bash <<'BASELINE'
-          set -euo pipefail
-          if [ -z "${BASELINE_REF}" ]; then
-            echo "No baseline ref provided."
-            exit 0
-          fi
-
-          # Ref syntax is insufficient: baseline scripts execute only from trusted main history.
-          BASELINE_COMMIT="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
-          echo "Resolved trusted baseline commit: ${BASELINE_COMMIT}"
-
-          git worktree add ../kinesync-baseline "${BASELINE_COMMIT}"
-
-          # Apply minimal harness protocol and integration patch to baseline
-          node ExpoLyrics/scripts/prepare-baseline-harness.mjs --baseline-dir ../kinesync-baseline
-
-          pushd ../kinesync-baseline/ExpoLyrics
-          npm ci
-          npx expo prebuild --clean --platform ios
-
-          # Build baseline simulator app using consistent discovery and actual xcodebuild
-          mkdir -p "${GITHUB_WORKSPACE}/ExpoLyrics/.expo"
-          node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_BASELINE}" 2>&1 | tee "${GITHUB_WORKSPACE}/ExpoLyrics/.expo/build-baseline-simulator.log"
-          BASELINE_APP="$(cat ios/.built_app_path)"
-
-          BASELINE_STATUS=0
-          node scripts/run-ios-simulator-test.mjs --app-path "${BASELINE_APP}" --output-dir "${GITHUB_WORKSPACE}/ExpoLyrics/.expo/baseline-test-output" --timeout-minutes 6 || BASELINE_STATUS=$?
-          popd
-
-          # Compare branch vs baseline screenshots
-          COMPARISON_STATUS=0
-          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir ExpoLyrics/.expo/simulator-test-output --baseline-dir ExpoLyrics/.expo/baseline-test-output --baseline-ref "${BASELINE_REF}" --output ExpoLyrics/.expo/comparison-report.md || COMPARISON_STATUS=$?
-          cat ExpoLyrics/.expo/comparison-report.md >> "${GITHUB_STEP_SUMMARY}"
-          if [ "${BASELINE_STATUS}" -ne 0 ] || [ "${COMPARISON_STATUS}" -ne 0 ]; then exit 1; fi
-
-          BASELINE
+          mkdir -p ExpoLyrics/.expo
+          { ccache --show-stats || true; du -sh "${DERIVED_DATA_PATH}" "${CCACHE_DIR}" "${{ steps.paths.outputs.pods }}" "${{ steps.paths.outputs.cocoapods }}" "${{ steps.paths.outputs.pods_downloads }}" || true; } 2>&1 | tee ExpoLyrics/.expo/cache-diagnostics.log
+          git worktree remove --force "${BASELINE_DIR}" || true
 
       - name: Publish Step Summary
         if: always()
+        env:
+          STEP_RESULTS: ${{ toJSON(steps) }}
+          VARIANT: ${{ matrix.variant }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
         run: |
+          mkdir -p ExpoLyrics/.expo
+          node --input-type=module <<'STATUS'
+          import fs from 'node:fs';
+          const steps = JSON.parse(process.env.STEP_RESULTS);
+          const baselineFile = 'ExpoLyrics/.expo/baseline-commit.txt';
+          const status = { variant: process.env.VARIANT, candidate: process.env.CANDIDATE_SHA, baselineRef: process.env.BASELINE_REF,
+            baseline: fs.existsSync(baselineFile) ? fs.readFileSync(baselineFile, 'utf8').trim() : 'unresolved/not requested',
+            steps: Object.fromEntries(['paths', 'baseline_prep', 'dependencies', 'prebuild', 'install_pods', 'pods_save', 'pods_verified', 'candidate_build', 'scenario', 'compiler_save', 'compiler_verified'].map(id => [id, steps[id]?.outcome === 'skipped' ? 'skipped (not applicable or earlier failure)' : steps[id]?.outcome || 'not reached (earlier failure)'])) };
+          fs.writeFileSync('ExpoLyrics/.expo/status-manifest.json', JSON.stringify(status, null, 2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n## ${status.variant} status\n\nCandidate: ${status.candidate}\nBaseline: ${status.baseline}\n\n` + Object.entries(status.steps).map(([id, outcome]) => `- ${id}: ${outcome}\n`).join(''));
+          STATUS
           for report in ExpoLyrics/.expo/{simulator,baseline}-test-output/{simulator-summary,runner-failure}.md; do
             if [ -f "${report}" ]; then cat "${report}" >> "${GITHUB_STEP_SUMMARY}"; fi
           done
@@ -231,11 +296,61 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ios-simulator-test-artifacts
+          name: ios-simulator-${{ matrix.variant }}-artifacts
           path: |
             ExpoLyrics/.expo/simulator-test-output/
             ExpoLyrics/.expo/comparison-report.md
             ExpoLyrics/.expo/*.log
-            ExpoLyrics/.expo/baseline-test-output/
+            ExpoLyrics/.expo/status-manifest.json
+            ExpoLyrics/.expo/*-commit.txt
+            ExpoLyrics/.expo/cache-verification-*.json
           include-hidden-files: true
           retention-days: 14
+
+  compare:
+    needs: ios-simulator-test
+    if: ${{ always() && !cancelled() && github.event.inputs.baseline_ref != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+        working-directory: ExpoLyrics
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ios-simulator-*-artifacts
+          path: comparison-input
+      - name: Compare all required screenshot pairs
+        id: comparison
+        env:
+          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+        run: |
+          BASELINE_SHA="$(cat comparison-input/ios-simulator-baseline-artifacts/baseline-commit.txt)"
+          test -n "${BASELINE_SHA}"
+          node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir comparison-input/ios-simulator-candidate-artifacts/simulator-test-output --baseline-dir comparison-input/ios-simulator-baseline-artifacts/simulator-test-output --baseline-ref "${BASELINE_SHA}" --output comparison-report.md
+      - name: Publish comparison summary
+        if: always()
+        env:
+          COMPARISON_OUTCOME: ${{ steps.comparison.outcome }}
+          BUILD_RESULT: ${{ needs.ios-simulator-test.result }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'STATUS'
+          import fs from 'node:fs';
+          const status = { candidate: process.env.CANDIDATE_SHA, builds: process.env.BUILD_RESULT, comparison: process.env.COMPARISON_OUTCOME || 'not reached (preparation/download failure)' };
+          fs.writeFileSync('comparison-status.json', JSON.stringify(status, null, 2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nComparison status: ${status.comparison}; build jobs: ${status.builds}; candidate: ${status.candidate}\n`);
+          STATUS
+          if [ -f comparison-report.md ]; then cat comparison-report.md >> "${GITHUB_STEP_SUMMARY}"; else echo "Comparison unavailable; inspect failed preparation/download steps." >> "${GITHUB_STEP_SUMMARY}"; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ios-simulator-comparison
+          path: |
+            comparison-report.md
+            comparison-status.json
