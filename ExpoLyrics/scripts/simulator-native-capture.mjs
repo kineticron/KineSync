@@ -8,7 +8,7 @@ import { nativePNGMetadata } from './simulator-png-metadata.mjs';
 
 export const APP_BUNDLE = 'dev.kineticron.KineSync';
 export function validateCaptureAttestation(response, request, udid) {
-  if (Object.entries(request).some(([key, value]) => response[key] !== value) || response.observedUDID !== udid || response.bundle !== APP_BUNDLE || response.foreground !== 'true' || response.deviceOrientation !== request.orientation) throw Error('Native capture attestation ownership/foreground mismatch');
+  if (Object.entries(request).some(([key, value]) => response[key] !== value) || response.observedUDID !== udid || response.bundle !== APP_BUNDLE || response.foreground !== 'true' || response.deviceOrientation !== request.orientation || response.captureSource !== (request.orientation === 'landscape' ? 'XCUIWindow' : 'XCUIScreen')) throw Error('Native capture attestation ownership/foreground mismatch');
   const width = Number(response.windowWidth), height = Number(response.windowHeight);
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || (request.orientation === 'landscape' ? width <= height : height <= width)) throw Error('Native capture attestation window geometry mismatch');
 }
@@ -67,9 +67,9 @@ export function configureCaptureTransport(configuration, mailbox, session) {
 }
 
 export class NativeCapture {
-  constructor({ mailbox, session, udid, state, alive = () => true, pause = () => new Promise(resolve => setTimeout(resolve, 20)), command = startupCommand }) {
+  constructor({ mailbox, session, udid, state, alive = () => true, pause = () => new Promise(resolve => setTimeout(resolve, 20)) }) {
     if (typeof session !== 'string' || !/^[a-f0-9-]{36}$/i.test(session)) throw Error('Invalid native capture session');
-    Object.assign(this, { mailbox, session, udid, state, alive, pause, command });
+    Object.assign(this, { mailbox, session, udid, state, alive, pause });
   }
   async capture(destination, { run, stage, token, orientation }) {
     if (!run || !stage || token !== `${run}_${stage}` || !['portrait', 'landscape'].includes(orientation)) throw Error('Invalid native capture request ownership');
@@ -96,10 +96,6 @@ export class NativeCapture {
       if (Object.entries(request).some(([key, value]) => response[key] !== value)) throw Error('Stale native capture response ownership');
       validateCaptureAttestation(response, request, this.udid);
       record.before = response;
-      if (orientation === 'landscape') {
-        fs.copyFileSync(pngFile, path.join(this.mailbox, `${request.id}-xctest.png`));
-        await this.command('xcrun', ['simctl', 'io', this.udid, 'screenshot', '--type=png', pngFile], this.state, undefined, 30000);
-      }
       const after = { ...request, id: randomUUID(), phase: 'after' };
       const afterFile = path.join(this.mailbox, `${after.id}.json`);
       fs.writeFileSync(path.join(this.mailbox, 'request.json.tmp'), JSON.stringify(after));
@@ -115,7 +111,7 @@ export class NativeCapture {
       validateCaptureAttestation(observedAfter, after, this.udid);
       record.after = observedAfter;
       fs.rmSync(afterFile);
-      record.source = orientation === 'landscape' ? 'simctl-framebuffer' : 'XCUIScreen';
+      record.source = response.captureSource;
       const bytes = fs.readFileSync(pngFile);
       // Retain the untouched API output even when decoding or orientation validation fails.
       fs.writeFileSync(destination, bytes);

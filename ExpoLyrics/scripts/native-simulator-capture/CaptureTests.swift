@@ -34,7 +34,8 @@ final class CaptureTests: XCTestCase {
                     XCTFail("Invalid native capture ownership"); return
                 }
                 let app = XCUIApplication(bundleIdentifier: "dev.kineticron.KineSync")
-                let frame = app.windows.firstMatch.frame
+                let window = app.windows.firstMatch
+                let frame = window.frame
                 let deviceOrientation = XCUIDevice.shared.orientation
                 let landscape = deviceOrientation == .landscapeLeft || deviceOrientation == .landscapeRight
                 var response = request
@@ -44,8 +45,15 @@ final class CaptureTests: XCTestCase {
                 response["deviceOrientation"] = landscape ? "landscape" : deviceOrientation == .portrait ? "portrait" : "unknown"
                 response["windowWidth"] = String(Double(frame.width))
                 response["windowHeight"] = String(Double(frame.height))
+                response["captureSource"] = request["orientation"] == "landscape" ? "XCUIWindow" : "XCUIScreen"
                 if request["phase"] == "before" {
-                    let screenshot = XCUIScreen.main.screenshot()
+                    // Preserve physical-screen output as diagnostics; never transform it.
+                    let screenScreenshot = XCUIScreen.main.screenshot()
+                    if request["orientation"] == "landscape" {
+                        try screenScreenshot.pngRepresentation.write(to: root.appendingPathComponent("\(id)-xctest.png"), options: .atomic)
+                    }
+                    // Public XCTest window capture, not an app redraw or host pixel conversion.
+                    let screenshot = request["orientation"] == "landscape" ? window.screenshot() : screenScreenshot
                     try screenshot.pngRepresentation.write(to: root.appendingPathComponent("\(id).png"), options: .atomic)
                 }
                 try write(response, "\(id).json")

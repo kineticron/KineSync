@@ -361,7 +361,7 @@ if (name === 'xcodebuild') {
    const source = process.env.SIM_CASE === 'blank' || process.env.SIM_CASE === 'unstable' && count % 2 ? 'blank.png' : landscape ? 'landscape.png' : 'portrait.png';
    fs.copyFileSync(path.join(dir, source), path.join(mailbox, request.id + '.png'));
    fs.writeFileSync(path.join(mailbox, request.id + '.png.source'), source);
-   fs.writeFileSync(path.join(mailbox, request.id + '.json'), JSON.stringify({ ...request, observedUDID: request.udid, bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: request.orientation, windowWidth: request.orientation === 'landscape' ? '200' : '100', windowHeight: request.orientation === 'landscape' ? '100' : '200' }));
+   fs.writeFileSync(path.join(mailbox, request.id + '.json'), JSON.stringify({ ...request, observedUDID: request.udid, bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: request.orientation, captureSource: request.orientation === 'landscape' ? 'XCUIWindow' : 'XCUIScreen', windowWidth: request.orientation === 'landscape' ? '200' : '100', windowHeight: request.orientation === 'landscape' ? '100' : '200' }));
   }, 5);
   return;
  }
