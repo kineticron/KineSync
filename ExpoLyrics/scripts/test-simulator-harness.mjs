@@ -1,3 +1,4 @@
+import './test-simulator-initialization.cjs';
 // Unit and integration tests for simulator test harness components
 // Validates clock monotonicity, log parser assertions, adversarial log detection, and screenshot comparison
 

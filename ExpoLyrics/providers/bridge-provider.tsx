@@ -159,6 +159,9 @@ export function BridgeProvider({ children }: PropsWithChildren) {
     }
 
     if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { notifySimulatorAppInitialized } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      notifySimulatorAppInitialized();
       setShowOnboarding(false);
       setOnboardingChecked(true);
       return;

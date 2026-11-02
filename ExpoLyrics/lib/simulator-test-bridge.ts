@@ -40,6 +40,22 @@ type LayoutWaiter = {
   timeoutHandle: ReturnType<typeof setTimeout>;
 };
 
+// A startup barrier, never a renderer-ready signal. Persisted defaults must finish
+// before the test fixture owns playback/session state.
+let appInitialized = false;
+const appInitializedWaiters = new Set<() => void>();
+export function notifySimulatorAppInitialized(): void {
+  if (!isSimulatorTestActive()) return;
+  appInitialized = true;
+  for (const resolve of appInitializedWaiters) resolve();
+  appInitializedWaiters.clear();
+}
+export function onSimulatorAppInitialized(callback: () => void): () => void {
+  if (appInitialized) callback();
+  else appInitializedWaiters.add(callback);
+  return () => { appInitializedWaiters.delete(callback); };
+}
+
 let eventSequence = 0;
 let latestReadyEvent: RendererReadyEvent | null = null;
 let latestLayoutEvent: LayoutChangeEvent | null = null;

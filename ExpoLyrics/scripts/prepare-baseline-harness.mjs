@@ -48,6 +48,7 @@ export function prepareBaselineHarness(options = {}) {
     'ExpoLyrics/scripts/parse-simulator-logs.mjs',
     'ExpoLyrics/scripts/compare-simulator-screenshots.mjs',
     'ExpoLyrics/scripts/test-simulator-harness.mjs',
+    'ExpoLyrics/scripts/test-simulator-initialization.cjs',
     'ExpoLyrics/scripts/test-simulator-protocol.mjs',
     'ExpoLyrics/scripts/test-simulator-build.mjs',
     'ExpoLyrics/scripts/test-simulator-baseline.mjs',

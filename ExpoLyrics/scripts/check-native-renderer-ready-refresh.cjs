@@ -132,7 +132,7 @@ const modules = {
   'react/jsx-runtime': { jsx, jsxs: jsx },
 };
 const viewModule = { exports: {} };
-vm.runInNewContext(viewCode, { __DEV__: false, module: viewModule, exports: viewModule.exports,
+vm.runInNewContext(viewCode, { __DEV__: false, process: { env: {} }, module: viewModule, exports: viewModule.exports,
   require: name => { assert(name in modules, `native view mock missing ${name}`); return modules[name]; } });
 const NativeLyricsView = viewModule.exports.NativeLyricsView;
 const lyrics = [{ lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'x', startTime: 0, endTime: 1000 }] }];

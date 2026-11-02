@@ -156,7 +156,8 @@ export class SimulatorTestHarness {
     console.info('[KINESYNC_SIM] INIT_BEGIN');
 
     // Force mobile session so listening empty state does not obscure the player
-    useSpotifySessionStore.setState({ signedIn: true, loggedOut: false });
+    useSpotifySessionStore.getState().setLoggedOut(false);
+    useSpotifySessionStore.setState({ signedIn: true });
     usePlaybackStore.setState({ playbackMode: 'mobile' });
 
     this.heartbeat.start(20);
