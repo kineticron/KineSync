@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import plist from 'plist';
 import { randomUUID, createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { startupCommand } from './simulator-startup.mjs';
@@ -7,19 +8,28 @@ import { startupCommand } from './simulator-startup.mjs';
 export const CAPTURE_BUNDLE = 'dev.kineticron.simulator-capture.xctrunner';
 
 // One XCTest process owns the native capture mailbox for this simulator run.
-export async function startNativeCapture(state, udid, startTransport) {
+export async function startNativeCapture(state, udid, startTransport, { command = startupCommand, pause = () => new Promise(resolve => setTimeout(resolve, 50)) } = {}) {
   const project = new URL('./native-simulator-capture/Capture.xcodeproj', import.meta.url).pathname;
   const derived = path.resolve(state.outputDir, 'diagnostics/native-capture-build');
   const args = ['-project', project, '-scheme', 'Capture', '-configuration', 'Release', '-destination', `platform=iOS Simulator,id=${udid}`, '-derivedDataPath', derived, '-parallel-testing-enabled', 'NO', 'CODE_SIGNING_ALLOWED=NO'];
   state.update('startup:native-capture-build');
-  await startupCommand('xcodebuild', [...args, 'build-for-testing'], state);
-  const runner = path.join(derived, 'Build/Products/Release-iphonesimulator/Capture-Runner.app');
-  await startupCommand('xcrun', ['simctl', 'install', udid, runner], state);
-  const container = (await startupCommand('xcrun', ['simctl', 'get_app_container', udid, CAPTURE_BUNDLE, 'data'], state)).trim();
-  if (!container || !fs.existsSync(container)) throw Error('Native capture container unavailable');
-  const mailbox = path.join(container, 'Library/Caches/kinesync-capture');
+  await command('xcodebuild', [...args, 'build-for-testing'], state);
+  // XCTest reinstalls its runner. Do not bind transport to a pre-launch container.
+  const mailbox = path.resolve(state.outputDir, 'diagnostics/native-capture-mailbox');
   fs.rmSync(mailbox, { recursive: true, force: true });
-  const child = startTransport('xcodebuild', [...args, 'test-without-building'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  fs.mkdirSync(mailbox, { recursive: true });
+  const session = randomUUID();
+  const products = path.join(derived, 'Build/Products');
+  const manifests = fs.readdirSync(products).filter(name => name.endsWith('.xctestrun') && name !== 'Capture-mailbox.xctestrun');
+  if (manifests.length !== 1) throw Error('Expected one native capture xctestrun manifest');
+  const manifest = path.join(products, manifests[0]);
+  const configuration = plist.parse(fs.readFileSync(manifest, 'utf8'));
+  configureCaptureTransport(configuration, mailbox, session);
+  // Preserve __TESTROOT__ resolution by writing beside the generated manifest.
+  const configured = path.join(products, 'Capture-mailbox.xctestrun');
+  fs.writeFileSync(configured, plist.build(configuration));
+  fs.writeFileSync(path.join(state.outputDir, 'native-capture-startup.json'), JSON.stringify({ mailbox, session, manifest, configured }));
+  const child = startTransport('xcodebuild', ['-xctestrun', configured, '-destination', `platform=iOS Simulator,id=${udid}`, '-parallel-testing-enabled', 'NO', 'test-without-building'], { stdio: ['ignore', 'pipe', 'pipe'] });
   state.children.push(child);
   let stopped = false;
   child.once('error', () => { stopped = true; });
@@ -28,10 +38,24 @@ export async function startNativeCapture(state, udid, startTransport) {
   while (!fs.existsSync(path.join(mailbox, 'ready.json'))) {
     state.check();
     if (stopped) throw Error('Native capture runner exited before readiness');
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await pause();
   }
-  const { session } = JSON.parse(fs.readFileSync(path.join(mailbox, 'ready.json')));
+  state.check();
+  if (stopped) throw Error('Native capture runner exited before readiness');
+  const ready = JSON.parse(fs.readFileSync(path.join(mailbox, 'ready.json')));
+  if (ready.session !== session || ready.mailbox !== mailbox) throw Error('Native capture readiness ownership mismatch');
+  fs.writeFileSync(path.join(state.outputDir, 'native-capture-ready.json'), JSON.stringify(ready));
   return new NativeCapture({ mailbox, session, udid, state, alive: () => !stopped });
+}
+
+export function configureCaptureTransport(configuration, mailbox, session) {
+  const target = configuration.Capture;
+  if (configuration.__xctestrun_metadata__?.FormatVersion !== 1 ||
+      target?.TestHostBundleIdentifier !== CAPTURE_BUNDLE || !target.IsUITestBundle) {
+    throw Error('Unexpected native capture xctestrun configuration');
+  }
+  target.EnvironmentVariables = { ...target.EnvironmentVariables,
+    KINESYNC_CAPTURE_MAILBOX: mailbox, KINESYNC_CAPTURE_SESSION: session };
 }
 
 export class NativeCapture {

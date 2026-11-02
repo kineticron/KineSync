@@ -4,14 +4,24 @@ import XCTest
 final class CaptureTests: XCTestCase {
     func testCaptureMailbox() throws {
         let files = FileManager.default
-        let root = files.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("kinesync-capture", isDirectory: true)
+        let environment = ProcessInfo.processInfo.environment
+        NSLog("KINESYNC_CAPTURE body entered pid=%d home=%@ caches=%@", ProcessInfo.processInfo.processIdentifier,
+              NSHomeDirectory(), files.urls(for: .cachesDirectory, in: .userDomainMask)[0].path)
+        NSLog("KINESYNC_CAPTURE HOME=%@ CFFIXED_USER_HOME=%@", environment["HOME"] ?? "<unset>",
+              environment["CFFIXED_USER_HOME"] ?? "<unset>")
+        guard let mailbox = environment["KINESYNC_CAPTURE_MAILBOX"], mailbox.hasPrefix("/"),
+              let session = environment["KINESYNC_CAPTURE_SESSION"], UUID(uuidString: session) != nil else {
+            XCTFail("Missing explicit native capture transport configuration"); return
+        }
+        let root = URL(fileURLWithPath: mailbox, isDirectory: true)
+        NSLog("KINESYNC_CAPTURE mailbox=%@ session=%@", mailbox, session)
         try files.createDirectory(at: root, withIntermediateDirectories: true)
-        let session = UUID().uuidString
         func write(_ value: [String: Any], _ name: String) throws {
             try JSONSerialization.data(withJSONObject: value).write(to: root.appendingPathComponent(name), options: .atomic)
         }
-        try write(["session": session], "ready.json")
+        try write(["session": session, "mailbox": mailbox, "home": NSHomeDirectory(),
+                   "pid": ProcessInfo.processInfo.processIdentifier], "ready.json")
+        NSLog("KINESYNC_CAPTURE ready published")
         let deadline = Date().addingTimeInterval(40 * 60)
         while Date() < deadline {
             let requestURL = root.appendingPathComponent("request.json")

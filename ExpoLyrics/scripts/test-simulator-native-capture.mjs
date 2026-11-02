@@ -5,13 +5,56 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { createRequire } from 'node:module';
-import { NativeCapture } from './simulator-native-capture.mjs';
+import { NativeCapture, configureCaptureTransport, startNativeCapture } from './simulator-native-capture.mjs';
 const xcode = createRequire(import.meta.url)('xcode');
 const project = xcode.project(new URL('./native-simulator-capture/Capture.xcodeproj/project.pbxproj', import.meta.url).pathname);
 project.parseSync();
 assert.equal(Object.values(project.hash.project.objects).filter(target => typeof target === 'object' && target.productType === '"com.apple.product-type.bundle.ui-testing"').length, 1);
+const configuration = { Capture: { TestHostBundleIdentifier: 'dev.kineticron.simulator-capture.xctrunner', IsUITestBundle: true,
+  EnvironmentVariables: { DYLD_LIBRARY_PATH: '__TESTROOT__/libs' }, TestHostPath: '__TESTROOT__/runner' },
+  __xctestrun_metadata__: { FormatVersion: 1 } };
+configureCaptureTransport(configuration, '/explicit/mailbox', 'host-session');
+assert.equal(configuration.Capture.EnvironmentVariables.KINESYNC_CAPTURE_MAILBOX, '/explicit/mailbox');
+assert.equal(configuration.Capture.EnvironmentVariables.KINESYNC_CAPTURE_SESSION, 'host-session');
+assert.equal(configuration.Capture.EnvironmentVariables.DYLD_LIBRARY_PATH, '__TESTROOT__/libs');
+assert.equal(configuration.Capture.TestHostPath, '__TESTROOT__/runner');
+assert.throws(() => configureCaptureTransport({}, '/mailbox', 'session'), /Unexpected/);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-capture-test-'));
 try {
+  // Execute startup with a runner whose cache/container is deliberately unrelated.
+  // Host readiness must come from the manifest, carry the host nonce, and be live.
+  const { EventEmitter } = await import('node:events');
+  const plist = (await import('plist')).default;
+  for (const mode of ['ready', 'stale', 'wrong-path', 'exit', 'timeout']) {
+    const outputDir = path.join(root, `startup-${mode}`); fs.mkdirSync(outputDir);
+    const oldMailbox = path.join(outputDir, 'diagnostics/native-capture-mailbox');
+    fs.mkdirSync(oldMailbox, { recursive: true });
+    fs.writeFileSync(path.join(oldMailbox, 'ready.json'), JSON.stringify({ session: 'stale-before-launch' }));
+    let checks = 0, child;
+    const state = { outputDir, children: [], update() {}, check() { if (++checks > 8) throw Error('startup timeout'); } };
+    const command = async (cmd, args) => {
+      assert.equal(cmd, 'xcodebuild'); assert.ok(args.includes('build-for-testing'));
+      const products = path.join(args[args.indexOf('-derivedDataPath') + 1], 'Build/Products');
+      fs.mkdirSync(products, { recursive: true });
+      fs.writeFileSync(path.join(products, 'Capture.xctestrun'), plist.build(configuration));
+    };
+    const transport = (cmd, args) => {
+      child = new EventEmitter();
+      assert.ok(!args.includes('-project'));
+      const manifest = plist.parse(fs.readFileSync(args[args.indexOf('-xctestrun') + 1], 'utf8'));
+      const env = manifest.Capture.EnvironmentVariables;
+      const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
+      assert.ok(!fs.existsSync(path.join(mailbox, 'ready.json')), 'Old readiness must be removed before launch');
+      if (mode !== 'timeout' && mode !== 'exit') fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({
+        session: mode === 'stale' ? 'old-session' : env.KINESYNC_CAPTURE_SESSION,
+        mailbox: mode === 'wrong-path' ? '/other/cache' : mailbox }));
+      if (mode === 'exit') queueMicrotask(() => child.emit('close', 7));
+      return child;
+    };
+    const pending = startNativeCapture(state, 'device', transport, { command, pause: async () => {} });
+    if (mode === 'ready') assert.equal((await pending).mailbox, path.join(outputDir, 'diagnostics/native-capture-mailbox'));
+    else await assert.rejects(pending, /ownership mismatch|exited before readiness|startup timeout/);
+  }
   const portrait = PNG.sync.write(new PNG({ width: 3, height: 5 }));
   const landscape = PNG.sync.write(new PNG({ width: 5, height: 3 }));
   const session = '12345678-1234-1234-1234-123456789abc';

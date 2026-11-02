@@ -329,10 +329,18 @@ if (name === 'node') {
 }
 if (name === 'xcodebuild') {
  if (args.includes('-version')) console.log('Xcode 26.6');
+ if (args.includes('build-for-testing')) {
+  const products = path.join(args[args.indexOf('-derivedDataPath') + 1], 'Build/Products');
+  fs.mkdirSync(products, { recursive: true });
+  const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
+  fs.writeFileSync(path.join(products, 'Capture.xctestrun'), plist.build({ Capture: { TestHostBundleIdentifier: 'dev.kineticron.simulator-capture.xctrunner', IsUITestBundle: true }, __xctestrun_metadata__: { FormatVersion: 1 } }));
+ }
  if (args.includes('test-without-building')) {
-  const mailbox = path.join(dir, 'capture-runner/Library/Caches/kinesync-capture');
+  const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
+  const env = plist.parse(fs.readFileSync(args[args.indexOf('-xctestrun') + 1], 'utf8')).Capture.EnvironmentVariables;
+  const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
   fs.mkdirSync(mailbox, { recursive: true });
-  fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: '12345678-1234-1234-1234-123456789abc' }));
+  fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: env.KINESYNC_CAPTURE_SESSION, mailbox }));
   setInterval(() => {
    const file = path.join(mailbox, 'request.json');
    if (!fs.existsSync(file)) return;
