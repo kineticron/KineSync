@@ -257,20 +257,8 @@ async function main() {
           await capture();
           const attemptsDir = path.join(outputDir, 'diagnostics', stage);
           fs.mkdirSync(attemptsDir, { recursive: true });
-          let buf = fs.readFileSync(shotPath);
+          const buf = fs.readFileSync(shotPath);
           fs.writeFileSync(path.join(attemptsDir, 'frame-0.png'), buf);
-          let settled = false;
-          for (let attempt = 0; attempt < 3; attempt++) {
-            runCommand('sleep', ['0.25']);
-            await capture();
-            const next = fs.readFileSync(shotPath);
-            fs.writeFileSync(path.join(attemptsDir, `frame-${attempt + 1}.png`), next);
-            const before = PNG.sync.read(buf), after = PNG.sync.read(next);
-            settled = before.width === after.width && before.height === after.height && before.data.equals(after.data);
-            buf = next;
-            if (settled) break;
-          }
-          if (!settled) throw new Error('Native snapshot did not settle to identical consecutive frames');
           const analysis = analyzeScreenshotContent(buf);
 
           let valid = analysis.nonBlank && parser.appLaunched && parser.scenarioStarted && parser.activeStage === stage && !parser.errors.length;

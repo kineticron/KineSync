@@ -389,9 +389,6 @@ jobs:
           test "${BASELINE_SHA}" = e9abf50510b84db9f9f3a20c6f45ceb11685771f
           test "${{ needs.ios-simulator-test.result }}" = success
           node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir comparison-input/ios-simulator-candidate-artifacts/simulator-test-output --baseline-dir comparison-input/ios-simulator-baseline-artifacts/simulator-test-output --baseline-ref "${BASELINE_SHA}" --output comparison-report.md
-      - name: Report screenshot artifacts to Kat
-        if: success()
-        run: echo "Kat, both candidate and pinned-main screenshot artifacts are available for review. No visual verdict was applied." >> "${GITHUB_STEP_SUMMARY}"
       - name: Publish comparison summary
         if: always()
         env:
@@ -414,3 +411,9 @@ jobs:
             comparison-report.md
             comparison-status.json
             comparison-report.md.manifest.json
+            comparison-input/
+          if-no-files-found: error
+
+      - name: Report screenshot artifacts to Kat
+        if: success()
+        run: echo "Kat, both candidate and pinned-main screenshot artifacts are available for review. No visual verdict was applied." >> "${GITHUB_STEP_SUMMARY}"

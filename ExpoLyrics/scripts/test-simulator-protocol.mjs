@@ -360,4 +360,13 @@ function testManualWorkflow() {
   assert.ok(compare.if.includes('always()'));
   assert.ok(compare.steps.some(step => step.name === 'Publish comparison summary' && step.if === 'always()'));
   assert.ok(steps.find(step => step.name === 'Upload Simulator Test Artifacts').if === 'always()');
+  const upload = steps.find(step => step.name === 'Upload Simulator Test Artifacts');
+  assert.equal(upload['continue-on-error'], undefined, 'Upload failure must fail the job');
+  assert.equal(upload.with['if-no-files-found'], 'error');
+  assert.deepEqual(workflow.jobs['ios-simulator-test'].strategy.matrix.variant, ['candidate', 'baseline']);
+  assert.equal(baseline.env.BASELINE_REF, 'e9abf50510b84db9f9f3a20c6f45ceb11685771f');
+  const acceptance = compare.steps.find(step => step.id === 'comparison');
+  assert.match(acceptance.run, /needs.ios-simulator-test.result/);
+  assert.equal(acceptance['continue-on-error'], undefined);
+
 }

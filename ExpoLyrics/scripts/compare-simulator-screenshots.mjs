@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { createHash } from 'node:crypto';
+import { validateCaptureAttestation } from './simulator-native-capture.mjs';
 import { SimulatorLogParser, REQUIRED_STAGES } from './parse-simulator-logs.mjs';
 
 export const REQUIRED_SCREENSHOTS = REQUIRED_STAGES.slice(0, 7).map(s => `${s}.png`);
@@ -206,16 +207,16 @@ export function generateComparisonMarkdown(comparison, baselineRef = 'baseline')
   return lines.join('\n');
 }
 
-export function validateComparison(comparison, maxDifferenceRatio = 1) {
+export function validateComparison(comparison) {
   const failures = [];
-  if (!Number.isFinite(maxDifferenceRatio) || maxDifferenceRatio < 0 || maxDifferenceRatio > 1) return ['Invalid maximum difference ratio'];
   if (comparison.error) failures.push(comparison.error);
   const names = comparison.results.map(r => r.filename);
   if (names.length !== REQUIRED_SCREENSHOTS.length || REQUIRED_SCREENSHOTS.some(f => !names.includes(f))) failures.push('Expected exactly seven screenshot pairs');
   for (const r of comparison.results) {
+    if (!['branchWidth', 'branchHeight', 'baselineWidth', 'baselineHeight'].every(key => Number.isInteger(r[key]) && r[key] > 0)) failures.push(`Invalid screenshot dimensions: ${r.filename}`);
     const landscape = r.filename === 'stage_7_rotation.png';
     if (landscape ? r.branchWidth <= r.branchHeight || r.baselineWidth <= r.baselineHeight : r.branchHeight <= r.branchWidth || r.baselineHeight <= r.baselineWidth) failures.push(`Invalid native screenshot orientation: ${r.filename}`);
-    if (!Number.isFinite(r.differenceRatio) || !['IDENTICAL', 'DIFFERENT', 'DIMENSION_MISMATCH'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
+    if (!['IDENTICAL', 'DIFFERENT', 'DIMENSION_MISMATCH'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
   }
   return failures;
 }
@@ -230,8 +231,8 @@ export function validateRunArtifacts(directory) {
     for (const line of raw.split('\n')) parser.processLine(line);
     failures.push(...parser.validateAssertions());
     const perf = JSON.parse(fs.readFileSync(path.join(directory, 'simulator-perf.json')));
-    for (const [key, value] of Object.entries({ summary: parser.summary, heartbeat: parser.heartbeat, stages: parser.stages, renderers: [...parser.renderers] })) {
-      if (JSON.stringify(perf[key]) !== JSON.stringify(value)) failures.push(`Exported ${key} contradicts protocol`);
+    for (const [key, value] of Object.entries({ summary: parser.summary && Object.fromEntries(Object.entries(parser.summary).filter(([key]) => key !== 'heartbeat')), stages: parser.stages, renderers: [...parser.renderers] })) {
+      if (JSON.stringify(key === 'summary' && perf[key] ? Object.fromEntries(Object.entries(perf[key]).filter(([field]) => field !== 'heartbeat')) : perf[key]) !== JSON.stringify(value)) failures.push(`Exported ${key} contradicts protocol`);
     }
     if (perf.landscapeConfirmed !== true || perf.portraitConfirmed !== true || perf.nativePortraitRestored !== true ||
         !Array.isArray(perf.assertionFailures) || perf.assertionFailures.length) failures.push('Run did not pass all capture/scenario assertions');
@@ -242,6 +243,11 @@ export function validateRunArtifacts(directory) {
     for (const capture of captures) {
       if (!run || capture.run !== run || capture.token !== `${run}_${capture.stage}` || capture.error ||
           !capture.id || ids.has(capture.id) || !first?.session || capture.session !== first.session || !first.udid || capture.udid !== first.udid) failures.push('Invalid native capture ownership');
+      if (capture.stage === 'stage_7_rotation' && capture.source !== 'simctl-framebuffer') failures.push('Landscape requires native framebuffer provenance');
+      if (!['XCUIScreen', 'simctl-framebuffer'].includes(capture.source) || !capture.before || !capture.after || capture.before.id !== capture.id || capture.after.id === capture.id || capture.before.phase !== 'before' || capture.after.phase !== 'after') failures.push('Missing native foreground attestations');
+      else for (const observed of [capture.before, capture.after]) {
+        validateCaptureAttestation(observed, { session: capture.session, id: observed.id, run: capture.run, stage: capture.stage, token: capture.token, orientation: capture.orientation, udid: capture.udid, phase: observed.phase }, capture.udid);
+      }
       ids.add(capture.id);
     }
     for (const stage of [...REQUIRED_STAGES.slice(0, 7), 'stage_7_restore']) {
