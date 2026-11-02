@@ -35,11 +35,11 @@ export async function startNativeCapture(state, udid, startTransport) {
 }
 
 export class NativeCapture {
-  constructor({ mailbox, session, udid, state, alive = () => true, pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20) }) {
+  constructor({ mailbox, session, udid, state, alive = () => true, pause = () => new Promise(resolve => setTimeout(resolve, 20)) }) {
     if (typeof session !== 'string' || !/^[a-f0-9-]{36}$/i.test(session)) throw Error('Invalid native capture session');
     Object.assign(this, { mailbox, session, udid, state, alive, pause });
   }
-  capture(destination, { run, stage, token, orientation }) {
+  async capture(destination, { run, stage, token, orientation }) {
     if (!run || !stage || token !== `${run}_${stage}` || !['portrait', 'landscape'].includes(orientation)) throw Error('Invalid native capture request ownership');
     this.state.check();
     if (!this.alive()) throw Error('Native capture runner exited');
@@ -54,7 +54,7 @@ export class NativeCapture {
       while (!fs.existsSync(responseFile)) {
         this.state.check();
         if (!this.alive()) throw Error('Native capture runner exited');
-        this.pause();
+        await this.pause();
       }
       const response = JSON.parse(fs.readFileSync(responseFile));
       if (Object.entries(request).some(([key, value]) => response[key] !== value)) throw Error('Stale native capture response ownership');

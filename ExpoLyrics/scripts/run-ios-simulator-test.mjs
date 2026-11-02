@@ -209,7 +209,7 @@ async function main() {
   let screenshotRunToken;
   let nativePortraitRestored = false;
 
-  function processIncomingLine(line) {
+  async function processIncomingLine(line) {
     const trimmed = String(line || '').trim();
     if (!trimmed) return;
     if (/\[KINESYNC_SIM\] STAGE_BEGIN/.test(trimmed) && !parser.appLaunched) { parser.errors.push('Scenario began before app/bridge INIT_READY'); scenarioResolve(); return; }
@@ -255,7 +255,7 @@ async function main() {
         const shotPath = path.join(outputDir, `${stage}.png`);
         try {
           const capture = () => nativeCapture.capture(shotPath, { run: screenshotRunToken, stage, token, orientation: stage === 'stage_7_rotation' ? 'landscape' : 'portrait' });
-          capture();
+          await capture();
           const attemptsDir = path.join(outputDir, 'diagnostics', stage);
           fs.mkdirSync(attemptsDir, { recursive: true });
           let buf = fs.readFileSync(shotPath);
@@ -263,7 +263,7 @@ async function main() {
           let settled = false;
           for (let attempt = 0; attempt < 3; attempt++) {
             runCommand('sleep', ['0.25']);
-            capture();
+            await capture();
             const next = fs.readFileSync(shotPath);
             fs.writeFileSync(path.join(attemptsDir, `frame-${attempt + 1}.png`), next);
             const before = PNG.sync.read(buf), after = PNG.sync.read(next);
@@ -333,7 +333,7 @@ async function main() {
             !parser.portraitConfirmed || parser.errors.length || processedScreenshotStages.has(stage)) throw Error('Invalid portrait restoration ownership/order');
         processedScreenshotStages.add(stage);
         const restored = path.join(outputDir, 'diagnostics/restored-portrait.png');
-        const bytes = nativeCapture.capture(restored, { run: screenshotRunToken, stage, token: restore[2], orientation: 'portrait' });
+        const bytes = await nativeCapture.capture(restored, { run: screenshotRunToken, stage, token: restore[2], orientation: 'portrait' });
         if (!analyzeScreenshotContent(bytes).nonBlank) throw Error('Blank native portrait restoration');
         nativePortraitRestored = true;
         const container = runCommand('xcrun', ['simctl', 'get_app_container', device.udid, 'dev.kineticron.KineSync', 'data']).trim();
@@ -371,18 +371,21 @@ async function main() {
       readyResolve();
     }
   };
+  // Yield during native capture without allowing later protocol lines to overtake its ACK.
+  let protocolQueue = Promise.resolve();
   const streamConsumer = createLineBufferConsumer(line => {
     observeReadiness(line);
-    if (protocolArmed) processIncomingLine(line);
+    if (protocolArmed) protocolQueue = protocolQueue.then(() => processIncomingLine(line)).catch(error => failStream(error.message));
   }, chunk => appendLog(rawLogFile, chunk));
   const stderrConsumer = createLineBufferConsumer(observeReadiness);
   deviceProcess.stdout.on('data', chunk => { appendLog(deviceLog, chunk); streamConsumer(chunk); });
   // stderr is evidence only, never an alternate protocol source.
   deviceProcess.stderr.on('data', chunk => { appendLog(deviceLog, chunk); stderrConsumer(chunk); });
   deviceProcess.on('error', err => failStream(`Unified log stream failed: ${err.message}`));
-  deviceProcess.on('close', (code, signal) => {
+  deviceProcess.on('close', async (code, signal) => {
     streamConsumer.flush();
     stderrConsumer.flush();
+    if (protocolArmed) await protocolQueue;
     if (!scenarioFinished && !transportStopping) failStream(`Unified log stream exited before completion: ${code ?? signal}`);
   });
   const readinessTimeout = setInterval(() => {

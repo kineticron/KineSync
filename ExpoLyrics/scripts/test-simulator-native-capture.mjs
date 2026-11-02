@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { createRequire } from 'node:module';
@@ -31,10 +32,10 @@ try {
       } });
     const destination = path.join(dir, 'result.png');
     if (mode === 'pass') {
-      assert.deepEqual(capture.capture(destination, owner), landscape);
+      assert.deepEqual(await capture.capture(destination, owner), landscape);
       assert.deepEqual(fs.readFileSync(destination), landscape, 'Native PNG bytes must be unchanged');
     } else {
-      assert.throws(() => capture.capture(destination, owner), /dimensions invalid|ownership|exited|timeout/, mode);
+      await assert.rejects(() => capture.capture(destination, owner), /dimensions invalid|ownership|exited|timeout/, mode);
       if (mode === 'portrait-framebuffer') assert.deepEqual(fs.readFileSync(destination), portrait, 'Rejected raw framebuffer must survive without conversion');
       else assert.ok(!fs.existsSync(destination), 'Unowned response must never publish a PNG');
       if (mode === 'png-before-timeout') {
@@ -42,8 +43,21 @@ try {
         assert.deepEqual(fs.readFileSync(record.rejectedPNG), landscape, 'PNG before timeout is evidence only');
       }
     }
-    assert.throws(() => capture.capture(destination, { ...owner, token: 'stale' }), /ownership/);
+    await assert.rejects(() => capture.capture(destination, { ...owner, token: 'stale' }), /ownership/);
   }
+  const dyingDir = path.join(root, 'dies-during-request'); fs.mkdirSync(dyingDir);
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(7), 50)']);
+  let stopped = false;
+  const closed = new Promise(resolve => child.once('close', () => { stopped = true; resolve(); }));
+  child.once('error', () => { stopped = true; });
+  const started = Date.now();
+  const dyingCapture = new NativeCapture({ mailbox: dyingDir, session, udid: 'device', alive: () => !stopped,
+    state: { outputDir: dyingDir, now: Date.now, check() { if (Date.now() - started > 2000) throw Error('Scenario stage timeout'); } } });
+  try {
+    await assert.rejects(() => dyingCapture.capture(path.join(dyingDir, 'result.png'), owner), /Native capture runner exited/);
+    assert.equal(stopped, true);
+    assert.equal(child.exitCode, 7);
+  } finally { child.kill(); await closed; }
   const swift = fs.readFileSync(new URL('./native-simulator-capture/CaptureTests.swift', import.meta.url), 'utf8');
   assert.match(swift, /XCUIScreen.main.screenshot\(\)/);
   assert.match(swift, /screenshot.pngRepresentation.write/);
