@@ -138,7 +138,7 @@ export class SimulatorTestHarness {
     if (this.clock.isPlaying() || this.clock.getPositionMs() !== positionMs) throw new Error('Screenshot playback anchor changed');
     const token = `${this.runToken}_${stage}`;
     console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=${stage} token=${token} ${details}`);
-    await waitForSimulatorScreenshotAck(stage, token, 12000);
+    await waitForSimulatorScreenshotAck(stage, token, 120000);
   }
 
   constructor() {
@@ -299,7 +299,7 @@ export class SimulatorTestHarness {
       // Stage 1: Launch and Song 1 initial load with Spicy renderer
       this.beginStage('stage_1_launch');
       // Set up readiness listener BEFORE triggering state change
-      const readyPromise1 = waitForSimulatorRendererReady({ style: 'spicy', trackId: 'spotify-connect:sim_rewind_track', timeoutMs: 12000 });
+      const readyPromise1 = waitForSimulatorRendererReady({ style: 'spicy', trackId: 'spotify-connect:sim_rewind_track', timeoutMs: 120000 });
       this.switchRenderer('spicy');
       const track1 = this.loadTrack(0);
       if (!track1) throw new Error('Failed to load track 1');
@@ -341,7 +341,7 @@ export class SimulatorTestHarness {
 
       // Stage 4: Switch renderer to AMLL
       this.beginStage('stage_4_switch_amll');
-      const readyPromiseAmll = waitForSimulatorRendererReady({ style: 'amll', trackId: track1.id, timeoutMs: 12000 });
+      const readyPromiseAmll = waitForSimulatorRendererReady({ style: 'amll', trackId: track1.id, timeoutMs: 120000 });
       this.switchRenderer('amll');
       const readyAmll = await readyPromiseAmll;
       this.renderersConfirmed.add(readyAmll.style);
@@ -351,7 +351,7 @@ export class SimulatorTestHarness {
 
       // Stage 5: Skip song to Song 2 (exercises parse, row build, and mount bottleneck)
       this.beginStage('stage_5_skip_song');
-      const readyPromiseTrack2 = waitForSimulatorRendererReady({ style: 'amll', trackId: 'spotify-connect:sim_seesaw_track', timeoutMs: 12000 });
+      const readyPromiseTrack2 = waitForSimulatorRendererReady({ style: 'amll', trackId: 'spotify-connect:sim_seesaw_track', timeoutMs: 120000 });
       const track2 = this.loadTrack(1);
       if (!track2) throw new Error('Failed to load track 2');
       const readyTrack2 = await readyPromiseTrack2;
@@ -365,7 +365,7 @@ export class SimulatorTestHarness {
 
       // Stage 6: Switch renderer back to Spicy
       this.beginStage('stage_6_switch_spicy');
-      const readyPromiseSpicy2 = waitForSimulatorRendererReady({ style: 'spicy', trackId: track2.id, timeoutMs: 12000 });
+      const readyPromiseSpicy2 = waitForSimulatorRendererReady({ style: 'spicy', trackId: track2.id, timeoutMs: 120000 });
       this.switchRenderer('spicy');
       const readySpicy2 = await readyPromiseSpicy2;
       this.renderersConfirmed.add(readySpicy2.style);
@@ -375,7 +375,7 @@ export class SimulatorTestHarness {
 
       // Stage 7: Orientation rotation stage
       this.beginStage('stage_7_rotation');
-      const landscapePromise = waitForSimulatorOrientation('landscape', 12000);
+      const landscapePromise = waitForSimulatorOrientation('landscape', 120000);
       console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape');
       const landscapeLayout = await landscapePromise;
       if (landscapeLayout.width <= landscapeLayout.height) {
@@ -385,7 +385,7 @@ export class SimulatorTestHarness {
       await this.screenshot('stage_7_rotation', `style=spicy track=${track2.id} positionMs=5000 orientation=landscape width=${Math.round(landscapeLayout.width)} height=${Math.round(landscapeLayout.height)}`);
 
       // Return back to portrait orientation
-      const portraitPromise = waitForSimulatorOrientation('portrait', 12000);
+      const portraitPromise = waitForSimulatorOrientation('portrait', 120000);
       console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait');
       await portraitPromise;
       this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });

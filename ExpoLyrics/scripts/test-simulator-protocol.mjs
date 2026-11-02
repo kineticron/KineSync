@@ -157,7 +157,7 @@ function testBaselineIntegration() {
     }
     execFileSync('git', ['apply', '--reverse', patch], { cwd: dir });
     prepareBaselineHarness({ candidateDir: candidate, baselineDir: dir });
-    for (const file of ['test-simulator-timeouts.mjs', 'run-with-ci-budget.mjs', 'simulator-run-lifecycle.mjs']) {
+    for (const file of ['test-simulator-timeouts.mjs', 'test-simulator-budgets.mjs', 'run-with-ci-budget.mjs', 'simulator-run-lifecycle.mjs', 'simulator-startup.mjs']) {
       assert.equal(fs.readFileSync(path.join(dir, 'ExpoLyrics/scripts', file), 'utf8'), fs.readFileSync(path.join(root, 'scripts', file), 'utf8'), `Prepared baseline must include current ${file}`);
     }
     for (const file of fs.readdirSync(path.join(dir, 'ExpoLyrics/scripts')).filter(f => f.endsWith('.mjs'))) {
@@ -284,7 +284,7 @@ function testManualWorkflow() {
   const workflow = YAML.parse(fs.readFileSync(path.join(root, '../.github/workflows/ios-simulator-test.yml'), 'utf8'));
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   const job = workflow.jobs['ios-simulator-test'];
-  assert.equal(job['timeout-minutes'], 90);
+  assert.equal(job['timeout-minutes'], 120);
   assert.equal(job['runs-on'], 'macos-26');
   assert.equal(job.strategy['fail-fast'], false, 'Candidate failure must not cancel baseline');
   assert.ok(job.strategy.matrix.variant.includes('candidate') && job.strategy.matrix.variant.includes('baseline'));
@@ -300,7 +300,7 @@ function testManualWorkflow() {
   assert.ok(rotationTool < steps.findIndex(step => step.id === 'candidate_build'));
   assert.match(steps[selection].run, /DEVELOPER_DIR=.*pwd -P/);
   const paths = steps.find(step => step.id === 'paths');
-  assert.match(paths.run, /75 \* 60 \* 1000/);
+  assert.match(paths.run, /60 \* 60 \* 1000/);
   assert.match(paths.run, /pwd -P/);
   assert.match(steps.find(step => step.name === 'Expo prebuild (iOS)').run, /--no-install/);
   for (const [id, minutes] of [['pods_cache', 4], ['compiler_cache', 8]]) {

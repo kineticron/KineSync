@@ -44,6 +44,7 @@ export function prepareBaselineHarness(options = {}) {
     'ExpoLyrics/scripts/verify-ci-cache.mjs',
     'ExpoLyrics/scripts/test-ci-cache.mjs',
     'ExpoLyrics/scripts/test-simulator-timeouts.mjs',
+    'ExpoLyrics/scripts/test-simulator-budgets.mjs',
     'ExpoLyrics/scripts/parse-simulator-logs.mjs',
     'ExpoLyrics/scripts/compare-simulator-screenshots.mjs',
     'ExpoLyrics/scripts/test-simulator-harness.mjs',

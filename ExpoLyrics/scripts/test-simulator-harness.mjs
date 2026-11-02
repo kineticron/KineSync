@@ -340,6 +340,7 @@ if (args.includes('screenshot')) {
  }
  fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') && process.env.SIM_CASE !== 'rotation-noop' ? 'landscape.png' : 'portrait.png'), dest);
 }
+if (args.includes('screenshot') && args.at(-1).includes('stage_') && process.env.SIM_CASE === 'png-timeout') { console.log('PNG written before timeout'); console.error('screenshot still running'); setInterval(() => {}, 1000); return; }
 if (args.includes('stream')) {
  if (!args.includes('--level') || args[args.indexOf('--level') + 1] !== 'debug' || args[args.indexOf('--predicate') + 1] !== 'process == "KineSync"') process.exit(98);
  if (process.env.SIM_CASE === 'stream-eof-banner') { process.stdout.write('Filtering the log data using process == KineSync', () => process.exit(0)); return; }
@@ -354,9 +355,9 @@ if (args.includes('stream')) {
   clearInterval(timer);
   if (process.env.SIM_CASE === 'stream-dies') process.exit(2);
   if (process.env.SIM_CASE === 'stalled-startup') return;
-  if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
+  if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
   if (['early-exit', 'capture-failure', 'signal'].includes(process.env.SIM_CASE)) return;
-  const logs = ${JSON.stringify(runLogs)}.map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
+  const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
   if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs.trimEnd());
@@ -386,14 +387,20 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
-    for (const file of ['launched', 'stream-ready']) fs.rmSync(path.join(dir, file), { force: true });
+  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
+    for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_1_launch.json']) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
     const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (scenario === 'png-timeout') {
+      assert.ok(fs.existsSync(path.join(output, 'stage_1_launch.png')), 'Timed-out command wrote PNG');
+      const ledger = fs.readFileSync(path.join(output, 'startup-commands.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+      assert.ok(ledger.some(r => r.args.includes('screenshot') && r.error?.signal === 'SIGKILL'));
+      assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_1_launch.json')), 'Timed-out PNG must not be acknowledged');
+    }
     if (shouldPass) {
       assert.equal(fs.readdirSync(output).filter(name => name.endsWith('.png')).length, 7);
       assert.ok(fs.existsSync(path.join(output, 'diagnostics/initial-portrait.png')));
@@ -415,13 +422,13 @@ if (args.includes('launch')) {
       assert.ok(state.error);
       for (const name of ['failure-screenshot.log', 'device-log.txt', 'metro-status.txt']) assert.ok(fs.existsSync(path.join(output, name)), `${scenario}: ${name}`);
       const screenshotLog = fs.readFileSync(path.join(output, 'failure-screenshot.log'), 'utf8');
-      assert.ok(fs.existsSync(path.join(output, 'failure.png')) || /Command failed|ETIMEDOUT|SIGKILL/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
+      assert.ok(fs.existsSync(path.join(output, 'failure.png')) || /Command failed|Command exited|ETIMEDOUT|SIGKILL|Evidence deadline exhausted/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
       if (scenario === 'rotation-hang') { assert.ok(Date.now() - started < 25000); assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('error')); }
       if (scenario === 'rotation-failure') {
         assert.ok(fs.readFileSync(path.join(output, 'rotation-native-stdout.log'), 'utf8').includes('native stdout before failure'));
-        assert.ok(fs.readFileSync(path.join(output, 'rotation-native-stderr.log'), 'utf8').includes('native stderr before failure'));
+        assert.ok(fs.readdirSync(output).filter(n => n.endsWith('-stderr.log')).some(n => fs.readFileSync(path.join(output, n), 'utf8').includes('native stderr before failure')));
       }
       if (scenario === 'initial-landscape') assert.match(state.error, /Initial native portrait/);
       if (scenario === 'signal') assert.match(state.error, /SIGTERM/);
@@ -474,6 +481,7 @@ function cleanTemp() {
 }
 
 try {
+  await import('./test-simulator-budgets.mjs');
   testLogParser();
   testAdversarialLogParser();
   testScreenshotAnalysis();

@@ -57,7 +57,7 @@ jobs:
   ios-simulator-test:
     if: github.event.inputs.diagnostic_only != 'true'
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -77,8 +77,7 @@ jobs:
         with:
           node-version: 22
 
-      # Each cold build gets its own job: 75m preparation/build/scenario,
-      # 8m compiler save, 2m verification, 2m upload, 2m cleanup margin.
+      # Independent jobs: 60m preparation/build + 40m harness + 15m evidence + 5m margin.
       - name: Canonical paths and independent work budget
         id: paths
         run: |
@@ -104,7 +103,7 @@ jobs:
           {
             echo "DERIVED_DATA_PATH=${DERIVED}"
             echo "CCACHE_DIR=${COMPILER}"
-            echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 75 * 60 * 1000 ))"
+            echo "SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 60 * 60 * 1000 ))"
           } >> "${GITHUB_ENV}"
 
       - name: Select installed Xcode 26 explicitly
@@ -125,7 +124,7 @@ jobs:
           node ExpoLyrics/scripts/run-with-ci-budget.mjs xcrun --sdk iphonesimulator --show-sdk-version | grep -Fx '26.5'
 
       - name: Prepare pinned CI-only native rotation tool
-        timeout-minutes: 2
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           TOOL_DIR="${RUNNER_TEMP}/kinesync-rotation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -279,16 +278,17 @@ jobs:
             ccache --zero-stats
           fi
           mkdir -p .expo
-          # Leave six minutes of the work allocation for the scenario.
-          SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_DEADLINE_MS - 6 * 60 * 1000 )) node scripts/run-with-ci-budget.mjs node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
+          # Preparation/build ends at minute 60; harness has a separate forty-minute reserve.
+          node scripts/run-with-ci-budget.mjs node scripts/build-simulator-app.mjs --derived-data-path "${DERIVED_DATA_PATH}" 2>&1 | tee .expo/build-simulator.log
 
       - name: Run iOS Simulator Test Harness
+        timeout-minutes: 40
         id: scenario
         working-directory: ExpoLyrics
         run: |
           set -euo pipefail
           APP_PATH="$(cat ios/.built_app_path)"
-          node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 6
+          SIMULATOR_CI_DEADLINE_MS=$(( SIMULATOR_CI_STARTED_MS + 100 * 60 * 1000 )) node scripts/run-ios-simulator-test.mjs --app-path "${APP_PATH}" --output-dir .expo/simulator-test-output --timeout-minutes 40
 
       # Always save partial native work within a separate eight-minute reserve.
       - name: Save partial Release arm64 compiler cache

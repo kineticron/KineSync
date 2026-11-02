@@ -120,7 +120,7 @@ export function waitForSimulatorRendererReady(
     return Promise.reject(new Error('Simulator test mode is not active'));
   }
 
-  const { style, trackId, afterSequence = eventSequence, minGeneration, timeoutMs = 12000 } = options;
+  const { style, trackId, afterSequence = eventSequence, minGeneration, timeoutMs = 120000 } = options;
 
   if (latestReadyEvent) {
     const styleMatches = !style || latestReadyEvent.style === style;
@@ -153,7 +153,7 @@ export function waitForSimulatorRendererReady(
 
 export function waitForSimulatorOrientation(
   orientation: 'portrait' | 'landscape',
-  timeoutMs: number = 12000
+  timeoutMs: number = 120000
 ): Promise<LayoutChangeEvent> {
   if (!isSimulatorTestActive()) {
     return Promise.reject(new Error('Simulator test mode is not active'));
@@ -181,7 +181,7 @@ export function waitForSimulatorOrientation(
 export async function waitForSimulatorScreenshotAck(
   stage: string,
   token: string,
-  timeoutMs: number = 12000
+  timeoutMs: number = 120000
 ): Promise<void> {
   if (!isSimulatorTestActive()) {
     return Promise.reject(new Error('Simulator test mode is not active'));

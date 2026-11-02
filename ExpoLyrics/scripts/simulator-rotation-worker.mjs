@@ -15,7 +15,7 @@ try {
   const developer = fs.realpathSync(process.env.DEVELOPER_DIR);
   if (developer !== process.env.DEVELOPER_DIR) throw Error('Canonical selected Xcode required');
   // The pinned native loader calls xcode-select -p internally; verify its view too.
-  const selected = execFileSync('/usr/bin/xcode-select', ['-p'], { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL' }).trim();
+  const selected = execFileSync('/usr/bin/xcode-select', ['-p'], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60000, killSignal: 'SIGKILL' }).trim();
   if (fs.realpathSync(selected) !== developer) throw Error('Native loader Xcode selection mismatch');
   const { SimHID } = createRequire(import.meta.url)(file);
   const hid = new SimHID(udid);

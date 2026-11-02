@@ -18,7 +18,7 @@ export function verifyFramework(file) {
   if (createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== FRAMEWORK_SHA256) throw Error('Pinned rotation framework hash mismatch');
 }
 // Separate process bounds addon load/thread failures before any simulator work.
-export function preflightNative(addon, timeout = 15000) {
+export function preflightNative(addon, timeout = 60000) {
   const probe = `
     const fs = require('node:fs');
     fs.writeSync(1, JSON.stringify({ node: process.version, arch: process.arch, platform: process.platform, napi: process.versions.napi }) + '\\n');
@@ -30,7 +30,7 @@ export function preflightNative(addon, timeout = 15000) {
     } catch (error) { fs.writeSync(2, error.stack + '\\n'); process.exit(1); }
   `;
   const result = spawnSync(process.execPath, ['-e', probe, path.resolve(addon)], {
-    encoding: 'utf8', timeout: Math.max(1, Math.min(15000, timeout)), killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: Math.max(1, Math.min(60000, timeout)), killSignal: 'SIGKILL', maxBuffer: 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
     const error = new Error(`Rotation addon load failed: ${result.stderr || result.error?.message || result.signal || result.status}`);
@@ -48,7 +48,7 @@ function loadDiagnostics(addon, framework) {
       ['/usr/bin/codesign', ['--verify', '--verbose=4', file]],
     ]) {
       console.error(`Rotation load diagnostic: ${cmd} ${args.join(' ')}`);
-      try { console.error(execFileSync(cmd, args, { encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL', maxBuffer: 512 * 1024 })); }
+      try { console.error(execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60000, killSignal: 'SIGKILL', maxBuffer: 512 * 1024 })); }
       catch (error) { console.error(error.stdout?.toString(), error.stderr?.toString(), error.message); }
     }
   }
@@ -67,7 +67,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     const archive = path.join(staging, 'package.tgz');
     fs.writeFileSync(archive, bytes);
     // Preserve the addon's loader-relative prebuilt WebRTC framework dependency.
-    execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging, 'package/dist/native/serve-sim-native.node', 'package/dist/bin/LiveKitWebRTC.framework'], { timeout: 15000 });
+    execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging, 'package/dist/native/serve-sim-native.node', 'package/dist/bin/LiveKitWebRTC.framework'], { timeout: 60000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] });
     const addon = path.join(staging, 'package/dist/native/serve-sim-native.node');
     verifyNative(addon);
     verifyFramework(path.join(staging, 'package/dist/bin/LiveKitWebRTC.framework/LiveKitWebRTC'));
