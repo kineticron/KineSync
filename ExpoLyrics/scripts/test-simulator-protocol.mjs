@@ -100,6 +100,30 @@ export async function testSimulatorProtocol() {
   await files.waitForSimulatorScreenshotAck('stage', 'nonce', 10);
   assert.equal(deleted, true);
 
+  // A stale or malformed file must never unfreeze the request. A later atomic
+  // replacement is accepted without deleting another request's ACK.
+  let contents = JSON.stringify({ stage: 'stage', token: 'old' });
+  let consumed = 0;
+  const ackLogs = [];
+  const replacement = loadBridge({ Paths: { cache: '/cache' }, File: class {
+    get exists() { return true; }
+    textSync() { return contents; }
+    delete() { consumed++; }
+  } }, ackLogs);
+  const pendingAck = replacement.waitForSimulatorScreenshotAck('stage', 'current', 1000);
+  assert.equal(consumed, 0);
+  setTimeout(() => { contents = '{'; }, 20);
+  setTimeout(() => { contents = JSON.stringify({ stage: 'stage', token: 'current' }); }, 150);
+  await pendingAck;
+  assert.equal(consumed, 1);
+  assert.equal(ackLogs.filter(line => line.includes('ACK_IGNORED')).length, 1);
+  const freezes = [];
+  const unsubscribeCapture = replacement.observeSimulatorCapture(value => freezes.push(value));
+  replacement.setSimulatorCaptureFrozen(true);
+  replacement.resetSimulatorBridge();
+  unsubscribeCapture();
+  assert.deepEqual(freezes, [false, true, false]);
+
   process.env.DEVELOPER_DIR = '/explicit/Xcode.app/Contents/Developer';
   const calls = [];
   rotateSimulator('landscape', 'chosen-udid', (cmd, args) => {
@@ -200,7 +224,8 @@ async function testSnapshotAnchors() {
     module: clocks, exports: clocks.exports, performance: { now: () => now }, setInterval: () => 1, clearInterval() {},
   });
   const module = { exports: {} }, markers = [];
-  const supported = { isSimulatorTestActive: () => true, waitForSimulatorScreenshotAck: async () => {} };
+  const frozen = [];
+  const supported = { setSimulatorCaptureFrozen(value) { frozen.push(value); }, isSimulatorTestActive: () => true, waitForSimulatorScreenshotAck: async () => {} };
   vm.runInNewContext(transformSync(source, { loader: 'ts', format: 'cjs' }).code, {
     module, exports: module.exports, console: { info: line => markers.push(line) },
     require: name => name.includes('simulator-playback-clock') ? clocks.exports : name.includes('playback-store') ? { usePlaybackStore: { getState: () => ({ ingestPacket() {} }) } } : name.includes('fixtures') ? { SIMULATOR_FIXTURE_TRACKS: [{ id: 'test' }] } : supported,
@@ -221,8 +246,13 @@ async function testSnapshotAnchors() {
       await harness.screenshot(stage, `positionMs=${position}`);
       assert.equal(harness.clock.getPositionMs(), position);
       assert.equal(markers.length, before + 1);
+      assert.deepEqual(frozen.slice(-2), [true, false]);
     }
   }
+  harness.delay = async () => { throw new Error('cancelled settlement'); };
+  await assert.rejects(harness.screenshot('stage_1_launch', ''), /cancelled settlement/);
+  assert.deepEqual(frozen.slice(-2), [true, false], 'Failed settlement releases snapshot ownership');
+
 }
 
 function testMainBaselinePreparation() {

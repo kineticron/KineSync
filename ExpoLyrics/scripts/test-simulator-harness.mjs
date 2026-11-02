@@ -1,3 +1,4 @@
+import './test-simulator-marquee.mjs';
 import './test-simulator-initialization.cjs';
 // Unit and integration tests for simulator test harness components
 // Validates clock monotonicity, log parser assertions, adversarial log detection, and screenshot comparison
@@ -304,7 +305,7 @@ function testRunnerCli(logs, parser) {
   fs.writeFileSync(path.join(dir, 'landscape.png'), createTextMockPng(200, 100));
   fs.writeFileSync(path.join(dir, 'blank.png'), createSolidPng(100, 200, 0, 0, 0));
   const summary = JSON.stringify({ ...parser.summary, stages: parser.summary.stages.map(({ stage, status, durationMs }) => [stage, status, durationMs]), heartbeat: { samples: parser.heartbeat.samples } });
-  const runLogs = logs.map(line => line.includes('SCENARIO_COMPLETE') ? `[KINESYNC_SIM] SCENARIO_COMPLETE ${summary}` : line.replace(/READY_FOR_SCREENSHOT stage=(\w+)/, 'READY_FOR_SCREENSHOT stage=$1 token=run_$1'));
+  const runLogs = logs.map(line => line === '[KINESYNC_SIM] SCENARIO_START' ? line + ' token=run' : line).map(line => line.includes('SCENARIO_COMPLETE') ? `[KINESYNC_SIM] SCENARIO_COMPLETE ${summary}` : line.replace(/READY_FOR_SCREENSHOT stage=(\w+)/, 'READY_FOR_SCREENSHOT stage=$1 token=run_$1'));
   const developer = path.join(dir, 'Xcode.app/Contents/Developer');
   fs.mkdirSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS'), { recursive: true });
   fs.writeFileSync(path.join(developer, 'Applications/Simulator.app/Contents/MacOS/Simulator'), 'fixture');
@@ -356,9 +357,9 @@ if (args.includes('stream')) {
   clearInterval(timer);
   if (process.env.SIM_CASE === 'stream-dies') process.exit(2);
   if (process.env.SIM_CASE === 'stalled-startup') return;
-  if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
+  if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START token=run'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
   if (['early-exit', 'capture-failure', 'signal'].includes(process.env.SIM_CASE)) return;
-  const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
+  const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => process.env.SIM_CASE === 'stale-run' ? line.replace('token=run_stage_1_launch', 'token=old_stage_1_launch') : line).map(line => process.env.SIM_CASE === 'stale-request' ? line.replace('READY_FOR_SCREENSHOT stage=stage_1_launch token=run_stage_1_launch', 'READY_FOR_SCREENSHOT stage=stage_2_playback token=run_stage_2_playback') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
   if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs.trimEnd());
@@ -388,14 +389,23 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
-    for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_1_launch.json']) fs.rmSync(path.join(dir, file), { force: true });
+  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
+    for (const file of ['launched', 'stream-ready', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
     const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
     const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (scenario === 'stale-request') {
+      assert.ok(!fs.existsSync(path.join(output, 'stage_2_playback.png')), 'Stale request cannot start a capture');
+      assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_2_playback.json')), 'Stale request cannot write an ACK');
+    }
+    if (scenario === 'unstable') {
+      assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_1_launch.json')));
+      assert.equal(fs.readdirSync(path.join(output, 'diagnostics/stage_1_launch')).length, 4);
+      assert.match(JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'))).error, /identical consecutive/);
+    }
     if (scenario === 'png-timeout') {
       assert.ok(fs.existsSync(path.join(output, 'stage_1_launch.png')), 'Timed-out command wrote PNG');
       const ledger = fs.readFileSync(path.join(output, 'startup-commands.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

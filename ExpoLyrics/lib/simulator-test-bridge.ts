@@ -194,6 +194,20 @@ export function waitForSimulatorOrientation(
   });
 }
 
+// Snapshot ownership is independent of playback pause (native chrome can animate).
+let captureFrozen = false;
+const captureListeners = new Set<(frozen: boolean) => void>();
+export function setSimulatorCaptureFrozen(frozen: boolean): void {
+  if (!isSimulatorTestActive()) return;
+  captureFrozen = frozen;
+  for (const listener of captureListeners) listener(frozen);
+}
+export function observeSimulatorCapture(listener: (frozen: boolean) => void): () => void {
+  captureListeners.add(listener);
+  listener(captureFrozen);
+  return () => { captureListeners.delete(listener); };
+}
+
 export async function waitForSimulatorScreenshotAck(
   stage: string,
   token: string,
@@ -223,11 +237,21 @@ export async function waitForSimulatorScreenshotAck(
   const file = new FileClass(PathsClass.cache, ackFileName);
 
   const startTime = Date.now();
+  let staleReported = false;
   while (Date.now() - startTime < timeoutMs) {
     try {
       if (file.exists) {
         const ack = JSON.parse(file.textSync());
-        if (ack.stage !== stage || ack.token !== token) throw new Error('Stale screenshot ACK');
+        if (ack.stage !== stage || ack.token !== token) {
+          // A previous request cannot release this snapshot; retain it as evidence
+          // until the host atomically replaces it with this request's ACK.
+          if (!staleReported) {
+            console.info(`[KINESYNC_SIM] SCREENSHOT_ACK_IGNORED stage=${stage} reason=stale`);
+            staleReported = true;
+          }
+          await new Promise((r) => setTimeout(r, 100));
+          continue;
+        }
         try {
           file.delete();
         } catch {
@@ -254,6 +278,7 @@ export function getLatestLayoutEvent(): LayoutChangeEvent | null {
 }
 
 export function resetSimulatorBridge(): void {
+  setSimulatorCaptureFrozen(false);
   for (const waiter of readyWaiters) {
     clearTimeout(waiter.timeoutHandle);
     waiter.reject(new Error('CANCELLED'));

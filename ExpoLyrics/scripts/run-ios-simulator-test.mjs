@@ -213,6 +213,11 @@ async function main() {
     try { lifecycle.check(); lifecycle.line(trimmed); }
     catch (error) { parser.errors.push(error.message); scenarioResolve(); return; }
     if (trimmed.includes('[KINESYNC_SIM]')) console.log(trimmed);
+    if (trimmed.includes('[KINESYNC_SIM] SCENARIO_START')) {
+      const match = trimmed.match(/\[KINESYNC_SIM\] SCENARIO_START\s+token=([\w]+)/);
+      if (!match || screenshotRunToken) { parser.errors.push('Missing or duplicate scenario request identity'); scenarioResolve(); return; }
+      screenshotRunToken = match[1];
+    }
     parser.processLine(trimmed);
 
     // Handle simulator rotation trigger
@@ -240,22 +245,27 @@ async function main() {
     if (shotMatch) {
       if (!parser.appLaunched || !parser.scenarioStarted || parser.errors.length) { parser.errors.push('Screenshot requires app/bridge readiness and valid scenario protocol'); scenarioResolve(); return; }
       const stage = shotMatch[1];
+      if (parser.activeStage !== stage) { parser.errors.push('Stale screenshot request stage'); scenarioResolve(); return; }
       const suffix = `_${stage}`;
       const token = shotMatch[2];
       const runToken = token.endsWith(suffix) ? token.slice(0, -suffix.length) : '';
-      if (!runToken || (screenshotRunToken && screenshotRunToken !== runToken)) { parser.errors.push('Invalid or stale screenshot token'); scenarioResolve(); return; }
+      if (!runToken || !screenshotRunToken || screenshotRunToken !== runToken) { parser.errors.push('Invalid or stale screenshot token'); scenarioResolve(); return; }
       screenshotRunToken = runToken;
       if (!processedScreenshotStages.has(stage)) {
         processedScreenshotStages.add(stage);
         const shotPath = path.join(outputDir, `${stage}.png`);
         try {
           runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath]);
+          const attemptsDir = path.join(outputDir, 'diagnostics', stage);
+          fs.mkdirSync(attemptsDir, { recursive: true });
           let buf = fs.readFileSync(shotPath);
+          fs.writeFileSync(path.join(attemptsDir, 'frame-0.png'), buf);
           let settled = false;
           for (let attempt = 0; attempt < 3; attempt++) {
             runCommand('sleep', ['0.25']);
             runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath], { timeout: 60000 });
             const next = fs.readFileSync(shotPath);
+            fs.writeFileSync(path.join(attemptsDir, `frame-${attempt + 1}.png`), next);
             const before = PNG.sync.read(buf), after = PNG.sync.read(next);
             settled = before.width === after.width && before.height === after.height && before.data.equals(after.data);
             buf = next;
@@ -278,6 +288,8 @@ async function main() {
           verifiedScreenshots.set(stage, { valid, analysis, shotPath });
           console.log(`[RUNNER] Captured screenshot for ${stage}: ${notes}`);
 
+          if (!valid) throw new Error(`Invalid screenshot: ${notes}`);
+
           // Send screenshot acknowledgement file into app container if screenshot is valid
           if (valid) {
             try {
@@ -294,7 +306,8 @@ async function main() {
                 if (!fs.existsSync(cachesDir)) throw Error('Missing app cache directory');
                 if (fs.existsSync(cachesDir)) {
                   const ackFile = path.join(cachesDir, `kinesync_sim_ack_${stage}.json`);
-                  fs.writeFileSync(ackFile, JSON.stringify({ stage, token: shotMatch[2], timestamp: Date.now() }), 'utf8');
+                  fs.writeFileSync(`${ackFile}.tmp`, JSON.stringify({ stage, token: shotMatch[2], timestamp: Date.now() }), 'utf8');
+                  fs.renameSync(`${ackFile}.tmp`, ackFile);
                   console.log(`[RUNNER] Wrote screenshot ACK for ${stage}`);
                 }
               }
@@ -305,6 +318,8 @@ async function main() {
         } catch (err) {
           console.error(`[RUNNER] Failed to capture screenshot for ${stage}: ${err.message}`);
           verifiedScreenshots.set(stage, { valid: false, error: err.message });
+          parser.errors.push(`Screenshot ${stage}: ${err.message}`);
+          scenarioResolve();
         }
       }
     }

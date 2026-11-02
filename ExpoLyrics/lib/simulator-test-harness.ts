@@ -11,6 +11,7 @@ import {
   waitForSimulatorOrientation,
   waitForSimulatorScreenshotAck,
   resetSimulatorBridge,
+  setSimulatorCaptureFrozen,
 } from './simulator-test-bridge';
 
 // Older trusted baselines omit these clock fields from their public packet type.
@@ -134,11 +135,16 @@ export class SimulatorTestHarness {
     if (positionMs === undefined) throw new Error(`Unknown screenshot stage: ${stage}`);
     this.clock.pause();
     this.clock.seek(positionMs);
-    await this.delay(1000);
-    if (this.clock.isPlaying() || this.clock.getPositionMs() !== positionMs) throw new Error('Screenshot playback anchor changed');
-    const token = `${this.runToken}_${stage}`;
-    console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=${stage} token=${token} ${details}`);
-    await waitForSimulatorScreenshotAck(stage, token, 120000);
+    setSimulatorCaptureFrozen(true);
+    try {
+      await this.delay(1000);
+      if (this.clock.isPlaying() || this.clock.getPositionMs() !== positionMs) throw new Error('Screenshot playback anchor changed');
+      const token = `${this.runToken}_${stage}`;
+      console.info(`[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=${stage} token=${token} ${details}`);
+      await waitForSimulatorScreenshotAck(stage, token, 120000);
+    } finally {
+      setSimulatorCaptureFrozen(false);
+    }
   }
 
   constructor() {
@@ -294,7 +300,7 @@ export class SimulatorTestHarness {
     this.runToken = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     this.stageTimers = [];
     this.tracksLoadedCount = 0;
-    console.info('[KINESYNC_SIM] SCENARIO_START');
+    console.info(`[KINESYNC_SIM] SCENARIO_START token=${this.runToken}`);
 
     try {
       // Stage 1: Launch and Song 1 initial load with Spicy renderer

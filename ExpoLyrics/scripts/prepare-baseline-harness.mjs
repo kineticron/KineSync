@@ -50,6 +50,7 @@ export function prepareBaselineHarness(options = {}) {
     'ExpoLyrics/scripts/test-simulator-harness.mjs',
     'ExpoLyrics/scripts/test-simulator-initialization.cjs',
     'ExpoLyrics/scripts/test-simulator-protocol.mjs',
+    'ExpoLyrics/scripts/test-simulator-marquee.mjs',
     'ExpoLyrics/scripts/test-simulator-build.mjs',
     'ExpoLyrics/scripts/test-simulator-baseline.mjs',
     'ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs',
