@@ -4,6 +4,7 @@ import plist from 'plist';
 import { randomUUID, createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { startupCommand } from './simulator-startup.mjs';
+import { nativePNGMetadata } from './simulator-png-metadata.mjs';
 
 export const CAPTURE_BUNDLE = 'dev.kineticron.simulator-capture.xctrunner';
 
@@ -89,8 +90,9 @@ export class NativeCapture {
       fs.writeFileSync(destination, bytes);
       const image = PNG.sync.read(bytes);
       record.width = image.width; record.height = image.height;
+      record.exifOrientation = nativePNGMetadata(bytes).exifOrientation;
       record.sha256 = createHash('sha256').update(bytes).digest('hex');
-      if (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width) throw Error(`Native ${orientation} screenshot dimensions invalid: ${image.width}x${image.height}`);
+      if (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width) throw Error(`Native ${orientation} screenshot dimensions invalid: ${image.width}x${image.height}; EXIF orientation=${record.exifOrientation ?? 'absent'} (raw encoded geometry required)`);
       this.state.check();
       return bytes;
     } catch (error) {

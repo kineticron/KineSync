@@ -1,4 +1,6 @@
 import './test-simulator-native-capture.mjs';
+import './test-simulator-raw-metadata.mjs';
+import './test-simulator-failure-evidence.mjs';
 import './test-simulator-marquee.mjs';
 import './test-simulator-initialization.cjs';
 // Unit and integration tests for simulator test harness components
@@ -483,7 +485,7 @@ if (args.includes('launch')) {
       assert.ok(state.error);
       for (const name of ['failure-screenshot.log', 'device-log.txt', 'metro-status.txt']) assert.ok(fs.existsSync(path.join(output, name)), `${scenario}: ${name}`);
       const screenshotLog = fs.readFileSync(path.join(output, 'failure-screenshot.log'), 'utf8');
-      assert.ok(fs.existsSync(path.join(output, 'failure.png')) || /Command failed|Command exited|ETIMEDOUT|SIGKILL|Evidence deadline exhausted/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
+      assert.ok(fs.existsSync(path.join(output, 'diagnostics/failure.png')) || /Command failed|Command exited|ETIMEDOUT|SIGKILL|Evidence deadline exhausted/.test(screenshotLog), `${scenario}: missing screenshot without capture failure evidence: ${screenshotLog}`);
       if (scenario === 'stalled-startup') assert.match(state.error, /Startup timeout/);
       if (scenario === 'stalled-scenario') assert.match(state.error, /Scenario stage timeout/);
       if (scenario === 'rotation-hang') { assert.ok(Date.now() - started < 25000); assert.ok(fs.readFileSync(path.join(output, 'rotation-commands.jsonl'), 'utf8').includes('error')); }

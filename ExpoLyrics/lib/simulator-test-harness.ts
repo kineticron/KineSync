@@ -165,6 +165,9 @@ export class SimulatorTestHarness {
     useSpotifySessionStore.getState().setLoggedOut(false);
     useSpotifySessionStore.setState({ signedIn: true });
     usePlaybackStore.setState({ playbackMode: 'mobile' });
+    // Existing setters also fence delayed persisted settings restoration.
+    usePlaybackStore.getState().setShowTranslatedText(true);
+    usePlaybackStore.getState().setTranslationLanguage('English');
 
     this.heartbeat.start(20);
     console.info('[KINESYNC_SIM] INIT_READY');

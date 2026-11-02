@@ -53,6 +53,10 @@ export async function startupCommand(cmd, args, state, run = execute, cap = Infi
   } catch (error) {
     stdout = error.stdout ?? stdout; stderr = error.stderr ?? stderr;
     record.error = { message: error.message, code: error.code, signal: error.signal, killed: error.killed };
+    // An exec timeout may reject before the following success-path check runs.
+    // Keep the native command error in the audit while reporting the expired phase.
+    try { state.check(); }
+    catch (deadlineError) { deadlineError.cause = error; throw deadlineError; }
     throw error;
   } finally {
     record.ended = state.now();

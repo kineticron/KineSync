@@ -168,7 +168,7 @@ assert.ok(scrollCallback);
 for (const animated of [false, true]) {
   const calls = [];
   let ready = false;
-  const context = { useCallback: fn => fn, transition: { onReady: () => { ready = true; } }, markRendererReady() {}, rendererReadyKey: 'test', pendingScroll: { current: { index: 4, animated } },
+  const context = { useCallback: fn => fn, transition: { onReady: () => { ready = true; } }, markRendererReady() {}, rendererReadyKey: 'test', simulatorReadyGeneration: 0, pendingScroll: { current: { index: 4, animated } },
     following: { current: true }, lastScrollTarget: { current: 'old' },
     scrollTo: (index, animation) => calls.push([index, animation]), backgrounds: [], lyrics: [], timing: {} };
   vm.runInNewContext(`(${retry})()`, context);

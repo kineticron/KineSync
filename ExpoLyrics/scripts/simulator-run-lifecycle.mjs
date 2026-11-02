@@ -89,6 +89,11 @@ export class SimulatorRunLifecycle {
     if (this.captured) return;
     this.captured = true;
     this.record();
+    // Startup/transport exceptions can exit before the scenario parser reports.
+    // Preserve a completed parser report; never invent metrics for an early exit.
+    const summary = path.join(this.outputDir, 'simulator-summary.md');
+    if (!fs.existsSync(summary)) fs.writeFileSync(summary,
+      `# Simulator Test Summary\n\nStatus: FAILED\n\nStage: ${this.stage}\n\n${this.error || 'Unknown failure'}\n\nNo complete scenario metrics were produced.\n`);
     // Failure collection is capped at six minutes and the remaining overall budget.
     const deadline = Math.min(this.overallDeadline, this.now() + 360000);
     const evidence = (name, cmd, args) => this.evidenceCommand(name, cmd, args, deadline);
@@ -97,7 +102,9 @@ export class SimulatorRunLifecycle {
     evidence('failure-services.txt', '/bin/launchctl', ['list']);
     fs.writeFileSync(path.join(this.outputDir, 'failure-toolchain.json'), JSON.stringify({ developer: process.env.DEVELOPER_DIR || null }));
     if (this.device) {
-      evidence('failure-screenshot.log', 'xcrun', ['simctl', 'io', this.device, 'screenshot', path.resolve(this.outputDir, 'failure.png')]);
+      // Keep failure evidence outside the seven native acceptance screenshot pairs.
+      fs.mkdirSync(path.join(this.outputDir, 'diagnostics'), { recursive: true });
+      evidence('failure-screenshot.log', 'xcrun', ['simctl', 'io', this.device, 'screenshot', path.resolve(this.outputDir, 'diagnostics/failure.png')]);
       evidence('device-log.txt', 'xcrun', ['simctl', 'spawn', this.device, 'log', 'show', '--last', '3m', '--style', 'compact', '--predicate', 'process == "KineSync" OR process == "SpringBoard"']);
     }
     evidence('metro-status.txt', 'curl', ['--max-time', '60', '-sS', 'http://127.0.0.1:8081/status']);

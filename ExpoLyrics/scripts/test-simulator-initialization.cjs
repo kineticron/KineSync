@@ -19,14 +19,16 @@ const gate = extract(read('app/(tabs)/index.tsx'), n => ts.isVariableDeclaration
 async function run(controller, fixed) {
   let release;
   const storage = new Promise(resolve => { release = resolve; });
-  const playback = { playbackMode: 'desktop' };
+  const playback = { playbackMode: 'desktop', showTranslatedText: false, translationLanguage: 'Korean',
+    setShowTranslatedText(value) { playback.showTranslatedText = value; },
+    setTranslationLanguage(value) { playback.translationLanguage = value; } };
   const session = { signedIn: false, loggedOut: false, setLoggedOut(value) { session.loggedOut = value; } };
   let effect, timer, ran = 0;
   const bridge = { exports: {}, process: { env: { EXPO_PUBLIC_SIMULATOR_TEST: '1', EXPO_PUBLIC_SIMULATOR_TEST_BUILD: 'release-arm64' } }, setTimeout, clearTimeout, Set, Date };
   vm.runInNewContext(compile(read('lib/simulator-test-bridge.ts')), bridge);
   const context = { exports: {}, _cachedBridgeUrl: null, _cachedHandshakeKey: null,
     getBridgeSettings: () => storage,
-    usePlaybackStore: { setState: value => Object.assign(playback, value) },
+    usePlaybackStore: { getState: () => playback, setState: value => Object.assign(playback, value) },
     useSpotifySessionStore: { setState: value => Object.assign(session, value), getState: () => session },
     console: { info() {} },
   };
@@ -49,6 +51,10 @@ async function run(controller, fixed) {
   await assert.rejects(bridge.exports.waitForSimulatorRendererReady({ timeoutMs: 1 }), /TIMEOUT_WAITING_RENDERER_READY/, 'startup barrier cannot manufacture renderer readiness');
   assert.equal(cancelledCallback, false, 'unmounted startup listener cannot initialize a fixture');
   assert.ok(timer); timer(); assert.equal(ran, 1);
+  if (fixed) {
+    assert.equal(playback.showTranslatedText, true, 'fixture must pin translation visibility');
+    assert.equal(playback.translationLanguage, 'English', 'fixture must pin translation language');
+  }
   const player = { tour: { active: false }, currentTrack: { id: 'fixture' }, playbackMode: playback.playbackMode, spotifySignedIn: session.signedIn, connectionStatus: 'disconnected' };
   vm.runInNewContext(`result = (${gate.slice(gate.indexOf('=') + 1)})`, player);
   assert.equal(player.result, !fixed, fixed ? 'fixture must clear real player empty-state gate' : 'original controller deterministically hides native renderer');
@@ -70,6 +76,30 @@ async function testSessionRestore(useSetter) {
   assert.equal(store.getState().signedIn, useSetter,
     'fixture setter must fence delayed persisted logout without changing production session store');
 }
+async function testTranslationRestore(pinSettings) {
+  let release;
+  const storage = new Promise(resolve => { release = resolve; });
+  const source = read('store/playback-store.ts');
+  const setter = name => extract(source, n => ts.isPropertyAssignment(n) && n.name.getText() === name);
+  const persist = extract(source, n => ts.isFunctionDeclaration(n) && n.name?.text === 'persistTranslationSettings');
+  const restore = source.slice(source.indexOf("void AsyncStorage.getItem('kinesync_translation_settings')"));
+  const state = { showTranslatedText: true, translationLanguage: 'English' };
+  const context = { exports: {}, AsyncStorage: { getItem: () => storage, setItem: async () => {} },
+    normalizeTranslationLanguage: value => value,
+    usePlaybackStore: { getState: () => state, setState: value => Object.assign(state, value) },
+    set: value => Object.assign(state, value),
+  };
+  vm.runInNewContext(compile(`let translationSettingsChanged = false;
+${persist}
+exports.setters = ({${setter('setShowTranslatedText')}, ${setter('setTranslationLanguage')}});
+${restore}`), context);
+  Object.assign(state, context.exports.setters);
+  if (pinSettings) { state.setShowTranslatedText(true); state.setTranslationLanguage('English'); }
+  release(JSON.stringify({ showTranslatedText: false, translationLanguage: 'Korean' }));
+  await storage; await Promise.resolve();
+  assert.equal(state.showTranslatedText, pinSettings, 'actual store setters must fence delayed translation storage');
+  assert.equal(state.translationLanguage, pinSettings ? 'English' : 'Korean');
+}
 (async () => {
   // Frozen failing controller from 466dbf389e1cf47d8039a4067cf00bd8dd0a92b2.
   // Keep the regression runnable in shallow CI/baseline checkouts.
@@ -86,6 +116,8 @@ async function testSessionRestore(useSetter) {
       return null;
     }
   `;
+  await testTranslationRestore(false);
+  await testTranslationRestore(true);
   await testSessionRestore(false);
   await testSessionRestore(true);
   await run(original, false);

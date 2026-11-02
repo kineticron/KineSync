@@ -9,6 +9,15 @@ import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-deadlines-'));
 try {
   let now = 1000;
+  const rejectedDir = path.join(dir, 'rejected-at-deadline');
+  const rejected = new SimulatorRunLifecycle(rejectedDir, { startupMs: 100, now: () => now, ciDeadlineMs: Infinity });
+  const commandError = Object.assign(Error('Command failed: xcrun'), { killed: true, signal: 'SIGKILL', stdout: 'partial output', stderr: 'native stderr' });
+  await assert.rejects(runStartupCommand('xcrun', ['simctl', 'list'], rejected, async () => { now = 1100; throw commandError; }), error => /Startup timeout at startup:discovery/.test(error.message) && error.cause === commandError);
+  const rejectedAudit = JSON.parse(fs.readFileSync(path.join(rejectedDir, 'startup-commands.jsonl'), 'utf8').trim());
+  assert.equal(rejectedAudit.error.message, commandError.message);
+  assert.equal(fs.readFileSync(path.join(rejectedDir, rejectedAudit.stdout), 'utf8'), 'partial output');
+  assert.equal(fs.readFileSync(path.join(rejectedDir, rejectedAudit.stderr), 'utf8'), 'native stderr');
+  now = 1000;
   const capped = new SimulatorRunLifecycle(path.join(dir, 'capped'), { now: () => now, ciDeadlineMs: 1150 });
   assert.equal(capped.overallDeadline, 1150);
   capped.line('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1');
