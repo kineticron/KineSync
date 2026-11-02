@@ -56,6 +56,8 @@ export class NativeCapture {
         if (!this.alive()) throw Error('Native capture runner exited');
         await this.pause();
       }
+      this.state.check();
+      if (!this.alive()) throw Error('Native capture runner exited');
       const response = JSON.parse(fs.readFileSync(responseFile));
       if (Object.entries(request).some(([key, value]) => response[key] !== value)) throw Error('Stale native capture response ownership');
       const bytes = fs.readFileSync(pngFile);

@@ -337,6 +337,7 @@ if (name === 'xcodebuild') {
    const file = path.join(mailbox, 'request.json');
    if (!fs.existsSync(file)) return;
    const request = JSON.parse(fs.readFileSync(file)); fs.unlinkSync(file);
+   if (process.env.SIM_CASE === 'capture-failure') { fs.writeFileSync(path.join(dir, 'failed-capture-request.json'), JSON.stringify(request)); process.exit(7); }
    if (process.env.SIM_CASE === 'png-timeout') { fs.copyFileSync(path.join(dir, 'portrait.png'), path.join(mailbox, request.id + '.png')); return; }
    const landscape = request.orientation === 'landscape' && !['rotation-noop', 'native-portrait-output'].includes(process.env.SIM_CASE) || request.stage === 'stage_7_restore' && process.env.SIM_CASE === 'portrait-noop';
    const counter = path.join(mailbox, request.stage + '.count');
@@ -362,7 +363,6 @@ if (args.includes('get_app_container')) {
 }
 if (args.includes('screenshot')) {
  const dest = args.at(-1);
- if (process.env.SIM_CASE === 'capture-failure' && dest.endsWith('failure.png')) process.exit(2);
  if (dest.includes('restored-portrait') && process.env.SIM_CASE === 'portrait-noop') { fs.copyFileSync(path.join(dir, 'landscape.png'), dest); return; }
  if (dest.includes('initial-portrait') && process.env.SIM_CASE === 'initial-landscape') { fs.copyFileSync(path.join(dir, 'landscape.png'), dest); return; }
  if (process.env.SIM_CASE === 'unstable') {
@@ -389,7 +389,7 @@ if (args.includes('stream')) {
   if (process.env.SIM_CASE === 'stream-dies') process.exit(2);
   if (process.env.SIM_CASE === 'stalled-startup') return;
   if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START token=run'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
-  if (['early-exit', 'capture-failure', 'signal'].includes(process.env.SIM_CASE)) return;
+  if (['early-exit', 'signal'].includes(process.env.SIM_CASE)) return;
   const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => process.env.SIM_CASE === 'stale-run' ? line.replace('token=run_stage_1_launch', 'token=old_stage_1_launch') : line).map(line => process.env.SIM_CASE === 'stale-request' ? line.replace('READY_FOR_SCREENSHOT stage=stage_1_launch token=run_stage_1_launch', 'READY_FOR_SCREENSHOT stage=stage_2_playback token=run_stage_2_playback') : line).map(line => process.env.SIM_CASE === 'rotation-stale' && line.includes('TRIGGER_SIMULATOR_ROTATION') ? line.replace('token=run_', 'token=old_') : line).filter(line => process.env.SIM_CASE !== 'restore-missing' || !line.includes('READY_FOR_PORTRAIT_RESTORE')).map(line => process.env.SIM_CASE === 'restore-stale' ? line.replace('token=run_stage_7_restore', 'token=old_stage_7_restore') : process.env.SIM_CASE === 'restore-early' && line.includes('orientation=portrait style=spicy') ? line.replace('orientation=portrait', 'orientation=landscape') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
@@ -406,7 +406,7 @@ if (args.includes('launch')) {
  if (!fs.existsSync(path.join(dir, 'stream-ready'))) process.exit(97);
  fs.writeFileSync(path.join(dir, 'launched'), '1');
  if (process.env.SIM_CASE === 'signal') { process.kill(process.ppid, 'SIGTERM'); setInterval(() => {}, 1000); return; }
- if (['early-exit', 'capture-failure'].includes(process.env.SIM_CASE)) process.exit(1);
+ if (process.env.SIM_CASE === 'early-exit') process.exit(1);
  if (process.env.SIM_CASE === 'console-duplicate') {
   console.log('ordinary launch stdout');
   console.error('ordinary launch stderr');
@@ -437,6 +437,16 @@ if (args.includes('launch')) {
       assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_1_launch.json')));
       assert.equal(fs.readdirSync(path.join(output, 'diagnostics/stage_1_launch')).length, 4);
       assert.match(JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'))).error, /identical consecutive/);
+    }
+    if (scenario === 'capture-failure') {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'failed-capture-request.json')));
+      assert.equal(request.stage, 'stage_1_launch');
+      assert.equal(request.token, 'run_stage_1_launch');
+      const ledger = fs.readFileSync(path.join(output, 'native-captures.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+      assert.ok(ledger.some(record => record.id === request.id && record.error === 'Native capture runner exited'));
+      assert.match(JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'))).error, /Native capture runner exited/);
+      assert.ok(!fs.existsSync(path.join(output, 'stage_1_launch.png')));
+      assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_1_launch.json')), 'Failed native request must never be acknowledged');
     }
     if (scenario === 'png-timeout') {
       assert.ok(!fs.existsSync(path.join(output, 'stage_1_launch.png')), 'Unanswered native request cannot publish a capture');

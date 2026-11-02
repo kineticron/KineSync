@@ -173,7 +173,6 @@ async function main() {
   if (process.env.SIMULATOR_ROTATION_TOOL_DIR) fs.copyFileSync(path.join(process.env.SIMULATOR_ROTATION_TOOL_DIR, 'provenance.json'), path.join(outputDir, 'rotation-tool-provenance.json'));
   await selectToolchain(lifecycle);
   const device = await prepareSimulator(lifecycle, selectSimulatorDevice);
-  const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport);
   lifecycle.enterPhase('startup:rotation-preflight', seconds('--preflight-seconds', 240000));
   // Reuse the verified inventory; preflight has its own bounded allowance.
   const inventory = JSON.stringify(lifecycle.readyInventory);
@@ -397,6 +396,8 @@ async function main() {
     await streamReadyPromise;
     if (!streamReady || parser.errors.length) throw new Error(parser.errors.join('; ') || 'Unified log stream not ready');
   } finally { clearInterval(readinessTimeout); }
+  const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport);
+  if (parser.errors.length) throw new Error(parser.errors.join('; '));
   lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');
   protocolArmed = true;
   console.log('[RUNNER] Launching app dev.kineticron.KineSync via console-pty with EXPO_PUBLIC_SIMULATOR_TEST=1...');

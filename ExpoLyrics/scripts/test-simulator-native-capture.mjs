@@ -16,12 +16,12 @@ try {
   const landscape = PNG.sync.write(new PNG({ width: 5, height: 3 }));
   const session = '12345678-1234-1234-1234-123456789abc';
   const owner = { run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', orientation: 'landscape' };
-  for (const mode of ['pass', 'portrait-framebuffer', 'wrong-run', 'wrong-stage', 'wrong-token', 'wrong-session', 'wrong-id', 'wrong-orientation', 'dead', 'timeout', 'png-before-timeout']) {
+  for (const mode of ['pass', 'portrait-framebuffer', 'wrong-run', 'wrong-stage', 'wrong-token', 'wrong-session', 'wrong-id', 'wrong-orientation', 'dead', 'dead-on-response', 'timeout', 'png-before-timeout']) {
     const dir = path.join(root, mode); fs.mkdirSync(dir);
-    let checks = 0;
+    let checks = 0, responseDead = false;
     const capture = new NativeCapture({ mailbox: dir, session, udid: 'device',
       state: { outputDir: dir, now: () => checks, check() { if (++checks > 10) throw Error('Scenario stage timeout'); } },
-      alive: () => mode !== 'dead', pause() {
+      alive: () => mode !== 'dead' && !responseDead, pause() {
         if (mode === 'timeout') return;
         const request = JSON.parse(fs.readFileSync(path.join(dir, 'request.json')));
         if (mode === 'png-before-timeout') { fs.writeFileSync(path.join(dir, request.id + '.png'), landscape); return; }
@@ -29,6 +29,7 @@ try {
         if (mode.startsWith('wrong-')) response[mode.slice(6)] = 'stale';
         fs.writeFileSync(path.join(dir, request.id + '.png'), mode === 'portrait-framebuffer' ? portrait : landscape);
         fs.writeFileSync(path.join(dir, request.id + '.json'), JSON.stringify(response));
+        if (mode === 'dead-on-response') responseDead = true;
       } });
     const destination = path.join(dir, 'result.png');
     if (mode === 'pass') {
