@@ -31,12 +31,12 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'raw-exif-'));
 const session = '12345678-1234-1234-1234-123456789abc';
 const raw = withExif(portrait, 8);
 try {
-  const capture = new NativeCapture({ mailbox: root, session, udid: 'device',
+  const capture = new NativeCapture({ mailbox: root, session, udid: 'device', command: async (_cmd, args) => { fs.writeFileSync(args.at(-1), raw); },
     state: { outputDir: root, now: Date.now, check() {} },
     pause: async () => {
       const request = JSON.parse(fs.readFileSync(path.join(root, 'request.json')));
       fs.writeFileSync(path.join(root, `${request.id}.png`), raw);
-      fs.writeFileSync(path.join(root, `${request.id}.json`), JSON.stringify(request));
+      fs.writeFileSync(path.join(root, `${request.id}.json`), JSON.stringify({ ...request, observedUDID: 'device', bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: request.orientation, windowWidth: '5', windowHeight: '3' }));
     } });
   const destination = path.join(root, 'result.png');
   await assert.rejects(capture.capture(destination, { run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', orientation: 'landscape' }), /dimensions invalid.*EXIF orientation=8/);

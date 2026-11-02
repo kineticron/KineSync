@@ -5,7 +5,13 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { createRequire } from 'node:module';
-import { NativeCapture, configureCaptureTransport, startNativeCapture } from './simulator-native-capture.mjs';
+import { validateCaptureAttestation, NativeCapture, configureCaptureTransport, startNativeCapture } from './simulator-native-capture.mjs';
+const requestProof = { id: 'nonce', session: 'session', udid: 'device', run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', phase: 'before', orientation: 'landscape' };
+const proof = { ...requestProof, observedUDID: 'device', bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: 'landscape', windowWidth: '200', windowHeight: '100' };
+validateCaptureAttestation(proof, requestProof, 'device');
+for (const key of ['id', 'session', 'udid', 'observedUDID', 'run', 'stage', 'token', 'phase', 'bundle', 'foreground', 'deviceOrientation', 'windowWidth']) {
+  assert.throws(() => validateCaptureAttestation({ ...proof, [key]: 'stale' }, requestProof, 'device'), /mismatch/);
+}
 const xcode = createRequire(import.meta.url)('xcode');
 const project = xcode.project(new URL('./native-simulator-capture/Capture.xcodeproj/project.pbxproj', import.meta.url).pathname);
 project.parseSync();
@@ -59,19 +65,20 @@ try {
   const landscape = PNG.sync.write(new PNG({ width: 5, height: 3 }));
   const session = '12345678-1234-1234-1234-123456789abc';
   const owner = { run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', orientation: 'landscape' };
-  for (const mode of ['pass', 'portrait-framebuffer', 'wrong-run', 'wrong-stage', 'wrong-token', 'wrong-session', 'wrong-id', 'wrong-orientation', 'dead', 'dead-on-response', 'timeout', 'png-before-timeout']) {
+  for (const mode of ['pass', 'portrait-framebuffer', 'wrong-run', 'wrong-stage', 'wrong-token', 'wrong-session', 'wrong-id', 'wrong-orientation', 'after-foreground', 'dead', 'dead-on-response', 'timeout', 'png-before-timeout']) {
     const dir = path.join(root, mode); fs.mkdirSync(dir);
     let checks = 0, responseDead = false;
-    const capture = new NativeCapture({ mailbox: dir, session, udid: 'device',
+    const capture = new NativeCapture({ mailbox: dir, session, udid: 'device', command: async (cmd, args, _state, _run, cap) => { assert.equal(cmd, 'xcrun'); assert.deepEqual(args.slice(0, 6), ['simctl', 'io', 'device', 'screenshot', '--type=png', args.at(-1)]); assert.equal(cap, 30000); fs.writeFileSync(args.at(-1), mode === 'portrait-framebuffer' ? portrait : landscape); },
       state: { outputDir: dir, now: () => checks, check() { if (++checks > 10) throw Error('Scenario stage timeout'); } },
       alive: () => mode !== 'dead' && !responseDead, pause() {
         if (mode === 'timeout') return;
         const request = JSON.parse(fs.readFileSync(path.join(dir, 'request.json')));
         if (mode === 'png-before-timeout') { fs.writeFileSync(path.join(dir, request.id + '.png'), landscape); return; }
         const response = { ...request };
+        if (mode === 'after-foreground' && request.phase === 'after') response.foreground = 'false';
         if (mode.startsWith('wrong-')) response[mode.slice(6)] = 'stale';
         fs.writeFileSync(path.join(dir, request.id + '.png'), mode === 'portrait-framebuffer' ? portrait : landscape);
-        fs.writeFileSync(path.join(dir, request.id + '.json'), JSON.stringify(response));
+        fs.writeFileSync(path.join(dir, request.id + '.json'), JSON.stringify({ observedUDID: 'device', bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: request.orientation, windowWidth: request.orientation === 'landscape' ? '5' : '3', windowHeight: request.orientation === 'landscape' ? '3' : '5', ...response }));
         if (mode === 'dead-on-response') responseDead = true;
       } });
     const destination = path.join(dir, 'result.png');

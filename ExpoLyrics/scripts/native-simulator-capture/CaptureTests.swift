@@ -33,11 +33,22 @@ final class CaptureTests: XCTestCase {
                       request["stage"] != nil, request["token"] != nil else {
                     XCTFail("Invalid native capture ownership"); return
                 }
-                // pngRepresentation is produced by XCTest's native screenshot API.
-                // A portrait result for a landscape request is rejected by the host.
-                let screenshot = XCUIScreen.main.screenshot()
-                try screenshot.pngRepresentation.write(to: root.appendingPathComponent("\(id).png"), options: .atomic)
-                try write(request, "\(id).json")
+                let app = XCUIApplication(bundleIdentifier: "dev.kineticron.KineSync")
+                let frame = app.windows.firstMatch.frame
+                let deviceOrientation = XCUIDevice.shared.orientation
+                let landscape = deviceOrientation == .landscapeLeft || deviceOrientation == .landscapeRight
+                var response = request
+                response["observedUDID"] = environment["SIMULATOR_UDID"] ?? ""
+                response["bundle"] = "dev.kineticron.KineSync"
+                response["foreground"] = app.state == .runningForeground ? "true" : "false"
+                response["deviceOrientation"] = landscape ? "landscape" : deviceOrientation == .portrait ? "portrait" : "unknown"
+                response["windowWidth"] = String(Double(frame.width))
+                response["windowHeight"] = String(Double(frame.height))
+                if request["phase"] == "before" {
+                    let screenshot = XCUIScreen.main.screenshot()
+                    try screenshot.pngRepresentation.write(to: root.appendingPathComponent("\(id).png"), options: .atomic)
+                }
+                try write(response, "\(id).json")
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         }
