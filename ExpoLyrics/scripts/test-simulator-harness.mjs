@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
-import { analyzeScreenshotContent, compareScreenshots } from './compare-simulator-screenshots.mjs';
+import { analyzeScreenshotContent, compareScreenshots, validateRunArtifacts } from './compare-simulator-screenshots.mjs';
 import './test-simulator-build.mjs';
 import './test-ci-cache.mjs';
 import './test-simulator-baseline.mjs';
@@ -520,6 +520,35 @@ function testComparisonCli() {
   const reset = () => { for (const dir of [branch, baseline]) { fs.rmSync(dir, { recursive: true }); fs.mkdirSync(dir); for (const name of names) fs.writeFileSync(path.join(dir, name), name.includes('stage_7') ? createTextMockPng(200, 100) : img);
     for (const file of ['simulator-perf.json', 'simulator-raw-log.txt', 'native-captures.jsonl', 'diagnostics/restored-portrait.png']) { fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); fs.copyFileSync(path.join(validRun, file), path.join(dir, file)); } } };
   const run = (...args) => spawnSync(process.execPath, [path.join(__dirname, 'compare-simulator-screenshots.mjs'), '--branch-dir', branch, '--baseline-dir', baseline, ...args], { encoding: 'utf8' });
+  reset();
+  const nonceFile = path.join(branch, 'native-captures.jsonl');
+  const fresh = fs.readFileSync(nonceFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const uuid = index => `12345678-1234-4234-8234-${index.toString(16).padStart(12, '0')}`;
+  fresh.forEach((capture, index) => {
+    capture.id = capture.before.id = uuid(index * 2 + 10);
+    capture.after.id = uuid(index * 2 + 11);
+  });
+  const writeNonces = captures => fs.writeFileSync(nonceFile, captures.map(c => JSON.stringify(c)).join('\n') + '\n');
+  writeNonces(fresh);
+  assert.deepEqual(validateRunArtifacts(branch), [], 'All fresh UUID phases including restore must pass');
+  const setBefore = (capture, id) => { capture.id = capture.before.id = id; };
+  for (const [name, mutate] of [
+    ['non-UUID post', captures => { captures[0].after.id = 'reused-after-nonce'; }],
+    ['non-UUID before alias', captures => setBefore(captures[0], 'not-a-uuid')],
+    ['duplicate post-post', captures => { captures[1].after.id = captures[0].after.id; }],
+    ['duplicate before-before', captures => setBefore(captures[1], captures[0].id)],
+    ['previous post reused as before', captures => setBefore(captures[1], captures[0].after.id)],
+    ['previous before reused as post', captures => { captures[1].after.id = captures[0].id; }],
+    ['future before reused as post', captures => { captures[0].after.id = captures[1].id; }],
+    ['case-insensitive collision', captures => { captures[1].after.id = captures[0].after.id.toUpperCase(); }],
+    ['restore post collision', captures => { captures.find(c => c.stage === 'stage_7_restore').after.id = captures[0].after.id; }],
+  ]) {
+    const captures = structuredClone(fresh); mutate(captures); writeNonces(captures);
+    assert.ok(validateRunArtifacts(branch).some(failure => /nonce/.test(failure)), `Must reject ${name}`);
+  }
+  const brokenAlias = structuredClone(fresh); brokenAlias[0].before.id = 'not-a-uuid'; writeNonces(brokenAlias);
+  assert.ok(validateRunArtifacts(branch).some(failure => /attestations/.test(failure)), 'Before ID must alias capture ID');
+  console.log('Delivered nonce UUID format, alias, global phase uniqueness and restoration regressions passed.');
   reset(); assert.equal(run().status, 0);
   const changed = PNG.sync.read(img); changed.data[0] = 255;
   const changedBytes = PNG.sync.write(changed);

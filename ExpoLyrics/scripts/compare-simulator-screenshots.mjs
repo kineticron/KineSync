@@ -241,14 +241,19 @@ export function validateRunArtifacts(directory) {
     const first = captures[0];
     const ids = new Set();
     for (const capture of captures) {
+      // capture.id and before.id alias one observation; after.id is a second nonce.
+      // One set covers every phase and stage, including portrait restoration.
+      for (const id of [capture.id, capture.after?.id]) {
+        if (typeof id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id) || ids.has(id.toLowerCase())) failures.push('Invalid or reused native capture nonce');
+        else ids.add(id.toLowerCase());
+      }
       if (!run || capture.run !== run || capture.token !== `${run}_${capture.stage}` || capture.error ||
-          !capture.id || ids.has(capture.id) || !first?.session || capture.session !== first.session || !first.udid || capture.udid !== first.udid) failures.push('Invalid native capture ownership');
+          !capture.id || !first?.session || capture.session !== first.session || !first.udid || capture.udid !== first.udid) failures.push('Invalid native capture ownership');
       if (capture.stage === 'stage_7_rotation' && capture.source !== 'simctl-framebuffer') failures.push('Landscape requires native framebuffer provenance');
       if (!['XCUIScreen', 'simctl-framebuffer'].includes(capture.source) || !capture.before || !capture.after || capture.before.id !== capture.id || capture.after.id === capture.id || capture.before.phase !== 'before' || capture.after.phase !== 'after') failures.push('Missing native foreground attestations');
       else for (const observed of [capture.before, capture.after]) {
         validateCaptureAttestation(observed, { session: capture.session, id: observed.id, run: capture.run, stage: capture.stage, token: capture.token, orientation: capture.orientation, udid: capture.udid, phase: observed.phase }, capture.udid);
       }
-      ids.add(capture.id);
     }
     for (const stage of [...REQUIRED_STAGES.slice(0, 7), 'stage_7_restore']) {
       const last = captures.filter(capture => capture.stage === stage).at(-1);
