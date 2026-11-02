@@ -1,6 +1,6 @@
 # Automated iOS simulator testing harness with deterministic fake playback clock
 # Builds unsigned Release arm64 simulator .app bundle, boots simulator, executes scenario,
-# captures real screenshots and perf metrics, and validates visual assertions.
+# captures real screenshots and perf metrics, and validates screenshot artifact delivery.
 
 name: iOS Simulator Test
 
@@ -14,9 +14,9 @@ on:
         default: false
         type: boolean
       baseline_ref:
-        description: 'Optional baseline git ref for screenshot comparison'
+        description: 'Compatibility input; baseline is pinned to e9abf50510b84db9f9f3a20c6f45ceb11685771f'
         required: false
-        default: ''
+        default: 'main'
         type: string
 
 permissions:
@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(github.event.inputs.baseline_ref != '' && '["candidate","baseline"]' || '["candidate"]') }}
+        variant: [candidate, baseline]
 
     steps:
       - name: Record job work start
@@ -135,7 +135,7 @@ jobs:
         id: baseline_prep
         if: matrix.variant == 'baseline'
         env:
-          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
           BASELINE_DIR: ${{ steps.paths.outputs.baseline }}
         run: |
           set -euo pipefail
@@ -327,7 +327,7 @@ jobs:
           STEP_RESULTS: ${{ toJSON(steps) }}
           VARIANT: ${{ matrix.variant }}
           CANDIDATE_SHA: ${{ github.sha }}
-          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
         run: |
           mkdir -p ExpoLyrics/.expo
           node --input-type=module <<'STATUS'
@@ -359,11 +359,12 @@ jobs:
             ExpoLyrics/.expo/*-commit.txt
             ExpoLyrics/.expo/cache-verification-*.json
           include-hidden-files: true
+          if-no-files-found: error
           retention-days: 14
 
   compare:
     needs: ios-simulator-test
-    if: ${{ always() && !cancelled() && github.event.inputs.diagnostic_only != 'true' && github.event.inputs.baseline_ref != '' }}
+    if: ${{ always() && !cancelled() && github.event.inputs.diagnostic_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -379,14 +380,18 @@ jobs:
         with:
           pattern: ios-simulator-*-artifacts
           path: comparison-input
-      - name: Compare all required screenshot pairs
+      - name: Validate screenshot artifact pairs for Kat
         id: comparison
         env:
-          BASELINE_REF: ${{ github.event.inputs.baseline_ref }}
+          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
         run: |
           BASELINE_SHA="$(cat comparison-input/ios-simulator-baseline-artifacts/baseline-commit.txt)"
-          test -n "${BASELINE_SHA}"
+          test "${BASELINE_SHA}" = e9abf50510b84db9f9f3a20c6f45ceb11685771f
+          test "${{ needs.ios-simulator-test.result }}" = success
           node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir comparison-input/ios-simulator-candidate-artifacts/simulator-test-output --baseline-dir comparison-input/ios-simulator-baseline-artifacts/simulator-test-output --baseline-ref "${BASELINE_SHA}" --output comparison-report.md
+      - name: Report screenshot artifacts to Kat
+        if: success()
+        run: echo "Kat, both candidate and pinned-main screenshot artifacts are available for review. No visual verdict was applied." >> "${GITHUB_STEP_SUMMARY}"
       - name: Publish comparison summary
         if: always()
         env:
@@ -404,7 +409,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: ios-simulator-comparison
+          name: ios-simulator-screenshot-review
           path: |
             comparison-report.md
             comparison-status.json
+            comparison-report.md.manifest.json

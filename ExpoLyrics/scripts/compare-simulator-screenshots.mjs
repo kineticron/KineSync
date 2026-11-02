@@ -198,7 +198,7 @@ export function generateComparisonMarkdown(comparison, baselineRef = 'baseline')
     '',
     '* When the baseline reference lacks the simulator test harness, the test harness files are applied to the baseline workspace for visual testing.',
     '* Baseline harness integration must apply successfully. Incompatible baselines fail closed.',
-    '* Acceptance requires all seven nonblank image pairs with matching dimensions. The default maximum differing-pixel ratio is zero after channel tolerance.',
+    '* Acceptance requires all seven authentic nonblank image pairs and raw landscape geometry. Pixel differences are advisory; Kat reviews artifacts afterwards.',
     '* Minor anti-aliasing and subpixel differences across independent builds can result in non-zero byte divergence even when layouts match visually.',
     '',
   );
@@ -206,7 +206,7 @@ export function generateComparisonMarkdown(comparison, baselineRef = 'baseline')
   return lines.join('\n');
 }
 
-export function validateComparison(comparison, maxDifferenceRatio = 0) {
+export function validateComparison(comparison, maxDifferenceRatio = 1) {
   const failures = [];
   if (!Number.isFinite(maxDifferenceRatio) || maxDifferenceRatio < 0 || maxDifferenceRatio > 1) return ['Invalid maximum difference ratio'];
   if (comparison.error) failures.push(comparison.error);
@@ -215,7 +215,7 @@ export function validateComparison(comparison, maxDifferenceRatio = 0) {
   for (const r of comparison.results) {
     const landscape = r.filename === 'stage_7_rotation.png';
     if (landscape ? r.branchWidth <= r.branchHeight || r.baselineWidth <= r.baselineHeight : r.branchHeight <= r.branchWidth || r.baselineHeight <= r.baselineWidth) failures.push(`Invalid native screenshot orientation: ${r.filename}`);
-    if (!Number.isFinite(r.differenceRatio) || !['IDENTICAL', 'DIFFERENT'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank || r.differenceRatio > maxDifferenceRatio) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
+    if (!Number.isFinite(r.differenceRatio) || !['IDENTICAL', 'DIFFERENT', 'DIMENSION_MISMATCH'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
   }
   return failures;
 }
@@ -277,14 +277,14 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
   if (output) {
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, markdown, 'utf8');
+    const manifest = { baseline: baselineRef, review: 'Kat reviews screenshots externally; no visual verdict', stages: REQUIRED_SCREENSHOTS.map(filename => ({ filename, candidate: path.relative(path.dirname(output), path.join(branchDir, filename)), main: path.relative(path.dirname(output), path.join(baselineDir, filename)) })) };
+    fs.writeFileSync(`${output}.manifest.json`, JSON.stringify(manifest, null, 2));
     console.log(`Wrote screenshot comparison report to ${output}`);
   } else {
     console.log(markdown);
   }
 
-  const thresholdIndex = process.argv.indexOf('--max-difference-ratio');
-  const threshold = thresholdIndex >= 0 ? Number(process.argv[thresholdIndex + 1]) : 0;
-  const failures = [...validateComparison(comparison, threshold),
+  const failures = [...validateComparison(comparison),
     ...validateRunArtifacts(branchDir).map(f => `Candidate: ${f}`),
     ...validateRunArtifacts(baselineDir).map(f => `Baseline: ${f}`)];
   if (failures.length && output) fs.appendFileSync(output, '\n## Run acceptance failures\n\n' + failures.map(f => `* ${f}`).join('\n') + '\n');

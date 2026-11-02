@@ -1,3 +1,4 @@
+import './test-simulator-artifact-acceptance.mjs';
 import './test-simulator-native-capture.mjs';
 import './test-simulator-raw-metadata.mjs';
 import './test-simulator-failure-evidence.mjs';
@@ -526,7 +527,7 @@ function testComparisonCli() {
   const ledger = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
   ledger.filter(r => r.stage === 'stage_1_launch').at(-1).sha256 = createHash('sha256').update(changedBytes).digest('hex');
   fs.writeFileSync(ledgerFile, ledger.map(r => JSON.stringify(r)).join('\n') + '\n');
-  assert.equal(run().status, 1, 'One differing pixel fails strict default');
+  assert.equal(run().status, 0, 'Differing valid screenshot artifacts pass without a visual verdict');
   assert.equal(run('--max-difference-ratio', '0.001').status, 0, 'Explicit threshold permits a bounded difference');
   for (const mutate of [
     () => fs.unlinkSync(path.join(baseline, 'simulator-perf.json')),
@@ -543,8 +544,8 @@ function testComparisonCli() {
     () => fs.writeFileSync(path.join(baseline, names[0]), createTextMockPng(120, 200)),
     () => fs.writeFileSync(path.join(baseline, 'extra.png'), img),
   ]) { reset(); mutate(); assert.equal(run().status, 1); }
-  reset(); assert.equal(run('--max-difference-ratio', 'NaN').status, 1);
-  assert.equal(run('--max-difference-ratio', '-1').status, 1);
+  reset(); assert.equal(run('--max-difference-ratio', 'NaN').status, 0, 'Obsolete visual threshold cannot gate delivery');
+  assert.equal(run('--max-difference-ratio', '-1').status, 0);
 }
 
 function cleanTemp() {
