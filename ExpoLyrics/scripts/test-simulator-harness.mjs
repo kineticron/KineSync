@@ -18,6 +18,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { PNG } from 'pngjs';
+import CrcCalculator from 'pngjs/lib/crc.js';
 import { reviewPNG } from './simulator-review-png.mjs';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent, compareScreenshots, validateRunArtifacts } from './compare-simulator-screenshots.mjs';
@@ -589,6 +590,55 @@ function testComparisonCli() {
     () => fs.writeFileSync(path.join(baseline, names[0]), createTextMockPng(120, 200)),
     () => fs.writeFileSync(path.join(baseline, 'extra.png'), img),
   ]) { reset(); mutate(); assert.equal(run().status, 1); }
+  // Mutate delivered files and refresh their declared hash to isolate shape/EXIF integrity.
+  const withExif = (bytes, tag) => {
+    const tiff = Buffer.alloc(26); tiff.write('MM'); tiff.writeUInt16BE(42, 2); tiff.writeUInt32BE(8, 4); tiff.writeUInt16BE(1, 8);
+    tiff.writeUInt16BE(0x112, 10); tiff.writeUInt16BE(3, 12); tiff.writeUInt32BE(1, 14); tiff.writeUInt16BE(tag, 18);
+    const chunk = Buffer.alloc(38); chunk.writeUInt32BE(26); chunk.write('eXIf', 4); tiff.copy(chunk, 8);
+    chunk.writeInt32BE(CrcCalculator.crc32(chunk.subarray(4, -4)), 34);
+    return Buffer.concat([bytes.subarray(0, 33), chunk, bytes.subarray(33)]);
+  };
+  for (const [stage, file, mutation] of [
+    ['stage_1_launch', names[0], 'reshape'],
+    ['stage_7_rotation', names[6], 'reshape'],
+    ['stage_7_restore', 'diagnostics/restored-portrait.png', 'reshape'],
+    ['stage_1_launch', names[0], 'add-exif-1'],
+    ['stage_7_rotation', names[6], 'add-exif-8'],
+    ['stage_7_restore', 'diagnostics/restored-portrait.png', 'remove-exif'],
+  ]) {
+    reset();
+    const records = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
+    const record = records.find(r => r.stage === stage);
+    const delivered = path.join(branch, file);
+    const nativeFile = path.join(branch, record.originalFile);
+    if (mutation === 'remove-exif') {
+      const tagged = withExif(fs.readFileSync(nativeFile), 1);
+      fs.writeFileSync(nativeFile, tagged); fs.writeFileSync(delivered, tagged);
+      record.sha256 = createHash('sha256').update(tagged).digest('hex'); record.exifOrientation = 1;
+      record.review = reviewPNG(tagged, record.orientation).conversion;
+    }
+    const writeRecords = () => fs.writeFileSync(ledgerFile, records.map(r => JSON.stringify(r)).join('\n') + '\n');
+    writeRecords();
+    assert.deepEqual(validateRunArtifacts(branch), [], `Valid initial fixture: ${stage}/${mutation}`);
+    assert.equal(run().status, 0);
+    const original = fs.readFileSync(nativeFile), before = PNG.sync.read(fs.readFileSync(delivered));
+    let altered;
+    if (mutation === 'reshape') {
+      const width = before.width > before.height ? 250 : 80, height = before.width > before.height ? 80 : 250;
+      altered = PNG.sync.write({ width, height, data: before.data });
+      assert.notEqual(width, before.width); assert.notEqual(height, before.height);
+    } else if (mutation === 'remove-exif') altered = PNG.sync.write(before);
+    else altered = withExif(fs.readFileSync(delivered), mutation.endsWith('1') ? 1 : 8);
+    const after = PNG.sync.read(altered);
+    assert.deepEqual(after.data, before.data, 'Decoded RGBA equality alone is insufficient');
+    assert.equal(after.width > after.height, before.width > before.height, 'Broad orientation classification stays identical');
+    fs.writeFileSync(delivered, altered);
+    record.review.outputSHA256 = createHash('sha256').update(altered).digest('hex'); writeRecords();
+    assert.deepEqual(fs.readFileSync(nativeFile), original, 'Native original stays untouched by delivered mutation');
+    assert.ok(validateRunArtifacts(branch).some(f => /native\/review conversion/.test(f)), `Reject delivered ${stage}/${mutation}`);
+    assert.equal(run().status, 1, `CLI rejects delivered ${stage}/${mutation}`);
+  }
+  console.log('Delivered reshape and added/removed EXIF conversion-integrity regressions passed.');
   reset(); assert.equal(run('--max-difference-ratio', 'NaN').status, 0, 'Obsolete visual threshold cannot gate delivery');
   assert.equal(run('--max-difference-ratio', '-1').status, 0);
 }

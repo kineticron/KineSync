@@ -268,7 +268,8 @@ export function validateRunArtifacts(directory) {
       const original = fs.readFileSync(path.join(directory, last.originalFile));
       const native = PNG.sync.read(original), metadata = nativePNGMetadata(original);
       const review = reviewPNG(original, orientation);
-      if (last.sha256 !== createHash('sha256').update(original).digest('hex') || last.width !== native.width || last.height !== native.height || last.exifOrientation !== metadata.exifOrientation ||
+      if (image.width !== review.conversion.outputWidth || image.height !== review.conversion.outputHeight || nativePNGMetadata(bytes).exifOrientation !== review.conversion.outputExifOrientation ||
+          last.sha256 !== createHash('sha256').update(original).digest('hex') || last.width !== native.width || last.height !== native.height || last.exifOrientation !== metadata.exifOrientation ||
           JSON.stringify(last.review) !== JSON.stringify({ ...review.conversion, outputSHA256: createHash('sha256').update(bytes).digest('hex') }) || !image.data.equals(PNG.sync.read(review.bytes).data) ||
           (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width)) failures.push(`Missing or mismatched native/review conversion: ${stage}`);
     }
