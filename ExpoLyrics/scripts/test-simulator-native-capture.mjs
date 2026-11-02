@@ -15,7 +15,7 @@ for (const key of ['id', 'session', 'udid', 'observedUDID', 'run', 'stage', 'tok
 const captureSwift = fs.readFileSync(new URL('./native-simulator-capture/CaptureTests.swift', import.meta.url), 'utf8');
 assert.match(captureSwift, /window\.screenshot\(\)/, 'Landscape must target the native app window rather than repeat physical framebuffer export');
 const hostCapture = fs.readFileSync(new URL('./simulator-native-capture.mjs', import.meta.url), 'utf8').split('export class NativeCapture')[1];
-assert.doesNotMatch(hostCapture, /simctl|framebuffer|PNG\.sync\.write|rotate|resize/, 'Host must not retry physical capture or transform native output');
+assert.doesNotMatch(hostCapture, /simctl|framebuffer|rotate|resize/, 'Host must not retry physical capture or transform native output');
 const xcode = createRequire(import.meta.url)('xcode');
 const project = xcode.project(new URL('./native-simulator-capture/Capture.xcodeproj/project.pbxproj', import.meta.url).pathname);
 project.parseSync();

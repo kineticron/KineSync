@@ -4,6 +4,7 @@ import plist from 'plist';
 import { randomUUID, createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { startupCommand } from './simulator-startup.mjs';
+import { reviewPNG } from './simulator-review-png.mjs';
 import { nativePNGMetadata } from './simulator-png-metadata.mjs';
 
 export const APP_BUNDLE = 'dev.kineticron.KineSync';
@@ -119,9 +120,15 @@ export class NativeCapture {
       record.width = image.width; record.height = image.height;
       record.exifOrientation = nativePNGMetadata(bytes).exifOrientation;
       record.sha256 = createHash('sha256').update(bytes).digest('hex');
-      if (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width) throw Error(`Native ${orientation} screenshot dimensions invalid: ${image.width}x${image.height}; EXIF orientation=${record.exifOrientation ?? 'absent'} (raw encoded geometry required)`);
+      const originalFile = `originals/${request.id}.png`;
+      fs.mkdirSync(path.join(this.state.outputDir, 'originals'), { recursive: true });
+      fs.writeFileSync(path.join(this.state.outputDir, originalFile), bytes);
+      record.originalFile = originalFile;
+      const review = reviewPNG(bytes, orientation);
+      record.review = review.conversion;
+      fs.writeFileSync(destination, review.bytes);
       this.state.check();
-      return bytes;
+      return review.bytes;
     } catch (error) {
       record.error = error.message;
       if (fs.existsSync(pngFile)) {

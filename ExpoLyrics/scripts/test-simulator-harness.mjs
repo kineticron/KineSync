@@ -1,3 +1,4 @@
+import './test-simulator-review-png.mjs';
 import './test-simulator-artifact-acceptance.mjs';
 import './test-simulator-native-capture.mjs';
 import './test-simulator-raw-metadata.mjs';
@@ -17,6 +18,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { PNG } from 'pngjs';
+import { reviewPNG } from './simulator-review-png.mjs';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
 import { analyzeScreenshotContent, compareScreenshots, validateRunArtifacts } from './compare-simulator-screenshots.mjs';
 import './test-simulator-build.mjs';
@@ -518,7 +520,7 @@ function testComparisonCli() {
   const img = createTextMockPng(100, 200);
   const validRun = path.join(tempDir, 'runner-cli', (process.env.SIM_TEST_CASES?.split(',') || ['pass'])[0]);
   const reset = () => { for (const dir of [branch, baseline]) { fs.rmSync(dir, { recursive: true }); fs.mkdirSync(dir); for (const name of names) fs.writeFileSync(path.join(dir, name), name.includes('stage_7') ? createTextMockPng(200, 100) : img);
-    for (const file of ['simulator-perf.json', 'simulator-raw-log.txt', 'native-captures.jsonl', 'diagnostics/restored-portrait.png']) { fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); fs.copyFileSync(path.join(validRun, file), path.join(dir, file)); } } };
+    for (const file of ['simulator-perf.json', 'simulator-raw-log.txt', 'native-captures.jsonl', 'diagnostics/restored-portrait.png']) { fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); fs.copyFileSync(path.join(validRun, file), path.join(dir, file)); } fs.cpSync(path.join(validRun, 'originals'), path.join(dir, 'originals'), { recursive: true }); } };
   const run = (...args) => spawnSync(process.execPath, [path.join(__dirname, 'compare-simulator-screenshots.mjs'), '--branch-dir', branch, '--baseline-dir', baseline, ...args], { encoding: 'utf8' });
   reset();
   const nonceFile = path.join(branch, 'native-captures.jsonl');
@@ -555,12 +557,25 @@ function testComparisonCli() {
   fs.writeFileSync(path.join(branch, names[0]), changedBytes);
   const ledgerFile = path.join(branch, 'native-captures.jsonl');
   const ledger = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
-  ledger.filter(r => r.stage === 'stage_1_launch').at(-1).sha256 = createHash('sha256').update(changedBytes).digest('hex');
+  const changedRecord = ledger.filter(r => r.stage === 'stage_1_launch').at(-1);
+  changedRecord.sha256 = createHash('sha256').update(changedBytes).digest('hex');
+  fs.writeFileSync(path.join(branch, changedRecord.originalFile), changedBytes);
+  changedRecord.review = reviewPNG(changedBytes, 'portrait').conversion;
   fs.writeFileSync(ledgerFile, ledger.map(r => JSON.stringify(r)).join('\n') + '\n');
   assert.equal(run().status, 0, 'Differing valid screenshot artifacts pass without a visual verdict');
   assert.equal(run('--max-difference-ratio', '0.001').status, 0, 'Explicit threshold permits a bounded difference');
   for (const mutate of [
     () => fs.unlinkSync(path.join(baseline, 'simulator-perf.json')),
+    () => fs.rmSync(path.join(branch, 'originals'), { recursive: true }),
+    ...[
+      records => { records[0].review.outputSHA256 = 'tampered'; },
+      records => { records[0].sha256 = 'tampered'; },
+      records => { records[0].before.foreground = 'false'; },
+      records => { records[0].after.deviceOrientation = 'landscape'; },
+      records => { records[6].after.windowWidth = '100'; records[6].after.windowHeight = '200'; },
+      records => { records.find(r => r.stage === 'stage_7_restore').orientation = 'landscape'; },
+    ].map(mutate => () => { const file = path.join(branch, 'native-captures.jsonl'); const records = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse); mutate(records); fs.writeFileSync(file, records.map(r => JSON.stringify(r)).join('\n')); }),
+    () => { const file = path.join(branch, 'native-captures.jsonl'); const records = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse); delete records[0].review; fs.writeFileSync(file, records.map(r => JSON.stringify(r)).join('\n')); },
     () => fs.unlinkSync(path.join(branch, 'simulator-raw-log.txt')),
     () => fs.unlinkSync(path.join(branch, 'native-captures.jsonl')),
     () => fs.unlinkSync(path.join(branch, 'diagnostics/restored-portrait.png')),

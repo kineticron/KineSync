@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { createHash } from 'node:crypto';
+import { reviewPNG } from './simulator-review-png.mjs';
+import { nativePNGMetadata } from './simulator-png-metadata.mjs';
 import { validateCaptureAttestation } from './simulator-native-capture.mjs';
 import { SimulatorLogParser, REQUIRED_STAGES } from './parse-simulator-logs.mjs';
 
@@ -199,7 +201,7 @@ export function generateComparisonMarkdown(comparison, baselineRef = 'baseline')
     '',
     '* When the baseline reference lacks the simulator test harness, the test harness files are applied to the baseline workspace for visual testing.',
     '* Baseline harness integration must apply successfully. Incompatible baselines fail closed.',
-    '* Acceptance requires all seven authentic nonblank image pairs and raw landscape geometry. Pixel differences are advisory; Kat reviews artifacts afterwards.',
+    '* Acceptance requires all seven authentic nonblank review image pairs, orientation-correct landscape copies, untouched native originals and conversion provenance. Pixel differences are advisory; Kat reviews artifacts afterwards.',
     '* Minor anti-aliasing and subpixel differences across independent builds can result in non-zero byte divergence even when layouts match visually.',
     '',
   );
@@ -262,9 +264,13 @@ export function validateRunArtifacts(directory) {
       const image = PNG.sync.read(bytes);
       if (!analyzeScreenshotContent(bytes).nonBlank) failures.push(`Blank native capture: ${stage}`);
       const orientation = stage === 'stage_7_rotation' ? 'landscape' : 'portrait';
-      if (!last || last.orientation !== orientation || last.sha256 !== createHash('sha256').update(bytes).digest('hex') ||
-          last.width !== image.width || last.height !== image.height ||
-          (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width)) failures.push(`Missing or mismatched native capture: ${stage}`);
+      if (!last || last.orientation !== orientation || !/^originals\/[a-f0-9-]{36}\.png$/i.test(last.originalFile || '')) { failures.push(`Missing original capture: ${stage}`); continue; }
+      const original = fs.readFileSync(path.join(directory, last.originalFile));
+      const native = PNG.sync.read(original), metadata = nativePNGMetadata(original);
+      const review = reviewPNG(original, orientation);
+      if (last.sha256 !== createHash('sha256').update(original).digest('hex') || last.width !== native.width || last.height !== native.height || last.exifOrientation !== metadata.exifOrientation ||
+          JSON.stringify(last.review) !== JSON.stringify({ ...review.conversion, outputSHA256: createHash('sha256').update(bytes).digest('hex') }) || !image.data.equals(PNG.sync.read(review.bytes).data) ||
+          (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width)) failures.push(`Missing or mismatched native/review conversion: ${stage}`);
     }
     return failures;
   } catch (error) { return [...failures, `Incomplete run artifacts: ${error.message}`]; }
@@ -288,7 +294,7 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
   if (output) {
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, markdown, 'utf8');
-    const manifest = { baseline: baselineRef, review: 'Kat reviews screenshots externally; no visual verdict', stages: REQUIRED_SCREENSHOTS.map(filename => ({ filename, candidate: path.relative(path.dirname(output), path.join(branchDir, filename)), main: path.relative(path.dirname(output), path.join(baselineDir, filename)) })) };
+    const manifest = { baseline: baselineRef, review: 'Review copies may be EXIF-oriented. Untouched originals and conversion records accompany them. Kat reviews externally; no visual verdict', nativeOriginals: { candidate: path.relative(path.dirname(output), path.join(branchDir, 'originals')), main: path.relative(path.dirname(output), path.join(baselineDir, 'originals')) }, captureLedgers: { candidate: path.relative(path.dirname(output), path.join(branchDir, 'native-captures.jsonl')), main: path.relative(path.dirname(output), path.join(baselineDir, 'native-captures.jsonl')) }, stages: REQUIRED_SCREENSHOTS.map(filename => ({ filename, kind: 'review-copy', candidate: path.relative(path.dirname(output), path.join(branchDir, filename)), main: path.relative(path.dirname(output), path.join(baselineDir, filename)) })) };
     fs.writeFileSync(`${output}.manifest.json`, JSON.stringify(manifest, null, 2));
     console.log(`Wrote screenshot comparison report to ${output}`);
   } else {

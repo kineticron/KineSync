@@ -1,4 +1,4 @@
-// Encoded geometry must remain authoritative even when EXIF displays landscape.
+// Raw metadata remains immutable; approved EXIF review copies have independent geometry.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,10 +39,12 @@ try {
       fs.writeFileSync(path.join(root, `${request.id}.json`), JSON.stringify({ ...request, observedUDID: 'device', bundle: 'dev.kineticron.KineSync', foreground: 'true', deviceOrientation: request.orientation, captureSource: request.orientation === 'landscape' ? 'XCUIWindow' : 'XCUIScreen', windowWidth: '5', windowHeight: '3' }));
     } });
   const destination = path.join(root, 'result.png');
-  await assert.rejects(capture.capture(destination, { run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', orientation: 'landscape' }), /dimensions invalid.*EXIF orientation=8/);
-  assert.deepEqual(fs.readFileSync(destination), raw, 'EXIF must never trigger pixel rotation or PNG reencoding');
+  await capture.capture(destination, { run: 'run', stage: 'stage_7_rotation', token: 'run_stage_7_rotation', orientation: 'landscape' });
+  assert.deepEqual(nativePNGMetadata(fs.readFileSync(destination)), { encodedWidth: 5, encodedHeight: 3, exifOrientation: null });
   const record = JSON.parse(fs.readFileSync(path.join(root, 'native-captures.jsonl'), 'utf8').trim());
+  assert.deepEqual(fs.readFileSync(path.join(root, record.originalFile)), raw, 'Native original remains unchanged');
+  assert.equal(record.review.operation, 'exif-8');
   assert.equal(record.exifOrientation, 8);
   assert.equal(record.width, 3); assert.equal(record.height, 5);
 } finally { fs.rmSync(root, { recursive: true, force: true }); }
-console.log('EXIF orientation is diagnostic only; encoded landscape gate rejects portrait bytes unchanged.');
+console.log('Approved EXIF8 review conversion preserves native originals and records raw metadata.');
