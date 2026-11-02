@@ -10,6 +10,7 @@ import path from 'node:path';
 import { startupCommand, selectToolchain, prepareSimulator, startupDiagnostics, SUPPORTED_RUNTIME_POLICY } from './simulator-startup.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { SimulatorLogParser } from './parse-simulator-logs.mjs';
+import { startNativeCapture } from './simulator-native-capture.mjs';
 import { analyzeScreenshotContent } from './compare-simulator-screenshots.mjs';
 
 let lifecycle;
@@ -134,6 +135,7 @@ async function main() {
   });
 
   fs.mkdirSync(outputDir, { recursive: true });
+  let transportStopping = false;
   const logBytes = new Map();
   const appendLog = (file, chunk) => {
     const bytes = Buffer.from(chunk);
@@ -171,6 +173,7 @@ async function main() {
   if (process.env.SIMULATOR_ROTATION_TOOL_DIR) fs.copyFileSync(path.join(process.env.SIMULATOR_ROTATION_TOOL_DIR, 'provenance.json'), path.join(outputDir, 'rotation-tool-provenance.json'));
   await selectToolchain(lifecycle);
   const device = await prepareSimulator(lifecycle, selectSimulatorDevice);
+  const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport);
   lifecycle.enterPhase('startup:rotation-preflight', seconds('--preflight-seconds', 240000));
   // Reuse the verified inventory; preflight has its own bounded allowance.
   const inventory = JSON.stringify(lifecycle.readyInventory);
@@ -196,7 +199,6 @@ async function main() {
   fs.writeFileSync(rawLogFile, '');
 
   let scenarioFinished = false;
-  let transportStopping = false;
   let scenarioResolve = null;
   const scenarioPromise = new Promise((res) => {
     scenarioResolve = res;
@@ -205,6 +207,7 @@ async function main() {
   const verifiedScreenshots = new Map();
   const processedScreenshotStages = new Set();
   let screenshotRunToken;
+  let nativePortraitRestored = false;
 
   function processIncomingLine(line) {
     const trimmed = String(line || '').trim();
@@ -224,18 +227,13 @@ async function main() {
     const rotMatch = trimmed.match(/\[KINESYNC_SIM\] TRIGGER_SIMULATOR_ROTATION\s+orientation=(\w+)/);
     if (rotMatch) {
       try {
-        rotateSimulator(rotMatch[1], device.udid);
-        if (rotMatch[1] === 'portrait') {
-          const restored = path.join(outputDir, 'diagnostics/restored-portrait.png');
-          let observed = false;
-          for (let attempt = 0; attempt < 8; attempt++) {
-            runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', restored], { timeout: 60000 });
-            const image = PNG.sync.read(fs.readFileSync(restored));
-            if (image.height > image.width) { observed = true; break; }
-            runCommand('/bin/sleep', ['0.25']);
-          }
-          if (!observed) throw Error('Restored native portrait orientation not observed');
-        }
+        const orientation = rotMatch[1];
+        const owner = trimmed.match(/stage=stage_7_rotation token=([\w]+)/)?.[1];
+        const captureStage = orientation === 'landscape' ? 'stage_7_rotation' : 'stage_7_restore';
+        if (!screenshotRunToken || owner !== `${screenshotRunToken}_${captureStage}` || parser.activeStage !== 'stage_7_rotation' || parser.errors.length ||
+            parser.rotationTriggers.join(',') !== (orientation === 'landscape' ? 'landscape' : 'landscape,portrait') ||
+            orientation === 'portrait' && !verifiedScreenshots.get('stage_7_rotation')?.valid) throw Error('Invalid rotation request ownership/order');
+        rotateSimulator(orientation, device.udid);
       }
       catch (err) { parser.errors.push(`Rotation command failed: ${err.message}`); scenarioResolve(); }
     }
@@ -251,11 +249,13 @@ async function main() {
       const runToken = token.endsWith(suffix) ? token.slice(0, -suffix.length) : '';
       if (!runToken || !screenshotRunToken || screenshotRunToken !== runToken) { parser.errors.push('Invalid or stale screenshot token'); scenarioResolve(); return; }
       screenshotRunToken = runToken;
+      if (stage === 'stage_7_rotation' && !parser.landscapeConfirmed) { parser.errors.push('Landscape capture requires fresh native layout'); scenarioResolve(); return; }
       if (!processedScreenshotStages.has(stage)) {
         processedScreenshotStages.add(stage);
         const shotPath = path.join(outputDir, `${stage}.png`);
         try {
-          runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath]);
+          const capture = () => nativeCapture.capture(shotPath, { run: screenshotRunToken, stage, token, orientation: stage === 'stage_7_rotation' ? 'landscape' : 'portrait' });
+          capture();
           const attemptsDir = path.join(outputDir, 'diagnostics', stage);
           fs.mkdirSync(attemptsDir, { recursive: true });
           let buf = fs.readFileSync(shotPath);
@@ -263,7 +263,7 @@ async function main() {
           let settled = false;
           for (let attempt = 0; attempt < 3; attempt++) {
             runCommand('sleep', ['0.25']);
-            runCommand('xcrun', ['simctl', 'io', device.udid, 'screenshot', shotPath], { timeout: 60000 });
+            capture();
             const next = fs.readFileSync(shotPath);
             fs.writeFileSync(path.join(attemptsDir, `frame-${attempt + 1}.png`), next);
             const before = PNG.sync.read(buf), after = PNG.sync.read(next);
@@ -322,6 +322,25 @@ async function main() {
           scenarioResolve();
         }
       }
+    }
+
+    const restore = trimmed.match(/\[KINESYNC_SIM\] READY_FOR_PORTRAIT_RESTORE stage=(\w+) token=([\w]+)/);
+    if (restore) {
+      try {
+        const stage = 'stage_7_restore';
+        if (restore[1] !== 'stage_7_rotation' || parser.activeStage !== 'stage_7_rotation' ||
+            restore[2] !== `${screenshotRunToken}_${stage}` || !verifiedScreenshots.get('stage_7_rotation')?.valid ||
+            !parser.portraitConfirmed || parser.errors.length || processedScreenshotStages.has(stage)) throw Error('Invalid portrait restoration ownership/order');
+        processedScreenshotStages.add(stage);
+        const restored = path.join(outputDir, 'diagnostics/restored-portrait.png');
+        const bytes = nativeCapture.capture(restored, { run: screenshotRunToken, stage, token: restore[2], orientation: 'portrait' });
+        if (!analyzeScreenshotContent(bytes).nonBlank) throw Error('Blank native portrait restoration');
+        nativePortraitRestored = true;
+        const container = runCommand('xcrun', ['simctl', 'get_app_container', device.udid, 'dev.kineticron.KineSync', 'data']).trim();
+        const ack = path.join(container, 'Library/Caches', `kinesync_sim_ack_${stage}.json`);
+        fs.writeFileSync(`${ack}.tmp`, JSON.stringify({ stage, token: restore[2], timestamp: Date.now() }));
+        fs.renameSync(`${ack}.tmp`, ack);
+      } catch (error) { parser.errors.push(`Portrait restoration: ${error.message}`); scenarioResolve(); }
     }
 
     if (trimmed.includes('[KINESYNC_SIM] SCENARIO_COMPLETE')) {
@@ -427,6 +446,7 @@ async function main() {
   console.log('[RUNNER] Test scenario completed. Validating assertions...');
 
   const assertionFailures = parser.validateAssertions();
+  if (!nativePortraitRestored) assertionFailures.push('Missing native portrait restoration capture');
 
   // Validate screenshots
   const requiredScreenshots = [
@@ -448,7 +468,7 @@ async function main() {
     }
   }
 
-  parser.errors.push(...assertionFailures.filter(f => f.startsWith('Missing screenshot capture') || f.startsWith('Invalid/blank screenshot')));
+  parser.errors.push(...assertionFailures.filter(f => f.startsWith('Missing native portrait restoration') || f.startsWith('Missing screenshot capture') || f.startsWith('Invalid/blank screenshot')));
   const markdownReport = parser.generateMarkdownReport();
   fs.writeFileSync(summaryReportFile, markdownReport, 'utf8');
 
@@ -458,6 +478,8 @@ async function main() {
     stages: parser.stages,
     renderers: Array.from(parser.renderers),
     landscapeConfirmed: parser.landscapeConfirmed,
+    portraitConfirmed: parser.portraitConfirmed,
+    nativePortraitRestored,
     assertionFailures,
   };
   fs.writeFileSync(perfJsonFile, JSON.stringify(perfData, null, 2), 'utf8');

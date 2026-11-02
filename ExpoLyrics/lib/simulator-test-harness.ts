@@ -383,7 +383,7 @@ export class SimulatorTestHarness {
       // Stage 7: Orientation rotation stage
       this.beginStage('stage_7_rotation');
       const landscapePromise = waitForSimulatorOrientation('landscape', 120000);
-      console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape');
+      console.info(`[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape stage=stage_7_rotation token=${this.runToken}_stage_7_rotation`);
       const landscapeLayout = await landscapePromise;
       if (landscapeLayout.width <= landscapeLayout.height) {
         throw new Error(`Landscape viewport invariant failed: width=${landscapeLayout.width} <= height=${landscapeLayout.height}`);
@@ -393,8 +393,17 @@ export class SimulatorTestHarness {
 
       // Return back to portrait orientation
       const portraitPromise = waitForSimulatorOrientation('portrait', 120000);
-      console.info('[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait');
+      console.info(`[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait stage=stage_7_rotation token=${this.runToken}_stage_7_restore`);
       await portraitPromise;
+      const restoreToken = `${this.runToken}_stage_7_restore`;
+      setSimulatorCaptureFrozen(true);
+      try {
+        await this.delay(1000);
+        console.info(`[KINESYNC_SIM] READY_FOR_PORTRAIT_RESTORE stage=stage_7_rotation token=${restoreToken}`);
+        await waitForSimulatorScreenshotAck('stage_7_restore', restoreToken, 120000);
+      } finally {
+        setSimulatorCaptureFrozen(false);
+      }
       this.endStage('stage_7_rotation', 'PASS', { width: landscapeLayout.width, height: landscapeLayout.height });
 
       // Stage 8: Finish scenario and report

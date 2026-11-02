@@ -4,7 +4,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
-import { REQUIRED_STAGES } from './parse-simulator-logs.mjs';
+import { createHash } from 'node:crypto';
+import { SimulatorLogParser, REQUIRED_STAGES } from './parse-simulator-logs.mjs';
 
 export const REQUIRED_SCREENSHOTS = REQUIRED_STAGES.slice(0, 7).map(s => `${s}.png`);
 
@@ -212,9 +213,50 @@ export function validateComparison(comparison, maxDifferenceRatio = 0) {
   const names = comparison.results.map(r => r.filename);
   if (names.length !== REQUIRED_SCREENSHOTS.length || REQUIRED_SCREENSHOTS.some(f => !names.includes(f))) failures.push('Expected exactly seven screenshot pairs');
   for (const r of comparison.results) {
-    if (!['IDENTICAL', 'DIFFERENT'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank || r.differenceRatio > maxDifferenceRatio) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
+    const landscape = r.filename === 'stage_7_rotation.png';
+    if (landscape ? r.branchWidth <= r.branchHeight || r.baselineWidth <= r.baselineHeight : r.branchHeight <= r.branchWidth || r.baselineHeight <= r.baselineWidth) failures.push(`Invalid native screenshot orientation: ${r.filename}`);
+    if (!Number.isFinite(r.differenceRatio) || !['IDENTICAL', 'DIFFERENT'].includes(r.status) || !r.branchNonBlank || !r.baselineNonBlank || r.differenceRatio > maxDifferenceRatio) failures.push(`Screenshot acceptance failed: ${r.filename} (${r.status})`);
   }
   return failures;
+}
+
+// Re-parse observed protocol and cross-check its full metrics against exported records.
+// A visually identical failed run must never produce a passing comparison.
+export function validateRunArtifacts(directory) {
+  const failures = [];
+  try {
+    const parser = new SimulatorLogParser();
+    const raw = fs.readFileSync(path.join(directory, 'simulator-raw-log.txt'), 'utf8');
+    for (const line of raw.split('\n')) parser.processLine(line);
+    failures.push(...parser.validateAssertions());
+    const perf = JSON.parse(fs.readFileSync(path.join(directory, 'simulator-perf.json')));
+    for (const [key, value] of Object.entries({ summary: parser.summary, heartbeat: parser.heartbeat, stages: parser.stages, renderers: [...parser.renderers] })) {
+      if (JSON.stringify(perf[key]) !== JSON.stringify(value)) failures.push(`Exported ${key} contradicts protocol`);
+    }
+    if (perf.landscapeConfirmed !== true || perf.portraitConfirmed !== true || perf.nativePortraitRestored !== true ||
+        !Array.isArray(perf.assertionFailures) || perf.assertionFailures.length) failures.push('Run did not pass all capture/scenario assertions');
+    const run = raw.match(/\[KINESYNC_SIM\] SCENARIO_START token=([\w]+)/)?.[1];
+    const captures = fs.readFileSync(path.join(directory, 'native-captures.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    const first = captures[0];
+    const ids = new Set();
+    for (const capture of captures) {
+      if (!run || capture.run !== run || capture.token !== `${run}_${capture.stage}` || capture.error ||
+          !capture.id || ids.has(capture.id) || !first?.session || capture.session !== first.session || !first.udid || capture.udid !== first.udid) failures.push('Invalid native capture ownership');
+      ids.add(capture.id);
+    }
+    for (const stage of [...REQUIRED_STAGES.slice(0, 7), 'stage_7_restore']) {
+      const last = captures.filter(capture => capture.stage === stage).at(-1);
+      const file = stage === 'stage_7_restore' ? 'diagnostics/restored-portrait.png' : `${stage}.png`;
+      const bytes = fs.readFileSync(path.join(directory, file));
+      const image = PNG.sync.read(bytes);
+      if (!analyzeScreenshotContent(bytes).nonBlank) failures.push(`Blank native capture: ${stage}`);
+      const orientation = stage === 'stage_7_rotation' ? 'landscape' : 'portrait';
+      if (!last || last.orientation !== orientation || last.sha256 !== createHash('sha256').update(bytes).digest('hex') ||
+          last.width !== image.width || last.height !== image.height ||
+          (orientation === 'landscape' ? image.width <= image.height : image.height <= image.width)) failures.push(`Missing or mismatched native capture: ${stage}`);
+    }
+    return failures;
+  } catch (error) { return [...failures, `Incomplete run artifacts: ${error.message}`]; }
 }
 
 // CLI entrypoint
@@ -242,7 +284,10 @@ if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1])))
 
   const thresholdIndex = process.argv.indexOf('--max-difference-ratio');
   const threshold = thresholdIndex >= 0 ? Number(process.argv[thresholdIndex + 1]) : 0;
-  const failures = validateComparison(comparison, threshold);
+  const failures = [...validateComparison(comparison, threshold),
+    ...validateRunArtifacts(branchDir).map(f => `Candidate: ${f}`),
+    ...validateRunArtifacts(baselineDir).map(f => `Baseline: ${f}`)];
+  if (failures.length && output) fs.appendFileSync(output, '\n## Run acceptance failures\n\n' + failures.map(f => `* ${f}`).join('\n') + '\n');
   if (failures.length) {
     console.error(`[COMPARATOR] ${failures.join('\n')}`);
     process.exit(1);

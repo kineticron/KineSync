@@ -222,6 +222,12 @@ export class SimulatorLogParser {
     if (!this.heartbeat || !Number.isInteger(this.heartbeat.samples) || this.heartbeat.samples <= 0) {
       failures.push('Missing or empty heartbeat performance metrics');
     }
+    const hb = this.heartbeat;
+    if (!hb || !['p50Ms', 'p95Ms', 'maxDelayMs', 'blocksOver50Ms', 'blocksOver100Ms'].every(key => Number.isFinite(hb[key]) && hb[key] >= 0) ||
+        !Number.isInteger(hb.blocksOver50Ms) || !Number.isInteger(hb.blocksOver100Ms) ||
+        hb.p50Ms > hb.p95Ms || hb.p95Ms > hb.maxDelayMs || hb.blocksOver100Ms > hb.blocksOver50Ms || hb.blocksOver50Ms > hb.samples) {
+      failures.push('Incomplete heartbeat delay/stall metrics or contradictory values');
+    }
     const requiredScreenshots = [
       'stage_1_launch',
       'stage_2_playback',

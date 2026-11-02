@@ -110,6 +110,7 @@ export class SimulatorRunLifecycle {
     const deadline = Math.min(this.overallDeadline, this.now() + 180000);
     for (const args of [
       ['terminate', this.device, 'dev.kineticron.KineSync'],
+      ['terminate', this.device, 'dev.kineticron.simulator-capture.xctrunner'],
       ['status_bar', this.device, 'clear'],
       ...(this.ownsDevice ? [['shutdown', this.device]] : []),
     ]) {

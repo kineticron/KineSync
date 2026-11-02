@@ -1,9 +1,11 @@
+import './test-simulator-native-capture.mjs';
 import './test-simulator-marquee.mjs';
 import './test-simulator-initialization.cjs';
 // Unit and integration tests for simulator test harness components
 // Validates clock monotonicity, log parser assertions, adversarial log detection, and screenshot comparison
 
 import assert from 'node:assert';
+import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { testSimulatorProtocol } from './test-simulator-protocol.mjs';
 import fs from 'node:fs';
@@ -96,11 +98,12 @@ function testLogParser() {
     '[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_6_switch_spicy style=spicy track=spotify-connect:sim_seesaw_track positionMs=5000',
     '[KINESYNC_SIM] STAGE_END stage_6_switch_spicy status=PASS durationMs=1100',
     '[KINESYNC_SIM] STAGE_BEGIN stage_7_rotation timestamp=12400',
-    '[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape',
+    '[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=landscape stage=stage_7_rotation token=run_stage_7_rotation',
     '[KINESYNC_SIM] VIEWPORT_LAYOUT width=844 height=390 windowWidth=844 windowHeight=390 orientation=landscape style=spicy',
     '[KINESYNC_SIM] READY_FOR_SCREENSHOT stage=stage_7_rotation style=spicy track=spotify-connect:sim_seesaw_track positionMs=5000 orientation=landscape width=844 height=390',
-    '[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait',
+    '[KINESYNC_SIM] TRIGGER_SIMULATOR_ROTATION orientation=portrait stage=stage_7_rotation token=run_stage_7_restore',
     '[KINESYNC_SIM] VIEWPORT_LAYOUT width=390 height=844 windowWidth=390 windowHeight=844 orientation=portrait style=spicy',
+    '[KINESYNC_SIM] READY_FOR_PORTRAIT_RESTORE stage=stage_7_rotation token=run_stage_7_restore',
     '[KINESYNC_SIM] STAGE_END stage_7_rotation status=PASS durationMs=2600',
     '[KINESYNC_SIM] STAGE_BEGIN stage_8_complete timestamp=15000',
     '[KINESYNC_SIM] STAGE_END stage_8_complete status=PASS durationMs=50',
@@ -281,6 +284,9 @@ function testEvidenceMutations(logs) {
     for (const line of mutate(logs)) p.processLine(line);
     assert.ok(p.validateAssertions().some(f => pattern.test(f)), `Expected ${pattern}`);
   };
+  for (const field of ['p50Ms', 'p95Ms', 'maxDelayMs', 'blocksOver50Ms', 'blocksOver100Ms']) {
+    check(lines => lines.map(l => l.includes('HEARTBEAT_METRICS') ? l.replace(new RegExp(',?\"' + field + '\":[0-9.]+'), '') : l), /Incomplete heartbeat/);
+  }
   check(lines => lines.filter(l => !l.includes('STAGE_END stage_5')), /Stage stage_5.*failed|overlapping/);
   check(lines => lines.map(l => l.replace('STAGE_BEGIN stage_5_skip_song', 'STAGE_BEGIN stage_4_switch_amll')), /Incomplete scenario/);
   check(lines => lines.filter(l => !l.includes('RENDERER_ACTIVE style=amll generation=3')), /fresh per-track/);
@@ -321,14 +327,39 @@ if (name === 'node') {
  console.log('native optional-symbol warning');
  console.log('KINESYNC_ROTATION_RESULT ' + JSON.stringify({ version: '0.13.0', udid: args.at(-2), orientation: args.at(-1), accepted: true })); process.exit(0);
 }
-if (name === 'xcodebuild') { if (args.includes('-version')) console.log('Xcode 26.6'); process.exit(0); }
+if (name === 'xcodebuild') {
+ if (args.includes('-version')) console.log('Xcode 26.6');
+ if (args.includes('test-without-building')) {
+  const mailbox = path.join(dir, 'capture-runner/Library/Caches/kinesync-capture');
+  fs.mkdirSync(mailbox, { recursive: true });
+  fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: '12345678-1234-1234-1234-123456789abc' }));
+  setInterval(() => {
+   const file = path.join(mailbox, 'request.json');
+   if (!fs.existsSync(file)) return;
+   const request = JSON.parse(fs.readFileSync(file)); fs.unlinkSync(file);
+   if (process.env.SIM_CASE === 'png-timeout') { fs.copyFileSync(path.join(dir, 'portrait.png'), path.join(mailbox, request.id + '.png')); return; }
+   const landscape = request.orientation === 'landscape' && !['rotation-noop', 'native-portrait-output'].includes(process.env.SIM_CASE) || request.stage === 'stage_7_restore' && process.env.SIM_CASE === 'portrait-noop';
+   const counter = path.join(mailbox, request.stage + '.count');
+   const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter)) : 0;
+   fs.writeFileSync(counter, String(count + 1));
+   const source = process.env.SIM_CASE === 'blank' || process.env.SIM_CASE === 'unstable' && count % 2 ? 'blank.png' : landscape ? 'landscape.png' : 'portrait.png';
+   fs.copyFileSync(path.join(dir, source), path.join(mailbox, request.id + '.png'));
+   fs.writeFileSync(path.join(mailbox, request.id + '.json'), JSON.stringify(request));
+  }, 5);
+  return;
+ }
+ process.exit(0);
+}
 if (name !== 'xcrun') process.exit(0);
 if (args.includes('--show-sdk-version')) console.log('26.5');
 if (args.includes('--show-sdk-path')) console.log(process.env.DEVELOPER_DIR + '/Platforms/iPhoneSimulator.platform/SDKs/iPhoneSimulator26.5.sdk');
 if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-5', isAvailable: true }] }));
 else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
-if (args.includes('get_app_container')) console.log(dir);
+if (args.includes('get_app_container')) {
+ const container = args.includes('dev.kineticron.simulator-capture.xctrunner') ? path.join(dir, 'capture-runner') : dir;
+ fs.mkdirSync(container, { recursive: true }); console.log(container);
+}
 if (args.includes('screenshot')) {
  const dest = args.at(-1);
  if (process.env.SIM_CASE === 'capture-failure' && dest.endsWith('failure.png')) process.exit(2);
@@ -340,7 +371,7 @@ if (args.includes('screenshot')) {
   fs.writeFileSync(counter, String(count + 1));
   fs.copyFileSync(path.join(dir, count % 2 ? 'blank.png' : 'portrait.png'), dest); return;
  }
- fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') && process.env.SIM_CASE !== 'rotation-noop' ? 'landscape.png' : 'portrait.png'), dest);
+ fs.copyFileSync(path.join(dir, process.env.SIM_CASE === 'blank' ? 'blank.png' : dest.includes('stage_7') && !['rotation-noop', 'native-framebuffer'].includes(process.env.SIM_CASE) ? 'landscape.png' : 'portrait.png'), dest);
 }
 if (args.includes('screenshot') && args.at(-1).includes('stage_') && process.env.SIM_CASE === 'png-timeout') { console.log('PNG written before timeout'); console.error('screenshot still running'); setInterval(() => {}, 1000); return; }
 if (args.includes('stream')) {
@@ -359,7 +390,7 @@ if (args.includes('stream')) {
   if (process.env.SIM_CASE === 'stalled-startup') return;
   if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START token=run'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
   if (['early-exit', 'capture-failure', 'signal'].includes(process.env.SIM_CASE)) return;
-  const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => process.env.SIM_CASE === 'stale-run' ? line.replace('token=run_stage_1_launch', 'token=old_stage_1_launch') : line).map(line => process.env.SIM_CASE === 'stale-request' ? line.replace('READY_FOR_SCREENSHOT stage=stage_1_launch token=run_stage_1_launch', 'READY_FOR_SCREENSHOT stage=stage_2_playback token=run_stage_2_playback') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
+  const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => process.env.SIM_CASE === 'stale-run' ? line.replace('token=run_stage_1_launch', 'token=old_stage_1_launch') : line).map(line => process.env.SIM_CASE === 'stale-request' ? line.replace('READY_FOR_SCREENSHOT stage=stage_1_launch token=run_stage_1_launch', 'READY_FOR_SCREENSHOT stage=stage_2_playback token=run_stage_2_playback') : line).map(line => process.env.SIM_CASE === 'rotation-stale' && line.includes('TRIGGER_SIMULATOR_ROTATION') ? line.replace('token=run_', 'token=old_') : line).filter(line => process.env.SIM_CASE !== 'restore-missing' || !line.includes('READY_FOR_PORTRAIT_RESTORE')).map(line => process.env.SIM_CASE === 'restore-stale' ? line.replace('token=run_stage_7_restore', 'token=old_stage_7_restore') : process.env.SIM_CASE === 'restore-early' && line.includes('orientation=portrait style=spicy') ? line.replace('orientation=portrait', 'orientation=landscape') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
   if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs.trimEnd());
@@ -389,10 +420,11 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies']) {
-    for (const file of ['launched', 'stream-ready', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
+  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['native-framebuffer', 'pass', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
+    console.log(`Runner CLI scenario: ${scenario}`);
+    for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_7_restore.json', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
-    const shouldPass = ['pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const shouldPass = ['native-framebuffer', 'pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
     const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
@@ -407,9 +439,9 @@ if (args.includes('launch')) {
       assert.match(JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'))).error, /identical consecutive/);
     }
     if (scenario === 'png-timeout') {
-      assert.ok(fs.existsSync(path.join(output, 'stage_1_launch.png')), 'Timed-out command wrote PNG');
-      const ledger = fs.readFileSync(path.join(output, 'startup-commands.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-      assert.ok(ledger.some(r => r.args.includes('screenshot') && r.error?.signal === 'SIGKILL'));
+      assert.ok(!fs.existsSync(path.join(output, 'stage_1_launch.png')), 'Unanswered native request cannot publish a capture');
+      const ledger = fs.readFileSync(path.join(output, 'native-captures.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+      assert.ok(ledger.some(r => /timeout/.test(r.error) && fs.existsSync(r.rejectedPNG)), 'A native PNG written before timeout must survive as rejected evidence and never count as success');
       assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_1_launch.json')), 'Timed-out PNG must not be acknowledged');
     }
     if (shouldPass) {
@@ -462,14 +494,26 @@ function testComparisonCli() {
   fs.mkdirSync(branch, { recursive: true }); fs.mkdirSync(baseline, { recursive: true });
   const names = ['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'].map(s => `${s}.png`);
   const img = createTextMockPng(100, 200);
-  const reset = () => { for (const dir of [branch, baseline]) { fs.rmSync(dir, { recursive: true }); fs.mkdirSync(dir); for (const name of names) fs.writeFileSync(path.join(dir, name), img); } };
+  const validRun = path.join(tempDir, 'runner-cli', (process.env.SIM_TEST_CASES?.split(',') || ['pass'])[0]);
+  const reset = () => { for (const dir of [branch, baseline]) { fs.rmSync(dir, { recursive: true }); fs.mkdirSync(dir); for (const name of names) fs.writeFileSync(path.join(dir, name), name.includes('stage_7') ? createTextMockPng(200, 100) : img);
+    for (const file of ['simulator-perf.json', 'simulator-raw-log.txt', 'native-captures.jsonl', 'diagnostics/restored-portrait.png']) { fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); fs.copyFileSync(path.join(validRun, file), path.join(dir, file)); } } };
   const run = (...args) => spawnSync(process.execPath, [path.join(__dirname, 'compare-simulator-screenshots.mjs'), '--branch-dir', branch, '--baseline-dir', baseline, ...args], { encoding: 'utf8' });
   reset(); assert.equal(run().status, 0);
   const changed = PNG.sync.read(img); changed.data[0] = 255;
-  fs.writeFileSync(path.join(branch, names[0]), PNG.sync.write(changed));
+  const changedBytes = PNG.sync.write(changed);
+  fs.writeFileSync(path.join(branch, names[0]), changedBytes);
+  const ledgerFile = path.join(branch, 'native-captures.jsonl');
+  const ledger = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').map(JSON.parse);
+  ledger.filter(r => r.stage === 'stage_1_launch').at(-1).sha256 = createHash('sha256').update(changedBytes).digest('hex');
+  fs.writeFileSync(ledgerFile, ledger.map(r => JSON.stringify(r)).join('\n') + '\n');
   assert.equal(run().status, 1, 'One differing pixel fails strict default');
   assert.equal(run('--max-difference-ratio', '0.001').status, 0, 'Explicit threshold permits a bounded difference');
   for (const mutate of [
+    () => fs.unlinkSync(path.join(baseline, 'simulator-perf.json')),
+    () => fs.unlinkSync(path.join(branch, 'simulator-raw-log.txt')),
+    () => fs.unlinkSync(path.join(branch, 'native-captures.jsonl')),
+    () => fs.unlinkSync(path.join(branch, 'diagnostics/restored-portrait.png')),
+    () => fs.writeFileSync(path.join(branch, names[6]), img),
     () => fs.unlinkSync(path.join(baseline, names[0])),
     () => fs.unlinkSync(path.join(branch, names[0])),
     () => fs.writeFileSync(path.join(baseline, names[0]), createSolidPng(100, 200, 0, 0, 0)),

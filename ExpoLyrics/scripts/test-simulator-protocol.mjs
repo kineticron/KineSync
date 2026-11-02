@@ -285,7 +285,7 @@ function testMainBaselinePreparation() {
     for (const [file, source] of original) assert.deepEqual(fs.readFileSync(path.join(dir, file)), source, `Adapter must preserve main renderer logic: ${file}`);
     assert.equal(execFileSync('git', ['diff', '--exit-code'], { cwd: dir, encoding: 'utf8' }), '', 'Reversing observation must leave no tracked production diff');
     assert.ok(fs.existsSync(path.join(dir, 'ExpoLyrics/scripts/test-simulator-protocol.mjs')));
-    for (const file of ['simulator-rotation-worker.mjs', 'prepare-simulator-rotation.mjs']) assert.equal(fs.readFileSync(path.join(dir, 'ExpoLyrics/scripts', file), 'utf8'), fs.readFileSync(path.join(root, 'scripts', file), 'utf8'), 'Baseline must receive identical pinned rotation adapter');
+    for (const file of ['simulator-rotation-worker.mjs', 'prepare-simulator-rotation.mjs', 'simulator-native-capture.mjs', 'native-simulator-capture/CaptureTests.swift', 'native-simulator-capture/Capture.xcodeproj/project.pbxproj', 'native-simulator-capture/Capture.xcodeproj/xcshareddata/xcschemes/Capture.xcscheme']) assert.equal(fs.readFileSync(path.join(dir, 'ExpoLyrics/scripts', file), 'utf8'), fs.readFileSync(path.join(root, 'scripts', file), 'utf8'), 'Baseline must receive identical pinned rotation adapter');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
