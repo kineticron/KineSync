@@ -226,6 +226,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
   let interactiveLoginPromise = null;
   let lastInteractiveLoginAt = 0;
   let accessTokenSource = "";
+  let authEpoch = 0;
 
   const ensureSessionCookie = async (spDcValue) => {
     if (!spDcValue) return;
@@ -279,6 +280,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
     },
 
     async getAccessToken(options = {}) {
+      const epoch = authEpoch;
       const forceRefresh = Boolean(options?.forceRefresh);
       const interactiveOnFailure = Boolean(options?.interactiveOnFailure);
       if (
@@ -309,6 +311,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
             });
         }
         await interactiveLoginPromise;
+        if (epoch !== authEpoch) throw new Error("Spotify session changed during login.");
         return this.getAccessToken({ forceRefresh: true, interactiveOnFailure: false });
       }
       if (refreshPromise) {
@@ -325,15 +328,18 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
         accessToken = "";
         accessTokenExpiresAt = 0;
       }
-      refreshPromise = exchangeWithHiddenWindow(spDc)
-        .then((result) => {
-          accessToken = result.token;
-          accessTokenExpiresAt = result.expiresAt;
-          accessTokenSource = "web-session";
-          lastError = "";
-          return accessToken;
-        })
+      const acceptToken = (result) => {
+        if (epoch !== authEpoch) throw new Error("Spotify session changed during refresh.");
+        accessToken = result.token;
+        accessTokenExpiresAt = result.expiresAt;
+        accessTokenSource = "web-session";
+        lastError = "";
+        return accessToken;
+      };
+      const attempt = exchangeWithHiddenWindow(spDc)
+        .then(acceptToken)
         .catch((error) => {
+          if (epoch !== authEpoch) throw error;
           accessToken = "";
           accessTokenExpiresAt = 0;
           lastError =
@@ -356,14 +362,17 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
                 interactiveLoginPromise = null;
               });
           }
-          return interactiveLoginPromise.then(() =>
-            this.getAccessToken({ forceRefresh: true, interactiveOnFailure: false }),
-          );
+          // Keep callers on the same flight, but never recursively await it.
+          return interactiveLoginPromise.then(() => {
+            if (epoch !== authEpoch) throw new Error("Spotify session changed during login.");
+            return exchangeWithHiddenWindow(getSpDcCookie());
+          }).then(acceptToken);
         })
         .finally(() => {
-          refreshPromise = null;
+          if (refreshPromise === attempt) refreshPromise = null;
         });
-      return refreshPromise;
+      refreshPromise = attempt;
+      return attempt;
     },
 
     startLogin() {
@@ -558,6 +567,7 @@ function createSpotifyAuth({ getSpDcCookie, setSpDcCookie }) {
     },
 
     logout() {
+      authEpoch++; refreshPromise = null;
       accessToken = "";
       accessTokenExpiresAt = 0;
       accessTokenSource = "";
