@@ -1755,11 +1755,11 @@ export default function HomeScreen() {
         }}
         onRefetchLyrics={() => {
           setMenuOpen(false);
-          void refreshLyricsForCurrentTrack("auto");
+          void refreshLyricsForCurrentTrack("auto", { force: true });
         }}
         onRefetchLyricsFromSource={(source) => {
           setMenuOpen(false);
-          void refreshLyricsForCurrentTrack(source);
+          void refreshLyricsForCurrentTrack(source, { force: true });
         }}
         onOpenBridgeSettings={() => {
           setMenuOpen(false);

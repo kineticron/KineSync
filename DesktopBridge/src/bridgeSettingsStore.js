@@ -11,6 +11,9 @@ const SETTINGS_DEFAULTS = {
   musixmatchAnonymousDeviceId: "",
   musixmatchAnonymousFetchedAt: 0,
   musixmatchAnonymousLastAttemptAt: 0,
+  musixmatchAnonymousProfileId: "",
+  musixmatchAnonymousRenewalAttemptAt: 0,
+  musixmatchAnonymousBlockedUntil: 0,
   spotifyWebToken: "",
   geminiApiKey: "",
   spotifySpDcCookie: "",
@@ -233,6 +236,10 @@ function createBridgeSettingsStore({ app }) {
     musixmatchAnonymousLastAttemptAt: sanitizeTimestamp(
       raw?.musixmatchAnonymousLastAttemptAt,
     ),
+    musixmatchAnonymousProfileId: String(raw?.musixmatchAnonymousProfileId || "").trim(),
+    musixmatchAnonymousRenewalAttemptAt: sanitizeTimestamp(raw?.musixmatchAnonymousRenewalAttemptAt),
+    musixmatchAnonymousBlockedUntil: sanitizeTimestamp(raw?.musixmatchAnonymousBlockedUntil),
+    musixmatchAnonymousRejectedTokenHashes: Array.isArray(raw?.musixmatchAnonymousRejectedTokenHashes) ? [...new Set(raw.musixmatchAnonymousRejectedTokenHashes.filter(value => /^[a-f0-9]{64}$/.test(value)))] : [],
     spotifyWebToken: sanitizeSpotifyWebToken(decodeSecret(raw?.spotifyWebToken || "")),
     geminiApiKey: sanitizeGeminiApiKey(decodeSecret(raw?.geminiApiKey || raw?.openRouterApiKey || "")),
     spotifySpDcCookie: decodeSecret(raw?.spotifySpDcCookie || "").trim(),
@@ -302,6 +309,10 @@ function createBridgeSettingsStore({ app }) {
         deviceId: settings.musixmatchAnonymousDeviceId,
         fetchedAt: settings.musixmatchAnonymousFetchedAt,
         lastAttemptAt: settings.musixmatchAnonymousLastAttemptAt,
+        profileId: settings.musixmatchAnonymousProfileId,
+        renewalAttemptAt: settings.musixmatchAnonymousRenewalAttemptAt,
+        blockedUntil: settings.musixmatchAnonymousBlockedUntil,
+        rejectedTokenHashes: settings.musixmatchAnonymousRejectedTokenHashes,
       };
     },
     getSpotifyWebToken() {
@@ -370,6 +381,16 @@ function createBridgeSettingsStore({ app }) {
           sanitizeTimestamp(state.lastAttemptAt),
         );
       }
+      if (Object.prototype.hasOwnProperty.call(state, "profileId")) {
+        store.set("musixmatchAnonymousProfileId", String(state.profileId || "").trim());
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "renewalAttemptAt")) {
+        store.set("musixmatchAnonymousRenewalAttemptAt", sanitizeTimestamp(state.renewalAttemptAt));
+      }
+      if (Object.prototype.hasOwnProperty.call(state, "blockedUntil")) {
+        store.set("musixmatchAnonymousBlockedUntil", sanitizeTimestamp(state.blockedUntil));
+      }
+      if (Array.isArray(state.rejectedTokenHashes)) store.set("musixmatchAnonymousRejectedTokenHashes", [...new Set(state.rejectedTokenHashes.filter(value => /^[a-f0-9]{64}$/.test(value)))]);
       return this.getMusixmatchAnonymousTokenState();
     },
     setSpotifyWebToken(token) {

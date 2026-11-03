@@ -360,12 +360,13 @@ function createQQDirectSongAccessors() {
   return { getSongMid, getSongId, getSongTitle, getSongArtist, getSongInterval };
 }
 
-async function collectQQSongsFromDesktopSearch(queryVariants) {
+async function collectQQSongsFromDesktopSearch(queryVariants, requests = new Map()) {
   const desktopSongs = [];
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        desktopSongs.push(...(await fetchQQDesktopSearchSongs(query)));
+        if (!requests.has(query)) requests.set(query, fetchQQDesktopSearchSongs(query));
+        desktopSongs.push(...(await requests.get(query)));
       } catch {
         // Try next query variant.
       }
@@ -455,6 +456,32 @@ function qqDirectSearchNeedsLegacySupplement(track, ranked, accessors) {
   return false;
 }
 
+function createRankedProbePool(items, limit, mapper) {
+  const slots = items.map(() => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  });
+  let next = 0;
+  let stopped = false;
+  const worker = async () => {
+    while (!stopped && next < items.length) {
+      const index = next++;
+      let result = null;
+      try { result = await mapper(items[index], index); } catch { /* Preserve per-candidate fallback. */ }
+      slots[index].resolve(result);
+    }
+  };
+  for (let index = 0; index < Math.min(Math.max(1, limit), items.length); index += 1) worker();
+  return {
+    read: index => slots[index].promise,
+    stop() {
+      stopped = true;
+      while (next < slots.length) slots[next++].resolve(null);
+    },
+  };
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   if (!Array.isArray(items) || !items.length) {
     return [];
@@ -478,28 +505,24 @@ async function mapWithConcurrency(items, limit, mapper) {
 async function searchQQDirectSongPool(track) {
   const accessors = createQQDirectSongAccessors();
   const allQueryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
-  let songs = [];
-
+  const desktopRequests = new Map();
+  // Search variants and the legacy supplement are independent. Start the same
+  // bounded query set once, while retaining the original supplement decision.
+  const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests);
+  const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants);
+  let songs;
   if (trackNeedsFeaturedVariantVerification(track)) {
-    const [desktopSongs, legacySongs] = await Promise.all([
-      collectQQSongsFromDesktopSearch(allQueryVariants),
-      collectQQSongsFromLegacyClientSearch(allQueryVariants),
-    ]);
+    const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
     songs = [...desktopSongs, ...legacySongs];
   } else {
-    songs = await collectQQSongsFromDesktopSearch(allQueryVariants.slice(0, 1));
-    let ranked = rankQQDirectSearchSongs(track, songs, accessors);
-    if (qqDirectSearchNeedsLegacySupplement(track, ranked, accessors)) {
-      const [desktopSongs, legacySongs] = await Promise.all([
-        collectQQSongsFromDesktopSearch(allQueryVariants),
-        collectQQSongsFromLegacyClientSearch(allQueryVariants),
-      ]);
+    songs = await (desktopRequests.get(allQueryVariants[0]) || Promise.resolve([])).catch(() => []);
+    const initialRanked = rankQQDirectSearchSongs(track, songs, accessors);
+    if (qqDirectSearchNeedsLegacySupplement(track, initialRanked, accessors)) {
+      const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
       songs = [...desktopSongs, ...legacySongs];
     }
   }
-
-  const ranked = rankQQDirectSearchSongs(track, songs, accessors);
-  return { ranked, accessors };
+  return { ranked: rankQQDirectSearchSongs(track, songs, accessors), accessors };
 }
 
 async function resolveQQLegacyDownloadFallback(track) {

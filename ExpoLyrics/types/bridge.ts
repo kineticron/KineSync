@@ -25,6 +25,18 @@ export type PlaybackPacket = {
   isPlaying: boolean;
   timestamp: number;
   capturedAtMs?: number;
+  /** Original Spotify anchor, separate from the locally normalized position. */
+  positionTimestampMs?: number;
+  sourcePositionMs?: number;
+  trackUri?: string;
+  uri?: string;
+  sourceServerTimestampMs?: number;
+  activeDeviceId?: string;
+  playbackSessionId?: string;
+  /** Detector instance/auth/route scope; contains no credentials. */
+  sourceClockScope?: string;
+  /** Dev-only Spotify detector experiment reanchor; never set by normal packets. */
+  nativeDeliveryExperimentReanchor?: boolean;
   timing?: BridgeTimingDiagnostics;
 };
 
@@ -92,6 +104,8 @@ export type Track = {
 };
 
 export type LyricsTranslationMetadata = {
+  /** Target of AI fallback text; source tracks retain their own language tags. */
+  targetLanguage?: string;
   isLoading?: boolean;
   model?: string;
   provider?: string;
@@ -160,7 +174,21 @@ export type LyricsAttributionMetadata = {
 export type LyricsMetadata = {
   spicyApi?: { fetchedAt: number; expiresAt: number };
   /** Original imported XML, retained for lossless TTML export. */
-  ttml?: { content: string };
+  ttml?: {
+    content: string;
+    /** Source subtitles keyed by paragraph lrc:key, including alternate languages. */
+    translationTracks?: Array<{
+      language: string;
+      type: string;
+      automaticallyCreated?: boolean;
+      lines: Array<{ key: string; text: string }>;
+    }>;
+    selectedTranslationTrack?: number;
+    /** Only text displayed from these tracks; preserved inline choices win over them. */
+    appliedTranslations?: Array<{ key: string; text: string }>;
+    // Existing inline choices belong to this unchanged lyric array, not a source track.
+    preservedTranslations?: Array<{ index: number; text?: string; backgroundText?: string }>;
+  };
   instrumental?: boolean;
   credits?: LyricsCreditsMetadata;
   attribution?: LyricsAttributionMetadata;
@@ -194,6 +222,8 @@ export type LyricLine = {
   spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
   /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
   spicyLyricsStartTime?: number;
+  /** Stable source paragraph key used only for TTML metadata joins. */
+  ttmlKey?: string;
   translatedText?: string;
   backgroundTranslatedText?: string;
   oppositeAligned?: boolean;

@@ -74,6 +74,7 @@ const MUSIXMATCH_TOKEN_PRIORITY_KEYS = [
   "mxm-account-v1.0",
   "mxm-pro-web-v1.0",
 ];
+const MUSIXMATCH_APP_MOBILE_PROFILE = require("./musixmatchProfile").MUSIXMATCH_APP_MOBILE_PROFILE;
 const MUSIXMATCH_CLIENT_PROFILES = [
   {
     appId: "android-player-v1.0",
@@ -87,16 +88,11 @@ const MUSIXMATCH_CLIENT_PROFILES = [
     ],
   },
   {
-    appId: "mac-ios-v2.0",
-    tokenKey: "mac-ios-v2.0",
-    userAgent:
-      "Musixmatch/6.8.1 (iPhone; iOS 17.0; Scale/3.00) CFNetwork/1492.0.1 Darwin/23.0.0",
-    userLanguage: "en",
-    cookieHeader: "AWSELB=0; AWSELBCORS=0",
-    baseUrls: [
-      "https://apic.musixmatch.com/ws/1.1",
-      "https://apic-desktop.musixmatch.com/ws/1.1",
-    ],
+    ...MUSIXMATCH_APP_MOBILE_PROFILE,
+    tokenKey: MUSIXMATCH_APP_MOBILE_PROFILE.appId,
+    cookieHeader: "",
+    baseUrls: [MUSIXMATCH_APP_MOBILE_PROFILE.baseUrl],
+    defaultParams: {},
   },
   {
     appId: "web-desktop-app-v1.0",

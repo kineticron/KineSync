@@ -1,37 +1,22 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { MUSIXMATCH_APP_MOBILE_PROFILE, isUsableMusixmatchToken } = require("./musixmatchProfile");
 
-const ANONYMOUS_TOKEN_RETRY_MS = 20 * 60 * 1000;
-const TOKEN_ENDPOINT_PROFILES = [
-  {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic-desktop.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
-    appId: "android-player-v1.0",
-    baseUrl: "https://apic.musixmatch.com/ws/1.1",
-    userAgent: "Musixmatch/7.13.5 (Linux; Android 14) okhttp/4.12.0",
-    headers: { Cookie: "AWSELB=0; AWSELBCORS=0" },
-  },
-  {
-    appId: "mac-ios-v2.0",
-    baseUrl: "https://apic-appmobile.musixmatch.com/ws/1.1",
-    userAgent:
-      "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
-    headers: {
-      "X-Cookie": "x-mxm-token-guid=",
-      "x-mxm-app-version": "10.1.1",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  },
-];
+const ANONYMOUS_TOKEN_RETRY_MS = MUSIXMATCH_APP_MOBILE_PROFILE.retryMs;
+const MUSIXMATCH_TOKEN_TTL_MS = MUSIXMATCH_APP_MOBILE_PROFILE.tokenTtlMs;
+const MUSIXMATCH_PROFILE_ID = MUSIXMATCH_APP_MOBILE_PROFILE.profileId;
+const TOKEN_ENDPOINT_PROFILES = [MUSIXMATCH_APP_MOBILE_PROFILE];
 
-function buildStoredToken(appId, userToken) {
-  return JSON.stringify({ [appId]: userToken });
+function buildStoredToken(appId, userToken, profileId = MUSIXMATCH_PROFILE_ID, acquiredAt = 0, deviceId = "") {
+  return JSON.stringify({ profileId, appId, userToken, acquiredAt, deviceId });
 }
+
+function tokenValue(value) {
+  try { const parsed = JSON.parse(value); if (parsed && typeof parsed === "object") return String(parsed.userToken || "").trim(); } catch {}
+  return String(value || "").trim();
+}
+const tokenHash = value => crypto.createHash("sha256").update(tokenValue(value)).digest("hex");
 
 function createMusixmatchTokenManager({
   settingsStore,
@@ -41,194 +26,144 @@ function createMusixmatchTokenManager({
   profiles = TOKEN_ENDPOINT_PROFILES,
   logger = console,
 } = {}) {
-  if (!settingsStore) {
-    throw new Error("A bridge settings store is required.");
-  }
-  if (typeof fetchImpl !== "function") {
-    throw new Error("A fetch implementation is required.");
-  }
+  if (!settingsStore) throw new Error("A bridge settings store is required.");
+  if (typeof fetchImpl !== "function") throw new Error("A fetch implementation is required.");
 
   let inFlightRequest = null;
-
-  const getManualToken = () =>
-    String(settingsStore.getMusixmatchUserToken() || "").trim();
-
-  const readAnonymousState = () => ({
-    userToken: "",
-    appId: "",
-    deviceId: "",
-    fetchedAt: 0,
-    lastAttemptAt: 0,
+  const renewedTokenHashes = new Set();
+  const profileId = (profile) => profile.profileId || `${profile.appId}@${new URL(profile.baseUrl).hostname}`;
+  const readState = () => ({
+    userToken: "", appId: "", profileId: "", deviceId: "", fetchedAt: 0,
+    lastAttemptAt: 0, renewalAttemptAt: 0, blockedUntil: 0, rejectedTokenHashes: [],
     ...(settingsStore.getMusixmatchAnonymousTokenState?.() || {}),
   });
+  const manualToken = () => String(settingsStore.getMusixmatchUserToken() || "").trim();
+  const validState = (state) => isUsableMusixmatchToken(state.userToken) &&
+    !(state.rejectedTokenHashes || []).includes(tokenHash(state.userToken)) &&
+    profiles.some((profile) => profile.appId === state.appId && profileId(profile) === state.profileId) &&
+    Number.isFinite(state.fetchedAt) && state.fetchedAt > 0 &&
+    now() >= state.fetchedAt && now() - state.fetchedAt < MUSIXMATCH_TOKEN_TTL_MS;
+  const serialize = (state) => buildStoredToken(state.appId, state.userToken, state.profileId, state.fetchedAt, state.deviceId);
+  const clearToken = () => settingsStore.setMusixmatchAnonymousTokenState({
+    userToken: "", appId: "", profileId: "", fetchedAt: 0,
+  });
 
-  const ensureDeviceId = () => {
-    const state = readAnonymousState();
-    if (state.deviceId) {
-      return state.deviceId;
-    }
-    const deviceId = randomUUID();
-    settingsStore.setMusixmatchAnonymousTokenState({ deviceId });
-    return deviceId;
+  const invalidateToken = rejectedToken => {
+    const value = tokenValue(rejectedToken);
+    if (!value) return;
+    const state = readState();
+    const hashes = [...new Set([...(state.rejectedTokenHashes || []), tokenHash(value)])];
+    settingsStore.setMusixmatchAnonymousTokenState({ rejectedTokenHashes: hashes });
+    if (tokenValue(state.userToken) === value) clearToken();
   };
 
-  const getStoredAnonymousToken = () => {
-    const state = readAnonymousState();
-    if (!state.userToken || !state.appId) {
-      return "";
-    }
-    return buildStoredToken(state.appId, state.userToken);
-  };
+  const requestToken = ({ force = false, rejectedToken = "" } = {}) => {
+    const manual = manualToken();
+    if (manual) return Promise.resolve((readState().rejectedTokenHashes || []).includes(tokenHash(manual)) ? "" : manual);
+    // Join before any cooldown or cache decisions, including a forced renewal.
+    if (inFlightRequest) return inFlightRequest;
 
-  const requestAnonymousToken = async ({ force = false } = {}) => {
-    const manualToken = getManualToken();
-    if (manualToken) {
-      return manualToken;
-    }
-
-    const storedToken = getStoredAnonymousToken();
-    if (storedToken && !force) {
-      return storedToken;
-    }
-
-    const state = readAnonymousState();
+    const state = readState();
     const currentTime = now();
-    if (
-      state.lastAttemptAt &&
-      currentTime - state.lastAttemptAt < ANONYMOUS_TOKEN_RETRY_MS
-    ) {
-      return storedToken;
+    const valid = validState(state);
+    let rejected = String(rejectedToken || (force ? state.userToken : "")).trim();
+    try {
+      const parsed = JSON.parse(rejected);
+      if (parsed && typeof parsed === "object") rejected = String(parsed.userToken || "").trim();
+    } catch {}
+    const rejectedHash = rejected ? crypto.createHash("sha256").update(rejected).digest("hex") : "";
+
+    if (state.userToken && (!valid || (force && state.userToken === rejected))) clearToken();
+    // An old request's rejection must not discard or remint a newer valid token.
+    if (force && valid && rejected && state.userToken !== rejected) return Promise.resolve(serialize(state));
+    if (!force && valid) return Promise.resolve(serialize(state));
+    if (state.blockedUntil > currentTime) return Promise.resolve("");
+    if (force) {
+      if ((rejectedHash && renewedTokenHashes.has(rejectedHash)) ||
+          (state.renewalAttemptAt > 0 && currentTime - state.renewalAttemptAt < ANONYMOUS_TOKEN_RETRY_MS)) {
+        return Promise.resolve("");
+      }
+      if (rejectedHash) renewedTokenHashes.add(rejectedHash);
+      settingsStore.setMusixmatchAnonymousTokenState({ renewalAttemptAt: currentTime });
+    } else if (state.lastAttemptAt > 0 && currentTime - state.lastAttemptAt < ANONYMOUS_TOKEN_RETRY_MS) {
+      return Promise.resolve("");
     }
 
-    if (inFlightRequest) {
-      return inFlightRequest;
-    }
-
-    inFlightRequest = (async () => {
-      const deviceId = ensureDeviceId();
-      settingsStore.setMusixmatchAnonymousTokenState({
-        lastAttemptAt: currentTime,
-      });
+    // Assign the promise before asynchronous storage/network work starts.
+    inFlightRequest = Promise.resolve().then(async () => {
+      const deviceId = state.deviceId || randomUUID();
+      settingsStore.setMusixmatchAnonymousTokenState({ deviceId, lastAttemptAt: currentTime });
       let lastError = null;
-
       for (const profile of profiles) {
-        const url = `${profile.baseUrl}/token.get?app_id=${encodeURIComponent(profile.appId)}`;
-        const headers = {
-          Accept: "application/json",
-          "User-Agent": profile.userAgent,
-          ...profile.headers,
-        };
-        if (headers.Cookie) {
-          headers.Cookie = `${headers.Cookie}; x-mxm-token-guid=${deviceId}`;
-        }
-        if (headers["X-Cookie"] !== undefined) {
-          headers["X-Cookie"] = `x-mxm-token-guid=${deviceId}`;
-        }
-
         try {
-          const response = await fetchImpl(url, {
+          const response = await fetchImpl(`${profile.baseUrl}/token.get?app_id=${encodeURIComponent(profile.appId)}`, {
             method: "GET",
-            headers,
+            headers: {
+              Accept: "application/json",
+              ...(profile.appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? {} : { "User-Agent": profile.userAgent }),
+              ...profile.headers,
+              "X-Cookie": profile.appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? "x-mxm-token-guid=" : `x-mxm-token-guid=${deviceId}`,
+            },
             signal: AbortSignal.timeout(12_000),
           });
+          const payload = await response.json().catch(() => null);
+          const status = Number(payload?.message?.header?.status_code || 0);
+          const captcha = /captcha/i.test(String(payload?.message?.header?.hint || ""));
+          if (captcha || response.status === 429 || status === 429) {
+            settingsStore.setMusixmatchAnonymousTokenState({ blockedUntil: now() + ANONYMOUS_TOKEN_RETRY_MS });
+            lastError = new Error(captcha ? "Musixmatch token request was blocked by captcha." : "Musixmatch token request was rate limited.");
+            break;
+          }
           if (!response.ok) {
-            lastError = new Error(
-              `Musixmatch token endpoint returned HTTP ${response.status}.`,
-            );
+            lastError = new Error(`Musixmatch token endpoint returned HTTP ${response.status}.`);
             continue;
           }
-          const payload = await response.json();
-          const statusCode = Number(payload?.message?.header?.status_code || 0);
-          const userToken = String(
-            payload?.message?.body?.user_token || "",
-          ).trim();
-          if (statusCode !== 200 || !userToken) {
-            lastError = new Error(
-              `Musixmatch token endpoint returned status ${statusCode || "unknown"}.`,
-            );
+          const userToken = String(payload?.message?.body?.user_token || "").trim();
+          if (status !== 200 || !isUsableMusixmatchToken(userToken) || (readState().rejectedTokenHashes || []).includes(tokenHash(userToken)) || (force && userToken === rejected)) {
+            lastError = new Error(`Musixmatch token endpoint returned an unusable token (API ${status || "unknown"}).`);
             continue;
           }
-          settingsStore.setMusixmatchAnonymousTokenState({
-            userToken,
-            appId: profile.appId,
-            deviceId,
-            fetchedAt: currentTime,
-            lastAttemptAt: currentTime,
-          });
-          return buildStoredToken(profile.appId, userToken);
+          const acquired = { userToken, appId: profile.appId, profileId: profileId(profile), deviceId, fetchedAt: now() };
+          settingsStore.setMusixmatchAnonymousTokenState(acquired);
+          return serialize(acquired);
         } catch (error) {
           lastError = error;
         }
       }
-
-      if (storedToken) {
-        return storedToken;
-      }
       throw lastError || new Error("Musixmatch anonymous token request failed.");
-    })();
-
-    try {
-      return await inFlightRequest;
-    } finally {
-      inFlightRequest = null;
-    }
+    }).finally(() => { inFlightRequest = null; });
+    return inFlightRequest;
   };
 
+  const resolve = async (options) => {
+    try { return await requestToken(options); }
+    catch (error) {
+      logger.warn("[musixmatch] Anonymous token request failed:", error instanceof Error ? error.message : "request failed");
+      return "";
+    }
+  };
   return {
-    async getToken() {
-      const manualToken = getManualToken();
-      if (manualToken) {
-        return manualToken;
-      }
-      try {
-        return await requestAnonymousToken();
-      } catch (error) {
-        logger.warn(
-          "[musixmatch] Automatic anonymous token request failed:",
-          error instanceof Error ? error.message : String(error),
-        );
-        return "";
-      }
+    getToken: () => resolve({}),
+    refreshToken: (rejectedToken = "") => {
+      const rejected = rejectedToken || readState().userToken;
+      invalidateToken(rejected);
+      return resolve({ force: true, rejectedToken: rejected });
     },
-    async refreshToken() {
-      const manualToken = getManualToken();
-      if (manualToken) {
-        return manualToken;
-      }
-      try {
-        return await requestAnonymousToken({ force: true });
-      } catch (error) {
-        logger.warn(
-          "[musixmatch] Automatic anonymous token refresh failed:",
-          error instanceof Error ? error.message : String(error),
-        );
-        return getStoredAnonymousToken();
-      }
-    },
+    invalidateToken,
     getStatus() {
-      const manualToken = getManualToken();
-      const anonymousState = readAnonymousState();
-      const automaticConfigured = Boolean(
-        anonymousState.userToken && anonymousState.appId,
-      );
-      const mode = manualToken
-        ? "manual-override"
-        : automaticConfigured
-          ? "automatic"
-          : "automatic-pending";
+      const manual = manualToken();
+      const state = readState();
+      const automaticConfigured = validState(state);
       return {
-        mode,
-        manualOverrideConfigured: Boolean(manualToken),
-        automaticConfigured,
-        automaticAppId: automaticConfigured ? anonymousState.appId : "",
+        mode: manual ? "manual-override" : automaticConfigured ? "automatic" : "automatic-pending",
+        manualOverrideConfigured: Boolean(manual), automaticConfigured,
+        automaticAppId: automaticConfigured ? state.appId : "",
       };
     },
   };
 }
 
 module.exports = {
-  ANONYMOUS_TOKEN_RETRY_MS,
-  TOKEN_ENDPOINT_PROFILES,
-  buildStoredToken,
-  createMusixmatchTokenManager,
+  ANONYMOUS_TOKEN_RETRY_MS, MUSIXMATCH_TOKEN_TTL_MS, MUSIXMATCH_PROFILE_ID,
+  TOKEN_ENDPOINT_PROFILES, buildStoredToken, isUsableMusixmatchToken, createMusixmatchTokenManager,
 };

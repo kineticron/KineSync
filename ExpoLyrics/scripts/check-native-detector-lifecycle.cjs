@@ -7,6 +7,22 @@ const ts = require('typescript');
 const React = require('react');
 const platform = process.argv.includes('--android') ? 'android' : 'ios';
 const alerts = [], openedUrls = [];
+const development = process.argv.includes('--development');
+const developmentLogs = [], publishedSamples = [];
+const diagnosticModules = new Map();
+const nativeRendererReadyRefresh = { registerNativeRendererReadyResync: () => () => {} };
+function diagnosticModule(name) {
+  if (diagnosticModules.has(name)) return diagnosticModules.get(name);
+  const exports = {}; diagnosticModules.set(name, exports);
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/spotify-detector', `${name}.ts`), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS },
+  }).outputText, { exports, __DEV__: development, Date, performance,
+    require: name => diagnosticModule(name.replace('./', '')),
+    console: { log: line => developmentLogs.push(JSON.parse(line.slice('[Spotify timing bootstrap] '.length))) } });
+  return exports;
+}
+const developmentTiming = diagnosticModule('development-timing-log');
+const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
@@ -39,15 +55,18 @@ class Detector {
 const callableStore = state => Object.assign(fn => fn(state), { getState: () => state });
 const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } };
 const mocks = {
+  '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {}, nativeClockCaptureActive: () => false, NATIVE_CLOCK_HTTP_TRACE_SCRIPT: '' },
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
-    Share: { share: async () => {} }, Alert: { alert: (...args) => alerts.push(args) },
+    Share: { share: async value => timingShares.push(value) }, Alert: { alert: (...args) => alerts.push(args) },
     Linking: { openURL: async url => { openedUrls.push(url); if (rejectLaunch) throw new Error('No app'); } },
     StyleSheet: { create: x => x, absoluteFill: {} } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
   '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
-  '@/lib/spotify-detector/packet': { detectorPacket: s => ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }) },
+  '@/lib/spotify-detector/development-timing-log': developmentTiming,
+  '@/lib/spotify-detector/packet': { detectorPacket: s => { publishedSamples.push(s); return ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }); } },
+  '@/lib/spotify-detector/timing-diagnostics': { startTimingCapture: () => timingCalls.push('start'), clearTimingCapture: () => timingCalls.push('clear'), timingSnapshot: () => ({ active: false, records: [] }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
     makeBrowserCommandScript: JSON.stringify, parseBrowserEvent: JSON.parse,
     isAllowedSpotifyWebViewNavigation: url => /^https:\/\/(open|accounts)\.spotify\.com\//.test(url),
@@ -55,12 +74,13 @@ const mocks = {
   '@/lib/spotify-player-actions': { registerSpotifyPlayerActions: a => { actions = a; return () => { actions = null; }; } },
   '@/lib/mobile-lyrics-settings': { saveMobileLyricsSettings: async () => {} },
   '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack: async () => { assert(playback.currentTrack.artist); searches.push(playback.currentTrack); } },
+  './native/native-renderer-ready-refresh': nativeRendererReadyRefresh,
   '@/store/playback-store': { usePlaybackStore: callableStore(playback) },
   '@/store/spotify-session-store': { useSpotifySessionStore: callableStore(session) },
   '@/store/player-tour-store': { usePlayerTourStore: { getState: () => tour } },
 };
 const context = { exports: {}, require: name => { assert(name in mocks, name); return mocks[name]; },
-  __DEV__: false,
+  __DEV__: development, console: { debug() {} },
   Date, setTimeout: fn => { scheduled.push(fn); return scheduled.length; }, clearTimeout() {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../components/lyrics/spotify-native-detector.tsx'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
@@ -86,10 +106,36 @@ if (platform === 'android') assert.equal(tree.props.style[1].opacity, 0.01, 'Chr
 assert.equal(instance.enabled, true);
 web.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'playback', positionMs: 9999 }), url: 'https://open.spotify.com/' } });
 assert.equal(packets.length, 0, 'browser playback is never mixed with native detector timing');
-instance.callbacks.sample({ uri: 'spotify:track:test', title: 'Test', artist: 'Artist', positionMs: 1000 });
+const receipt = Object.freeze({ wallMs: Date.now(), monotonicMs: performance.now() });
+const evidence = developmentTiming.developmentTimingAnchor({ playerPath: '$.player_state', serverPath: '$',
+  positionField: 'position_as_of_timestamp', position: 1000, player: receipt.wallMs - 100, server: receipt.wallMs,
+  receipt, origin: 'registration', device: 'private-device', session: 'private-session', connection: 'private-connection' });
+const firstSample = { uri: 'spotify:track:test', title: 'Test', artist: 'Artist', positionMs: 1000,
+  playing: true, receivedAt: receipt.wallMs, positionTimestampMs: receipt.wallMs - 100,
+  sourceServerTimestampMs: receipt.wallMs, positionObservedAt: receipt, developmentTiming: evidence };
+instance.callbacks.sample(firstSample);
+for (let n = 0; n < 10; n++) await Promise.resolve();
 instance.callbacks.ready();
 render(); assert.equal(tree, null, 'usable native state unmounts the closed browser');
-assert.equal(packets.length, 1);
+assert.equal(packets.length, 2, 'sample and asynchronous metadata publication');
+for (let n = 0; n < 10; n++) await Promise.resolve();
+assert.equal(publishedSamples.at(-1).developmentTiming, evidence, 'actual metadata publication preserves anchor');
+assert.equal(publishedSamples.at(-1).positionObservedAt, receipt);
+if (development) {
+  assert(Object.isFrozen(evidence.receipt));
+  assert(developmentLogs.some(l => l.stage === 'metadata-publish' && l.raw.anchor === evidence.anchor));
+  assert(developmentLogs.some(l => l.stage === 'store-track-change' && l.track.startsWith('track-')));
+} else assert.equal(developmentLogs.length, 0);
+assert.equal(timingCalls.length, 0, 'timing capture is off until explicit opt-in');
+ref.current.runDiagnostics();
+assert.equal(alerts.at(-1)[0], 'Spotify timing diagnostics');
+assert.equal(timingCalls.length, 0, 'opening the dialog does not start capture');
+alerts.at(-1)[2][0].onPress();
+assert.deepEqual(timingCalls, ['start']);
+alerts.at(-1)[2][1].onPress();
+assert.deepEqual(JSON.parse(timingShares.at(-1).message), { active: false, records: [] }, 'share only the safe timing snapshot');
+alerts.at(-1)[2][2].onPress();
+assert.deepEqual(timingCalls, ['start', 'clear']);
 ref.current.togglePlayPause();
 assert.equal(commands.at(-1).type, 'toggle', 'controls target native device while browser is unmounted');
 assert.equal(find(tree), null);
@@ -143,15 +189,30 @@ AppState.currentState = 'background'; listeners.forEach(fn => fn('background'));
 assert.equal(instance.enabled, false);
 AppState.currentState = 'active'; listeners.forEach(fn => fn('active'));
 assert.equal(instance.enabled, true, 'foreground resumes native observation');
+// Cached transport mocked; real Detector.setEnabled replay is tested by check-spotify-timing.
+const replay = { ...firstSample, receivedAt: Date.now() + 1000 };
+instance.callbacks.sample(replay);
+assert.equal(publishedSamples.at(-1).developmentTiming, evidence);
+assert.equal(publishedSamples.at(-1).positionObservedAt, receipt);
+assert.equal(publishedSamples.at(-1).receivedAt, replay.receivedAt);
+if (development) {
+  assert(developmentLogs.some(l => l.stage === 'js-startup' && l.version === 3 && l.buildBase === '0453f4e'));
+  assert(developmentLogs.some(l => l.stage === 'cold-mount'));
+  assert(developmentLogs.some(l => l.stage === 'app-state' && l.previous === 'active' && l.next === 'background'));
+  assert(developmentLogs.some(l => l.stage === 'app-state' && l.previous === 'background' && l.next === 'active'));
+  assert(developmentLogs.some(l => l.stage === 'observation-policy' && l.enabled));
+  assert(!/private-|spotify:track:|Resolved Title/.test(JSON.stringify(developmentLogs)));
+} else assert.equal(developmentLogs.length, 0);
+const packetsAfterReplay = packets.length;
 session.loggedOut = true; actions.logout(); render(); web = find(tree);
 assert.equal(web.props.source.uri, 'https://accounts.spotify.com/logout', 'logout clears browser cookies even after unmount');
 instance.callbacks.authenticated('late-token', 123);
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 3000 });
-assert.equal(packets.length, acceptedPackets, 'logout suppresses late auth/state callbacks');
+assert.equal(packets.length, packetsAfterReplay, 'logout suppresses late auth/state callbacks');
 web.props.onLoadEnd(); render(); assert.equal(tree, null, 'logout browser is temporary');
 for (const hook of hooks) hook?.cleanup?.();
 assert.equal(listeners.size, 0); assert.equal(actions, null);
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 4000 });
-assert.equal(packets.length, acceptedPackets, 'unmounted detector cannot write playback');
+assert.equal(packets.length, packetsAfterReplay, 'unmounted detector cannot write playback');
 console.log(`Native detector lifecycle checks passed (${platform}): shared login, browser unmount, single state source, native controls, tour/background cleanup and logout.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

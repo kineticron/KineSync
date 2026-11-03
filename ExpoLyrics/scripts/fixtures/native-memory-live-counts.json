@@ -1,0 +1,14 @@
+{
+  "source": "Live lrc.red TTML parsed through lyrics-ttml-import.js and buildNativeRows; count-only, lyrics omitted",
+  "countDerivation": {
+    "spicyShapePictureCallsPerInitialShapePass": "sum per paint word: letters.length when emphasized, otherwise 1",
+    "paragraphBuilderMakeCallsPerInitialShapePass": "2 per voice, plus 2 when any gapAfter requires a width probe in both passes, plus 1 for a translation",
+    "nativeGlyphPicture": "one component per non-static batched lead/background voice; each non-cached redraw records one picture"
+  },
+  "tracks": [
+    { "title": "seesaw (Feat. IU)", "isrc": "ZZA0P2622376", "lines": 42, "voices": 42, "backgroundVoices": 0, "leadSegments": 286, "backgroundSegments": 0, "maxSegmentsPerVoice": 12, "maxLettersPerVoice": 31, "spicyShapePictureCallsPerInitialShapePass": 296, "paragraphBuilderMakeCallsPerInitialShapePass": 84 },
+    { "title": "Rewind", "isrc": "US5TA1500050", "lines": 54, "voices": 54, "backgroundVoices": 0, "leadSegments": 196, "backgroundSegments": 0, "maxSegmentsPerVoice": 7, "maxLettersPerVoice": 25, "spicyShapePictureCallsPerInitialShapePass": 360, "paragraphBuilderMakeCallsPerInitialShapePass": 108 },
+    { "title": "Bohemian Rhapsody", "isrc": "GBUM71805979", "lines": 22, "voices": 22, "backgroundVoices": 0, "leadSegments": 102, "backgroundSegments": 0, "maxSegmentsPerVoice": 9, "maxLettersPerVoice": 45, "spicyShapePictureCallsPerInitialShapePass": 162, "paragraphBuilderMakeCallsPerInitialShapePass": 44 },
+    { "title": "hate that i made you love me", "isrc": "USUM72601821", "lines": 53, "voices": 60, "backgroundVoices": 7, "leadSegments": 311, "backgroundSegments": 26, "maxSegmentsPerVoice": 11, "maxLettersPerVoice": 55, "spicyShapePictureCallsPerInitialShapePass": 459, "paragraphBuilderMakeCallsPerInitialShapePass": 120 }
+  ]
+}

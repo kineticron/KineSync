@@ -141,6 +141,33 @@ for (let time = 0; time <= 1800; time += 10) {
 }
 const glyphLayout = load('export * from "./components/lyrics/native/native-glyph-layout"');
 const syllableRect = { x: 20, y: 0, width: 40, height: 20 };
+// "♡ yeah," (USUM72601821, L13, 48.014–48.366) can shape into
+// separate heart, text and punctuation boxes. Use their union, not box zero.
+const splitSyllable = [
+  { x: 20, y: -3, width: 12, height: 24 },
+  { x: 32, y: 0, width: 40, height: 20 },
+  { x: 72, y: 0, width: 6, height: 20 },
+  { x: 0, y: 20, width: 100, height: 20 },
+];
+const glyphLines = [{ baseline: 16, ascent: 16, descent: 4 }, { baseline: 36, ascent: 16, descent: 4 }];
+for (const rect of splitSyllable.slice(0, 3)) {
+  const extent = glyphLayout.glyphRowExtent(rect, splitSyllable, glyphLines);
+  assert.equal(extent.x, 20);
+  assert.equal(extent.width, 58, 'All fallback/punctuation slices share the full row extent, excluding wrapped rows');
+}
+const rtlExtent = glyphLayout.glyphRowExtent(splitSyllable[2], [...splitSyllable].reverse(), glyphLines);
+assert.equal(rtlExtent.x, 20, 'Extent is independent of RTL slice ordering');
+assert.equal(rtlExtent.width, 58);
+assert.equal(glyphLayout.glyphRowExtent(syllableRect, [syllableRect], glyphLines).width, 40);
+const sharedBaseline = [{ x: 0, y: -10, width: 30, height: 50 }, { x: 30, y: 35, width: 88, height: 40 }];
+const baselineLines = [{ baseline: 37, ascent: 37, descent: 13 }, { baseline: 87, ascent: 37, descent: 13 }];
+const nextLine = { x: 0, y: 55, width: 200, height: 40 };
+for (const rect of sharedBaseline) {
+  assert.equal(glyphLayout.glyphRowExtent(rect, [...sharedBaseline, nextLine], baselineLines).width, 118,
+    'Fallback and text sharing a paragraph baseline need not overlap by half their tight heights');
+}
+assert.equal(glyphLayout.glyphRowExtent(nextLine, [...sharedBaseline, nextLine], baselineLines).width, 200,
+  'Baseline grouping keeps the following wrapped row separate');
 for (const advanced of [0, 10, 20, 40, 80]) {
   const edges = [0, 1, 2, 3].map(letter => glyphLayout.amllRevealStart({ ...syllableRect, x: 20 + letter * 10, width: 10 }, [syllableRect], advanced, 0, 10));
   assert.ok(edges.every(x => x === edges[0]), 'Sustained letters share a syllable reveal edge instead of starting parallel reveal streams');

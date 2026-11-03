@@ -1,0 +1,76 @@
+{
+  "commit": "cf816c41126795201346eabb3514e5265f05a1ac",
+  "sourceSha256": "1aaf487f4f96e709b78e0afb1329344104c63566753662171238f23dc8470d38",
+  "results": [
+    {
+      "style": "amll",
+      "id": "US5TA1500050",
+      "frames": 414,
+      "shaders": 8280,
+      "exactMatches32": 7038
+    },
+    {
+      "style": "amll",
+      "id": "ZZA0P2622376",
+      "frames": 321,
+      "shaders": 3852,
+      "exactMatches32": 2199
+    },
+    {
+      "style": "amll",
+      "id": "KRMIM2652961",
+      "frames": 219,
+      "shaders": 2847,
+      "exactMatches32": 1314
+    },
+    {
+      "style": "amll",
+      "id": "USUM72601821",
+      "frames": 173,
+      "shaders": 2422,
+      "exactMatches32": 1038
+    },
+    {
+      "style": "amll",
+      "id": "GBUM71805979",
+      "frames": 343,
+      "shaders": 3087,
+      "exactMatches32": 0
+    },
+    {
+      "style": "spicy",
+      "id": "US5TA1500050",
+      "frames": 414,
+      "shaders": 9108,
+      "exactMatches32": 8718
+    },
+    {
+      "style": "spicy",
+      "id": "ZZA0P2622376",
+      "frames": 321,
+      "shaders": 3852,
+      "exactMatches32": 3534
+    },
+    {
+      "style": "spicy",
+      "id": "KRMIM2652961",
+      "frames": 219,
+      "shaders": 2847,
+      "exactMatches32": 2632
+    },
+    {
+      "style": "spicy",
+      "id": "USUM72601821",
+      "frames": 230,
+      "shaders": 3680,
+      "exactMatches32": 3450
+    },
+    {
+      "style": "spicy",
+      "id": "GBUM71805979",
+      "frames": 242,
+      "shaders": 5082,
+      "exactMatches32": 4850
+    }
+  ]
+}

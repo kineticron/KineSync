@@ -21,7 +21,7 @@ const NOOP = () => {};
 const easeOut = Easing.bezier(0.23, 1, 0.32, 1);
 
 /** Keep the previous renderer alive until the replacement has laid out its lyrics. */
-export function withLyricsPacketTransition<Props extends { demoLyrics?: LyricLine[]; active?: boolean }>(Renderer: ComponentType<Props>) {
+export function withLyricsPacketTransition<Props extends { demoLyrics?: LyricLine[]; active?: boolean }>(Renderer: ComponentType<Props>, options: { reuseSameSourcePackets?: boolean } = {}) {
   const LiveTransition = memo(function LiveTransition(props: Props) {
     const packet = usePlaybackStore(useShallow(state => ({ lyrics: state.lyrics, lyricsSource: state.lyricsSource,
       lyricsMetadata: state.lyricsMetadata, lyricsStatusMessage: state.lyricsStatusMessage, currentTrack: state.currentTrack })));
@@ -32,14 +32,19 @@ export function withLyricsPacketTransition<Props extends { demoLyrics?: LyricLin
     const [layers, setLayers] = useState<{ current: Layer; previous?: Layer; ready: boolean }>(
       () => ({ current: { id: 0, packet }, ready: true }));
     const { current, previous, ready } = layers;
+    // Native lists reconcile source rows incrementally; retain their mounted
+    // caches for same-track/provider updates. Empty/source/track replacements
+    // still use the existing readiness transition. Other callers keep defaults.
+    const sameIdentity = current.packet.lyricsSource === packet.lyricsSource &&
+      current.packet.currentTrack?.id === packet.currentTrack?.id;
+    const sameContentLayer = current.packet.lyrics === packet.lyrics ||
+      !!options.reuseSameSourcePackets && sameIdentity && current.packet.lyrics.length > 0 && packet.lyrics.length > 0;
     // Replace an unready packet, but let an in-progress crossfade finish.
-    if ((!previous || !ready) && (current.packet.lyrics !== packet.lyrics || current.packet.lyricsSource !== packet.lyricsSource ||
-      current.packet.currentTrack?.id !== packet.currentTrack?.id)) {
+    if ((!previous || !ready) && (!sameContentLayer || !sameIdentity)) {
       setLayers({ current: { id: current.id + 1, packet }, previous: previous ?? current, ready: !isActive });
     } else if (previous && !ready && !isActive) {
       setLayers({ ...layers, ready: true });
-    } else if (current.packet !== packet && current.packet.lyrics === packet.lyrics &&
-      current.packet.lyricsSource === packet.lyricsSource && current.packet.currentTrack?.id === packet.currentTrack?.id) {
+    } else if (current.packet !== packet && sameContentLayer && sameIdentity) {
       setLayers({ ...layers, current: { ...current, packet } });
     }
     const onReady = useCallback(() => {

@@ -135,7 +135,7 @@ function isLikelySameKugouTrack(
   return false;
 }
 
-async function collectKugouTitleLinkedKeys(track) {
+async function collectKugouTitleLinkedKeys(track, searchSongs = searchKugouSongs) {
   const rawTitle = String(track?.title || "").trim();
   const artistPrimary = getSpotifyPrimaryArtist(track?.artist || "");
   const titleCore = normalizeCoreTitle(rawTitle);
@@ -143,7 +143,7 @@ async function collectKugouTitleLinkedKeys(track) {
     return new Set();
   }
   try {
-    const payload = await searchKugouSongs(`${rawTitle} ${artistPrimary}`);
+    const payload = await searchSongs(`${rawTitle} ${artistPrimary}`);
     const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
     const keys = new Set();
     for (const song of flattenKugouSearchResults(songs)) {
@@ -313,53 +313,40 @@ async function fetchKugouKaraokeLyricsForSong(track, song, matchScore) {
   const lyricCandidates = Array.isArray(lyricSearchPayload?.candidates)
     ? lyricSearchPayload.candidates
     : [];
-  if (!lyricCandidates.length) {
-    return null;
-  }
-
   const rankedLyrics = lyricCandidates
-    .map((entry) => ({
-      entry,
-      score: rankKugouLyricCandidate(track, entry),
-    }))
-    .sort((left, right) => right.score - left.score);
+    .map((entry) => ({ entry, score: rankKugouLyricCandidate(track, entry) }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .filter(({ entry }) => entry?.id && entry?.accesskey);
 
-  for (const { entry } of rankedLyrics.slice(0, 3)) {
-    if (!entry?.id || !entry?.accesskey) {
-      continue;
-    }
+  const downloads = createRankedProbePool(rankedLyrics, 3, async ({ entry }) => {
     try {
       const downloadPayload = await downloadKugouLyric(entry);
       const encodedContent = String(downloadPayload?.content || "").trim();
-      if (!encodedContent) {
-        continue;
-      }
-      const decodedKrc = decodeKugouKrc(encodedContent);
+      if (!encodedContent) return null;
       const karaokeLyrics = stripLeadingMetadataLines(
-        parseKugouKrc(decodedKrc),
+        parseKugouKrc(decodeKugouKrc(encodedContent)),
         track,
       );
-      if (!karaokeLyrics.length) {
-        continue;
-      }
-      const coverage = scoreLyricsCoverage(karaokeLyrics, track.durationMs);
-      const coverageRatio = getLyricsCoverageRatio(
-        karaokeLyrics,
-        track.durationMs,
-      );
+      if (!karaokeLyrics.length) return null;
       return {
         lyrics: karaokeLyrics,
         source: "kugou-krc",
-        coverage,
-        coverageRatio,
+        coverage: scoreLyricsCoverage(karaokeLyrics, track.durationMs),
+        coverageRatio: getLyricsCoverageRatio(karaokeLyrics, track.durationMs),
         matchScore,
       };
     } catch {
-      // Try the next lyric candidate.
+      return null;
     }
-  }
-
-  return null;
+  });
+  try {
+    for (let index = 0; index < rankedLyrics.length; index += 1) {
+      const result = await downloads.read(index);
+      if (result?.lyrics?.length) return result;
+    }
+    return null;
+  } finally { downloads.stop(); }
 }
 
 async function collectRankedKugouSearchCandidates(track) {
@@ -367,13 +354,18 @@ async function collectRankedKugouSearchCandidates(track) {
     0,
     KUGOU_MAX_QUERY_VARIANTS,
   );
-  const titleLinkedKeys = await collectKugouTitleLinkedKeys(track);
+  const searches = new Map();
+  const searchSongs = query => {
+    if (!searches.has(query)) searches.set(query, searchKugouSongs(query));
+    return searches.get(query);
+  };
+  const titleLinkedKeysPromise = collectKugouTitleLinkedKeys(track, searchSongs);
   const rawSongs = [];
 
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await searchKugouSongs(query);
+        const payload = await searchSongs(query);
         const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
         rawSongs.push(...flattenKugouSearchResults(songs));
       } catch {
@@ -381,6 +373,7 @@ async function collectRankedKugouSearchCandidates(track) {
       }
     }),
   );
+  const titleLinkedKeys = await titleLinkedKeysPromise;
 
   const deduped = [];
   const seen = new Set();
@@ -457,33 +450,28 @@ async function fetchFromKugou(track) {
     .sort((left, right) => compareCandidateMatchQuality(track, left, right))
     .slice(0, MAX_KUGOU_CANDIDATES);
 
+  const probes = createRankedProbePool(likelyCandidates, 4, async candidate => {
+    try {
+      return await fetchKugouKaraokeLyricsForSong(track, candidate.song, candidate.score);
+    } catch {
+      return null;
+    }
+  });
   let bestResult = null;
   let bestScore = -1;
-
-  for (const candidate of likelyCandidates) {
-    try {
-      const probe = await fetchKugouKaraokeLyricsForSong(
-        track,
-        candidate.song,
-        candidate.score,
-      );
-      if (!probe?.lyrics?.length) {
-        continue;
-      }
+  try {
+    for (let index = 0; index < likelyCandidates.length; index += 1) {
+      const candidate = likelyCandidates[index];
+      const probe = await probes.read(index);
+      if (!probe?.lyrics?.length) continue;
       if (probe.coverage > bestScore) {
         bestScore = probe.coverage;
         bestResult = { lyrics: probe.lyrics, source: probe.source };
       }
-      if (
-        candidate.score >= MATCH_CONFIDENCE_SCORE &&
-        probe.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO
-      ) {
+      if (candidate.score >= MATCH_CONFIDENCE_SCORE && probe.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO) {
         return { lyrics: probe.lyrics, source: probe.source };
       }
-    } catch {
-      // Try next candidate.
     }
-  }
-
-  return bestResult;
+    return bestResult;
+  } finally { probes.stop(); }
 }

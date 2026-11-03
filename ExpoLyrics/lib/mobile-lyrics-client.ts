@@ -15,6 +15,7 @@ import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import {
   refreshMobileMusixmatchToken,
+  invalidateMobileMusixmatchToken,
   resolveMobileMusixmatchToken,
 } from "@/lib/mobile-musixmatch-token";
 
@@ -53,10 +54,12 @@ const mobileLyricsService = createLyricsService({
     resolveMobileMusixmatchToken(
       readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
     ),
-  refreshMusixmatchUserToken: () =>
+  refreshMusixmatchUserToken: (rejectedToken = "") =>
     refreshMobileMusixmatchToken(
       readEnv("EXPO_PUBLIC_MUSIXMATCH_USER_TOKEN", "MUSIXMATCH_USER_TOKEN"),
+      rejectedToken,
     ),
+  invalidateMusixmatchUserToken: invalidateMobileMusixmatchToken,
   getSpotifyWebToken: () =>
     storedSpotifyToken() ||
     readEnv("EXPO_PUBLIC_SPOTIFY_WEB_TOKEN", "SPOTIFY_WEB_TOKEN"),
@@ -192,10 +195,12 @@ export async function fetchMobileLyricsForTrack(
   track: Track,
   {
     preferredSource = "auto",
+    force = false,
     immediateTranslation = false,
     onSyncedLyrics,
   }: {
     preferredSource?: LyricsSourcePreference;
+    force?: boolean;
     immediateTranslation?: boolean;
     onSyncedLyrics?: (packet: LyricsPacket) => void;
   } = {},
@@ -234,7 +239,7 @@ export async function fetchMobileLyricsForTrack(
 
   const mobileTrack = toMobileTrack(track);
   const result = await mobileLyricsService.fetchSyncedLyrics(mobileTrack, {
-    force: true,
+    force,
     preferredSource,
     immediateTranslation,
     translationLanguage,

@@ -41,7 +41,8 @@ export type MobileLyricsSourcePreference =
 
 export function createLyricsService(options?: {
   getMusixmatchUserToken?: () => string | Promise<string>;
-  refreshMusixmatchUserToken?: (() => string | Promise<string>) | null;
+  refreshMusixmatchUserToken?: ((rejectedToken: string) => string | Promise<string>) | null;
+  invalidateMusixmatchUserToken?: ((rejectedToken: string) => void | Promise<void>) | null;
   getSpotifyWebToken?: () => string;
   getGeminiApiKey?: () => string;
   getSpotifyAccessToken?: () => string | Promise<string>;

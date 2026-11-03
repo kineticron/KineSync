@@ -1,6 +1,8 @@
 /* global __dirname */
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+const ts = require('typescript');
 const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 const output = buildSync({ entryPoints: [path.resolve(__dirname, '../components/lyrics/native/native-lyrics-model.ts')], bundle: true,
@@ -8,6 +10,67 @@ const output = buildSync({ entryPoints: [path.resolve(__dirname, '../components/
 const moduleObject = { exports: {} };
 vm.runInNewContext(output, { module: moduleObject, exports: moduleObject.exports, require });
 const { buildNativeRows, buildNativeVoice, nativeWordProgress, nativeFollowIndex } = moduleObject.exports;
+
+// Exercise the actual alignment expressions without rendering React Native UI.
+const rowPath = path.resolve(__dirname, '../components/lyrics/native/native-lyric-row.tsx');
+const rowAst = ts.createSourceFile('native-lyric-row.tsx', fs.readFileSync(rowPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let rightInitializer;
+function findRight(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(rowAst) === 'right') rightInitializer = node.initializer.getText(rowAst);
+  ts.forEachChild(node, findRight);
+}
+findRight(rowAst);
+assert.ok(rightInitializer, 'NativeLyricRowView must define its row alignment');
+const evaluateRight = ({ spicy, landscape, oppositeAligned, staticLyrics = false }) =>
+  vm.runInNewContext(`(${rightInitializer})`, { spicy, landscape, row: { line: { oppositeAligned } }, staticLyrics });
+for (const spicy of [false, true]) {
+  for (const landscape of [false, true]) {
+    for (const oppositeAligned of [false, true, undefined]) {
+      const expected = landscape ? !oppositeAligned : Boolean(oppositeAligned);
+      assert.equal(evaluateRight({ spicy, landscape, oppositeAligned }), expected,
+        `${spicy ? 'spicy' : 'amll'} row alignment (${landscape ? 'landscape' : 'portrait'}, opposite=${String(oppositeAligned)})`);
+    }
+  }
+}
+for (const spicy of [false, true]) {
+  for (const landscape of [false, true]) {
+    for (const oppositeAligned of [false, true, undefined]) {
+      assert.equal(evaluateRight({ spicy, landscape, oppositeAligned, staticLyrics: true }), landscape,
+        `${spicy ? 'spicy' : 'amll'} static lyrics retain landscape alignment`);
+    }
+  }
+}
+
+const viewPath = path.resolve(__dirname, '../components/lyrics/native/native-lyrics-view.tsx');
+const viewAst = ts.createSourceFile('native-lyrics-view.tsx', fs.readFileSync(viewPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let hasDuetCallback;
+function findHasDuet(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(viewAst) === 'hasDuet' && node.initializer && ts.isCallExpression(node.initializer)) {
+    hasDuetCallback = node.initializer.arguments[0].getText(viewAst);
+  }
+  ts.forEachChild(node, findHasDuet);
+}
+findHasDuet(viewAst);
+assert.ok(hasDuetCallback, 'NativeLyricsView must define hasDuet with useMemo');
+const evaluateHasDuet = (lyrics, landscapeMode) => vm.runInNewContext(`(${hasDuetCallback})()`, { lyrics, landscapeMode });
+for (const lines of [
+  { name: 'empty', lyrics: [] },
+  { name: 'normal', lyrics: [{ oppositeAligned: false }, { oppositeAligned: undefined }] },
+  { name: 'opposite', lyrics: [{ oppositeAligned: true }] },
+  { name: 'mixed', lyrics: [{ oppositeAligned: false }, { oppositeAligned: true }] },
+]) {
+  for (const landscapeMode of [false, true]) {
+    const expected = lines.lyrics.some(line => landscapeMode ? !line.oppositeAligned : !!line.oppositeAligned);
+    assert.equal(evaluateHasDuet(lines.lyrics, landscapeMode), expected,
+      `${lines.name} lines hasDuet matches dynamic ${landscapeMode ? 'landscape' : 'portrait'} row alignment`);
+    for (const spicy of [false, true]) {
+      assert.equal(evaluateHasDuet(lines.lyrics, landscapeMode),
+        lines.lyrics.some(line => evaluateRight({ spicy, landscape: landscapeMode, oppositeAligned: line.oppositeAligned })),
+        `${lines.name} lines hasDuet agrees with ${spicy ? 'spicy' : 'amll'} row alignment`);
+    }
+  }
+}
+
 const makePart = (text, index, isPartOfWord) => ({ text, startTime: index * 1000, endTime: (index + 1) * 1000,
   ...(isPartOfWord === undefined ? {} : { isPartOfWord }) });
 for (const style of ['amll', 'spicy']) {
@@ -48,9 +111,10 @@ const line = { lineStartTime: 0, lineEndTime: 3000, syllables: [makePart('lead',
 const spicy = buildNativeRows([line], 'spicy')[0];
 const japanese = buildNativeVoice([{ text: '革命道中', startTime: 1000, endTime: 3000 }], 1000, 3000, 'amll');
 assert.equal(japanese.paintText, '革命道中');
-assert.deepEqual(Array.from(japanese.paintWords, word => word.text), ['革', '命', '道', '中']);
-assert.deepEqual(Array.from(japanese.paintWords, word => [word.start, word.end]), [[1000, 1500], [1500, 2000], [2000, 2500], [2500, 3000]]);
-assert.ok(japanese.paintWords.every(word => !word.emphasized), 'AMLL tests emphasis after splitting CJK into timed characters');
+assert.deepEqual(Array.from(japanese.paintWords, word => word.text), ['革命道中']);
+assert.deepEqual(Array.from(japanese.paintWords, word => [word.start, word.end]), [[1000, 3000]],
+  'a source syllable remains one paint timing item while AMLL chunk grouping stays internal');
+assert.ok(japanese.paintWords.every(word => !word.emphasized), 'CJK emphasis remains based on the original AMLL shaping chunks');
 const emphasized = buildNativeVoice([{ text: 'sing ', startTime: 1000, endTime: 3000 }, { text: 'along', startTime: 3000, endTime: 3500 }], 1000, 3500, 'amll');
 assert.equal(emphasized.paintWords.length, 2, 'Whitespace is layout text rather than an animated word');
 assert.equal(emphasized.paintWords[0].letters.join(''), 'sing');

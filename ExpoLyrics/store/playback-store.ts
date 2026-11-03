@@ -7,6 +7,7 @@ import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import { getBridgeSettings } from '@/lib/bridge-settings';
 import { resolvePacketArtworkUrl } from '@/lib/artwork';
+import { numericEvidence, packetTimingAnchor, recordTiming } from '@/lib/spotify-detector/timing-diagnostics';
 import {
   shouldAcceptPlaybackPacket,
   type PlaybackMode,
@@ -28,6 +29,30 @@ const PLAYBACK_CLOCK_INTERVAL_MS = 1000;
 const PLAYBACK_POSITION_UPDATE_EPSILON_MS = 32;
 const DEFAULT_HANDSHAKE_KEY = '';
 const PLAYBACK_PACKET_METADATA_EPSILON_MS = 32;
+
+type SourceAnchorProof = {
+  key: string;
+  anchorPositionMs: number;
+  anchorMonotonicMs: number;
+  compensationMs: number;
+};
+
+function sourceAnchorKey(packet: PlaybackPacket, source: PlaybackMode): string | null {
+  const id = /^spotify:track:([a-zA-Z0-9]{22})$/.exec(packet.uri ?? '')?.[1];
+  const timestamp = packet.positionTimestampMs, server = packet.sourceServerTimestampMs;
+  // Only the paired source path proves an unchanged raw anchor. Legacy/local
+  // timestamps and incomplete identities must retain ordinary correction rules.
+  if (source !== 'mobile' || !packet.isPlaying || !id ||
+    packet.trackId !== `spotify-connect:${id}` ||
+    (packet.spotifyTrackId !== undefined && packet.spotifyTrackId !== id) ||
+    !Number.isSafeInteger(timestamp) || timestamp! <= 1_000_000_000_000 ||
+    !Number.isSafeInteger(server) || server! < timestamp! ||
+    !Number.isFinite(packet.sourcePositionMs) || packet.sourcePositionMs! < 0 ||
+    ![packet.activeDeviceId, packet.playbackSessionId, packet.sourceClockScope]
+      .every(value => typeof value === 'string' && value.length > 0)) return null;
+  return JSON.stringify([packet.uri, packet.activeDeviceId, packet.playbackSessionId,
+    packet.sourceClockScope, timestamp, packet.sourcePositionMs]);
+}
 
 export type LyricsStyle = 'spicy' | 'amll';
 /** @deprecated Use LyricsStyle. Kept for migration of persisted settings. */
@@ -132,6 +157,7 @@ type PlaybackState = {
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
+  sourceAnchorProof: SourceAnchorProof | null;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setPlaybackMode: (mode: PlaybackMode) => void;
   setServerUrl: (url: string) => void;
@@ -249,6 +275,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
+  sourceAnchorProof: null,
   setConnectionStatus: (status) =>
     set((state) =>
       status === 'connected'
@@ -260,6 +287,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       playbackMode,
       clockSkewBaselineMs: Number.NaN,
       lastSourceClockMs: 0,
+      sourceAnchorProof: null,
     }),
   setServerUrl: (url) => {
     set({ serverUrl: url.trim() });
@@ -273,11 +301,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const nowMono = getMonotonicNow();
     const prev = get();
     if (!shouldAcceptPlaybackPacket(prev.playbackMode, source)) {
+      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'mode' });
       return { trackChanged: false, seekDetected: false };
     }
     const sourceClockRaw = Number(packet.capturedAtMs ?? packet.timestamp ?? nowWall);
     const sourceClock = Number.isFinite(sourceClockRaw) ? sourceClockRaw : nowWall;
     if (sourceClock + 250 < prev.lastSourceClockMs) {
+      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'older-local-packet', storeSourceClockMs: numericEvidence(sourceClock) });
       return { trackChanged: false, seekDetected: false };
     }
     const observedDelta = Math.max(-60_000, Math.min(60_000, nowWall - sourceClock));
@@ -306,14 +336,28 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const trackChanged = prev.currentTrack?.id !== incomingTrack.id;
     const projected =
       prev.anchorPositionMs + (prev.isPlaying ? nowMono - prev.anchorMonotonicMs : 0);
+    const sourceKey = sourceAnchorKey(packet, source);
+    const proof = prev.sourceAnchorProof;
+    // An optimistic seek can replace the store clock without a source packet.
+    // Such a clock is not covered by the previous source proof.
+    const sameSourceAnchor = !trackChanged && prev.isPlaying && sourceKey !== null &&
+      proof?.key === sourceKey && proof.anchorPositionMs === prev.anchorPositionMs &&
+      proof.anchorMonotonicMs === prev.anchorMonotonicMs &&
+      proof.compensationMs === prev.playbackCompensationMs;
     const seekDetected =
-      !trackChanged && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
+      !trackChanged && !sameSourceAnchor && Math.abs(projected - correctedPosition) >= SEEK_RESET_THRESHOLD_MS;
     const playStateChanged = prev.isPlaying !== packet.isPlaying;
+    const forceExperimentReanchor = typeof __DEV__ !== 'undefined' && __DEV__ &&
+      packet.nativeDeliveryExperimentReanchor === true;
     // Keep a stable render anchor through ordinary source/transport jitter.
     // Restarting every token's UI animation for a few milliseconds of noise
     // produces visible bumps, even when the source is otherwise in sync.
-    const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
-      Math.abs(projected - correctedPosition) <= 80;
+    const preserveAnchor = !forceExperimentReanchor && !trackChanged && !playStateChanged && packet.isPlaying &&
+      (Math.abs(projected - correctedPosition) <= 80 || (sameSourceAnchor && correctedPosition < projected));
+    recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
+      projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
+      storeSourceClockMs: numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected,
+      sourceIdentityComplete: sourceKey !== null, sameSourceAnchor, forceExperimentReanchor });
     const metadataChanged =
       trackChanged ||
       prev.currentTrack?.title !== incomingTrack.title ||
@@ -330,8 +374,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       Math.abs(prev.playbackPosition - correctedPosition) < PLAYBACK_PACKET_METADATA_EPSILON_MS &&
       Math.abs(prev.anchorPositionMs - correctedPosition) < PLAYBACK_PACKET_METADATA_EPSILON_MS;
     if (stationaryDuplicate) {
-      if (packet.timing && typeof packet.timing === 'object') {
-        set({ bridgeTiming: packet.timing });
+      if (prev.sourceAnchorProof || (packet.timing && typeof packet.timing === 'object')) {
+        set({ sourceAnchorProof: null, ...(packet.timing ? { bridgeTiming: packet.timing } : {}) });
       }
       return { trackChanged: false, seekDetected: false };
     }
@@ -353,6 +397,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           : prev.bridgeTiming,
       clockSkewBaselineMs: baseline,
       lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
+      // Replace atomically: never combine old identity fields with a partial packet.
+      sourceAnchorProof: sourceKey === null ? null : {
+        key: sourceKey,
+        anchorPositionMs: preserveAnchor ? prev.anchorPositionMs : correctedPosition,
+        anchorMonotonicMs: preserveAnchor ? prev.anchorMonotonicMs : nowMono,
+        compensationMs: prev.playbackCompensationMs,
+      },
     });
     if (packet.isPlaying) {
       schedulePlaybackClockTick();

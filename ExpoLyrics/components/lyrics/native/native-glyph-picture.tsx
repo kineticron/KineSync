@@ -1,7 +1,10 @@
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkParagraph, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
+import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkImageFilter, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
-import { amllRevealStart, selectGlyphSlice } from './native-glyph-layout';
+import { scheduleOnRN } from 'react-native-worklets';
+import { reportNativePicture } from '@/lib/native-clock-diagnostics';
+import { needsEmojiMask } from './native-glyph-mask';
+import { amllRevealStart, glyphRowExtent, selectGlyphSlice } from './native-glyph-layout';
 import type { NativePaintWord } from './native-lyrics-model';
 import { advanceReferenceWordMotion, initialWordSpringState, type WordMotion } from './reference-word-motion';
 import { amllEmphasis, amllFloat, clamp01 } from './reference-motion';
@@ -11,14 +14,76 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[] };
+type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; revealRects: SkRect[] };
+type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
+type ReusableGlyphPaints = { revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
+
+// Glow sigma is animation-derived and continuous. Reuse only bit-exact radii,
+// with a small per-voice LRU so a long song cannot retain an unbounded filter set.
+const MAX_GLOW_FILTER_CACHE_ENTRIES = 32;
+
+function getGlowFilter(paints: ReusableGlyphPaints, radius: number) {
+  'worklet';
+  const existing = paints.blurRadii.indexOf(radius);
+  if (existing >= 0) {
+    const filter = paints.blurFilters[existing];
+    if (existing !== paints.blurRadii.length - 1) {
+      paints.blurRadii.splice(existing, 1);
+      paints.blurFilters.splice(existing, 1);
+      paints.blurRadii.push(radius);
+      paints.blurFilters.push(filter);
+    }
+    return filter;
+  }
+  const filter = Skia.ImageFilter.MakeBlur(radius, radius, TileMode.Decal);
+  if (paints.blurRadii.length === MAX_GLOW_FILTER_CACHE_ENTRIES) {
+    paints.blurRadii.shift();
+    paints.blurFilters.shift();
+  }
+  paints.blurRadii.push(radius);
+  paints.blurFilters.push(filter);
+  return filter;
+}
+
+// White RGB, shared endpoint Y, null positions, Clamp tiling and default
+// matrix/flags are fixed here. Compare every varying input exactly; never quantize animation values.
+const MAX_REVEAL_SHADER_CACHE_ENTRIES = 32;
+function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX: number, bright: number, dark: number) {
+  'worklet';
+  const entries = paints.revealShaders;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (Object.is(entry.x, x) && Object.is(entry.y, y) && Object.is(entry.endX, endX) &&
+        Object.is(entry.bright, bright) && Object.is(entry.dark, dark)) {
+      // Move to MRU without allocating a key, array or cache entry on a hit.
+      for (let j = i; j < entries.length - 1; j++) entries[j] = entries[j + 1];
+      entries[entries.length - 1] = entry;
+      return entry.shader;
+    }
+  }
+  const shader = Skia.Shader.MakeLinearGradient({ x, y }, { x: endX, y },
+    [Skia.Color(`rgba(255,255,255,${bright})`), Skia.Color(`rgba(255,255,255,${dark})`)], null, TileMode.Clamp);
+  // SkShaders are immutable; recorded paints retain native references. Do not
+  // explicitly dispose evicted handles while pictures may still reference them.
+  if (entries.length === MAX_REVEAL_SHADER_CACHE_ENTRIES) entries.shift();
+  entries.push({ x, y, endX, bright, dark, shader });
+  return shader;
+}
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
+  const lines = paragraph.getLineMetrics();
   const allRects = words.flatMap(word => word.rects);
   const shaped = words.map(word => {
     const parts = word.word.emphasized ? word.letters : [word.rects];
-    return { ...word, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
+    const emojiMask = word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)];
+    const revealRects = parts.map(rects => {
+      const rect = rects[0];
+      if (!rect) return Skia.XYWHRect(0, 0, 0, 0);
+      const extent = glyphRowExtent(rect, rects, lines);
+      return Skia.XYWHRect(extent.x, rect.y, extent.width, rect.height);
+    });
+    return { ...word, emojiMask, revealRects, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
       const path = Skia.PathBuilder.Make();
       rects.forEach(rect => {
         const onLine = allRects.filter(r => Math.min(r.y + r.height, rect.y + rect.height) - Math.max(r.y, rect.y) > Math.min(r.height, rect.height) / 2);
@@ -60,7 +125,7 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
   const sourcePaint = Skia.Paint();
   sourcePaint.setAntiAlias(true);
   sourcePaint.setColor(Skia.Color('white'));
-  if (spicy) for (const word of shaped) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
+  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean)) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
     canvas.clipPath(word.clips[index], ClipOp.Intersect, true);
     for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, sourcePaint);
   }));
@@ -77,12 +142,28 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
   canvas.translate(-ox, -oy);
 }
 
-function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
-  spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock) {
+function drawGlyphSlice(canvas: SkCanvas, word: ShapedGlyphWord, letter: number, paint: SkPaint) {
   'worklet';
-  const paint = Skia.Paint();
+  if (word.emojiMask[letter]) {
+    // Color fallback glyphs can ignore a glyph paint's shader. Apply the
+    // reveal to the recorded glyph alpha, including the inactive dim state.
+    canvas.saveLayer();
+    canvas.drawPicture(word.pictures[letter]);
+    paint.setBlendMode(BlendMode.SrcIn);
+    canvas.drawPaint(paint);
+    canvas.restore();
+    paint.setBlendMode(BlendMode.SrcOver);
+  } else for (const run of word.runs[letter]) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+}
+
+function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
+  spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock,
+  paints: ReusableGlyphPaints) {
+  'worklet';
+  const { paint, glowPaint } = paints;
   paint.setAntiAlias(true);
-  const glowPaint = Skia.Paint();
+  // A reusable Paint must begin each recording with SkPaint's native default.
+  paint.setColor(Skia.Color('black'));
   glowPaint.setAntiAlias(true);
   const fade = (words[0]?.rects[0]?.height ?? fontSize) * 0.56;
   let advanced = 0;
@@ -100,8 +181,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
     const floatTime = amllWordFloatPosition(floatClock, time, word.word.start, word.word.end);
     transform(canvas, bounds, spicy ? motion.scale : 1, 0,
       spicy ? motion.y * (background ? fontSize / 0.75 : fontSize) : amllFloat(floatTime, word.word.start, word.word.end, background) * fontSize, word.word.origin ?? 0.5);
-    word.runs.forEach((runs, letter) => {
-      const rect = (word.word.emphasized ? word.letters[letter] : word.rects)[0];
+    word.runs.forEach((_runs, letter) => {
+      const rects = word.word.emphasized ? word.letters[letter] : word.rects;
+      const rect = rects[0];
       if (!rect) return;
       canvas.save();
       let glow = 0;
@@ -135,31 +217,33 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setAlphaf(spicy ? sung ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5 : line.dark);
       } else {
         const rtl = spicyIsRtl(word.word.text);
-        const x = spicy ? rtl ? rect.x + rect.width * (1 - gradient) : rect.x + rect.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
-        const length = spicy ? rect.width * 0.2 * (rtl ? -1 : 1) : fade;
+        const extent = spicy ? word.revealRects[letter] : rect;
+        const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
+        const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
         paint.setAlphaf(1);
-        shader = Skia.Shader.MakeLinearGradient({ x, y: rect.y }, { x: x + length, y: rect.y },
-          [Skia.Color(`rgba(255,255,255,${spicy ? background ? 0.6 : 0.85 : line.bright})`),
-            Skia.Color(`rgba(255,255,255,${spicy ? background ? 0.3 : 0.5 : line.dark})`)], null, TileMode.Clamp);
+        shader = getRevealShader(paints, x, rect.y, x + length,
+          spicy ? background ? 0.6 : 0.85 : line.bright,
+          spicy ? background ? 0.3 : 0.5 : line.dark);
         paint.setShader(shader);
       }
       if (glow > 0.001 && active) {
-        glowPaint.setShader(spicy ? null : shader);
+        glowPaint.setShader(spicy || word.emojiMask[letter] ? null : shader);
         glowPaint.setColor(Skia.Color('white'));
         glowPaint.setAlphaf(glow);
         // Blur the clipped letter image, not each whole intersecting glyph.
         // Ligatures shared by two slices must not emit their full glow twice.
-        glowPaint.setImageFilter(Skia.ImageFilter.MakeBlur(Math.max(0.01, radius), Math.max(0.01, radius), TileMode.Decal));
+        const sigma = Math.max(0.01, radius);
+        glowPaint.setImageFilter(getGlowFilter(paints, sigma));
         canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
           canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-          for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+          drawGlyphSlice(canvas, word, letter, paint);
         }
         canvas.restore();
       }
       canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
-      for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+      drawGlyphSlice(canvas, word, letter, paint);
       canvas.restore();
     });
     canvas.restore();
@@ -167,6 +251,8 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
 }
 
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
+const pictureNativeMonotonicNow = typeof performance !== 'undefined' ? performance.now : null;
+const pictureTraceEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
   words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
@@ -174,11 +260,14 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
+  const paints = useSharedValue<ReusableGlyphPaints | null>(null);
+  const traceFrames = useSharedValue(0);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     const time = position.value;
+    const pictureStarted = pictureTraceEnabled ? performance.now() : 0;
     const previous = state.value;
     const isActive = active.value;
     // A proven idle picture needs no word scans while its presentation is unchanged.
@@ -208,10 +297,27 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
-    picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd, lineMotion.value, floatClock), bounds);
+    const cachedPaints = paints.value;
+    const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
+    picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
+      lineMotion.value, floatClock, reusablePaints), bounds);
+    if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
+      traceFrames.value++;
+      let nativeNow: number | null = null;
+      try { nativeNow = pictureNativeMonotonicNow!(); } catch { /* Report unavailable native transfer explicitly. */ }
+      scheduleOnRN(reportNativePicture, { style: spicy ? 'spicy' : 'amll', position: time, nativeNow,
+        uiNow: performance.now(), pictureDurationMs: performance.now() - pictureStarted,
+        lineStart: words[0]?.word.start ?? null, lineEnd, playing: true, background });
+    }
+    // Picture recording is synchronous and snapshots paint state. Release the
+    // last frame's shader/filter refs while keeping the reusable Paint objects.
+    reusablePaints.paint.setShader(null);
+    reusablePaints.glowPaint.setShader(null);
+    reusablePaints.glowPaint.setImageFilter(null);
+    if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [active, background, bounds, fontSize, lineEnd, lineMotion, picture, position, spicy, state, words]), false);
+  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 });

@@ -7,8 +7,8 @@ import { advanceSpicyDot, amllInterludeSnapshot, initialDotSpringState, spicyDot
   spicyDotTiming, type NativeInterlude } from './native-interlude-motion';
 import { NativeLyricsFontContext } from './native-lyrics-fonts';
 
-const SpicyDot = memo(function SpicyDot({ start, end, position, fontSize }: {
-  start: number; end: number; position: SharedValue<number>; fontSize: number;
+const SpicyDot = memo(function SpicyDot({ start, end, position, seekVersion, fontSize }: {
+  start: number; end: number; position: SharedValue<number>; seekVersion: SharedValue<number>; fontSize: number;
 }) {
   const fonts = useContext(NativeLyricsFontContext);
   const font = useMemo(() => fonts ? matchFont({ fontFamily: 'SF Pro Display', fontSize: fontSize * 1.3,
@@ -20,8 +20,10 @@ const SpicyDot = memo(function SpicyDot({ start, end, position, fontSize }: {
   // Draw the actual bundled glyph into a padded canvas without enlarging flow.
   const padding = 32;
   const state = useSharedValue(initialDotSpringState());
-  useAnimatedReaction(() => ({ start, end }), (current, previous) => {
-    if (current.start !== previous?.start || current.end !== previous?.end)
+  const visibleState = useDerivedValue(() => state.value.time < 0
+    ? advanceSpicyDot(state.value, position.value, start, end, 0) : state.value);
+  useAnimatedReaction(() => ({ start, end, seek: seekVersion.value }), (current, previous) => {
+    if (current.start !== previous?.start || current.end !== previous?.end || current.seek !== previous?.seek)
       state.value = initialDotSpringState();
   });
   const frame = useFrameCallback(useCallback(info => {
@@ -32,10 +34,10 @@ const SpicyDot = memo(function SpicyDot({ start, end, position, fontSize }: {
       Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000)));
   }, [end, position, start, state]), false);
   useEffect(() => { frame.setActive(true); return () => frame.setActive(false); }, [frame]);
-  const style = useAnimatedStyle(() => ({ opacity: state.value.opacity.p,
-    transform: [{ translateY: state.value.y.p * fontSize }, { scale: state.value.scale.p }] }));
-  const blur = useDerivedValue(() => (4 + 6 * state.value.glow.p) / 2);
-  const shadowColor = useDerivedValue(() => `rgba(255,255,255,${Math.min(1, Math.max(0, state.value.glow.p * 0.9))})`);
+  const style = useAnimatedStyle(() => ({ opacity: visibleState.value.opacity.p,
+    transform: [{ translateY: visibleState.value.y.p * fontSize }, { scale: visibleState.value.scale.p }] }));
+  const blur = useDerivedValue(() => (4 + 6 * visibleState.value.glow.p) / 2);
+  const shadowColor = useDerivedValue(() => `rgba(255,255,255,${Math.min(1, Math.max(0, visibleState.value.glow.p * 0.9))})`);
   return <Animated.View style={[{ width, height: dotHeight }, style]}>
     {font && ink && <Canvas style={{ position: 'absolute', left: -padding, top: -padding,
       width: width + padding * 2, height: dotHeight + padding * 2 }}>
@@ -91,7 +93,7 @@ export const NativeInterludeView = memo(function NativeInterludeView({ interlude
       left: right ? undefined : 0, right: right ? 0 : undefined,
       transformOrigin: spicy ? 'center center' : right ? 'right center' : 'left center' }, group]}>
       {spicy ? spicyDotTiming(start, end).map(([dotStart, dotEnd], index) =>
-        <SpicyDot key={index} start={dotStart} end={dotEnd} position={position} fontSize={fontSize} />)
+        <SpicyDot key={index} start={dotStart} end={dotEnd} position={position} seekVersion={seekVersion} fontSize={fontSize} />)
         : [0, 1, 2].map(index => <AmllDot key={index} index={index} snapshot={snapshot} size={fontSize * 0.5} />)}
     </Animated.View>
   </Animated.View>;

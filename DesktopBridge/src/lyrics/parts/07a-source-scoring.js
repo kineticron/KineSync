@@ -630,43 +630,10 @@ function isSpicyLyricsSource(sourceLabel) {
     .includes("spicy-lyrics");
 }
 
-function isSpicyLineSource(sourceLabel) {
-  return String(sourceLabel || "")
-    .toLowerCase()
-    .includes("spicy-lyrics-line");
-}
-
 function isSpicyStaticSource(sourceLabel) {
   return String(sourceLabel || "")
     .toLowerCase()
     .includes("spicy-lyrics-static");
-}
-
-function isKaraokeLyricsSource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  if (source.includes("netease-lrc")) {
-    return false;
-  }
-  return (
-    isSpicyKaraokeSource(source) ||
-    source.includes("kugou-krc") ||
-    source.includes("qq-musicu-qrc") ||
-    source.includes("netease-yrc") ||
-    source.includes("musixmatch-richsync") ||
-    source.includes("richsync") ||
-    source.includes("karaoke") ||
-    source.includes("yrc")
-  );
-}
-
-function hasComparableLastLineTiming(referenceLyrics, candidateLyrics) {
-  const referenceEnd = getLastLyricEndTimeMs(referenceLyrics);
-  const candidateEnd = getLastLyricEndTimeMs(candidateLyrics);
-  if (referenceEnd <= 0 || candidateEnd <= 0) {
-    return true;
-  }
-  const toleranceMs = Math.max(8_000, Math.floor(referenceEnd * 0.14));
-  return candidateEnd + toleranceMs >= referenceEnd;
 }
 
 function spicyLyricsFailFeaturedVariantCheck(track, result) {
@@ -680,227 +647,19 @@ function spicyLyricsFailFeaturedVariantCheck(track, result) {
   );
 }
 
-function meetsCoverageDemand(track, currentBest, candidate) {
-  if (!candidate?.lyrics?.length) {
-    return false;
-  }
-  const candidateSource = String(candidate?.source || "").toLowerCase();
-  if (candidateSource.includes("local-vault")) {
-    return true;
-  }
-  if (isSpicyStaticSource(candidateSource)) {
-    if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-      return false;
-    }
-    if (
-      currentBest?.lyrics?.length &&
-      !isSpicyStaticSource(currentBest.source)
-    ) {
-      return false;
-    }
-    return candidate.lyrics.length > 0;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-    return false;
-  }
-  const trackDuration = Number(track?.durationMs || 0);
-  const candidateCoverageStats = getLyricsCoverageStats(
-    candidate.lyrics,
-    trackDuration,
-  );
-  const candidateCoverage = candidateCoverageStats.coverageRatio;
-  const candidateIsKaraoke = isKaraokeLyricsSource(candidate.source);
-  const candidateIsSpicyLine =
-    isSpicyLineSource(candidate.source) && !candidateIsKaraoke;
-  if (candidateIsSpicyLine) {
-    if (
-      currentBest?.lyrics?.length &&
-      isKaraokeLyricsSource(currentBest.source)
-    ) {
-      return false;
-    }
-    return true;
-  }
-  const minimumCoverage = candidateIsKaraoke ? 0.4 : 0.46;
-  if (trackDuration > 0 && candidateCoverage < minimumCoverage) {
-    const allowedTrailingGapMs = Math.min(
-      45_000,
-      Math.max(18_000, Math.floor(trackDuration * 0.2)),
-    );
-    const modestCoverageMiss =
-      candidateCoverage >= minimumCoverage - 0.08 &&
-      candidateCoverageStats.lineCount >= 10;
-    const looksLikeTrailingInstrumentalGap =
-      candidateCoverageStats.trailingGapMs <= allowedTrailingGapMs &&
-      candidateCoverageStats.lastTimedPointMs >= trackDuration * 0.34;
-    if (!modestCoverageMiss || !looksLikeTrailingInstrumentalGap) {
-      return false;
-    }
-  }
-
-  if (currentBest?.lyrics?.length) {
-    if (!hasComparableLastLineTiming(currentBest.lyrics, candidate.lyrics)) {
-      return false;
-    }
-    const currentCoverage = getLyricsCoverageRatio(
-      currentBest.lyrics,
-      trackDuration,
-    );
-    if (!candidateIsKaraoke && candidateCoverage + 0.05 < currentCoverage) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isQqDirectFamilySource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  return (
-    source.includes("qq-musicu-qrc") ||
-    source.includes("qq-music-direct") ||
-    source.includes("qq-legacy")
-  );
-}
-
-function isQqNonDirectSource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  return (
-    source.includes("qq-music-openapi-fallback") ||
-    source.includes("qq-openapi") ||
-    source.includes("qq-music-openai") ||
-    source.includes("qq-openai")
-  );
-}
-
-function scoreLyricsCandidate(track, result) {
-  const coverageScore = scoreLyricsCoverage(
-    result?.lyrics || [],
-    track?.durationMs || 0,
-  );
-  const lineCount = Array.isArray(result?.lyrics) ? result.lyrics.length : 0;
-  const timingTier = getLyricsTimingTier(result?.source || "");
-  const coverageRatio = getLyricsCoverageRatio(
-    result?.lyrics || [],
-    track?.durationMs || 0,
-  );
-  return (
-    coverageScore +
-    timingTier * 36 +
-    getSourcePriorityBucket(result?.source || "") * 0.15 +
-    Math.min(18, lineCount * 0.22) +
-    coverageRatio * 12
-  );
+function isValidLyricsCandidate(track, candidate) {
+  if (!candidate?.lyrics?.length || spicyLyricsFailFeaturedVariantCheck(track, candidate)) return false;
+  if (String(candidate.source || "").includes("local-vault")) return true;
+  if (isSpicyStaticSource(candidate.source)) return true;
+  return candidate.lyrics.every(line =>
+    Number.isFinite(line?.lineStartTime) && Number.isFinite(line?.lineEndTime) &&
+    line.lineStartTime >= 0 && line.lineEndTime >= line.lineStartTime);
 }
 
 function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
-  if (
-    !candidate?.lyrics?.length ||
-    !meetsCoverageDemand(track, currentBest, candidate)
-  ) {
-    return false;
-  }
-  if (!currentBest?.lyrics?.length) {
-    return true;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-    return false;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, currentBest)) {
-    return true;
-  }
-  const currentIsSpicyStatic = isSpicyStaticSource(currentBest.source);
-  const nextIsSpicyStatic = isSpicyStaticSource(candidate.source);
-  if (currentIsSpicyStatic && !nextIsSpicyStatic) {
-    return true;
-  }
-  if (nextIsSpicyStatic && !currentIsSpicyStatic) {
-    return false;
-  }
-  const currentIsLrcRedKaraoke = String(currentBest.source).includes("lrc-red-karaoke");
-  const nextIsLrcRedKaraoke = String(candidate.source).includes("lrc-red-karaoke");
-  if (currentIsLrcRedKaraoke !== nextIsLrcRedKaraoke) {
-    return nextIsLrcRedKaraoke;
-  }
-  const currentIsSpicyKaraoke = isSpicyKaraokeSource(currentBest.source);
-  const nextIsSpicyKaraoke = isSpicyKaraokeSource(candidate.source);
-  if (currentIsSpicyKaraoke && !nextIsSpicyKaraoke) {
-    return false;
-  }
-  if (nextIsSpicyKaraoke && !currentIsSpicyKaraoke) {
-    return true;
-  }
-
-  const currentIsKaraoke = isKaraokeLyricsSource(currentBest.source);
-  const nextIsKaraoke = isKaraokeLyricsSource(candidate.source);
-  const currentIsLrcRedLine = String(currentBest.source).includes("lrc-red-line");
-  const nextIsLrcRedLine = String(candidate.source).includes("lrc-red-line");
-  if (!currentIsKaraoke && !nextIsKaraoke && currentIsLrcRedLine !== nextIsLrcRedLine) {
-    return nextIsLrcRedLine;
-  }
-  const currentIsSpicyLine = isSpicyLineSource(currentBest.source);
-  const nextIsSpicyLine = isSpicyLineSource(candidate.source);
-  if (currentIsSpicyLine && !nextIsSpicyLine && !nextIsKaraoke) {
-    return false;
-  }
-  if (nextIsSpicyLine && !currentIsSpicyLine && !currentIsKaraoke) {
-    return true;
-  }
-  const currentPriority = getSourcePriorityBucket(currentBest.source);
-  const nextPriority = getSourcePriorityBucket(candidate.source);
-  const currentTimingTier = getLyricsTimingTier(currentBest.source);
-  const nextTimingTier = getLyricsTimingTier(candidate.source);
-  const currentCoverage = getLyricsCoverageRatio(
-    currentBest.lyrics,
-    track?.durationMs || 0,
-  );
-  const nextCoverage = getLyricsCoverageRatio(
-    candidate.lyrics,
-    track?.durationMs || 0,
-  );
-  const currentScore = scoreLyricsCandidate(track, currentBest);
-  const nextScore = scoreLyricsCandidate(track, candidate);
-
-  // Karaoke upgrades should win quickly when they satisfy coverage demands.
-  if (nextIsKaraoke && !currentIsKaraoke) {
-    return true;
-  }
-  // Explicit online karaoke priority order: lrc-red-karaoke > spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
-  if (nextIsKaraoke && currentIsKaraoke && nextPriority > currentPriority) {
-    return true;
-  }
-  if (
-    !nextIsKaraoke &&
-    !currentIsKaraoke &&
-    nextPriority > currentPriority &&
-    nextCoverage >= currentCoverage - 0.04
-  ) {
-    return true;
-  }
-  // If both are karaoke, prefer QQ direct family over non-direct fallbacks.
-  if (
-    nextTimingTier >= 3 &&
-    currentTimingTier >= 3 &&
-    isQqDirectFamilySource(candidate.source) &&
-    isQqNonDirectSource(currentBest.source)
-  ) {
-    return true;
-  }
-  // Prefer qq-direct over non-direct QQ fallbacks when coverage is comparable.
-  if (
-    isQqDirectFamilySource(candidate.source) &&
-    isQqNonDirectSource(currentBest.source) &&
-    nextCoverage >= currentCoverage - 0.08
-  ) {
-    return true;
-  }
-  // Significant coverage improvement should win.
-  if (nextCoverage >= currentCoverage + 0.12) {
-    return true;
-  }
-  if (nextCoverage >= 0.92 && currentCoverage <= 0.78) {
-    return true;
-  }
-  return nextScore >= currentScore + 14;
+  if (!isValidLyricsCandidate(track, candidate)) return false;
+  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return true;
+  return require("./lyricsAutoPicker").shouldPreferAutoCandidate(track, currentBest, candidate);
 }
 
 async function fetchBestSyncedLyrics(
@@ -911,11 +670,16 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
+    invalidateMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
+    autoSourceTimeoutMs = 3000,
+    onAutoComplete = null,
+    onAutoSettled = null,
   } = {},
 ) {
   const failures = [];
@@ -924,7 +688,7 @@ async function fetchBestSyncedLyrics(
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
   const attemptOrder = getSourceAttemptOrder(preferredSource, {
-    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken),
+    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function",
     hasSpotifyWebToken:
       Boolean(safeSpotifyWebToken) || Boolean(safeSpotifyAccessToken),
     hasSpotifyTrackId,
@@ -951,13 +715,14 @@ async function fetchBestSyncedLyrics(
         });
         if (vaultResult?.lyrics?.length) {
           const finalizedVault = await finalizeFetchedLyricsResult(vaultResult);
-          if (meetsCoverageDemand(track, null, finalizedVault)) {
+          if (isValidLyricsCandidate(track, finalizedVault)) {
             if (typeof sourceCache?.set === "function") {
               sourceCache.set("local-vault", finalizedVault);
             }
             if (typeof onSourceCached === "function") {
               onSourceCached(finalizedVault, "local-vault");
             }
+            if (preferred === "auto") { onAutoComplete?.(); onAutoSettled?.(); }
             return finalizedVault;
           }
         }
@@ -972,6 +737,7 @@ async function fetchBestSyncedLyrics(
 
   const apiAttemptOrder = attemptOrder.filter((source) => source !== "local-vault");
   if (!apiAttemptOrder.length) {
+    if (preferred === "auto") { onAutoComplete?.(); onAutoSettled?.(); }
     return { lyrics: [], source: "local-vault:no-match" };
   }
 
@@ -988,6 +754,10 @@ async function fetchBestSyncedLyrics(
   };
 
   const invokeSourceFetcher = async (source, fetcher) => {
+    if (source === "musixmatch" && !safeMusixmatchUserToken && typeof resolveMusixmatchUserToken === "function") {
+      safeMusixmatchUserToken = String((await resolveMusixmatchUserToken()) || "").trim();
+      if (!safeMusixmatchUserToken) return null;
+    }
     const fetchWithCurrentToken = () =>
       fetcher(track, {
         musixmatchUserToken: safeMusixmatchUserToken,
@@ -1000,234 +770,136 @@ async function fetchBestSyncedLyrics(
     } catch (error) {
       if (
         source !== "musixmatch" ||
-        describeSourceError(error) !== "unauthorized" ||
-        typeof refreshMusixmatchUserToken !== "function"
+        describeSourceError(error) !== "unauthorized"
       ) {
         throw error;
       }
+      await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+      if (typeof refreshMusixmatchUserToken !== "function") throw error;
       const refreshedToken = String(
-        (await refreshMusixmatchUserToken()) || "",
+        (await refreshMusixmatchUserToken(safeMusixmatchUserToken)) || "",
       ).trim();
       if (!refreshedToken || refreshedToken === safeMusixmatchUserToken) {
         throw error;
       }
       safeMusixmatchUserToken = refreshedToken;
-      return fetchWithCurrentToken();
+      try {
+        return await fetchWithCurrentToken();
+      } catch (retryError) {
+        if (describeSourceError(retryError) === "unauthorized") await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+        throw retryError;
+      }
     }
   };
 
-  if (sanitizePreferredSource(preferredSource) === "auto") {
-    const failureBySource = new Map();
-
-    const sourceTasks = apiAttemptOrder.map(async (source) => {
-      const fetcher = SOURCE_FETCHERS[source];
-      if (typeof fetcher !== "function") {
-        const reason = `${source}:unknown-source`;
-        failureBySource.set(source, reason);
-        return {
-          source,
-          ok: false,
-          failureReason: reason,
-          result: null,
-        };
-      }
-      const cachedResult =
-        typeof sourceCache?.get === "function" ? sourceCache.get(source) : null;
-      if (cachedResult?.lyrics?.length) {
-        cacheSourceResult(source, cachedResult);
-        return {
-          source,
-          ok: true,
-          failureReason: "",
-          result: cachedResult,
-          fromCache: true,
-        };
-      }
-      try {
-        const result = await invokeSourceFetcher(source, fetcher);
-        if (!result) {
-          const reason = classifySourceFailure(
-            source,
-            new Error("__NO_MATCH__"),
-          );
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result: null,
-          };
-        }
-        if (result?.metadata?.instrumental && !result?.lyrics?.length) {
-          const reason = `${source}:instrumental`;
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result,
-          };
-        }
-        const quickCandidate = await finalizeFetchedLyricsResult(result);
-        if (!meetsCoverageDemand(track, null, quickCandidate)) {
-          const reason = `${source}:insufficient-coverage`;
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result: null,
-          };
-        }
-        cacheSourceResult(source, quickCandidate);
-        return {
-          source,
-          ok: true,
-          failureReason: "",
-          result: quickCandidate,
-        };
-      } catch (error) {
-        const reason = classifySourceFailure(source, error);
-        failureBySource.set(source, reason);
-        return {
-          source,
-          ok: false,
-          failureReason: reason,
-          result: null,
-        };
-      }
-    });
-    try {
-      if (waitForAutoCompletion) {
-        const settled = await Promise.all(sourceTasks);
-        const successful = settled
-          .filter((outcome) => outcome.ok && outcome.result?.lyrics?.length)
-          .map((outcome) => outcome.result);
-        if (!successful.length) {
-          const instrumentalOutcome = settled.find(
-            (outcome) => outcome.result?.metadata?.instrumental,
-          );
-          if (instrumentalOutcome) {
-            return {
-              lyrics: [],
-              source: `${instrumentalOutcome.source}-instrumental`,
-              metadata: {
-                ...(instrumentalOutcome.result?.metadata || {}),
-                instrumental: true,
-              },
-            };
-          }
-          const failures = apiAttemptOrder.map(
-            (source) => failureBySource.get(source) || `${source}:no-match`,
-          );
-          return {
-            lyrics: [],
-            source: failures.join(" | ") || "lyrics-unavailable",
-          };
-        }
-        let bestFinal = successful[0];
-        for (const candidate of successful.slice(1)) {
-          if (shouldUpgradeLyricsCandidate(track, bestFinal, candidate)) {
-            bestFinal = candidate;
-          }
-        }
-        return bestFinal;
-      }
-
-      const raceTasks = sourceTasks.map(async (taskPromise) => {
-        const outcome = await taskPromise;
-        if (!outcome.ok || !outcome.result?.lyrics?.length) {
-          throw new Error(outcome.failureReason || "__NO_MATCH__");
-        }
-        return outcome;
-      });
-
-      let quickestOutcome = null;
-      try {
-        quickestOutcome = await Promise.any(raceTasks);
-      } catch {
-        quickestOutcome = null;
-      }
-
-      if (!quickestOutcome) {
-        const settled = await Promise.all(sourceTasks);
-        const successful = settled
-          .filter((outcome) => outcome.ok && outcome.result?.lyrics?.length)
-          .map((outcome) => outcome.result);
-        if (!successful.length) {
-          const instrumentalOutcome = settled.find(
-            (outcome) => outcome.result?.metadata?.instrumental,
-          );
-          if (instrumentalOutcome) {
-            return {
-              lyrics: [],
-              source: `${instrumentalOutcome.source}-instrumental`,
-              metadata: {
-                ...(instrumentalOutcome.result?.metadata || {}),
-                instrumental: true,
-              },
-            };
-          }
-          const failures = apiAttemptOrder.map(
-            (source) => failureBySource.get(source) || `${source}:no-match`,
-          );
-          return {
-            lyrics: [],
-            source: failures.join(" | ") || "lyrics-unavailable",
-          };
-        }
-        let bestFinal = successful[0];
-        for (const candidate of successful.slice(1)) {
-          if (shouldUpgradeLyricsCandidate(track, bestFinal, candidate)) {
-            bestFinal = candidate;
-          }
-        }
-        return bestFinal;
-      }
-      let bestResult = quickestOutcome.result;
-
-      // Continue probing in background; cache every successful source and upgrade when better.
-      if (apiAttemptOrder.length > 1) {
-        for (const taskPromise of sourceTasks) {
-          void taskPromise
-            .then(async (outcome) => {
-              if (!outcome.ok || !outcome.result?.lyrics?.length) {
-                return;
-              }
-              const finalizedCandidate = outcome.fromCache
-                ? outcome.result
-                : await finalizeFetchedLyricsResult(outcome.result);
-              cacheSourceResult(outcome.source, finalizedCandidate);
-              if (typeof onProgress !== "function") {
-                return;
-              }
-              if (
-                shouldUpgradeLyricsCandidate(
-                  track,
-                  bestResult,
-                  finalizedCandidate,
-                )
-              ) {
-                bestResult = finalizedCandidate;
-                onProgress(finalizedCandidate);
-              }
-            })
-            .catch(() => {
-              // Individual background source failures are expected and ignored.
-            });
-        }
-      }
-
-      return bestResult || { lyrics: [], source: "lyrics-unavailable" };
-    } catch {
-      const failures = apiAttemptOrder.map(
-        (source) => failureBySource.get(source) || `${source}:no-match`,
-      );
-      return {
-        lyrics: [],
-        source: failures.join(" | ") || "lyrics-unavailable",
-      };
+  if (preferred === "auto") {
+    const { autoCandidateCouldOutrank } = require("./lyricsAutoPicker");
+    const cachedDecision = sourceCache?.get?.("auto");
+    if (cachedDecision?.lyrics?.length && isValidLyricsCandidate(track, cachedDecision)) {
+      onAutoComplete?.();
+      onAutoSettled?.();
+      return cachedDecision;
     }
+    const pending = new Set(apiAttemptOrder);
+    const boundedPending = new Set(apiAttemptOrder);
+    const outcomes = new Map();
+    const timers = new Map();
+    let best = null;
+    let allStarted = false;
+    let initialResolved = false;
+    let completionResolved = false;
+    let finalCached = false;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      onAutoSettled?.();
+    };
+    let resolveInitial, resolveCompletion;
+    const initialResult = new Promise(resolve => { resolveInitial = resolve; });
+    const completionResult = new Promise(resolve => { resolveCompletion = resolve; });
+    const unavailable = () => {
+      const completed = [...outcomes.values()];
+      const instrumental = completed.find(outcome => outcome.instrumental);
+      return instrumental
+        ? { lyrics: [], source: `${instrumental.source}-instrumental`, metadata: { ...(instrumental.result?.metadata || {}), instrumental: true } }
+        : { lyrics: [], source: completed.map(outcome => outcome.failureReason).filter(Boolean).join(" | ") || "lyrics-unavailable" };
+    };
+    const complete = result => {
+      if (completionResolved) return;
+      completionResolved = true;
+      for (const timer of timers.values()) clearTimeout(timer);
+      resolveCompletion(result);
+      onAutoComplete?.();
+    };
+    const consider = candidate => {
+      if (!shouldUpgradeLyricsCandidate(track, best, candidate)) return;
+      best = candidate;
+      // First usable lyrics are delivered immediately; pending superior sources
+      // affect finalization only, and may publish a later guarded upgrade.
+      if (typeof onProgress === "function") onProgress(best);
+      if (!initialResolved) { initialResolved = true; resolveInitial(best); }
+    };
+    const maybeFinalize = () => {
+      if (!allStarted) return;
+      const pendingWinner = best && [...pending].some(source => autoCandidateCouldOutrank(track, best, source));
+      if (best && !pendingWinner) {
+        const transientSuperiorFailure = [...outcomes.values()].some(outcome => !outcome.ok &&
+          !outcome.instrumental && outcome.failureReason !== `${outcome.source}:no-match` &&
+          autoCandidateCouldOutrank(track, best, outcome.source));
+        if (!finalCached && !transientSuperiorFailure) {
+          finalCached = true;
+          sourceCache?.set?.("auto", best);
+        }
+        complete(best);
+        settle();
+      }
+      if (!boundedPending.size) {
+        const result = best || unavailable();
+        if (!initialResolved) { initialResolved = true; resolveInitial(result); }
+        complete(result);
+      }
+      if (!pending.size) settle();
+    };
+    // Every eligible fetch is scheduled before considering any completion.
+    for (const source of apiAttemptOrder) {
+      let timer;
+      const timeoutMs = source === "lrc-red" || source === "spicy-lyrics"
+        ? autoSourceTimeoutMs : Math.max(autoSourceTimeoutMs, 15_000);
+      timer = setTimeout(() => {
+        boundedPending.delete(source);
+        outcomes.set(source, { source, ok: false, timedOut: true, failureReason: `${source}:timeout` });
+        // Keep the raw source pending: a late possible winner must not poison
+        // the final cache, and may still upgrade while this auto run is active.
+        maybeFinalize();
+      }, timeoutMs);
+      timers.set(source, timer);
+      Promise.resolve().then(async () => {
+        const fetcher = SOURCE_FETCHERS[source];
+        if (typeof fetcher !== "function") return { source, ok: false, failureReason: `${source}:unknown-source` };
+        const cached = sourceCache?.get?.(source);
+        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached };
+        try {
+          const result = await invokeSourceFetcher(source, fetcher);
+          if (!result) return { source, ok: false, failureReason: `${source}:no-match` };
+          if (result.metadata?.instrumental && !result.lyrics?.length) return { source, ok: false, result, instrumental: true, failureReason: `${source}:instrumental` };
+          const candidate = await finalizeFetchedLyricsResult(result);
+          if (!isValidLyricsCandidate(track, candidate)) return { source, ok: false, failureReason: `${source}:invalid-candidate` };
+          cacheSourceResult(source, candidate);
+          return { source, ok: true, result: candidate };
+        } catch (error) { return { source, ok: false, failureReason: classifySourceFailure(source, error) }; }
+      }).then(outcome => {
+        clearTimeout(timer);
+        pending.delete(source);
+        boundedPending.delete(source);
+        outcomes.set(source, outcome);
+        if (outcome.ok) consider(outcome.result);
+        maybeFinalize();
+      });
+    }
+    allStarted = true;
+    maybeFinalize();
+    return waitForAutoCompletion ? completionResult : initialResult;
   }
 
   for (const source of apiAttemptOrder) {
@@ -1255,11 +927,11 @@ async function fetchBestSyncedLyrics(
           };
         }
         const finalized = await finalizeFetchedLyricsResult(result);
-        if (meetsCoverageDemand(track, null, finalized)) {
+        if (isValidLyricsCandidate(track, finalized)) {
           cacheSourceResult(source, finalized);
           return finalized;
         }
-        failures.push(`${source}:insufficient-coverage`);
+        failures.push(`${source}:invalid-candidate`);
         continue;
       }
       failures.push(classifySourceFailure(source, new Error("__NO_MATCH__")));

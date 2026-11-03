@@ -168,7 +168,7 @@ assert.ok(scrollCallback);
 for (const animated of [false, true]) {
   const calls = [];
   let ready = false;
-  const context = { useCallback: fn => fn, transition: { onReady: () => { ready = true; } }, pendingScroll: { current: { index: 4, animated } },
+  const context = { useCallback: fn => fn, transition: { onReady: () => { ready = true; } }, markRendererReady() {}, rendererReadyKey: 'test', pendingScroll: { current: { index: 4, animated } },
     following: { current: true }, lastScrollTarget: { current: 'old' },
     scrollTo: (index, animation) => calls.push([index, animation]), backgrounds: [], lyrics: [], timing: {} };
   vm.runInNewContext(`(${retry})()`, context);
@@ -184,6 +184,8 @@ for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true
     list: 'flash', flashRef: { current: { getLayout: () => ({ y: 500 }), getFirstItemOffset: () => 150, getFirstVisibleIndex: () => 3 } },
     flatRef: {}, lastScrollTarget: { current: '' }, landscapeMode: false, fontScale: 1, showTranslatedText: true,
     viewportHeight: 800, preview: false, style: 'amll', pendingScroll: { current: null }, scrollState: command, scrollCommand: {} };
+  context.latestRows = { current: context.rows };
+  context.translationOnlyLayout = { current: false };
   vm.runInNewContext(ts.transpileModule(`(${scrollCallback})(${index}, ${animated})`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   assert.equal(context.scrollCommand.value.geometry, geometry,

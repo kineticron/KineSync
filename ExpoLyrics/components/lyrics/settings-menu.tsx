@@ -14,6 +14,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
+import { DealerDeliveryExperimentSwitch } from "@/components/lyrics/dealer-delivery-experiment-switch";
 import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { usePlaybackStore, type LyricsStyle } from "@/store/playback-store";
@@ -605,6 +606,10 @@ export const SettingsMenu = memo(function SettingsMenu({
                 {playbackMode === "mobile" && <MenuAction icon="desktop-outline" label="Switch to Desktop Bridge" onPress={() => { onClose(); router.push({ pathname: "/explore", params: { action: "desktop" } }); }} showChevron />}
                 <MenuAction icon="settings-outline" label="Settings" onPress={onOpenBridgeSettings} showChevron />
               </MenuSection>
+
+              {__DEV__ && playbackMode === "mobile" && <MenuSection title="Developer experiment">
+                <DealerDeliveryExperimentSwitch />
+              </MenuSection>}
 
               <MenuSection title="Help">
                 <MenuAction

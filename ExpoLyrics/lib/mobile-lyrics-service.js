@@ -3,7 +3,7 @@
 import { Buffer } from "buffer";
 import * as pako from "pako";
 import CryptoJS from "crypto-js";
-import { parseTtmlToLyrics as parseLrcRedTtml, parseTtmlTimeExpression as parseLrcRedTime } from "./lyrics-ttml-import";
+import { parseTtmlToLyrics as parseLrcRedTtml, parseTtmlTimeExpression as parseLrcRedTime, extractTtmlMetadata as extractLrcRedTtmlMetadata } from "./lyrics-ttml-import";
 
 const process = { env: {} };
 const isBrowserRuntime =
@@ -5534,6 +5534,22 @@ const MUSIXMATCH_TOKEN_PRIORITY_KEYS = [
   "mxm-account-v1.0",
   "mxm-pro-web-v1.0",
 ];
+const MUSIXMATCH_APP_MOBILE_PROFILE = Object.freeze({
+  profileId: "mac-ios-v2.0@apic-appmobile",
+  appId: "mac-ios-v2.0",
+  baseUrl: "https://apic-appmobile.musixmatch.com/ws/1.1",
+  userAgent: "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
+  userLanguage: "en",
+  tokenTtlMs: 6 * 60 * 60 * 1000,
+  retryMs: 20 * 60 * 1000,
+  headers: Object.freeze({
+    "X-User-Agent": "Musixmatch/2025120901 CFNetwork/3860.300.31 Darwin/25.2.0",
+    "X-Cookie": "x-mxm-token-guid=",
+    "x-mxm-app-version": "10.1.1",
+    "Accept-Language": "en-US,en;q=0.9",
+  }),
+});
+
 const MUSIXMATCH_CLIENT_PROFILES = [
   {
     appId: "android-player-v1.0",
@@ -5547,16 +5563,11 @@ const MUSIXMATCH_CLIENT_PROFILES = [
     ],
   },
   {
-    appId: "mac-ios-v2.0",
-    tokenKey: "mac-ios-v2.0",
-    userAgent:
-      "Musixmatch/6.8.1 (iPhone; iOS 17.0; Scale/3.00) CFNetwork/1492.0.1 Darwin/23.0.0",
-    userLanguage: "en",
-    cookieHeader: "AWSELB=0; AWSELBCORS=0",
-    baseUrls: [
-      "https://apic.musixmatch.com/ws/1.1",
-      "https://apic-desktop.musixmatch.com/ws/1.1",
-    ],
+    ...MUSIXMATCH_APP_MOBILE_PROFILE,
+    tokenKey: MUSIXMATCH_APP_MOBILE_PROFILE.appId,
+    cookieHeader: "",
+    baseUrls: [MUSIXMATCH_APP_MOBILE_PROFILE.baseUrl],
+    defaultParams: {},
   },
   {
     appId: "web-desktop-app-v1.0",
@@ -6798,7 +6809,6 @@ function decodeQQBase64Text(value) {
   }
 }
 
-
 function decodeQQBase64EncryptedText(value) {
   const compact = String(value || "").replace(/\s+/g, "");
   if (!compact || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
@@ -6814,6 +6824,7 @@ function decodeQQBase64EncryptedText(value) {
     return "";
   }
 }
+
 function looksLikeQQKaraokeLyrics(value) {
   const text = String(value || "");
   return (
@@ -7125,12 +7136,13 @@ function createQQDirectSongAccessors() {
   return { getSongMid, getSongId, getSongTitle, getSongArtist, getSongInterval };
 }
 
-async function collectQQSongsFromDesktopSearch(queryVariants) {
+async function collectQQSongsFromDesktopSearch(queryVariants, requests = new Map()) {
   const desktopSongs = [];
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        desktopSongs.push(...(await fetchQQDesktopSearchSongs(query)));
+        if (!requests.has(query)) requests.set(query, fetchQQDesktopSearchSongs(query));
+        desktopSongs.push(...(await requests.get(query)));
       } catch {
         // Try next query variant.
       }
@@ -7220,6 +7232,32 @@ function qqDirectSearchNeedsLegacySupplement(track, ranked, accessors) {
   return false;
 }
 
+function createRankedProbePool(items, limit, mapper) {
+  const slots = items.map(() => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    return { promise, resolve };
+  });
+  let next = 0;
+  let stopped = false;
+  const worker = async () => {
+    while (!stopped && next < items.length) {
+      const index = next++;
+      let result = null;
+      try { result = await mapper(items[index], index); } catch { /* Preserve per-candidate fallback. */ }
+      slots[index].resolve(result);
+    }
+  };
+  for (let index = 0; index < Math.min(Math.max(1, limit), items.length); index += 1) worker();
+  return {
+    read: index => slots[index].promise,
+    stop() {
+      stopped = true;
+      while (next < slots.length) slots[next++].resolve(null);
+    },
+  };
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   if (!Array.isArray(items) || !items.length) {
     return [];
@@ -7243,28 +7281,24 @@ async function mapWithConcurrency(items, limit, mapper) {
 async function searchQQDirectSongPool(track) {
   const accessors = createQQDirectSongAccessors();
   const allQueryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
-  let songs = [];
-
+  const desktopRequests = new Map();
+  // Search variants and the legacy supplement are independent. Start the same
+  // bounded query set once, while retaining the original supplement decision.
+  const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests);
+  const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants);
+  let songs;
   if (trackNeedsFeaturedVariantVerification(track)) {
-    const [desktopSongs, legacySongs] = await Promise.all([
-      collectQQSongsFromDesktopSearch(allQueryVariants),
-      collectQQSongsFromLegacyClientSearch(allQueryVariants),
-    ]);
+    const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
     songs = [...desktopSongs, ...legacySongs];
   } else {
-    songs = await collectQQSongsFromDesktopSearch(allQueryVariants.slice(0, 1));
-    let ranked = rankQQDirectSearchSongs(track, songs, accessors);
-    if (qqDirectSearchNeedsLegacySupplement(track, ranked, accessors)) {
-      const [desktopSongs, legacySongs] = await Promise.all([
-        collectQQSongsFromDesktopSearch(allQueryVariants),
-        collectQQSongsFromLegacyClientSearch(allQueryVariants),
-      ]);
+    songs = await (desktopRequests.get(allQueryVariants[0]) || Promise.resolve([])).catch(() => []);
+    const initialRanked = rankQQDirectSearchSongs(track, songs, accessors);
+    if (qqDirectSearchNeedsLegacySupplement(track, initialRanked, accessors)) {
+      const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
       songs = [...desktopSongs, ...legacySongs];
     }
   }
-
-  const ranked = rankQQDirectSearchSongs(track, songs, accessors);
-  return { ranked, accessors };
+  return { ranked: rankQQDirectSearchSongs(track, songs, accessors), accessors };
 }
 
 async function resolveQQLegacyDownloadFallback(track) {
@@ -8065,125 +8099,66 @@ async function previewQQDirectSearchCandidates(track) {
 async function fetchFromNetease(track) {
   const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const rawSongs = [];
-
-  await Promise.all(
-    queryVariants.map(async (query) => {
-      try {
-        const payload = await fetchNeteaseSearchJson(query, {
-          timeoutMs: 10_000,
-        });
-        const songs = Array.isArray(payload?.result?.songs)
-          ? payload.result.songs
-          : [];
-        rawSongs.push(...songs);
-      } catch {
-        // Try next query variant.
-      }
-    }),
-  );
-
-  if (!rawSongs.length) {
-    return null;
-  }
+  await Promise.all(queryVariants.map(async query => {
+    try {
+      const payload = await fetchNeteaseSearchJson(query, { timeoutMs: 10_000 });
+      const songs = Array.isArray(payload?.result?.songs) ? payload.result.songs : [];
+      rawSongs.push(...songs);
+    } catch { /* Continue with the other independent queries. */ }
+  }));
+  if (!rawSongs.length) return null;
 
   const deduped = [];
   const seen = new Set();
   for (const song of rawSongs) {
     const id = Number(song?.id || 0);
-    if (!id || seen.has(id)) {
-      continue;
-    }
+    if (!id || seen.has(id)) continue;
     seen.add(id);
     deduped.push(song);
   }
-
-  const ranked = deduped
-    .map((song) => {
-      const title = String(song?.name || song?.title || "").trim();
-      const artist = Array.isArray(song?.artists)
-        ? song.artists.map((entry) => entry?.name || "").join(" ")
-        : String(song?.artist || "").trim();
-      let score = scoreCandidate(track, title, artist);
-      const durationMs = Number(song?.duration || song?.dt || 0);
-      score += scoreDurationBonus(track, title, artist, durationMs);
-      return { song, score, title, artist, durationMs };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  if (!ranked.length) {
-    return null;
-  }
+  const ranked = deduped.map(song => {
+    const title = String(song?.name || song?.title || "").trim();
+    const artist = Array.isArray(song?.artists)
+      ? song.artists.map(entry => entry?.name || "").join(" ")
+      : String(song?.artist || "").trim();
+    let score = scoreCandidate(track, title, artist);
+    const durationMs = Number(song?.duration || song?.dt || 0);
+    score += scoreDurationBonus(track, title, artist, durationMs);
+    return { song, score, title, artist, durationMs };
+  }).sort((a, b) => b.score - a.score);
+  const likely = ranked.filter(candidate => isLikelySameTrack(
+    track, candidate.title, candidate.artist, candidate.durationMs,
+  )).sort((left, right) => compareCandidateMatchQuality(track, left, right)).slice(0, 8);
+  const lyricResults = createRankedProbePool(likely, 4, async candidate => {
+    try {
+      const payload = await fetchNeteaseLyricsJson(candidate.song.id, { timeoutMs: 10_000 });
+      const karaokeText = payload?.yrc?.lyric || payload?.klyric?.lyric || payload?.data?.yrc?.lyric || payload?.data?.klyric?.lyric || "";
+      const karaokeLyrics = stripLeadingMetadataLines(parseNeteaseYrc(cleanNeteaseSpacing(karaokeText)), track);
+      if (karaokeLyrics.length) return {
+        source: "netease-yrc", lyrics: karaokeLyrics,
+        coverage: scoreLyricsCoverage(karaokeLyrics, track.durationMs),
+        coverageRatio: getLyricsCoverageRatio(karaokeLyrics, track.durationMs),
+      };
+      const rawTimed = payload?.lrc?.lyric || payload?.data?.lrc?.lyric || payload?.lyric || "";
+      const lyrics = stripLeadingMetadataLines(parseLrc(cleanNeteaseSpacing(rawTimed)), track);
+      return lyrics.length ? { source: "netease-lrc", lyrics, coverage: scoreLyricsCoverage(lyrics, track.durationMs) } : null;
+    } catch { return null; }
+  });
 
   let bestResult = null;
   let bestScore = -1;
-  const likelyNeteaseCandidates = ranked
-    .filter((candidate) =>
-      isLikelySameTrack(
-        track,
-        candidate.title,
-        candidate.artist,
-        candidate.durationMs,
-      ),
-    )
-    .sort((left, right) => compareCandidateMatchQuality(track, left, right))
-    .slice(0, 8);
-
-  for (const candidate of likelyNeteaseCandidates) {
-    try {
-      const lyricPayload = await fetchNeteaseLyricsJson(candidate.song.id, {
-        timeoutMs: 10_000,
-      });
-      const karaokeText =
-        lyricPayload?.yrc?.lyric ||
-        lyricPayload?.klyric?.lyric ||
-        lyricPayload?.data?.yrc?.lyric ||
-        lyricPayload?.data?.klyric?.lyric ||
-        "";
-      const karaokeLyrics = stripLeadingMetadataLines(
-        parseNeteaseYrc(cleanNeteaseSpacing(karaokeText)),
-        track,
-      );
-      if (karaokeLyrics.length) {
-        const coverage = scoreLyricsCoverage(karaokeLyrics, track.durationMs);
-        const coverageRatio = getLyricsCoverageRatio(
-          karaokeLyrics,
-          track.durationMs,
-        );
-        if (coverage > bestScore) {
-          bestScore = coverage;
-          bestResult = { lyrics: karaokeLyrics, source: "netease-yrc" };
-        }
-        if (
-          candidate.score >= MATCH_CONFIDENCE_SCORE &&
-          coverageRatio >= EARLY_RETURN_COVERAGE_RATIO
-        ) {
-          return { lyrics: karaokeLyrics, source: "netease-yrc" };
-        }
-        continue;
+  // Results are consumed in original match-rank order, preserving early-return semantics.
+  try {
+    for (let index = 0; index < likely.length; index += 1) {
+      const result = await lyricResults.read(index);
+      if (!result?.lyrics?.length) continue;
+      if (result.coverage > bestScore) { bestScore = result.coverage; bestResult = result; }
+      if (result.source === "netease-yrc" && likely[index].score >= MATCH_CONFIDENCE_SCORE && result.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO) {
+        return { lyrics: result.lyrics, source: result.source };
       }
-
-      const rawTimedLyrics =
-        lyricPayload?.lrc?.lyric ||
-        lyricPayload?.data?.lrc?.lyric ||
-        lyricPayload?.lyric ||
-        "";
-      const lyrics = stripLeadingMetadataLines(
-        parseLrc(cleanNeteaseSpacing(rawTimedLyrics)),
-        track,
-      );
-      if (lyrics.length) {
-        const coverage = scoreLyricsCoverage(lyrics, track.durationMs);
-        if (coverage > bestScore) {
-          bestScore = coverage;
-          bestResult = { lyrics, source: "netease-lrc" };
-        }
-      }
-    } catch {
-      // Try next candidate.
     }
-  }
-
-  return bestResult;
+    return bestResult ? { lyrics: bestResult.lyrics, source: bestResult.source } : null;
+  } finally { lyricResults.stop(); }
 }
 
 async function resolveQqReferenceFingerprint(track) {
@@ -8311,12 +8286,6 @@ async function fetchFromSpicyLyrics(
     }
     if (!spicyLyricsData) {
       lastNoMatchError = createSourceStageNoMatchError("spicy", "backend");
-      continue;
-    }
-
-    // Only community syncs come from Spicy. Other recordings use lrc.red
-    // and the normal provider fallbacks, without retaining Spicy's copies.
-    if (extractSpicyPayloadMetadata(spicyLyricsData).attribution.provider !== "Spicy Lyrics") {
       continue;
     }
 
@@ -8888,7 +8857,7 @@ function isLikelySameKugouTrack(
   return false;
 }
 
-async function collectKugouTitleLinkedKeys(track) {
+async function collectKugouTitleLinkedKeys(track, searchSongs = searchKugouSongs) {
   const rawTitle = String(track?.title || "").trim();
   const artistPrimary = getSpotifyPrimaryArtist(track?.artist || "");
   const titleCore = normalizeCoreTitle(rawTitle);
@@ -8896,7 +8865,7 @@ async function collectKugouTitleLinkedKeys(track) {
     return new Set();
   }
   try {
-    const payload = await searchKugouSongs(`${rawTitle} ${artistPrimary}`);
+    const payload = await searchSongs(`${rawTitle} ${artistPrimary}`);
     const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
     const keys = new Set();
     for (const song of flattenKugouSearchResults(songs)) {
@@ -9066,53 +9035,40 @@ async function fetchKugouKaraokeLyricsForSong(track, song, matchScore) {
   const lyricCandidates = Array.isArray(lyricSearchPayload?.candidates)
     ? lyricSearchPayload.candidates
     : [];
-  if (!lyricCandidates.length) {
-    return null;
-  }
-
   const rankedLyrics = lyricCandidates
-    .map((entry) => ({
-      entry,
-      score: rankKugouLyricCandidate(track, entry),
-    }))
-    .sort((left, right) => right.score - left.score);
+    .map((entry) => ({ entry, score: rankKugouLyricCandidate(track, entry) }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .filter(({ entry }) => entry?.id && entry?.accesskey);
 
-  for (const { entry } of rankedLyrics.slice(0, 3)) {
-    if (!entry?.id || !entry?.accesskey) {
-      continue;
-    }
+  const downloads = createRankedProbePool(rankedLyrics, 3, async ({ entry }) => {
     try {
       const downloadPayload = await downloadKugouLyric(entry);
       const encodedContent = String(downloadPayload?.content || "").trim();
-      if (!encodedContent) {
-        continue;
-      }
-      const decodedKrc = decodeKugouKrc(encodedContent);
+      if (!encodedContent) return null;
       const karaokeLyrics = stripLeadingMetadataLines(
-        parseKugouKrc(decodedKrc),
+        parseKugouKrc(decodeKugouKrc(encodedContent)),
         track,
       );
-      if (!karaokeLyrics.length) {
-        continue;
-      }
-      const coverage = scoreLyricsCoverage(karaokeLyrics, track.durationMs);
-      const coverageRatio = getLyricsCoverageRatio(
-        karaokeLyrics,
-        track.durationMs,
-      );
+      if (!karaokeLyrics.length) return null;
       return {
         lyrics: karaokeLyrics,
         source: "kugou-krc",
-        coverage,
-        coverageRatio,
+        coverage: scoreLyricsCoverage(karaokeLyrics, track.durationMs),
+        coverageRatio: getLyricsCoverageRatio(karaokeLyrics, track.durationMs),
         matchScore,
       };
     } catch {
-      // Try the next lyric candidate.
+      return null;
     }
-  }
-
-  return null;
+  });
+  try {
+    for (let index = 0; index < rankedLyrics.length; index += 1) {
+      const result = await downloads.read(index);
+      if (result?.lyrics?.length) return result;
+    }
+    return null;
+  } finally { downloads.stop(); }
 }
 
 async function collectRankedKugouSearchCandidates(track) {
@@ -9120,13 +9076,18 @@ async function collectRankedKugouSearchCandidates(track) {
     0,
     KUGOU_MAX_QUERY_VARIANTS,
   );
-  const titleLinkedKeys = await collectKugouTitleLinkedKeys(track);
+  const searches = new Map();
+  const searchSongs = query => {
+    if (!searches.has(query)) searches.set(query, searchKugouSongs(query));
+    return searches.get(query);
+  };
+  const titleLinkedKeysPromise = collectKugouTitleLinkedKeys(track, searchSongs);
   const rawSongs = [];
 
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const payload = await searchKugouSongs(query);
+        const payload = await searchSongs(query);
         const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
         rawSongs.push(...flattenKugouSearchResults(songs));
       } catch {
@@ -9134,6 +9095,7 @@ async function collectRankedKugouSearchCandidates(track) {
       }
     }),
   );
+  const titleLinkedKeys = await titleLinkedKeysPromise;
 
   const deduped = [];
   const seen = new Set();
@@ -9210,113 +9172,181 @@ async function fetchFromKugou(track) {
     .sort((left, right) => compareCandidateMatchQuality(track, left, right))
     .slice(0, MAX_KUGOU_CANDIDATES);
 
+  const probes = createRankedProbePool(likelyCandidates, 4, async candidate => {
+    try {
+      return await fetchKugouKaraokeLyricsForSong(track, candidate.song, candidate.score);
+    } catch {
+      return null;
+    }
+  });
   let bestResult = null;
   let bestScore = -1;
-
-  for (const candidate of likelyCandidates) {
-    try {
-      const probe = await fetchKugouKaraokeLyricsForSong(
-        track,
-        candidate.song,
-        candidate.score,
-      );
-      if (!probe?.lyrics?.length) {
-        continue;
-      }
+  try {
+    for (let index = 0; index < likelyCandidates.length; index += 1) {
+      const candidate = likelyCandidates[index];
+      const probe = await probes.read(index);
+      if (!probe?.lyrics?.length) continue;
       if (probe.coverage > bestScore) {
         bestScore = probe.coverage;
         bestResult = { lyrics: probe.lyrics, source: probe.source };
       }
-      if (
-        candidate.score >= MATCH_CONFIDENCE_SCORE &&
-        probe.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO
-      ) {
+      if (candidate.score >= MATCH_CONFIDENCE_SCORE && probe.coverageRatio >= EARLY_RETURN_COVERAGE_RATIO) {
         return { lyrics: probe.lyrics, source: probe.source };
       }
-    } catch {
-      // Try next candidate.
     }
-  }
-
-  return bestResult;
+    return bestResult;
+  } finally { probes.stop(); }
 }
 
 // ---- DesktopBridge/src/lyrics/parts/04-lrc-red-source.js ----
 "use strict";
 
-// Public API: https://lrc.red/docs. Search resolves recordings to ISRCs;
-// TTML preserves supplied word/syllable timing and background vocals.
+// Resolve catalog ISRCs before text search. Keep supplied TTML timing intact.
+const lrcRedIsrcCache = new Map();
+const lrcRedHeaders = { "User-Agent": "KineSync/1.2.0 (https://github.com/Kineticron/KineSync)" };
+
 async function fetchFromLrcRed(track) {
   const parseTtmlToLyrics = parseLrcRedTtml;
   const parseTtmlTimeExpression = parseLrcRedTime;
+  const extractTtmlMetadata = extractLrcRedTtmlMetadata;
   const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
-    .replace(/[-\s]/g, "")
-    .toUpperCase();
+    .replace(/[-\s]/g, "").toUpperCase();
   const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
-  let candidates = validIsrc(directIsrc) ? [{ isrc: directIsrc }] : [];
-  if (!candidates.length) {
-    if (!String(track?.title || "").trim()) return null;
-    const payload = await fetchJson("https://lrc.red/search.json", {
-      params: { q: `${track.title} ${track.artist || ""}`.trim() },
-    });
-    candidates = (Array.isArray(payload?.hits) ? payload.hits : [])
-      .map((hit) => ({
-        ...hit,
-        durationMs: Number(hit.duration || 0) * 1000,
-        score: scoreCandidate(track, hit.title, hit.artist) +
-          scoreDurationBonus(track, hit.title, hit.artist, Number(hit.duration || 0) * 1000),
-      }))
-      .filter((hit) =>
-        validIsrc(hit.isrc) &&
-        isLikelySameTrack(track, hit.title, hit.artist, hit.durationMs),
-      )
-      .sort((left, right) => compareCandidateMatchQuality(track, left, right))
-      .slice(0, 3);
-  }
-
-  const errors = [];
-  // Start all bounded candidate requests concurrently, but consume them in
-  // ranked order so a top-ranked karaoke result can return as soon as it
-  // settles without waiting for lower-ranked (possibly hanging) requests.
-  const candidatePromises = candidates.map(async (candidate, index) => {
-    try {
-      const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`);
-      // Reject static lyrics, HTML error pages, and invalid payloads.
-      if (!/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
-      const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
-      if (!timings.some((match) => parseTtmlTimeExpression(match[1]) > 0)) return null;
-      const parsed = parseTtmlToLyrics(content);
-      if (!parsed.lyrics?.some((line) =>
-        Number(line.lineEndTime) > Number(line.lineStartTime),
-      )) return null;
-      const result = {
-        lyrics: parsed.lyrics,
-        source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
-        metadata: {
-          ...(parsed.metadata || {}),
-          attribution: {
-            source: "lrc-red",
-            provider: "lrc.red",
-            url: `https://lrc.red/s/${candidate.isrc}`,
-          },
-        },
-      };
-      if (parsed.useKaraokeTiming) return result;
-      return result;
-    } catch (error) {
-      if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;
-      return null;
-    }
-  });
+  const cacheKey = JSON.stringify([normalizeText(track?.title), normalizeArtistText(track?.artist), Number(track?.durationMs || 0)]);
+  const cached = lrcRedIsrcCache.get(cacheKey);
+  let matchTrack = { ...track, artist: cached?.artist || track.artist };
+  let lastError = null;
   let bestResult = null;
-  for (const promise of candidatePromises) {
-    const result = await promise;
-    if (!result) continue;
-    if (result.source === "lrc-red-karaoke") return result;
-    bestResult ||= result;
+  const attempted = new Set();
+  const stripRemaster = (title) => String(title || "")
+    .replace(/\s*\([^)]*\bremaster(?:ed)?\b[^)]*\)/gi, "")
+    .replace(/\s*[-–]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$/i, "").trim();
+  const durationMatches = (durationMs) => !(Number(track.durationMs) > 0) ||
+    (Number(durationMs) > 0 && Math.abs(Number(durationMs) - Number(track.durationMs)) <= 3000);
+  function versionMatches(title) {
+    const wanted = normalizeText(track.title);
+    const actual = normalizeText(title);
+    for (const hint of [/\blive\b|\bconcert\b|\bfirst take\b|\bunplugged\b/, /\bremix\b|\bmix\b/, /\bacoustic\b/, /\binstrumental\b|\bkaraoke\b/, /\bsped up\b/, /\bslowed\b/, /\bdemo\b/, /\bmono\b/, /\blong version\b|\bextended\b/]) {
+      if (hint.test(wanted) !== hint.test(actual)) return false;
+    }
+    // A catalog can omit a remaster suffix, but an explicitly different year is not equivalent.
+    if (/\bremaster/.test(wanted) && /\bremaster/.test(actual)) {
+      const years = (value) => value.match(/\b(?:19|20)\d{2}\b/g) || [];
+      if (years(wanted).length && years(actual).length && !years(wanted).some(year => years(actual).includes(year))) return false;
+    }
+    return true;
   }
+  function matches(hit, artist = hit.artist) {
+    return durationMatches(hit.durationMs) && versionMatches(hit.title) &&
+      isLikelySameTrack({ ...matchTrack, title: stripRemaster(track.title) }, stripRemaster(hit.title), artist, hit.durationMs) &&
+      artistNamesLookRelated(matchTrack.artist, artist);
+  }
+  function rank(hits) {
+    return hits.map(hit => ({ ...hit, score: scoreCandidate(matchTrack, hit.title, hit.artist) +
+      scoreDurationBonus(matchTrack, hit.title, hit.artist, hit.durationMs) }))
+      .sort((left, right) => compareCandidateMatchQuality(matchTrack, left, right));
+  }
+  function remember(isrc) {
+    if (lrcRedIsrcCache.size >= 1000) lrcRedIsrcCache.delete(lrcRedIsrcCache.keys().next().value);
+    lrcRedIsrcCache.set(cacheKey, { isrc, artist: matchTrack.artist });
+  }
+  async function catalogCandidates() {
+    const payload = await fetchJson("https://api.deezer.com/search", {
+      params: { q: `${track.artist || ""} ${track.title}`.trim() },
+    });
+    const hits = (Array.isArray(payload?.data) ? payload.data : [])
+      .map(hit => ({ ...hit, artistId: hit.artist?.id, artist: hit.artist?.name || "", durationMs: Number(hit.duration) * 1000 }))
+      .filter(hit => validIsrc(hit.isrc));
+    let accepted = hits.filter(hit => matches(hit));
+    if (!accepted.length && /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(track.artist || "")) {
+      // Corroborate translated artist names with the catalog's artist search and ID.
+      // Title and duration alone must never authorize a cross-script artist match.
+      const artists = await fetchJson("https://api.deezer.com/search/artist", { params: { q: track.artist } });
+      const canonical = artists?.data?.[0];
+      if (canonical?.id && canonical.name && hits.some(hit => Number(hit.artistId) === Number(canonical.id))) {
+        matchTrack = { ...matchTrack, artist: `${track.artist} (${canonical.name})` };
+        accepted = hits.filter(hit => Number(hit.artistId) === Number(canonical.id) && matches(hit));
+      }
+    }
+    return rank(accepted).filter((hit, index, all) =>
+      all.findIndex(other => other.isrc === hit.isrc) === index).slice(0, 3);
+  }
+  async function searchFallback() {
+    if (!String(track?.title || "").trim()) return [];
+    const payload = await fetchJson("https://lrc.red/search.json", {
+      headers: lrcRedHeaders,
+      params: { q: `${track.title} ${matchTrack.artist || ""}`.trim() },
+    });
+    return rank((Array.isArray(payload?.hits) ? payload.hits : [])
+      .map(hit => ({ ...hit, durationMs: Number(hit.duration || 0) * 1000 }))
+      .filter(hit => validIsrc(hit.isrc) && matches(hit))).slice(0, 3);
+  }
+  async function tryCandidates(candidates) {
+    const errors = [];
+    // Fetch bounded candidates concurrently, consuming results in ranked order.
+    const candidatePromises = candidates.filter((candidate) => {
+      if (attempted.has(candidate.isrc)) return false;
+      attempted.add(candidate.isrc);
+      return true;
+    }).map(async (candidate, index) => {
+      try {
+        let recording = null;
+        try { recording = await fetchJson(`https://lrc.red/s/${candidate.isrc}.json`, { headers: lrcRedHeaders }); }
+        catch { /* JSON is optional metadata; TTML remains the source of truth. */ }
+        if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
+        if (recording?.title && !versionMatches(recording.title)) return null;
+        const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
+        if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
+        const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
+        if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
+        const parsed = parseTtmlToLyrics(content);
+        if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
+        const ttmlTrack = extractTtmlMetadata(content);
+        if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
+          { ...matchTrack, title: stripRemaster(track.title) }, stripRemaster(ttmlTrack.title),
+          ttmlTrack.artist || candidate.artist || matchTrack.artist,
+        ))) return null;
+        if (ttmlTrack.artist && !artistNamesLookRelated(matchTrack.artist, ttmlTrack.artist)) return null;
+        const trackDuration = Number(track.durationMs) || Number(candidate.durationMs) || 0;
+        if (trackDuration && parsed.durationMs > trackDuration + 10000) return null;
+        const result = {
+          lyrics: parsed.lyrics,
+          source: parsed.useKaraokeTiming ? "lrc-red-karaoke" : "lrc-red-line",
+          metadata: {
+            ...(parsed.metadata || {}),
+            attribution: { source: "lrc-red", provider: "lrc.red", url: `https://lrc.red/s/${candidate.isrc}` },
+          },
+        };
+        return { candidate, result };
+      } catch (error) {
+        if (!/HTTP 404\b/.test(String(error?.message || error))) errors[index] = error;
+      }
+      return null;
+    });
+    for (const promise of candidatePromises) {
+      const entry = await promise;
+      if (!entry) continue;
+      const { candidate, result } = entry;
+      if (!bestResult || result.source === "lrc-red-karaoke") {
+        bestResult = result;
+        remember(candidate.isrc);
+      }
+      if (result.source === "lrc-red-karaoke") return result;
+    }
+    lastError = errors.filter(Boolean).pop() || lastError;
+    return null;
+  }
+  const initial = validIsrc(directIsrc) ? [{ isrc: directIsrc }] : cached ? [{ isrc: cached.isrc }] : [];
+  if (await tryCandidates(initial)) return bestResult;
+  if (!bestResult && String(track?.title || "").trim()) {
+    try {
+      if (await tryCandidates(await catalogCandidates())) return bestResult;
+    } catch (error) { lastError = error; }
+  }
+  try {
+    if (await tryCandidates(await searchFallback())) return bestResult;
+  } catch (error) { lastError = error; }
   if (bestResult) return bestResult;
-  const lastError = errors.filter(Boolean).pop();
   if (lastError) throw lastError;
   return null;
 }
@@ -9329,24 +9359,43 @@ async function fetchFromLrcRed(track) {
 function normalizeMusixmatchBody(payload) {
   const header = payload?.message?.header || payload?.header || {};
   const body = payload?.message?.body || payload?.body || {};
-  const hint = String(header?.hint || "").trim();
+  const hint = redactMusixmatchDiagnostic(header?.hint || "");
   const statusCode = Number(header?.status_code || 0);
   return { statusCode, hint, body };
+}
+
+function redactMusixmatchDiagnostic(value) {
+  return String(value || "").trim()
+    .replace(/((?:user_?token|signature|cookie|authorization)\s*[:=]\s*)[^\s;&,)]+/gi, "$1[redacted]")
+    .replace(/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted]")
+    .slice(0, 200);
 }
 
 function assertMusixmatchSuccess(payload, endpointLabel) {
   const { statusCode, hint, body } = normalizeMusixmatchBody(payload);
   const hintSuffix = hint ? ` (${hint})` : "";
+  const fail = (name, message) => {
+    const error = new Error(message);
+    error.name = name;
+    error.apiStatus = statusCode;
+    error.hint = hint;
+    error.endpoint = `/${endpointLabel}`;
+    throw error;
+  };
   if (hint.toLowerCase().includes("captcha")) {
-    throw new Error(`Musixmatch blocked request with captcha${hintSuffix}.`);
+    fail("MusixmatchCaptchaError", `Musixmatch blocked request with captcha${hintSuffix}.`);
+  }
+  if (statusCode === 429) {
+    fail("MusixmatchRateLimitError", `Musixmatch cooldown active (API 429)${hintSuffix}.`);
   }
   if (statusCode === 401 || statusCode === 403) {
-    throw new Error(`Musixmatch user token was rejected${hintSuffix}.`);
+    fail("MusixmatchAuthError", `Musixmatch user token was rejected${hintSuffix}.`);
   }
-  if (statusCode > 0 && statusCode !== 200 && statusCode !== 404) {
-    throw new Error(
-      `Musixmatch ${endpointLabel} failed with status ${statusCode}${hintSuffix}.`,
-    );
+  if (statusCode === 404 && /endpoint not found/i.test(hint)) {
+    fail("MusixmatchEndpointError", `Musixmatch ${endpointLabel} failed with API 404${hintSuffix}.`);
+  }
+  if (statusCode !== 200 && statusCode !== 404) {
+    fail("MusixmatchApiError", `Musixmatch ${endpointLabel} failed with API status ${statusCode || "unknown"}${hintSuffix}.`);
   }
   return { statusCode, hint, body };
 }
@@ -9360,17 +9409,16 @@ function extractMusixmatchTracks(payload) {
 }
 
 function extractMusixmatchMatchedTrack(payload) {
-  const { body } = assertMusixmatchSuccess(payload, "matcher.track.get");
+  const { body } = assertMusixmatchSuccess(payload, "macro.subtitles.get");
+  const matcher = body?.macro_calls?.["matcher.track.get"]?.message;
+  if (matcher) {
+    const { statusCode, body: matchedBody } = assertMusixmatchSuccess(matcher, "matcher.track.get");
+    if (statusCode === 404) return null;
+    const track = matchedBody?.track;
+    return track && typeof track === "object" ? track : null;
+  }
   const direct = body?.track || body?.matcher?.track;
-  if (direct && typeof direct === "object") {
-    return direct;
-  }
-  const macroTrack =
-    body?.macro_calls?.["matcher.track.get"]?.message?.body?.track;
-  if (macroTrack && typeof macroTrack === "object") {
-    return macroTrack;
-  }
-  return null;
+  return direct && typeof direct === "object" ? direct : null;
 }
 
 function toMusixmatchDurationMs(track) {
@@ -9414,36 +9462,20 @@ function findFirstNestedStringByKey(value, keyName, depth = 0) {
   return "";
 }
 
-function extractMusixmatchSubtitleBody(
-  payload,
-  endpointLabel = "track.subtitle.get",
-) {
-  const { body } = assertMusixmatchSuccess(payload, endpointLabel);
-  const directSubtitle = body?.subtitle?.subtitle_body;
-  if (typeof directSubtitle === "string" && directSubtitle.trim()) {
-    return directSubtitle;
+function extractMusixmatchSubtitleBody(payload, endpointLabel = "track.subtitles.get") {
+  const { statusCode, body } = assertMusixmatchSuccess(payload, endpointLabel);
+  if (statusCode === 404) return "";
+  if (body?.macro_calls) {
+    const call = body.macro_calls["track.subtitles.get"] || body.macro_calls["track.subtitle.get"];
+    if (!call?.message) return "";
+    return extractMusixmatchSubtitleBody(call.message, "track.subtitles.get");
   }
-
-  const subtitleList = Array.isArray(body?.subtitle_list)
-    ? body.subtitle_list
-    : [];
-  for (const entry of subtitleList) {
+  const direct = body?.subtitle?.subtitle_body;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  const list = Array.isArray(body?.subtitle_list) ? body.subtitle_list : [];
+  for (const entry of list) {
     const text = entry?.subtitle?.subtitle_body;
-    if (typeof text === "string" && text.trim()) {
-      return text;
-    }
-  }
-
-  const macroCalls = body?.macro_calls || {};
-  const macroSubtitle =
-    macroCalls?.["track.subtitle.get"]?.message?.body?.subtitle?.subtitle_body;
-  if (typeof macroSubtitle === "string" && macroSubtitle.trim()) {
-    return macroSubtitle;
-  }
-
-  const nestedSubtitle = findFirstNestedStringByKey(body, "subtitle_body");
-  if (nestedSubtitle) {
-    return nestedSubtitle;
+    if (typeof text === "string" && text.trim()) return text;
   }
   return "";
 }
@@ -9499,10 +9531,12 @@ function buildMusixmatchProfileForAppId(appId) {
       existingLower.includes("ipad");
     return {
       appId: existing.appId,
+      profileId: existing.profileId || "",
       tokenKey: existing.tokenKey,
       userAgent: existing.userAgent,
       userLanguage: existing.userLanguage,
       cookieHeader: existing.cookieHeader,
+      headers: { ...(existing.headers || {}) },
       baseUrls: Array.isArray(existing.baseUrls)
         ? [...existing.baseUrls]
         : [...MUSIXMATCH_DEFAULT_BASE_URLS],
@@ -9548,10 +9582,12 @@ function buildMusixmatchProfileForAppId(appId) {
 
   return {
     appId: normalizedAppId,
+    profileId: template.profileId || "",
     tokenKey: normalizedAppId,
     userAgent: template.userAgent,
     userLanguage: template.userLanguage,
     cookieHeader: template.cookieHeader,
+    headers: { ...(template.headers || {}) },
     baseUrls: Array.isArray(template.baseUrls)
       ? [...template.baseUrls]
       : [...MUSIXMATCH_DEFAULT_BASE_URLS],
@@ -9646,7 +9682,8 @@ function looksLikeMusixmatchTokenValue(value) {
 
 function shouldAbortMusixmatchTokenAttempt(error) {
   const reason = describeSourceError(error);
-  return reason === "unauthorized" || reason === "rate-limited";
+  return reason === "unauthorized" || reason === "rate-limited" ||
+    error?.name === "MusixmatchEndpointError";
 }
 
 async function getMusixmatchSignatureSecret({ timeoutMs = 6_000 } = {}) {
@@ -9721,6 +9758,28 @@ function appendMusixmatchSignature(unsignedUrl, signatureSecret) {
   return `${unsignedUrl}${separator}signature=${encodeURIComponent(signature)}&signature_protocol=sha1`;
 }
 
+async function fetchMusixmatchText(url, { headers = {}, timeoutMs = 12_000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const safeHeaders = typeof makeMobileSafeHeaders === "function"
+      ? makeMobileSafeHeaders(headers)
+      : headers;
+    const response = await fetch(url, { method: "GET", headers: safeHeaders, signal: controller.signal });
+    if (!response.ok) {
+      const responseText = await response.text().catch(() => "");
+      const error = new Error(`HTTP ${response.status}`);
+      error.httpStatus = response.status;
+      error.responseText = responseText;
+      throw error;
+    }
+    return response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+
 function resolveMusixmatchClientCandidates(rawToken) {
   const safeRaw = String(rawToken || "").trim();
   if (!safeRaw) {
@@ -9731,7 +9790,7 @@ function resolveMusixmatchClientCandidates(rawToken) {
   const seen = new Set();
   const pushCandidate = (profile, token, tokenSource) => {
     const safeToken = String(token || "").trim();
-    if (!safeToken) {
+    if (!safeToken || /^0+$/.test(safeToken) || /^UpgradeOnly/i.test(safeToken)) {
       return;
     }
     const signature = `${profile.appId}|${safeToken}`;
@@ -9758,6 +9817,31 @@ function resolveMusixmatchClientCandidates(rawToken) {
       return null;
     })();
 
+  if (
+    parsedTokenObject &&
+    ["profileId", "acquiredAt", "userToken", "appId"].some((key) => Object.prototype.hasOwnProperty.call(parsedTokenObject, key))
+  ) {
+    const userToken = String(parsedTokenObject.userToken || "").trim();
+    const acquiredAt = Number(parsedTokenObject.acquiredAt || 0);
+    const now = Date.now();
+    if (
+      parsedTokenObject.profileId !== MUSIXMATCH_APP_MOBILE_PROFILE.profileId ||
+      parsedTokenObject.appId !== MUSIXMATCH_APP_MOBILE_PROFILE.appId ||
+      !looksLikeMusixmatchTokenValue(userToken) ||
+      /^0+$/.test(userToken) ||
+      /^UpgradeOnly/i.test(userToken) ||
+      !Number.isFinite(acquiredAt) ||
+      acquiredAt <= 0 || now - acquiredAt < 0 ||
+      now - acquiredAt >= MUSIXMATCH_APP_MOBILE_PROFILE.tokenTtlMs
+    ) {
+      return [];
+    }
+    const profile = buildMusixmatchProfileForAppId(parsedTokenObject.appId);
+    profile.defaultParams = {};
+    pushCandidate(profile, userToken, "typed-cache");
+    return resolved;
+  }
+
   const collectPrioritizedTokenEntries = (parsedObject) => {
     const entries = [];
     const seen = new Set();
@@ -9774,6 +9858,14 @@ function resolveMusixmatchClientCandidates(rawToken) {
       seen.add(signature);
       entries.push({ key: safeKey, token: safeToken });
     };
+
+    if (
+      parsedObject.profileId === "mac-ios-v2.0@apic-appmobile" &&
+      parsedObject.appId === "mac-ios-v2.0" &&
+      parsedObject.acquiredAt > 0
+    ) {
+      addEntry(parsedObject.appId, parsedObject.userToken);
+    }
 
     for (const key of MUSIXMATCH_TOKEN_PRIORITY_KEYS) {
       addEntry(key, findFirstNestedStringByKey(parsedObject, key));
@@ -9919,6 +10011,7 @@ async function fetchMusixmatchJson(
     userAgent = "KineSyncDesktopBridge/1.0",
     userLanguage = "en",
     cookieHeader = "",
+    headers: clientHeaders = {},
     baseUrls = MUSIXMATCH_DEFAULT_BASE_URLS,
     defaultParams = {},
     requireSignature = true,
@@ -9930,7 +10023,8 @@ async function fetchMusixmatchJson(
       : MUSIXMATCH_DEFAULT_BASE_URLS
   ).map((baseUrl) => `${baseUrl}${path}`);
   let lastError = null;
-  const signatureSecret = requireSignature
+  const shouldSign = requireSignature && appId !== "mac-ios-v2.0";
+  const signatureSecret = shouldSign
     ? await getMusixmatchSignatureSecret()
     : "";
 
@@ -9948,17 +10042,25 @@ async function fetchMusixmatchJson(
         crypto.randomUUID(),
       ...params,
     };
+    if (appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId) {
+      delete requestParams.guid;
+      delete requestParams.device_id;
+    }
     try {
       const unsignedUrl = buildMusixmatchUrlWithParams(endpoint, requestParams);
-      const requestUrls = requireSignature
+      const requestUrls = shouldSign
         ? [appendMusixmatchSignature(unsignedUrl, signatureSecret), unsignedUrl]
         : [unsignedUrl];
       for (const requestUrl of requestUrls) {
-        const responseText = await fetchText(requestUrl, {
+        const responseText = await fetchMusixmatchText(requestUrl, {
           timeoutMs,
           headers: {
-            Accept: "application/json,text/plain,*/*",
-            "User-Agent": userAgent,
+            Accept: appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? "application/json" : "application/json,text/plain,*/*",
+            ...(appId === MUSIXMATCH_APP_MOBILE_PROFILE.appId ? { "X-User-Agent": userAgent } : { "User-Agent": userAgent }),
+            ...(clientHeaders || {}),
+            ...(appId === "mac-ios-v2.0"
+              ? { "X-Cookie": "x-mxm-token-guid=" }
+              : {}),
             ...(cookieHeader ? { Cookie: cookieHeader } : {}),
           },
         });
@@ -9979,7 +10081,30 @@ async function fetchMusixmatchJson(
         return payload;
       }
     } catch (error) {
-      lastError = error;
+      if (error?.httpStatus) {
+        let errorPayload = null;
+        try { errorPayload = parseJsonLenient(error.responseText || ""); } catch {}
+        const header = errorPayload?.message?.header || errorPayload?.header || {};
+        const hint = redactMusixmatchDiagnostic(header.hint || "");
+        const apiStatus = Number(header.status_code || 0);
+        const captcha = /captcha/i.test(hint);
+        const rateLimited = error.httpStatus === 429 || apiStatus === 429;
+        const auth = [401, 403].includes(error.httpStatus) || [401, 403].includes(apiStatus);
+        const prefix = captcha ? "Musixmatch blocked request with captcha" : rateLimited ? "Musixmatch cooldown active" :
+          auth ? "Musixmatch user token was rejected" : `Musixmatch ${path.slice(1)} failed`;
+        const endpointError = new Error(`${prefix} with HTTP ${error.httpStatus}${apiStatus ? ` / API ${apiStatus}` : ""}${hint ? ` (${hint})` : ""}.`);
+        endpointError.name = captcha ? "MusixmatchCaptchaError" : rateLimited ? "MusixmatchRateLimitError" : auth ? "MusixmatchAuthError" :
+          error.httpStatus === 404 ? "MusixmatchEndpointError" : "MusixmatchHttpError";
+        endpointError.httpStatus = error.httpStatus;
+        endpointError.apiStatus = apiStatus;
+        endpointError.endpoint = path;
+        endpointError.hint = hint;
+        lastError = endpointError;
+        continue;
+      }
+      lastError = new Error(`Musixmatch ${path.slice(1)} ${error?.name === "AbortError" ? "request timeout" : "network request failed"}.`);
+      lastError.name = "MusixmatchTransportError";
+      lastError.endpoint = path;
     }
   }
   throw lastError || new Error("All Musixmatch endpoint attempts failed");
@@ -9997,6 +10122,11 @@ function buildMusixmatchMatcherQueries(track) {
         f_subtitle_length_max_deviation: 8,
       }
     : {};
+  const recordingFilters = {};
+  const isrc = String(track?.isrc || track?.trackIsrc || "").trim();
+  const spotifyTrackId = String(track?.spotifyTrackId || track?.spotify_track_id || "").trim();
+  if (isrc) recordingFilters.track_isrc = isrc;
+  if (spotifyTrackId) recordingFilters.track_spotify_id = `spotify:track:${spotifyTrackId.replace(/^spotify:track:/i, "")}`;
   const artistVariants = buildMusixmatchArtistVariants(track.artist);
   const primaryArtistVariants =
     artistVariants.length > 0
@@ -10009,6 +10139,7 @@ function buildMusixmatchMatcherQueries(track) {
       q_track: track.title,
       q_artist: artist,
       q_album: track.album || undefined,
+      ...recordingFilters,
       ...durationFilters,
     });
   }
@@ -10018,6 +10149,7 @@ function buildMusixmatchMatcherQueries(track) {
       queries.push({
         q_track: query,
         q_artist: artist,
+      ...recordingFilters,
         ...durationFilters,
       });
     }
@@ -10043,93 +10175,26 @@ function buildMusixmatchMatcherQueries(track) {
 }
 
 async function fetchMusixmatchTrackCandidates(track, requestOptions) {
-  const matches = [];
   let lastError = null;
-
-  for (const query of buildMusixmatchMatcherQueries(track)) {
+  const queries = buildMusixmatchMatcherQueries(track);
+  const hasRecordingId = Boolean(track?.isrc || track?.trackIsrc || track?.spotifyTrackId);
+  for (const query of queries.slice(0, hasRecordingId ? 1 : 2)) {
     try {
-      const payload = await fetchMusixmatchJson(
-        "/matcher.track.get",
-        query,
-        requestOptions,
-      );
-      const matchedTrack = extractMusixmatchMatchedTrack(payload);
-      if (matchedTrack) {
-        matches.push(matchedTrack);
+      const payload = await fetchMusixmatchJson("/macro.subtitles.get", {
+        ...query, namespace: "lyrics_richsynched", optional_calls: "track.richsync",
+        richsync_compact_type: "words", subtitle_format: "lrc",
+      }, requestOptions);
+      const candidate = extractMusixmatchMatchedTrack(payload);
+      if (candidate) {
+        // Content is used only after this candidate passes recording/metadata validation.
+        return { matches: [{ ...candidate, musixmatchMacroPayload: payload }], lastError: null };
       }
     } catch (error) {
       lastError = error;
-      if (shouldAbortMusixmatchTokenAttempt(error)) {
-        return { matches, lastError };
-      }
+      if (shouldAbortMusixmatchTokenAttempt(error)) break;
     }
   }
-
-  const searchQueryVariants = buildQueryVariants(track).slice(
-    0,
-    MAX_QUERY_VARIANTS,
-  );
-  const artistVariants = buildMusixmatchArtistVariants(track.artist);
-  for (const query of searchQueryVariants) {
-    if (matches.length >= 16) {
-      break;
-    }
-    const artistQueryVariants =
-      artistVariants.length > 0
-        ? artistVariants
-        : [String(track.artist || "").trim()];
-    for (const artist of artistQueryVariants.slice(0, 2)) {
-      try {
-        const payload = await fetchMusixmatchJson(
-          "/track.search",
-          {
-            q_track: query,
-            q_artist: artist,
-            page_size: 12,
-            page: 1,
-            s_track_rating: "desc",
-            f_has_subtitles: 1,
-          },
-          requestOptions,
-        );
-        const candidates = extractMusixmatchTracks(payload);
-        matches.push(...candidates);
-      } catch (error) {
-        lastError = error;
-        if (shouldAbortMusixmatchTokenAttempt(error)) {
-          return { matches, lastError };
-        }
-      }
-    }
-  }
-
-  // Final relaxed fallback for stubborn metadata mismatches: try title-only search.
-  if (!matches.length) {
-    for (const query of searchQueryVariants.slice(0, 2)) {
-      try {
-        const payload = await fetchMusixmatchJson(
-          "/track.search",
-          {
-            q_track: query,
-            page_size: 12,
-            page: 1,
-            s_track_rating: "desc",
-            f_has_subtitles: 1,
-          },
-          requestOptions,
-        );
-        const candidates = extractMusixmatchTracks(payload);
-        matches.push(...candidates);
-      } catch (error) {
-        lastError = error;
-        if (shouldAbortMusixmatchTokenAttempt(error)) {
-          return { matches, lastError };
-        }
-      }
-    }
-  }
-
-  return { matches, lastError };
+  return { matches: [], lastError };
 }
 
 function extractMusixmatchCandidateIdentity(candidate) {
@@ -10149,6 +10214,47 @@ function extractMusixmatchCandidateIdentity(candidate) {
   );
   return `${title}|${artist}`;
 }
+
+function parseMusixmatchSubtitleLyrics(subtitleBody, durationMs = 0) {
+  // LRC also starts with '['; only JSON object arrays or objects enter the JSON parser.
+  if (!/^\s*(?:\[\s*\{|\{\s*")/.test(String(subtitleBody || ""))) return parseLrc(subtitleBody);
+  let parsed;
+  try { parsed = parseJsonLenient(subtitleBody); } catch { return []; }
+  const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.lines) ? parsed.lines : [];
+  const timed = entries.map((entry) => {
+    const time = entry?.time;
+    const seconds = time == null ? NaN : typeof time === "number" ? time : Number(time?.total ??
+      (Number(time?.minutes || 0) * 60 + Number(time?.seconds || 0) + Number(time?.hundredths || 0) / 100));
+    return { text: String(entry?.text || "").trim(), start: seconds * 1000 };
+  }).filter((entry) => Number.isFinite(entry.start) && entry.start >= 0)
+    .sort((a, b) => a.start - b.start);
+  return timed.map((entry, index) => {
+    const end = timed[index + 1]?.start ?? (durationMs > entry.start ? durationMs : entry.start + 3000);
+    const lineEndTime = Math.max(entry.start + 1, end);
+    return { lineStartTime: entry.start, lineEndTime,
+      syllables: [{ text: entry.text, startTime: entry.start, endTime: lineEndTime }] };
+  }).filter((line) => line.syllables[0].text);
+}
+
+function extractMusixmatchRecordingIsrc(candidate) {
+  return String(candidate?.track_isrc || candidate?.isrc || candidate?.track_isrcs?.[0] || "")
+    .trim().toUpperCase();
+}
+
+function buildMusixmatchResultMetadata(candidate, songwriters = []) {
+  const matchedTrack = {
+    title: String(candidate?.track_name || candidate?.name || ""),
+    artist: String(candidate?.artist_name || candidate?.artist || ""),
+    commontrackId: Number(candidate?.commontrack_id || candidate?.commontrackid || 0) || null,
+    isrc: extractMusixmatchRecordingIsrc(candidate) || null,
+    album: String(candidate?.album_name || candidate?.album || "") || null,
+  };
+  return {
+    matchedTrack,
+    ...(songwriters.length ? { credits: { songwriters } } : {}),
+  };
+}
+
 
 function normalizeMusixmatchSongwriterNames(value, output = []) {
   if (value === null || value === undefined) {
@@ -11013,192 +11119,46 @@ function parseMusixmatchRichsyncLyrics(richsyncBody) {
   return output.filter((line) => line?.syllables?.length);
 }
 
-async function fetchMusixmatchRichsyncForCandidate(
-  candidate,
-  track,
-  requestOptions,
-) {
-  let lastError = null;
-  for (const identifierParams of extractMusixmatchIdentifierRequests(
-    candidate,
-  )) {
-    try {
-      const richsyncPayload = await fetchMusixmatchJson(
-        "/track.richsync.get",
-        {
-          ...identifierParams,
-          richsync_format: "json",
-        },
-        requestOptions,
-      );
-      const richsyncBody = extractMusixmatchRichsyncBody(
-        richsyncPayload,
-        "track.richsync.get",
-      );
-      if (!richsyncBody) {
-        continue;
-      }
-      const lyrics = parseMusixmatchRichsyncLyrics(richsyncBody);
-      if (lyrics.length) {
-        return { lyrics, lastError: null };
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const matcherDurationSec =
-    toMusixmatchDurationMs(candidate) > 0
-      ? Math.max(1, Math.round(toMusixmatchDurationMs(candidate) / 1000))
-      : Number(track?.durationMs || 0) > 0
-        ? Math.max(1, Math.round(Number(track.durationMs) / 1000))
-        : 0;
-  const matcherDurationFilters = matcherDurationSec
-    ? {
-        f_subtitle_length: matcherDurationSec,
-        f_subtitle_length_max_deviation: 8,
-      }
-    : {};
-
+async function fetchMusixmatchRichsyncForCandidate(candidate, track, requestOptions) {
+  if (Number(candidate?.has_richsync) === 0) return { lyrics: [], lastError: null };
   try {
-    const matcherPayload = await fetchMusixmatchJson(
-      "/matcher.richsync.get",
-      {
-        q_track: String(candidate?.track_name || track?.title || "").trim(),
-        q_artist: String(candidate?.artist_name || track?.artist || "").trim(),
-        ...matcherDurationFilters,
-      },
-      requestOptions,
-    );
-    const richsyncBody = extractMusixmatchRichsyncBody(
-      matcherPayload,
-      "matcher.richsync.get",
-    );
-    if (!richsyncBody) {
-      return { lyrics: [], lastError: null };
+    const macroCall = candidate?.musixmatchMacroPayload?.message?.body?.macro_calls?.["track.richsync.get"];
+    if (macroCall?.message) {
+      const { statusCode } = assertMusixmatchSuccess(macroCall.message, "track.richsync.get");
+      if (statusCode === 404) return { lyrics: [], lastError: null };
+      const lyrics = parseMusixmatchRichsyncLyrics(extractMusixmatchRichsyncBody(macroCall.message));
+      if (lyrics.length) return { lyrics, lastError: null };
     }
-    const lyrics = parseMusixmatchRichsyncLyrics(richsyncBody);
-    if (lyrics.length) {
-      return { lyrics, lastError: null };
-    }
-  } catch (error) {
-    lastError = error;
-  }
-  return { lyrics: [], lastError };
+    const identifier = extractMusixmatchIdentifierRequests(candidate)[0];
+    if (!identifier) return { lyrics: [], lastError: null };
+    const payload = await fetchMusixmatchJson("/track.richsync.get", {
+      ...identifier, richsync_format: "json",
+    }, requestOptions);
+    const { statusCode } = assertMusixmatchSuccess(payload, "track.richsync.get");
+    if (statusCode === 404) return { lyrics: [], lastError: null };
+    return { lyrics: parseMusixmatchRichsyncLyrics(extractMusixmatchRichsyncBody(payload)), lastError: null };
+  } catch (error) { return { lyrics: [], lastError: error }; }
 }
 
-async function fetchMusixmatchSubtitleForCandidate(
-  candidate,
-  track,
-  requestOptions,
-) {
-  let lastError = null;
-  for (const identifierParams of extractMusixmatchIdentifierRequests(
-    candidate,
-  )) {
-    try {
-      const subtitlePayload = await fetchMusixmatchJson(
-        "/track.subtitle.get",
-        {
-          ...identifierParams,
-          subtitle_format: "lrc",
-        },
-        requestOptions,
-      );
-      const subtitleBody = extractMusixmatchSubtitleBody(
-        subtitlePayload,
-        "track.subtitle.get",
-      );
-      if (subtitleBody) {
-        return { subtitleBody, lastError: null };
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const matcherDurationSec =
-    toMusixmatchDurationMs(candidate) > 0
-      ? Math.max(1, Math.round(toMusixmatchDurationMs(candidate) / 1000))
-      : Number(track?.durationMs || 0) > 0
-        ? Math.max(1, Math.round(Number(track.durationMs) / 1000))
-        : 0;
-  const matcherDurationFilters = matcherDurationSec
-    ? {
-        f_subtitle_length: matcherDurationSec,
-        f_subtitle_length_max_deviation: 8,
-      }
-    : {};
-
+async function fetchMusixmatchSubtitleForCandidate(candidate, track, requestOptions) {
   try {
-    const matcherPayload = await fetchMusixmatchJson(
-      "/matcher.subtitle.get",
-      {
-        q_track: String(candidate?.track_name || track?.title || "").trim(),
-        q_artist: String(candidate?.artist_name || track?.artist || "").trim(),
-        ...matcherDurationFilters,
-        subtitle_format: "lrc",
-      },
-      requestOptions,
-    );
-    const subtitleBody = extractMusixmatchSubtitleBody(
-      matcherPayload,
-      "matcher.subtitle.get",
-    );
-    if (subtitleBody) {
-      return { subtitleBody, lastError: null };
+    if (candidate.musixmatchMacroPayload) {
+      const subtitleBody = extractMusixmatchSubtitleBody(candidate.musixmatchMacroPayload, "macro.subtitles.get");
+      if (subtitleBody) return { subtitleBody, lastError: null };
     }
-  } catch (error) {
-    lastError = error;
-  }
-
-  for (const identifierParams of extractMusixmatchIdentifierRequests(
-    candidate,
-  )) {
-    try {
-      const macroPayload = await fetchMusixmatchJson(
-        "/macro.subtitles.get",
-        {
-          ...identifierParams,
-          subtitle_format: "lrc",
-        },
-        requestOptions,
-      );
-      const subtitleBody = extractMusixmatchSubtitleBody(
-        macroPayload,
-        "macro.subtitles.get",
-      );
-      if (subtitleBody) {
-        return { subtitleBody, lastError: null };
-      }
-    } catch (error) {
-      lastError = error;
+    const identifier = extractMusixmatchIdentifierRequests(candidate)[0];
+    if (!identifier) return { subtitleBody: "", lastError: null };
+    const payload = await fetchMusixmatchJson("/macro.subtitles.get", {
+      ...identifier, q_track: candidate.track_name, q_artist: candidate.artist_name,
+      namespace: "lyrics_richsynched", optional_calls: "track.richsync",
+      richsync_compact_type: "words", subtitle_format: "lrc",
+    }, requestOptions);
+    const matched = extractMusixmatchMatchedTrack(payload);
+    if (!matched || extractMusixmatchCandidateIdentity(matched) !== extractMusixmatchCandidateIdentity(candidate)) {
+      return { subtitleBody: "", lastError: new Error("Musixmatch subtitle recording did not match the validated track.") };
     }
-  }
-
-  try {
-    const macroMatcherPayload = await fetchMusixmatchJson(
-      "/macro.subtitles.get",
-      {
-        q_track: String(candidate?.track_name || track?.title || "").trim(),
-        q_artist: String(candidate?.artist_name || track?.artist || "").trim(),
-        ...matcherDurationFilters,
-        subtitle_format: "lrc",
-      },
-      requestOptions,
-    );
-    const subtitleBody = extractMusixmatchSubtitleBody(
-      macroMatcherPayload,
-      "macro.subtitles.get",
-    );
-    if (subtitleBody) {
-      return { subtitleBody, lastError: null };
-    }
-  } catch (error) {
-    lastError = error;
-  }
-
-  return { subtitleBody: "", lastError };
+    return { subtitleBody: extractMusixmatchSubtitleBody(payload, "macro.subtitles.get"), lastError: null };
+  } catch (error) { return { subtitleBody: "", lastError: error }; }
 }
 
 async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
@@ -11240,6 +11200,7 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
       userAgent: client.userAgent,
       userLanguage: client.userLanguage,
       cookieHeader: client.cookieHeader,
+      headers: client.headers || {},
       baseUrls: client.baseUrls,
       defaultParams: client.defaultParams || {},
     };
@@ -11269,6 +11230,9 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
     const seenCandidates = new Set();
     const ranked = matches
       .filter((candidate) => {
+        const requestedIsrc = String(track?.isrc || track?.trackIsrc || "").trim().toUpperCase();
+        const candidateIsrc = extractMusixmatchRecordingIsrc(candidate);
+        if (requestedIsrc && candidateIsrc && requestedIsrc !== candidateIsrc) return false;
         const identity = extractMusixmatchCandidateIdentity(candidate);
         if (!identity || seenCandidates.has(identity)) {
           return false;
@@ -11318,6 +11282,7 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
         lastError = richsyncError;
         if (describeSourceError(richsyncError) === "unauthorized") {
           rememberMusixmatchRejectedClient(rawToken, client.appId);
+          throw richsyncError;
         }
         if (describeSourceError(richsyncError) === "rate-limited") {
           activateMusixmatchCooldown("captcha");
@@ -11332,9 +11297,7 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
         const richsyncResult = {
           lyrics: richsyncLyrics,
           source: `musixmatch-richsync-user-token-${client.appId}`,
-          metadata: songwriters.length
-            ? { credits: { songwriters } }
-            : undefined,
+          metadata: buildMusixmatchResultMetadata(entry.candidate, songwriters),
         };
         rememberMusixmatchPreferredClient(rawToken, client.appId);
         setMusixmatchCachedResult(track, rawToken, richsyncResult);
@@ -11352,6 +11315,7 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
         lastError = subtitleError;
         if (describeSourceError(subtitleError) === "unauthorized") {
           rememberMusixmatchRejectedClient(rawToken, client.appId);
+          throw subtitleError;
         }
         if (describeSourceError(subtitleError) === "rate-limited") {
           activateMusixmatchCooldown("captcha");
@@ -11365,15 +11329,13 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
         sawNoMatchPath = true;
         continue;
       }
-      const lyrics = parseLrc(subtitleBody);
+      const lyrics = parseMusixmatchSubtitleLyrics(subtitleBody, Number(track.durationMs) || toMusixmatchDurationMs(entry.candidate));
       if (lyrics.length) {
         const songwriters = extractMusixmatchSongwriters(entry.candidate);
         const subtitleResult = {
           lyrics,
           source: `musixmatch-user-token-${client.appId}`,
-          metadata: songwriters.length
-            ? { credits: { songwriters } }
-            : undefined,
+          metadata: buildMusixmatchResultMetadata(entry.candidate, songwriters),
         };
         rememberMusixmatchPreferredClient(rawToken, client.appId);
         setMusixmatchCachedResult(track, rawToken, subtitleResult);
@@ -11386,9 +11348,6 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
   }
 
   if (lastError) {
-    if (sawNoMatchPath && describeSourceError(lastError) === "unauthorized") {
-      throw createSourceStageNoMatchError("musixmatch", "catalog");
-    }
     throw lastError;
   }
   return null;
@@ -12865,10 +12824,8 @@ async function finalizeFetchedLyricsResult(result) {
   }
 
   if (result.lyrics?.length) {
+    mergeCensorshipSyllablesInLyrics(result.lyrics);
     const source = String(result.source || "").toLowerCase();
-    if (!isSpicyKaraokeSource(result.source)) {
-      mergeCensorshipSyllablesInLyrics(result.lyrics);
-    }
     if (
       !isSpicyKaraokeSource(result.source) &&
       !source.includes("local-vault") &&
@@ -13023,43 +12980,10 @@ function isSpicyLyricsSource(sourceLabel) {
     .includes("spicy-lyrics");
 }
 
-function isSpicyLineSource(sourceLabel) {
-  return String(sourceLabel || "")
-    .toLowerCase()
-    .includes("spicy-lyrics-line");
-}
-
 function isSpicyStaticSource(sourceLabel) {
   return String(sourceLabel || "")
     .toLowerCase()
     .includes("spicy-lyrics-static");
-}
-
-function isKaraokeLyricsSource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  if (source.includes("netease-lrc")) {
-    return false;
-  }
-  return (
-    isSpicyKaraokeSource(source) ||
-    source.includes("kugou-krc") ||
-    source.includes("qq-musicu-qrc") ||
-    source.includes("netease-yrc") ||
-    source.includes("musixmatch-richsync") ||
-    source.includes("richsync") ||
-    source.includes("karaoke") ||
-    source.includes("yrc")
-  );
-}
-
-function hasComparableLastLineTiming(referenceLyrics, candidateLyrics) {
-  const referenceEnd = getLastLyricEndTimeMs(referenceLyrics);
-  const candidateEnd = getLastLyricEndTimeMs(candidateLyrics);
-  if (referenceEnd <= 0 || candidateEnd <= 0) {
-    return true;
-  }
-  const toleranceMs = Math.max(8_000, Math.floor(referenceEnd * 0.14));
-  return candidateEnd + toleranceMs >= referenceEnd;
 }
 
 function spicyLyricsFailFeaturedVariantCheck(track, result) {
@@ -13073,227 +12997,19 @@ function spicyLyricsFailFeaturedVariantCheck(track, result) {
   );
 }
 
-function meetsCoverageDemand(track, currentBest, candidate) {
-  if (!candidate?.lyrics?.length) {
-    return false;
-  }
-  const candidateSource = String(candidate?.source || "").toLowerCase();
-  if (candidateSource.includes("local-vault")) {
-    return true;
-  }
-  if (isSpicyStaticSource(candidateSource)) {
-    if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-      return false;
-    }
-    if (
-      currentBest?.lyrics?.length &&
-      !isSpicyStaticSource(currentBest.source)
-    ) {
-      return false;
-    }
-    return candidate.lyrics.length > 0;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-    return false;
-  }
-  const trackDuration = Number(track?.durationMs || 0);
-  const candidateCoverageStats = getLyricsCoverageStats(
-    candidate.lyrics,
-    trackDuration,
-  );
-  const candidateCoverage = candidateCoverageStats.coverageRatio;
-  const candidateIsKaraoke = isKaraokeLyricsSource(candidate.source);
-  const candidateIsSpicyLine =
-    isSpicyLineSource(candidate.source) && !candidateIsKaraoke;
-  if (candidateIsSpicyLine) {
-    if (
-      currentBest?.lyrics?.length &&
-      isKaraokeLyricsSource(currentBest.source)
-    ) {
-      return false;
-    }
-    return true;
-  }
-  const minimumCoverage = candidateIsKaraoke ? 0.4 : 0.46;
-  if (trackDuration > 0 && candidateCoverage < minimumCoverage) {
-    const allowedTrailingGapMs = Math.min(
-      45_000,
-      Math.max(18_000, Math.floor(trackDuration * 0.2)),
-    );
-    const modestCoverageMiss =
-      candidateCoverage >= minimumCoverage - 0.08 &&
-      candidateCoverageStats.lineCount >= 10;
-    const looksLikeTrailingInstrumentalGap =
-      candidateCoverageStats.trailingGapMs <= allowedTrailingGapMs &&
-      candidateCoverageStats.lastTimedPointMs >= trackDuration * 0.34;
-    if (!modestCoverageMiss || !looksLikeTrailingInstrumentalGap) {
-      return false;
-    }
-  }
-
-  if (currentBest?.lyrics?.length) {
-    if (!hasComparableLastLineTiming(currentBest.lyrics, candidate.lyrics)) {
-      return false;
-    }
-    const currentCoverage = getLyricsCoverageRatio(
-      currentBest.lyrics,
-      trackDuration,
-    );
-    if (!candidateIsKaraoke && candidateCoverage + 0.05 < currentCoverage) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isQqDirectFamilySource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  return (
-    source.includes("qq-musicu-qrc") ||
-    source.includes("qq-music-direct") ||
-    source.includes("qq-legacy")
-  );
-}
-
-function isQqNonDirectSource(sourceLabel) {
-  const source = String(sourceLabel || "").toLowerCase();
-  return (
-    source.includes("qq-music-openapi-fallback") ||
-    source.includes("qq-openapi") ||
-    source.includes("qq-music-openai") ||
-    source.includes("qq-openai")
-  );
-}
-
-function scoreLyricsCandidate(track, result) {
-  const coverageScore = scoreLyricsCoverage(
-    result?.lyrics || [],
-    track?.durationMs || 0,
-  );
-  const lineCount = Array.isArray(result?.lyrics) ? result.lyrics.length : 0;
-  const timingTier = getLyricsTimingTier(result?.source || "");
-  const coverageRatio = getLyricsCoverageRatio(
-    result?.lyrics || [],
-    track?.durationMs || 0,
-  );
-  return (
-    coverageScore +
-    timingTier * 36 +
-    getSourcePriorityBucket(result?.source || "") * 0.15 +
-    Math.min(18, lineCount * 0.22) +
-    coverageRatio * 12
-  );
+function isValidLyricsCandidate(track, candidate) {
+  if (!candidate?.lyrics?.length || spicyLyricsFailFeaturedVariantCheck(track, candidate)) return false;
+  if (String(candidate.source || "").includes("local-vault")) return true;
+  if (isSpicyStaticSource(candidate.source)) return true;
+  return candidate.lyrics.every(line =>
+    Number.isFinite(line?.lineStartTime) && Number.isFinite(line?.lineEndTime) &&
+    line.lineStartTime >= 0 && line.lineEndTime >= line.lineStartTime);
 }
 
 function shouldUpgradeLyricsCandidate(track, currentBest, candidate) {
-  if (
-    !candidate?.lyrics?.length ||
-    !meetsCoverageDemand(track, currentBest, candidate)
-  ) {
-    return false;
-  }
-  if (!currentBest?.lyrics?.length) {
-    return true;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, candidate)) {
-    return false;
-  }
-  if (spicyLyricsFailFeaturedVariantCheck(track, currentBest)) {
-    return true;
-  }
-  const currentIsSpicyStatic = isSpicyStaticSource(currentBest.source);
-  const nextIsSpicyStatic = isSpicyStaticSource(candidate.source);
-  if (currentIsSpicyStatic && !nextIsSpicyStatic) {
-    return true;
-  }
-  if (nextIsSpicyStatic && !currentIsSpicyStatic) {
-    return false;
-  }
-  const currentIsLrcRedKaraoke = String(currentBest.source).includes("lrc-red-karaoke");
-  const nextIsLrcRedKaraoke = String(candidate.source).includes("lrc-red-karaoke");
-  if (currentIsLrcRedKaraoke !== nextIsLrcRedKaraoke) {
-    return nextIsLrcRedKaraoke;
-  }
-  const currentIsSpicyKaraoke = isSpicyKaraokeSource(currentBest.source);
-  const nextIsSpicyKaraoke = isSpicyKaraokeSource(candidate.source);
-  if (currentIsSpicyKaraoke && !nextIsSpicyKaraoke) {
-    return false;
-  }
-  if (nextIsSpicyKaraoke && !currentIsSpicyKaraoke) {
-    return true;
-  }
-
-  const currentIsKaraoke = isKaraokeLyricsSource(currentBest.source);
-  const nextIsKaraoke = isKaraokeLyricsSource(candidate.source);
-  const currentIsLrcRedLine = String(currentBest.source).includes("lrc-red-line");
-  const nextIsLrcRedLine = String(candidate.source).includes("lrc-red-line");
-  if (!currentIsKaraoke && !nextIsKaraoke && currentIsLrcRedLine !== nextIsLrcRedLine) {
-    return nextIsLrcRedLine;
-  }
-  const currentIsSpicyLine = isSpicyLineSource(currentBest.source);
-  const nextIsSpicyLine = isSpicyLineSource(candidate.source);
-  if (currentIsSpicyLine && !nextIsSpicyLine && !nextIsKaraoke) {
-    return false;
-  }
-  if (nextIsSpicyLine && !currentIsSpicyLine && !currentIsKaraoke) {
-    return true;
-  }
-  const currentPriority = getSourcePriorityBucket(currentBest.source);
-  const nextPriority = getSourcePriorityBucket(candidate.source);
-  const currentTimingTier = getLyricsTimingTier(currentBest.source);
-  const nextTimingTier = getLyricsTimingTier(candidate.source);
-  const currentCoverage = getLyricsCoverageRatio(
-    currentBest.lyrics,
-    track?.durationMs || 0,
-  );
-  const nextCoverage = getLyricsCoverageRatio(
-    candidate.lyrics,
-    track?.durationMs || 0,
-  );
-  const currentScore = scoreLyricsCandidate(track, currentBest);
-  const nextScore = scoreLyricsCandidate(track, candidate);
-
-  // Karaoke upgrades should win quickly when they satisfy coverage demands.
-  if (nextIsKaraoke && !currentIsKaraoke) {
-    return true;
-  }
-  // Explicit online karaoke priority order: lrc-red-karaoke > spicy-lyrics-syllable > kugou-krc > qq-musicu-qrc > netease-yrc > musixmatch-richsync.
-  if (nextIsKaraoke && currentIsKaraoke && nextPriority > currentPriority) {
-    return true;
-  }
-  if (
-    !nextIsKaraoke &&
-    !currentIsKaraoke &&
-    nextPriority > currentPriority &&
-    nextCoverage >= currentCoverage - 0.04
-  ) {
-    return true;
-  }
-  // If both are karaoke, prefer QQ direct family over non-direct fallbacks.
-  if (
-    nextTimingTier >= 3 &&
-    currentTimingTier >= 3 &&
-    isQqDirectFamilySource(candidate.source) &&
-    isQqNonDirectSource(currentBest.source)
-  ) {
-    return true;
-  }
-  // Prefer qq-direct over non-direct QQ fallbacks when coverage is comparable.
-  if (
-    isQqDirectFamilySource(candidate.source) &&
-    isQqNonDirectSource(currentBest.source) &&
-    nextCoverage >= currentCoverage - 0.08
-  ) {
-    return true;
-  }
-  // Significant coverage improvement should win.
-  if (nextCoverage >= currentCoverage + 0.12) {
-    return true;
-  }
-  if (nextCoverage >= 0.92 && currentCoverage <= 0.78) {
-    return true;
-  }
-  return nextScore >= currentScore + 14;
+  if (!isValidLyricsCandidate(track, candidate)) return false;
+  if (currentBest?.lyrics?.length && spicyLyricsFailFeaturedVariantCheck(track, currentBest)) return true;
+  return require("../../DesktopBridge/src/lyricsAutoPicker").shouldPreferAutoCandidate(track, currentBest, candidate);
 }
 
 async function fetchBestSyncedLyrics(
@@ -13304,11 +13020,16 @@ async function fetchBestSyncedLyrics(
     onSourceCached = null,
     sourceCache = null,
     musixmatchUserToken = "",
+    resolveMusixmatchUserToken = null,
     refreshMusixmatchUserToken = null,
+    invalidateMusixmatchUserToken = null,
     spotifyWebToken = "",
     spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
     spotifyAccessToken = "",
     waitForAutoCompletion = false,
+    autoSourceTimeoutMs = 3000,
+    onAutoComplete = null,
+    onAutoSettled = null,
   } = {},
 ) {
   const failures = [];
@@ -13317,7 +13038,7 @@ async function fetchBestSyncedLyrics(
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
   const attemptOrder = getSourceAttemptOrder(preferredSource, {
-    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken),
+    hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function",
     hasSpotifyWebToken:
       Boolean(safeSpotifyWebToken) || Boolean(safeSpotifyAccessToken),
     hasSpotifyTrackId,
@@ -13344,13 +13065,14 @@ async function fetchBestSyncedLyrics(
         });
         if (vaultResult?.lyrics?.length) {
           const finalizedVault = await finalizeFetchedLyricsResult(vaultResult);
-          if (meetsCoverageDemand(track, null, finalizedVault)) {
+          if (isValidLyricsCandidate(track, finalizedVault)) {
             if (typeof sourceCache?.set === "function") {
               sourceCache.set("local-vault", finalizedVault);
             }
             if (typeof onSourceCached === "function") {
               onSourceCached(finalizedVault, "local-vault");
             }
+            if (preferred === "auto") { onAutoComplete?.(); onAutoSettled?.(); }
             return finalizedVault;
           }
         }
@@ -13365,6 +13087,7 @@ async function fetchBestSyncedLyrics(
 
   const apiAttemptOrder = attemptOrder.filter((source) => source !== "local-vault");
   if (!apiAttemptOrder.length) {
+    if (preferred === "auto") { onAutoComplete?.(); onAutoSettled?.(); }
     return { lyrics: [], source: "local-vault:no-match" };
   }
 
@@ -13381,6 +13104,10 @@ async function fetchBestSyncedLyrics(
   };
 
   const invokeSourceFetcher = async (source, fetcher) => {
+    if (source === "musixmatch" && !safeMusixmatchUserToken && typeof resolveMusixmatchUserToken === "function") {
+      safeMusixmatchUserToken = String((await resolveMusixmatchUserToken()) || "").trim();
+      if (!safeMusixmatchUserToken) return null;
+    }
     const fetchWithCurrentToken = () =>
       fetcher(track, {
         musixmatchUserToken: safeMusixmatchUserToken,
@@ -13393,234 +13120,136 @@ async function fetchBestSyncedLyrics(
     } catch (error) {
       if (
         source !== "musixmatch" ||
-        describeSourceError(error) !== "unauthorized" ||
-        typeof refreshMusixmatchUserToken !== "function"
+        describeSourceError(error) !== "unauthorized"
       ) {
         throw error;
       }
+      await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+      if (typeof refreshMusixmatchUserToken !== "function") throw error;
       const refreshedToken = String(
-        (await refreshMusixmatchUserToken()) || "",
+        (await refreshMusixmatchUserToken(safeMusixmatchUserToken)) || "",
       ).trim();
       if (!refreshedToken || refreshedToken === safeMusixmatchUserToken) {
         throw error;
       }
       safeMusixmatchUserToken = refreshedToken;
-      return fetchWithCurrentToken();
+      try {
+        return await fetchWithCurrentToken();
+      } catch (retryError) {
+        if (describeSourceError(retryError) === "unauthorized") await invalidateMusixmatchUserToken?.(safeMusixmatchUserToken);
+        throw retryError;
+      }
     }
   };
 
-  if (sanitizePreferredSource(preferredSource) === "auto") {
-    const failureBySource = new Map();
-
-    const sourceTasks = apiAttemptOrder.map(async (source) => {
-      const fetcher = SOURCE_FETCHERS[source];
-      if (typeof fetcher !== "function") {
-        const reason = `${source}:unknown-source`;
-        failureBySource.set(source, reason);
-        return {
-          source,
-          ok: false,
-          failureReason: reason,
-          result: null,
-        };
-      }
-      const cachedResult =
-        typeof sourceCache?.get === "function" ? sourceCache.get(source) : null;
-      if (cachedResult?.lyrics?.length) {
-        cacheSourceResult(source, cachedResult);
-        return {
-          source,
-          ok: true,
-          failureReason: "",
-          result: cachedResult,
-          fromCache: true,
-        };
-      }
-      try {
-        const result = await invokeSourceFetcher(source, fetcher);
-        if (!result) {
-          const reason = classifySourceFailure(
-            source,
-            new Error("__NO_MATCH__"),
-          );
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result: null,
-          };
-        }
-        if (result?.metadata?.instrumental && !result?.lyrics?.length) {
-          const reason = `${source}:instrumental`;
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result,
-          };
-        }
-        const quickCandidate = await finalizeFetchedLyricsResult(result);
-        if (!meetsCoverageDemand(track, null, quickCandidate)) {
-          const reason = `${source}:insufficient-coverage`;
-          failureBySource.set(source, reason);
-          return {
-            source,
-            ok: false,
-            failureReason: reason,
-            result: null,
-          };
-        }
-        cacheSourceResult(source, quickCandidate);
-        return {
-          source,
-          ok: true,
-          failureReason: "",
-          result: quickCandidate,
-        };
-      } catch (error) {
-        const reason = classifySourceFailure(source, error);
-        failureBySource.set(source, reason);
-        return {
-          source,
-          ok: false,
-          failureReason: reason,
-          result: null,
-        };
-      }
-    });
-    try {
-      if (waitForAutoCompletion) {
-        const settled = await Promise.all(sourceTasks);
-        const successful = settled
-          .filter((outcome) => outcome.ok && outcome.result?.lyrics?.length)
-          .map((outcome) => outcome.result);
-        if (!successful.length) {
-          const instrumentalOutcome = settled.find(
-            (outcome) => outcome.result?.metadata?.instrumental,
-          );
-          if (instrumentalOutcome) {
-            return {
-              lyrics: [],
-              source: `${instrumentalOutcome.source}-instrumental`,
-              metadata: {
-                ...(instrumentalOutcome.result?.metadata || {}),
-                instrumental: true,
-              },
-            };
-          }
-          const failures = apiAttemptOrder.map(
-            (source) => failureBySource.get(source) || `${source}:no-match`,
-          );
-          return {
-            lyrics: [],
-            source: failures.join(" | ") || "lyrics-unavailable",
-          };
-        }
-        let bestFinal = successful[0];
-        for (const candidate of successful.slice(1)) {
-          if (shouldUpgradeLyricsCandidate(track, bestFinal, candidate)) {
-            bestFinal = candidate;
-          }
-        }
-        return bestFinal;
-      }
-
-      const raceTasks = sourceTasks.map(async (taskPromise) => {
-        const outcome = await taskPromise;
-        if (!outcome.ok || !outcome.result?.lyrics?.length) {
-          throw new Error(outcome.failureReason || "__NO_MATCH__");
-        }
-        return outcome;
-      });
-
-      let quickestOutcome = null;
-      try {
-        quickestOutcome = await Promise.any(raceTasks);
-      } catch {
-        quickestOutcome = null;
-      }
-
-      if (!quickestOutcome) {
-        const settled = await Promise.all(sourceTasks);
-        const successful = settled
-          .filter((outcome) => outcome.ok && outcome.result?.lyrics?.length)
-          .map((outcome) => outcome.result);
-        if (!successful.length) {
-          const instrumentalOutcome = settled.find(
-            (outcome) => outcome.result?.metadata?.instrumental,
-          );
-          if (instrumentalOutcome) {
-            return {
-              lyrics: [],
-              source: `${instrumentalOutcome.source}-instrumental`,
-              metadata: {
-                ...(instrumentalOutcome.result?.metadata || {}),
-                instrumental: true,
-              },
-            };
-          }
-          const failures = apiAttemptOrder.map(
-            (source) => failureBySource.get(source) || `${source}:no-match`,
-          );
-          return {
-            lyrics: [],
-            source: failures.join(" | ") || "lyrics-unavailable",
-          };
-        }
-        let bestFinal = successful[0];
-        for (const candidate of successful.slice(1)) {
-          if (shouldUpgradeLyricsCandidate(track, bestFinal, candidate)) {
-            bestFinal = candidate;
-          }
-        }
-        return bestFinal;
-      }
-      let bestResult = quickestOutcome.result;
-
-      // Continue probing in background; cache every successful source and upgrade when better.
-      if (apiAttemptOrder.length > 1) {
-        for (const taskPromise of sourceTasks) {
-          void taskPromise
-            .then(async (outcome) => {
-              if (!outcome.ok || !outcome.result?.lyrics?.length) {
-                return;
-              }
-              const finalizedCandidate = outcome.fromCache
-                ? outcome.result
-                : await finalizeFetchedLyricsResult(outcome.result);
-              cacheSourceResult(outcome.source, finalizedCandidate);
-              if (typeof onProgress !== "function") {
-                return;
-              }
-              if (
-                shouldUpgradeLyricsCandidate(
-                  track,
-                  bestResult,
-                  finalizedCandidate,
-                )
-              ) {
-                bestResult = finalizedCandidate;
-                onProgress(finalizedCandidate);
-              }
-            })
-            .catch(() => {
-              // Individual background source failures are expected and ignored.
-            });
-        }
-      }
-
-      return bestResult || { lyrics: [], source: "lyrics-unavailable" };
-    } catch {
-      const failures = apiAttemptOrder.map(
-        (source) => failureBySource.get(source) || `${source}:no-match`,
-      );
-      return {
-        lyrics: [],
-        source: failures.join(" | ") || "lyrics-unavailable",
-      };
+  if (preferred === "auto") {
+    const { autoCandidateCouldOutrank } = require("../../DesktopBridge/src/lyricsAutoPicker");
+    const cachedDecision = sourceCache?.get?.("auto");
+    if (cachedDecision?.lyrics?.length && isValidLyricsCandidate(track, cachedDecision)) {
+      onAutoComplete?.();
+      onAutoSettled?.();
+      return cachedDecision;
     }
+    const pending = new Set(apiAttemptOrder);
+    const boundedPending = new Set(apiAttemptOrder);
+    const outcomes = new Map();
+    const timers = new Map();
+    let best = null;
+    let allStarted = false;
+    let initialResolved = false;
+    let completionResolved = false;
+    let finalCached = false;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      onAutoSettled?.();
+    };
+    let resolveInitial, resolveCompletion;
+    const initialResult = new Promise(resolve => { resolveInitial = resolve; });
+    const completionResult = new Promise(resolve => { resolveCompletion = resolve; });
+    const unavailable = () => {
+      const completed = [...outcomes.values()];
+      const instrumental = completed.find(outcome => outcome.instrumental);
+      return instrumental
+        ? { lyrics: [], source: `${instrumental.source}-instrumental`, metadata: { ...(instrumental.result?.metadata || {}), instrumental: true } }
+        : { lyrics: [], source: completed.map(outcome => outcome.failureReason).filter(Boolean).join(" | ") || "lyrics-unavailable" };
+    };
+    const complete = result => {
+      if (completionResolved) return;
+      completionResolved = true;
+      for (const timer of timers.values()) clearTimeout(timer);
+      resolveCompletion(result);
+      onAutoComplete?.();
+    };
+    const consider = candidate => {
+      if (!shouldUpgradeLyricsCandidate(track, best, candidate)) return;
+      best = candidate;
+      // First usable lyrics are delivered immediately; pending superior sources
+      // affect finalization only, and may publish a later guarded upgrade.
+      if (typeof onProgress === "function") onProgress(best);
+      if (!initialResolved) { initialResolved = true; resolveInitial(best); }
+    };
+    const maybeFinalize = () => {
+      if (!allStarted) return;
+      const pendingWinner = best && [...pending].some(source => autoCandidateCouldOutrank(track, best, source));
+      if (best && !pendingWinner) {
+        const transientSuperiorFailure = [...outcomes.values()].some(outcome => !outcome.ok &&
+          !outcome.instrumental && outcome.failureReason !== `${outcome.source}:no-match` &&
+          autoCandidateCouldOutrank(track, best, outcome.source));
+        if (!finalCached && !transientSuperiorFailure) {
+          finalCached = true;
+          sourceCache?.set?.("auto", best);
+        }
+        complete(best);
+        settle();
+      }
+      if (!boundedPending.size) {
+        const result = best || unavailable();
+        if (!initialResolved) { initialResolved = true; resolveInitial(result); }
+        complete(result);
+      }
+      if (!pending.size) settle();
+    };
+    // Every eligible fetch is scheduled before considering any completion.
+    for (const source of apiAttemptOrder) {
+      let timer;
+      const timeoutMs = source === "lrc-red" || source === "spicy-lyrics"
+        ? autoSourceTimeoutMs : Math.max(autoSourceTimeoutMs, 15_000);
+      timer = setTimeout(() => {
+        boundedPending.delete(source);
+        outcomes.set(source, { source, ok: false, timedOut: true, failureReason: `${source}:timeout` });
+        // Keep the raw source pending: a late possible winner must not poison
+        // the final cache, and may still upgrade while this auto run is active.
+        maybeFinalize();
+      }, timeoutMs);
+      timers.set(source, timer);
+      Promise.resolve().then(async () => {
+        const fetcher = SOURCE_FETCHERS[source];
+        if (typeof fetcher !== "function") return { source, ok: false, failureReason: `${source}:unknown-source` };
+        const cached = sourceCache?.get?.(source);
+        if (cached?.lyrics?.length && isValidLyricsCandidate(track, cached)) return { source, ok: true, result: cached };
+        try {
+          const result = await invokeSourceFetcher(source, fetcher);
+          if (!result) return { source, ok: false, failureReason: `${source}:no-match` };
+          if (result.metadata?.instrumental && !result.lyrics?.length) return { source, ok: false, result, instrumental: true, failureReason: `${source}:instrumental` };
+          const candidate = await finalizeFetchedLyricsResult(result);
+          if (!isValidLyricsCandidate(track, candidate)) return { source, ok: false, failureReason: `${source}:invalid-candidate` };
+          cacheSourceResult(source, candidate);
+          return { source, ok: true, result: candidate };
+        } catch (error) { return { source, ok: false, failureReason: classifySourceFailure(source, error) }; }
+      }).then(outcome => {
+        clearTimeout(timer);
+        pending.delete(source);
+        boundedPending.delete(source);
+        outcomes.set(source, outcome);
+        if (outcome.ok) consider(outcome.result);
+        maybeFinalize();
+      });
+    }
+    allStarted = true;
+    maybeFinalize();
+    return waitForAutoCompletion ? completionResult : initialResult;
   }
 
   for (const source of apiAttemptOrder) {
@@ -13648,11 +13277,11 @@ async function fetchBestSyncedLyrics(
           };
         }
         const finalized = await finalizeFetchedLyricsResult(result);
-        if (meetsCoverageDemand(track, null, finalized)) {
+        if (isValidLyricsCandidate(track, finalized)) {
           cacheSourceResult(source, finalized);
           return finalized;
         }
-        failures.push(`${source}:insufficient-coverage`);
+        failures.push(`${source}:invalid-candidate`);
         continue;
       }
       failures.push(classifySourceFailure(source, new Error("__NO_MATCH__")));
@@ -13678,12 +13307,14 @@ async function enrichTrackForVaultMatch(track, spotifyAccessToken = "") {
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
   refreshMusixmatchUserToken = null,
+  invalidateMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
   getSpotifyAccessToken = () => "",
   getSpicyLyricsPublishableKey = () => process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
 } = {}) {
+  const { selectTtmlTranslationTracks, mergeTtmlTranslationResult } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
   const isExpiredSpicyPacket = (packet) => packet?.metadata?.spicyApi && !(Number(packet.metadata.spicyApi.expiresAt) > Date.now());
   const lastDisplayedByTrack = new Map();
   const geminiTranslationCache = new Map();
@@ -13692,11 +13323,19 @@ function createLyricsService({
     trackId: "",
     bySource: new Map(),
   };
+  const sourceCachesByTrack = new Map();
+  const sourceCacheExpiry = new WeakMap();
+  const sourceFetchesInFlight = new Map();
+  const SOURCE_CACHE_TTL_MS = 30 * 60_000;
+  const AUTO_CACHE_TTL_MS = 5 * 60_000;
+  const MAX_CACHED_TRACKS = 100;
+  let selectionGeneration = 0;
+  let selectionKey = "";
   const AUTO_TRANSLATION_QUIET_MS = 5_000;
   let cacheExpiryTimer;
   const scheduleCacheExpiry = () => {
     clearTimeout(cacheExpiryTimer);
-    const caches = [lastDisplayedByTrack, publishedToFrontendCache, activeTrackSourceCache.bySource];
+    const caches = [lastDisplayedByTrack, publishedToFrontendCache, ...[...sourceCachesByTrack.values()].map(record => record.bySource)];
     let nextExpiry = Infinity;
     let removed = false;
     for (const cache of caches) {
@@ -13712,7 +13351,6 @@ function createLyricsService({
     }
   };
 
-
   const stripDesktopSourceSuffix = (source) =>
     String(source || "")
       .replace(/\|mobile$/i, "")
@@ -13720,6 +13358,7 @@ function createLyricsService({
 
   /** Map fetcher-specific labels (e.g. qq-musicu-qrc) to Expo/bridge source keys (qq-direct). */
   const canonicalSourceCacheKey = (source) => {
+    if (source === "auto") return "auto"
     const stripped = stripDesktopSourceSuffix(source).replace(
       /-instrumental$/i,
       "",
@@ -13802,74 +13441,57 @@ function createLyricsService({
     };
   };
 
+  const getSourceRecord = (cacheKey) => {
+    let record = sourceCachesByTrack.get(cacheKey);
+    if (!record) record = { bySource: new Map(), identity: "" };
+    sourceCachesByTrack.delete(cacheKey);
+    sourceCachesByTrack.set(cacheKey, record);
+    while (sourceCachesByTrack.size > MAX_CACHED_TRACKS) {
+      const oldest = sourceCachesByTrack.keys().next().value;
+      sourceCachesByTrack.delete(oldest);
+      lastDisplayedByTrack.delete(oldest);
+      publishedToFrontendCache.delete(oldest);
+    }
+    return record;
+  };
   const setActiveTrack = (trackId) => {
     const cacheKey = String(trackId || "").trim();
-    if (!cacheKey) {
-      activeTrackSourceCache.trackId = "";
-      activeTrackSourceCache.bySource = new Map();
-      return;
-    }
-    if (activeTrackSourceCache.trackId === cacheKey) {
-      return;
+    if (activeTrackSourceCache.trackId !== cacheKey) {
+      selectionGeneration += 1;
+      selectionKey = "";
     }
     activeTrackSourceCache.trackId = cacheKey;
-    activeTrackSourceCache.bySource = new Map();
-    for (const publishedTrackId of [...publishedToFrontendCache.keys()]) {
-      if (publishedTrackId !== cacheKey) {
-        publishedToFrontendCache.delete(publishedTrackId);
-      }
-    }
-    for (const displayedTrackId of [...lastDisplayedByTrack.keys()]) {
-      if (displayedTrackId !== cacheKey) {
-        lastDisplayedByTrack.delete(displayedTrackId);
-      }
-    }
+    activeTrackSourceCache.bySource = cacheKey ? getSourceRecord(cacheKey).bySource : new Map();
   };
 
   const rememberSourceLyrics = (trackId, sourceKey, basePacket) => {
     const cacheKey = String(trackId || "").trim();
     const normalizedSource = canonicalSourceCacheKey(sourceKey);
-    if (!cacheKey || !normalizedSource) {
-      return;
-    }
-    if (!basePacket?.lyrics?.length) {
-      return;
-    }
-    if (activeTrackSourceCache.trackId !== cacheKey) {
-      setActiveTrack(cacheKey);
-    }
+    if (!cacheKey || !normalizedSource || !basePacket?.lyrics?.length) return;
+    // A late old-track result may fill its own cache, but must never switch the active track.
+    const record = sourceCachesByTrack.get(cacheKey);
+    if (!record) return;
     const incoming = cloneSourceCachePacket(basePacket);
-    const existing = activeTrackSourceCache.bySource.get(normalizedSource);
-    if (
-      existing?.lyrics?.length &&
-      hasTranslatedLinesInLyrics(existing.lyrics) &&
-      !hasTranslatedLinesInLyrics(incoming.lyrics) &&
-      packetLyricsSignature(existing) === packetLyricsSignature(incoming)
-    ) {
-      return;
-    }
-    activeTrackSourceCache.bySource.set(normalizedSource, incoming);
+    const existing = record.bySource.get(normalizedSource);
+    if (existing?.lyrics?.length && hasTranslatedLinesInLyrics(existing.lyrics) &&
+      !hasTranslatedLinesInLyrics(incoming.lyrics) && packetLyricsSignature(existing) === packetLyricsSignature(incoming)) return;
+    record.bySource.set(normalizedSource, incoming);
+    sourceCacheExpiry.set(incoming, Date.now() + (normalizedSource === "auto" ? AUTO_CACHE_TTL_MS : SOURCE_CACHE_TTL_MS));
     scheduleCacheExpiry();
   };
-
-  const getCachedSourceLyricsPacket = (trackId, preferredSource) => {
-    const cacheKey = String(trackId || "").trim();
-    const normalizedSource = canonicalSourceCacheKey(preferredSource);
-    if (!cacheKey || !normalizedSource) {
+  const getSourceBase = (trackId, source) => {
+    const record = sourceCachesByTrack.get(String(trackId || ""));
+    const key = canonicalSourceCacheKey(source);
+    const base = record?.bySource.get(key);
+    if (base && (isExpiredSpicyPacket(base) || (sourceCacheExpiry.get(base) || 0) <= Date.now())) {
+      record.bySource.delete(key);
       return null;
     }
-    if (activeTrackSourceCache.trackId !== cacheKey) {
-      return null;
-    }
-    const base = activeTrackSourceCache.bySource.get(normalizedSource);
-    if (isExpiredSpicyPacket(base)) {
-      activeTrackSourceCache.bySource.delete(normalizedSource);
-      return null;
-    }
-    if (!base?.lyrics?.length) {
-      return null;
-    }
-    return buildLyricsPacketFromBase({ trackId: cacheKey }, base);
+    return base || null;
+  };
+  const getCachedSourceLyricsPacket = (trackId, preferredSource, translationLanguage = "English") => {
+    const base = getSourceBase(trackId, preferredSource);
+    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, selectTtmlTranslationTracks(base, translationLanguage)) : null;
   };
 
   const cloneLyricsLinesWithoutTranslations = (lyrics) => {
@@ -13895,7 +13517,9 @@ function createLyricsService({
     if (!cacheKey || !packet) {
       return;
     }
-    const lyrics = cloneLyricsLinesWithoutTranslations(packet.lyrics);
+    const hasSourceTracks = Boolean(packet.metadata?.ttml?.translationTracks?.length);
+    const lyrics = hasSourceTracks ? packet.lyrics.map(line => ({ ...line }))
+      : cloneLyricsLinesWithoutTranslations(packet.lyrics);
     if (!lyrics.length) {
       return;
     }
@@ -13903,7 +13527,7 @@ function createLyricsService({
       packet.metadata && typeof packet.metadata === "object"
         ? { ...packet.metadata }
         : {};
-    delete metadata.translation;
+    if (!hasSourceTracks) delete metadata.translation;
     publishedToFrontendCache.set(cacheKey, {
       source:
         stripDesktopSourceSuffix(packet.source) ||
@@ -14056,13 +13680,7 @@ function createLyricsService({
         },
       );
 
-      const finalBase = {
-        ...basePacket,
-        lyrics: enrichedLyrics,
-        metadata: mergeLyricsMetadata(basePacket.metadata, {
-          translation: enrichedLyrics.translationMeta,
-        }),
-      };
+      const finalBase = mergeTtmlTranslationResult(basePacket, enrichedLyrics, translationLanguage);
 
       emitToFrontend(finalBase);
       rememberSourceLyrics(cacheKey, published.source, finalBase);
@@ -14088,15 +13706,26 @@ function createLyricsService({
       }
       const cacheKey = track.trackId;
       setActiveTrack(cacheKey);
-      const normalizedPreferredSource =
-        sanitizePreferredSource(preferredSource);
-
+      const normalizedPreferredSource = sanitizePreferredSource(preferredSource);
+      const recordingIdentity = [track.spotifyTrackId || "", track.isrc || "", track.title || "", track.artist || "", Number(track.durationMs || 0)].join("|");
+      let sourceRecord = getSourceRecord(cacheKey);
+      if (force || (sourceRecord.identity && sourceRecord.identity !== recordingIdentity)) {
+        sourceRecord = { bySource: new Map(), identity: recordingIdentity };
+        sourceCachesByTrack.set(cacheKey, sourceRecord);
+        activeTrackSourceCache.bySource = sourceRecord.bySource;
+      }
+      sourceRecord.identity = recordingIdentity;
+      const requestKey = `${cacheKey}|${recordingIdentity}|${normalizedPreferredSource}|${translationLanguage}`;
+      if (force || selectionKey !== requestKey) { selectionKey = requestKey; selectionGeneration += 1; }
+      const requestGeneration = selectionGeneration;
+      const isCurrentSelection = () => selectionGeneration === requestGeneration && selectionKey === requestKey;
       let matchTrack = { ...track };
 
       if (!force && normalizedPreferredSource !== "auto") {
         const cachedSourcePacket = getCachedSourceLyricsPacket(
           cacheKey,
           normalizedPreferredSource,
+          translationLanguage,
         );
         if (cachedSourcePacket) {
           console.log(
@@ -14111,20 +13740,9 @@ function createLyricsService({
       }
 
       const sourceCache = {
-        get: (source) => {
-          if (activeTrackSourceCache.trackId !== cacheKey) {
-            return null;
-          }
-          const key = sanitizePreferredSource(source);
-          const cached = activeTrackSourceCache.bySource.get(key);
-          if (isExpiredSpicyPacket(cached)) {
-            activeTrackSourceCache.bySource.delete(key);
-            return null;
-          }
-          return cached || null;
-        },
+        get: source => force ? null : getSourceBase(cacheKey, source),
         set: (source, basePacket) => {
-          rememberSourceLyrics(cacheKey, source, basePacket);
+          if (sourceCachesByTrack.get(cacheKey) === sourceRecord) rememberSourceLyrics(cacheKey, source, basePacket);
         },
       };
 
@@ -14160,7 +13778,7 @@ function createLyricsService({
       };
 
       const emitPacket = (basePacket) => {
-        if (!basePacket) {
+        if (!isCurrentSelection() || !basePacket) {
           return;
         }
         const safeLyrics = Array.isArray(basePacket?.lyrics)
@@ -14212,6 +13830,8 @@ function createLyricsService({
       };
 
       const registerCandidate = (candidatePacket) => {
+        if (!isCurrentSelection()) return false;
+        candidatePacket = selectTtmlTranslationTracks(candidatePacket, translationLanguage);
         const safeCandidate = {
           ...candidatePacket,
           lyrics: Array.isArray(candidatePacket?.lyrics)
@@ -14328,13 +13948,7 @@ function createLyricsService({
               targetLanguage: translationLanguage,
             },
           );
-          const translatedBase = {
-            ...latestBase,
-            lyrics: enrichedLyrics,
-            metadata: mergeLyricsMetadata(latestBase.metadata, {
-              translation: enrichedLyrics.translationMeta,
-            }),
-          };
+          const translatedBase = mergeTtmlTranslationResult(latestBase, enrichedLyrics, translationLanguage);
 
           const currentBest = getLatestBasePacket();
           if (
@@ -14461,35 +14075,47 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
-      let resolvedMusixmatchUserToken = "";
-      try {
-        resolvedMusixmatchUserToken = String(
-          (typeof getMusixmatchUserToken === "function"
-            ? await getMusixmatchUserToken()
-            : "") || "",
-        ).trim();
-      } catch {
-        // Automatic Musixmatch token provisioning failed; other sources remain available.
+      const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
+      // Credential/catalog setup can outlive a force refresh or source/track
+      // switch. It must not replace the newer run's in-flight registry entry.
+      if (!isCurrentSelection() || sourceCachesByTrack.get(cacheKey) !== sourceRecord) {
+        return { trackId: cacheKey, lyrics: [], source: "stale-lyrics-request" };
       }
+      let flight = !force ? sourceFetchesInFlight.get(requestKey) : null;
+      if (!flight || flight.record !== sourceRecord) {
+        flight = { record: sourceRecord, listeners: new Set(), latest: null, initial: null };
+        sourceFetchesInFlight.set(requestKey, flight);
+        const currentFlight = flight;
+        const finishFlight = () => {
+          if (sourceFetchesInFlight.get(requestKey) === currentFlight) sourceFetchesInFlight.delete(requestKey);
+        };
+        currentFlight.initial = fetchBestSyncedLyrics(matchTrack, {
+          preferredSource,
+          onProgress: candidate => {
+            currentFlight.latest = candidate;
+            for (const listener of currentFlight.listeners) listener(candidate);
+          },
+          // The bounded completion deadline must not release deduplication
+          // while a raw pending provider can still publish a superior result.
+          onAutoSettled: finishFlight,
+          onSourceCached: (candidate, source) => sourceCache.set(source || candidate?.source, candidate),
+          sourceCache,
+          // Provision only inside the Musixmatch task: a vault/final cache hit
+          // needs no issuance, and other providers never wait on token.get.
+          resolveMusixmatchUserToken: getMusixmatchUserToken,
+          refreshMusixmatchUserToken,
+          invalidateMusixmatchUserToken,
+          spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
+          spotifyAccessToken: resolvedSpotifyAccessToken,
+          spicyLyricsPublishableKey: resolvedSpicyLyricsPublishableKey,
+          waitForAutoCompletion: false,
+        });
+        if (normalizedPreferredSource !== "auto") currentFlight.initial.then(finishFlight, finishFlight);
+      }
+      flight.listeners.add(handleProgressPacket);
+      if (flight.latest) handleProgressPacket(flight.latest);
+      const base = await flight.initial;
 
-      const base = await fetchBestSyncedLyrics(matchTrack, {
-        preferredSource,
-        onProgress: handleProgressPacket,
-        onSourceCached: (candidate, source) => {
-          rememberSourceLyrics(
-            cacheKey,
-            source || candidate?.source,
-            candidate,
-          );
-        },
-        sourceCache,
-        musixmatchUserToken: resolvedMusixmatchUserToken,
-        refreshMusixmatchUserToken,
-        spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
-        spotifyAccessToken: resolvedSpotifyAccessToken,
-        spicyLyricsPublishableKey: await getSpicyLyricsPublishableKey(),
-        waitForAutoCompletion: false,
-      });
       initialBaseCandidate = {
         ...base,
         lyrics: Array.isArray(base.lyrics) ? base.lyrics : [],
@@ -14564,13 +14190,7 @@ function createLyricsService({
           },
         );
 
-        finalBase = {
-          ...inputPacket,
-          lyrics: enrichedLyrics,
-          metadata: mergeLyricsMetadata(inputPacket?.metadata, {
-            translation: enrichedLyrics.translationMeta,
-          }),
-        };
+        finalBase = mergeTtmlTranslationResult(inputPacket, enrichedLyrics, translationLanguage);
         emitTranslatedPacketIfCurrentBest(finalBase);
 
         if (!isAutoPreferredSource) {
@@ -14614,7 +14234,7 @@ function createLyricsService({
             ? "This song is an instrumental."
             : `No synced lyrics found (${finalOutputBase.source || "unknown reason"}).`,
       };
-      lastDisplayedByTrack.set(cacheKey, result);
+      if (isCurrentSelection()) lastDisplayedByTrack.set(cacheKey, result);
       if (autoTranslationTimer) {
         clearTimeout(autoTranslationTimer);
       }
@@ -14642,6 +14262,10 @@ function createLyricsService({
       publishedToFrontendCache.clear();
       activeTrackSourceCache.trackId = "";
       activeTrackSourceCache.bySource = new Map();
+      sourceCachesByTrack.clear();
+      sourceFetchesInFlight.clear();
+      selectionKey = "";
+      selectionGeneration += 1;
       clearMusixmatchRuntimeState();
       geminiRuntimeState.cooldownUntil = 0;
       geminiRuntimeState.cooldownReason = "";

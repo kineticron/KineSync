@@ -1,6 +1,8 @@
 // Wire field numbers from librespot's connect.proto and player.proto (MIT).
 // Only decode state/identity fields; skip queues, transfer data, and commands.
 // https://github.com/librespot-org/librespot/tree/dev/protocol/proto
+import { timingCaptureActive } from './timing-diagnostics';
+import { developmentTimingActive } from './development-timing-log';
 type Field = { id: number; wire: number; value: number | Uint8Array };
 function fields(bytes: Uint8Array): Field[] {
   let pos = 0;
@@ -53,6 +55,7 @@ function player(bytes: Uint8Array) {
     if (f.wire === 0 && numbers[f.id]) out[numbers[f.id]] = f.value;
     if (f.wire === 0 && bools[f.id]) out[bools[f.id]] = !!f.value;
     if (f.wire === 2 && f.id === 7) out.track = track(f.value as Uint8Array);
+    if (f.wire === 2 && f.id === 23) out.session_id = text(f.value as Uint8Array);
   }
   return out;
 }
@@ -69,6 +72,11 @@ export function decodeCluster(bytes: Uint8Array, wrapped = false): any {
   if (wrapped && nested) return { cluster: decodeCluster(nested.value as Uint8Array) };
   const out: any = { device: Object.create(null) };
   for (const f of outer) {
+    if (f.wire === 0 && f.id === 9) out.server_timestamp_ms = f.value;
+    if ((timingCaptureActive() || developmentTimingActive()) && f.wire === 0) {
+      const clock = ({ 1: 'changed_timestamp_ms', 6: 'transfer_data_timestamp', 11: 'started_playing_at_timestamp' } as Record<number, string>)[f.id];
+      if (clock) out[clock] = f.value;
+    }
     if (f.wire === 2 && f.id === 2) out.active_device_id = text(f.value as Uint8Array);
     if (f.wire === 2 && f.id === 3) out.player_state = player(f.value as Uint8Array);
     if (f.wire === 2 && f.id === 4) {

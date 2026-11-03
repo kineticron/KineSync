@@ -1,0 +1,127 @@
+{
+  "label": "HOST ONLY: actual hooks/model/wrapping; 8px fake paragraph metrics, mocked glyph recorder; cold mounts at width 320 and 10 unchanged re-renders per voice. Counts, not device frame times.",
+  "results": [
+    {
+      "style": "amll",
+      "id": "US5TA1500050",
+      "voices": 54,
+      "withGap": 0,
+      "rectQueries": 1034,
+      "paragraphBuilds": 162,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 54,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "4e8f1e3c700c74b9e9d0901bb10967666adfffdefee6d37063303fea65553fbd"
+    },
+    {
+      "style": "amll",
+      "id": "ZZA0P2622376",
+      "voices": 42,
+      "withGap": 0,
+      "rectQueries": 1098,
+      "paragraphBuilds": 126,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 42,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "b874c46267911fec981115edaacbdfa6020138cf7d8f33d495f1b0e0f37ba8c1"
+    },
+    {
+      "style": "amll",
+      "id": "KRMIM2652961",
+      "voices": 12,
+      "withGap": 0,
+      "rectQueries": 370,
+      "paragraphBuilds": 36,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 12,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "232b12a1f2e17d70f17ceb2c7b6e2f8fe89bc4aa1e58311d12eeda45c67ff7e4"
+    },
+    {
+      "style": "amll",
+      "id": "USUM72601821",
+      "voices": 60,
+      "withGap": 0,
+      "rectQueries": 2130,
+      "paragraphBuilds": 120,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 60,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "a337ac65d231f27be97059713d9067b9fda7bd9d56cc73ca23d7caec25e0c8d8"
+    },
+    {
+      "style": "amll",
+      "id": "GBUM71805979",
+      "voices": 22,
+      "withGap": 0,
+      "rectQueries": 715,
+      "paragraphBuilds": 44,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 22,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "f99f93743d16c0cca92a9097828b71e8a8366b9913a950f035e020e3760be18c"
+    },
+    {
+      "style": "spicy",
+      "id": "US5TA1500050",
+      "voices": 54,
+      "withGap": 0,
+      "rectQueries": 1034,
+      "paragraphBuilds": 162,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 54,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "e2a886f7a790304c81de4758945cf5ca153685c0918755611a951d3e511b300b"
+    },
+    {
+      "style": "spicy",
+      "id": "ZZA0P2622376",
+      "voices": 42,
+      "withGap": 0,
+      "rectQueries": 1323,
+      "paragraphBuilds": 126,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 42,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "889142dde09b0aca6af2fe1587a938c63ef2565c40748f53aa2b2666cab3384d"
+    },
+    {
+      "style": "spicy",
+      "id": "KRMIM2652961",
+      "voices": 12,
+      "withGap": 0,
+      "rectQueries": 411,
+      "paragraphBuilds": 36,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 12,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "dd8a4158be40f84dfe797edc25db266ccd0781499af2b5e7dedc7f9136beba70"
+    },
+    {
+      "style": "spicy",
+      "id": "USUM72601821",
+      "voices": 60,
+      "withGap": 0,
+      "rectQueries": 2138,
+      "paragraphBuilds": 120,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 60,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "78f717ca38fbd12749ef6bd4d877afbb266d63994b241998c5a66ee7e20eb4c0"
+    },
+    {
+      "style": "spicy",
+      "id": "GBUM71805979",
+      "voices": 22,
+      "withGap": 0,
+      "rectQueries": 715,
+      "paragraphBuilds": 44,
+      "spacingProbeBuilds": 0,
+      "glyphShapePasses": 22,
+      "cueShapePasses": 0,
+      "consumedGlyphInputsSha256": "b759f9be7107675a48ea54d5dab424cfa9ce9df9736c4b0e501e42841b63872b"
+    }
+  ],
+  "commit": "3eff8808939f1caff11fb4d32e9b0cd7f799d137",
+  "sourceSha256": "590ae3e0c23aef87c57c3dce9d125d7c55bd90e21588e4927f9d3050cc29cd55"
+}

@@ -13,6 +13,34 @@ background translations, and background timings extending beyond lead lines.
 Desktop compact storage retains background translations alongside lead
 translations and alignment.
 
+lrc.red `head/metadata/sourceMetadata/translations` subtitles are joined by
+`text@for` and paragraph `lrc:key`, never by position. Both importers share the
+namespace-aware metadata reader. This reader does not resolve DTDs or external
+entities; malformed optional metadata does not replace the existing lyric parser.
+Inline lead/background translations take precedence. The existing native AMLL
+and Spicy translation fields display the selected subtitle without layout changes.
+
+The default target is English; service requests select their configured target
+language, including when using a cached source packet. Exact language tags rank
+first, then non-automatic tracks among equally matching languages, then source
+order. Chinese script variants are kept distinct. A missing target track leaves
+source translations absent, allowing the existing explicit AI translation path.
+Only previously applied metadata text is replaced on language changes; inline
+and subsequently enriched translations remain authoritative. Explicit AI requests
+retain their existing override behavior. A selected partial track is not mixed
+with other tracks. Conflicting duplicate text keys and duplicate paragraph keys
+are skipped; identical duplicate text entries are harmless.
+
+Packets retain alternate tracks, language/type/automatic provenance, selection,
+and applied-key records under `metadata.ttml`, plus `ttmlKey` on keyed lines.
+The archived XML always retains the full source. Desktop compact storage retains
+paragraph keys, selected subtitle text, alternate tracks and provenance; mobile
+SQLite retains the same fields. Completed enrichment metadata also survives the
+desktop round trip so source-track selection cannot supersede explicit AI output.
+Romanization and broader TTML timing/namespace parser changes are outside this
+feature. Existing cached/imported entries need a source refresh or reimport to
+populate the new structured metadata.
+
 Renaming an entry or adding translations for playback does not rewrite its
 archived original XML. Code that intentionally generates an updated document
 can call `lyricsToTtml` with `preserveOriginal: false`. Generated documents

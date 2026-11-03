@@ -2,12 +2,14 @@
 function createLyricsService({
   getMusixmatchUserToken = () => process.env.MUSIXMATCH_USER_TOKEN || "",
   refreshMusixmatchUserToken = null,
+  invalidateMusixmatchUserToken = null,
   getSpotifyWebToken = () => process.env.SPOTIFY_WEB_TOKEN || "",
   getGeminiApiKey = () =>
     process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY || "",
   getSpotifyAccessToken = () => "",
   getSpicyLyricsPublishableKey = () => process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "",
 } = {}) {
+  const { selectTtmlTranslationTracks, mergeTtmlTranslationResult } = require("./lyricsTtmlTranslations");
   const isExpiredSpicyPacket = (packet) => packet?.metadata?.spicyApi && !(Number(packet.metadata.spicyApi.expiresAt) > Date.now());
   const lastDisplayedByTrack = new Map();
   const geminiTranslationCache = new Map();
@@ -16,11 +18,19 @@ function createLyricsService({
     trackId: "",
     bySource: new Map(),
   };
+  const sourceCachesByTrack = new Map();
+  const sourceCacheExpiry = new WeakMap();
+  const sourceFetchesInFlight = new Map();
+  const SOURCE_CACHE_TTL_MS = 30 * 60_000;
+  const AUTO_CACHE_TTL_MS = 5 * 60_000;
+  const MAX_CACHED_TRACKS = 100;
+  let selectionGeneration = 0;
+  let selectionKey = "";
   const AUTO_TRANSLATION_QUIET_MS = 5_000;
   let cacheExpiryTimer;
   const scheduleCacheExpiry = () => {
     clearTimeout(cacheExpiryTimer);
-    const caches = [lastDisplayedByTrack, publishedToFrontendCache, activeTrackSourceCache.bySource];
+    const caches = [lastDisplayedByTrack, publishedToFrontendCache, ...[...sourceCachesByTrack.values()].map(record => record.bySource)];
     let nextExpiry = Infinity;
     let removed = false;
     for (const cache of caches) {
@@ -43,6 +53,7 @@ function createLyricsService({
 
   /** Map fetcher-specific labels (e.g. qq-musicu-qrc) to Expo/bridge source keys (qq-direct). */
   const canonicalSourceCacheKey = (source) => {
+    if (source === "auto") return "auto"
     const stripped = stripDesktopSourceSuffix(source).replace(
       /-instrumental$/i,
       "",
@@ -125,74 +136,57 @@ function createLyricsService({
     };
   };
 
+  const getSourceRecord = (cacheKey) => {
+    let record = sourceCachesByTrack.get(cacheKey);
+    if (!record) record = { bySource: new Map(), identity: "" };
+    sourceCachesByTrack.delete(cacheKey);
+    sourceCachesByTrack.set(cacheKey, record);
+    while (sourceCachesByTrack.size > MAX_CACHED_TRACKS) {
+      const oldest = sourceCachesByTrack.keys().next().value;
+      sourceCachesByTrack.delete(oldest);
+      lastDisplayedByTrack.delete(oldest);
+      publishedToFrontendCache.delete(oldest);
+    }
+    return record;
+  };
   const setActiveTrack = (trackId) => {
     const cacheKey = String(trackId || "").trim();
-    if (!cacheKey) {
-      activeTrackSourceCache.trackId = "";
-      activeTrackSourceCache.bySource = new Map();
-      return;
-    }
-    if (activeTrackSourceCache.trackId === cacheKey) {
-      return;
+    if (activeTrackSourceCache.trackId !== cacheKey) {
+      selectionGeneration += 1;
+      selectionKey = "";
     }
     activeTrackSourceCache.trackId = cacheKey;
-    activeTrackSourceCache.bySource = new Map();
-    for (const publishedTrackId of [...publishedToFrontendCache.keys()]) {
-      if (publishedTrackId !== cacheKey) {
-        publishedToFrontendCache.delete(publishedTrackId);
-      }
-    }
-    for (const displayedTrackId of [...lastDisplayedByTrack.keys()]) {
-      if (displayedTrackId !== cacheKey) {
-        lastDisplayedByTrack.delete(displayedTrackId);
-      }
-    }
+    activeTrackSourceCache.bySource = cacheKey ? getSourceRecord(cacheKey).bySource : new Map();
   };
 
   const rememberSourceLyrics = (trackId, sourceKey, basePacket) => {
     const cacheKey = String(trackId || "").trim();
     const normalizedSource = canonicalSourceCacheKey(sourceKey);
-    if (!cacheKey || !normalizedSource) {
-      return;
-    }
-    if (!basePacket?.lyrics?.length) {
-      return;
-    }
-    if (activeTrackSourceCache.trackId !== cacheKey) {
-      setActiveTrack(cacheKey);
-    }
+    if (!cacheKey || !normalizedSource || !basePacket?.lyrics?.length) return;
+    // A late old-track result may fill its own cache, but must never switch the active track.
+    const record = sourceCachesByTrack.get(cacheKey);
+    if (!record) return;
     const incoming = cloneSourceCachePacket(basePacket);
-    const existing = activeTrackSourceCache.bySource.get(normalizedSource);
-    if (
-      existing?.lyrics?.length &&
-      hasTranslatedLinesInLyrics(existing.lyrics) &&
-      !hasTranslatedLinesInLyrics(incoming.lyrics) &&
-      packetLyricsSignature(existing) === packetLyricsSignature(incoming)
-    ) {
-      return;
-    }
-    activeTrackSourceCache.bySource.set(normalizedSource, incoming);
+    const existing = record.bySource.get(normalizedSource);
+    if (existing?.lyrics?.length && hasTranslatedLinesInLyrics(existing.lyrics) &&
+      !hasTranslatedLinesInLyrics(incoming.lyrics) && packetLyricsSignature(existing) === packetLyricsSignature(incoming)) return;
+    record.bySource.set(normalizedSource, incoming);
+    sourceCacheExpiry.set(incoming, Date.now() + (normalizedSource === "auto" ? AUTO_CACHE_TTL_MS : SOURCE_CACHE_TTL_MS));
     scheduleCacheExpiry();
   };
-
-  const getCachedSourceLyricsPacket = (trackId, preferredSource) => {
-    const cacheKey = String(trackId || "").trim();
-    const normalizedSource = canonicalSourceCacheKey(preferredSource);
-    if (!cacheKey || !normalizedSource) {
+  const getSourceBase = (trackId, source) => {
+    const record = sourceCachesByTrack.get(String(trackId || ""));
+    const key = canonicalSourceCacheKey(source);
+    const base = record?.bySource.get(key);
+    if (base && (isExpiredSpicyPacket(base) || (sourceCacheExpiry.get(base) || 0) <= Date.now())) {
+      record.bySource.delete(key);
       return null;
     }
-    if (activeTrackSourceCache.trackId !== cacheKey) {
-      return null;
-    }
-    const base = activeTrackSourceCache.bySource.get(normalizedSource);
-    if (isExpiredSpicyPacket(base)) {
-      activeTrackSourceCache.bySource.delete(normalizedSource);
-      return null;
-    }
-    if (!base?.lyrics?.length) {
-      return null;
-    }
-    return buildLyricsPacketFromBase({ trackId: cacheKey }, base);
+    return base || null;
+  };
+  const getCachedSourceLyricsPacket = (trackId, preferredSource, translationLanguage = "English") => {
+    const base = getSourceBase(trackId, preferredSource);
+    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, selectTtmlTranslationTracks(base, translationLanguage)) : null;
   };
 
   const cloneLyricsLinesWithoutTranslations = (lyrics) => {
@@ -218,7 +212,9 @@ function createLyricsService({
     if (!cacheKey || !packet) {
       return;
     }
-    const lyrics = cloneLyricsLinesWithoutTranslations(packet.lyrics);
+    const hasSourceTracks = Boolean(packet.metadata?.ttml?.translationTracks?.length);
+    const lyrics = hasSourceTracks ? packet.lyrics.map(line => ({ ...line }))
+      : cloneLyricsLinesWithoutTranslations(packet.lyrics);
     if (!lyrics.length) {
       return;
     }
@@ -226,7 +222,7 @@ function createLyricsService({
       packet.metadata && typeof packet.metadata === "object"
         ? { ...packet.metadata }
         : {};
-    delete metadata.translation;
+    if (!hasSourceTracks) delete metadata.translation;
     publishedToFrontendCache.set(cacheKey, {
       source:
         stripDesktopSourceSuffix(packet.source) ||
@@ -374,13 +370,7 @@ function createLyricsService({
         },
       );
 
-      const finalBase = {
-        ...basePacket,
-        lyrics: enrichedLyrics,
-        metadata: mergeLyricsMetadata(basePacket.metadata, {
-          translation: enrichedLyrics.translationMeta,
-        }),
-      };
+      const finalBase = mergeTtmlTranslationResult(basePacket, enrichedLyrics, translationLanguage);
 
       emitToFrontend(finalBase);
       rememberSourceLyrics(cacheKey, published.source, finalBase);
@@ -406,15 +396,26 @@ function createLyricsService({
       }
       const cacheKey = track.trackId;
       setActiveTrack(cacheKey);
-      const normalizedPreferredSource =
-        sanitizePreferredSource(preferredSource);
-
+      const normalizedPreferredSource = sanitizePreferredSource(preferredSource);
+      const recordingIdentity = [track.spotifyTrackId || "", track.isrc || "", track.title || "", track.artist || "", Number(track.durationMs || 0)].join("|");
+      let sourceRecord = getSourceRecord(cacheKey);
+      if (force || (sourceRecord.identity && sourceRecord.identity !== recordingIdentity)) {
+        sourceRecord = { bySource: new Map(), identity: recordingIdentity };
+        sourceCachesByTrack.set(cacheKey, sourceRecord);
+        activeTrackSourceCache.bySource = sourceRecord.bySource;
+      }
+      sourceRecord.identity = recordingIdentity;
+      const requestKey = `${cacheKey}|${recordingIdentity}|${normalizedPreferredSource}|${translationLanguage}`;
+      if (force || selectionKey !== requestKey) { selectionKey = requestKey; selectionGeneration += 1; }
+      const requestGeneration = selectionGeneration;
+      const isCurrentSelection = () => selectionGeneration === requestGeneration && selectionKey === requestKey;
       let matchTrack = { ...track };
 
       if (!force && normalizedPreferredSource !== "auto") {
         const cachedSourcePacket = getCachedSourceLyricsPacket(
           cacheKey,
           normalizedPreferredSource,
+          translationLanguage,
         );
         if (cachedSourcePacket) {
           console.log(
@@ -429,20 +430,9 @@ function createLyricsService({
       }
 
       const sourceCache = {
-        get: (source) => {
-          if (activeTrackSourceCache.trackId !== cacheKey) {
-            return null;
-          }
-          const key = sanitizePreferredSource(source);
-          const cached = activeTrackSourceCache.bySource.get(key);
-          if (isExpiredSpicyPacket(cached)) {
-            activeTrackSourceCache.bySource.delete(key);
-            return null;
-          }
-          return cached || null;
-        },
+        get: source => force ? null : getSourceBase(cacheKey, source),
         set: (source, basePacket) => {
-          rememberSourceLyrics(cacheKey, source, basePacket);
+          if (sourceCachesByTrack.get(cacheKey) === sourceRecord) rememberSourceLyrics(cacheKey, source, basePacket);
         },
       };
 
@@ -478,7 +468,7 @@ function createLyricsService({
       };
 
       const emitPacket = (basePacket) => {
-        if (!basePacket) {
+        if (!isCurrentSelection() || !basePacket) {
           return;
         }
         const safeLyrics = Array.isArray(basePacket?.lyrics)
@@ -530,6 +520,8 @@ function createLyricsService({
       };
 
       const registerCandidate = (candidatePacket) => {
+        if (!isCurrentSelection()) return false;
+        candidatePacket = selectTtmlTranslationTracks(candidatePacket, translationLanguage);
         const safeCandidate = {
           ...candidatePacket,
           lyrics: Array.isArray(candidatePacket?.lyrics)
@@ -646,13 +638,7 @@ function createLyricsService({
               targetLanguage: translationLanguage,
             },
           );
-          const translatedBase = {
-            ...latestBase,
-            lyrics: enrichedLyrics,
-            metadata: mergeLyricsMetadata(latestBase.metadata, {
-              translation: enrichedLyrics.translationMeta,
-            }),
-          };
+          const translatedBase = mergeTtmlTranslationResult(latestBase, enrichedLyrics, translationLanguage);
 
           const currentBest = getLatestBasePacket();
           if (
@@ -779,35 +765,47 @@ function createLyricsService({
         spotifyAccessToken: resolvedSpotifyAccessToken,
       });
 
-      let resolvedMusixmatchUserToken = "";
-      try {
-        resolvedMusixmatchUserToken = String(
-          (typeof getMusixmatchUserToken === "function"
-            ? await getMusixmatchUserToken()
-            : "") || "",
-        ).trim();
-      } catch {
-        // Automatic Musixmatch token provisioning failed; other sources remain available.
+      const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
+      // Credential/catalog setup can outlive a force refresh or source/track
+      // switch. It must not replace the newer run's in-flight registry entry.
+      if (!isCurrentSelection() || sourceCachesByTrack.get(cacheKey) !== sourceRecord) {
+        return { trackId: cacheKey, lyrics: [], source: "stale-lyrics-request" };
       }
+      let flight = !force ? sourceFetchesInFlight.get(requestKey) : null;
+      if (!flight || flight.record !== sourceRecord) {
+        flight = { record: sourceRecord, listeners: new Set(), latest: null, initial: null };
+        sourceFetchesInFlight.set(requestKey, flight);
+        const currentFlight = flight;
+        const finishFlight = () => {
+          if (sourceFetchesInFlight.get(requestKey) === currentFlight) sourceFetchesInFlight.delete(requestKey);
+        };
+        currentFlight.initial = fetchBestSyncedLyrics(matchTrack, {
+          preferredSource,
+          onProgress: candidate => {
+            currentFlight.latest = candidate;
+            for (const listener of currentFlight.listeners) listener(candidate);
+          },
+          // The bounded completion deadline must not release deduplication
+          // while a raw pending provider can still publish a superior result.
+          onAutoSettled: finishFlight,
+          onSourceCached: (candidate, source) => sourceCache.set(source || candidate?.source, candidate),
+          sourceCache,
+          // Provision only inside the Musixmatch task: a vault/final cache hit
+          // needs no issuance, and other providers never wait on token.get.
+          resolveMusixmatchUserToken: getMusixmatchUserToken,
+          refreshMusixmatchUserToken,
+          invalidateMusixmatchUserToken,
+          spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
+          spotifyAccessToken: resolvedSpotifyAccessToken,
+          spicyLyricsPublishableKey: resolvedSpicyLyricsPublishableKey,
+          waitForAutoCompletion: false,
+        });
+        if (normalizedPreferredSource !== "auto") currentFlight.initial.then(finishFlight, finishFlight);
+      }
+      flight.listeners.add(handleProgressPacket);
+      if (flight.latest) handleProgressPacket(flight.latest);
+      const base = await flight.initial;
 
-      const base = await fetchBestSyncedLyrics(matchTrack, {
-        preferredSource,
-        onProgress: handleProgressPacket,
-        onSourceCached: (candidate, source) => {
-          rememberSourceLyrics(
-            cacheKey,
-            source || candidate?.source,
-            candidate,
-          );
-        },
-        sourceCache,
-        musixmatchUserToken: resolvedMusixmatchUserToken,
-        refreshMusixmatchUserToken,
-        spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
-        spotifyAccessToken: resolvedSpotifyAccessToken,
-        spicyLyricsPublishableKey: await getSpicyLyricsPublishableKey(),
-        waitForAutoCompletion: false,
-      });
       initialBaseCandidate = {
         ...base,
         lyrics: Array.isArray(base.lyrics) ? base.lyrics : [],
@@ -882,13 +880,7 @@ function createLyricsService({
           },
         );
 
-        finalBase = {
-          ...inputPacket,
-          lyrics: enrichedLyrics,
-          metadata: mergeLyricsMetadata(inputPacket?.metadata, {
-            translation: enrichedLyrics.translationMeta,
-          }),
-        };
+        finalBase = mergeTtmlTranslationResult(inputPacket, enrichedLyrics, translationLanguage);
         emitTranslatedPacketIfCurrentBest(finalBase);
 
         if (!isAutoPreferredSource) {
@@ -932,7 +924,7 @@ function createLyricsService({
             ? "This song is an instrumental."
             : `No synced lyrics found (${finalOutputBase.source || "unknown reason"}).`,
       };
-      lastDisplayedByTrack.set(cacheKey, result);
+      if (isCurrentSelection()) lastDisplayedByTrack.set(cacheKey, result);
       if (autoTranslationTimer) {
         clearTimeout(autoTranslationTimer);
       }
@@ -960,6 +952,10 @@ function createLyricsService({
       publishedToFrontendCache.clear();
       activeTrackSourceCache.trackId = "";
       activeTrackSourceCache.bySource = new Map();
+      sourceCachesByTrack.clear();
+      sourceFetchesInFlight.clear();
+      selectionKey = "";
+      selectionGeneration += 1;
       clearMusixmatchRuntimeState();
       geminiRuntimeState.cooldownUntil = 0;
       geminiRuntimeState.cooldownReason = "";

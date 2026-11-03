@@ -5,7 +5,9 @@ import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
 import { SpotifyDetector, SpotifyPlaybackUnavailableError } from '@/lib/spotify-detector/client';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
+import { logDevelopmentLifecycle, logDevelopmentTiming } from '@/lib/spotify-detector/development-timing-log';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
+import { clearTimingCapture, startTimingCapture, timingSnapshot } from '@/lib/spotify-detector/timing-diagnostics';
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
   isAllowedSpotifyWebViewNavigation, isTrustedSpotifyWebViewMessageUrl,
@@ -17,6 +19,8 @@ import { usePlaybackStore } from '@/store/playback-store';
 import { useSpotifySessionStore } from '@/store/spotify-session-store';
 import { usePlayerTourStore } from '@/store/player-tour-store';
 import type { SpotifyBrowserFallbackHandle } from './spotify-browser-fallback';
+import { registerNativeRendererReadyResync } from './native/native-renderer-ready-refresh';
+import { emitNativeClockDiagnostic, nativeClockCaptureActive, NATIVE_CLOCK_HTTP_TRACE_SCRIPT } from '@/lib/native-clock-diagnostics';
 
 const PLAYER_URL = 'https://open.spotify.com/';
 
@@ -33,7 +37,7 @@ async function openSpotifyApp() {
     { text: 'Close', style: 'cancel' },
   ]);
 }
-const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}`;
+const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}\n${NATIVE_CLOCK_HTTP_TRACE_SCRIPT}`;
 const CONTROL_SCRIPT = `${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
 const USER_AGENT = Platform.OS === 'android'
   ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
@@ -68,17 +72,38 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     ready: () => callbacks.current.ready(),
   });
   const detector = detectorRef.current;
-  const canIngest = () => mounted.current && !usePlayerTourStore.getState().active && !usePlayerTourStore.getState().pending && !useSpotifySessionStore.getState().loggedOut &&
-    usePlaybackStore.getState().playbackMode === 'mobile' && usePlaybackStore.getState().connectionStatus !== 'connected';
-  const publish = (s: Sample) => {
+  const canIngest = useCallback(() => mounted.current && !usePlayerTourStore.getState().active && !usePlayerTourStore.getState().pending && !useSpotifySessionStore.getState().loggedOut &&
+    usePlaybackStore.getState().playbackMode === 'mobile' && usePlaybackStore.getState().connectionStatus !== 'connected', []);
+  const publish = (s: Sample, stage: 'sample-publish' | 'metadata-publish' = 'sample-publish') => {
     if (!canIngest()) return;
+    logDevelopmentTiming(stage, s);
     const metadata = enriched.current.get(s.uri);
     const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title,
       artist: metadata.artist || s.artist, album: metadata.album || s.album,
       artworkUrl: metadata.artworkUrl || s.artworkUrl } : s);
     const store = usePlaybackStore.getState();
+    const beforeMono = __DEV__ && nativeClockCaptureActive() ? performance.now() : null;
     const result = store.ingestPacket(packet, 'mobile');
+    if (beforeMono !== null) {
+      const after = usePlaybackStore.getState();
+      const now = performance.now();
+      const beforeProjected = store.anchorPositionMs + (store.isPlaying ? Math.max(0, now - store.anchorMonotonicMs) : 0);
+      const afterProjected = after.anchorPositionMs + (after.isPlaying ? Math.max(0, now - after.anchorMonotonicMs) : 0);
+      emitNativeClockDiagnostic('store-ingest-result', { publication: stage, rawPosition: s.positionMs,
+        playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
+        receiptWall: s.positionObservedAt?.wallMs, receiptMono: s.positionObservedAt?.monotonicMs,
+        normalizedPosition: packet.positionMs, packetWall: packet.capturedAtMs, playing: s.playing,
+        beforeAnchorPosition: store.anchorPositionMs, beforeAnchorMono: store.anchorMonotonicMs,
+        afterAnchorPosition: after.anchorPositionMs, afterAnchorMono: after.anchorMonotonicMs,
+        beforeProjected, afterProjected, sourceCorrectionMs: afterProjected - beforeProjected,
+        sourceIdentityComplete: after.sourceAnchorProof !== null,
+        sourceAnchorPreserved: store.sourceAnchorProof !== null &&
+          store.sourceAnchorProof?.key === after.sourceAnchorProof?.key &&
+          store.anchorPositionMs === after.anchorPositionMs && store.anchorMonotonicMs === after.anchorMonotonicMs,
+        trackChanged: result.trackChanged, seekDetected: result.seekDetected, ingestMs: now - beforeMono });
+    }
     if (result.trackChanged) {
+      logDevelopmentTiming('store-track-change', s);
       enrichmentRun.current++;
       metadataPending.current = '';
       if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
@@ -97,7 +122,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (!match || !canIngest() || run !== enrichmentRun.current || lastSample.current?.uri !== uri) return;
         if (enriched.current.size >= 32) enriched.current.clear();
         enriched.current.set(uri, match);
-        if (lastSample.current) publish(lastSample.current);
+        if (lastSample.current) publish(lastSample.current, 'metadata-publish');
       }).catch(error => {
         if (canIngest() && run === enrichmentRun.current) {
           const message = error instanceof Error ? error.message : 'Spotify metadata lookup failed.';
@@ -151,9 +176,11 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     setBrowserOpen(true);
   }, []);
   const runDiagnostics = useCallback(() => {
-    void Share.share({ message: JSON.stringify({ detector: diagnostics.current,
-      browserMounted: !!web.current, mobileOnly: usePlaybackStore.getState().playbackMode === 'mobile',
-      positionMs: usePlaybackStore.getState().playbackPosition }, null, 2) }).catch(() => {});
+    Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
+      { text: 'Start capture', onPress: startTimingCapture },
+      { text: 'Share capture', onPress: () => { void Share.share({ message: JSON.stringify(timingSnapshot(), null, 2) }).catch(() => {}); } },
+      { text: 'Clear', style: 'destructive', onPress: clearTimingCapture },
+    ]);
   }, []);
   const sendCommand = useCallback((command: BrowserCommand) => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }
@@ -173,15 +200,17 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       // A refused seek must replace the screen's optimistic scrub anchor.
       if (command.type === 'seek' && !message.includes('429')) detector.refresh();
     });
-  }, [detector, openBrowser]);
+  }, [canIngest, detector, openBrowser]);
+  const resyncPlayback = useCallback(() => { metadataAttempts.current.clear(); detector.refresh(); }, [detector]);
   useImperativeHandle(ref, () => ({ openBrowser, reload: () => { remount(); detector.refresh(); },
-    togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback: () => { metadataAttempts.current.clear(); detector.refresh(); },
+    togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback,
     skipPrevious: () => sendCommand({ type: 'previous' }), skipNext: () => sendCommand({ type: 'next' }),
     seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }), runDiagnostics,
-  }), [detector, openBrowser, remount, runDiagnostics, sendCommand]);
+  }), [detector, openBrowser, remount, resyncPlayback, runDiagnostics, sendCommand]);
 
   useEffect(() => {
     mounted.current = true;
+    logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
     const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { remount(); detector.refresh(); }, logout: () => {
       detector.clear(); enrichmentRun.current++; enriched.current.clear(); lastSample.current = null;
@@ -194,11 +223,19 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
     };
   }, [detector, openBrowser, remount]);
+  useEffect(() => registerNativeRendererReadyResync({ canResync: canIngest, resyncPlayback }), [canIngest, resyncPlayback]);
   useEffect(() => {
     if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }
-    const update = () => detector.setEnabled(mobile && !loggedOut && AppState.currentState !== 'background');
+    const update = () => {
+      const enabled = mobile && !loggedOut && AppState.currentState !== 'background';
+      logDevelopmentLifecycle('observation-policy', { next: AppState.currentState, enabled, mobile, loggedOut });
+      detector.setEnabled(enabled);
+    };
     update();
+    let previous = AppState.currentState;
     const sub = AppState.addEventListener('change', next => {
+      logDevelopmentLifecycle('app-state', { previous, next });
+      previous = next;
       if (next === 'background') detector.setEnabled(false);
       else if (next === 'active') update();
     });
@@ -240,6 +277,18 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (run !== browserRun.current || loggedOut || !mounted.current) return;
         const origin = e.nativeEvent.url || documentUrl.current;
         if (!isTrustedSpotifyWebViewMessageUrl(origin)) return;
+        if (__DEV__ && nativeClockCaptureActive()) {
+          try {
+            const diagnostic = JSON.parse(e.nativeEvent.data);
+            if (diagnostic.type === 'nativeClockHttp' && diagnostic.status === 410 &&
+              ['browser-device-registration', 'browser-player-state', 'browser-track-playback', 'browser-other'].includes(diagnostic.endpoint)) {
+              emitNativeClockDiagnostic('browser-http-410', { endpoint: diagnostic.endpoint, status: 410,
+                browserWallMs: typeof diagnostic.wallMs === 'number' ? diagnostic.wallMs : null,
+                cacheProvenance: 'browser-response-status-only' });
+              return;
+            }
+          } catch { /* Ignore malformed diagnostic messages; existing parser remains authoritative. */ }
+        }
         detector.capture(e.nativeEvent.data, origin);
         const event = parseBrowserEvent(e.nativeEvent.data);
         if (event?.type === 'signedIn') useSpotifySessionStore.getState().setSignedIn(event.signedIn);

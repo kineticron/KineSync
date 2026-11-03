@@ -1,0 +1,41 @@
+{
+  "track": {
+    "title": "seesaw (Feat. IU)",
+    "artist": "Crush",
+    "spotifyTrackId": "3lTdjfpGVeYLeHfrczXw1a",
+    "isrc": "ZZA0P2622376"
+  },
+  "liveParsedLines": {
+    "lrcRed": {
+      "lineStartTime": 11077,
+      "lineEndTime": 13170,
+      "syllables": [
+        { "text": "뒤", "startTime": 11077, "endTime": 11744, "isPartOfWord": true },
+        { "text": "죽", "startTime": 11744, "endTime": 12095, "isPartOfWord": true },
+        { "text": "박", "startTime": 12095, "endTime": 12409, "isPartOfWord": true },
+        { "text": "죽", "startTime": 12409, "endTime": 13170, "isPartOfWord": false }
+      ]
+    },
+    "spicyLyrics": {
+      "lineStartTime": 11057,
+      "lineEndTime": 13190,
+      "syllables": [
+        { "text": "뒤", "startTime": 11057, "endTime": 11764, "isPartOfWord": true },
+        { "text": "죽", "startTime": 11764, "endTime": 12075, "isPartOfWord": true },
+        { "text": "박", "startTime": 12075, "endTime": 12389, "isPartOfWord": true },
+        { "text": "죽", "startTime": 12389, "endTime": 13190, "isPartOfWord": false }
+      ]
+    }
+  },
+  "syntheticCases": {
+    "englishMultiSyllable": [
+      { "text": "Hel", "startTime": 1000, "endTime": 1200, "isPartOfWord": true },
+      { "text": "lo", "startTime": 1200, "endTime": 1300, "isPartOfWord": false },
+      { "text": "world", "startTime": 1300, "endTime": 1800, "isPartOfWord": false }
+    ],
+    "background": [
+      { "text": "ah", "startTime": 2200, "endTime": 2350, "isPartOfWord": true },
+      { "text": "ha", "startTime": 2350, "endTime": 2600, "isPartOfWord": false }
+    ]
+  }
+}

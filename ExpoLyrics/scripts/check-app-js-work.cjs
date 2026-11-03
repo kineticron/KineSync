@@ -43,7 +43,7 @@ function hooks() {
     View: 'View', Text: 'Text', TextInput: 'TextInput', FlatList: 'FlatList', ScrollView: 'ScrollView', Modal: 'Modal',
     KeyboardAvoidingView: 'KeyboardAvoidingView', ActivityIndicator: 'ActivityIndicator', Platform: { OS: 'ios' },
     useWindowDimensions: () => ({ width: 390, height: 844 }) };
-  const timerGlobals = { performance: { now: () => now },
+  const timerGlobals = { __DEV__: false, performance: { now: () => now },
     setTimeout(fn, delay) { const id = {}; timers.set(id, { fn, at: now + delay }); return id; },
     clearTimeout: id => timers.delete(id), setInterval() { throw new Error('A continuous React preview timer is forbidden'); } };
   return { react, native, app, timers, get writes() { return writes; }, get callbacks() { return callbacks; },
@@ -113,21 +113,32 @@ function checkDemoClocks() {
 }
 
 function checkNativeClock() {
-  const h = hooks(), timings = [], subscriptions = new Set();
+  const h = hooks(), animations = [], subscriptions = new Set();
   const { useNativeLyricsClock } = load('components/lyrics/native/use-native-lyrics-clock.ts', { ...h.mocks,
+    '@/lib/native-clock-diagnostics': {}, 'react-native-worklets': {},
     '@/store/playback-store': { usePlaybackStore: { getState: () => ({ anchorPositionMs: 99999, isPlaying: true }),
       subscribe: fn => { subscriptions.add(fn); return () => subscriptions.delete(fn); } } },
-    'react-native-reanimated': { useSharedValue: value => h.react.useMemo(() => ({ value }), []), cancelAnimation() {}, Easing: { linear: 'linear' },
-      withTiming: (target, config) => { timings.push({ target, config }); return target; } },
+    'react-native-reanimated': {
+      useSharedValue: initial => h.react.useMemo(() => {
+        let current = initial;
+        return { get value() { return current; }, set value(next) {
+          if (next?.onFrame) {
+            animations.push(next); next.onStart(next); next.onFrame(next); current = next.current;
+          } else current = next;
+        } };
+      }, []),
+      cancelAnimation() {}, defineAnimation: (_initial, factory) => factory(),
+    },
   }, h.globals);
   let anchor = { anchorPositionMs: 4000, anchorMonotonicMs: 500, isPlaying: true };
   const render = preview => h.run(() => useNativeLyricsClock({ active: true, duration: 25000, demo: true, demoPlayback: anchor, preview }));
-  render(null); assert.equal(timings.at(-1).config.duration, 20500); assert.equal(subscriptions.size, 0);
-  const count = timings.length; h.advance(1000); render(null); assert.equal(timings.length, count, 'An unchanged demo anchor never restarts the UI tween');
+  assert.equal(render(null).position.value, 4500); assert.equal(subscriptions.size, 0);
+  const count = animations.length; h.advance(1000); render(null);
+  assert.equal(animations.length, count, 'An unchanged demo anchor never restarts the UI clock');
   anchor = { ...anchor, isPlaying: false }; assert.equal(render(null).position.value, 4000);
   anchor = { ...anchor, isPlaying: true }; assert.equal(render(7000).position.value, 7000, 'A scrub preview holds at the requested position');
   h.foreground('background'); assert.equal(render(null).running.value, false); h.unmount();
-  console.log('Native demo clock: projected anchors, UI tween reuse, pause, scrub hold, and background cleanup passed.');
+  console.log('Native demo clock: projected anchors, UI clock reuse, pause, scrub hold, and background cleanup passed.');
 }
 
 function checkCueTimeline() {

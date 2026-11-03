@@ -1,4 +1,42 @@
-import type { SkPoint, SkRect } from '@shopify/react-native-skia';
+import type { LineMetrics, SkPoint, SkRect } from '@shopify/react-native-skia';
+
+type GlyphLine = Pick<LineMetrics, 'baseline' | 'ascent' | 'descent'>;
+
+function glyphLineIndex(rect: SkRect, lines: GlyphLine[]) {
+  'worklet';
+  let best = -1;
+  let bestContainsBaseline = false;
+  let bestDistance = Infinity;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Tight fallback boxes need not overlap each other, but their glyphs
+    // belong to the same paragraph baseline. Allow Skia's pixel rounding.
+    const containsBaseline = rect.y <= line.baseline + 0.5 && rect.y + rect.height >= line.baseline - 0.5;
+    const center = line.baseline + (line.descent - line.ascent) / 2;
+    const distance = Math.abs(rect.y + rect.height / 2 - center);
+    if (bestContainsBaseline && !containsBaseline) continue;
+    if (containsBaseline && !bestContainsBaseline || distance < bestDistance) {
+      best = i;
+      bestContainsBaseline = containsBaseline;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** Shaping may split one syllable into fallback-font or punctuation boxes. */
+export function glyphRowExtent(rect: SkRect, rects: SkRect[], lines: GlyphLine[]) {
+  'worklet';
+  const row = glyphLineIndex(rect, lines);
+  let left = rect.x;
+  let right = rect.x + rect.width;
+  for (const slice of rects) {
+    if (glyphLineIndex(slice, lines) !== row) continue;
+    left = Math.min(left, slice.x);
+    right = Math.max(right, slice.x + slice.width);
+  }
+  return { x: left, width: right - left };
+}
 
 /** All letters on a syllable's row share one reveal edge, even when scaled separately. */
 export function amllRevealStart(rect: SkRect, syllableRects: SkRect[], advanced: number, before: number, fade: number) {

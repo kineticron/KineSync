@@ -145,6 +145,14 @@ function pickVaultPersistedMetadata(metadata) {
       throw new Error("Original TTML document is too large to preserve.");
     }
     persisted.ttml = { content: metadata.ttml.content };
+    // Retain source subtitle choices/provenance alongside the archived XML.
+    for (const key of ["translationTracks", "selectedTranslationTrack", "appliedTranslations", "preservedTranslations"]) {
+      if (metadata.ttml[key] !== undefined) persisted.ttml[key] = JSON.parse(JSON.stringify(metadata.ttml[key]));
+    }
+  }
+  // Retain AI provenance for per-line source selection after a compact reload.
+  if (metadata.translation?.translatedLineCount > 0) {
+    persisted.translation = JSON.parse(JSON.stringify(metadata.translation));
   }
   return persisted;
 }
@@ -207,6 +215,7 @@ function compactLyricsForStorage(lyrics) {
         e: Number(line?.lineEndTime) || 0,
         y: syllables,
       };
+      if (typeof line?.ttmlKey === "string" && line.ttmlKey) compact.k = line.ttmlKey;
       const translatedText = String(line?.translatedText || "").trim();
       if (translatedText) {
         compact.t = translatedText;
@@ -252,6 +261,7 @@ function expandLyricsFromStorage(payload) {
           lineEndTime: Number(line?.e) || 0,
           syllables,
         };
+        if (typeof line?.k === "string" && line.k) expanded.ttmlKey = line.k;
         const translatedText = String(line?.t || "").trim();
         if (translatedText) {
           expanded.translatedText = translatedText;

@@ -1,19 +1,18 @@
 /**
- * Word grouping for the AMLL WebView.
+ * Timed lyric segments and shaping-safe text groups for AMLL renderers.
  *
  * Spicy-sourced lyrics carry explicit `isPartOfWord` join flags with no
  * whitespace inside the syllable text (e.g. "Hel" + "lo" forming "Hello").
  * Other providers (KRC/QRC/YRC) encode boundaries in literal trailing spaces.
- * AMLL core joins its `words` array with no separator, so inter-word spacing
- * must live inside the word text itself.
+ * AMLL renderers join their `words` array with no separator, so inter-word
+ * spacing must live inside the segment text itself.
  *
- * Flagged syllables are grouped by their join flags and a single separating
- * space is synthesized between groups (with punctuation/CJK awareness).
- * Unflagged syllables pass through 1:1 so literal spacing and per-syllable
- * timing are preserved exactly as before.
+ * Join flags control spacing only in timed segments. Shaping consumers can
+ * request whole groups separately, without changing animation timing.
  */
 
 import { repairSyllableClusters } from "./cluster-safe-syllables";
+import { getGraphemes } from "../../lib/graphemes";
 
 export type AmllSyllable = {
   text?: string;
@@ -26,6 +25,8 @@ export type AmllWord = {
   word: string;
   startTime: number;
   endTime: number;
+  /** Excludes a synthesized trailing separator from timing interpolation. */
+  timedGraphemeCount?: number;
 };
 
 function toFiniteMs(value: unknown, fallback = 0) {
@@ -171,11 +172,19 @@ export function groupAmllSyllables(
 }
 
 /**
- * Build AMLL-core words from syllables. Flagged fragments are concatenated
- * into whole words with a synthesized separator; unflagged syllables map 1:1
- * with their text (and literal spaces) untouched.
+ * Build animation items from syllables. Every safe provider timing atom stays
+ * separate; word flags only determine synthetic spacing at group boundaries.
  */
 export function buildAmllWords(
+  syllables: AmllSyllable[],
+  fallbackStart: number,
+  fallbackEnd: number,
+): AmllWord[] {
+  return buildAmllTimedSegments(syllables, fallbackStart, fallbackEnd);
+}
+
+/** Whole text groups for renderers that need a single shaping/layout chunk. */
+export function buildAmllShapingWords(
   syllables: AmllSyllable[],
   fallbackStart: number,
   fallbackEnd: number,
@@ -203,10 +212,10 @@ export function buildAmllWords(
       toFiniteMs(last?.endTime, fallbackEnd),
     );
     let word = text;
-    if (hasFlags && groupIndex < groups.length - 1) {
-      const nextText = groups[groupIndex + 1]
-        .map((syllable) => String(syllable.text || ""))
-        .join("");
+    if (hasFlags) {
+      const nextText = groups.slice(groupIndex + 1)
+        .map(nextGroup => nextGroup.map(syllable => String(syllable.text || "")).join(""))
+        .find(text => text.length > 0) || "";
       if (
         !/[ \t\n]$/u.test(word) &&
         !/^[ \t\n]/u.test(nextText) &&
@@ -228,4 +237,53 @@ export function buildAmllWords(
       endTime: Math.max(fallbackStartMs + 1, toFiniteMs(fallbackEnd)),
     },
   ];
+}
+
+/**
+ * Keep provider timing atoms intact while applying word-boundary spacing.
+ */
+function buildAmllTimedSegments(
+  syllables: AmllSyllable[],
+  fallbackStart: number,
+  fallbackEnd: number,
+): AmllWord[] {
+  const repaired = repairSyllableClusters(syllables);
+  const hasFlags = repaired.some((syllable) => typeof syllable.isPartOfWord === "boolean");
+  const groups = groupAmllSyllables(repaired);
+  const groupTexts = groups.map(group => group.map(part => String(part.text || "")).join(""));
+  const segments: AmllWord[] = [];
+  groups.forEach((group, groupIndex) => {
+    const groupText = group.map((part, index) => {
+      const raw = String(part.text || "");
+      return index < group.length - 1 && part.isPartOfWord ? raw.replace(/\s+$/u, "") : raw;
+    }).join("");
+    const nextText = groupTexts.slice(groupIndex + 1).find(text => text.length > 0) ?? "";
+    const addSpace = hasFlags &&
+      !/[ \t\n]$/u.test(groupText) && !/^[ \t\n]/u.test(nextText) &&
+      needsSpaceBetweenGroups(groupText, nextText);
+    let lastTextIndex = -1;
+    group.forEach((part, index) => {
+      let word = String(part.text || "");
+      if (index < group.length - 1 && part.isPartOfWord) word = word.replace(/\s+$/u, "");
+      if (word) lastTextIndex = index;
+    });
+    group.forEach((part, index) => {
+      let word = String(part.text || "");
+      if (index < group.length - 1 && part.isPartOfWord) word = word.replace(/\s+$/u, "");
+      if (!word) return;
+      const addSeparator = addSpace && index === lastTextIndex;
+      const timedGraphemeCount = addSeparator ? getGraphemes(word).length : undefined;
+      if (addSeparator) word += " ";
+      const startTime = toFiniteMs(part.startTime, fallbackStart);
+      segments.push({
+        word,
+        startTime,
+        endTime: Math.max(startTime + 1, toFiniteMs(part.endTime, fallbackEnd)),
+        ...(timedGraphemeCount === undefined ? {} : { timedGraphemeCount }),
+      });
+    });
+  });
+  if (segments.length) return segments;
+  const fallbackStartMs = toFiniteMs(fallbackStart);
+  return [{ word: " ", startTime: fallbackStartMs, endTime: Math.max(fallbackStartMs + 1, toFiniteMs(fallbackEnd)) }];
 }
