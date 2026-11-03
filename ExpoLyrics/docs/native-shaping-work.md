@@ -5,11 +5,11 @@ Ordinary words are painted as one slice using their full `rects`. Emphasized
 words retain all per-letter boxes. Timing, word text, glyph shaping, fallback
 selection, clipping, reveal gradients, blur and scrolling policies are unchanged.
 
-Consumer audit: `AnimatedWord` selects `letters` only when emphasized;
-`shapeGlyphWords` does the same in its setup and run visitor; `drawVoice` selects
+Consumer audit: `AnimatedWord` selects `letters` only when emphasized.
+`shapeGlyphWords` does the same in its setup and run visitor. `drawVoice` selects
 letter rectangles only in that branch. Static paragraph painting has no use for
 the letter arrays. Source `word.letters` (graphemes used for motion and emoji
-classification) is retained; only unused **geometry queries** are removed.
+classification) is retained. Only unused **geometry queries** are removed.
 
 The untouched baseline is **3eff8808939f1caff11fb4d32e9b0cd7f799d137**.
 Before any production edit, the actual hook/model/wrapping code was run with
@@ -47,7 +47,7 @@ Native paragraph/font/drawing APIs are mocked. Equality is not pixel evidence.
 
 Device JS/UI frame times, GPU blur cost, virtualization populations and actual
 React row render counts were unavailable. The optimization reduces synchronous
-paragraph API calls during mount/relayout; it does not establish smoother device
+paragraph API calls during mount/relayout. It does not establish smoother device
 scrolling or a whole-app frame-time/FPS improvement. FlashList draw distance
 420, FlatList window size 5, glyph picture recording and blur behavior remain
 unchanged. The optional spacing probe had zero uses in these fixtures and was

@@ -2,7 +2,7 @@
 
 For TTML packets with lrc.red sourceMetadata translation tracks, existing inline
 translations remain authoritative. The chosen target-language source track wins
-over Gemini on each unambiguous paragraph key; Gemini supplies other lines.
+over Gemini on each unambiguous paragraph key. Gemini supplies other lines.
 `automaticallyCreated` remains source provenance, not a claim of human authorship.
 Track ranking (language, subtitle type, automatic flag, document order) is unchanged.
 
@@ -10,12 +10,12 @@ Track ranking (language, subtitle type, automatic flag, document order) is uncha
 
 The settings menu selects a lyric provider, a target language, and requests AI
 translation of the current source. Choosing a provider selects the entire lyric
-packet; it does not make Gemini output a manual translation. There is no separate
+packet. It does not make Gemini output a manual translation. There is no separate
 manual subtitle-track picker or per-line translation editor in the inspected UI.
 Existing inline lead/background translations and non-AI text already present in
 a source packet are represented choices and remain protected. This does not invent
-a new manual-choice flag or UI. Source metadata only applies to its own packet;
-selecting a different provider does not graft lrc.red subtitles onto its lyrics.
+a new manual-choice flag or UI. Source metadata only applies to its own packet.
+Selecting a different provider does not graft lrc.red subtitles onto its lyrics.
 
 ## Small merge boundary
 
@@ -30,13 +30,13 @@ Other provider flows retain their existing translation behavior.
 `ttml.preservedTranslations` list retains existing inline lead/background text by
 index within the unchanged lyric array, including paragraphs without lrc:key.
 Source subtitle joins still use lrc:key, never array order. Both vaults retain the
-list; the desktop compact serializer adds only that metadata field. No timing,
+list. The desktop compact serializer adds only that metadata field. No timing,
 syllable, background, alignment, or source-track provenance is changed.
 
 New AI fallback metadata records its target language. Switching languages removes
 stale AI text and reselects the source track while preserving inline choices.
 Legacy AI packets without a target tag cannot reliably identify a mismatched AI
-language; no language is guessed. An old unmarked edit already overwritten by AI
+language. No language is guessed. An old unmarked edit already overwritten by AI
 cannot be reconstructed as a manual choice. AI provider/count metadata describes
 the enrichment pass, not human authorship or the number of visible AI-only lines.
 

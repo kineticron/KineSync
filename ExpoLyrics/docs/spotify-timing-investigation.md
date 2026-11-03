@@ -6,7 +6,7 @@ Current schema is V3, `buildBase: "0453f4e"`, using the same
 `[Spotify timing bootstrap]` marker and existing bounded windows/counters.
 `raw.stateFlags` whitelists only the parser's existing `is_playing`, `is_paused`,
 `paused`, `loading`, and `is_buffering` fields. Each records decoded presence,
-kind and boolean/numeric evidence; arbitrary strings/objects become `invalid`.
+kind and boolean/numeric evidence. Arbitrary strings/objects become `invalid`.
 The parent `raw.playerPath` gives their field provenance. `flagPresenceScope`
 is explicitly `decoded-player-state`: binary decoding supplies false defaults,
 so `binaryFalseDefaultsPossible: true` warns that present false is NOT proof of
@@ -14,7 +14,7 @@ wire presence. Decoder defaults and playback interpretation remain unchanged.
 `raw.clusterClocks` records existing known `changed_timestamp_ms`,
 `transfer_data_timestamp`, and `started_playing_at_timestamp`, relative to
 `raw.serverPath`. Binary fields 1/6/11 are now exposed for development diagnostics
-as well as opt-in capture; production decoding remains unchanged. No new wire
+as well as opt-in capture. Production decoding remains unchanged. No new wire
 field numbers or guessed scheduled-state flags are introduced. A future
 started-playing timestamp alone does not establish scheduling semantics.
 
@@ -23,16 +23,16 @@ The user's fresh-bundle report of audible lag on new songs, corrected by
 pause/seek, stands independently of missing newer runtime logs. V1 registration
 ages 32733/20961 ms and subsequent duplicate anchors show paired projection is
 executing, not a fallback diagnosis. The zero-position candidate projects
-644.576 ms; its next anchor projects 1730.377 ms, a -105.612 ms residual over
+644.576 ms. Its next anchor projects 1730.377 ms, a -105.612 ms residual over
 1191.413 ms of processing-clock advance. No track alias proves these are the
 same song. In the other run, the -1957.437 ms apparent residual crosses an
-explicit user seek; it is NOT evidence of a clock error. Later pause projects
+explicit user seek. It is NOT evidence of a clock error. Later pause projects
 125597 ms without advance. No numeric audible delay is established.
 
 Proposals pending Kat approval and matching same-track phone evidence:
 if decoded buffering/loading state incorrectly suppresses progression, correct
-only that proven interpretation; if publication/replay changes anchor age,
-correct only that stage's receipt handling; if a new authoritative player state
+only that proven interpretation. If publication/replay changes anchor age,
+correct only that stage's receipt handling. If a new authoritative player state
 reveals a source/store mismatch, reanchor using its documented timing semantics.
 Compare same ephemeral track alias and raw anchor before/after the user's natural
 state changes. Audio buffering or lyric-reference mismatch cannot be inferred
@@ -49,10 +49,10 @@ There are at most 512 detail lines plus 64 context lines per rolling local
 monotonic hour (the hour starts at the first log, not a calendar boundary).
 Startup/lifecycle/track contexts have a separate budget, so detail expiry does
 not permanently silence a later foreground. `suppressedSinceLastLine` reports
-omitted lines when logging next resumes; exhaustion can still suppress contexts
+omitted lines when logging next resumes. Exhaustion can still suppress contexts
 until the next hour or JS reload. No recurring timers are installed.
-Raw provenance remains attached in development even outside output windows;
-only bounded alias mappings and counters are retained by the logger.
+Raw provenance remains attached in development even outside output windows.
+Only bounded alias mappings and counters are retained by the logger.
 Release/production builds emit no automatic lines. There are no new timers,
 requests, playback controls, UI changes or normalization changes in this logger.
 
@@ -64,31 +64,31 @@ processing time, elapsed time, source/projected position, playing state, origin
 (`registration` or `dealer`) and temporary device/session/connection aliases.
 `raw.anchor` correlates metadata/replay publication with the same original receipt.
 V2 emits `js-startup` on module evaluation, with `version: 2` and
-`buildBase: "959f855"`. The base identifies the prior committed diagnostics;
-it deliberately does not claim the extension's own commit hash. `cold-mount`,
+`buildBase: "959f855"`. The base identifies the prior committed diagnostics.
+It deliberately does not claim the extension's own commit hash. `cold-mount`,
 `app-state` (previous/next), and `observation-policy` (existing enable decision)
 are emitted from the actual native component lifecycle. No enable/reset behavior
-changes. Background still disables observation; active still invokes the existing
+changes. Background still disables observation. Active still invokes the existing
 enable path, which replays cached state before reconnect/registration.
 `sample-publish` and `metadata-publish` identify the actual component publication
 calls before packet normalization. `legacyReceivedAtMs` is the sample's current
-publication receipt label; `processed` is this stage's clock, distinct from the
+publication receipt label. `processed` is this stage's clock, distinct from the
 immutable `raw.receipt` and `positionObservedAt`. Cached foreground callback
-relabels legacy `receivedAt` as before; paired elapsed retains original monotonic
+relabels legacy `receivedAt` as before. Paired elapsed retains original monotonic
 receipt. Async metadata still republishes the current cached sample unchanged.
-Track aliases contain no URI/title; `track-observed` is a parsed sample identity
+Track aliases contain no URI/title. `track-observed` is a parsed sample identity
 observation and can include rejected stale/duplicate updates. Only
 `store-track-change` means actual ingest returned `trackChanged: true`. Neither
 marker establishes explicit-start provenance, audible onset, or a user command.
 Position/playing and anchor identity distinguish same-track state updates.
-Identity labels have at most 64 retained mappings; evicted identities can get new
+Identity labels have at most 64 retained mappings. Evicted identities can get new
 labels. Raw IDs, payloads, titles, account fields, tokens and cookies are excluded.
 
 Normalization lines label `projection` as `paired` or `legacy`. `reasons` explains
 `paired`, `missing-player`, `missing-server`, `invalid-player`, `invalid-server`,
 or `future-player-relative-to-server` (a potentially scheduled/future pair).
 Multiple missing/invalid reasons can coexist. These labels explain the unchanged
-`clusterPositionAge` guards; they never select or repair a clock. `elapsedClock`
+`clusterPositionAge` guards. They never select or repair a clock. `elapsedClock`
 identifies monotonic versus legacy wall projection, and `sinceOriginalReceiptMs`
 remains based on the original immutable receipt through metadata and replay.
 For paused state, elapsed is diagnostic only: `playing: false` prevents advance.
@@ -98,7 +98,7 @@ disabled. Earlier reload records show one module, without absolute event times o
 commit identities. A later fresh bundle request failed resolving the existing
 `timing-diagnostics` file: strong stale file-map evidence, not proof of an exact
 old bundle hash. **Execution of 32ac820 on the iPhone was never established.**
-Manual reload alone could have served stale code; the earlier phone report must
+Manual reload alone could have served stale code. The earlier phone report must
 not be treated as a verified 32ac820 regression.
 
 After a coordinated cache-clear restart, the actual public HTTPS iOS launch asset
@@ -112,19 +112,19 @@ cold/foreground/new-song lag still requires correlation with runtime evidence.
 
 The V2 extension needs a separately coordinated Metro cache-clear/bundle marker
 check before the user reloads. This task never restarts Metro, reloads the phone,
-or touches Spotify. A V2 `js-startup` line proves execution of the extension;
-a marker in a downloaded bundle proves delivery only. Inspect actual
+or touches Spotify. A V2 `js-startup` line proves execution of the extension.
+A marker in a downloaded bundle proves delivery only. Inspect actual
 `app-state` -> `foreground-replay` -> `sample-publish` -> `normalize`, and
 `track-observed` -> publication -> `store-track-change`, then metadata publication.
 The offline tests execute the actual component lifecycle with mocked native state,
-transport and metadata; parser/packet/store normalization and actual detector
+transport and metadata. Parser/packet/store normalization and actual detector
 cached replay have separate deterministic checks. They are not phone/audio tests.
 
 The initial instrumentation applies no clock estimate, timestamp rewrite,
 output-latency adjustment or smoothing change. The subsequent captured-bootstrap
 correction described below uses paired server/player clocks, not a learned offset. A subsequent scoped correctness
 fix accepts known device/session handoffs across different source clocks and
-protects them from stale registration snapshots; it does not calibrate timing.
+protects them from stale registration snapshots. It does not calibrate timing.
 
 ## Evidence and reconstruction limits
 
@@ -150,8 +150,8 @@ capture did not preserve raw Dealer schema/flags, exact native arrival time,
 packet/store processing times, or metadata callbacks. Its event `at` is the sample
 callback time, slightly later than the detector's WS callback receipt. Using it
 as receipt is an explicit reconstruction assumption, not a recovered raw trace.
-The observer URL was derived on the captured host and registration succeeded;
-the URL itself was not captured from desktop network traffic.
+The observer URL was derived on the captured host and registration succeeded.
+The URL itself was not captured from desktop network traffic.
 
 ## Measurement protocol and primary evidence
 
@@ -174,10 +174,10 @@ A separate tester subsequently provided `independent-before/event-once-results.j
 and the audited `live-event-once.cjs`: 543 rows and 14 mobile callbacks over about
 140 seconds. This harness records successful explicit MPRIS **Next** commands at
 1.5, 25 and 49 seconds after harness startup, with observed title changes and
-positions near track start. These are commanded fresh starts; no inference is
+positions near track start. These are commanded fresh starts. No inference is
 made from phase labels alone. Private titles are replaced with temporary track
 numbers in `scripts/fixtures/spotify-timing-explicit-start.json`. Title matching
-is weaker than an authoritative URI match; the source artifact did not retain
+is weaker than an authoritative URI match. The source artifact did not retain
 URIs. The initial already-playing segment is still unknown. Pause/resume, seek,
 and the later automatic track advance are excluded from primary aggregates.
 
@@ -198,16 +198,16 @@ This establishes a **sandbox position-telemetry fresh-start baseline**, not an
 independent source-clock calibration, phone baseline, audible presentation epoch,
 or universal delay. The first start includes additional real state updates and
 an early transient, with sampled store errors ranging roughly -1473 to -168 ms
-inside the eligible phase; its median does not describe every transient.
+inside the eligible phase. Its median does not describe every transient.
 
-The fixture preserves action evidence and all numerical comparisons; inputs are
+The fixture preserves action evidence and all numerical comparisons. Inputs are
 reconstructed envelopes, not raw Dealer messages. Replaying event-once state
 agrees with measured store errors within 3.394 ms (a 5 ms test tolerance), because
 callback wall time was logged after ingest and exact packet/store monotonic
 stamps were not retained. This tolerance is reconstruction error, not an absolute
 clock/audio accuracy claim. The harness never performs catalog metadata
 republication, so the earlier metadata-delay experiments remain hypothetical.
-New instrumentation can capture those stages prospectively; neither artifact
+New instrumentation can capture those stages prospectively. Neither artifact
 contains them. Inspection of the private capture directory found credentials,
 audio/transition metadata and a CDP session-discovery script, but **no retained
 raw Dealer playback envelopes**. The discovery script captures request credentials
@@ -216,10 +216,10 @@ and websocket URLs, not websocket frame bodies. No raw fixture is invented.
 Fresh-start results disprove a generalized 1.52-second production-store lag in
 these commanded starts. A smaller 124–194 ms residual remains. The old unknown-start
 initial residual, future timestamp semantics and real metadata callback effects
-remain unresolved; none identifies a clock offset or authorizes a blind timestamp
-rewrite. Those earlier observables alone did not justify a main timestamp-level correction;
-the subsequent raw bootstrap capture below supplies the missing evidence. No fresh before/after timing improvement is claimed for the ordering
-fix below; the live events do not exercise an older-clock device/session handoff.
+remain unresolved. None identifies a clock offset or authorizes a blind timestamp
+rewrite. Those earlier observables alone did not justify a main timestamp-level correction.
+The subsequent raw bootstrap capture below supplies the missing evidence. No fresh before/after timing improvement is claimed for the ordering
+fix below. The live events do not exercise an older-clock device/session handoff.
 
 The replay's primary-eligibility guard requires a successful explicit-start action,
 observed track change, matching action/receipt chronology and a fresh-start case.
@@ -230,8 +230,8 @@ changes are also tested separately through parser/detector/packet/store.
 ## Secondary exploratory event-once results (unknown start provenance)
 
 Run `npm run test:spotify-detector` with supported Node (validated with 24.21.0).
-The timing script bundles the actual parser, detector, packet and playback store;
-only native storage/AppState, clocks, timers and transport are stubbed. Inputs
+The timing script bundles the actual parser, detector, packet and playback store.
+Only native storage/AppState, clocks, timers and transport are stubbed. Inputs
 pass through the detector's real WS callback and acceptance logic. It reconstructs
 all 286 original repeated-projection positions exactly, then compares event-once
 store advancement against the recorded independent MPRIS numerical positions.
@@ -239,7 +239,7 @@ store advancement against the recorded independent MPRIS numerical positions.
 Negative error means behind MPRIS. All times below are relative, in milliseconds.
 The range excludes command-to-state races: MPRIS can change before the matching
 Dealer event. Stable medians require more than three seconds since both phase
-start and event receipt; the second event has no such window.
+start and event receipt. The second event has no such window.
 
 | Event | Receipt | Source minus receipt | First sampled store error | In-phase store error range | Stable store median | Original repeated-projection phase median |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -250,7 +250,7 @@ start and event receipt; the second event has no such window.
 | Seek | 38037 | +1249 | -269 | -271 to -264 | -270 | -1519 |
 
 Relay phase continues using the seek anchor and changes transport for the desktop
-pairing path; it supplies no new mobile anchor. Original relay phase median is
+pairing path. It supplies no new mobile anchor. Original relay phase median is
 -1519 ms, while the event-once store remains near -270 ms.
 
 Metadata republication at hypothetical delays produces the following **replay
@@ -266,30 +266,30 @@ results**, not captured production metadata measurements:
 | 5000 ms | -1498 | not applied before next event | 0 | -1520 | -1519 |
 
 The script also emits per-event first/range/median results for every delay.
-Republication is applied only if it precedes the next callback; production uses
+Republication is applied only if it precedes the next callback. Production uses
 the latest sample, not a queued obsolete sample. The real component's catalog
-cache means enrichment is not necessarily requested at each pause/resume/seek;
-the delayed republications deliberately exercise possible timing, not observed
-frequency. Delays of 250/1000 ms are before both future playing epochs;
+cache means enrichment is not necessarily requested at each pause/resume/seek.
+The delayed republications deliberately exercise possible timing, not observed
+frequency. Delays of 250/1000 ms are before both future playing epochs.
 1500/2000/5000 ms are after them. A clock-valid old anchor does not lose time on
-enrichment; the future-anchor case does because the original source is projected
+enrichment. The future-anchor case does because the original source is projected
 again. No metadata behavior is changed in this instrumentation step.
 
 ## Causal conclusion
 
 The legacy `projectedPosition` branch adds `max(0, localWall - sourceTimestamp)` while playing. Equal
 clocks and an old anchor already compensate delivery age exactly once. A future
-anchor adds zero at callback time; `detectorPacket` then assigns local wall time
+anchor adds zero at callback time. `detectorPacket` then assigns local wall time
 to `timestamp` and `capturedAtMs`. The store sees no upstream age and immediately
 advances monotonically. Repeatedly projecting the source instead keeps clamping
 until its future epoch, producing a different timeline. Re-enrichment can reset
 the store toward that timeline. The 80 ms store deadband also matters for small
-ordinary corrections; its diagnostic snapshot interval is 1000 ms, while visible
+ordinary corrections. Its diagnostic snapshot interval is 1000 ms, while visible
 lyrics/timelines interpolate independently.
 
 The initial old anchors retain a roughly 1.5-second discrepancy in the event-once
-path. Staleness alone with a consistent timestamp/position pair is compensated;
-a stale position paired with a newer timestamp, a producer clock discrepancy,
+path. Staleness alone with a consistent timestamp/position pair is compensated.
+A stale position paired with a newer timestamp, a producer clock discrepancy,
 or different position semantics could each explain residual error. Future source
 anchors are strong provenance evidence, but do not distinguish skew from a valid
 scheduled start. Neither this capture nor the server field name establishes a
@@ -306,10 +306,10 @@ the 1.52-second position discrepancy is audio latency.
 Open Spotify diagnostics, choose **Start capture**, reproduce the issue, reopen
 and choose **Share capture**. Opening the dialog does not start collection or
 share anything. **Clear** discards retained records. Capture is memory-only and
-off by default; no files, uploads, polling, extra requests or persistent setting
+off by default. No files, uploads, polling, extra requests or persistent setting
 are introduced. Records stop after 60 seconds of local monotonic time or are
 restricted to the latest 256 records. Expiration is checked lazily on the next
-capture operation/export; there is no new timer. App termination loses the data.
+capture operation/export. There is no new timer. App termination loses the data.
 
 Exports contain an immutable source anchor and separate receipt, parse and
 stage-processing wall/monotonic stamps, normalized packet/store source clocks,
@@ -317,33 +317,33 @@ store rejection reasons, selected raw numeric position and player
 timestamp, sanitized schema path, cluster clocks when present, playback flags
 at packet/store stages, local connection generation and temporary device,
 playback-session and connection labels. Source monotonic time is explicitly
-unavailable. Missing, malformed and nonfinite numeric values receive labels;
-unsafe finite JS numbers remain approximate evidence, not validated epochs.
+unavailable. Missing, malformed and nonfinite numeric values receive labels.
+Unsafe finite JS numbers remain approximate evidence, not validated epochs.
 Schema paths replace dynamic keys and array indexes with `*`.
 
 Cluster diagnostic clock wire fields 1/6/11 are decoded only while capture is active.
 Server field 9 is now always decoded for paired-clock projection.
-Player session field 23 is always decoded for scoped ordering; only its temporary
+Player session field 23 is always decoded for scoped ordering. Only its temporary
 label enters an opt-in export. A session means `PlayerState.session_id`, not an
-account identity. Labels are per-capture counters, not persistent hashes; at most 64
+account identity. Labels are per-capture counters, not persistent hashes. At most 64
 alias mappings are retained, so an evicted identity can receive a new label.
 No device names, titles, track IDs, raw connection/session/account IDs, URLs,
 headers, tokens, cookies, arbitrary strings or raw payloads enter the export.
-The packet-to-provenance association uses a WeakMap; wire packets are unchanged.
+The packet-to-provenance association uses a WeakMap. Wire packets are unchanged.
 
 The frozen provenance keeps original receipt through registration buffering,
 metadata spread/republication and foreground replay. Legacy `Sample.receivedAt`
-behavior, including the foreground fallback relabel, remains unchanged; the
+behavior, including the foreground fallback relabel, remains unchanged. The
 immutable diagnostic receipt is the original observation. Parsing a cached
 sample never manufactures a new original receipt. Starting capture cannot
-retroactively annotate an already-cached sample; wait for a fresh state event.
+retroactively annotate an already-cached sample. Wait for a fresh state event.
 Clearing or restarting capture makes old anchors ineligible for recording.
 
 Tests cover scoped timestamp ordering across device/session switches,
 absent/nonfinite/unsafe epochs, future scheduled-start ambiguity, stale
 anchor pairs, pause/buffering/resume/backward seek, wall jumps, registration races,
 foreground replay, binary/wrapped/gzip paths, privacy, expiry and buffer limits.
-These assertions document existing failures; passing tests do not mean they are
+These assertions document existing failures. Passing tests do not mean they are
 fixed. Before changing timing behavior, collect the new provenance on the actual
 phone/device and validate player/server timestamp semantics independently.
 
@@ -353,12 +353,12 @@ Player timestamps cannot be globally ordered across devices or playback sessions
 A positive change between two known active device IDs or playback session IDs now
 resets the timestamp watermark and duplicate fence. A session-only handoff with
 otherwise equal state is accepted. Binary PlayerState field 23 (`session_id`) is
-always decoded for ordering, even with diagnostics off; raw identities still do
+always decoded for ordering, even with diagnostics off. Raw identities still do
 not enter timing exports. A device-only switch discards the prior device's session
 scope if the incoming session is missing.
 
-Missing/empty identity fields inherit the known scope and do not prove a handoff;
-they neither reset ordering nor bypass stale suppression. First discovering an
+Missing/empty identity fields inherit the known scope and do not prove a handoff.
+They neither reset ordering nor bypass stale suppression. First discovering an
 identity after anonymous state is similarly insufficient evidence of a new clock.
 This conservative choice may reject an anonymous older-clock handoff until explicit
 refresh or positive identity-change evidence appears. Timestamp-less updates do
@@ -374,9 +374,9 @@ Registration completion is additionally bound to its original connection ID,
 so an aborted response that nevertheless resolves after ID replacement is ignored.
 Same-source older registration updates remain rejected. A different-source HTTP
 snapshot after live state is ambiguous and conservatively skipped until another
-Dealer update or refresh; source timestamps cannot resolve that race. A late
-Dealer identity switch can still be ambiguous without a server sequence/version;
-this patch does not manufacture cross-device chronology.
+Dealer update or refresh. Source timestamps cannot resolve that race. A late
+Dealer identity switch can still be ambiguous without a server sequence/version.
+This patch does not manufacture cross-device chronology.
 
 Both diagnostics-off/on regressions exercise older-clock device-only/session-only
 switches, equal-state duplicates, same-source stale and identity-less frames,
@@ -396,7 +396,7 @@ change. Neither resume nor seek is labeled a track transition.
    a source/store mismatch, provided track/device/session and timestamp semantics
    are valid. Production already ingests such anchors, resets on track identity
    change and applies ordinary corrections outside its 80 ms deadband. The event
-   can arrive late, be buffering/stale, or carry a future epoch; reanchoring cannot
+   can arrive late, be buffering/stale, or carry a future epoch. Reanchoring cannot
    prove the output has begun presenting the corresponding audio.
 2. **Short-term drift detection:** compare successive same-scope source anchors
    with the monotonically projected store, using receipt/processing provenance.
@@ -407,7 +407,7 @@ change. Neither resume nor seek is labeled a track transition.
    projecting the same source is not an independent drift measurement and can
    recreate the demonstrated harness artifact. No drift estimator is added.
 3. **Resync on the next playback-state event:** this already supplies the next
-   chance to correct the reported timeline; retaining provenance and fixing scoped
+   chance to correct the reported timeline. Retaining provenance and fixing scoped
    ordering prevents a valid handoff from being lost. It offers no correction
    before the event arrives and cannot repair audio buffering that is absent from
    every reported position. No transition-specific resync policy is implemented.
@@ -417,7 +417,7 @@ output/audio reference or trustworthy presentation timestamps. Dealer state,
 DesktopBridge/MPRIS agreement, local RTT, HTTP Date and store residuals cannot
 observe that presentation directly. Audio-relative calibration must remain
 separate, per route/device and measured with uncertainty. All transition proposals
-remain design-only; no fixed offset, universal delay or transition correction is
+remain design-only. No fixed offset, universal delay or transition correction is
 implemented.
 
 ## Captured first-anchor bootstrap correction
@@ -430,12 +430,12 @@ covers real asynchronous metadata behavior absent from the earlier harness. It
 is still sandbox position telemetry, not a physical-phone or audio test.
 
 The first controlled reproduction observed an old-track MPRIS sample immediately
-after Next returned; that sample was not valid fresh-start matching evidence.
+after Next returned. That sample was not valid fresh-start matching evidence.
 That exploratory run is excluded from the matched baseline. The repeated protocol
 polls until a changed track is playing below 3000 ms before delaying observer
-mount by 4500 ms. Both verified builds observe a new track near its beginning;
-both builds verify MPRIS `xesam:url` against the raw registration Spotify URI
-(logging booleans only; baseline 261/263 and candidate 260/262 rows match, with
+mount by 4500 ms. Both verified builds observe a new track near its beginning.
+Both builds verify MPRIS `xesam:url` against the raw registration Spotify URI
+(logging booleans only. Baseline 261/263 and candidate 260/262 rows match, with
 all settled rows and all four callback identity checks matching in each run). The
 baseline build is compiled from `84dd5f6` files through an esbuild source override,
 without checking out or modifying the working tree. The baseline and candidate both verify changed-track playback near its beginning
@@ -449,16 +449,16 @@ candidate versus 1508.836/142.316/1515.237 ms for the baseline (bootstrap/resume
 refresh). Candidate windows are 6155–15827 ms (97 rows), 18548–26291 ms (78 rows),
 and 26393–32248 ms (59 rows), relative to that capture's origin. Pause/resume
 command-to-state transients are excluded from settled comparisons. A preliminary
-candidate run measured about +10 ms; it was a different run, also versus MPRIS.
-**All these results reference MPRIS Position; DesktopBridge is a comparator,
+candidate run measured about +10 ms. It was a different run, also versus MPRIS.
+**All these results reference MPRIS Position. DesktopBridge is a comparator,
 not an audio presentation reference.**
 
 The earlier raw reproduction supplies a clear chronology: registration receipt
 5356 ms, player timestamp 2902 ms, position 1093 ms, server timestamp 6854 ms.
-Pause receipt/source/server are 15271/16629/16793; resume 17764/19127/19290;
-reobservation 25833/19127/27370. The server reference changes while the cached
+Pause receipt/source/server are 15271/16629/16793. Resume 17764/19127/19290.
+Reobservation 25833/19127/27370. The server reference changes while the cached
 player anchor remains fixed. Actual metadata completion follows the first callback
-by about 83 ms; it retains the original store anchor in that run. Observer refresh,
+by about 83 ms. It retains the original store anchor in that run. Observer refresh,
 not metadata, reintroduces the large error. Other metadata timings remain covered
 as hypothetical regression cases rather than reported phone measurements.
 
@@ -477,14 +477,14 @@ normalized at original local receipt and then advances only by local monotonic
 elapsed time. No server/local offset is estimated. No fixed bias or RTT/2 is added.
 Unknown server-to-receipt transit and snapshot/reference freshness remain timing
 uncertainty. Same-envelope pairing and observed Spotify behavior support the
-shared-domain assumption for this path; arbitrary third-party producer clocks
+shared-domain assumption for this path. Arbitrary third-party producer clocks
 are not independently certified by this investigation.
 
 Missing/malformed/unsafe server clocks, non-epoch player clocks and a future
 scheduled player anchor retain legacy handling. No unrelated sibling server
 clock is paired to a selected player. Pause/buffering do not extrapolate. Metadata,
 foreground replay and cached state retain the original immutable monotonic
-observation; re-registration obtains a new paired reference. Server protobuf
+observation. Re-registration obtains a new paired reference. Server protobuf
 field 9 is available with diagnostics off. Store ordering, deadband and transport
 estimation are otherwise unchanged, and source timestamps remain intact for the
 reviewed device/session ordering fix.
@@ -500,5 +500,5 @@ frames through actual registration/Dealer parsing, detector, metadata request,
 packet and store, with diagnostics off/on. They verify normalization once, cache/
 metadata receipt preservation, pause, scheduled/future/invalid references,
 observer refresh, monotonic wall jumps and binary field 9. Phone resume-jump
-validation remains necessary; the real-device report motivated this capture and
+validation remains necessary. The real-device report motivated this capture and
 is not relabeled as a sandbox audio measurement.

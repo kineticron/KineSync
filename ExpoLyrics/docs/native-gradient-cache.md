@@ -19,8 +19,8 @@ timing, layout, clip, mask, draw order, gradient parameter or blur change is mad
 Inspected installed @shopify/react-native-skia 2.13.1 sources before implementing:
 
 - `cpp/skia/include/core/SkPaint.h:68`: paint copies share reference-counted
-  shaders; referenced shaders cannot be modified after creation. `fShader` is
-  `sk_sp<SkShader>`; `setShader` takes an owning reference.
+  shaders. Referenced shaders cannot be modified after creation. `fShader` is
+  `sk_sp<SkShader>`. `setShader` takes an owning reference.
 - `cpp/api/JsiSkShader.h`: the JS wrapper holds `sk_sp<SkShader>` and exposes no
   shader mutation methods. Its common dispose method eagerly releases the wrapper.
 - `cpp/api/JsiSkPaint.h:107` and `JsiSkNativeObjects.h:305`: conversion copies the
@@ -28,13 +28,13 @@ Inspected installed @shopify/react-native-skia 2.13.1 sources before implementin
   pointer from a JS cache entry.
 - `cpp/api/JsiSkCanvas.h`: drawGlyphs/drawPaint/saveLayer pass the paint to the
   recording canvas. `cpp/skia/include/core/SkPictureRecorder.h:58` specifies the
-  resulting immutable picture; `JsiSkPictureRecorder.h` transfers it into an
+  resulting immutable picture. `JsiSkPictureRecorder.h` transfers it into an
   owning `sk_sp<SkPicture>` wrapper. Recorded paint state/resources outlive later
   mutations of the reusable paint.
 
-Eviction drops cache references; it never calls `dispose()`. Recorded pictures
-may retain shader references. The cache owns at most 32 handles per voice;
-recordings can retain additional old shader resources. This is not a native
+Eviction drops cache references. It never calls `dispose()`. Recorded pictures
+may retain shader references. The cache owns at most 32 handles per voice.
+Recordings can retain additional old shader resources. This is not a native
 memory measurement or an assertion that total retained shaders cannot exceed 32.
 A component remount creates fresh per-voice state. No global cross-voice cache.
 
