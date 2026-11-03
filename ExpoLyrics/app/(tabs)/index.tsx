@@ -1,3 +1,5 @@
+import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
+import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
 import { BlurView } from "expo-blur";
 import { Asset } from "expo-asset";
 import { LyricsTypeIcon } from "@/components/lyrics/lyrics-type-icon";
@@ -250,7 +252,14 @@ async function shareGifOnWeb({
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+function nativePlaybackUnavailable() {
+  const state = usePlaybackStore.getState();
+  return (Platform.OS === 'ios' || Platform.OS === 'android') && state.playbackMode === 'mobile' && state.connectionStatus !== 'connected' &&
+    !usePlayerTourStore.getState().active && !useSpotifyConnectionStore.getState().health.controlsEnabled;
+}
+
 type PlaybackControlsDockProps = {
+  controlsDisabled?: boolean;
   isPlaying: boolean;
   durationMs: number;
   shareSelectionCount?: number;
@@ -282,6 +291,7 @@ type PlaybackControlsDockProps = {
 };
 
 const PlaybackControlsDock = memo(function PlaybackControlsDock({
+  controlsDisabled,
   isPlaying,
   durationMs,
   shareSelectionCount,
@@ -313,6 +323,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
 }: PlaybackControlsDockProps) {
   return (
     <PlaybackControls
+      controlsDisabled={controlsDisabled}
       previewPlayback={previewPlayback}
       tourStep={tourStep}
       previewTranslated={previewTranslated}
@@ -346,6 +357,9 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
 });
 
 export default function HomeScreen() {
+  const nativeControlsEnabled = useSpotifyConnectionStore(s => s.health.controlsEnabled);
+  const nativeSelected = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
+  const nativeUnavailable = (Platform.OS === 'ios' || Platform.OS === 'android') && nativeSelected && !nativeControlsEnabled;
   const router = useRouter();
   const [isScreenFocused, setIsScreenFocused] = useState(true);
   useFocusEffect(
@@ -417,6 +431,7 @@ export default function HomeScreen() {
     number | null
   >(null);
   const handleScrubPreview = useCallback((positionMs: number | null) => {
+      if (nativePlaybackUnavailable() && positionMs !== null) return;
     setScrubPreviewPositionMs(positionMs);
   }, []);
   const activeLineIndex = useRef(-1);
@@ -785,6 +800,7 @@ export default function HomeScreen() {
   }, []);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
+      if (nativePlaybackUnavailable()) return;
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.seekTo(positionMs);
       return;
@@ -793,6 +809,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackPlayPause = useCallback(() => {
+      if (nativePlaybackUnavailable()) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().togglePlayback(); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.togglePlayPause();
@@ -811,6 +828,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackNext = useCallback(() => {
+      if (nativePlaybackUnavailable()) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipNext();
@@ -819,6 +837,7 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.skipNext();
   }, []);
   const handleLyricLinePress = useCallback((line: LyricLine) => {
+      if (nativePlaybackUnavailable()) return;
     if (usePlayerTourStore.getState().active) {
       usePlayerTourStore.getState().seek(line.lineStartTime);
       usePlayerTourStore.getState().advance('seek');
@@ -847,6 +866,7 @@ export default function HomeScreen() {
 
   const handleSeek = useCallback(
     (positionMs: number) => {
+      if (nativePlaybackUnavailable()) return;
       if (usePlayerTourStore.getState().active) {
         usePlayerTourStore.getState().seek(positionMs);
         usePlayerTourStore.getState().advance('seek');
@@ -883,6 +903,7 @@ export default function HomeScreen() {
   );
 
   const handlePlaybackPrevious = useCallback(() => {
+      if (nativePlaybackUnavailable()) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().playbackPosition > 3000) {
       handleSeek(0);
@@ -1310,6 +1331,7 @@ export default function HomeScreen() {
                 controlsOverlayVisible={landscapeArtControlsVisible}
                 controlsOverlay={
                   <PlaybackControlsDock
+                    controlsDisabled={!tour.active && nativeUnavailable}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}
@@ -1328,6 +1350,7 @@ export default function HomeScreen() {
                 }
                 utilityRow={
                   <PlaybackControlsDock
+                    controlsDisabled={!tour.active && nativeUnavailable}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}
@@ -1680,6 +1703,7 @@ export default function HomeScreen() {
           }}
         >
           <PlaybackControlsDock
+                    controlsDisabled={!tour.active && nativeUnavailable}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}
@@ -1741,6 +1765,7 @@ export default function HomeScreen() {
         </Reanimated.View>
       ) : null}
 
+      {(Platform.OS === 'ios' || Platform.OS === 'android') && <SpotifyConnectionStrip />}
       {!tour.active && !tour.pending && (Platform.OS === 'ios' || Platform.OS === 'android'
         ? <SpotifyNativeDetector ref={spotifyBrowserRef} />
         : <SpotifyBrowserFallback ref={spotifyBrowserRef} />)}
