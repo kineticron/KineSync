@@ -384,6 +384,7 @@ async function main() {
     await streamReadyPromise;
     if (!streamReady || parser.errors.length) throw new Error(parser.errors.join('; ') || 'Unified log stream not ready');
   } finally { clearInterval(readinessTimeout); }
+  lifecycle.enterPhase('startup:native-capture-readiness', seconds('--readiness-seconds', 180000));
   const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport);
   if (parser.errors.length) throw new Error(parser.errors.join('; '));
   lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');

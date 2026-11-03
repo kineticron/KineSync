@@ -32,6 +32,17 @@ try {
     const pending = Promise.resolve({ stdout: '' }); pending.child = { kill() {} }; return pending;
   });
   now = 1000;
+  const readinessLifecycle = new SimulatorRunLifecycle(path.join(dir, 'readiness-isolation'), { now: () => now, ciDeadlineMs: Infinity });
+  readinessLifecycle.enterPhase('startup:unified-log-readiness', 180000);
+  now += 175000;
+  readinessLifecycle.check();
+  readinessLifecycle.enterPhase('startup:native-capture-readiness', 180000);
+  now += 150000;
+  readinessLifecycle.check();
+  assert.equal(readinessLifecycle.remaining(), 30000);
+  now += 31000;
+  assert.throws(() => readinessLifecycle.check(), /Startup timeout at startup:native-capture-readiness/);
+  now = 1000;
   const lifecycle = new SimulatorRunLifecycle(dir, { startupMs: 100, stageMs: 50, overallMs: 200, now: () => now, command: () => { throw new Error('device unavailable'); } });
   now = 1100; assert.throws(() => lifecycle.check(), /Startup timeout/);
   now = 1050; lifecycle.line('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1');

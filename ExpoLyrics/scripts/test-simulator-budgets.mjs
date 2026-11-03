@@ -13,10 +13,16 @@ try {
   assert.equal(state.remaining(), 600000);
   for (const invalid of [0, -1, NaN, Infinity]) assert.throws(() => state.enterPhase('invalid', invalid), /finite and positive/);
   now = 590000;
+  state.enterPhase('startup:rotation-preflight', 240000);
+  assert.equal(state.remaining(), 240000);
+  now += 239000;
   state.enterPhase('install', 300000);
   assert.equal(state.remaining(), 300000);
   now += 299000;
-  state.enterPhase('readiness', 180000);
+  state.enterPhase('startup:unified-log-readiness', 180000);
+  assert.equal(state.remaining(), 180000);
+  now += 179000;
+  state.enterPhase('startup:native-capture-readiness', 180000);
   assert.equal(state.remaining(), 180000);
   now += 179000;
   for (let i = 1; i <= 7; i++) {
