@@ -171,7 +171,6 @@ export class SpotifyDetector {
   private binding() { return JSON.stringify([this.generation, this.connectionId, this.currentTarget, this.lastSample?.uri, this.lastSample?.playbackSessionId]); }
   private stateConfirmed(target: string | undefined, restricted = false) {
     this.restricted = restricted; this.observed = true; this.currentTarget = target; this.lastState = this.runtime.mono();
-    this.rejectedFreshToken = false;
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
     if (this.healthySince === null) this.healthySince = this.runtime.mono();
     if (this.commandPhase !== 'sending') {
@@ -580,7 +579,7 @@ export class SpotifyDetector {
         const decoded = decodeDealer(payload);
         if (payload.type !== 'pong' && !id && !sampleFrom(decoded) && !idleState(decoded)) return;
         lastReceived = this.runtime.mono(); this.lastContact = lastReceived;
-        if (this.healthySince !== null && lastReceived - this.healthySince >= 60000) { this.reconnects = 0; this.rateLimits = 0; }
+        if (this.healthySince !== null && lastReceived - this.healthySince >= 60000) { this.reconnects = 0; this.rateLimits = 0; this.rejectedFreshToken = false; }
         if (payload.type === 'pong') return;
         if (id && id !== this.connectionId) { this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null;
           if (this.confirmation) this.runtime.clearTimeout(this.confirmation); this.confirmation = null;

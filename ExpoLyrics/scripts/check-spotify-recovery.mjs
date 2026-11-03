@@ -200,6 +200,12 @@ await check('seeded jitter has exact deterministic backoff and positive-only rat
  const expected=seeded(123);for(let i=0;i<40;i++)expected();const h=setup(seeded(123));h.start();h.response={status:503};await h.identify();assert.equal(h.d.health.nextRetryAtWall,h.clock.wall+2000*(0.8+expected()*0.4));h.d.clear();
  const rateExpected=seeded(456);for(let i=0;i<40;i++)rateExpected();const r=setup(seeded(456));r.start();r.response={status:429};await r.identify();const wait=30000*(1+rateExpected()*0.2);assert.equal(r.d.health.retryNotBeforeWall,r.clock.wall+wait);assert(wait>=30000);r.d.clear();
 });
+for(const method of ['POST','GET'])await check(`${method} 401 renews once and fresh-token rejection stops even after successful observer registration`,async()=>{
+ const h=setup();h.start();await h.identify();h.response={status:401};
+ const send=()=>method==='POST'?h.d.control({type:'next'}):h.d.metadata(uri);
+ await assert.rejects(send(),/HTTP 401/);assert.equal(h.d.health.phase,'renewingSession');
+ h.credentials('fresh');h.response={status:200,body:state()};await h.identify();assert(h.d.health.controlsEnabled);h.response={status:401};await assert.rejects(send(),/HTTP 401/);assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.posts().length,method==='POST'?2:0);await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');h.d.clear();
+});
 // Execute the actual injected browser script with independently controlled fetch/body and lifecycle.
 function browser(response) {
  const clock=new Clock(), events={}, messages=[], requests=[];
