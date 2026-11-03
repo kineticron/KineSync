@@ -388,7 +388,7 @@ assert.deepEqual(getSpicyWordJoins([{ text: 'some', isPartOfWord: true }, { text
 assert.deepEqual(getSpicyWordJoins([{ text: 'one' }, { text: ' two' }, { text: ' ' }, { text: 'three' }]),
   [false, false, false, false], 'leading/standalone spaces are boundaries too');
 
-const { buildAmllWords } = load('components/lyrics/amll-word-spacing.ts');
+const { buildAmllWords, buildAmllShapingWords } = load('components/lyrics/amll-word-spacing.ts');
 const { getGraphemes } = load('lib/graphemes.ts');
 const { repairSyllableClusters } = load('components/lyrics/cluster-safe-syllables.ts');
 for (const [text, expected] of [
@@ -430,10 +430,22 @@ const amllFlagged = buildAmllWords([
   { text: 'wor', startTime: 1600, endTime: 1800, isPartOfWord: true },
   { text: 'ld', startTime: 1800, endTime: 2100, isPartOfWord: false },
 ], 1000, 2100);
-assert.deepEqual(amllFlagged.map((w) => w.word), ['Hello ', 'world'],
-  'Spicy fragments group into whole words with a synthesized separator');
+assert.deepEqual(amllFlagged.map((w) => w.word), ['Hel', 'lo ', 'wor', 'ld'],
+  'Spicy animation preserves timing fragments with a boundary separator');
 assert.equal(amllFlagged[0].startTime, 1000, 'grouped word starts at its first fragment');
-assert.equal(amllFlagged[0].endTime, 1500, 'grouped word ends at its last fragment');
+assert.deepEqual(amllFlagged.map(({ startTime, endTime }) => [startTime, endTime]),
+  [[1000, 1200], [1200, 1500], [1600, 1800], [1800, 2100]],
+  'animation preserves every provider timing interval');
+assert.equal(amllFlagged[1].timedGraphemeCount, 2, 'separator has no animation duration');
+assert.deepEqual(buildAmllShapingWords([
+  { text: 'Hel', startTime: 1000, endTime: 1200, isPartOfWord: true },
+  { text: 'lo', startTime: 1200, endTime: 1500, isPartOfWord: false },
+  { text: 'wor', startTime: 1600, endTime: 1800, isPartOfWord: true },
+  { text: 'ld', startTime: 1800, endTime: 2100, isPartOfWord: false },
+], 1000, 2100), [
+  { word: 'Hello ', startTime: 1000, endTime: 1500 },
+  { word: 'world', startTime: 1600, endTime: 2100 },
+], 'shaping groups retain whole words and their complete timing spans');
 assert.equal(amllFlagged.map((w) => w.word).join(''), 'Hello world',
   'AMLL joins grouped words into the correct line text');
 const amllPunct = buildAmllWords([
@@ -458,7 +470,7 @@ const koreanFlagged = [
   { text: '사', startTime: 1800, endTime: 2100, isPartOfWord: false },
 ];
 const koreanSnapshot = JSON.stringify(koreanFlagged);
-assert.deepEqual(buildAmllWords(koreanFlagged, 1000, 2100), [
+assert.deepEqual(buildAmllShapingWords(koreanFlagged, 1000, 2100), [
   { word: '한글 ', startTime: 1000, endTime: 1500 },
   { word: '가사', startTime: 1600, endTime: 2100 },
 ], 'Spicy Korean word boundaries survive AMLL conversion with grouped timings');

@@ -203,6 +203,7 @@ function checkClosedMenu() {
     'react-native-gesture-handler': { GestureHandlerRootView: 'Root' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
     '@/lib/lyrics-timing': { getLyricsTimingLabel: () => 'Line' }, '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/bridge-client': {},
+    '@/components/lyrics/dealer-delivery-experiment-switch': { DealerDeliveryExperimentSwitch: 'DealerDeliveryExperimentSwitch' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' },
     'expo-camera': { CameraView: 'Camera', useCameraPermissions: () => [{ granted: false }, () => {}] },
     'react-native-reanimated': { __esModule: true, default: { View: 'AnimatedView' }, useReducedMotion: () => false,
@@ -281,8 +282,8 @@ function checkCanvasPresentation() {
   visit(ast);
   let renders = 0, scrolls = 0, notifications = 0;
   const lyrics = [{}];
-  const context = { update: null, mounted: { current: true }, generation: { current: 1 }, latestLyrics: { current: lyrics }, lyrics,
-    active: true, AppState: { currentState: 'active' }, currentPosition: { current: 0 }, backgrounds: [], timing: {}, reveal: 'canvas',
+  const context = { __DEV__: false, update: null, mounted: { current: true }, generation: { current: 1 }, latestLyrics: { current: lyrics }, lyrics,
+    active: true, AppState: { currentState: 'active' }, currentPosition: { current: 0 }, latestBackgrounds: { current: [] }, latestTiming: { current: {} }, reveal: 'canvas',
     activeIndex: { current: -1 }, lastScrollTarget: { current: '' }, getPlaybackWindowState: time => ({ activeLineStartIndex: time }),
     getAutoScrollTargetRange: () => ({ startIndex: 0 }), setWindow: () => renders++, scrollTo: () => scrolls++, onActiveLineChange: () => notifications++ };
   vm.runInNewContext(ts.transpileModule(`update = ${callback}`, {}).outputText, context);
