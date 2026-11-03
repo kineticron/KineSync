@@ -25,6 +25,7 @@ const developmentTiming = diagnosticModule('development-timing-log');
 const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
+const captures = [];
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
 let cursor = 0, dirty = false, actions, instance;
 let tour = { active: false, pending: false };
@@ -48,7 +49,7 @@ class Detector {
   setReachability() {}
   constructor(callbacks) { this.callbacks = callbacks; instance = this; }
   setEnabled(value) { this.enabled = value; }
-  capture() { return true; }
+  capture(raw) { captures.push(raw); return true; }
   refresh() {}
   async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
   async control(command) { commands.push(command); if (controlError) throw controlError; }
@@ -108,6 +109,21 @@ assert.equal(web.props.userAgent.includes('Chrome/'), platform === 'android');
 assert.equal(web.props.injectedJavaScriptBeforeContentLoaded.includes('android-observer'), platform === 'android');
 if (platform === 'android') assert.equal(tree.props.style[1].opacity, 0.01, 'Chromium bootstrap stays in the viewport');
 assert.equal(instance.enabled, true);
+// Renewal deliberately remounts a document, even if sessionNeeded is already
+// true. It does not depend on restarting an exhausted window.__probeToken.
+const oldDocument = web;
+instance.callbacks.sessionNeeded(); render(); web = find(tree);
+assert.notEqual(web.key, oldDocument.key, 'renewal changes the actual WebView key');
+const secondDocument = web;
+instance.callbacks.sessionNeeded(); render(); web = find(tree);
+assert.notEqual(web.key, secondDocument.key, 'already-needed renewal still gets a fresh document');
+const beforeOldDocument = captures.length;
+oldDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+secondDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+assert.equal(captures.length, beforeOldDocument, 'obsolete document callbacks cannot capture credentials');
+web.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+assert.equal(captures.length, beforeOldDocument + 1, 'only the newly mounted document can capture');
+web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'playback', positionMs: 9999 }), url: 'https://open.spotify.com/' } });
 assert.equal(packets.length, 0, 'browser playback is never mixed with native detector timing');
 const receipt = Object.freeze({ wallMs: Date.now(), monotonicMs: performance.now() });

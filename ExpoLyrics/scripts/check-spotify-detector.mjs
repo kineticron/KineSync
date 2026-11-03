@@ -230,13 +230,17 @@ try {
     await detector.control(value);
     const last = detector.lastSample;
     detector.socket.event({ payloads: [state(last.positionMs, last.positionTimestampMs, !last.playing, last.uri)] });
+    if (detector.health.command === 'awaitingConfirmation') {
+      const id = detector.confirmation, timer = timers.get(id); timers.delete(id); timer.fn(); await flush();
+    }
   };
-  const commandBody = () => JSON.parse(new TextDecoder().decode(ungzip(new Uint8Array(requests.at(-1).body))));
+  const lastCommand = () => requests.filter(r => r.method === 'POST').at(-1);
+  const commandBody = () => JSON.parse(new TextDecoder().decode(ungzip(new Uint8Array(lastCommand().body))));
   await command({ type: 'toggle' });
   assert.equal(commandBody().command.endpoint, 'pause');
-  assert.equal(requests.at(-1).headers['content-encoding'], 'gzip');
-  assert.equal(requests.at(-1).headers['x-spotify-connection-id'], 'our-connection');
-  assert.equal(new URL(requests.at(-1).url).pathname, `/connect-state/v1/player/command/from/${new URL(requests[0].url).pathname.split('/').pop()}/to/iphone`);
+  assert.equal(lastCommand().headers['content-encoding'], 'gzip');
+  assert.equal(lastCommand().headers['x-spotify-connection-id'], 'our-connection');
+  assert.equal(new URL(lastCommand().url).pathname, `/connect-state/v1/player/command/from/${new URL(requests[0].url).pathname.split('/').pop()}/to/iphone`);
   assert.equal(samples.length, 1, 'command acknowledgment cannot invent a clock anchor');
   await command({ type: 'seek', positionMs: 999999 });
   assert.equal(commandBody().command.value, 200000);

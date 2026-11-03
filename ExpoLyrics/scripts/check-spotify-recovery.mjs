@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'node:fs';
-const bundle = await build({ stdin: { contents: `export * from './lib/spotify-detector/client'; export {bootstrap} from './lib/spotify-detector/bootstrap'; export * from './lib/spotify-detector/health';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', write: false });
+import { execFileSync } from 'node:child_process';
+const baseline = process.env.SPOTIFY_RECOVERY_BASELINE;
+const plugins = baseline ? [{ name: 'review-baseline', setup(b) { b.onLoad({ filter: /spotify-detector\/client\.ts$/ }, args => ({ contents: execFileSync('git', ['show', `${baseline}:ExpoLyrics/lib/spotify-detector/client.ts`], { encoding: 'utf8' }), loader: 'ts', resolveDir: args.path.slice(0, args.path.lastIndexOf('/')) })); } }] : [];
+const bundle = await build({ stdin: { contents: `export * from './lib/spotify-detector/client'; export {bootstrap} from './lib/spotify-detector/bootstrap'; export * from './lib/spotify-detector/health';`, resolveDir: process.cwd() }, plugins, bundle: true, platform: 'node', format: 'esm', write: false });
 const { SpotifyDetector, bootstrap, spotifyHealthMessage } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
 const flush = async () => { for (let n = 0; n < 60; n++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise, resolve, reject }; };
@@ -53,9 +56,67 @@ function setup(random = () => 0.5) {
   const posts=()=>requests.filter(r=>r.method==='POST');
   return {d,clock,sockets,requests,health,samples,capture,credentials,start,identify,posts,set response(r){response=r;},get needed(){return needed;}};
 }
-let cases=0;
-async function check(name,fn){await fn();cases++;console.log(`PASS ${name}`);}
+let cases=0, baselineFailures=0;
+async function check(name,fn){
+ if(baseline && !name.startsWith('review:')) return;
+ try { await fn();cases++;console.log(`PASS ${name}`); }
+ catch(error) { if(!baseline)throw error;baselineFailures++;console.log(`FAIL ${name}: ${error.message}`); }
+}
 async function allDisabled(h){const n=h.posts().length;for(const type of ['toggle','next','previous','seek'])await assert.rejects(h.d.control({type,positionMs:20}));assert.equal(h.posts().length,n);}
+for(const type of ['next','previous','toggle','seek'])for(const advance of ['result','supersession'])await check(`review: ${type} Dealer ${advance} before HTTP response preserves healthy authority`,async()=>{
+ const h=setup();try {
+ h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;
+ const command=h.d.control({type,positionMs:9000});const settled=assert.doesNotReject(command);await flush();assert.equal(h.posts().length,1);
+ const observed=state('phone',advance==='supersession'||['next','previous'].includes(type)?'spotify:track:0000000000000000000001':uri,1900000001000);
+ if(advance==='supersession') observed.player_state.session_id='new-session';
+ if(type==='toggle') observed.player_state.is_paused=true;
+ if(type==='seek') observed.player_state.position_as_of_timestamp=9000;
+ ws.event({payloads:[observed]});await flush();assert.equal(h.d.health.command,'sending');await allDisabled(h);
+ pending.resolve({status:204});await settled;assert.equal(h.d.health.command,'idle');assert(h.d.health.controlsEnabled);
+ await h.clock.advance(5001);assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);assert.equal(h.d.health.attempt,0);
+ } finally {h.d.clear();}
+});
+for(const type of ['next','seek'])await check(`review: ${type} observation during HTTP response body is retained without reconnect`,async()=>{
+ const h=setup();try {h.start();const ws=await h.identify();const body=deferred();h.response={status:204,bodyPromise:body.promise};const pending=h.d.control({type,positionMs:9000});await flush();const observed=state('phone',type==='next'?'spotify:track:0000000000000000000001':uri,1900000001000);observed.player_state.position_as_of_timestamp=9000;ws.event({payloads:[observed]});body.resolve(new ArrayBuffer(0));await pending;await h.clock.advance(5001);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);}finally{h.d.clear();}
+});
+await check('review: synchronous observation from awaiting-confirmation health cancels its already-owned deadline',async()=>{
+ const h=setup();try{h.start();const ws=await h.identify();let entered=false;h.d.callbacks.health=health=>{if(health.command==='awaitingConfirmation'&&!entered){entered=true;const observed=state('phone',uri,1900000001000);observed.player_state.is_paused=true;ws.event({payloads:[observed]});}};await h.d.control({type:'toggle'});assert(entered);assert.equal(h.d.health.command,'idle');await h.clock.advance(5001);assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);assert.equal(h.posts().length,1);}finally{h.d.clear();}
+});
+await check('review: fresh observation supersedes ambiguous POST outcome without reconnect or replay',async()=>{
+ const h=setup();try {h.start();const ws=await h.identify();h.response=()=>new Promise(()=>{});const pending=h.d.control({type:'next'});const rejected=assert.rejects(pending,/unknown/);await flush();ws.event({payloads:[state('phone','spotify:track:0000000000000000000001',1900000001000)]});await h.clock.advance(10000);await rejected;assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);assert.equal(h.d.health.attempt,0);}finally{h.d.clear();}
+});
+await check('review: unrelated unchanged state is not positive toggle confirmation, but no-op reconciliation preserves transport',async()=>{
+ const h=setup();try {h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;const command=h.d.control({type:'toggle'});await flush();ws.event({payloads:[state()]});pending.resolve({status:204});await command;assert.equal(h.d.health.command,'awaitingConfirmation');ws.event({payloads:[state()]});assert.equal(h.d.health.command,'awaitingConfirmation');h.response={status:200,body:state()};await h.clock.advance(5000);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);assert.equal(h.d.health.attempt,0);}finally{h.d.clear();}
+});
+await check('review: stale observation cannot positively settle a pending command',async()=>{
+ const h=setup();try {h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;const command=h.d.control({type:'toggle'});await flush();ws.event({payloads:[state('phone',uri,1899999999000)]});pending.resolve({status:204});await command;assert.equal(h.d.health.command,'awaitingConfirmation');h.response={status:200,body:state('phone',uri,1899999999000)};await h.clock.advance(5000);assert.equal(h.d.health.command,'idle');assert.equal(h.sockets.length,1);assert.equal(h.d.socket,ws);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.d.health.attempt,0);}finally{h.d.clear();}
+});
+await check('review: no-op confirmation timeout reconciles observation once without transport penalty',async()=>{
+ const h=setup();try {h.start();const ws=await h.identify();const attempt=h.d.health.attempt;await h.d.control({type:'next'});await h.clock.advance(4999);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);await h.clock.advance(1);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.d.health.attempt,attempt);assert.equal(h.d.health.lastError,undefined);await h.clock.advance(5001);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);}finally{h.d.clear();}
+});
+await check('review: only failed reconciliation spends transport retry budget',async()=>{
+ const h=setup();try{h.start();await h.identify();await h.d.control({type:'previous'});h.response={status:503};await h.clock.advance(5000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.attempt,1);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);await h.clock.advance(2000);assert.equal(h.sockets.length,2);assert.equal(h.posts().length,1);}finally{h.d.clear();}
+});
+for(const cancel of [false,true])await check(`review: synchronous connecting health reentry ${cancel?'cancels':'coalesces'} the whole owned attempt`,async()=>{
+ const h=setup();let entered=false;try {
+ h.capture({type:'observerEndpoint',url:'https://spclient.spotify.com/connect-state/v1/devices/observer'});h.capture({type:'socket',url:'wss://dealer.spotify.com/'});h.credentials();
+ h.d.callbacks.health=health=>{h.health.push(health);if(health.phase==='connecting'&&!entered){entered=true;if(cancel)h.d.clear();else {h.d.setEnabled(true);h.d.refresh(true);}}};
+ h.d.setEnabled(true);await flush();assert(entered);assert.equal(h.sockets.length,1);if(cancel){assert.equal(h.d.socket,null);assert.equal(h.clock.timers.size,0);assert.equal(h.sockets[0].readyState,3);}else {assert.equal(h.d.socket,h.sockets[0]);await h.identify();assert(h.d.health.controlsEnabled);}
+ }finally{h.d.clear();}assert(h.sockets.every(ws=>ws.readyState===3),'no orphan socket survives teardown');
+});
+await check('review: socket factory reentry cannot create an orphan attempt',async()=>{
+ const h=setup();try{const factory=h.d.runtime.socket;let entered=false;h.d.runtime.socket=url=>{if(!entered){entered=true;h.d.setEnabled(true);}return factory(url);};h.start();await h.identify();assert.equal(h.sockets.length,1);assert.equal(h.d.socket,h.sockets[0]);}finally{h.d.clear();}
+});
+await check('review: Dealer access_token-only rotations do not change observer authority',async()=>{
+ const h=setup();try{h.start();const ws=await h.identify();const generation=h.d.health.generation;const scope=h.d.lastSample.sourceClockScope;
+ for(const token of ['browser-a','browser-b'])h.capture({type:'socket',url:`wss://dealer.spotify.com/?access_token=${token}#ignored`});
+ assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.d.health.generation,generation);assert.equal(h.d.lastSample.sourceClockScope,scope);assert(h.d.health.controlsEnabled);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);assert.equal(h.posts().length,0);assert.equal(new URL(ws.url).searchParams.get('access_token'),'valid');
+ h.credentials('actually-new-verified-token');assert.equal(h.sockets.length,2);assert.equal(h.d.health.observerConfirmed,false);
+ }finally{h.d.clear();}
+});
+for(const body of [{},[],{player_state:{}},{player_state:[]},{player_state:{is_playing:true}},{player_state:{is_paused:true,track:{uri:'malformed'}}},{arbitrary:{player_state:{is_paused:true}}}])await check(`review: malformed/unproven registration body never establishes readiness ${JSON.stringify(body)}`,async()=>{
+ const h=setup();try{h.response={status:200,body};h.start();await h.identify();assert.equal(h.d.health.observerConfirmed,false);await allDisabled(h);await h.clock.advance(10000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.posts().length,0);}finally{h.d.clear();}
+});
 await check('background detaches silent socket; old callbacks and cached replay cannot enable controls',async()=>{
  const h=setup();h.start();const ws=await h.identify();const late=ws.onmessage;assert(h.d.health.controlsEnabled);
  h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.sockets.length,2);await allDisabled(h);
@@ -121,7 +182,7 @@ for(const type of ['toggle','next','previous','seek'])await check(`${type} respo
  const h=setup();h.start();await h.identify();h.response=()=>new Promise(()=>{});const result=h.d.control({type,positionMs:100});const rejected=assert.rejects(result,/unknown/);await allDisabled(h);await h.clock.advance(10000);await rejected;assert.equal(h.d.health.command,'outcomeUnknown');assert.equal(h.d.commandPending,null);await h.clock.advance(2000);h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,1);h.d.clear();
 });
 await check('accepted command awaits authoritative state, five-second reconciliation never replays',async()=>{
- const h=setup();h.start();await h.identify();await h.d.control({type:'toggle'});assert.equal(h.d.health.command,'awaitingConfirmation');await allDisabled(h);await h.clock.advance(4999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);await h.identify();assert.equal(h.posts().length,1);assert.equal(h.d.health.command,'idle');h.d.clear();
+ const h=setup();h.start();await h.identify();await h.d.control({type:'toggle'});assert.equal(h.d.health.command,'awaitingConfirmation');await allDisabled(h);await h.clock.advance(4999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.d.health.phase,'ready');assert.equal(h.sockets.length,1);assert.equal(h.d.health.attempt,0);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);assert.equal(h.d.health.command,'idle');h.d.clear();
 });
 await check('track/target change invalidates seek confirmation; current observation wins without seek replay',async()=>{
  const h=setup();h.start();const ws=await h.identify();await h.d.control({type:'seek',positionMs:500});ws.event({payloads:[state('other','spotify:track:0000000000000000000001',1900000001000)]});await flush();assert.equal(h.d.health.command,'idle');await h.clock.advance(5000);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);h.d.clear();
@@ -227,10 +288,28 @@ await check('late verified observer body from obsolete same-document epoch canno
  const text=deferred();const b=browser(async input=>String(input).startsWith('/api/token')?{status:200,json:()=>new Promise(()=>{})}:{status:200,headers:new Headers(),clone:()=>({text:()=>text.promise})});
  await b.window.fetch('https://spclient.spotify.com/connect-state/v1/devices/observer',{method:'PUT',headers:{authorization:'Bearer obsolete'}});await flush();b.events.pagehide.forEach(fn=>fn());text.resolve(JSON.stringify({player_state:{is_paused:true}}));await flush();assert.equal(b.messages.filter(m=>m.type==='credentials'&&m.authenticated===true).length,0);assert.equal(b.clock.timers.size,0);
 });
+await check('review: successful bootstrap does not restart probes through reinjection or __probeToken; a new host document does',async()=>{
+ let count=0;const response=async()=>{count++;return {status:200,json:async()=>({accessToken:'token-'+count,isAnonymous:false})};};
+ const b=browser(response);await flush();b.window.__probeToken();b.install();b.events.pageshow.forEach(fn=>fn());await b.clock.advance(60000);assert.equal(count,1);assert.equal(b.clock.timers.size,0);
+ const next=browser(response);await flush();assert.equal(count,2);assert(next.messages.some(m=>m.type==='credentials'&&m.token==='token-2'));assert.equal(next.clock.timers.size,0);
+});
+await check('review: exhausted probe retains passive verified capture but cannot start an unbounded new probe',async()=>{
+ const b=browser(async input=>String(input).startsWith('/api/token')?Promise.reject(Error('offline')):{status:200,headers:new Headers(),clone:()=>({text:async()=>JSON.stringify({player_state:{is_paused:true}})})});await flush();await b.clock.advance(32000);const count=b.requests.length;assert.equal(count,2);b.window.__probeToken();b.install();await flush();assert.equal(b.requests.length,count);
+ await b.window.fetch('https://spclient.spotify.com/connect-state/v1/devices/observer',{method:'PUT',headers:{authorization:'Bearer passive-verified'}});await flush();assert(b.messages.some(m=>m.type==='credentials'&&m.authenticated===true&&m.token==='passive-verified'));assert.equal(b.clock.timers.size,0);
+});
+await check('review: whole-episode deadline parks passive capture until intended pageshow or host remount',async()=>{
+ let available=false;const response=async input=>String(input).startsWith('/api/token')?(available?{status:200,json:async()=>({accessToken:'new-episode',isAnonymous:false})}:new Promise(()=>{})):{status:200,headers:new Headers(),clone:()=>({text:async()=>JSON.stringify({player_state:{is_paused:true}})})};
+ const b=browser(response);await flush();const [id,deadline]=[...b.clock.timers].find(([,t])=>t.at===45000);b.clock.timers.delete(id);b.clock.mono=45000;b.clock.wall+=45000;deadline.fn();await flush();assert(b.messages.some(m=>m.type==='session'&&m.state==='unavailable'));
+ const count=b.requests.length;b.window.__probeToken();b.install();await flush();assert.equal(b.requests.length,count);await b.window.fetch('https://spclient.spotify.com/connect-state/v1/devices/observer',{method:'PUT',headers:{authorization:'Bearer obsolete'}});await flush();assert(!b.messages.some(m=>m.type==='credentials'&&m.authenticated===true));assert.equal(b.clock.timers.size,0);
+ available=true;b.events.pageshow.forEach(fn=>fn());await flush();assert(b.messages.some(m=>m.type==='credentials'&&m.token==='new-episode'));assert.equal(b.clock.timers.size,0);
+ const remounted=browser(response);await flush();assert(remounted.messages.some(m=>m.type==='credentials'&&m.token==='new-episode'));assert.equal(remounted.clock.timers.size,0);
+});
 await check('health presentation distinguishes no device, offline, denial and sign-in without routing mutation',async()=>{
  const h=setup();h.start();h.response={status:200,body:{player_state:{is_paused:true}}};await h.identify();assert.match(spotifyHealthMessage(h.d.health),/no active/);h.d.setReachability('offline');assert.match(spotifyHealthMessage(h.d.health),/Offline/);assert.equal(h.d.health.source,'nativeSpotify');h.d.clear();
  const source=readFileSync('components/lyrics/spotify-connection-strip.tsx','utf8');assert(source.includes("s.playbackMode === 'mobile' && s.connectionStatus !== 'connected'"));assert(!source.includes('setState'));
  const screen=readFileSync('app/(tabs)/index.tsx','utf8');for(const handler of ['handleLyricLinePress','handleSeek','handlePlaybackPrevious','sendSeekToPlaybackSource','handlePlaybackPlayPause','handlePlaybackNext','handleScrubPreview']){const start=screen.indexOf(`const ${handler} =`);assert(start>=0);assert(screen.slice(start,start+180).includes('nativePlaybackUnavailable()'),handler);}
  const controls=readFileSync('components/lyrics/playback-controls.tsx','utf8');assert(controls.includes('.enabled(!controlsDisabled)'));assert(controls.includes('accessibilityState={{ disabled }}'));assert(controls.includes('if (controlsDisabled) { setIsScrubbing(false)'));assert.equal((controls.match(/disabled=\{controlsDisabled\}/g)??[]).length,3);
 });
-console.log(`Spotify recovery matrix passed: ${cases} deterministic cases; actual detector/bootstrap, injected clocks/fetch/socket/body/callbacks, no external playback.`);
+if(!baseline)console.log(`Spotify recovery matrix passed: ${cases} deterministic cases; actual detector/bootstrap, injected clocks/fetch/socket/body/callbacks, no external playback.`);
+
+if(baseline){console.log(`Review baseline ${baseline}: ${baselineFailures} failures, ${cases} passes`);process.exitCode=baselineFailures?1:0;}
