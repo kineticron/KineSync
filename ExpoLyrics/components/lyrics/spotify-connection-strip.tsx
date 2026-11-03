@@ -18,7 +18,7 @@ export const SpotifyConnectionStrip = memo(function SpotifyConnectionStrip() {
   const openDevice = h.phase === 'ready' && h.target === 'absent';
   const retry = h.phase === 'retryWait';
   return <View style={[styles.strip, { top: insets.top + 4 }]}>
-    <Text accessibilityLiveRegion="polite" style={styles.message}>{spotifyHealthMessage(h)}{h.phase !== 'ready' ? ' · Last known playback' : ''}</Text>
+    <Text accessibilityLiveRegion="polite" style={styles.message}>{spotifyHealthMessage(h)}{h.phase !== 'ready' || h.target === 'absent' ? ' · Last known playback' : ''}</Text>
     {(signIn || openDevice || retry) && <Pressable accessibilityRole="button"
       accessibilityLabel={openDevice ? 'Open Spotify' : signIn ? 'Review Spotify sign-in' : 'Retry Spotify connection'}
       hitSlop={8} onPress={() => {

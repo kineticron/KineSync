@@ -34,7 +34,7 @@ for (const phase of ['idle','suspended','offline','renewingSession','connecting'
 health = { ...health, phase: 'retryWait' };
 let tree = render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.deepEqual(actions,['retry']);
 health = { ...health, phase: 'signInRequired' };tree=render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.deepEqual(actions,['retry','open']);
-health = { ...health, phase: 'ready', target: 'absent' };tree=render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.equal(actions.at(-1),'spotify://');
+health = { ...health, phase: 'ready', target: 'absent' };tree=render();assert(text(tree).includes('Last known playback')); React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.equal(actions.at(-1),'spotify://');
 playback.connectionStatus='connected';assert.equal(render(),null,'native health is hidden when bridge owns routing');assert.equal(playback.connectionStatus,'connected');
 playback.connectionStatus='disconnected';playback.playbackMode='desktop';assert.equal(render(),null);
 playback.playbackMode='mobile';tour.pending=true;assert.equal(render(),null);
