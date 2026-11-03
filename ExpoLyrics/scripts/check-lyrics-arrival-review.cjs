@@ -45,6 +45,7 @@ function hooks() {
 }
 function pictureDriver(dev, original) {
   const h = hooks(), queue = [], frames = [], rnCalls = [], commandFrames = [];
+  const measurementCells=[];
   let mutables = 0, shared = 0, pictures = 0, paintCreates = 0, filters = 0, shaders = 0;
   const mutable = value => ({ value, modify(fn) { this.value = fn(this.value); } });
   const paint = () => { paintCreates++; return { setAntiAlias() {}, setBlendMode() {}, setColor() {}, setAlphaf() {}, setShader() {}, setImageFilter() {} }; };
@@ -58,14 +59,14 @@ function pictureDriver(dev, original) {
   const modules = { react: h.react, 'react/jsx-runtime': { jsx: (type, props) => ({type,props}) },
     '@shopify/react-native-skia': { Skia: skia, createPicture, Picture:'Picture', BlendMode:{SrcIn:5,SrcOver:3}, ClipOp:{Intersect:0}, TileMode:{Clamp:0,Decal:1} },
     'react-native-reanimated': {
-      makeMutable(value) { mutables++; return mutable(value); },
+      makeMutable(value) { mutables++; const cell=mutable(value);measurementCells.push(cell);return cell; },
       useSharedValue(value) { h.calls.push('shared'); return h.memo(() => { shared++; return mutable(value); }, []); },
       useFrameCallback(fn) { h.calls.push('frame'); const frame = h.memo(() => { const frame = { active:false }; frames.push(frame); return frame; }, []); frame.fn = fn;
         return h.memo(() => ({ setActive(value) { frame.active = value; } }), []); },
     },
     'react-native-worklets': { scheduleOnUI: (fn,...args) => queue.push(() => fn(...args)), scheduleOnRN: (fn,...args) => { rnCalls.push(fn.name); fn(...args); } },
   };
-  const extra = original ? '' : '\nexport { startArrivalCapture, beginArrival, flushArrivalUiCounts, snapshotArrivalCapture, registerArrivalUiReader, requestArrivalUiSample, receiveArrivalUiSample } from "@/lib/lyrics-arrival-trace";';
+  const extra = original ? '' : '\nexport { startArrivalCapture, stopArrivalCapture, beginArrival, flushArrivalUiCounts, snapshotArrivalCapture, registerArrivalUiReader, requestArrivalUiSample, receiveArrivalUiSample } from "@/lib/lyrics-arrival-trace";';
   const api = evaluate(build(path.join(directory, 'native-glyph-picture.tsx'), dev, original, extra), modules);
   const rect = {x:0,y:0,width:20,height:24};
   const words = [{ word:{text:'sing',start:0,end:1000,offset:0,letters:['s','i','n','g'],emphasized:false,joined:false},
@@ -73,7 +74,7 @@ function pictureDriver(dev, original) {
     runs:[[{glyphs:[1],positions:[{x:0,y:20}],font:{}}]] }];
   const props = { words,width:100,height:24,position:{value:0},active:{value:true},spicy:true,background:false,fontSize:36,lineEnd:1000,
     lineMotion:{value:{dark:.2,bright:.8}} };
-  return { api, props, h, rnCalls, commandFrames,
+  return { api, props, h, rnCalls, commandFrames, measurementCells,
     render(next={}) { Object.assign(props,next); h.begin(); const tree=api.NativeGlyphPicture(props); h.commit(); return tree; },
     tick(time) { props.position.value=time; props.lineMotion.value={...props.lineMotion.value,dark:.2+time/10000};
       for(const frame of frames) if(frame.active) frame.fn({timeSincePreviousFrame:16}); },
@@ -135,7 +136,12 @@ function pictureDriver(dev, original) {
   assert.equal(idle.api.snapshotArrivalCapture().counters.firstPicturePublications,idleFirst);
   idle.props.active.value=true;idle.tick(200);
   assert.equal(idle.api.snapshotArrivalCapture().counters.firstPicturePublications,idleFirst+1,'new owner reports its next actual record');
-  await idle.flush();idle.h.unmount();idle.drain();
+  await idle.flush();idle.api.stopArrivalCapture();idle.drain();
+  const stoppedBuilds=idle.measurementCells.at(-1).value.pictureBuilds, drawings=idle.stats().pictures;
+  idle.tick(400);idle.tick(500);
+  assert.ok(idle.stats().pictures>drawings,'capture stop does not stop original drawing');
+  assert.equal(idle.measurementCells.at(-1).value.pictureBuilds,stoppedBuilds,'capture stop disables UI measurement accumulation');
+  idle.h.unmount();idle.drain();
 
   // Release adapters must not invoke any React hook or native scheduler.
   const contextFile=path.join(root,'lib/lyrics-arrival-context.ts');
@@ -164,7 +170,7 @@ function pictureDriver(dev, original) {
     assert.deepEqual(normalize(after.treeSnapshot()),normalize(before.treeSnapshot()),'release native tree has no trace wrapper');
   }
   let contextApi, fontProvider = {};
-  const contextExtra = '\nexport { startArrivalCapture, beginArrival, arrivalSpan, arrivalEvent, snapshotArrivalCapture } from "./lyrics-arrival-trace";';
+  const contextExtra = '\nexport { startArrivalCapture, stopArrivalCapture, beginArrival, arrivalSpan, arrivalEvent, snapshotArrivalCapture, arrivalCounter, arrivalNow, arrivalProduced } from "./lyrics-arrival-trace";';
   const devView=buildSync({jsx:'automatic',stdin:{contents:fs.readFileSync(viewFile,'utf8'),resolveDir:directory,loader:'tsx'},bundle:true,platform:'node',format:'cjs',write:false,external:['*'],define:{__DEV__:'true'}}).outputFiles[0].text;
   const devHost=harness('spicy','flash',{code:devView,dev:true,fontProvider:()=>fontProvider,arrivalContextFactory(react,state){
     contextApi=evaluate(build(contextFile,true,undefined,contextExtra),{react});
@@ -216,6 +222,34 @@ function pictureDriver(dev, original) {
   assert.equal(timeoutTrace.snapshotArrivalUiCounts().owners.length,2048);
   assert.equal(timeoutTrace.snapshotArrivalUiCounts().droppedOwners,1);
   assert.equal((await timeoutTrace.flushArrivalUiCounts()).uiCounts.complete,false);
+  let voiceApi, clockReads = 0;
+  const voiceExtra = '\nexport * from "./lyrics-arrival-trace";';
+  const voiceHarness=createVoiceHarness(bundle(fs.readFileSync(voiceFile,'utf8')),true,{dev:true,arrivalContextFactory(react){
+    voiceApi=evaluate(build(contextFile,true,undefined,voiceExtra),{react},{performance:{now(){clockReads++;return clockReads;}}});
+    return voiceApi;
+  }});
+  voiceApi.startArrivalCapture();const voiceA=voiceApi.beginArrival({},'voice-a'),voiceB=voiceApi.beginArrival({},'voice-b');
+  voiceApi.LyricsArrivalContext.value={handle:voiceA,generation:1};
+  const retainedVoice={words:[],paintWords:[],paintText:'',start:0,end:100,translation:'translation'};
+  voiceHarness.render(retainedVoice).props.onLayout({nativeEvent:{layout:{width:240}}});voiceHarness.render(retainedVoice);
+  const initialShapes=voiceHarness.counters.glyphShapePasses;
+  voiceApi.LyricsArrivalContext.value={handle:voiceA,generation:2};voiceHarness.render(retainedVoice);
+  voiceApi.LyricsArrivalContext.value={handle:voiceB,generation:3};voiceHarness.render(retainedVoice);
+  const voiceRecords=voiceApi.snapshotArrivalCapture().records;
+  assert.equal(voiceRecords.filter(r=>r.stage==='voice-component-mounted').length,1);
+  assert.equal(voiceRecords.filter(r=>r.stage==='voice-component-unmounted').length,0);
+  assert.equal(voiceHarness.counters.glyphShapePasses,initialShapes,'new observation owner does not force shaping');
+  const reused=voiceRecords.filter(r=>r.stage==='voice-stage-attribution'&&r.packet===voiceB.packet&&r.reuse.stage==='main-shape').at(-1);
+  assert.equal(reused.reuse.producerPacket,voiceA.packet);assert.equal(reused.reuse.producerGeneration,1);assert.equal(reused.reuse.reused,true);
+  voiceHarness.unmount();
+  assert.equal(voiceApi.snapshotArrivalCapture().records.filter(r=>r.stage==='voice-component-unmounted').length,1);
+  voiceApi.stopArrivalCapture();clockReads=0;
+  voiceApi.arrivalEvent(voiceA,1,'disabled');voiceApi.arrivalNow(voiceA);
+  voiceHarness.render(retainedVoice,{fontSize:40});assert.equal(clockReads,0,'disabled instrumentation does not read clocks even on fresh layout/shaping');
+  contextApi.stopArrivalCapture();devHost.render();
+  const disabledContext=devHost.treeSnapshot().props.children.props.value;
+  devHost.viewport(700);fontProvider={};devHost.render({fontScale:1.4});
+  assert.equal(devHost.treeSnapshot().props.children.props.value,disabledContext,'inactive geometry changes preserve context value identity');
   const expectedProduction=baseline(file).split('export const NativeGlyphPicture = memo(')[1].trim().slice(0,-2);
   assert.ok(fs.readFileSync(file,'utf8').includes('const NativeGlyphPictureProduction = '+expectedProduction), 'production component body remains byte-identical to c2aaa20');
   console.log('review regressions passed: recycled UI epochs, complete dynamic counts, retirement/flush/capture isolation, no per-frame JS and release hook/tree/worklet parity against c2aaa20; mocked hosts only');

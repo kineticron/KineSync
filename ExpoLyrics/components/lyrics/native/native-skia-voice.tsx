@@ -1,5 +1,5 @@
-import { useArrivalVoice } from '@/lib/lyrics-arrival-context';
-import { arrivalEvent, arrivalSpan, arrivalCounter } from '@/lib/lyrics-arrival-trace';
+import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
+import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
@@ -131,7 +131,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const shaped = useMemo(() => {
     if (width <= 0 || !fonts) return null;
-    const layoutStart = __DEV__ ? performance.now() : 0;
+    const layoutStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
     const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
       strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
         fontFamilies: ['SF Pro Display'], fontSize,
@@ -180,8 +180,8 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     }
     const paragraph = makeParagraph(text, paintWords);
     paragraph.layout(textWidth);
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'paragraph-height-layout', layoutStart, performance.now(), 1);
-    const rangeStart = __DEV__ ? performance.now() : 0;
+    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'paragraph-height-layout', layoutStart, arrivalNow(trace.handle), 1);
+    const rangeStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
     let before = 0;
     const words = paintWords.map(word => {
       const rects = paragraph.getRectsForRange(word.offset, word.offset + (spicy ? word.text.length + Number(!!word.gapAfter) : word.text.trimEnd().length));
@@ -194,15 +194,16 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       before += wordWidth;
       return shapedWord;
     });
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'word-letter-ranges', rangeStart, performance.now(), 1);
+    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'word-letter-ranges', rangeStart, arrivalNow(trace.handle), 1);
     const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-    return { paragraph, height: paragraph.getHeight(), mainPadding, words, revision: ++shapeRevision.current,
+    const result = { paragraph, height: paragraph.getHeight(), mainPadding, words, revision: ++shapeRevision.current,
       glyphWords: batched && !staticLyrics ? (__DEV__ ? arrivalSpan(trace.handle, trace.generation, 'glyph-shaping', () => shapeGlyphWords(paragraph, words, spicy)) : shapeGlyphWords(paragraph, words, spicy)) : [] };
+    return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth,
     voicePaintText, voicePaintWords, voiceWords, width]);
   const translationLayout = useMemo(() => {
     if (width <= 0 || !fonts || staticLyrics || !showTranslation || !translation) return null;
-    const translationStarted = __DEV__ && trace.handle ? performance.now() : 0;
+    const translationStarted = __DEV__ ? arrivalNow(trace.handle) : undefined;
     const size = spicy ? fontSize * (background ? 12 / (32 * 1.05 * 0.75) : 14 / (32 * 1.05)) : Math.max(10, fontSize * 0.5);
     const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
     if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
@@ -211,9 +212,11 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
         heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts)
       .addText(translation).build();
     paragraph.layout(Math.max(1, textWidth - (spicy ? 4 : 0)));
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'translation-layout', translationStarted, performance.now(), 1);
-    return { paragraph, height: paragraph.getHeight(), margin: spicy ? background ? 2 : 4 : 0 };
+    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'translation-layout', translationStarted, arrivalNow(trace.handle), 1);
+    const result = { paragraph, height: paragraph.getHeight(), margin: spicy ? background ? 2 : 4 : 0 };
+    return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, translation, width]);
+  useArrivalShapeAttribution(trace, shaped, translationLayout);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
     : spicy ? position.value > voiceEnd ? 0.497 : 0.51 : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);

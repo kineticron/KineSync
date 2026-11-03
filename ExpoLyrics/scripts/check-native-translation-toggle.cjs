@@ -15,6 +15,7 @@ const baselineCode = baselineIndex < 0 ? null : bundle(fs.readFileSync(process.a
 function createVoiceHarness(code, spicy, layouts = {}) {
   const hookSlots = [];
   const hookCalls = [];
+  const effects = [];
   let hookCursor = 0;
   const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
     translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
@@ -22,9 +23,16 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const fonts = { name: 'test-fonts' };
   const react = {
     memo: component => component,
-    useEffect() {},
+    createContext: value => ({ value }),
+    useEffect(fn, dependencies) {
+      const index = hookCursor++, prior = hookSlots[index];
+      if (!prior || dependencies.some((value, i) => !Object.is(value, prior.dependencies[i]))) {
+        const next = { dependencies }; hookSlots[index] = next;
+        effects.push(() => { prior?.cleanup?.(); next.cleanup = fn(); });
+      }
+    },
     createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; },
-    useContext(context) { hookCursor++; return context === arrivalContext ? { handle: layouts.arrivalHandle, generation: 1 } : fonts; },
+    useContext(context) { hookCursor++; return context && 'value' in context ? context.value : fonts; },
     useRef(initial) { const index = hookCursor++; return hookSlots[index] ??= { current: initial }; },
     useState(initial) {
       const index = hookCursor++;
@@ -56,10 +64,11 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   };
   const skia = { ParagraphBuilder: { Make: () => makeParagraph('') }, Color: color => color };
   const NativeGlyphPicture = function NativeGlyphPictureMock() {};
+  const actualArrivalContext = layouts.arrivalContextFactory?.(react);
   const modules = {
     react,
-    "@/lib/lyrics-arrival-context": layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1 }) },
-    "@/lib/lyrics-arrival-trace": layouts.arrivalTrace ?? {},
+    "@/lib/lyrics-arrival-context": actualArrivalContext ?? layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1, voiceInstance: 1 }), useArrivalShapeAttribution() {} },
+    "@/lib/lyrics-arrival-trace": actualArrivalContext ?? layouts.arrivalTrace ?? {},
     'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
     '@shopify/react-native-skia': { Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
       Mask: 'Mask', Paint: 'Paint', Paragraph: 'Paragraph', Rect: 'Rect', Skia: skia, TextAlign: { Left: 0, Right: 1 } },
@@ -89,9 +98,11 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const defaults = { position: { value: 100 }, blur: { value: 0 }, lineActive: { value: true },
     lineMotion: { value: { scale: 1, bright: 0.9, dark: 0.3 } }, fontSize: 32, lineHeight: 42,
     right: false, background: false, staticLyrics: false, spicy, showTranslation: true, hasDuet: false, batched: true };
-  return { counters, hookCalls, NativeGlyphPicture, render(voice, props = {}) {
+  return { counters, hookCalls, NativeGlyphPicture, unmount() { for (const slot of hookSlots) slot?.cleanup?.(); }, render(voice, props = {}) {
     hookCursor = 0;
-    return NativeSkiaVoice({ ...defaults, voice, ...props });
+    const tree = NativeSkiaVoice({ ...defaults, voice, ...props });
+    while (effects.length) effects.shift()();
+    return tree;
   } };
 }
 

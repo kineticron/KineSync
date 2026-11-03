@@ -1,7 +1,9 @@
 /** Development-only bounded observations. Never retains packets, text or native objects. */
 export type ArrivalHandle = Readonly<{ capture: number; packet: number; source: string; parentPacket?: number }>;
-type Observation = { pictureEpoch?: number; producers?: { model: number; cues: number }; parentPacket?: number; source: string; packet: number; generation: number; stage: string; start: number; end: number; count?: number; uiRecordDurationMs?: number };
+type Reuse = { stage: string; observed: boolean; producerPacket?: number; producerGeneration?: number; reused?: boolean };
+type Observation = { voiceInstance?: number; reuse?: Reuse; pictureEpoch?: number; producers?: { model: number; cues: number }; parentPacket?: number; source: string; packet: number; generation: number; stage: string; start: number; end: number; count?: number; uiRecordDurationMs?: number };
 let capture = 0, sequence = 0, enabled = false, dropped = 0;
+let shapes: WeakMap<object, { capture: number; packet: number; generation: number }>;
 let packets: WeakMap<object, ArrivalHandle>;
 const records: Observation[] = (typeof __DEV__ !== 'undefined' && __DEV__ ? [] : undefined)!;
 const LIMIT = 2048;
@@ -14,9 +16,11 @@ export function arrivalCounter(handle: ArrivalHandle | undefined, metric: Arriva
 }
 export function startArrivalCapture() {
   if (!__DEV__) return;
+  for (const stop of uiStops?.values() ?? []) stop();
+  uiStops = undefined;
   for (const pending of uiRequests.values()) { clearTimeout(pending.timer); pending.finish(); }
   uiRequests.clear(); uiReaders = undefined; uiSamples = undefined; uiVersion = 0; uiFlushedVersion = -1; uiDrops = 0; uiTimeouts = 0;
-  capture++; counters = emptyCounters(); enabled = true; dropped = 0; records.length = 0; packets = new WeakMap();
+  capture++; counters = emptyCounters(); enabled = true; dropped = 0; records.length = 0; packets = new WeakMap(); shapes = new WeakMap();
 }
 export function arrivalHandle(packet: object): ArrivalHandle | undefined {
   if (!__DEV__ || !enabled) return;
@@ -41,11 +45,28 @@ export function publishArrival(packet: object, source: string, parent: ArrivalHa
 export function linkArrival(packet: object, handle: ArrivalHandle | undefined) {
   if (__DEV__ && enabled && handle?.capture === capture) packets.set(packet, handle);
 }
-export function arrivalEvent(handle: ArrivalHandle | undefined, generation: number, stage: string, start = performance.now(), end = start, count?: number, producers?: { model: number; cues: number }) {
+export function arrivalIsActive(handle: ArrivalHandle | undefined): handle is ArrivalHandle {
+  return !!(__DEV__ && enabled && handle?.capture === capture);
+}
+export function arrivalNow(handle: ArrivalHandle | undefined) { return arrivalIsActive(handle) ? performance.now() : undefined; }
+export function arrivalProduced<T extends object>(handle: ArrivalHandle | undefined, generation: number, output: T): T {
+  if (arrivalIsActive(handle)) shapes.set(output, { capture, packet: handle.packet, generation });
+  return output;
+}
+export function arrivalReuse(handle: ArrivalHandle | undefined, generation: number, stage: string, output: object | null, voiceInstance: number) {
+  if (!arrivalIsActive(handle) || !output) return;
+  const origin = shapes.get(output);
+  const observed = origin?.capture === capture;
+  arrivalEvent(handle, generation, 'voice-stage-attribution', undefined, undefined, undefined, undefined, { voiceInstance,
+    reuse: { stage, observed, ...(observed ? { producerPacket: origin.packet, producerGeneration: origin.generation,
+      reused: origin.packet !== handle.packet || origin.generation !== generation } : {}) } });
+}
+export function arrivalEvent(handle: ArrivalHandle | undefined, generation: number, stage: string, start?: number, end?: number, count?: number, producers?: { model: number; cues: number }, metadata?: { voiceInstance?: number; reuse?: Reuse }) {
   if (!__DEV__ || !enabled || handle?.capture !== capture) return;
+  start ??= performance.now(); end ??= start;
   if (stage.startsWith('react-') && stage.endsWith('-render-to-commit')) counters.reactCommits++;
   if (records.length === LIMIT) { dropped++; return; }
-  records.push({ parentPacket: handle.parentPacket, source: handle.source, packet: handle.packet, generation, stage, start, end, ...(producers ? { producers: { ...producers } } : {}), ...(count === undefined ? {} : { count }) });
+  records.push({ ...metadata, parentPacket: handle.parentPacket, source: handle.source, packet: handle.packet, generation, stage, start, end, ...(producers ? { producers: { ...producers } } : {}), ...(count === undefined ? {} : { count }) });
 }
 export function arrivalPicture(handle: ArrivalHandle, generation: number, uiRecordDurationMs: number, pictureEpoch?: number) {
   if (!__DEV__ || !enabled || handle.capture !== capture) return;
@@ -71,9 +92,11 @@ export function snapshotArrivalCapture() {
   return { uiCounts: snapshotArrivalUiCounts(), counterSchema: 1, counters: { ...counters }, counterScope: 'accepted capture owners; counters continue after span buffer saturation',
     counterUnavailable: ['empty/emoji-mask picture builds', 'native/GPU allocation bytes', 'all native allocation calls', 'actual JS long tasks'],
     capture, dropped, saturated: dropped > 0, clock: 'RN performance.now', accounting: 'independent inclusive spans; never sum',
-    unavailable: ['native body-ready', 'callback backlog', 'actual first presented correct line', 'actual first presented correct window'], records: records.map(record => ({ ...record, ...(record.producers ? { producers: { ...record.producers } } : {}) })) };
+    unavailable: ['native body-ready', 'callback backlog', 'actual first presented correct line', 'actual first presented correct window'], records: records.map(record => ({ ...record, ...(record.reuse ? { reuse: { ...record.reuse } } : {}), ...(record.producers ? { producers: { ...record.producers } } : {}) })) };
 }
-export function stopArrivalCapture() { if (__DEV__) enabled = false; }
+export function stopArrivalCapture() {
+  if (__DEV__) { enabled = false; for (const stop of uiStops?.values() ?? []) stop(); uiStops = undefined; }
+}
 
 // Explicit opt-in for live-provider runs through the development JS console.
 if (typeof __DEV__ !== 'undefined' && __DEV__) Object.assign(globalThis, { kineSyncArrivalTrace: {
@@ -96,17 +119,18 @@ if (typeof __DEV__ !== 'undefined' && __DEV__) Object.assign(globalThis, { kineS
 
 export type ArrivalUiTotals = { pictureBuilds: number; paintConstructors: number; blurFilterConstructors: number; shaderConstructors: number };
 type UiSample = { sampledAtUiMs?: number; receivedAtRnMs: number; epoch: number; packet: number; generation: number; totals: ArrivalUiTotals };
+let uiStops: Map<number, () => void> | undefined;
 let uiReaders: Map<number, () => Promise<void>> | undefined;
 let uiSamples: Map<number, UiSample> | undefined;
 let uiVersion = 0, uiFlushedVersion = -1, uiDrops = 0, uiTimeouts = 0;
 let requestSequence = 0;
 const uiRequests: Map<number, { finish: () => void; timer: ReturnType<typeof setTimeout> }> = (typeof __DEV__ !== 'undefined' && __DEV__ ? new Map() : undefined)!;
-export function registerArrivalUiReader(handle: ArrivalHandle, epoch: number, read: () => Promise<void>) {
+export function registerArrivalUiReader(handle: ArrivalHandle, epoch: number, read: () => Promise<void>, stop?: () => void) {
   if (!__DEV__ || !enabled || handle.capture !== capture) return () => {};
   uiReaders ??= new Map();
   if (uiReaders.size >= 512) { uiDrops++; return () => {}; }
-  uiReaders.set(epoch, read); uiVersion++;
-  return () => { if (handle.capture === capture && uiReaders?.get(epoch) === read) { uiReaders.delete(epoch); uiVersion++; } };
+  uiReaders.set(epoch, read); if (stop) { uiStops ??= new Map(); uiStops.set(epoch, stop); } uiVersion++;
+  return () => { if (handle.capture === capture && uiReaders?.get(epoch) === read) { uiReaders.delete(epoch); uiStops?.delete(epoch); uiVersion++; } };
 }
 export function requestArrivalUiSample(send: (request: number) => void) {
   if (!__DEV__ || !enabled) return Promise.resolve();

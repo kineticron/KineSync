@@ -3,6 +3,7 @@
  */
 const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
+const { validateEvidence } = require('./lyrics-arrival-evidence.cjs');
 const matrix = ['amll', 'spicy'].flatMap(style => ['portrait', 'landscape'].flatMap(orientation =>
   ['start', 'mid-song', 'overlap'].map(scenario => ({ style, orientation, scenario }))));
 if (process.argv.includes('--plan')) {
@@ -31,10 +32,10 @@ const results = [];
       const logger = spawn('adb', ['-s', serial, 'logcat', '-v', 'raw', '-s', 'ReactNativeJS:I']);
       let buffer = '';
       const chunks = new Map();
-      let chunkTotal = 0;
+      let chunkTotal = 0, timer;
       try {
         const result = new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(Error(`No trace for ${run}; verify installed dev binary and deep link`)), 30000);
+          timer = setTimeout(() => reject(Error(`No trace for ${run}; verify installed dev binary and deep link`)), 30000);
           logger.on('error', error => { clearTimeout(timer); reject(error); });
           logger.stdout.on('data', chunk => {
             buffer = (buffer + chunk).slice(-2 * 1024 * 1024);
@@ -52,7 +53,10 @@ const results = [];
                 chunkTotal = part.total; chunks.set(part.index, part.data);
                 if (chunks.size === chunkTotal) {
                   const data = JSON.parse(Array.from({ length: chunkTotal }, (_, index) => chunks.get(index)).join(''));
-                  if (data.run === run) { clearTimeout(timer); resolve(data); }
+                  if (data.run === run) {
+                    clearTimeout(timer);
+                    try { resolve(validateEvidence(data, { run, style, orientation, scenario })); } catch (error) { reject(error); }
+                  }
                 }
               } catch {}
             }
@@ -61,8 +65,8 @@ const results = [];
         const uri = `expolyrics://arrival-lab?${new URLSearchParams({ style, orientation, scenario, run })}`;
         adb('shell', 'am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', `'${uri}'`, packageName);
         results.push(await result);
-        fs.writeFileSync(output, JSON.stringify({ device, measurement: 'native fixture workload; actual correct presentation unavailable', results }, null, 2));
-      } finally { logger.kill(); }
+        fs.writeFileSync(output, JSON.stringify({ device, measurement: 'paused synthetic delayed arrival into initialized native host; no first-renderer/provider/presentation baseline', matrix, complete: results.length === matrix.length, results }, null, 2));
+      } finally { clearTimeout(timer); logger.kill(); }
     }
   } finally {
     adb('shell', 'settings', 'put', 'system', 'user_rotation', oldRotation);

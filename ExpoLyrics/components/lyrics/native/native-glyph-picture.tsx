@@ -74,6 +74,7 @@ function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX
 
 function measuredGlowFilter(paints: ReusableGlyphPaints, radius: number) {
   'worklet';
+  if (!paints.arrivalCounts) return getGlowFilter(paints, radius);
   const hit = paints.blurRadii.includes(radius);
   const result = getGlowFilter(paints, radius);
   if (!hit && paints.arrivalCounts) paints.arrivalCounts.blurFilterConstructors++;
@@ -81,6 +82,7 @@ function measuredGlowFilter(paints: ReusableGlyphPaints, radius: number) {
 }
 function measuredRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX: number, bright: number, dark: number) {
   'worklet';
+  if (!paints.arrivalCounts) return getRevealShader(paints, x, y, endX, bright, dark);
   const hit = paints.revealShaders.some(entry => Object.is(entry.x, x) && Object.is(entry.y, y) && Object.is(entry.endX, endX) &&
     Object.is(entry.bright, bright) && Object.is(entry.dark, dark));
   const result = getRevealShader(paints, x, y, endX, bright, dark);
@@ -438,11 +440,11 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     const cachedPaints = paints.value;
-    const totals = pictureTraceEnabled && measurement ? { ...measurement.counts.value } : undefined;
+    const totals = pictureTraceEnabled && measurement && measurement.counts.value.active ? { ...measurement.counts.value } : undefined;
     if (totals && !cachedPaints) totals.paintConstructors += 2;
     const reusablePaints: ReusableGlyphPaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
     if (pictureTraceEnabled && totals) reusablePaints.arrivalCounts = totals;
-    const arrivalStarted = pictureTraceEnabled && measurement && !measurement.counts.value.reported ? performance.now() : 0;
+    const arrivalStarted = pictureTraceEnabled && totals && !totals.reported ? performance.now() : 0;
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
     if (pictureTraceEnabled && measurement && totals) {

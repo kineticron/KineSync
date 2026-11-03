@@ -61,6 +61,11 @@ function harness(reduced = false, active = true, options = {}) {
   const Wrapped = module.exports.withLyricsPacketTransition('renderer', options);
   const Live = Wrapped({}).type;
   const render = () => {
+    if (options.store) {
+      const state = options.store.getState();
+      const next = Object.fromEntries(['lyrics','lyricsSource','lyricsMetadata','lyricsStatusMessage','currentTrack'].map(key=>[key,state[key]]));
+      if (Object.keys(next).some(key=>next[key]!==packet[key])) packet=next;
+    }
     let count = 0;
     do {
       assert.ok(count++ < 10, 'render must settle');
@@ -77,6 +82,7 @@ function harness(reduced = false, active = true, options = {}) {
 }
 const opacity = layer => layer.props.style.at(-1).opacity;
 const context = layer => layer.props.children.props.value;
+if (require.main === module) {
 const h = harness();
 let layers = h.render();
 assert.equal(layers.length, 1);
@@ -195,3 +201,6 @@ context(layers[1]).onReady(); native.render(); native.finish();
 layers = native.set({ currentTrack: { id: 'next-native-song' }, lyrics: original });
 assert.equal(layers.length, 2, 'native track changes retain normal replacement semantics');
 console.log('Native packet opt-in PASS: same-source mounted identity, incremental updates, pending readiness, provider and track isolation.');
+
+}
+module.exports={harness,context,opacity};
