@@ -53,9 +53,14 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: DesktopBridge/package-lock.json
+          cache-dependency-path: |
+            DesktopBridge/package-lock.json
+            ExpoLyrics/package-lock.json
       - name: Install test dependencies without native downloads
         working-directory: DesktopBridge
+        run: npm ci --ignore-scripts
+      - name: Install mobile dependencies used by cross-project regressions
+        working-directory: ExpoLyrics
         run: npm ci --ignore-scripts
       - name: Check syntax and run regressions
         working-directory: DesktopBridge
