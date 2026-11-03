@@ -14,9 +14,9 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[] };
+type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[]; unionGroup?: number; unionInk?: SkRect };
 type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
-type ReusableGlyphPaints = { revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
+type ReusableGlyphPaints = { unionPaints?: { encode: SkPaint; decode: SkPaint }; arrivalCounts?: { paintConstructors: number }; revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
 
 // Glow sigma is animation-derived and continuous. Reuse only bit-exact radii,
 // with a small per-voice LRU so a long song cannot retain an unbounded filter set.
@@ -74,7 +74,7 @@ function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
   const lines = paragraph.getLineMetrics();
   const allRects = words.flatMap(word => word.rects);
-  const shaped = words.map(word => {
+  const shaped: ShapedGlyphWord[] = words.map(word => {
     const parts = word.word.emphasized ? word.letters : [word.rects];
     const emojiMask = word.word.emphasized ? word.word.letters.map(needsEmojiMask) : [word.word.letters.some(needsEmojiMask)];
     const revealRects = parts.map(rects => {
@@ -137,10 +137,33 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
       });
     }
   });
+  // Connected timing atoms may still share ink after their independent
+  // transforms. Keep their original ownership/motion, but composite presented
+  // slices together. Whitespace/gap boundaries keep unrelated words direct.
+  let groupStart = 0;
+  const finishGroup = (end: number) => {
+    if (shaped.slice(groupStart, end).reduce((n, word) => n + word.runs.filter(runs => runs.length > 0).length, 0) < 2) return;
+    for (let i = groupStart; i < end; i++) {
+      const rects = [...shaped[i].rects, ...shaped[i].letters.flat(), ...sliceInk[i].flat()];
+      if (!rects.length) continue;
+      const x = Math.min(...rects.map(rect => rect.x)), y = Math.min(...rects.map(rect => rect.y));
+      shaped[i].unionGroup = groupStart;
+      shaped[i].unionInk = { x, y, width: Math.max(...rects.map(rect => rect.x + rect.width)) - x,
+        height: Math.max(...rects.map(rect => rect.y + rect.height)) - y };
+    }
+  };
+  for (let i = 1; i <= shaped.length; i++) {
+    const previous = shaped[i - 1], next = shaped[i];
+    const joined = next && previous.word.offset + previous.word.text.length === next.word.offset && !previous.word.gapAfter &&
+      !/\s$/.test(previous.word.text) && !/^\s/.test(next.word.text);
+    const inkTouches = next && sliceInk[i - 1].some(part => part.some(a => sliceInk[i].some(other => other.some(b =>
+      Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) && Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y)))));
+    if (!joined && !inkTouches) { finishGroup(i); groupStart = i; }
+  }
   const sourcePaint = Skia.Paint();
   sourcePaint.setAntiAlias(true);
   sourcePaint.setColor(Skia.Color('white'));
-  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean) || word.overlapMask.some(Boolean)) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
+  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean) || word.overlapMask.some(Boolean) || word.unionGroup !== undefined) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
     canvas.clipPath(word.clips[index], ClipOp.Intersect, true);
     for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, sourcePaint);
   }));
@@ -159,7 +182,7 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
 
 function drawGlyphSlice(canvas: SkCanvas, word: ShapedGlyphWord, letter: number, paint: SkPaint) {
   'worklet';
-  if (word.emojiMask[letter] || word.overlapMask?.[letter]) {
+  if (word.emojiMask[letter] || word.overlapMask?.[letter] || word.unionGroup !== undefined) {
     // shirorekha-alpha-union-v1: apply reveal alpha once to opaque glyph ink.
     // With coverage c1,c2 and alpha a, direct SrcOver gives
     // a*c1 + a*c2*(1-a*c1). Masking gives a*(c1+c2*(1-c1)),
@@ -173,6 +196,64 @@ function drawGlyphSlice(canvas: SkCanvas, word: ShapedGlyphWord, letter: number,
     canvas.restore();
     paint.setBlendMode(BlendMode.SrcOver);
   } else for (const run of word.runs[letter]) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+}
+
+// Encode the already-rasterized slice's alpha into opaque RGB. Lighten
+// between opaque images is exactly max(Rsrc,Rdst), unlike Lighten on white
+// translucent ink (whose alpha still uses SrcOver). Decode max(R) to white
+// alpha once. This keeps each slice's transform, reveal and glow intact.
+function getUnionPaints(paints: ReusableGlyphPaints) {
+  'worklet';
+  if (paints.unionPaints) return paints.unionPaints;
+  const encode = Skia.Paint(), decode = Skia.Paint();
+  encode.setColorFilter(Skia.ColorFilter.MakeMatrix([
+    0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1,
+  ]));
+  encode.setBlendMode(BlendMode.Lighten);
+  decode.setColorFilter(Skia.ColorFilter.MakeMatrix([
+    0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0,
+  ]));
+  if (paints.arrivalCounts) paints.arrivalCounts.paintConstructors += 2;
+  paints.unionPaints = { encode, decode };
+  return paints.unionPaints;
+}
+
+// Bounds include actual fallback ink and conservatively bound both nested
+// transforms and 4 sigma of glow. They are allocation hints, never new clips.
+function unionBounds(words: ShapedGlyphWord[], motions: WordMotion[], start: number, end: number, time: number,
+  spicy: boolean, background: boolean, fontSize: number, clock: AmllFloatClock) {
+  'worklet';
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  let wordScale = 1, wordDelta = 0, letterScale = 1, letterDelta = 0, wordY = 0, letterX = 0, letterY = 0, sigma = 0;
+  const unit = background ? fontSize / 0.75 : fontSize;
+  for (let i = start; i < end; i++) {
+    const word = words[i], motion = motions[i], ink = word.unionInk!;
+    left = Math.min(left, ink.x); top = Math.min(top, ink.y);
+    right = Math.max(right, ink.x + ink.width); bottom = Math.max(bottom, ink.y + ink.height);
+    const scale = spicy ? motion.scale : 1;
+    wordScale = Math.max(wordScale, Math.abs(scale)); wordDelta = Math.max(wordDelta, Math.abs(scale - 1));
+    wordY = Math.max(wordY, Math.abs(spicy ? motion.y * unit : amllFloat(amllWordFloatPosition(clock, time, word.word.start, word.word.end), word.word.start, word.word.end, background) * fontSize));
+    if (!word.word.emphasized && spicy) sigma = Math.max(sigma, (4 + 2 * motion.glow) / 2);
+    if (word.word.emphasized) for (let letter = 0; letter < word.runs.length; letter++) {
+      if (spicy) {
+        const m = motion.letters[letter] ?? motion;
+        letterScale = Math.max(letterScale, Math.abs(m.scale)); letterDelta = Math.max(letterDelta, Math.abs(m.scale - 1));
+        letterY = Math.max(letterY, Math.abs(m.y * unit)); sigma = Math.max(sigma, (4 + 12 * m.glow) / 2);
+      } else {
+        const m = amllEmphasis(time, word.word.emphasis?.start ?? word.word.start, word.word.emphasis?.end ?? word.word.end,
+          (word.word.emphasis?.index ?? 0) + letter, word.word.emphasis?.count ?? word.word.letters.length,
+          word.word.emphasis?.last ?? i === words.length - 1, background);
+        letterScale = Math.max(letterScale, Math.abs(m.scale)); letterDelta = Math.max(letterDelta, Math.abs(m.scale - 1));
+        letterX = Math.max(letterX, Math.abs(m.x * fontSize)); letterY = Math.max(letterY, Math.abs(m.y * fontSize));
+        sigma = Math.max(sigma, m.radius * fontSize / 2);
+      }
+    }
+  }
+  const expansion = wordDelta + wordScale * letterDelta;
+  const blur = 4 * sigma * wordScale * letterScale + 2;
+  const x = (right - left) * expansion + wordScale * letterX + blur;
+  const y = (bottom - top) * expansion + wordY + wordScale * letterY + blur;
+  return Skia.XYWHRect(left - x, top - y, right - left + x * 2, bottom - top + y * 2);
 }
 
 function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
@@ -191,9 +272,20 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
     advanced += clamp01((time - word.word.start) / Math.max(1, word.word.end - word.word.start)) *
       (word.width + (i === 0 ? fade * 1.5 : 0) + (i === words.length - 1 ? fade * 0.5 : 0));
   }
+  let groupEnd = -1;
+  let groupBounds: SkRect | undefined;
   words.forEach((word, index) => {
+    const union = word.unionGroup !== undefined;
+    if (union && index >= groupEnd) {
+      groupEnd = index + 1;
+      while (groupEnd < words.length && words[groupEnd].unionGroup === word.unionGroup) groupEnd++;
+      groupBounds = unionBounds(words, motions, index, groupEnd, time, spicy, background, fontSize, floatClock);
+      // cross-slice-alpha-max-v1: opaque RGB max of independently drawn slices.
+      canvas.saveLayer(getUnionPaints(paints).decode, groupBounds);
+      canvas.clear(Skia.Color('black'));
+    }
     const bounds = word.rects[0];
-    if (!bounds) return;
+    if (!bounds) { if (union && index + 1 === groupEnd) canvas.restore(); return; }
     const motion = motions[index];
     const sung = time > lineEnd;
     canvas.save();
@@ -204,6 +296,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
       const rects = word.word.emphasized ? word.letters[letter] : word.rects;
       const rect = rects[0];
       if (!rect) return;
+      if (union) canvas.saveLayer(getUnionPaints(paints).encode);
       canvas.save();
       let glow = 0;
       let radius = 0;
@@ -264,8 +357,10 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
       canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
       drawGlyphSlice(canvas, word, letter, paint);
       canvas.restore();
+      if (union) canvas.restore();
     });
     canvas.restore();
+    if (union && index + 1 === groupEnd) canvas.restore();
   });
 }
 
