@@ -33,11 +33,21 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   const appearance = useSharedValue(1);
   const visible = active && foreground && launchVisible;
   const density = PixelRatio.get();
+  const layoutReady = size.width > 0 && size.height > 0;
   const renderSize = useMemo(() => kawarpRenderSize(size.width, size.height, density), [density, size.height, size.width]);
-  const canvasStyle = useMemo(() => ({ position: 'absolute' as const, left: -renderSize.bleed, top: -renderSize.bleed,
-    width: renderSize.width, height: renderSize.height, transformOrigin: 'top left',
+  const preparationSize = useRef(renderSize);
+  preparationSize.current = renderSize;
+  const canvasBoundsStyle = useMemo(() => ({ position: 'absolute' as const,
+    left: -renderSize.bleed, top: -renderSize.bleed, right: -renderSize.bleed, bottom: -renderSize.bleed }), [renderSize.bleed]);
+  const canvasStyle = useMemo(() => ({
+    width: `${100 / renderSize.scale}%` as const, height: `${100 / renderSize.scale}%` as const, transformOrigin: 'top left',
     transform: [{ scale: renderSize.scale }] }), [renderSize]);
-  const uniforms = useDerivedValue(() => ({ resolution: [renderSize.width, renderSize.height], time: time.get(), blend: 1 }));
+  // Skia measures on the UI thread. Reanimated's Fabric measure includes the
+  // display transform; undo our scale to recover the backing surface's points.
+  const canvasSize = useSharedValue({ width: 0, height: 0 });
+  const canvasWidth = useDerivedValue(() => Math.max(1, Math.floor(canvasSize.get().width / renderSize.scale)));
+  const canvasHeight = useDerivedValue(() => Math.max(1, Math.floor(canvasSize.get().height / renderSize.scale)));
+  const uniforms = useDerivedValue(() => ({ resolution: [canvasWidth.get(), canvasHeight.get()], time: time.get(), blend: 1 }));
 
   useEffect(() => {
     const app = AppState.addEventListener('change', state => setForeground(state === 'active'));
@@ -46,7 +56,7 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   }, []);
 
   useEffect(() => {
-    if (!uri || size.width <= 0 || size.height <= 0) return;
+    if (!uri || !layoutReady) return;
     let cancelled = false;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -68,9 +78,10 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
         const old = sceneRef.current;
         if (old) cancelAnimation(old.blend);
         const progress = old?.blend.get() ?? 1;
+        const frameSize = preparationSize.current;
         const prepared = await prepareKawarpArtwork(data, old && {
           texture: old.texture, frame: old.frame, previousFrame: old.previousFrame, effects: old.effects,
-        }, progress, time.get(), renderSize.width, renderSize.height, density);
+        }, progress, time.get(), frameSize.width, frameSize.height, density);
         if (cancelled) return;
         const next = { ...prepared, blend: makeMutable(0), generation: (old?.generation ?? 0) + 1 };
         sceneRef.current = next;
@@ -85,7 +96,7 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
     }
     void load();
     return () => { cancelled = true; controller.abort(); clearTimeout(timeout); };
-  }, [density, renderSize.height, renderSize.width, size.height, size.width, time, uri]);
+  }, [density, layoutReady, time, uri]);
 
   const finishFade = useCallback((generation: number) => {
     if (sceneRef.current?.generation === generation) setTransitioning(false);
@@ -130,15 +141,15 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   return <View pointerEvents="none" aria-hidden onLayout={onLayout} style={styles.root}>
     <PromotionalBackdrop />
     <Animated.View style={[StyleSheet.absoluteFill, appearanceStyle]}>
-      {size.width > 0 && size.height > 0 ? <Canvas style={canvasStyle}>
+      {layoutReady ? <View style={canvasBoundsStyle}><Canvas style={canvasStyle} onSize={visible ? canvasSize : undefined}>
         {scene ? transitioning ? <>
-          {scene.previousFrame ? <Image image={scene.previousFrame} x={0} y={0} width={renderSize.width} height={renderSize.height} fit="fill" sampling={SAMPLING} /> : null}
-          <Image image={scene.frame} x={0} y={0} width={renderSize.width} height={renderSize.height} fit="fill" sampling={SAMPLING} opacity={scene.blend} />
+          {scene.previousFrame ? <Image image={scene.previousFrame} x={0} y={0} width={canvasWidth} height={canvasHeight} fit="fill" sampling={SAMPLING} /> : null}
+          <Image image={scene.frame} x={0} y={0} width={canvasWidth} height={canvasHeight} fit="fill" sampling={SAMPLING} opacity={scene.blend} />
         </> : <Fill><Shader source={scene.effects.warp} uniforms={uniforms}>
           <ImageShader image={scene.texture} width={KAWARP_TEXTURE_SIZE} height={KAWARP_TEXTURE_SIZE} fit="fill" sampling={SAMPLING} />
           <ImageShader image={scene.texture} width={KAWARP_TEXTURE_SIZE} height={KAWARP_TEXTURE_SIZE} fit="fill" sampling={SAMPLING} />
         </Shader></Fill> : null}
-      </Canvas> : null}
+      </Canvas></View> : null}
     </Animated.View>
   </View>;
 });
