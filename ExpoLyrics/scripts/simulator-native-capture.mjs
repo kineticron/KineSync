@@ -17,7 +17,7 @@ export function validateCaptureAttestation(response, request, udid) {
 export const CAPTURE_BUNDLE = 'dev.kineticron.simulator-capture.xctrunner';
 
 // One XCTest process owns the native capture mailbox for this simulator run.
-export async function startNativeCapture(state, udid, startTransport, { command = startupCommand, pause = () => new Promise(resolve => setTimeout(resolve, 50)) } = {}) {
+export async function startNativeCapture(state, udid, startTransport, { command = startupCommand, pause = () => new Promise(resolve => setTimeout(resolve, 50)), readinessBudget = 240000 } = {}) {
   const project = new URL('./native-simulator-capture/Capture.xcodeproj', import.meta.url).pathname;
   const derived = path.resolve(state.outputDir, 'diagnostics/native-capture-build');
   const args = ['-project', project, '-scheme', 'Capture', '-configuration', 'Release', '-destination', `platform=iOS Simulator,id=${udid}`, '-derivedDataPath', derived, '-parallel-testing-enabled', 'NO', 'CODE_SIGNING_ALLOWED=NO'];
@@ -38,12 +38,13 @@ export async function startNativeCapture(state, udid, startTransport, { command 
   const configured = path.join(products, 'Capture-mailbox.xctestrun');
   fs.writeFileSync(configured, plist.build(configuration));
   fs.writeFileSync(path.join(state.outputDir, 'native-capture-startup.json'), JSON.stringify({ mailbox, session, manifest, configured }));
+  if (typeof state.enterPhase === 'function') state.enterPhase('startup:native-capture-readiness', readinessBudget);
+  else state.update('startup:native-capture-readiness');
   const child = startTransport('xcodebuild', ['-xctestrun', configured, '-destination', `platform=iOS Simulator,id=${udid}`, '-parallel-testing-enabled', 'NO', 'test-without-building'], { stdio: ['ignore', 'pipe', 'pipe'] });
   state.children.push(child);
   let stopped = false;
   child.once('error', () => { stopped = true; });
   child.once('close', () => { stopped = true; });
-  state.update('startup:native-capture-readiness');
   while (!fs.existsSync(path.join(mailbox, 'ready.json'))) {
     state.check();
     if (stopped) throw Error('Native capture runner exited before readiness');

@@ -344,7 +344,7 @@ if (name === 'xcodebuild') {
   fs.mkdirSync(products, { recursive: true });
   const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
   fs.writeFileSync(path.join(products, 'Capture.xctestrun'), plist.build({ Capture: { TestHostBundleIdentifier: 'dev.kineticron.simulator-capture.xctrunner', IsUITestBundle: true }, __xctestrun_metadata__: { FormatVersion: 1 } }));
-  if (process.env.SIM_CASE === 'unified-log-slow-ready') { setTimeout(() => process.exit(0), 400); return; }
+  if (process.env.SIM_CASE === 'unified-log-slow-ready') { setTimeout(() => process.exit(0), 1100); return; }
  }
  if (args.includes('test-without-building')) {
   const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
@@ -352,7 +352,7 @@ if (name === 'xcodebuild') {
   const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
   fs.mkdirSync(mailbox, { recursive: true });
   const writeReady = () => fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: env.KINESYNC_CAPTURE_SESSION, mailbox }));
-  if (process.env.SIM_CASE === 'unified-log-slow-ready') setTimeout(writeReady, 400);
+  if (process.env.SIM_CASE === 'unified-log-slow-ready') setTimeout(writeReady, 1100);
   else writeReady();
   setInterval(() => {
    const file = path.join(mailbox, 'request.json');
@@ -449,7 +449,7 @@ if (args.includes('launch')) {
     const output = path.join(dir, scenario);
     const shouldPass = ['unstable', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--build-seconds', scenario === 'unified-log-slow-ready' ? '2' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (scenario === 'stale-request') {
@@ -491,6 +491,8 @@ if (args.includes('launch')) {
       if (scenario === 'unified-log-slow-ready') {
         const startupLog = fs.readFileSync(path.join(output, 'startup-commands.jsonl'), 'utf8');
         assert.ok(startupLog.includes('startup:native-capture-build'));
+        const startsLog = fs.readFileSync(path.join(output, 'command-starts.jsonl'), 'utf8');
+        assert.ok(startsLog.includes('"stage":"startup:native-capture-readiness"'));
         assert.ok(fs.existsSync(path.join(output, 'native-capture-ready.json')));
       }
     } else {

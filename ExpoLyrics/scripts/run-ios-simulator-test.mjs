@@ -173,7 +173,7 @@ async function main() {
   if (process.env.SIMULATOR_ROTATION_TOOL_DIR) fs.copyFileSync(path.join(process.env.SIMULATOR_ROTATION_TOOL_DIR, 'provenance.json'), path.join(outputDir, 'rotation-tool-provenance.json'));
   await selectToolchain(lifecycle);
   const device = await prepareSimulator(lifecycle, selectSimulatorDevice);
-  lifecycle.enterPhase('startup:rotation-preflight', seconds('--preflight-seconds', 240000));
+  lifecycle.enterPhase('startup:rotation-preflight', seconds('--preflight-seconds', 120000));
   // Reuse the verified inventory; preflight has its own bounded allowance.
   const inventory = JSON.stringify(lifecycle.readyInventory);
   rotateSimulator('portrait', device.udid, (cmd, args, options) => cmd === 'xcrun' ? inventory : runCommand(cmd, args, options));
@@ -336,7 +336,7 @@ async function main() {
     }
   }
 
-  lifecycle.enterPhase('startup:unified-log-readiness', seconds('--readiness-seconds', 180000));
+  lifecycle.enterPhase('startup:unified-log-readiness', seconds('--stream-readiness-seconds', seconds('--readiness-seconds', 120000)));
   const deviceLog = path.join(outputDir, 'device-stream.log');
   fs.writeFileSync(deviceLog, '');
   // RN Release's default JS logger uses os_log, not the launch console. Parse
@@ -384,8 +384,8 @@ async function main() {
     await streamReadyPromise;
     if (!streamReady || parser.errors.length) throw new Error(parser.errors.join('; ') || 'Unified log stream not ready');
   } finally { clearInterval(readinessTimeout); }
-  lifecycle.enterPhase('startup:native-capture-readiness', seconds('--readiness-seconds', 180000));
-  const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport);
+  lifecycle.enterPhase('startup:native-capture-build', seconds('--build-seconds', 120000));
+  const nativeCapture = await startNativeCapture(lifecycle, device.udid, startTransport, { readinessBudget: seconds('--readiness-seconds', 240000) });
   if (parser.errors.length) throw new Error(parser.errors.join('; '));
   lifecycle.update('startup:launch/awaiting-STAGE_BEGIN');
   protocolArmed = true;
