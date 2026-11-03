@@ -1,3 +1,4 @@
+import { arrivalPicture, type ArrivalHandle } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
 import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkImageFilter, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -364,13 +365,19 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
   });
 }
 
+function reportArrivalPicture(handle: ArrivalHandle, generation: number, duration: number) {
+  arrivalPicture(handle, generation, duration);
+}
+
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
 const pictureNativeMonotonicNow = typeof performance !== 'undefined' ? performance.now : null;
 const pictureTraceEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
-export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
+export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0 }: {
+  arrivalOwner?: ArrivalHandle; arrivalGeneration?: number;
   words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
+  const arrivalReported = useSharedValue(false);
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
@@ -413,8 +420,13 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     const cachedPaints = paints.value;
     const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
+    const arrivalStarted = arrivalOwner && !arrivalReported.value ? performance.now() : 0;
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
+    if (arrivalOwner && !arrivalReported.value) {
+      arrivalReported.value = true;
+      scheduleOnRN(reportArrivalPicture, arrivalOwner, arrivalGeneration, performance.now() - arrivalStarted);
+    }
     if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
       traceFrames.value++;
       let nativeNow: number | null = null;
@@ -431,7 +443,7 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  }, [arrivalOwner, arrivalGeneration, arrivalReported, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 });

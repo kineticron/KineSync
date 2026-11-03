@@ -1,3 +1,4 @@
+import { beginArrival, linkArrival, arrivalEvent, arrivalSpan } from "./lyrics-arrival-trace";
 // Generated mobile bundle from DesktopBridge/src/lyrics/parts.
 // Keep source behavior aligned with the Desktop Bridge parts.
 import { Buffer } from "buffer";
@@ -5925,7 +5926,7 @@ async function fetchJsososoWithFallback(path, options = {}, retryOptions = {}) {
   throw lastError || new Error("All jsososo endpoints failed");
 }
 
-async function fetchText(url, { headers = {}, timeoutMs = 8_000 } = {}) {
+async function fetchText(url, { headers = {}, timeoutMs = 8_000, arrivalTrace } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -5938,10 +5939,14 @@ async function fetchText(url, { headers = {}, timeoutMs = 8_000 } = {}) {
       }),
       signal: controller.signal,
     });
+    if (arrivalTrace) arrivalEvent(arrivalTrace, 0, 'response-rn-continuation');
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    return response.text();
+    return arrivalTrace ? response.text().then(body => {
+      arrivalEvent(arrivalTrace, 0, 'body-rn-continuation');
+      return body;
+    }) : response.text();
   } finally {
     clearTimeout(timer);
   }
@@ -9295,11 +9300,14 @@ async function fetchFromLrcRed(track) {
         catch { /* JSON is optional metadata; TTML remains the source of truth. */ }
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (recording?.title && !versionMatches(recording.title)) return null;
-        const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
+        const tracePacket = {};
+        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'lrc-red') : undefined;
+        const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders, arrivalTrace: trace });
         if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
-        const parsed = parseTtmlToLyrics(content);
+        const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
+        if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
         if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
@@ -14351,7 +14359,11 @@ function createLyricsService({
         throw new Error("Lyrics vault is not initialized.");
       }
 
-      const parsed = parseTtmlToLyrics(ttmlContent);
+      const tracePacket = {};
+      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'vault-ttml-import') : undefined;
+      if (trace) arrivalEvent(trace, 0, 'import-input-rn-received');
+      const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
+      if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);
       if (!parsed?.lyrics?.length) {
         throw new Error("TTML file did not contain any lyric lines.");
       }

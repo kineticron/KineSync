@@ -1,3 +1,4 @@
+import { arrivalHandle, linkArrival, publishArrival, arrivalEvent, arrivalSpan } from '@/lib/lyrics-arrival-trace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { normalizeTranslationLanguage, type TranslationLanguage } from '@/lib/translation-settings';
@@ -413,8 +414,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     return { trackChanged, seekDetected };
   },
-  setLyrics: (lyrics, source = 'qq-music') =>
-    set({ lyrics: enrichLyrics(lyrics), lyricsSource: source }),
+  setLyrics: (lyrics, source = 'qq-music') => {
+    const parent = __DEV__ ? arrivalHandle(lyrics) : undefined;
+    const handle = __DEV__ ? publishArrival({}, source, parent) : undefined;
+    if (__DEV__ && handle) {
+      arrivalEvent(handle, 0, 'store-input-received', undefined, undefined, lyrics.length);
+      arrivalEvent(handle, 0, 'payload-voices', undefined, undefined, lyrics.reduce((n, line) => n + 1 +
+        (line.spicyBackgrounds?.length ?? (line.backgroundSyllables?.length ? 1 : 0)), 0));
+    }
+    const enriched = __DEV__ ? arrivalSpan(handle, 0, 'store-enrichment', () => enrichLyrics(lyrics)) : enrichLyrics(lyrics);
+    if (__DEV__) linkArrival(enriched, handle);
+    set({ lyrics: enriched, lyricsSource: source });
+  },
   setLyricsMetadata: (metadata) => set({ lyricsMetadata: metadata || {} }),
   beginTranslationRequest: () =>
     set((state) => ({

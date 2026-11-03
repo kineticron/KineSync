@@ -20,6 +20,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const fonts = { name: 'test-fonts' };
   const react = {
     memo: component => component,
+    useEffect() {},
     createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; },
     useContext() { hookCursor++; return fonts; },
     useRef(initial) { const index = hookCursor++; return hookSlots[index] ??= { current: initial }; },
@@ -52,6 +53,8 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const NativeGlyphPicture = function NativeGlyphPictureMock() {};
   const modules = {
     react,
+    "@/lib/lyrics-arrival-context": { LyricsArrivalContext: {} },
+    "@/lib/lyrics-arrival-trace": {},
     'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
     '@shopify/react-native-skia': { Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
       Mask: 'Mask', Paint: 'Paint', Paragraph: 'Paragraph', Rect: 'Rect', Skia: skia, TextAlign: { Left: 0, Right: 1 } },
@@ -75,7 +78,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
       jsxs(type, props, key) { return { type, props: { ...props, ...(key === undefined ? {} : { key }) } }; } },
   };
   const moduleObject = { exports: {} };
-  vm.runInNewContext(code, { module: moduleObject, exports: moduleObject.exports,
+  vm.runInNewContext(code, { __DEV__: false, module: moduleObject, exports: moduleObject.exports,
     require(name) { assert(name in modules, `native-only hook harness missing import ${name}`); return modules[name]; } });
   const NativeSkiaVoice = moduleObject.exports.NativeSkiaVoice;
   const defaults = { position: { value: 100 }, blur: { value: 0 }, lineActive: { value: true },

@@ -6,7 +6,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),vm=require(
 const {buildSync}=require('esbuild');
 const native=path.resolve(__dirname,'../components/lyrics/native');
 function bundle(file,external=[]){return buildSync({entryPoints:[file],bundle:true,platform:'node',format:'cjs',write:false,external}).outputFiles[0].text;}
-function evaluate(code,requireImpl=require){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process});return module.exports;}
+function evaluate(code,requireImpl=require){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process,__DEV__:false});return module.exports;}
 const model=evaluate(bundle(path.join(native,'native-lyrics-model.ts')));
 const layout=evaluate(bundle(path.resolve(__dirname,'../lib/lyrics-layout.ts')));
 const cues=evaluate(bundle(path.join(native,'native-cue-timeline.ts')));
@@ -31,6 +31,9 @@ function harness(style,list){
   scrollToIndex:command=>commands.push(command),scrollToOffset(){}};
  const jsx=(type,props)=>({type,props:props??{}});
  const modules={react,
+  '@/lib/lyrics-arrival-context':{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit'},
+  '@/lib/lyrics-arrival-trace':{},
+  '@/lib/native-clock-diagnostics':{},
   'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},FlatList:'FlatList',Linking:{openURL(){}},Pressable:'Pressable',StyleSheet:{create:x=>x},Text:'Text',View:'View'},
   'expo-image':{Image:'Image'},'@shopify/flash-list':{FlashList:'FlashList'},
   'react-native-reanimated':{
