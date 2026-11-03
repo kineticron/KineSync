@@ -193,7 +193,7 @@ export class SpotifyDetector {
       await this.request(path, 'POST', body);
       this.callbacks.status(`Spotify ${endpoint} accepted; awaiting the device update.`);
     } catch (error) {
-      if (error instanceof Error && /outcome may be unknown/.test(error.message)) this.retryObservation();
+      if (this.commandPending === commandId && error instanceof Error && /outcome may be unknown/.test(error.message)) this.retryObservation();
       throw error;
     } finally { if (this.commandPending === commandId) this.commandPending = null; }
   }
