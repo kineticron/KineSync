@@ -112,6 +112,23 @@ async function main() {
       assert.ok(excess > 0, `${label}: must reproduce actual overlapping ink`);
     }
   }
+  // AMLL has its own line reveal/release shader: independently exercise its
+  // bright and dark endpoints in BOTH active and inactive states. The shared
+  // overlap mask must fix each path without routing through Spicy painting.
+  const amllWords = indic.shape(false);
+  for (const active of [false, true]) for (const [state, time, expectedDirect, expectedFixed] of [
+    ['dark', -1000, 192, 128], ['bright', 3000, 249, 217],
+  ]) {
+    const options = { spicy: false, active, alpha: 0.85, dark: 0.5, time, glow: 0 };
+    const direct = raster(noMask(amllWords), options), fixed = raster(amllWords, options);
+    const label = `amll-${active ? 'active' : 'inactive'}-${state}-reveal`;
+    assert.ok(Math.abs(max(direct.pixels) - expectedDirect) <= 1, `${label}: independent direct-alpha control`);
+    assert.ok(Math.abs(max(fixed.pixels) - expectedFixed) <= 1, `${label}: shared alpha-union correction`);
+    const excess = direct.pixels.reduce((n, value, i) => n + (i % 4 === 3 && value > fixed.pixels[i] + 4 ? 1 : 0), 0);
+    assert.ok(excess > 0, `${label}: actual overlapping Devanagari ink must reproduce the defect`);
+    save(`${label}-direct`, direct); save(`${label}-fixed`, fixed);
+    results.push({ label, maximumDirect: max(direct.pixels), maximumFixed: max(fixed.pixels), expectedDirect, expectedFixed, excess });
+  }
   // Independent review's active Spicy control, with only overlapMask disabled
   // for direct painting. At gradient=0 the first 20% is still a fade strip:
   // assert the 0.5 plateau beyond that strip, not a uniform-dark whole image.
@@ -248,7 +265,17 @@ async function main() {
     save(`amll-${name}-no-glow`, without); save(`amll-${name}-with-glow`, withGlow); save(`amll-${name}-suppressed-restore-shader-control`, suppressedGlow);
     results.push({ label: `amll-glow-${name}`, glowPixels, restoreShaderDifferencePixels: difference });
   }
-  fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ renderer: 'CanvasKit real Skia WASM, not native iOS', fontSha256: Object.fromEntries(Object.entries(fonts).map(([name, bytes]) => [name, hash(bytes)])), results }, null, 2));
+  // Keep dual-renderer coverage explicit: dropping either renderer/state or
+  // the real emphasized AMLL glow experiment must fail this standalone check.
+  const coverage = {
+    amllActive: results.some(result => result.label === 'amll-active-bright-reveal'),
+    amllInactive: results.some(result => result.label === 'amll-inactive-dark-reveal'),
+    amllGlow: results.some(result => result.label === 'amll-glow-indic-graphemes' && result.glowPixels > 0),
+    spicyActive: results.some(result => result.label === 'active-spicy-control-1'),
+    spicyInactive: results.some(result => result.label === 'spicy-inactive-0.5'),
+  };
+  for (const [name, present] of Object.entries(coverage)) assert.ok(present, `Missing independent production-path coverage: ${name}`);
+  fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ renderer: 'CanvasKit real Skia WASM, not native iOS', coverage, fontSha256: Object.fromEntries(Object.entries(fonts).map(([name, bytes]) => [name, hash(bytes)])), results }, null, 2));
   console.log(JSON.stringify(results));
   for (const resource of resources) resource.delete();
 }
