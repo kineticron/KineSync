@@ -204,7 +204,7 @@ async function checkLifecycle() {
     __esModule: true, default: { View: 'AnimatedView' },
     useReducedMotion: () => false, useSharedValue: initial => memo(() => shared(initial), []),
     makeMutable: value => { const blend = shared(value); blends.push(blend); return blend; },
-    useDerivedValue: fn => ({ get value() { return fn(); } }),
+    useDerivedValue: fn => ({ get: fn, get value() { return fn(); } }),
     useAnimatedStyle: fn => ({ get opacity() { return fn().opacity; } }),
     cancelAnimation(value) { value.animation?.complete?.(false); value.animation = null; },
     withTiming: (target, options, complete) => ({ target, options, complete }), Easing: { bezier() {} },
@@ -255,18 +255,60 @@ async function checkLifecycle() {
   assert.equal(nodes(tree, 'Image').length, 1);
   assert.equal(nodes(tree, 'Image')[0].props.opacity, blends[0]);
   assert.equal(transitions.find(t => t.shared === blends[0]).duration, 1200);
-  const canvasStyle = nodes(tree, 'Canvas')[0].props.style;
-  assert.ok(canvasStyle.left < 0 && canvasStyle.top < 0);
-  assert.ok(canvasStyle.width * canvasStyle.transform[0].scale + canvasStyle.left > 390);
-  assert.ok(canvasStyle.height * canvasStyle.transform[0].scale + canvasStyle.top > 844);
+  // Emulate native percentage layout independently of React's delayed onLayout.
+  const nativeLayout = (width, height) => {
+    const canvas = nodes(tree, 'Canvas')[0];
+    const style = canvas.props.style;
+    assert.equal(typeof style.width, 'string', 'Canvas coverage must follow native percentage layout');
+    const bounds = nodes(tree, 'View').find(node => node.props.children === canvas).props.style;
+    const scale = style.transform[0].scale;
+    assert.equal(style.transformOrigin, 'top left');
+    const actual = {
+      width: (width - bounds.left - bounds.right) * parseFloat(style.width) / 100,
+      height: (height - bounds.top - bounds.bottom) * parseFloat(style.height) / 100,
+    };
+    // Installed Reanimated Fabric measure includes the Canvas display transform.
+    canvas.props.onSize.set({ width: actual.width * scale, height: actual.height * scale });
+    for (const axis of ['width', 'height']) {
+      const offset = axis === 'width' ? bounds.left : bounds.top;
+      const target = axis === 'width' ? width : height;
+      const filteredEdge = scale / 3 / 2;
+      assert.ok(offset + filteredEdge < 0);
+      assert.ok(Math.floor(actual[axis]) * scale + offset - filteredEdge >= target,
+        `Native ${axis} covers rotation before React receives onLayout`);
+    }
+    for (const image of nodes(tree, 'Image')) {
+      assert.equal(image.props.width.get(), Math.floor(actual.width));
+      assert.equal(image.props.height.get(), Math.floor(actual.height));
+    }
+    for (const shader of nodes(tree, 'Shader')) {
+      assert.deepEqual(Array.from(shader.props.uniforms.get().resolution), [Math.floor(actual.width), Math.floor(actual.height)]);
+    }
+    return canvas;
+  };
+  nativeLayout(390, 844);
+  const rotate = (width, height) => {
+    nativeLayout(width, height);
+    tree.props.onLayout({ nativeEvent: { layout: { width, height } } }); render();
+    return nativeLayout(width, height);
+  };
+  const preparationCount = jobs.length;
+  const firstBlend = blends[0];
+  const fadeAnimation = firstBlend.animation;
+  for (const [width, height] of [[500, 760], [700, 500], [844, 390], [640, 600], [390, 844]]) rotate(width, height);
+  assert.equal(jobs.length, preparationCount, 'Rotation during a fade does not decode, blur, rasterize or restart preparation');
+  assert.equal(blends[0], firstBlend);
+  assert.equal(firstBlend.animation, fadeAnimation, 'Rotation retains the in-flight fade');
   finishFade();
   assert.equal(frames[0].active, true);
   assert.equal(nodes(tree, 'Shader').length, 1);
   for (const changes of [{ playing: false }, { active: false }]) {
     render(changes); assert.equal(frames[0].active, false);
+    if (changes.active === false) assert.equal(nodes(tree, 'Canvas')[0].props.onSize, undefined, 'Hidden backgrounds do not measure their surface');
     render({ playing: true, active: true }); assert.equal(frames[0].active, true);
   }
   listeners.get('change')('background'); render(); assert.equal(frames[0].active, false);
+  assert.equal(nodes(tree, 'Canvas')[0].props.onSize, undefined, 'Backgrounded apps do not measure their surface');
   listeners.get('change')('active'); render(); assert.equal(frames[0].active, true);
   listeners.get('reduceMotionChanged')(true); render(); assert.equal(frames[0].active, false);
   listeners.get('reduceMotionChanged')(false); render(); assert.equal(frames[0].active, true);
@@ -281,6 +323,9 @@ async function checkLifecycle() {
   assert.equal(requests.get('https://art/slow').signal.aborted, true);
   resolveArtwork('https://art/latest', 1); await settle();
   assert.equal(frames[0].active, false, 'Worker preparation holds the old frame without blocking the UI');
+  const loadingJobs = jobs.length;
+  rotate(844, 390); rotate(390, 844);
+  assert.equal(jobs.length, loadingJobs, 'Rotation cannot cancel or restart pending artwork preparation');
   resolveJob(jobs.at(-1)); await settle();
   resolveArtwork('https://art/slow', 2); await settle();
   assert.equal(nodes(tree, 'Canvas').length, 1, 'Song changes never remount or allocate a second native surface');
@@ -308,9 +353,24 @@ async function checkLifecycle() {
   assert.equal(blends.length, 2, 'A stale worker result cannot publish a new scene');
   resolveArtwork(props.uri, 1); await settle(); resolveJob(jobs.at(-1)); await settle(); finishFade();
   const requestsBeforeResize = requests.size;
-  tree.props.onLayout({ nativeEvent: { layout: { width: 844, height: 390 } } }); render();
-  assert.equal(requests.size, requestsBeforeResize, 'Rotation reuses encoded artwork instead of downloading it again');
-  resolveJob(jobs.at(-1)); await settle(); finishFade();
+  const jobsBeforeResize = jobs.length;
+  const blendsBeforeResize = blends.length;
+  const textureBeforeResize = nodes(tree, 'ImageShader')[0].props.image;
+  const timeBeforeResize = time.value;
+  for (const [width, height] of [[500, 760], [844, 390], [700, 500], [390, 844]]) {
+    const canvas = rotate(width, height);
+    assert.equal(canvas.key, undefined, 'Rotation preserves the native Canvas identity');
+    assert.equal(nodes(tree, 'ImageShader')[0].props.image, textureBeforeResize);
+    assert.equal(frames[0].active, true, 'Rotation never pauses the motion clock');
+    assert.equal(time.value, timeBeforeResize, 'Rotation never resets animation time');
+  }
+  listeners.get('reduceMotionChanged')(true); render();
+  rotate(844, 390); rotate(390, 844);
+  assert.equal(frames[0].active, false, 'Reduced motion stays still while rotating');
+  listeners.get('reduceMotionChanged')(false); render();
+  assert.equal(requests.size, requestsBeforeResize);
+  assert.equal(jobs.length, jobsBeforeResize, 'Rotation reuses the prepared texture and effects');
+  assert.equal(blends.length, blendsBeforeResize, 'Rotation never publishes a replacement scene');
   render({ uri: 'https://art/broken' }); requests.get(props.uri).reject(new Error('offline')); await settle();
   assert.equal(frames[0].active, false);
   assert.ok(transitions.some(t => t.to === 0));

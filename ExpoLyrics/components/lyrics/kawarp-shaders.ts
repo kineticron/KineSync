@@ -12,16 +12,17 @@ export const KAWARP_TRANSITION_MS = 1200;
 export function kawarpRenderSize(width: number, height: number, pixelRatio: number) {
   const density = Math.max(1, pixelRatio);
   const maxPoints = Math.max(1, Math.floor(720 / density));
-  const scale = Math.min(1, maxPoints / Math.max(1, width, height));
+  // Reserve four source points for overscan. Percentage layout follows the native
+  // viewport during rotation, even before its onLayout event reaches React.
+  const scale = Math.max(1, Math.max(width, height) / Math.max(1, maxPoints - 4));
+  const bleed = 2 * scale;
   // Skia's iOS Metal provider truncates layout dimensions to integer points.
-  const renderWidth = Math.min(maxPoints, Math.ceil(width * scale));
-  const renderHeight = Math.min(maxPoints, Math.ceil(height * scale));
-  // Keep the scaled surface's filtered edge one source pixel outside the viewport.
-  const bleed = 1 / (scale * density);
+  const renderWidth = Math.max(1, Math.floor((width + 2 * bleed) / scale));
+  const renderHeight = Math.max(1, Math.floor((height + 2 * bleed) / scale));
   return {
     width: renderWidth,
     height: renderHeight,
-    scale: Math.max((width + 2 * bleed) / renderWidth, (height + 2 * bleed) / renderHeight),
+    scale,
     bleed,
   };
 }
