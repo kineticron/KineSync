@@ -28,7 +28,7 @@
     "test:android-compat": "node ./scripts/check-android-desugaring.cjs",
     "test:security": "node ./scripts/security-check.js",
     "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-spotify-seek.cjs && node ./scripts/check-tour-tracker.cjs",
-    "test:spotify-detector": "node ./scripts/check-spotify-detector.mjs && node ./scripts/check-spotify-timing.mjs && node ./scripts/check-spotify-development-timing.mjs && node ./scripts/check-native-detector-lifecycle.cjs && node ./scripts/check-native-detector-lifecycle.cjs --android && node ./scripts/check-native-detector-lifecycle.cjs --development && node ./scripts/check-native-detector-lifecycle.cjs --android --development",
+    "test:spotify-detector": "node ./scripts/check-spotify-detector.mjs && node ./scripts/check-spotify-timing.mjs && node ./scripts/check-spotify-development-timing.mjs && node ./scripts/check-native-detector-lifecycle.cjs && node ./scripts/check-native-detector-lifecycle.cjs --android && node ./scripts/check-native-detector-lifecycle.cjs --development && node ./scripts/check-native-detector-lifecycle.cjs --android --development && npm run test:spotify-recovery",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
     "test:lyrics": "node ./scripts/check-pyaar-runtime.cjs && node ./scripts/check-lyrics-packet-transition.cjs && node ./scripts/check-native-inactive-work.cjs && node ./scripts/check-native-glyph-idle.cjs && node ./scripts/check-spicy-attribution.cjs && node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-playback-previous.cjs && node ./scripts/check-energy-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
@@ -37,7 +37,8 @@
     "build:amll-webview": "node ./scripts/build-amll-webview-bundle.mjs",
     "test:vault": "node ./scripts/check-vault-sqlite.cjs && node ./scripts/check-vault-policy.cjs && node ./scripts/check-vault-ttml.cjs && node ./scripts/check-vault-sharing.cjs && node ./scripts/check-vault-artwork.cjs && node ./scripts/check-desktop-vault.cjs && node ./scripts/check-lrc-red-vault.cjs",
     "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs",
-    "test:native-translation-incremental": "node ./scripts/check-native-translation-toggle.cjs && node ./scripts/check-native-translation-incremental.cjs && node ./scripts/check-native-translation-scroll.cjs"
+    "test:native-translation-incremental": "node ./scripts/check-native-translation-toggle.cjs && node ./scripts/check-native-translation-incremental.cjs && node ./scripts/check-native-translation-scroll.cjs",
+    "test:spotify-recovery": "node scripts/check-spotify-recovery.mjs && node scripts/check-spotify-connection-ui.cjs && node scripts/check-spotify-reachability.cjs"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",
@@ -97,7 +98,7 @@
     "zustand": "^5.0.15"
   },
   "license": "AGPL-3.0-only",
-  "description": "KineSync mobile app — synchronized Spotify lyrics with phone-only playback or an optional Desktop Bridge.",
+  "description": "KineSync mobile app \u2014 synchronized Spotify lyrics with phone-only playback or an optional Desktop Bridge.",
   "author": {
     "name": "Kineticron",
     "email": "kineticrondev@gmail.com"
