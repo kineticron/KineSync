@@ -33,8 +33,32 @@ for (const phase of ['idle','suspended','offline','renewingSession','connecting'
 }
 health = { ...health, phase: 'retryWait' };
 let tree = render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.deepEqual(actions,['retry']);
-health = { ...health, phase: 'signInRequired' };tree=render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.deepEqual(actions,['retry','retry','open']);
+health = { ...health, phase: 'signInRequired' };tree=render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.deepEqual(actions,['retry','open']);
+health = { ...health, phase: 'ready', target: 'absent' };tree=render();React.Children.toArray(tree.props.children).find(n => n.type === 'Pressable').props.onPress();assert.equal(actions.at(-1),'spotify://');
 playback.connectionStatus='connected';assert.equal(render(),null,'native health is hidden when bridge owns routing');assert.equal(playback.connectionStatus,'connected');
 playback.connectionStatus='disconnected';playback.playbackMode='desktop';assert.equal(render(),null);
 playback.playbackMode='mobile';tour.pending=true;assert.equal(render(),null);
+// Execute every actual host callback with unavailable authority. They must
+// return before touching transport, playback anchors or optimistic seek state.
+const screenSource = fs.readFileSync(path.join(__dirname,'../app/(tabs)/index.tsx'),'utf8');
+const ast = ts.createSourceFile('index.tsx',screenSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+const gated = new Set(['handlePlaybackPlayPause','handlePlaybackPrevious','handlePlaybackNext','handleLyricLinePress','handleSeek','sendSeekToPlaybackSource','handleScrubPreview']);
+let guardCode;
+function visit(node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'nativePlaybackUnavailable') guardCode = node.getText(ast);
+  if (ts.isVariableDeclaration(node) && gated.has(node.name.getText(ast))) {
+    const fn=node.initializer.arguments[0].getText(ast);
+    const code=ts.transpileModule(`const handler = ${fn}; handler({lineStartTime:1000});`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+    vm.runInNewContext(code,{nativePlaybackUnavailable:()=>true});
+    gated.delete(node.name.getText(ast));
+  }
+  ts.forEachChild(node,visit);
+}
+visit(ast);assert.equal(gated.size,0);
+for(const platform of ['ios','android','web'])for(const bridge of ['connected','disconnected'])for(const enabled of [true,false]) {
+  const ctx={Platform:{OS:platform},usePlaybackStore:{getState:()=>({playbackMode:'mobile',connectionStatus:bridge})},
+    useSpotifyConnectionStore:{getState:()=>({health:{controlsEnabled:enabled}})},usePlayerTourStore:{getState:()=>({active:false})},result:null};
+  vm.runInNewContext(`${guardCode};result=nativePlaybackUnavailable();`,ctx);
+  assert.equal(ctx.result,platform!=='web'&&bridge!=='connected'&&!enabled,'health cannot steal bridge or web routing');
+}
 console.log('Spotify connection UI passed: actual component across all phases, empty lyrics/closed browser independent, bridge/tour exclusion and actions.');

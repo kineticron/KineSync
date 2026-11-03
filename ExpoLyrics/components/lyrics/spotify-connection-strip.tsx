@@ -23,7 +23,7 @@ export const SpotifyConnectionStrip = memo(function SpotifyConnectionStrip() {
       accessibilityLabel={openDevice ? 'Open Spotify' : signIn ? 'Review Spotify sign-in' : 'Retry Spotify connection'}
       hitSlop={8} onPress={() => {
         if (openDevice) { void Linking.openURL('spotify://').catch(() => {}); }
-        else if (signIn) { requestReloadSpotifyBrowser(); requestOpenSpotifyBrowser(); }
+        else if (signIn) requestOpenSpotifyBrowser();
         else requestReloadSpotifyBrowser();
       }}><Text style={styles.action}>{openDevice ? 'Open Spotify' : signIn ? 'Sign in' : 'Retry now'}</Text></Pressable>}
   </View>;

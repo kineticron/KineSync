@@ -24,7 +24,8 @@ class Clock {
     this.wall+=end-this.mono; this.mono=end; await flush();
   }
 }
-function setup() {
+function seeded(seed) { let value = seed >>> 0; return () => { value = (Math.imul(value, 1664525) + 1013904223) >>> 0; return value / 2 ** 32; }; }
+function setup(random = () => 0.5) {
   const clock=new Clock(), sockets=[], requests=[], health=[], samples=[];
   let needed=0, response = { status: 200, body: state() };
   class Socket {
@@ -35,7 +36,7 @@ function setup() {
     open(){this.readyState=1;this.onopen?.();}
     event(value){this.onmessage?.({data:JSON.stringify(value)});}
   }
-  const runtime={wall:()=>clock.wall,mono:()=>clock.mono,random:()=>0.5,
+  const runtime={wall:()=>clock.wall,mono:()=>clock.mono,random,
     socket:url=>new Socket(url), setTimeout:(fn,ms)=>clock.set(fn,ms),clearTimeout:clock.clear,
     setInterval:(fn,ms)=>clock.set(fn,ms,true),clearInterval:clock.clear,
     fetch:async (url,options)=>{
@@ -72,7 +73,7 @@ await check('renewal episode has hard deadline and backoff for network stalls; e
 });
 await check('403 denied has no automatic loop across lifecycle/renderer/credentials; explicit retry is debounced',async()=>{
  const h=setup();h.response={status:403,bodyPromise:new Promise(()=>{})};h.start();await h.identify();assert.equal(h.d.health.phase,'denied');
- h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh();h.credentials('different');await h.clock.advance(120000);assert.equal(h.sockets.length,1);
+ h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh();h.credentials('different');await h.clock.advance(120000);assert.equal(h.sockets.length,1);assert.equal(h.d.health.phase,'denied');
  h.response={status:200,body:state()};h.d.refresh(true);h.d.refresh(true);assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
 });
 for(const [label,value,duration] of [['seconds','9',9000],['date',new Date(1900000012000).toUTCString(),12000],['invalid','nope',33000],['missing',undefined,33000],['large','900',900000]]){
@@ -173,13 +174,39 @@ await check('backward wall jump conservatively extends cooldown; offline flaps n
  for(let i=0;i<4;i++){h.d.setReachability('offline');h.d.setReachability('online');await h.clock.advance(100);}assert.equal(h.sockets.length,1);
  await h.clock.advance(29599);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);h.d.clear();
 });
+await check('explicit account review starts one auth epoch without forbidden observer loop; cooldown cannot be bypassed by sign-in',async()=>{
+ const h=setup();h.start();h.response={status:403};await h.identify();h.d.beginSignIn();assert.equal(h.d.health.phase,'renewingSession');assert.equal(h.sockets.length,1);h.response={status:200,body:state()};h.credentials('new-account');await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+ const r=setup();r.start();r.response={status:429,headers:{'retry-after':'10'}};await r.identify();const needs=r.needed;r.d.beginSignIn();assert.equal(r.needed,needs);assert.equal(r.d.health.phase,'rateLimited');r.d.clear();
+});
+await check('inactive-to-active revalidates expiry without waiting for suspended JS expiry timer',async()=>{
+ const h=setup();h.start();await h.identify();h.d.setActivity('inactive');h.clock.wall+=4000000;h.clock.mono+=4000000;await allDisabled(h);h.d.setActivity('active');assert.equal(h.d.health.phase,'renewingSession');assert.equal(h.d.socket,null);h.d.clear();
+});
+await check('Retry-After HTTP-date uses server Date when local wall clock is skewed',async()=>{
+ const h=setup();h.start();h.response={status:429,headers:{date:new Date(h.clock.wall-60000).toUTCString(),'retry-after':new Date(h.clock.wall-45000).toUTCString()}};await h.identify();assert.equal(h.d.health.retryNotBeforeWall-h.clock.wall,15000);await h.clock.advance(14999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);h.d.clear();
+});
+await check('sign-in requirement survives background, renderer, reachability and late auth until explicit user sign-in',async()=>{
+ const h=setup();h.start();h.response={status:401};await h.identify();h.credentials('fresh');await h.identify();assert.equal(h.d.health.phase,'signInRequired');const n=h.sockets.length, needs=h.needed;
+ h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh();h.credentials('late');h.d.setReachability('offline');h.d.setReachability('online');await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.sockets.length,n);assert.equal(h.needed,needs);h.d.beginSignIn();assert.equal(h.d.health.phase,'renewingSession');h.d.clear();
+});
+await check('active rechecks silent liveness and establishment deadlines when native timers were suspended',async()=>{
+ for(const phase of ['ready','connecting']) {
+  const h=setup();h.start();if(phase==='ready')await h.identify();h.d.setActivity('inactive');h.clock.wall+=50000;h.clock.mono+=50000;h.d.setActivity('active');assert.equal(h.d.health.phase,'retryWait');await allDisabled(h);assert.equal(h.d.socket,null);h.d.clear();
+ }
+});
+await check('native send throwing without an error/close event still detaches and retries locally',async()=>{
+ const h=setup();h.start();const ws=await h.identify();ws.send=()=>{throw Error('native transport disconnected');};await h.clock.advance(15000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.socket,null);await h.clock.advance(2000);assert.equal(h.sockets.length,2);assert.equal(h.posts().length,0);h.d.clear();
+});
+await check('seeded jitter has exact deterministic backoff and positive-only rate-limit fallback',async()=>{
+ const expected=seeded(123);for(let i=0;i<40;i++)expected();const h=setup(seeded(123));h.start();h.response={status:503};await h.identify();assert.equal(h.d.health.nextRetryAtWall,h.clock.wall+2000*(0.8+expected()*0.4));h.d.clear();
+ const rateExpected=seeded(456);for(let i=0;i<40;i++)rateExpected();const r=setup(seeded(456));r.start();r.response={status:429};await r.identify();const wait=30000*(1+rateExpected()*0.2);assert.equal(r.d.health.retryNotBeforeWall,r.clock.wall+wait);assert(wait>=30000);r.d.clear();
+});
 // Execute the actual injected browser script with independently controlled fetch/body and lifecycle.
 function browser(response) {
  const clock=new Clock(), events={}, messages=[], requests=[];
  class Xhr {open(){}setRequestHeader(){}send(){}}
  const window={fetch:(...args)=>{requests.push(args);return response(...args);},WebSocket:class{},ReactNativeWebView:{postMessage:raw=>messages.push(JSON.parse(raw))},addEventListener:(name,fn)=>{(events[name]??=[]).push(fn);}};
  const context={window,XMLHttpRequest:Xhr,URL,Headers,AbortController,location:{origin:'https://open.spotify.com',href:'https://open.spotify.com/'},setTimeout:(fn,ms)=>clock.set(fn,ms),clearTimeout:clock.clear};
- const install=()=>runInNewContext(bootstrap,context);install();return {clock,events,messages,requests,install};
+ const install=()=>runInNewContext(bootstrap,context);install();return {clock,events,messages,requests,install,window};
 }
 await check('bootstrap failure then success; at most one in-flight probe; bounded two attempts',async()=>{
  let count=0;const b=browser(async()=>{if(++count===1)throw Error('network');return {status:200,json:async()=>({accessToken:'fresh',isAnonymous:false})};});await flush();await b.clock.advance(1999);assert.equal(count,1);await b.clock.advance(1);assert.equal(count,2);assert(b.messages.some(m=>m.type==='credentials'));await b.clock.advance(60000);assert.equal(count,2);assert.equal(b.clock.timers.size,0);
@@ -189,6 +216,10 @@ for(const mode of ['fetch','body'])await check(`bootstrap hanging ${mode}: 15s i
 });
 await check('bootstrap pagehide/pageshow/reinjection restarts once; obsolete body credentials ignored',async()=>{
  const late=deferred();let count=0;const b=browser(async()=>({status:200,json:()=>++count===1?late.promise:Promise.resolve({accessToken:'new',isAnonymous:false})}));await flush();b.events.pagehide.forEach(fn=>fn());b.install();b.events.pageshow.forEach(fn=>fn());b.events.pageshow.forEach(fn=>fn());await flush();assert.equal(b.requests.length,2);late.resolve({accessToken:'obsolete',isAnonymous:false});await flush();assert.deepEqual(b.messages.filter(m=>m.type==='credentials').map(m=>m.token),['new']);assert.equal(b.clock.timers.size,0);
+});
+await check('late verified observer body from obsolete same-document epoch cannot restore credentials',async()=>{
+ const text=deferred();const b=browser(async input=>String(input).startsWith('/api/token')?{status:200,json:()=>new Promise(()=>{})}:{status:200,headers:new Headers(),clone:()=>({text:()=>text.promise})});
+ await b.window.fetch('https://spclient.spotify.com/connect-state/v1/devices/observer',{method:'PUT',headers:{authorization:'Bearer obsolete'}});await flush();b.events.pagehide.forEach(fn=>fn());text.resolve(JSON.stringify({player_state:{is_paused:true}}));await flush();assert.equal(b.messages.filter(m=>m.type==='credentials'&&m.authenticated===true).length,0);assert.equal(b.clock.timers.size,0);
 });
 await check('health presentation distinguishes no device, offline, denial and sign-in without routing mutation',async()=>{
  const h=setup();h.start();h.response={status:200,body:{player_state:{is_paused:true}}};await h.identify();assert.match(spotifyHealthMessage(h.d.health),/no active/);h.d.setReachability('offline');assert.match(spotifyHealthMessage(h.d.health),/Offline/);assert.equal(h.d.health.source,'nativeSpotify');h.d.clear();

@@ -164,9 +164,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     setSessionNeeded(true); setLoggingOut(false);
   }, []);
   const openBrowser = useCallback(() => {
+    if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') detector.beginSignIn();
     if (!useSpotifySessionStore.getState().signedIn) { router.push({ pathname: '/explore', params: { action: 'login' } }); return; }
     setBrowserOpen(true);
-  }, []);
+  }, [detector]);
   const runDiagnostics = useCallback(() => {
     Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
       { text: 'Start capture', onPress: startTimingCapture },

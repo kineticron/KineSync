@@ -108,8 +108,10 @@ export const bootstrap = String.raw`(function () {
     var run = epoch; attempts++; inFlight = true;
     controller = new AbortController();
     var own = controller;
-    var limit;
+    var limit, cancel;
     var timeout = new Promise(function(_, reject) {
+      cancel = function(){ reject(new Error('probe canceled')); };
+      own.signal.addEventListener('abort',cancel,{once:true});
       limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 15000);
     });
     var work = Promise.resolve().then(function(){
@@ -132,7 +134,7 @@ export const bootstrap = String.raw`(function () {
       send({type:'notice',message:'Session token probe unavailable; waiting for browser requests.'});
       if (attempts >= 2) { clearTimeout(deadline); send({type:'session',state:'unavailable'}); }
     }).finally(function(){
-      clearTimeout(limit);
+      clearTimeout(limit); own.signal.removeEventListener('abort',cancel);
       if (run !== epoch || stopped) return;
       inFlight = false; controller = null;
       if (attempts < 2) timer = setTimeout(probeToken,2000);
