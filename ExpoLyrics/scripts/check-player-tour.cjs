@@ -39,6 +39,7 @@ let liveCommands = 0;
 const liveCommand = () => { liveCommands++; };
 const setter = () => {};
 const handlers = {
+  nativePlaybackUnavailable: () => false,
   usePlayerTourStore: store,
   usePlaybackStore: { getState: () => ({ connectionStatus: 'connected' }), setState: liveCommand },
   bridgeClient: { togglePlayPause: liveCommand, resyncPlayback: liveCommand, skipPrevious: liveCommand, skipNext: liveCommand },

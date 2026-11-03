@@ -58,7 +58,7 @@ const mocks = {
   } },
   'react-native-gesture-handler': { GestureDetector: Primitive, Gesture: { Pan: () => {
     gesture = {};
-    const builder = { minDistance: () => builder };
+    const builder = { minDistance: () => builder, enabled: value => { gesture.enabled = value; return builder; } };
     for (const name of ['onBegin', 'onUpdate', 'onFinalize']) builder[name] = (cb) => {
       gesture[name] = worklet(cb); return builder;
     };
@@ -172,6 +172,20 @@ gesture.onFinalize({ x: 0.3 }, false);
 flushJS();
 assert.equal(sought, null, 'cancelled gestures do not seek');
 stopGestureClock();
+// Exercise production-transformed disabled timeline callbacks as well as the
+// native gesture gate. A stale queued finalization must never submit a seek.
+sought = null;
+renderToStaticMarkup(React.createElement(PlaybackTimeline, {
+  controlsDisabled: true, durationMs: 100000, onSeek: value => { sought = value; },
+  onScrubPreview: value => { preview = value; },
+}));
+const stopDisabledClock = focusEffects.pop()();
+assert.equal(gesture.enabled, false, 'unavailable playback disables the native seek gesture');
+gesture.onFinalize({ x: 0.9 }, true); flushJS();
+assert.equal(sought, null, 'queued accessibility/gesture finalization cannot submit disabled seek');
+assert.equal(preview, null);
+stopDisabledClock();
+
 
 const { addHighRefreshRate } = require('../plugins/with-high-refresh-rate');
 const template = 'class MainActivity : ReactActivity() {\n  override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(null) }\n}\n';

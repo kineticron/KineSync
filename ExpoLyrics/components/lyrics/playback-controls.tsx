@@ -655,7 +655,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 
   const finishScrub = useCallback(
     (explicitRatio?: number) => {
-      if (controlsDisabled) { setIsScrubbing(false); onScrubPreview?.(null); return; }
+      if (controlsDisabled) { setIsScrubbing(false); pendingSeekPositionMsShared.value = null; onScrubPreview?.(null); return; }
       onUserInteraction?.();
       if (explicitRatio !== undefined) {
         scrubValueRef.current = explicitRatio;
