@@ -50,12 +50,18 @@ export class SpotifyDetector {
   private orderingSessionId: string | undefined;
   private lastDealerConnection = '';
   private registered = false;
+  private observed = false;
+  private currentTarget: string | undefined;
   private blocked = false;
   private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext; sourceClockScope: string } | null = null;
   private requests = new Set<AbortController>();
   private metadataCache = new Map<string, TrackMetadata>();
   private metadataPending = new Map<string, Promise<TrackMetadata>>();
-  private commandPending = false;
+  private commandPending: object | null = null;
+  private phaseDeadline: ReturnType<typeof setTimeout> | null = null;
+  private cooldownWall = 0;
+  private cooldownMono = 0;
+  private rateLimits = 0;
   private deliveryBaseline = new DealerDeliveryBaseline();
   private deliveryRouteEpoch = 0;
   private deliveryAuthEpoch = 0;
@@ -127,7 +133,9 @@ export class SpotifyDetector {
       this.connectIfReady();
     } else this.disconnect();
   }
-  refresh() {
+  refresh(explicit = false) {
+    if (this.blocked && !explicit) return;
+    if (!explicit && this.socket && !this.observed) return;
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
       generation: this.generation, reason: 'explicit-refresh', registered: this.registered, experiment: this.experimentEnabled,
       ...this.deliveryBaseline.diagnosticSummary() });
@@ -135,7 +143,7 @@ export class SpotifyDetector {
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-preserved', {
       generation: this.generation, ...this.deliveryBaseline.diagnosticSummary() });
     this.blocked = false;
-    this.resetOrdering(); this.reconnects = 0;
+    this.resetOrdering();
     this.disconnect(true); this.connectIfReady();
   }
   clear() {
@@ -145,7 +153,7 @@ export class SpotifyDetector {
     this.deliveryAuthEpoch++;
     this.removeExperimentListener?.(); this.removeExperimentListener = null;
     this.resetOrdering();
-    this.blocked = false;
+    this.blocked = false; this.cooldownWall = 0; this.cooldownMono = 0; this.rateLimits = 0;
     this.metadataCache.clear(); this.metadataPending.clear();
   }
   async metadata(uri: string): Promise<TrackMetadata> {
@@ -169,8 +177,8 @@ export class SpotifyDetector {
   }
   async control(command: { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }): Promise<void> {
     if (this.commandPending) throw new Error('Waiting for the previous Spotify command.');
-    const target = this.lastSample?.activeDeviceId;
-    if (!this.enabled || !this.registered || !target) throw new SpotifyPlaybackUnavailableError('Spotify detector is reconnecting; try again when a device is detected.');
+    const target = this.currentTarget;
+    if (!this.enabled || !this.registered || !this.observed || !target) throw new SpotifyPlaybackUnavailableError('Spotify detector is reconnecting; try again when a device is detected.');
     if (command.type === 'seek' && !Number.isFinite(command.positionMs)) throw new Error('Invalid seek position.');
     const endpoint = { toggle: this.lastSample?.playing ? 'pause' : 'resume', previous: 'skip_prev', next: 'skip_next', seek: 'seek_to' }[command.type];
     // Route to the device observed by Dealer, not a newly mounted web player.
@@ -180,11 +188,14 @@ export class SpotifyDetector {
     const body = { command: { endpoint, ...(value !== undefined ? { value } : {}),
       options: { only_for_local_device: false, system_initiated: false, override_restrictions: false } },
       connection_type: 'wlan', intent_id: Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('') };
-    this.commandPending = true;
+    const commandId = {}; this.commandPending = commandId;
     try {
       await this.request(path, 'POST', body);
       this.callbacks.status(`Spotify ${endpoint} accepted; awaiting the device update.`);
-    } finally { this.commandPending = false; }
+    } catch (error) {
+      if (error instanceof Error && /outcome may be unknown/.test(error.message)) this.retryObservation();
+      throw error;
+    } finally { if (this.commandPending === commandId) this.commandPending = null; }
   }
   private async request(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Uint8Array> {
     if (!this.enabled || this.blocked || !this.token || !this.route || !this.connectionId) throw new Error('Spotify session is not ready.');
@@ -197,24 +208,26 @@ export class SpotifyDetector {
     if (this.clientToken) headers['client-token'] = this.clientToken;
     if (body !== undefined) { headers['content-type'] = 'application/json'; headers['content-encoding'] = 'gzip'; }
     try {
-      const response = await fetch(new URL(path, this.route).toString(), { method, headers, signal: controller.signal,
-        ...(body !== undefined ? { body: Uint8Array.from(gzip(JSON.stringify(body))).buffer } : {}) });
+      const response = await this.bounded(fetch(new URL(path, this.route).toString(), { method, headers, signal: controller.signal,
+        ...(body !== undefined ? { body: Uint8Array.from(gzip(JSON.stringify(body))).buffer } : {}) }), controller);
       if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('spotify-http-response', { endpoint: method === 'GET' ? 'metadata' : 'player-control',
         method, status: response.status, requestGeneration: run, currentGeneration: this.generation,
         elapsedMs: performance.now() - started, staleGeneration: run !== this.generation, cacheProvenance: 'network-response' });
       if (run !== this.generation) throw new Error('Spotify session changed during request.');
       if (response.status === 401) this.needSession('Spotify session expired. Refreshing login…');
-      if (response.status === 429) { this.blocked = true; this.disconnect(); }
-      if (method === 'POST' && response.status === 404) throw new SpotifyPlaybackUnavailableError('Spotify playback device is unavailable.');
+      if (response.status === 429) this.rateLimited(response);
+      if (method === 'POST' && response.status === 404) { this.retryObservation(); throw new SpotifyPlaybackUnavailableError('Spotify playback target changed. Restoring observation; command was not retried.'); }
       if (!response.ok) throw new Error(`Spotify ${method === 'GET' ? 'metadata' : 'control'} HTTP ${response.status}.`);
       // Read while the abort/timeout is still installed, including slow bodies.
-      const bytes = await response.arrayBuffer();
+      const bytes = await this.bounded(response.arrayBuffer(), controller);
       if (run !== this.generation) throw new Error('Spotify session changed during response.');
       return new Uint8Array(bytes);
     } finally { clearTimeout(timeout); this.requests.delete(controller); }
   }
   private disconnect(preserveDeliveryBaseline = false) {
     this.generation++;
+    this.commandPending = null;
+    if (this.phaseDeadline) clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
     if (!preserveDeliveryBaseline) this.deliveryBaseline.clear();
     this.controller?.abort(); this.controller = null;
     for (const controller of this.requests) controller.abort();
@@ -223,8 +236,9 @@ export class SpotifyDetector {
     if (this.reconnect) clearTimeout(this.reconnect);
     if (this.expiry) clearTimeout(this.expiry);
     this.heartbeat = null; this.reconnect = null; this.expiry = null;
-    const ws = this.socket; this.socket = null; ws?.close();
-    this.connectionId = ''; this.registered = false; this.pendingState = null;
+    const ws = this.socket; this.socket = null;
+    if (ws) { ws.onopen = null; ws.onmessage = null; ws.onerror = null; ws.onclose = null; try { ws.close(); } catch {} }
+    this.connectionId = ''; this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null;
   }
   private needSession(message: string) {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
@@ -249,6 +263,8 @@ export class SpotifyDetector {
     s.sourceClockScope = authorityScope === this.sourceClockScope ? authorityScope : undefined;
     if (s.sourceServerTimestampMs !== undefined) s.positionObservedAt = timing.receipt ?? timingNow(receivedAt);
     // Recognizable state proves observer readiness even when duplicate/stale.
+    if (this.phaseDeadline) clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
+    this.observed = true; this.currentTarget = s.activeDeviceId;
     this.callbacks.ready();
     const device = typeof s.activeDeviceId === 'string' && s.activeDeviceId ? s.activeDeviceId : undefined;
     const session = s.playbackSessionId;
@@ -320,7 +336,7 @@ export class SpotifyDetector {
     if (key === this.fingerprint) { logDevelopmentTiming('duplicate', s); recordTiming('duplicate', s.timingProvenance); return true; }
     this.fingerprint = key;
     if (s.positionTimestampMs) this.lastSourceTimestamp = s.positionTimestampMs;
-    this.lastSample = s; this.reconnects = 0;
+    this.lastSample = s;
     recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
     logDevelopmentTiming('accepted', s);
     this.lastDeliveryObservation = s;
@@ -344,6 +360,8 @@ export class SpotifyDetector {
   }
   private connectIfReady() {
     if (!this.enabled || this.blocked || this.socket || this.reconnect) return;
+    const wait = Math.max(this.cooldownWall - Date.now(), this.cooldownMono - performance.now());
+    if (wait > 0) { this.reconnect = setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, Math.min(wait, 2147483647)); return; }
     if (!this.token || !this.route || !this.dealer) { this.callbacks.sessionNeeded(); return; }
     if (Date.now() >= this.expiresAt - 30_000) { this.needSession('Refreshing Spotify session…'); return; }
     const run = ++this.generation;
@@ -352,16 +370,17 @@ export class SpotifyDetector {
     url.searchParams.set('access_token', this.token);
     const ws = new WebSocket(url.toString());
     this.socket = ws;
+    this.armPhaseDeadline();
     const alive = () => this.enabled && run === this.generation && this.socket === ws;
     let lastReceived = performance.now();
     this.callbacks.status('Connecting to Spotify playback…');
     this.expiry = setTimeout(() => { if (alive()) this.needSession('Refreshing Spotify session…'); }, Math.max(1, this.expiresAt - Date.now() - 30_000));
     this.heartbeat = setInterval(() => {
       if (!alive()) return;
-      if (performance.now() - lastReceived > 45000) { ws.close(); return; }
+      if (performance.now() - lastReceived >= 45000) { this.retryObservation(); return; }
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
     }, 15000);
-    ws.onopen = () => { if (alive()) { lastReceived = performance.now(); ws.send(JSON.stringify({ type: 'ping' })); } };
+    ws.onopen = () => { if (alive()) { lastReceived = performance.now(); this.armPhaseDeadline(); ws.send(JSON.stringify({ type: 'ping' })); } };
     ws.onmessage = e => {
       if (!alive()) return;
       const receivedAt = Date.now();
@@ -370,21 +389,51 @@ export class SpotifyDetector {
         const payload = JSON.parse(String(e.data)); lastReceived = performance.now();
         if (payload.type === 'pong') return;
         const id = connectionIdFrom(payload);
-        if (id && id !== this.connectionId) { this.connectionId = id; void this.register(run, ws, sourceClockScope); }
+        if (id && id !== this.connectionId) { this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null; this.connectionId = id; this.armPhaseDeadline(); void this.register(run, ws, sourceClockScope); }
         const decoded = decodeDealer(payload);
         const timing: TimingContext = { receipt, origin: 'dealer', connectionId: this.connectionId, generation: run };
         if (this.registered) this.emit(decoded, receivedAt, timing, sourceClockScope);
         else if (sampleFrom(decoded)) this.pendingState = { payload: decoded, receivedAt, timing, sourceClockScope };
       } catch { this.callbacks.status('A Spotify update could not be decoded; awaiting the next update.'); }
     };
-    ws.onerror = () => { if (alive()) this.callbacks.status('Spotify connection interrupted; reconnecting…'); };
-    ws.onclose = () => {
-      if (!alive()) return;
-      this.disconnect();
-      if (++this.reconnects <= 3) this.reconnect = setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, this.reconnects * 2000);
-      else this.needSession('Reconnecting Spotify session…');
-    };
+    ws.onerror = () => { if (alive()) this.retryObservation(); };
+    ws.onclose = () => { if (alive()) this.retryObservation(); };
   }
+  private armPhaseDeadline() {
+    if (this.phaseDeadline) clearTimeout(this.phaseDeadline);
+    this.phaseDeadline = setTimeout(() => this.retryObservation(), 10000);
+  }
+  private retryObservation() {
+    this.disconnect();
+    if (!this.enabled || this.blocked) return;
+    const attempt = this.reconnects++;
+    const delay = attempt < 5 ? Math.min(30000, 2000 * 2 ** attempt * (0.8 + Math.random() * 0.4)) : 60000;
+    this.callbacks.status('Spotify connection lost; retrying automatically.');
+    this.reconnect = setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, delay);
+  }
+  private rateLimited(response: Response) {
+    const value = response.headers?.get('retry-after');
+    const seconds = value && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) * 1000 : NaN;
+    const parsed = value ? Date.parse(value) - Date.now() : NaN;
+    const duration = Math.max(1000, Number.isFinite(seconds) ? seconds : Number.isFinite(parsed) ? parsed : Math.min(300000, 30000 * 2 ** Math.min(this.rateLimits++, 4)) * (1 + Math.random() * 0.2));
+    this.cooldownWall = Math.max(this.cooldownWall, Date.now() + duration);
+    this.cooldownMono = Math.max(this.cooldownMono, performance.now() + duration);
+    this.disconnect();
+    this.callbacks.status('Spotify HTTP 429: limiting requests; waiting before reconnecting.');
+    this.connectIfReady();
+  }
+  private bounded<T>(work: Promise<T>, controller: AbortController): Promise<T> {
+    let cleanup = () => {};
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(new Error('Spotify request interrupted; playback outcome may be unknown.'));
+      const timer = setTimeout(() => { controller.abort(); abort(); }, 10000);
+      controller.signal.addEventListener('abort', abort, { once: true });
+      if (controller.signal.aborted) abort();
+      cleanup = () => { clearTimeout(timer); controller.signal.removeEventListener('abort', abort); };
+      work.then(resolve, reject);
+    }).finally(() => cleanup());
+  }
+
   private async register(run: number, ws: WebSocket, sourceClockScope = this.sourceClockScope) {
     const connectionId = this.connectionId;
     const requestCapture = nativeDiagnosticsEnabled ? getNativeClockCapture() : null;
@@ -399,12 +448,12 @@ export class SpotifyDetector {
       const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
         'content-type': 'application/json', 'x-spotify-connection-id': this.connectionId };
       if (this.clientToken) headers['client-token'] = this.clientToken;
-      const response = await fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal });
+      const response = await this.bounded(fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal }), controller);
       const headersAt = nativeDiagnosticsEnabled ? performance.now() : 0;
       if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-headers', { endpoint: 'connect-state-registration', status: response.status,
         requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
         currentGeneration: this.generation, alive: alive(), elapsedMs: headersAt - requestStarted });
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = new Uint8Array(await this.bounded(response.arrayBuffer(), controller));
       const receipt = timingNow();
       let errorTag: string | null = null;
       if (nativeDiagnosticsEnabled && !response.ok && nativeClockCaptureActive()) {
@@ -421,11 +470,12 @@ export class SpotifyDetector {
         responseAction: !response.ok ? 'no-state-emitted-existing-error-path' : 'pending-dealer-then-response-state' });
       if (!alive()) return;
       if (response.status === 401) { this.needSession('Spotify session expired. Refreshing login…'); return; }
-      if (response.status === 403 || response.status === 429) {
+      if (response.status === 429) { this.rateLimited(response); return; }
+      if (response.status === 403) {
         this.blocked = true; this.disconnect();
         this.callbacks.status(`Spotify observer unavailable (HTTP ${response.status}). Reconnect manually later.`); return;
       }
-      if (!response.ok) { ws.close(); return; }
+      if (!response.ok) { this.retryObservation(); return; }
       this.registered = true;
       this.callbacks.status('Spotify detector connected. Play music in the Spotify app.');
       // Apply any newer Dealer anchor first, so an HTTP response that was
@@ -436,7 +486,7 @@ export class SpotifyDetector {
         { receipt, origin: 'registration', connectionId: this.connectionId, generation: run }, sourceClockScope);
     } catch { if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
       requestGeneration: run, currentGeneration: this.generation, alive: alive(), elapsedMs: performance.now() - requestStarted,
-      cacheProvenance: 'no-state-emitted' }); if (alive()) ws.close(); }
+      cacheProvenance: 'no-state-emitted' }); if (alive()) this.retryObservation(); }
     finally { clearTimeout(timeout); if (this.controller === controller) this.controller = null; }
   }
 }

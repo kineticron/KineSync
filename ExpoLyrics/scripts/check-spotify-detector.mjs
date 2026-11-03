@@ -239,8 +239,6 @@ try {
   }
     responseStatus = 403;
     await assert.rejects(detector.control({ type: 'toggle' }), /control HTTP 403/);
-    responseStatus = 404;
-    await assert.rejects(detector.control({ type: 'toggle' }), SpotifyPlaybackUnavailableError);
   responseStatus = 200;
   ws.event({ payloads: [state()] });
   assert.equal(samples.length, 1, 'duplicate anchors do not reset the lyrics clock');
@@ -273,10 +271,47 @@ try {
   releaseResponse(); await flush(); holdResponse = false;
   assert.equal(samples.at(-1).positionMs, 62000, 'Dealer event during registration beats older HTTP response');
   assert.equal(samples.at(-1).playing, false);
+  // A new identity immediately revokes permission to dispatch, even on the same socket.
+  holdResponse = true;
+  ws2.event({ headers: { 'spotify-connection-id': 'rotated' } }); await flush();
+  const beforeRotation = requests.length;
+  for (const type of ['toggle', 'next', 'previous', 'seek']) {
+    await assert.rejects(detector.control({ type, positionMs: 100 }), SpotifyPlaybackUnavailableError);
+  }
+  assert.equal(requests.length, beforeRotation, 'no playback POST while replacement registration is pending');
+  releaseResponse(); await flush(); holdResponse = false;
+  responseStatus = 404;
+  const before404 = requests.filter(r => r.method === 'POST').length;
+  await assert.rejects(detector.control({ type: 'next' }), SpotifyPlaybackUnavailableError);
+  await assert.rejects(detector.control({ type: 'next' }), SpotifyPlaybackUnavailableError);
+  assert.equal(requests.filter(r => r.method === 'POST').length, before404 + 1, 'stale target recovery never replays or queues playback');
+  assert.equal(detector.socket, null, 'stale target detaches local ownership');
+  responseStatus = 200;
+  // Native close delivery is optional: a phase timeout releases ownership locally.
+  detector.refresh(true);
+  const silentSocket = sockets.at(-1);
+  silentSocket.close = () => { silentSocket.readyState = 3; };
+  const beforeTimeout = sockets.length;
+  const phaseTimer = timers.get(detector.phaseDeadline); timers.delete(detector.phaseDeadline); phaseTimer.fn();
+  assert.equal(detector.socket, null, 'phase timeout detaches even when close emits nothing');
+  const retryTimer = timers.get(detector.reconnect); timers.delete(detector.reconnect); retryTimer.fn();
+  assert.equal(sockets.length, beforeTimeout + 1, 'phase timeout schedules exactly one new attempt');
+  responseStatus = 200;
+  sockets.at(-1).event({ headers: { 'spotify-connection-id': 'timeout-recovered' } }); await flush();
+  const normalFetch = globalThis.fetch;
+  globalThis.fetch = () => new Promise(() => {});
+  const unknown = detector.control({ type: 'next' });
+  const rejected = assert.rejects(unknown, /outcome may be unknown/);
+  for (const [id, timer] of [...timers]) if (timer.ms === 10000) { timers.delete(id); timer.fn(); }
+  await rejected; await flush();
+  assert.equal(detector.commandPending, null, 'ignored fetch abort still settles command ownership');
+  globalThis.fetch = normalFetch;
   responseStatus = 429;
   detector.refresh(); sockets.at(-1).event({ headers: { 'spotify-connection-id': 'limited' } }); await flush();
   const socketCount = sockets.length;
-  detector.setEnabled(true);
+  detector.setEnabled(false); detector.setEnabled(true);
+  detector.refresh();
+  capture({ type: 'credentials', token: 'replacement', authenticated: true, expiresAt: epoch + 3600000 });
   assert.equal(sockets.length, socketCount, 'rate limits cannot trigger automatic reconnect loops');
   assert(statuses.some(s => s.includes('429')));
   detector.clear();

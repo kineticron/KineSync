@@ -202,7 +202,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     });
   }, [canIngest, detector, openBrowser]);
   const resyncPlayback = useCallback(() => { metadataAttempts.current.clear(); detector.refresh(); }, [detector]);
-  useImperativeHandle(ref, () => ({ openBrowser, reload: () => { remount(); detector.refresh(); },
+  useImperativeHandle(ref, () => ({ openBrowser, reload: () => { remount(); detector.refresh(true); },
     togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback,
     skipPrevious: () => sendCommand({ type: 'previous' }), skipNext: () => sendCommand({ type: 'next' }),
     seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }), runDiagnostics,
@@ -212,7 +212,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     mounted.current = true;
     logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
-    const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { remount(); detector.refresh(); }, logout: () => {
+    const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { remount(); detector.refresh(true); }, logout: () => {
       detector.clear(); enrichmentRun.current++; enriched.current.clear(); lastSample.current = null;
       metadataAttempts.current.clear(); metadataPending.current = '';
       setBrowserOpen(false); setLoggingOut(true);
@@ -255,7 +255,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     style={[styles.root, !browserOpen && styles.hidden]}>
     {browserOpen && <SafeAreaView edges={_stableEdges1} style={styles.header}>
       <Text style={styles.title}>Spotify</Text><Text style={styles.status}>{status}</Text>
-      <View style={styles.buttons}><Button title="Reconnect" onPress={() => { remount(); detector.refresh(); }} />
+      <View style={styles.buttons}><Button title="Reconnect" onPress={() => { remount(); detector.refresh(true); }} />
         <Button title="Diagnostics" onPress={runDiagnostics} /><Button title="Close" onPress={() => setBrowserOpen(false)} /></View>
     </SafeAreaView>}
     <WebView<object> key={`spotify-detector-${browserGeneration}`} ref={web}
