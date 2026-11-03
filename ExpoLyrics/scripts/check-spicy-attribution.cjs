@@ -104,6 +104,8 @@ let expanded = false;
 let interactions = 0;
 let previousOverlayDeps;
 let reducedMotion = false;
+let viewport = { width: 390, height: 844 };
+let insets = { top: 59, bottom: 34, left: 0, right: 0 };
 let reaction;
 let sharedCursor = 0;
 let stateUpdates = 0;
@@ -134,7 +136,8 @@ vm.runInNewContext(overlayCode, { exports: overlayModule.exports, require(name) 
   }, useState: () => [expanded, value => { expanded = value; stateUpdates++; }] };
   if (name === 'expo-blur') return { BlurView: 'BlurView' };
   if (name === 'expo-image') return { Image: 'Image' };
-  if (name === 'react-native') return { useWindowDimensions: () => ({ width: 390, height: 844 }), Linking: { openURL: url => { overlayLinks.push(url); return Promise.resolve(); } }, Modal: 'Modal', Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', View: 'View', StyleSheet: { create: styles => styles, absoluteFill: {} } };
+  if (name === 'react-native-safe-area-context') return { useSafeAreaInsets: () => insets };
+  if (name === 'react-native') return { useWindowDimensions: () => viewport, Linking: { openURL: url => { overlayLinks.push(url); return Promise.resolve(); } }, Modal: 'Modal', Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', View: 'View', StyleSheet: { create: styles => styles, absoluteFill: {} } };
   if (name === 'react-native-reanimated') {
     const fade = { duration: () => ({ reduceMotion: () => 'fade' }) };
     return { __esModule: true, default: { View: 'AnimatedView', Text: 'AnimatedText' }, FadeIn: fade, ReduceMotion: { System: 'system' },
@@ -225,6 +228,38 @@ assert.equal(nodes.find(node => node.tag === 'AnimatedView').props.style[1].tran
 sharedValues[0].set(0);
 sharedValues[1].set(-208);
 assert.equal(nodes.find(node => node.tag === 'Modal').props.visible, true);
+// Opening and rotating details must retain the overlay and all native dismiss paths.
+const updatesBeforeRotation = stateUpdates;
+for (const [width, height, left, right] of [[844, 390, 59, 0], [844, 390, 0, 59], [390, 844, 0, 0]]) {
+  viewport = { width, height };
+  insets = { top: height > width ? 59 : 0, bottom: 34, left, right };
+  nodes = tree(renderOverlay(overlayProps));
+  const modal = nodes.find(node => node.tag === 'Modal');
+  assert.equal(modal.props.visible, true, 'Rotation does not close or remount details');
+  assert.deepEqual(Array.from(modal.props.supportedOrientations || []), ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']);
+  assert.equal(modal.key, undefined);
+  const scrim = nodes.find(node => node.props?.accessibilityLabel === 'Close lyrics attribution');
+  const padding = scrim.props.style[1];
+  for (const edge of ['Top', 'Bottom', 'Left', 'Right']) assert.equal(padding['padding' + edge], Math.max(24, insets[edge.toLowerCase()]));
+  assert.equal(nodes.find(node => node.props?.accessibilityViewIsModal).props.style.flexShrink, 1);
+  assert.equal(nodes.find(node => node.tag === 'ScrollView').props.style.flexShrink, 1, 'Short landscape constrains the scroll viewport, leaving Done reachable');
+}
+assert.equal(stateUpdates, updatesBeforeRotation, 'Orientation does not reset attribution state');
+for (const dismiss of [
+  nodes.find(node => node.tag === 'Modal').props.onRequestClose,
+  nodes.find(node => node.props?.accessibilityViewIsModal).props.onAccessibilityEscape,
+  nodes.find(node => node.props?.accessibilityLabel === 'Close lyrics attribution').props.onPress,
+  nodes.find(node => node.props?.accessibilityRole === 'button' && tree(node).some(child => child.children === 'Done')).props.onPress,
+]) {
+  expanded = true;
+  dismiss();
+  assert.equal(expanded, false, 'Back, accessibility escape, scrim and Done dismiss details');
+}
+expanded = true;
+let stoppedInside = false;
+nodes.find(node => node.props?.accessibilityViewIsModal).props.onPress({ stopPropagation() { stoppedInside = true; } });
+assert.ok(stoppedInside, 'Inside taps do not dismiss the scrollable panel');
+
 const avatars = nodes.filter(node => node.tag === 'Image');
 assert.equal(avatars.length, 4, 'Both compact and expanded attribution include both profile pictures');
 for (const profile of Object.values(profiles)) assert.equal(avatars.filter(node => node.props.source.uri === profile.avatar).length, 2);

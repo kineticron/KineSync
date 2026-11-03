@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import Animated, { Easing, FadeIn, ReduceMotion, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
 type Props = {
@@ -48,6 +49,7 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 export const LyricsAttribution = memo(function LyricsAttribution({ metadata, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const badgeRef = useAnimatedRef<View>();
   const attribution = metadata.attribution;
@@ -118,12 +120,17 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, tra
         </Pressable>
       </Animated.View>
     </View>
-    <Modal transparent visible={expanded} animationType="fade" statusBarTranslucent onRequestClose={() => setExpanded(false)}>
-      <Pressable accessibilityLabel="Close lyrics attribution" style={styles.scrim} onPress={() => setExpanded(false)}>
+    <Modal transparent visible={expanded} animationType="fade" statusBarTranslucent
+      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
+      onRequestClose={() => setExpanded(false)}>
+      <Pressable accessibilityLabel="Close lyrics attribution" style={[styles.scrim, {
+        paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
+        paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
+      }]} onPress={() => setExpanded(false)}>
         <Animated.View entering={FadeIn.duration(200).reduceMotion(ReduceMotion.System)} style={styles.dialog}>
-          <Pressable onPress={event => event.stopPropagation()} accessibilityViewIsModal>
+          <Pressable style={styles.dialogBody} onPress={event => event.stopPropagation()} accessibilityViewIsModal onAccessibilityEscape={() => setExpanded(false)}>
             <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
-            <ScrollView contentContainerStyle={styles.details}>
+            <ScrollView style={styles.detailsScroll} contentContainerStyle={styles.details}>
               <Text accessibilityRole="header" style={styles.title}>Lyrics attribution</Text>
               <Text style={styles.detailProvider}>{attribution.provider || 'Unknown'}</Text>
               {community ? <>
@@ -159,6 +166,8 @@ const styles = StyleSheet.create({
   link: { textDecorationLine: 'underline' },
   scrim: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.25)' },
   dialog: { width: '100%', maxWidth: 380, maxHeight: '80%', borderRadius: 24, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.2)', backgroundColor: 'rgba(24,24,30,0.18)' },
+  dialogBody: { flexShrink: 1 },
+  detailsScroll: { flexShrink: 1 },
   details: { padding: 24, gap: 12, alignItems: 'stretch' },
   title: { color: '#FFF', fontSize: 21, fontWeight: '600' },
   detailProvider: { color: '#FFF', fontSize: 15, fontWeight: '500' },
