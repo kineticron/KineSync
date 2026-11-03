@@ -19,9 +19,18 @@ function compare(baseline, candidate, baselinePerf, candidatePerf) {
     if (![before, after].every(value => Number.isFinite(value) && value >= 0)) throw Error('Invalid legacy heartbeat');
     return [key, { baseline: before, candidate: after, delta: after - before }];
   })) : undefined;
-  return { schema: 1, legacyHeartbeat: heartbeat, heartbeatInterpretation: heartbeat ? 'callback lateness; shared-host noise; not measured JS task duration' : undefined, runId: baseline.runId, sourceShas: { baseline: baseline.sourceSha, candidate: candidate.sourceSha },
+  let uiMetrics;
+  if (baseline.uiCounts?.complete && candidate.uiCounts?.complete) {
+    if (baseline.uiCounts.scope !== candidate.uiCounts.scope) throw Error('UI count scope mismatch');
+    uiMetrics = Object.fromEntries(['pictureBuilds', 'paintConstructors', 'blurFilterConstructors', 'shaderConstructors'].map(key => {
+      const before = baseline.uiCounts.totals?.[key], after = candidate.uiCounts.totals?.[key];
+      if (![before, after].every(value => Number.isSafeInteger(value) && value >= 0)) throw Error('Invalid UI counters');
+      return [key, { baseline: before, candidate: after, delta: after - before, ratio: before ? after / before : null }];
+    }));
+  }
+  return { schema: 1, uiMetrics, uiMetricsUnavailable: uiMetrics ? undefined : 'both sides need successful explicit UI flush with complete scoped owners', legacyHeartbeat: heartbeat, heartbeatInterpretation: heartbeat ? 'callback lateness; shared-host noise; not measured JS task duration' : undefined, runId: baseline.runId, sourceShas: { baseline: baseline.sourceSha, candidate: candidate.sourceSha },
     fixtureSha: baseline.fixtureSha, instrumentationSha: baseline.instrumentationSha, configuration: baseline.configuration, scenario: baseline.scenario,
-    interpretation: 'same-run exploratory counts; no performance gate or physical baseline; firstPicturePublications is not all picture builds; long spans are not JS tasks',
+    interpretation: 'same-run exploratory counts; no performance gate or physical baseline; firstPicturePublications counts first records per measurement epoch; uiMetrics.pictureBuilds counts all sampled dynamic voice records (excludes empty/emoji-mask pictures); long spans are not JS tasks',
     metrics: Object.fromEntries(Object.keys(baseline.counters).map(key => [key, {
       baseline: baseline.counters[key], candidate: candidate.counters[key], delta: candidate.counters[key] - baseline.counters[key],
       ratio: baseline.counters[key] ? candidate.counters[key] / baseline.counters[key] : null,

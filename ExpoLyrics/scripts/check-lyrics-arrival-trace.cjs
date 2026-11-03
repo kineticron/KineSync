@@ -125,3 +125,10 @@ for (const spicy of [false, true]) {
   assert.equal(exported.shapingCalls, harness.counters.glyphShapePasses);
 }
 console.log('native voice constructor/shaping/render counters match mocked native calls for both styles; no device measurement');
+
+countTrace.arrivalSpan(hc, 1, 'glyph-shaping', () => 42);
+assert.equal(countTrace.exportArrivalCounters(metadata).counters.shapingCalls, 0, 'stale spans execute work without contaminating new capture counters');
+const producerHandle = countTrace.beginArrival({}, 'producer');
+countTrace.arrivalEvent(producerHandle, 2, 'stage-producer-attribution', undefined, undefined, undefined, { model: 1, cues: 1 });
+countTrace.snapshotArrivalCapture().records.at(-1).producers.model = 999;
+assert.equal(countTrace.snapshotArrivalCapture().records.at(-1).producers.model, 1, 'snapshots cannot mutate stored producer attribution');

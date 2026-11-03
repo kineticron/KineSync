@@ -109,7 +109,7 @@ const react = {
 };
 const modules = {
   react,
-  '@/lib/lyrics-arrival-context': { LyricsArrivalContext: { Provider: 'TraceProvider' }, LyricsArrivalCommit: 'TraceCommit' },
+  '@/lib/lyrics-arrival-context': { LyricsArrivalContext: { Provider: 'TraceProvider' }, LyricsArrivalCommit: 'TraceCommit', useArrivalGeometry: () => ({}), useArrivalIdentity: () => ({ handle: undefined, identity: { id: 0 }, context: {}, producers: {} }) },
   '@/lib/lyrics-arrival-trace': {},
   '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {} },
   'react-native': { AppState: appState, FlatList: 'FlatList', Linking: { openURL() {} }, Pressable: 'Pressable', StyleSheet: { create: x => x }, Text: 'Text', View: 'View' },

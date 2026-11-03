@@ -1,6 +1,6 @@
-import { LyricsArrivalContext } from '@/lib/lyrics-arrival-context';
+import { useArrivalVoice } from '@/lib/lyrics-arrival-context';
 import { arrivalEvent, arrivalSpan, arrivalCounter } from '@/lib/lyrics-arrival-trace';
-import React, { memo, useEffect, useContext, useMemo, useRef, useState } from 'react';
+import React, { memo, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
   type SkParagraph, type SkRect } from '@shopify/react-native-skia';
@@ -110,12 +110,8 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   voice: NativeVoice; position: SharedValue<number>; fontSize: number; lineHeight: number;
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean;
 }) {
-  const trace = useContext(LyricsArrivalContext);
+  const trace = useArrivalVoice();
   if (__DEV__) arrivalCounter(trace.handle, 'voiceRenders');
-  useEffect(() => {
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'voice-mounted', undefined, undefined, 1);
-    return () => { if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'voice-unmounted', undefined, undefined, 1); };
-  }, [trace]);
   const fonts = useContext(NativeLyricsFontContext);
   const voiceWords = voice.words;
   const voicePaintWords = voice.paintWords;
@@ -230,7 +226,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture arrivalOwner={__DEV__ ? trace.handle : undefined} arrivalGeneration={trace.generation} key={`${voiceStart}:${voiceEnd}:${shaped.revision}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shaped.revision}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}

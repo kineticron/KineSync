@@ -6,17 +6,17 @@ const assert=require('node:assert/strict'),path=require('node:path'),vm=require(
 const {buildSync}=require('esbuild');
 const native=path.resolve(__dirname,'../components/lyrics/native');
 function bundle(file,external=[]){return buildSync({entryPoints:[file],bundle:true,platform:'node',format:'cjs',write:false,external}).outputFiles[0].text;}
-function evaluate(code,requireImpl=require){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process,__DEV__:false});return module.exports;}
+function evaluate(code,requireImpl=require,dev=false){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process,performance,__DEV__:dev});return module.exports;}
 const model=evaluate(bundle(path.join(native,'native-lyrics-model.ts')));
 const layout=evaluate(bundle(path.resolve(__dirname,'../lib/lyrics-layout.ts')));
 const cues=evaluate(bundle(path.join(native,'native-cue-timeline.ts')));
 const code=bundle(path.join(native,'native-lyrics-view.tsx'),['*']);
 const clone=value=>JSON.parse(JSON.stringify(value));
-function harness(style,list){
+function harness(style,list,options={}){
  let cursor=0,tree,props={style,list,reveal:'canvas',tapToSeekEnabled:false};const slots=[],effects=[],commands=[],reactions=[];
  const slot=make=>{const i=cursor++;return slots[i]??=(make());};
  const same=(a,b)=>a&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
- const react={memo:fn=>fn,
+ const react={memo:fn=>fn,createContext:value=>({value}),
   useRef:value=>slot(()=>({current:value})),
   useState:initial=>{const item=slot(()=>({value:typeof initial==='function'?initial():initial}));return [item.value,next=>{item.value=typeof next==='function'?next(item.value):next;}];},
   useMemo(fn,deps){const item=slot(()=>({}));if(!same(item.deps,deps)){item.deps=deps;item.value=fn();}return item.value;},
@@ -30,10 +30,13 @@ function harness(style,list){
  const host={getLayout:()=>({y:measuredY}),getFirstItemOffset:()=>150,getAbsoluteLastScrollOffset:()=>0,getFirstVisibleIndex:()=>0,
   scrollToIndex:command=>commands.push(command),scrollToOffset(){}};
  const jsx=(type,props)=>({type,props:props??{}});
+ const hookCalls=[];
+ for(const name of ['useRef','useState','useMemo','useCallback','useEffect']){const original=react[name];react[name]=(...args)=>{hookCalls.push(name);return original(...args);};}
+ const arrivalContextModule=options.arrivalContextFactory?.(react,state)??options.arrivalContextModule;
  const modules={react,
-  '@/lib/lyrics-arrival-context':{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit'},
-  '@/lib/lyrics-arrival-trace':{},
-  '@/lib/native-clock-diagnostics':{},
+  '@/lib/lyrics-arrival-context':arrivalContextModule??{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit',useArrivalGeometry:()=>({}),useArrivalIdentity:()=>({handle:undefined,identity:{id:0},context:{},producers:{}})},
+  '@/lib/lyrics-arrival-trace':arrivalContextModule??{},
+  '@/lib/native-clock-diagnostics':{emitNativeClockDiagnostic(){}},
   'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},FlatList:'FlatList',Linking:{openURL(){}},Pressable:'Pressable',StyleSheet:{create:x=>x},Text:'Text',View:'View'},
   'expo-image':{Image:'Image'},'@shopify/flash-list':{FlashList:'FlashList'},
   'react-native-reanimated':{
@@ -47,22 +50,23 @@ function harness(style,list){
   '@/lib/lyrics-timing':{detectLyricsTimingMode:()=> 'synced'},'@/lib/lyrics-layout':layout,
   './native-lyrics-model':model,'./native-lyric-row':{NativeLyricRowView:'Row'},
   './use-native-lyrics-clock':{useNativeLyricsClock:()=>({position,running,seekVersion})},
-  './native-lyrics-fonts':{NativeLyricsFontContext:{Provider:'FontProvider'},useNativeLyricsFonts:()=>null},
+  './native-lyrics-fonts':{NativeLyricsFontContext:{Provider:'FontProvider'},useNativeLyricsFonts:()=>options.fontProvider?.()??null},
   './reference-scroll':{initialScrollCommand:{serial:0,offset:0,delta:0,index:0,firstVisible:0,interval:800,instant:true,interlude:false,snap:false},ReferenceScrollContext:{Provider:'ScrollProvider'},ReferenceScrollView:'Scroll'},
   './amll-layout-cell':{AmllLayoutCell:'Cell'},'./native-cue-timeline':cues,
   './native-renderer-ready-refresh':{NativeRendererReadyRefreshGate:class{begin(){return 0;}setMounted(){}foreground(){return 0;}onReady(){}},requestNativeRendererReadyResync(){throw Error('unexpected request');}},
   'react/jsx-runtime':{jsx,jsxs:jsx},
  };
- const {NativeLyricsView}=evaluate(code,name=>{assert(Object.hasOwn(modules,name),`Unexpected native dependency ${name}`);return modules[name];});
+ const {NativeLyricsView}=evaluate(options.code??code,name=>{assert(Object.hasOwn(modules,name),`Unexpected native dependency ${name}`);return modules[name];},!!options.dev);
  function find(node,type){if(!node||typeof node!=='object')return null;if(node.type===type)return node;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const result=find(child,type);if(result)return result;}return null;}
  function render(next={}){props={...props,...next};cursor=0;reactions.length=0;tree=NativeLyricsView(props);find(tree,list==='flash'?'FlashList':'FlatList').props.ref.current=host;while(effects.length)effects.shift()();return tree;}
  function content(){find(tree,list==='flash'?'FlashList':'FlatList').props.onContentSizeChange();}
  function viewport(width=400){tree.props.onLayout({nativeEvent:{layout:{width,height:800}}});render();}
  render();viewport();content();
- return {state,commands,render,content,viewport,
+ return {state,commands,render,content,viewport,hookCalls,treeSnapshot:()=>tree,
   snapshot:()=>reactions[0].prepare(), react:previous=>reactions[0].react(reactions[0].prepare(),previous),
   cue(time,seek=false){const before=reactions[0].prepare();position.value=time;running.value=true;if(seek)seekVersion.value++;render();const after=reactions[0].prepare();reactions[0].react(after,before);},setY:value=>{measuredY=value;},row:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.data[0],drag:()=>find(tree,list==='flash'?'FlashList':'FlatList').props.onScrollBeginDrag()};
 }
+if(require.main===module){
 for(const style of ['amll','spicy'])for(const list of ['flash','flat']){
  const h=harness(style,list),before=h.commands.length,row=h.row(),oldCue=h.snapshot();
  h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='late translation';h.render();
@@ -88,3 +92,6 @@ for(const style of ['amll','spicy'])for(const list of ['flash','flat']){
  console.log(`${style}/${list}: real native host hooks preserve translation scroll state, timing changes, geometry retries and manual follow.`);
 }
 console.log('Native translation scroll checks PASS; mocked list/clock/ready hosts, not measured device layout or animation.');
+
+}
+module.exports={harness};

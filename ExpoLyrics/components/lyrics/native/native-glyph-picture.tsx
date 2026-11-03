@@ -1,4 +1,5 @@
-import { arrivalPicture, type ArrivalHandle } from '@/lib/lyrics-arrival-trace';
+import { useArrivalPictureMeasurement } from '@/lib/lyrics-arrival-picture';
+import { arrivalPicture, type ArrivalHandle, type ArrivalUiTotals } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
 import { BlendMode, ClipOp, createPicture, Picture, Skia, TileMode, type SkCanvas, type SkFont, type SkImageFilter, type SkParagraph, type SkPaint, type SkPoint, type SkRect, type SkShader, type SkPath, type SkPicture } from '@shopify/react-native-skia';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -17,7 +18,7 @@ type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
 type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[]; unionGroup?: number; unionInk?: SkRect };
 type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
-type ReusableGlyphPaints = { unionPaints?: { encode: SkPaint; decode: SkPaint }; arrivalCounts?: { paintConstructors: number }; revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
+type ReusableGlyphPaints = { unionPaints?: { encode: SkPaint; decode: SkPaint }; arrivalCounts?: ArrivalUiTotals; revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
 
 // Glow sigma is animation-derived and continuous. Reuse only bit-exact radii,
 // with a small per-voice LRU so a long song cannot retain an unbounded filter set.
@@ -70,6 +71,24 @@ function getRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX
   entries.push({ x, y, endX, bright, dark, shader });
   return shader;
 }
+
+function measuredGlowFilter(paints: ReusableGlyphPaints, radius: number) {
+  'worklet';
+  const hit = paints.blurRadii.includes(radius);
+  const result = getGlowFilter(paints, radius);
+  if (!hit && paints.arrivalCounts) paints.arrivalCounts.blurFilterConstructors++;
+  return result;
+}
+function measuredRevealShader(paints: ReusableGlyphPaints, x: number, y: number, endX: number, bright: number, dark: number) {
+  'worklet';
+  const hit = paints.revealShaders.some(entry => Object.is(entry.x, x) && Object.is(entry.y, y) && Object.is(entry.endX, endX) &&
+    Object.is(entry.bright, bright) && Object.is(entry.dark, dark));
+  const result = getRevealShader(paints, x, y, endX, bright, dark);
+  if (!hit && paints.arrivalCounts) paints.arrivalCounts.shaderConstructors++;
+  return result;
+}
+const glowFilterForDraw = typeof __DEV__ !== 'undefined' && __DEV__ ? measuredGlowFilter : getGlowFilter;
+const revealShaderForDraw = typeof __DEV__ !== 'undefined' && __DEV__ ? measuredRevealShader : getRevealShader;
 
 /** Read the paragraph's actual shaped glyphs, including fallback fonts and RTL placement. */
 export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], spicy = true): ShapedGlyphWord[] {
@@ -334,7 +353,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
         const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
         paint.setAlphaf(1);
-        shader = getRevealShader(paints, x, rect.y, x + length,
+        shader = revealShaderForDraw(paints, x, rect.y, x + length,
           spicy ? background ? 0.6 : 0.85 : line.bright,
           spicy ? background ? 0.3 : 0.5 : line.dark);
         paint.setShader(shader);
@@ -346,7 +365,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         // Blur the clipped letter image, not each whole intersecting glyph.
         // Ligatures shared by two slices must not emit their full glow twice.
         const sigma = Math.max(0.01, radius);
-        glowPaint.setImageFilter(getGlowFilter(paints, sigma));
+        glowPaint.setImageFilter(glowFilterForDraw(paints, sigma));
         canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
@@ -365,19 +384,102 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
   });
 }
 
-function reportArrivalPicture(handle: ArrivalHandle, generation: number, duration: number) {
-  arrivalPicture(handle, generation, duration);
+function reportArrivalPicture(handle: ArrivalHandle, generation: number, duration: number, epoch: number) {
+  arrivalPicture(handle, generation, duration, epoch);
 }
 
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
 const pictureNativeMonotonicNow = typeof performance !== 'undefined' ? performance.now : null;
 const pictureTraceEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
-export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0 }: {
+const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0 }: {
   arrivalOwner?: ArrivalHandle; arrivalGeneration?: number;
   words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
-  const arrivalReported = useSharedValue(false);
+  const measurement = useArrivalPictureMeasurement(arrivalOwner, arrivalGeneration, words, width, height);
+  const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
+  const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
+  const picture = useSharedValue(empty);
+  const paints = useSharedValue<ReusableGlyphPaints | null>(null);
+  const traceFrames = useSharedValue(0);
+  const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
+    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
+  const frame = useFrameCallback(useCallback(info => {
+    'worklet';
+    const time = position.value;
+    const pictureStarted = pictureTraceEnabled ? performance.now() : 0;
+    const previous = state.value;
+    const isActive = active.value;
+    // A proven idle picture needs no word scans while its presentation is unchanged.
+    if (previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
+      (time === previous.time || !isActive && (time < lineEnd) === (previous.time < lineEnd) &&
+        (time < words[0].word.start || time > lineEnd + 1500))) {
+      if (time !== previous.time) state.modify(s => { s.time = time; return s; }, false);
+      return;
+    }
+    const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
+    const floatClock = advanceAmllFloatClock(previous.floatClock, isActive, time, dt * 1000);
+    const floatSettled = spicy || words.every(w => amllWordFloatPosition(floatClock, time, w.word.start, w.word.end) <= w.word.start);
+    const idle = floatSettled && !isActive && !previous.active && (time < lineEnd) === (previous.time < lineEnd);
+    const settled = !spicy || previous.words.every(w => w.settled);
+    if (settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
+      lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) {
+      state.modify(s => { s.cached = true; return s; }, false);
+      return;
+    }
+    // Future/settled voices keep a cached picture. Their position/blur/alpha is
+    // composited by the parent without rebuilding glyph commands each frame.
+    if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
+      lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
+      state.modify(s => { s.time = time; s.cached = true; return s; }, false);
+      return;
+    }
+    const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
+      ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
+    const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
+    const cachedPaints = paints.value;
+    const totals = pictureTraceEnabled && measurement ? { ...measurement.counts.value } : undefined;
+    if (totals && !cachedPaints) totals.paintConstructors += 2;
+    const reusablePaints: ReusableGlyphPaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
+    if (pictureTraceEnabled && totals) reusablePaints.arrivalCounts = totals;
+    const arrivalStarted = pictureTraceEnabled && measurement && !measurement.counts.value.reported ? performance.now() : 0;
+    picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
+      lineMotion.value, floatClock, reusablePaints), bounds);
+    if (pictureTraceEnabled && measurement && totals) {
+      totals.pictureBuilds++;
+      if (!totals.reported) {
+        totals.reported = true;
+        scheduleOnRN(reportArrivalPicture, measurement.handle, measurement.generation, performance.now() - arrivalStarted, measurement.epoch);
+      }
+      measurement.counts.value = totals;
+      reusablePaints.arrivalCounts = undefined;
+    }
+    if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
+      traceFrames.value++;
+      let nativeNow: number | null = null;
+      try { nativeNow = pictureNativeMonotonicNow!(); } catch { /* Report unavailable native transfer explicitly. */ }
+      scheduleOnRN(reportNativePicture, { style: spicy ? 'spicy' : 'amll', position: time, nativeNow,
+        uiNow: performance.now(), pictureDurationMs: performance.now() - pictureStarted,
+        lineStart: words[0]?.word.start ?? null, lineEnd, playing: true, background });
+    }
+    // Picture recording is synchronous and snapshots paint state. Release the
+    // last frame's shader/filter refs while keeping the reusable Paint objects.
+    reusablePaints.paint.setShader(null);
+    reusablePaints.glowPaint.setShader(null);
+    reusablePaints.glowPaint.setImageFilter(null);
+    if (!cachedPaints) paints.value = reusablePaints;
+    state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+  }, [...(pictureTraceEnabled ? [measurement] : []), active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
+  return <Picture picture={picture} />;
+};
+
+// Exact c2aaa20 component body: no arrival hooks, shared values or callback captures.
+const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
+  words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
+  spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
+}) {
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
   const empty = useMemo(() => createPicture(() => {}, bounds), [bounds]);
   const picture = useSharedValue(empty);
@@ -420,13 +522,8 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     const cachedPaints = paints.value;
     const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
-    const arrivalStarted = arrivalOwner && !arrivalReported.value ? performance.now() : 0;
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
       lineMotion.value, floatClock, reusablePaints), bounds);
-    if (arrivalOwner && !arrivalReported.value) {
-      arrivalReported.value = true;
-      scheduleOnRN(reportArrivalPicture, arrivalOwner, arrivalGeneration, performance.now() - arrivalStarted);
-    }
     if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
       traceFrames.value++;
       let nativeNow: number | null = null;
@@ -443,8 +540,8 @@ export const NativeGlyphPicture = memo(function NativeGlyphPicture({ words, widt
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [arrivalOwner, arrivalGeneration, arrivalReported, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
-});
-
+};
+export const NativeGlyphPicture = memo(pictureTraceEnabled ? NativeGlyphPictureDevelopment : NativeGlyphPictureProduction);

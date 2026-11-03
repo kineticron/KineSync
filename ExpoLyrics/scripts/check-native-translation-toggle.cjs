@@ -14,6 +14,7 @@ const baselineCode = baselineIndex < 0 ? null : bundle(fs.readFileSync(process.a
 
 function createVoiceHarness(code, spicy, layouts = {}) {
   const hookSlots = [];
+  const hookCalls = [];
   let hookCursor = 0;
   const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
     translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
@@ -38,6 +39,9 @@ function createVoiceHarness(code, spicy, layouts = {}) {
       return hookSlots[index].value;
     },
   };
+  for (const name of ['useContext', 'useEffect', 'useRef', 'useState', 'useMemo']) {
+    const original = react[name]; react[name] = (...args) => { hookCalls.push(name); return original(...args); };
+  }
   const makeParagraph = initialText => {
     let text = initialText;
     return { addText(value) { text += value; return this; }, pushStyle() { return this; }, pop() { return this; }, build() {
@@ -54,7 +58,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const NativeGlyphPicture = function NativeGlyphPictureMock() {};
   const modules = {
     react,
-    "@/lib/lyrics-arrival-context": { LyricsArrivalContext: arrivalContext },
+    "@/lib/lyrics-arrival-context": layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1 }) },
     "@/lib/lyrics-arrival-trace": layouts.arrivalTrace ?? {},
     'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
     '@shopify/react-native-skia': { Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
@@ -85,7 +89,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const defaults = { position: { value: 100 }, blur: { value: 0 }, lineActive: { value: true },
     lineMotion: { value: { scale: 1, bright: 0.9, dark: 0.3 } }, fontSize: 32, lineHeight: 42,
     right: false, background: false, staticLyrics: false, spicy, showTranslation: true, hasDuet: false, batched: true };
-  return { counters, NativeGlyphPicture, render(voice, props = {}) {
+  return { counters, hookCalls, NativeGlyphPicture, render(voice, props = {}) {
     hookCursor = 0;
     return NativeSkiaVoice({ ...defaults, voice, ...props });
   } };
