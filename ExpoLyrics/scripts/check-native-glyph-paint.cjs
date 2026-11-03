@@ -263,3 +263,35 @@ if (canvasKitArg >= 0) require('./native-glyph-canvaskit.cjs')(process.argv[canv
   .then(fixture => console.log('Live CanvasKit layout + real shapeGlyphWords/glyphRowExtent:', JSON.stringify(checkCapturedLayout(fixture), null, 2)))
   .catch(error => { console.error(error); process.exitCode = 1; });
 console.log('Native glyph paint checks passed: direct text drawing, exact bounded blur caching, heart/emoji masking in Spicy and AMLL, multi-run Spicy reveal in LTR/RTL, continuous AMLL highlight release, Hangul ownership and descender isolation.');
+
+// Runtime branch regression only; these synthetic rectangles are NOT native
+// shaping/raster evidence. See check-native-shirorekha.cjs for real Skia pixels.
+for (const spicy of [false, true]) for (const emphasized of [false, true]) {
+  const joined = { ...word, word: { ...word.word, text: 'देख', emphasized, letters: ['देख'] }, letters: [[rect]] };
+  const overlappingRun = { glyphs: [10, 11], positions: [{ x: 0, y: 20 }, { x: 10, y: 20 }], origin: { x: 0, y: 0 },
+    bounds: [{ x: 0, y: -16, width: 12, height: 20 }, { x: 0, y: -16, width: 10, height: 20 }],
+    font: { getGlyphWidths: () => [10, 10] } };
+  // Overlap must be detected across font runs as well as within one run.
+  for (const split of [false, true]) {
+    const runs = split ? overlappingRun.glyphs.map((glyph, i) => ({ ...overlappingRun, glyphs: [glyph],
+      positions: [overlappingRun.positions[i]], bounds: [overlappingRun.bounds[i]], font: { getGlyphWidths: () => [10] } })) : [overlappingRun];
+    const shaped = moduleObject.exports.shapeGlyphWords({ getLineMetrics, extendedVisit: visit => runs.forEach(run => visit(0, run)) }, [joined], spicy)[0];
+    assert.deepEqual(Array.from(shaped.overlapMask), [true], 'Actual selected ink bounds choose masking independently of script/font');
+    assert.deepEqual(Array.from(shaped.runs[0]).flatMap(run => Array.from(run.glyphs)), [10, 11], 'Masking preserves glyph ownership/order');
+    assert.equal(shaped.pictures.length, 1, 'AMLL also needs a cached opaque source for overlapping text');
+    for (const active of [false, true]) for (const background of [false, true]) {
+      const commands = [];
+      const canvas = { save() {}, restore() {}, translate() {}, scale() {}, clipPath() {},
+        saveLayer: () => commands.push('layer'), drawPicture: picture => { assert.equal(picture, shaped.pictures[0]); commands.push('picture'); },
+        drawPaint: paint => commands.push(paint.blendMode), drawGlyphs: () => assert.fail('Overlapping ink must not receive per-glyph reveal alpha') };
+      const paints = makePaints();
+      moduleObject.exports.drawVoice(canvas, [shaped], [{ ...motion, letters: [motion] }], -1, active, spicy, background, 36, 1000,
+        { bright: 0.85, dark: 0.3 }, { active, releasePosition: 0, elapsed: 0 }, paints);
+      assert.deepEqual(commands.slice(-3), ['layer', 'picture', 5], 'Foreground uses one SrcIn application per slice in active/inactive/emphasis/background paths');
+      assert.equal(commands.filter(command => command === 'picture').length, commands.filter(command => command === 5).length, 'Every foreground/glow glyph source receives exactly one alpha mask');
+      assert.equal(paints.paint.blendMode, 3, 'Mask blend mode cannot leak into the next slice');
+    }
+  }
+}
+assert.deepEqual(Array.from(shaped[0].overlapMask), [false], 'Nonoverlapping text retains the direct draw path');
+console.log('Overlapping-ink runtime regression passed (synthetic geometry; not native pixels).');

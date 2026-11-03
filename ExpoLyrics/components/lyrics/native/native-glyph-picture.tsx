@@ -14,7 +14,7 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; revealRects: SkRect[] };
+type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[] };
 type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
 type ReusableGlyphPaints = { revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
 
@@ -83,7 +83,7 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
       const extent = glyphRowExtent(rect, rects, lines);
       return Skia.XYWHRect(extent.x, rect.y, extent.width, rect.height);
     });
-    return { ...word, emojiMask, revealRects, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
+    return { ...word, emojiMask, overlapMask: parts.map(() => false), revealRects, pictures: [] as SkPicture[], runs: parts.map(() => [] as GlyphRun[]), clips: parts.map(rects => {
       const path = Skia.PathBuilder.Make();
       rects.forEach(rect => {
         const onLine = allRects.filter(r => Math.min(r.y + r.height, rect.y + rect.height) - Math.max(r.y, rect.y) > Math.min(r.height, rect.height) / 2);
@@ -96,14 +96,29 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
       return path.detach();
     }) };
   });
+  const sliceInk = shaped.map(word => word.runs.map(() => [] as SkRect[]));
   paragraph.extendedVisit((_line, run) => {
     if (!run) return;
     const selectionRun = { ...run, advances: run.font.getGlyphWidths(run.glyphs) };
-    for (const word of shaped) {
+    for (const [wordIndex, word] of shaped.entries()) {
       const parts = word.word.emphasized ? word.letters : [word.rects];
       parts.forEach((rects, index) => {
         const { glyphs, positions } = selectGlyphSlice(selectionRun, rects);
         if (glyphs.length) word.runs[index].push({ glyphs, positions, font: run.font });
+        const inks = sliceInk[wordIndex][index];
+        // Inspect actual shaped ink, including zero-advance marks and fallback
+        // runs. Bounding-box overlap is conservative: false positives only use
+        // the same alpha mask; glyph ownership and slice clips stay unchanged.
+        run.glyphs.forEach((_glyph, glyphIndex) => {
+          const x = run.origin.x + run.positions[glyphIndex].x;
+          const y = run.origin.y + run.positions[glyphIndex].y;
+          if (!positions.some(position => position.x === x && position.y === y)) return;
+          const bounds = run.bounds[glyphIndex];
+          const ink = { x: x + bounds.x, y: y + bounds.y, width: bounds.width, height: bounds.height };
+          if (inks.some(other => Math.min(ink.x + ink.width, other.x + other.width) > Math.max(ink.x, other.x) &&
+              Math.min(ink.y + ink.height, other.y + other.height) > Math.max(ink.y, other.y))) word.overlapMask[index] = true;
+          inks.push(ink);
+        });
         // An owned glyph may overhang its advance box. Keep that ink on its
         // own syllable without admitting the next syllable's glyphs. Shared
         // ligatures retain their original slice clip.
@@ -125,7 +140,7 @@ export function shapeGlyphWords(paragraph: SkParagraph, words: PictureWord[], sp
   const sourcePaint = Skia.Paint();
   sourcePaint.setAntiAlias(true);
   sourcePaint.setColor(Skia.Color('white'));
-  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean)) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
+  for (const word of shaped) if (spicy || word.emojiMask.some(Boolean) || word.overlapMask.some(Boolean)) word.pictures = word.runs.map((runs, index) => createPicture(canvas => {
     canvas.clipPath(word.clips[index], ClipOp.Intersect, true);
     for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, sourcePaint);
   }));
@@ -144,7 +159,11 @@ function transform(canvas: SkCanvas, rect: SkRect, scale: number, x: number, y: 
 
 function drawGlyphSlice(canvas: SkCanvas, word: ShapedGlyphWord, letter: number, paint: SkPaint) {
   'worklet';
-  if (word.emojiMask[letter]) {
+  if (word.emojiMask[letter] || word.overlapMask?.[letter]) {
+    // shirorekha-alpha-union-v1: apply reveal alpha once to opaque glyph ink.
+    // With coverage c1,c2 and alpha a, direct SrcOver gives
+    // a*c1 + a*c2*(1-a*c1). Masking gives a*(c1+c2*(1-c1)),
+    // so solid overlapping headline strokes stay at a rather than 2a-a².
     // Color fallback glyphs can ignore a glyph paint's shader. Apply the
     // reveal to the recorded glyph alpha, including the inactive dim state.
     canvas.saveLayer();
@@ -227,7 +246,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setShader(shader);
       }
       if (glow > 0.001 && active) {
-        glowPaint.setShader(spicy || word.emojiMask[letter] ? null : shader);
+        glowPaint.setShader(spicy || word.emojiMask[letter] || word.overlapMask?.[letter] ? null : shader);
         glowPaint.setColor(Skia.Color('white'));
         glowPaint.setAlphaf(glow);
         // Blur the clipped letter image, not each whole intersecting glyph.
