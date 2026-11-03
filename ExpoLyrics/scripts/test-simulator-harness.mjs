@@ -344,13 +344,16 @@ if (name === 'xcodebuild') {
   fs.mkdirSync(products, { recursive: true });
   const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
   fs.writeFileSync(path.join(products, 'Capture.xctestrun'), plist.build({ Capture: { TestHostBundleIdentifier: 'dev.kineticron.simulator-capture.xctrunner', IsUITestBundle: true }, __xctestrun_metadata__: { FormatVersion: 1 } }));
+  if (process.env.SIM_CASE === 'unified-log-slow-ready') { setTimeout(() => process.exit(0), 400); return; }
  }
  if (args.includes('test-without-building')) {
   const plist = require(${JSON.stringify(new URL(import.meta.resolve('plist')).pathname)});
   const env = plist.parse(fs.readFileSync(args[args.indexOf('-xctestrun') + 1], 'utf8')).Capture.EnvironmentVariables;
   const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
   fs.mkdirSync(mailbox, { recursive: true });
-  fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: env.KINESYNC_CAPTURE_SESSION, mailbox }));
+  const writeReady = () => fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({ session: env.KINESYNC_CAPTURE_SESSION, mailbox }));
+  if (process.env.SIM_CASE === 'unified-log-slow-ready') setTimeout(writeReady, 400);
+  else writeReady();
   setInterval(() => {
    const file = path.join(mailbox, 'request.json');
    if (!fs.existsSync(file)) return;
@@ -402,7 +405,7 @@ if (args.includes('stream')) {
  // Split the banner to exercise streaming line framing before launch.
  const banner = process.env.SIM_CASE === 'stderr-banner' ? process.stderr : process.stdout;
  banner.write('Filtering the log ');
- setTimeout(() => { fs.writeFileSync(path.join(dir, 'stream-ready'), '1'); banner.write('data using "process == KineSync"\\n'); }, 100);
+ setTimeout(() => { fs.writeFileSync(path.join(dir, 'stream-ready'), '1'); banner.write('data using "process == KineSync"\\n'); }, process.env.SIM_CASE === 'unified-log-slow-ready' ? 1400 : 100);
  const timer = setInterval(() => {
   if (!fs.existsSync(path.join(dir, 'launched'))) return;
   clearInterval(timer);
@@ -440,13 +443,13 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['native-framebuffer', 'pass', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
+  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['native-framebuffer', 'pass', 'unified-log-slow-ready', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
     console.log(`Runner CLI scenario: ${scenario}`);
     for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_7_restore.json', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
-    const shouldPass = ['unstable', 'native-framebuffer', 'pass', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const shouldPass = ['unstable', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const started = Date.now();
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (scenario === 'stale-request') {
@@ -485,6 +488,11 @@ if (args.includes('launch')) {
         assert.equal(fs.readFileSync(path.join(output, 'device-stream.log'), 'utf8').split('[KINESYNC_SIM] SCENARIO_START').length - 1, 2, 'stderr mirror must be retained as evidence but ignored as protocol');
       }
       if (scenario === 'pass') assert.equal(fs.readFileSync(path.join(output, 'launch-console.log'), 'utf8'), '', 'Silent Release launch must still pass');
+      if (scenario === 'unified-log-slow-ready') {
+        const startupLog = fs.readFileSync(path.join(output, 'startup-commands.jsonl'), 'utf8');
+        assert.ok(startupLog.includes('startup:native-capture-build'));
+        assert.ok(fs.existsSync(path.join(output, 'native-capture-ready.json')));
+      }
     } else {
       const state = JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'), 'utf8'));
       assert.ok(state.error);
