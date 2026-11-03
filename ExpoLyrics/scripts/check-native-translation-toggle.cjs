@@ -17,12 +17,13 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   let hookCursor = 0;
   const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
     translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
+  const arrivalContext = {};
   const fonts = { name: 'test-fonts' };
   const react = {
     memo: component => component,
     useEffect() {},
     createElement(type, props, ...children) { return { type, props: { ...props, ...(children.length ? { children: children.length === 1 ? children[0] : children } : {}) } }; },
-    useContext() { hookCursor++; return fonts; },
+    useContext(context) { hookCursor++; return context === arrivalContext ? { handle: layouts.arrivalHandle, generation: 1 } : fonts; },
     useRef(initial) { const index = hookCursor++; return hookSlots[index] ??= { current: initial }; },
     useState(initial) {
       const index = hookCursor++;
@@ -53,8 +54,8 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const NativeGlyphPicture = function NativeGlyphPictureMock() {};
   const modules = {
     react,
-    "@/lib/lyrics-arrival-context": { LyricsArrivalContext: {} },
-    "@/lib/lyrics-arrival-trace": {},
+    "@/lib/lyrics-arrival-context": { LyricsArrivalContext: arrivalContext },
+    "@/lib/lyrics-arrival-trace": layouts.arrivalTrace ?? {},
     'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
     '@shopify/react-native-skia': { Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
       Mask: 'Mask', Paint: 'Paint', Paragraph: 'Paragraph', Rect: 'Rect', Skia: skia, TextAlign: { Left: 0, Right: 1 } },
@@ -78,7 +79,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
       jsxs(type, props, key) { return { type, props: { ...props, ...(key === undefined ? {} : { key }) } }; } },
   };
   const moduleObject = { exports: {} };
-  vm.runInNewContext(code, { __DEV__: false, module: moduleObject, exports: moduleObject.exports,
+  vm.runInNewContext(code, { __DEV__: !!layouts.dev, performance, module: moduleObject, exports: moduleObject.exports,
     require(name) { assert(name in modules, `native-only hook harness missing import ${name}`); return modules[name]; } });
   const NativeSkiaVoice = moduleObject.exports.NativeSkiaVoice;
   const defaults = { position: { value: 100 }, blur: { value: 0 }, lineActive: { value: true },

@@ -1,5 +1,5 @@
 import { LyricsArrivalContext } from '@/lib/lyrics-arrival-context';
-import { arrivalEvent, arrivalSpan } from '@/lib/lyrics-arrival-trace';
+import { arrivalEvent, arrivalSpan, arrivalCounter } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useEffect, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { Blur, Canvas, Group, LinearGradient, Mask, Paint, Paragraph, Rect, Skia, TextAlign,
@@ -111,6 +111,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean;
 }) {
   const trace = useContext(LyricsArrivalContext);
+  if (__DEV__) arrivalCounter(trace.handle, 'voiceRenders');
   useEffect(() => {
     if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'voice-mounted', undefined, undefined, 1);
     return () => { if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'voice-unmounted', undefined, undefined, 1); };
@@ -145,6 +146,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     let text = staticLyrics ? voiceWords.map(w => w.text).join('') : voicePaintText;
     let paintWords = voicePaintWords;
     if (!spicy && !staticLyrics) {
+      if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
       const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText(text).build();
       unwrapped.layout(100000);
       const balanced = balanceAmllText(text, paintWords, textWidth, (start, end) =>
@@ -153,8 +155,10 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
       paintWords = balanced.words;
     }
     const makeParagraph = (inputText: string, inputWords: NativePaintWord[]) => {
+      if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
       const builder = Skia.ParagraphBuilder.Make(paragraphStyle, fonts);
       if (spicy && !staticLyrics && inputWords.some(word => word.gapAfter)) {
+        if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
         const probe = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText('0 ').build();
         probe.layout(1000);
         const ch = probe.getRectsForRange(0, 1).reduce((sum, rect) => sum + rect.width, 0);
@@ -205,6 +209,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     const translationStarted = __DEV__ && trace.handle ? performance.now() : 0;
     const size = spicy ? fontSize * (background ? 12 / (32 * 1.05 * 0.75) : 14 / (32 * 1.05)) : Math.max(10, fontSize * 0.5);
     const leading = spicy ? fontSize * (background ? 16 / (32 * 1.05 * 0.75) : 18 / (32 * 1.05)) : size * 1.5;
+    if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
     const paragraph = Skia.ParagraphBuilder.Make({ textAlign: right ? TextAlign.Right : TextAlign.Left,
       textStyle: { fontFamilies: ['SF Pro Display'], fontSize: size, fontStyle: { weight: spicy ? 500 : 700 },
         heightMultiplier: leading / size, halfLeading: true, color: Skia.Color('rgba(255,255,255,0.3)') } }, fonts)
