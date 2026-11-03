@@ -112,6 +112,36 @@ async function main() {
       assert.ok(excess > 0, `${label}: must reproduce actual overlapping ink`);
     }
   }
+  // Independent review's active Spicy control, with only overlapMask disabled
+  // for direct painting. At gradient=0 the first 20% is still a fade strip:
+  // assert the 0.5 plateau beyond that strip, not a uniform-dark whole image.
+  const activeSpicy = indic.shape(true);
+  const fullyRevealed = raster(activeSpicy, { spicy: true, active: true, glow: 0, gradient: 1 });
+  for (const [gradient, expectedDirect, expectedFixed] of [[0, 192, 128], [1, 249, 217]]) {
+    const options = { spicy: true, active: true, glow: 0, gradient };
+    const direct = raster(noMask(activeSpicy), options), fixed = raster(activeSpicy, options);
+    let plateauPixels = 0, plateauMaximumDirect = 0, plateauMaximumFixed = 0, excess = 0;
+    for (let i = 3; i < fixed.pixels.length; i += 4) {
+      if (fullyRevealed.pixels[i] !== 217) continue; // Fully covered ink only.
+      const x = Math.floor(i / 4) % 750 - 48; // Undo raster()'s canvas translation.
+      if (gradient === 0 && !activeSpicy.some(word => {
+        const rect = word.revealRects[0];
+        return x >= rect.x + rect.width * 0.2 + 1 && x <= rect.x + rect.width - 1;
+      })) continue;
+      plateauPixels++;
+      plateauMaximumDirect = Math.max(plateauMaximumDirect, direct.pixels[i]);
+      plateauMaximumFixed = Math.max(plateauMaximumFixed, fixed.pixels[i]);
+      assert.ok(Math.abs(fixed.pixels[i] - expectedFixed) <= 1, `Active Spicy solid plateau ${expectedFixed}`);
+      if (direct.pixels[i] > fixed.pixels[i] + 4) excess++;
+    }
+    assert.ok(plateauPixels > 100 && excess > 0, 'Active Spicy control must contain solid plateau ink and excess overlap alpha');
+    assert.ok(Math.abs(plateauMaximumDirect - expectedDirect) <= 1, `Active Spicy direct plateau ${expectedDirect}`);
+    assert.ok(Math.abs(plateauMaximumFixed - expectedFixed) <= 1, `Active Spicy union plateau ${expectedFixed}`);
+    if (gradient === 1) assert.equal(max(fixed.pixels), 217, 'Full active reveal caps the entire foreground at 0.85');
+    save(`active-spicy-control-${gradient}-direct`, direct); save(`active-spicy-control-${gradient}-fixed`, fixed);
+    results.push({ label: `active-spicy-control-${gradient}`, maximumDirect: max(direct.pixels), maximumFixed: max(fixed.pixels),
+      plateauMaximumDirect, plateauMaximumFixed, expectedDirect, expectedFixed, plateauPixels, excess });
+  }
   // Active Spicy: exact bright/dark plateaus and a half-swept frame. Neither
   // the line alpha argument nor disabling active can stand in for this path.
   for (const [name, data] of [['indic-word', indic], ['indic-graphemes', fixture('देख', 'indic', [{ text: 'देख', offset: 0, emphasized: true,
