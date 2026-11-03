@@ -246,7 +246,7 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         paint.setShader(shader);
       }
       if (glow > 0.001 && active) {
-        glowPaint.setShader(spicy || word.emojiMask[letter] || word.overlapMask?.[letter] ? null : shader);
+        glowPaint.setShader(spicy || word.emojiMask[letter] ? null : shader);
         glowPaint.setColor(Skia.Color('white'));
         glowPaint.setAlphaf(glow);
         // Blur the clipped letter image, not each whole intersecting glyph.
