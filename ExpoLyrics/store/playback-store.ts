@@ -413,8 +413,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     return { trackChanged, seekDetected };
   },
-  setLyrics: (lyrics, source = 'qq-music') =>
-    set({ lyrics: enrichLyrics(lyrics), lyricsSource: source }),
+  setLyrics: (lyrics, source = 'qq-music') => {
+    if (__DEV__) {
+      // Packet boundary diagnostics: counts only, never lyric text or track data.
+      console.info('[lyrics-store-packet]', {
+        source,
+        lines: lyrics.length,
+        segments: lyrics.reduce((count, line) => count + line.syllables.length, 0),
+        singleSegmentLines: lyrics.filter(line => line.syllables.length === 1).length,
+        firstStart: lyrics[0]?.lineStartTime,
+        lastEnd: lyrics.at(-1)?.lineEndTime,
+      });
+    }
+    set({ lyrics: enrichLyrics(lyrics), lyricsSource: source });
+  },
   setLyricsMetadata: (metadata) => set({ lyricsMetadata: metadata || {} }),
   beginTranslationRequest: () =>
     set((state) => ({
