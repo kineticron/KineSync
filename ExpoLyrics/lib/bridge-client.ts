@@ -23,30 +23,9 @@ function getLyricsPacketSignature(lyrics: LyricsPacket["lyrics"]) {
   if (!Array.isArray(lyrics) || !lyrics.length) {
     return "0";
   }
-  const first = lyrics[0];
-  const last = lyrics[lyrics.length - 1];
-  const translatedLineCount = lyrics.reduce(
-    (count, line) =>
-      count +
-      (String(line?.translatedText || "").trim() ||
-      String(line?.backgroundTranslatedText || "").trim()
-        ? 1
-        : 0),
-    0,
-  );
-  const textSample = lyrics
-    .slice(0, 3)
-    .map((line) =>
-      (line?.syllables || []).map((syllable) => syllable.text || "").join(""),
-    )
-    .join("\u001f");
-  return [
-    lyrics.length,
-    Number(first?.lineStartTime || -1),
-    Number(last?.lineEndTime || -1),
-    translatedLineCount,
-    textSample,
-  ].join("|");
+  // Compare every renderable field. Store enrichment adds graphemes, so omit
+  // that derived field when comparing an incoming packet with stored lyrics.
+  return JSON.stringify(lyrics, (key, value) => key === "graphemes" ? undefined : value);
 }
 
 const RECONNECT_BASE_MS = 2_000;
