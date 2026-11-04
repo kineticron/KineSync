@@ -20,7 +20,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
     translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
   const arrivalContext = {};
-  const fonts = { name: 'test-fonts' };
+  const fonts = layouts.fonts ?? { name: 'test-fonts' };
   const react = {
     memo: component => component,
     createContext: value => ({ value }),
@@ -75,6 +75,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
     'react-native-reanimated': { __esModule: true, default: { View: 'Animated.View' }, Easing: { bezier: () => () => 0 },
       useAnimatedReaction() {}, useAnimatedStyle: () => ({}), useDerivedValue: callback => ({ value: callback() }),
       useSharedValue: value => react.useMemo(() => ({ value }), []), withTiming: value => value },
+    './native-geometry-cache': layouts.geometryCache ?? { nativeGeometryCache: { get: (_fonts, _key, _cost, build) => build() } },
     './native-glyph-model': {},
     './reference-motion': layouts.motion ?? { amllEmphasis: () => ({ scale: 1, x: 0, y: 0, glow: 0, radius: 0 }), amllFloat: () => 0, clamp01: value => value },
     './use-reference-word-motion': layouts.wordMotion ?? { useReferenceWordMotion: () => ({ value: {} }) },

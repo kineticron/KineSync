@@ -1,3 +1,4 @@
+import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
 import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useContext, useMemo, useRef, useState } from 'react';
@@ -131,76 +132,82 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   const presentation = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const shaped = useMemo(() => {
     if (width <= 0 || !fonts) return null;
-    const layoutStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
-    const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
-      strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
-        fontFamilies: ['SF Pro Display'], fontSize,
-        fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, heightMultiplier: lineHeight / fontSize },
-      textStyle: { fontFamilies: ['SF Pro Display'], fontSize,
-        fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, color: Skia.Color('white'),
-        heightMultiplier: lineHeight / fontSize, halfLeading: true, letterSpacing: staticLyrics ? 0.15 : 0 } };
-    let text = staticLyrics ? voiceWords.map(w => w.text).join('') : voicePaintText;
-    let paintWords = voicePaintWords;
-    if (!spicy && !staticLyrics) {
-      if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
-      const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText(text).build();
-      unwrapped.layout(100000);
-      const balanced = balanceAmllText(text, paintWords, textWidth, (start, end) =>
-        unwrapped.getRectsForRange(start, end).reduce((sum, rect) => sum + rect.width, 0));
-      text = balanced.text;
-      paintWords = balanced.words;
-    }
-    const makeParagraph = (inputText: string, inputWords: NativePaintWord[]) => {
-      if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
-      const builder = Skia.ParagraphBuilder.Make(paragraphStyle, fonts);
-      if (spicy && !staticLyrics && inputWords.some(word => word.gapAfter)) {
+    ++shapeRevision.current;
+    // All consumed inputs are exact; retained paragraphs are never relaid out.
+    return nativeGeometryCache.get(fonts, ['main-v1', background, batched, fontSize, lineHeight,
+      right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd,
+      voiceWords, voicePaintText, voicePaintWords], voicePaintText.length + voiceWords.reduce((n, word) => n + word.text.length, 0), () => {
+      const layoutStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
+      const paragraphStyle = { textAlign: right ? TextAlign.Right : TextAlign.Left,
+        strutStyle: { strutEnabled: true, forceStrutHeight: true, halfLeading: true,
+          fontFamilies: ['SF Pro Display'], fontSize,
+          fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, heightMultiplier: lineHeight / fontSize },
+        textStyle: { fontFamilies: ['SF Pro Display'], fontSize,
+          fontStyle: { weight: background ? spicy ? 500 : 800 : staticLyrics ? 600 : spicy ? 700 : 800 }, color: Skia.Color('white'),
+          heightMultiplier: lineHeight / fontSize, halfLeading: true, letterSpacing: staticLyrics ? 0.15 : 0 } };
+      let text = staticLyrics ? voiceWords.map(w => w.text).join('') : voicePaintText;
+      let paintWords = voicePaintWords;
+      if (!spicy && !staticLyrics) {
         if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
-        const probe = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText('0 ').build();
-        probe.layout(1000);
-        const ch = probe.getRectsForRange(0, 1).reduce((sum, rect) => sum + rect.width, 0);
-        const space = probe.getRectsForRange(1, 2).reduce((sum, rect) => sum + rect.width, 0);
-        let cursor = 0;
-        for (const word of inputWords) if (word.gapAfter) {
-          const gap = word.offset + word.text.length;
-          builder.addText(inputText.slice(cursor, gap));
-          builder.pushStyle({ ...paragraphStyle.textStyle, letterSpacing: ch * 0.32 - space }).addText(' ').pop();
-          cursor = gap + 1;
-        }
-        builder.addText(inputText.slice(cursor));
-      } else builder.addText(inputText);
-      return builder.build();
-    };
-    if (spicy && !staticLyrics) {
-      const unwrapped = makeParagraph(text, paintWords);
-      unwrapped.layout(100000);
-      const wrapped = wrapSpicyText(text, paintWords, textWidth, (start, end) =>
-        unwrapped.getRectsForRange(start, end).reduce((sum, rect) => sum + rect.width, 0));
-      text = wrapped.text;
-      paintWords = wrapped.words;
-    }
-    const paragraph = makeParagraph(text, paintWords);
-    paragraph.layout(textWidth);
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'paragraph-height-layout', layoutStart, arrivalNow(trace.handle), 1);
-    const rangeStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
-    let before = 0;
-    const words = paintWords.map(word => {
-      const rects = paragraph.getRectsForRange(word.offset, word.offset + (spicy ? word.text.length + Number(!!word.gapAfter) : word.text.trimEnd().length));
-      let offset = word.offset;
-      // Only emphasized words draw independent letter slices. Range queries
-      // cross into SkParagraph; ordinary syllables already have their full rects.
-      const letters = word.emphasized ? word.letters.map(letter => { const start = offset; offset += letter.length; return paragraph.getRectsForRange(start, offset); }) : [];
-      const wordWidth = rects.reduce((sum, r) => sum + r.width, 0);
-      const shapedWord = { word, rects, letters, width: wordWidth, before };
-      before += wordWidth;
-      return shapedWord;
+        const unwrapped = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText(text).build();
+        unwrapped.layout(100000);
+        const balanced = balanceAmllText(text, paintWords, textWidth, (start, end) =>
+          unwrapped.getRectsForRange(start, end).reduce((sum, rect) => sum + rect.width, 0));
+        text = balanced.text;
+        paintWords = balanced.words;
+      }
+      const makeParagraph = (inputText: string, inputWords: NativePaintWord[]) => {
+        if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
+        const builder = Skia.ParagraphBuilder.Make(paragraphStyle, fonts);
+        if (spicy && !staticLyrics && inputWords.some(word => word.gapAfter)) {
+          if (__DEV__) arrivalCounter(trace.handle, 'paragraphBuilds');
+          const probe = Skia.ParagraphBuilder.Make(paragraphStyle, fonts).addText('0 ').build();
+          probe.layout(1000);
+          const ch = probe.getRectsForRange(0, 1).reduce((sum, rect) => sum + rect.width, 0);
+          const space = probe.getRectsForRange(1, 2).reduce((sum, rect) => sum + rect.width, 0);
+          let cursor = 0;
+          for (const word of inputWords) if (word.gapAfter) {
+            const gap = word.offset + word.text.length;
+            builder.addText(inputText.slice(cursor, gap));
+            builder.pushStyle({ ...paragraphStyle.textStyle, letterSpacing: ch * 0.32 - space }).addText(' ').pop();
+            cursor = gap + 1;
+          }
+          builder.addText(inputText.slice(cursor));
+        } else builder.addText(inputText);
+        return builder.build();
+      };
+      if (spicy && !staticLyrics) {
+        const unwrapped = makeParagraph(text, paintWords);
+        unwrapped.layout(100000);
+        const wrapped = wrapSpicyText(text, paintWords, textWidth, (start, end) =>
+          unwrapped.getRectsForRange(start, end).reduce((sum, rect) => sum + rect.width, 0));
+        text = wrapped.text;
+        paintWords = wrapped.words;
+      }
+      const paragraph = makeParagraph(text, paintWords);
+      paragraph.layout(textWidth);
+      if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'paragraph-height-layout', layoutStart, arrivalNow(trace.handle), 1);
+      const rangeStart = __DEV__ ? arrivalNow(trace.handle) : undefined;
+      let before = 0;
+      const words = paintWords.map(word => {
+        const rects = paragraph.getRectsForRange(word.offset, word.offset + (spicy ? word.text.length + Number(!!word.gapAfter) : word.text.trimEnd().length));
+        let offset = word.offset;
+        // Only emphasized words draw independent letter slices. Range queries
+        // cross into SkParagraph; ordinary syllables already have their full rects.
+        const letters = word.emphasized ? word.letters.map(letter => { const start = offset; offset += letter.length; return paragraph.getRectsForRange(start, offset); }) : [];
+        const wordWidth = rects.reduce((sum, r) => sum + r.width, 0);
+        const shapedWord = { word, rects, letters, width: wordWidth, before };
+        before += wordWidth;
+        return shapedWord;
+      });
+      if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'word-letter-ranges', rangeStart, arrivalNow(trace.handle), 1);
+      const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
+      const result = { paragraph, height: paragraph.getHeight(), mainPadding, words,
+        glyphWords: batched && !staticLyrics ? (__DEV__ ? arrivalSpan(trace.handle, trace.generation, 'glyph-shaping', () => shapeGlyphWords(paragraph, words, spicy)) : shapeGlyphWords(paragraph, words, spicy)) : [] };
+      return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
     });
-    if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'word-letter-ranges', rangeStart, arrivalNow(trace.handle), 1);
-    const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-    const result = { paragraph, height: paragraph.getHeight(), mainPadding, words, revision: ++shapeRevision.current,
-      glyphWords: batched && !staticLyrics ? (__DEV__ ? arrivalSpan(trace.handle, trace.generation, 'glyph-shaping', () => shapeGlyphWords(paragraph, words, spicy)) : shapeGlyphWords(paragraph, words, spicy)) : [] };
-    return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth,
-    voicePaintText, voicePaintWords, voiceWords, width]);
+    voicePaintText, voicePaintWords, voiceWords, voiceStart, voiceEnd, width]);
   const translationLayout = useMemo(() => {
     if (width <= 0 || !fonts || staticLyrics || !showTranslation || !translation) return null;
     const translationStarted = __DEV__ ? arrivalNow(trace.handle) : undefined;
@@ -229,7 +236,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shaped.revision}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}
