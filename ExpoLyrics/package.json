@@ -30,7 +30,7 @@
     "test:spotify-browser": "node ./scripts/check-spotify-login.mjs && node ./scripts/verify-spotify-browser-metadata.js && node ./scripts/check-spotify-connect.cjs && node ./scripts/check-spotify-seek.cjs && node ./scripts/check-tour-tracker.cjs",
     "test:spotify-detector": "node ./scripts/check-spotify-detector.mjs && node ./scripts/check-spotify-timing.mjs && node ./scripts/check-spotify-development-timing.mjs && node ./scripts/check-native-detector-lifecycle.cjs && node ./scripts/check-native-detector-lifecycle.cjs --android && node ./scripts/check-native-detector-lifecycle.cjs --development && node ./scripts/check-native-detector-lifecycle.cjs --android --development",
     "test:live-activity": "node ./scripts/check-live-activity.mjs",
-    "test:fast-lyric-loading": "node ./scripts/check-fast-lyric-loading.cjs",
+    "test:fast-lyric-loading": "node ./scripts/check-fast-lyric-loading.cjs && node ./scripts/check-service-copy-ownership.cjs",
     "test:lyrics": "npm run test:fast-lyric-loading && node ./scripts/check-pyaar-runtime.cjs && node ./scripts/check-lyrics-packet-transition.cjs && node ./scripts/check-native-inactive-work.cjs && node ./scripts/check-native-glyph-idle.cjs && node ./scripts/check-spicy-attribution.cjs && node ./scripts/check-lyrics-renderers.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-playback-previous.cjs && node ./scripts/check-energy-performance.cjs && node ./scripts/check-amll-clusters.mjs && node ./scripts/check-amll-scroll.mjs",
     "build:spicy-webview": "node ./scripts/build-spicy-webview-bundle.mjs",
     "sync:musixmatch": "node ./scripts/sync-musixmatch-core.cjs",

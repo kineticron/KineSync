@@ -26,6 +26,11 @@ function generate(input) {
       source = source.replaceAll('|desktop', '|mobile').replaceAll('desktop-bridge', 'mobile-app').replaceAll('on desktop.', 'on mobile.')
         .replaceAll('require("./lyricsVault")', 'mobileLyricsVaultShim').replaceAll('require("./lyricsTtmlImport")', 'mobileTtmlImportShim')
         .replace('    getCachedSourceLyricsPacket,', '    getCachedSourceLyricsPacket,\n    resolveSpotifyCatalogTrackById,\n    resolveSpotifyCatalogTrackViaPartnerSearch,\n    buildLyricsMatchTrack,\n    mergeNativePlaybackArtist,\n    applySpotifyCatalogOverlay,');
+      source = source.replace('      const parsed = parseTtmlToLyrics(ttmlContent);', `      const tracePacket = {};
+      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'vault-ttml-import') : undefined;
+      if (trace) arrivalEvent(trace, 0, 'import-input-rn-received');
+      const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
+      if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);`);
     }
     output = output.slice(0, start) + '\n' + source + '\n' + output.slice(end);
   }

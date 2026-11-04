@@ -13423,31 +13423,66 @@ function createLyricsService({
     ].join("|");
   };
 
-  const cloneSourceCachePacket = (basePacket) => {
-    const safeLyrics = Array.isArray(basePacket?.lyrics)
-      ? basePacket.lyrics.map((line) =>
-          line && typeof line === "object"
-            ? JSON.parse(JSON.stringify(line))
-            : line,
-        )
-      : [];
-    if (basePacket?.lyrics?.translationMeta) {
-      safeLyrics.translationMeta = JSON.parse(
-        JSON.stringify(basePacket.lyrics.translationMeta),
-      );
-    }
-    return {
-      source:
-        stripDesktopSourceSuffix(basePacket?.source) ||
-        String(basePacket?.source || "mobile-app"),
-      metadata:
-        basePacket?.metadata && typeof basePacket.metadata === "object"
-          ? JSON.parse(JSON.stringify(basePacket.metadata))
-          : {},
-      lyrics: safeLyrics,
-      statusMessage: String(basePacket?.statusMessage || ""),
-    };
+  // Timing payloads are immutable after provider parsing. Take an owned snapshot
+  // once at the cache boundary, then share it across row-level translation COW.
+  // Weak ownership does not retain provider packets or grow another source cache.
+  const ownedTiming = new WeakSet();
+  const ownSyllables = (syllables) => {
+    if (!Array.isArray(syllables) || ownedTiming.has(syllables)) return syllables;
+    const owned = syllables.map(syllable => !syllable || typeof syllable !== "object" ? syllable : Object.freeze({ ...syllable,
+      ...(Array.isArray(syllable.graphemes) ? { graphemes: Object.freeze([...syllable.graphemes]) } : {}),
+    }));
+    ownedTiming.add(owned);
+    return Object.freeze(owned);
   };
+  const ownBackgrounds = (backgrounds) => {
+    if (!Array.isArray(backgrounds) || ownedTiming.has(backgrounds)) return backgrounds;
+    const owned = backgrounds.map(block => !block || typeof block !== "object" ? block : Object.freeze({ ...block, syllables: ownSyllables(block.syllables) }));
+    ownedTiming.add(owned);
+    return Object.freeze(owned);
+  };
+  const copyLyricsForTranslation = (lyrics) => {
+    const result = Array.isArray(lyrics) ? lyrics.map(line => {
+      if (!line || typeof line !== "object") return line;
+      return { ...line,
+        ...(line.syllables ? { syllables: ownSyllables(line.syllables) } : {}),
+        ...(line.backgroundSyllables ? { backgroundSyllables: ownSyllables(line.backgroundSyllables) } : {}),
+        ...(line.spicyBackgrounds ? { spicyBackgrounds: ownBackgrounds(line.spicyBackgrounds) } : {}),
+        ...(line.translationMeta ? { translationMeta: { ...line.translationMeta } } : {}),
+      };
+    }) : [];
+    if (lyrics?.translationMeta) result.translationMeta = { ...lyrics.translationMeta };
+    return result;
+  };
+  const copySourceMetadata = (metadata) => {
+    if (!metadata || typeof metadata !== "object") return {};
+    // These are the mutable metadata branches consumed by source selection,
+    // translation, attribution and vault saving. Unknown scalar fields survive.
+    const result = { ...metadata };
+    for (const key of ["translation", "spicyApi", "matchedTrack", "vault"]) if (metadata[key]) result[key] = { ...metadata[key] };
+    if (Array.isArray(metadata.spicyVariantTitles)) result.spicyVariantTitles = [...metadata.spicyVariantTitles];
+    if (metadata.credits) result.credits = { ...metadata.credits,
+      ...(metadata.credits.songwriters ? { songwriters: [...metadata.credits.songwriters] } : {}) };
+    if (metadata.attribution) {
+      result.attribution = { ...metadata.attribution };
+      for (const key of ["maker", "uploader"]) if (metadata.attribution[key]) result.attribution[key] = { ...metadata.attribution[key] };
+    }
+    if (metadata.ttml) {
+      result.ttml = { ...metadata.ttml };
+      for (const key of ["appliedTranslations", "preservedTranslations"]) if (metadata.ttml[key])
+        result.ttml[key] = metadata.ttml[key].map(line => ({ ...line }));
+      if (metadata.ttml.translationTracks) result.ttml.translationTracks = metadata.ttml.translationTracks.map(track => ({
+        ...track, lines: track.lines.map(line => ({ ...line })),
+      }));
+    }
+    return result;
+  };
+  const cloneSourceCachePacket = (basePacket) => ({
+    source: stripDesktopSourceSuffix(basePacket?.source) || String(basePacket?.source || "mobile-app"),
+    metadata: copySourceMetadata(basePacket?.metadata),
+    lyrics: copyLyricsForTranslation(basePacket?.lyrics),
+    statusMessage: String(basePacket?.statusMessage || ""),
+  });
 
   const getSourceRecord = (cacheKey) => {
     let record = sourceCachesByTrack.get(cacheKey);
@@ -13499,7 +13534,7 @@ function createLyricsService({
   };
   const getCachedSourceLyricsPacket = (trackId, preferredSource, translationLanguage = "English") => {
     const base = getSourceBase(trackId, preferredSource);
-    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, selectTtmlTranslationTracks(base, translationLanguage)) : null;
+    return base?.lyrics?.length ? buildLyricsPacketFromBase({ trackId: String(trackId) }, selectTtmlTranslationTracks(cloneSourceCachePacket(base), translationLanguage)) : null;
   };
 
   const cloneLyricsLinesWithoutTranslations = (lyrics) => {
