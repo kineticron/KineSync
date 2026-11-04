@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveTrustedBaseline } from './resolve-trusted-simulator-baseline.mjs';
+import { resolveTrustedBaseline, resolveTrustedCandidate } from './resolve-trusted-simulator-baseline.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function testTrustedBaseline() {
@@ -20,6 +20,11 @@ function testTrustedBaseline() {
     assert.equal(resolveTrustedBaseline('main', dir), trusted);
     assert.equal(resolveTrustedBaseline(trusted, dir), trusted);
     assert.throws(() => resolveTrustedBaseline('untrusted', dir), /Untrusted baseline/);
+    assert.equal(resolveTrustedCandidate('untrusted', dir), untrusted);
+    assert.equal(resolveTrustedCandidate(untrusted, dir), untrusted);
+    for (const ref of ['', '--upload-pack=evil', 'main$(id)', 'main;id', '../escape', 'main:evil', 'refs/heads/main', 'main~1', 'https://example.com/main', 'main\nother']) {
+      assert.throws(() => resolveTrustedCandidate(ref, dir), undefined, ref);
+    }
     const script = path.join(root, 'scripts/resolve-trusted-simulator-baseline.mjs');
     for (const ref of ['main', trusted, 'untrusted', untrusted, '--upload-pack=evil', 'main$(id)', 'main;id', '../escape']) {
       const result = spawnSync(process.execPath, [script, ref], { cwd: dir, encoding: 'utf8' });

@@ -368,7 +368,14 @@ function testManualWorkflow() {
   assert.equal(workflow.on.workflow_dispatch.inputs.candidate_ref.default, 'main');
   assert.equal(workflow.on.workflow_dispatch.inputs.baseline_ref.default, 'main');
   const acceptance = compare.steps.find(step => step.id === 'comparison');
-  assert.match(acceptance.run, /needs.ios-simulator-test.result/);
+  assert.equal(acceptance.env.BUILD_RESULT, '${{ needs.ios-simulator-test.result }}');
+  assert.match(acceptance.run, /BUILD_RESULT/);
+  for (const job of Object.values(workflow.jobs)) {
+    for (const step of job.steps || []) {
+      if (step.uses?.startsWith('actions/checkout@')) assert.equal(step.with.ref, '${{ github.sha }}');
+      assert.ok(!step.run?.includes('${{ inputs.'), 'Inputs enter scripts only via env');
+    }
+  }
   assert.equal(acceptance['continue-on-error'], undefined);
 
 }

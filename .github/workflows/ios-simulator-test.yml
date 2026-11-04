@@ -14,7 +14,7 @@ on:
         default: false
         type: boolean
       candidate_ref:
-        description: 'Candidate source ref reachable from trusted main'
+        description: 'Candidate source branch or SHA from this repository'
         required: false
         default: 'main'
         type: string
@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ci-sim
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -57,7 +57,7 @@ jobs:
           BASELINE_REF: ${{ inputs.baseline_ref }}
         run: |
           set -euo pipefail
-          CANDIDATE="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${CANDIDATE_REF}")"
+          CANDIDATE="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${CANDIDATE_REF}" --candidate)"
           BASELINE="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
           echo "candidate=${CANDIDATE}" >> "${GITHUB_OUTPUT}"
           echo "baseline=${BASELINE}" >> "${GITHUB_OUTPUT}"
@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ci-sim
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Observe simulator startup (no build or app)
         timeout-minutes: 15
@@ -102,7 +102,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ci-sim
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup build tools Node
@@ -407,7 +407,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ci-sim
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -421,13 +421,14 @@ jobs:
       - name: Validate screenshot artifact pairs for Kat
         id: comparison
         env:
+          BUILD_RESULT: ${{ needs.ios-simulator-test.result }}
           CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate }}
           BASELINE_REF: ${{ needs.resolve.outputs.baseline }}
         run: |
           BASELINE_SHA="$(cat comparison-input/ios-simulator-baseline-artifacts/baseline-commit.txt)"
           test "${BASELINE_SHA}" = "${BASELINE_REF}"
           test "$(cat comparison-input/ios-simulator-candidate-artifacts/candidate-commit.txt)" = "${CANDIDATE_SHA}"
-          test "${{ needs.ios-simulator-test.result }}" = success
+          test "${BUILD_RESULT}" = success
           node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir comparison-input/ios-simulator-candidate-artifacts/simulator-test-output --baseline-dir comparison-input/ios-simulator-baseline-artifacts/simulator-test-output --baseline-ref "${BASELINE_SHA}" --output comparison-report.md
       - name: Publish comparison summary
         if: always()

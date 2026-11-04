@@ -16,7 +16,20 @@ export function resolveTrustedBaseline(ref, cwd = process.cwd()) {
   return commit;
 }
 
+// Manual candidate builds may use branches ahead of main, but only from origin.
+export function resolveTrustedCandidate(ref, cwd = process.cwd()) {
+  const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const sha = typeof ref === 'string' && /^[0-9a-fA-F]{40}$/.test(ref);
+  if (!sha) {
+    // Narrow branch alphabet excludes refspecs, revision expressions and shell syntax.
+    if (typeof ref !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref) || ref.startsWith('refs/')) throw new Error('Invalid candidate ref');
+    git(['check-ref-format', '--branch', ref]);
+  }
+  git(['fetch', '--no-tags', 'origin', '--', sha ? ref : `refs/heads/${ref}`]);
+  return git(['rev-parse', '--verify', 'FETCH_HEAD^{commit}']);
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  try { console.log(resolveTrustedBaseline(process.argv[2])); }
+  try { console.log((process.argv[3] === '--candidate' ? resolveTrustedCandidate : resolveTrustedBaseline)(process.argv[2])); }
   catch (err) { console.error(err.message); process.exitCode = 1; }
 }
