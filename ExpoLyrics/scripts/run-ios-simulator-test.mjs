@@ -1,4 +1,4 @@
-import { verifyVariantApp, verifyRuntimeProvenance, readJson, writeJson } from './simulator-app-reuse.mjs';
+import { verifyVariantApp, saveInstalledAppEvidence, verifyRuntimeProvenance, readJson, writeJson } from './simulator-app-reuse.mjs';
 // iOS Simulator Test Runner for KineSync
 // Boots simulator, installs Release app, streams logs, handles rotation, captures screenshots, and asserts results
 
@@ -201,8 +201,8 @@ async function main() {
   console.log('[RUNNER] App installed.');
   if (provenance) {
     const installed = (await runStartupCommand('xcrun', ['simctl', 'get_app_container', device.udid, 'dev.kineticron.KineSync', 'app'])).trim();
+    saveInstalledAppEvidence(installed, provenance, outputDir);
     verifyVariantApp(installed, { sourceSha: process.env.SOURCE_SHA, variant: process.env.VARIANT, harnessSha: process.env.HARNESS_SHA }, provenance);
-    writeJson(path.join(outputDir, 'installed-app-hashes.json'), { installed, files: provenance.files });
   }
 
   const parser = new SimulatorLogParser();

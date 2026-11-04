@@ -384,7 +384,24 @@ if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identif
 else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) {
- const container = args.at(-1) === 'app' ? path.join(dir, 'provenance.app') : args.includes('dev.kineticron.simulator-capture.xctrunner') ? path.join(dir, 'capture-runner') : dir;
+ let container = args.at(-1) === 'app' ? path.join(dir, 'provenance.app') : args.includes('dev.kineticron.simulator-capture.xctrunner') ? path.join(dir, 'capture-runner') : dir;
+ if (args.at(-1) === 'app' && process.env.SIM_CASE.startsWith('provenance-installed-')) {
+  container = path.join(dir, 'installed.app');
+  fs.rmSync(container, { recursive: true, force: true });
+  fs.cpSync(path.join(dir, 'provenance.app'), container, { recursive: true, verbatimSymlinks: true });
+  if (process.env.SIM_CASE === 'provenance-installed-mismatch') {
+   fs.writeFileSync(path.join(container, 'main.jsbundle'), 'observed installed bytes');
+   fs.chmodSync(path.join(container, 'KineSync'), 0o755);
+   fs.writeFileSync(path.join(container, 'added'), 'added installed file');
+   fs.unlinkSync(path.join(container, 'removed'));
+   fs.unlinkSync(path.join(container, 'native-link'));
+   fs.symlinkSync('main.jsbundle', path.join(container, 'native-link'));
+  } else {
+   const embedded = JSON.parse(fs.readFileSync(path.join(container, 'ci-provenance.json')));
+   embedded.runtimeId = 'f'.repeat(64);
+   fs.writeFileSync(path.join(container, 'ci-provenance.json'), JSON.stringify(embedded));
+  }
+ }
  fs.mkdirSync(container, { recursive: true }); console.log(container);
 }
 if (args.includes('screenshot')) {
@@ -448,14 +465,17 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['provenance-pass', 'provenance-wrong', 'provenance-missing', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
+  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['provenance-installed-mismatch', 'provenance-installed-identity', 'provenance-pass', 'provenance-wrong', 'provenance-missing', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
     console.log(`Runner CLI scenario: ${scenario}`);
     for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_7_restore.json', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
     const shouldPass = ['provenance-pass', 'unstable', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
     const app = path.join(dir, 'provenance.app');
+    fs.rmSync(app, { recursive: true, force: true });
     fs.mkdirSync(app, { recursive: true });
-    fs.writeFileSync(path.join(app, 'KineSync'), 'native');
+    fs.writeFileSync(path.join(app, 'KineSync'), 'native', { mode: 0o644 });
+    fs.writeFileSync(path.join(app, 'removed'), 'prepared file');
+    fs.symlinkSync('KineSync', path.join(app, 'native-link'));
     fs.writeFileSync(path.join(app, 'main.jsbundle'), 'fresh Hermes bundle');
     const identity = { sourceSha: 'a'.repeat(40), harnessSha: 'b'.repeat(40), variant: 'candidate' };
     const provenance = { ...identity, identity, runtimeId: digest(identity) };
@@ -465,10 +485,28 @@ if (args.includes('launch')) {
     const started = Date.now();
     const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', app, '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--build-seconds', scenario === 'unified-log-slow-ready' ? '2' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer, SIMULATOR_REQUIRE_PROVENANCE: scenario.startsWith('provenance-') ? '1' : '0', SIM_RUNTIME_ID: provenance.runtimeId, SIMULATOR_PROVENANCE_FILE: provenanceFile, SOURCE_SHA: identity.sourceSha, HARNESS_SHA: identity.harnessSha, VARIANT: identity.variant } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
-    if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (!['provenance-installed-mismatch', 'provenance-installed-identity', 'rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
     if (scenario === 'provenance-pass') {
       assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'runtime-provenance.json'))).runtimeId, provenance.runtimeId);
-      assert.ok(fs.existsSync(path.join(output, 'installed-app-hashes.json')));
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'installed-app-hashes.json'))), { installed: app, files: provenance.files });
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'installed-app-diff.json'))), { installed: app, differences: [] });
+    }
+    if (scenario.startsWith('provenance-installed-')) {
+      const installed = path.join(dir, 'installed.app');
+      const observed = treeManifest(installed); delete observed['ci-provenance.json'];
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'installed-app-hashes.json'))), { installed, files: observed });
+      const differences = JSON.parse(fs.readFileSync(path.join(output, 'installed-app-diff.json'))).differences;
+      const message = scenario === 'provenance-installed-mismatch' ? 'App bundle/assets/native hash mismatch' : 'Embedded runtime identity mismatch';
+      assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'runner-state.json'))).error, message);
+      assert.ok(result.stderr.includes(`[RUNNER] Fatal runner error: ${message}`));
+      assert.ok(!fs.existsSync(path.join(dir, 'launched')), 'Installed verification failure prevents launch');
+      if (scenario === 'provenance-installed-mismatch') {
+        assert.deepEqual(differences, ['KineSync', 'added', 'main.jsbundle', 'native-link', 'removed'].map(name => ({
+          path: name, status: name === 'added' ? 'added' : name === 'removed' ? 'missing' : 'changed',
+          expected: provenance.files[name] ?? null, actual: observed[name] ?? null,
+        })));
+        assert.notDeepEqual(observed, provenance.files, 'Failure evidence must contain actual installed changes');
+      } else assert.deepEqual(differences, [], 'Embedded identity is still checked independently of file comparison');
     }
     if (['provenance-wrong', 'provenance-missing'].includes(scenario)) {
       assert.equal(fs.readdirSync(output).filter(name => /^stage_.*\.png$/.test(name)).length, 0, 'Provenance failure must prevent every capture');

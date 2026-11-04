@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { digest, treeManifest, writeJson, nativeIdentity, mayShareNative, validateNativeCache, saveNativeCache,
-  materializeVariantResources, verifyVariantApp, verifyRuntimeProvenance, buildVariantPair, nativeCacheToken, nativeCacheState, directoryBytes, resolveHermesCompiler, hermesCompileArguments } from './simulator-app-reuse.mjs';
+  materializeVariantResources, saveInstalledAppEvidence, verifyVariantApp, verifyRuntimeProvenance, buildVariantPair, nativeCacheToken, nativeCacheState, directoryBytes, resolveHermesCompiler, hermesCompileArguments } from './simulator-app-reuse.mjs';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-reuse-'));
 const file = (name, data) => { fs.mkdirSync(path.dirname(name), { recursive: true }); fs.writeFileSync(name, data); };
 const a = { eligible: true, key: digest('native-A') }, b = { eligible: true, key: digest('native-B') };
@@ -112,6 +112,42 @@ try {
   assert.throws(() => verifyRuntimeProvenance(provenance, undefined), /runtime/);
   assert.throws(() => verifyRuntimeProvenance(provenance, digest('wrong bundle')), /runtime/);
   assert.equal(verifyRuntimeProvenance(provenance, provenance.runtimeId).bundleHash, provenance.files['main.jsbundle'].hash);
+  // Evidence never authorizes a changed tree: each mutation still reaches the
+  // original strict verifier, with exact observed values already on disk.
+  const signed = path.join(root, 'signed.app'), installed = path.join(root, 'installed.app');
+  fs.cpSync(app, signed, { recursive: true, verbatimSymlinks: true });
+  fs.symlinkSync('KineSync', path.join(signed, 'native-link'));
+  const signedProvenance = { ...provenance, files: treeManifest(signed) };
+  delete signedProvenance.files['ci-provenance.json'];
+  writeJson(path.join(signed, 'ci-provenance.json'), signedProvenance);
+  const evidence = path.join(root, 'installed-evidence');
+  const loadEvidence = name => JSON.parse(fs.readFileSync(path.join(evidence, name), 'utf8'));
+  const mutations = [
+    ['hash', () => file(path.join(installed, 'main.jsbundle'), 'changed bytes'), 'main.jsbundle', 'changed'],
+    ['mode', () => fs.chmodSync(path.join(installed, 'KineSync'), signedProvenance.files.KineSync.mode ^ 0o111), 'KineSync', 'changed'],
+    ['added', () => file(path.join(installed, 'new/path'), 'new file'), 'new/path', 'added'],
+    ['missing', () => fs.unlinkSync(path.join(installed, 'assets/new.png')), 'assets/new.png', 'missing'],
+    ['link', () => { fs.unlinkSync(path.join(installed, 'native-link')); fs.symlinkSync('main.jsbundle', path.join(installed, 'native-link')); }, 'native-link', 'changed'],
+    ['type', () => { fs.unlinkSync(path.join(installed, 'native-link')); file(path.join(installed, 'native-link'), 'now a file'); }, 'native-link', 'changed'],
+  ];
+  for (const [kind, mutate, changedPath, status] of [['success', () => {}], ...mutations]) {
+    fs.rmSync(installed, { recursive: true, force: true });
+    fs.cpSync(signed, installed, { recursive: true, verbatimSymlinks: true });
+    mutate();
+    const observed = treeManifest(installed); delete observed['ci-provenance.json'];
+    const originalExpected = JSON.stringify(signedProvenance);
+    saveInstalledAppEvidence(installed, signedProvenance, evidence);
+    assert.equal(JSON.stringify(signedProvenance), originalExpected, 'Evidence must not mutate expected provenance');
+    assert.deepEqual(loadEvidence('installed-app-hashes.json'), { installed, files: observed });
+    assert.deepEqual(loadEvidence('installed-app-diff.json'), { installed, differences: kind === 'success' ? [] : [{
+      path: changedPath, status, expected: signedProvenance.files[changedPath] ?? null, actual: observed[changedPath] ?? null,
+    }] });
+    if (kind === 'success') assert.equal(verifyVariantApp(installed, expected, signedProvenance), signedProvenance);
+    else assert.throws(() => verifyVariantApp(installed, expected, signedProvenance), { message: 'App bundle/assets/native hash mismatch' });
+  }
+  saveInstalledAppEvidence(signed, signedProvenance, evidence);
+  assert.throws(() => verifyVariantApp(signed, { ...expected, variant: 'candidate' }, signedProvenance), { message: 'App provenance mismatch: variant' });
+  assert.deepEqual(loadEvidence('installed-app-diff.json').differences, []);
   for (const name of ['main.jsbundle', 'assets/new.png', 'KineSync']) {
     const original = fs.readFileSync(path.join(app, name)); file(path.join(app, name), 'corrupt');
     assert.throws(() => verifyVariantApp(app, expected), /hash mismatch/); file(path.join(app, name), original);

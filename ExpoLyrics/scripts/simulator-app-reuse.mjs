@@ -93,6 +93,23 @@ export function saveNativeCache(directory, identity, app, hermesc, precompiled =
   fs.renameSync(staging, directory);
 }
 
+// Diagnostic snapshot only. Use the verifier's tree scope; embedded provenance is
+// checked separately by verifyVariantApp. Never substitute this snapshot for verification.
+export function saveInstalledAppEvidence(installed, provenance, outputDir) {
+  const files = treeManifest(installed);
+  delete files['ci-provenance.json'];
+  writeJson(path.join(outputDir, 'installed-app-hashes.json'), { installed, files });
+  const expected = provenance.files || {};
+  const differences = [];
+  for (const name of [...new Set([...Object.keys(expected), ...Object.keys(files)])].sort()) {
+    const before = expected[name] ?? null, after = files[name] ?? null;
+    if (before?.hash !== after?.hash || before?.mode !== after?.mode || before?.link !== after?.link || !before || !after) {
+      differences.push({ path: name, status: !before ? 'added' : !after ? 'missing' : 'changed', expected: before, actual: after });
+    }
+  }
+  writeJson(path.join(outputDir, 'installed-app-diff.json'), { installed, differences });
+}
+
 export function verifyVariantApp(app, expected, manifest) {
   const embedded = readJson(path.join(app, 'ci-provenance.json'));
   const provenance = manifest || embedded;
