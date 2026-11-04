@@ -68,8 +68,11 @@ function spicyWords(syllables: LyricSyllable[]): NativeWord[] {
 }
 
 export function buildNativeVoice(syllables: LyricSyllable[], start: number, end: number, style: NativeLyricsStyle, translation?: string): NativeVoice {
+  const amllTimedWords = style === 'amll' ? buildAmllWords(syllables, start, end) : undefined;
+  // AMLL constructs paint words below from the reference shaping groups.
+  // Its preliminary Spicy paint representation was immediately discarded.
   const parts = style === 'amll'
-    ? buildAmllWords(syllables, start, end).map(word => ({ text: word.word, startTime: word.startTime, endTime: word.endTime }))
+    ? []
     : repairSyllableClusters(syllables).map(part => ({ ...part, text: spicyPaintText(part.text) }));
   const joins = getSpicyWordJoins(parts);
   const rtlLine = parts.some(part => spicyIsRtl(part.text));
@@ -92,7 +95,7 @@ export function buildNativeVoice(syllables: LyricSyllable[], start: number, end:
   if (style === 'amll') {
     const sourceWords = buildAmllShapingWords(syllables, start, end);
     const chunks = chunkAndSplitLyricWords(sourceWords);
-    const timedSegments = buildAmllWords(syllables, start, end);
+    const timedSegments = amllTimedWords!;
     const emphasizes = (word: typeof sourceWords[number]) => word.endTime - word.startTime >= 1000 &&
       (isCJK(word.word) || word.word.trim().length >= 2 && word.word.trim().length <= 7);
     paintText = '';
@@ -152,7 +155,7 @@ export function buildNativeVoice(syllables: LyricSyllable[], start: number, end:
   return {
     start, end, translation, paintWords, paintText,
     words: style === 'amll'
-      ? spicyWords(buildAmllWords(syllables, start, end).map(word => ({ text: word.word, startTime: word.startTime,
+      ? spicyWords(amllTimedWords!.map(word => ({ text: word.word, startTime: word.startTime,
         endTime: word.endTime, timedGraphemeCount: word.timedGraphemeCount })))
       : spicyWords(syllables),
   };
