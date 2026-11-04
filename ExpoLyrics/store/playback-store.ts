@@ -168,7 +168,7 @@ type PlaybackState = {
     packet: PlaybackPacket,
     source: PlaybackMode,
   ) => { trackChanged: boolean; seekDetected: boolean };
-  setLyrics: (lyrics: LyricLine[], source?: string) => void;
+  setLyrics: (lyrics: LyricLine[], source?: string, packet?: { metadata: LyricsMetadata; statusMessage: string }) => void;
   setLyricsMetadata: (metadata: LyricsMetadata) => void;
   beginTranslationRequest: () => void;
   clearLyrics: () => void;
@@ -414,7 +414,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     return { trackChanged, seekDetected };
   },
-  setLyrics: (lyrics, source = 'qq-music') => {
+  setLyrics: (lyrics, source = 'qq-music', packet) => {
     const parent = __DEV__ ? arrivalHandle(lyrics) : undefined;
     const handle = __DEV__ ? publishArrival({}, source, parent) : undefined;
     if (__DEV__ && handle) {
@@ -424,7 +424,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     const enriched = __DEV__ ? arrivalSpan(handle, 0, 'store-enrichment', () => enrichLyrics(lyrics)) : enrichLyrics(lyrics);
     if (__DEV__) linkArrival(enriched, handle);
-    set({ lyrics: enriched, lyricsSource: source });
+    set({ lyrics: enriched, lyricsSource: source, ...(packet ? { lyricsMetadata: packet.metadata, lyricsStatusMessage: packet.statusMessage } : {}) });
   },
   setLyricsMetadata: (metadata) => set({ lyricsMetadata: metadata || {} }),
   beginTranslationRequest: () =>

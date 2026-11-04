@@ -55,14 +55,13 @@ function applyMobileLyricsPacket(packet: LyricsPacket) {
   if (packet.trackId && activeTrackId && packet.trackId !== activeTrackId) {
     return;
   }
-  state.setLyrics(packet.lyrics || [], packet.source || "mobile-app");
-  state.setLyricsMetadata(packet.metadata || {});
-  state.setLyricsStatusMessage(
-    packet.statusMessage ||
+  state.setLyrics(packet.lyrics || [], packet.source || "mobile-app", {
+    metadata: packet.metadata || {},
+    statusMessage: packet.statusMessage ||
       ((packet.lyrics || []).length
         ? `Fetched ${(packet.lyrics || []).length} lines from ${packet.source || "mobile-app"}.`
         : "No synced lyrics available."),
-  );
+  });
 }
 function inferCurrentSourcePreference(
   lyricsSource: string,

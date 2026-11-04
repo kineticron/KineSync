@@ -27,7 +27,7 @@ const a={id:'a',title:'Example A',artist:'Artist',album:'Album',durationMs:10000
 const b={...a,id:'b',title:'Example B',spotifyTrackId:'0000000000000000000002'};
 let bridgeCalls=0,clearCalls=0;
 const state={currentTrack:a,connectionStatus:'disconnected',translationLanguage:'English',lyrics:[],lyricsSource:'',
- setLyrics(lyrics,source){state.lyrics=lyrics;state.lyricsSource=source;},setLyricsMetadata(){},setLyricsStatusMessage(){},clearLyrics(){state.lyrics=[];}};
+ setLyrics(lyrics,source,packet){state.lyrics=lyrics;state.lyricsSource=source;state.packetEnvelope=packet;},setLyricsMetadata(){},setLyricsStatusMessage(){},clearLyrics(){state.lyrics=[];}};
 const settings={spicyLyricsPublishableKey:'sl_pk_fixture'};
 const client=load('mobile-lyrics-client.ts',{
  '@/lib/mobile-lyrics-service':{...api,createLyricsService(options){
@@ -53,6 +53,9 @@ const packet=source=>({source,metadata:{attribution:{source:'spicy_lyrics'}},lyr
  fetchers['lrc-red']=async track=>{calls.set(track.title,(calls.get(track.title)||0)+1);return packet('lrc-red-line');};
  fetchers['spicy-lyrics']=track=>{spicyCalls++;return track.title===a.title?late.promise:Promise.resolve(null);};
  await sync.refreshLyricsForCurrentTrack();await sync.refreshLyricsForCurrentTrack();
+ assert.equal(state.packetEnvelope.metadata.attribution.source,'spicy_lyrics','actual sync caller supplies atomic packet metadata');
+ assert.equal(typeof state.packetEnvelope.statusMessage,'string');
+ assert.ok(state.packetEnvelope.statusMessage.length>0);
  assert.equal(calls.get(a.title),1);assert.equal(spicyCalls,1,'real mobile caller shares a pending flight');
  state.currentTrack=b;await sync.refreshLyricsForCurrentTrack();
  assert.equal(clearCalls,0,'track changes retain bounded identity-specific caches');
