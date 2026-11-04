@@ -141,7 +141,7 @@ jobs:
         if: ${{ steps.pair.outputs.baseline_key != '' }}
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
+          path: ${{ env.CCACHE_BASEDIR }}/kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
           key: ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.baseline_key }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.baseline_key }}-
@@ -150,7 +150,7 @@ jobs:
         if: ${{ steps.pair.outputs.candidate_key != '' && steps.pair.outputs.candidate_key != steps.pair.outputs.baseline_key }}
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
+          path: ${{ env.CCACHE_BASEDIR }}/kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
           key: ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.candidate_key }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.candidate_key }}-
@@ -162,7 +162,7 @@ jobs:
         if: steps.cache_before.outputs.needs_native == 'true'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-ios-ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ios-sim-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.compiler_key }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ios-sim-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.compiler_key }}-
@@ -186,7 +186,7 @@ jobs:
         timeout-minutes: 4
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
+          path: ${{ env.CCACHE_BASEDIR }}/kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
           key: ${{ steps.baseline_cache.outputs.cache-primary-key }}
       - name: Verify baseline native cache save on server
         if: ${{ !cancelled() && steps.baseline_save.outcome == 'success' }}
@@ -202,7 +202,7 @@ jobs:
         timeout-minutes: 4
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
+          path: ${{ env.CCACHE_BASEDIR }}/kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
           key: ${{ steps.candidate_cache.outputs.cache-primary-key }}
       - name: Verify candidate native cache save on server
         if: ${{ !cancelled() && steps.candidate_save.outcome == 'success' }}
@@ -218,7 +218,7 @@ jobs:
         timeout-minutes: 3
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ../kinesync-ios-ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
       - name: Verify compiler cache save on server
         if: ${{ !cancelled() && steps.compiler_save.outcome == 'success' }}

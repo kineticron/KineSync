@@ -83,11 +83,13 @@ jobs:
       # DerivedData lives outside ios/ at a Debug-only path that is stable
       # across fresh runner VMs (separate from the unsigned workflow's
       # Release cache), which is what makes the restore reusable.
+      - name: Resolve cache producer destination
+        run: echo "IOS_DERIVED_DATA=$(cd "${GITHUB_WORKSPACE}/.." && pwd -P)/kinesync-ios-derived-debug" >> "${GITHUB_ENV}"
       - name: Restore DerivedData, ccache and CocoaPods caches
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ${{ github.workspace }}/../kinesync-ios-derived-debug
+            ${{ env.IOS_DERIVED_DATA }}
             ${{ env.HOME }}/Library/Caches/ccache
             ${{ env.HOME }}/.cocoapods
             ${{ env.HOME }}/Library/Caches/CocoaPods
@@ -97,7 +99,7 @@ jobs:
 
       - name: Build Debug development client and locate .app
         env:
-          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived-debug
+          DERIVED_DATA_PATH: ${{ env.IOS_DERIVED_DATA }}
         run: |
           set -euo pipefail
           if [ "${KINESYNC_USE_CCACHE:-0}" = "1" ] && command -v ccache >/dev/null 2>&1; then

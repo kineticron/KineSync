@@ -1,3 +1,4 @@
+import './test-cache-path-contracts.mjs';
 import './test-simulator-release-provenance.mjs';
 import { digest, treeManifest, writeJson } from './simulator-app-reuse.mjs';
 import './test-simulator-app-reuse.mjs';

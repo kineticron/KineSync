@@ -68,11 +68,13 @@ jobs:
       # compile restart from zero without these. DerivedData lives outside ios/
       # (see DERIVED_DATA_PATH below) at a path that is stable across fresh
       # runner VMs, which is what makes the restore reusable.
+      - name: Resolve cache producer destination
+        run: echo "IOS_DERIVED_DATA=$(cd "${GITHUB_WORKSPACE}/.." && pwd -P)/kinesync-ios-derived" >> "${GITHUB_ENV}"
       - name: Restore DerivedData and CocoaPods caches
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            ${{ github.workspace }}/../kinesync-ios-derived
+            ${{ env.IOS_DERIVED_DATA }}
             ${{ env.HOME }}/.cocoapods
             ${{ env.HOME }}/Library/Caches/CocoaPods
           key: ios-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
@@ -88,7 +90,7 @@ jobs:
 
       - name: Build Release and locate .app
         env:
-          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived
+          DERIVED_DATA_PATH: ${{ env.IOS_DERIVED_DATA }}
         run: |
           set -euo pipefail
           node <<'NODE'

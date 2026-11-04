@@ -345,7 +345,7 @@ function testManualWorkflow() {
     const cache = native.steps.find(step => step.id === `${variant}_cache`);
     const save = native.steps.find(step => step.id === `${variant}_save`);
     assert.equal(cache.with.path, save.with.path);
-    assert.equal(cache.with.path, `../kinesync-native-cache/\${{ steps.pair.outputs.${variant}_key }}`);
+    assert.equal(cache.with.path, `\${{ env.CCACHE_BASEDIR }}/kinesync-native-cache/\${{ steps.pair.outputs.${variant}_key }}`);
     assert.ok(cache.with.key.includes(`steps.pair.outputs.${variant}_key`));
     assert.ok(!cache.with.key.includes(`steps.pair.outputs.${variant === 'baseline' ? 'candidate' : 'baseline'}_key`));
     assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}$/, '-'));
@@ -354,7 +354,8 @@ function testManualWorkflow() {
     assert.ok(save.if.includes(`steps.cache_policy.outputs.${variant}_save == 'true'`));
   }
   const compiler = native.steps.find(step => step.id === 'compiler_cache');
-  assert.equal(compiler.with.path, '../kinesync-ios-ccache');
+  assert.equal(compiler.with.path, '${{ env.CCACHE_DIR }}');
+  assert.equal(native.steps.find(step => step.id === 'compiler_save').with.path, compiler.with.path);
   assert.match(compiler.if, /needs_native == 'true'/);
   assert.ok(!native.steps.filter(step => step.uses?.includes('actions/cache/')).some(step => /Pods|Derived|CocoaPods|native-work/.test(step.with.path)));
   const policy = native.steps.find(step => step.id === 'cache_policy');
