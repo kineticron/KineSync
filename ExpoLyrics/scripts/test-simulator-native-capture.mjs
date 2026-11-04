@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { SimulatorRunLifecycle } from './simulator-run-lifecycle.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
@@ -35,14 +36,16 @@ try {
   // Host readiness must come from the manifest, carry the host nonce, and be live.
   const { EventEmitter } = await import('node:events');
   const plist = (await import('plist')).default;
-  for (const mode of ['ready', 'stale', 'wrong-path', 'exit', 'timeout', 'retry-success', 'exhausted', 'cleanup-failure']) {
+  for (const mode of ['ready', 'stale', 'wrong-path', 'exit', 'timeout', 'retry-success', 'exhausted', 'cleanup-failure', 'overall', 'drift']) {
     const outputDir = path.join(root, `startup-${mode}`); fs.mkdirSync(outputDir);
     const oldMailbox = path.join(outputDir, 'diagnostics/native-capture-mailbox');
     fs.mkdirSync(oldMailbox, { recursive: true });
     fs.writeFileSync(path.join(oldMailbox, 'ready.json'), JSON.stringify({ session: 'stale-before-launch' }));
-    let checks = 0, child, launches = 0;
+    let checks = 0, child, launches = 0, clock = 0;
+    const recovery = ['retry-success', 'exhausted', 'cleanup-failure', 'overall', 'drift'].includes(mode);
     const sessions = new Set();
-    const state = { outputDir, children: [], update() {}, check() { if (++checks > 8 && !['retry-success', 'exhausted', 'cleanup-failure'].includes(mode)) throw Error('startup timeout'); } };
+    const state = recovery ? new SimulatorRunLifecycle(outputDir, { now: () => clock, startupMs: 1000, overallMs: mode === 'overall' ? 10 : 100000, ciDeadlineMs: Infinity }) : { outputDir, children: [], update() {}, check() { if (++checks > 8) throw Error('startup timeout'); } };
+    if (mode === 'drift') { const check = state.check.bind(state); state.check = () => { if (clock === 9) clock = 10; check(); }; }
     const command = async (cmd, args) => {
       assert.equal(cmd, 'xcodebuild'); assert.ok(args.includes('build-for-testing'));
       const products = path.join(args[args.indexOf('-derivedDataPath') + 1], 'Build/Products');
@@ -52,23 +55,31 @@ try {
     const transport = (cmd, args) => {
       child = new EventEmitter();
       launches++;
-      child.kill = () => { if (mode !== 'cleanup-failure') child.emit('close', 0); };
+      const runner = child;
+      child.kill = () => { if (mode !== 'cleanup-failure') runner.emit('close', 0); };
       assert.ok(!args.includes('-project'));
       const manifest = plist.parse(fs.readFileSync(args[args.indexOf('-xctestrun') + 1], 'utf8'));
       const env = manifest.Capture.EnvironmentVariables;
       const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
       assert.ok(!sessions.has(env.KINESYNC_CAPTURE_SESSION)); sessions.add(env.KINESYNC_CAPTURE_SESSION);
       assert.ok(!fs.existsSync(path.join(mailbox, 'ready.json')), 'Old readiness must be removed before launch');
-      if (!['timeout', 'exit', 'exhausted', 'cleanup-failure'].includes(mode) && (mode !== 'retry-success' || launches === 2)) fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({
+      if (!['timeout', 'exit', 'exhausted', 'cleanup-failure', 'overall'].includes(mode) && (!['retry-success', 'drift'].includes(mode) || launches === 2)) fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({
         session: mode === 'stale' ? 'old-session' : env.KINESYNC_CAPTURE_SESSION,
         mailbox: mode === 'wrong-path' ? '/other/cache' : mailbox }));
       if (mode === 'exit') queueMicrotask(() => child.emit('close', 7));
       return child;
     };
-    const pending = startNativeCapture(state, 'device', transport, { command, pause: async () => {}, readinessBudget: ['retry-success', 'exhausted', 'cleanup-failure'].includes(mode) ? 0 : 240000, diagnosticRun: async () => ({ stdout: '', stderr: '' }) });
-    if (mode === 'retry-success') { assert.match((await pending).mailbox, /-retry$/); assert.equal(launches, 2); }
+    const pending = startNativeCapture(state, 'device', transport, { command, pause: async () => { clock += mode === 'drift' ? 9 : 10; }, readinessBudget: recovery ? 10 : 240000, diagnosticRun: async cmd => { assert.equal(child.listenerCount('close'), 1); if (cmd === '/bin/ps') { assert.equal(state.children.at(-1), child); throw Object.assign(Error('snapshot failed'), { stdout: 'partial-processes', stderr: 'snapshot-stderr', code: 7, signal: 'SIGTERM' }); } return { stdout: '', stderr: '' }; } });
+    if (mode === 'retry-success' || mode === 'drift') { const result = await pending; assert.match(result.mailbox, /-retry$/); assert.equal(launches, 2); state.children[0].emit('error', Error('late old error')); assert.equal(result.alive(), true); assert.match(fs.readFileSync(path.join(outputDir, 'diagnostics/capture-startup-1/processes.log'), 'utf8'), /partial-processes[\s\S]*snapshot-stderr[\s\S]*code=7 signal=SIGTERM/); }
     else if (mode === 'ready') assert.equal((await pending).mailbox, path.join(outputDir, 'diagnostics/native-capture-mailbox'));
-    else await assert.rejects(pending, /ownership mismatch|exited before readiness|startup timeout|readiness timeout after two attempts|cleanup did not complete/);
+    else await assert.rejects(pending, /ownership mismatch|exited before readiness|startup timeout|readiness timeout after two attempts|cleanup did not complete|Overall timeout/);
+    if (mode === 'overall' || mode === 'cleanup-failure') assert.equal(launches, 1);
+    if (mode === 'exhausted') assert.equal(launches, 2);
+  }
+  // Recovery is unavailable for live readiness or an unrelated expired phase.
+  { const dir = path.join(root, 'recovery-api'); let tick = 0; const lifecycle = new SimulatorRunLifecycle(dir, { now: () => tick, startupMs: 10, ciDeadlineMs: Infinity });
+    assert.throws(() => lifecycle.recoverNativeCaptureReadiness(), /requires expired/);
+    tick = 10; assert.throws(() => lifecycle.recoverNativeCaptureReadiness(), /requires expired/);
   }
   const portrait = PNG.sync.write(new PNG({ width: 3, height: 5 }));
   const landscape = PNG.sync.write(new PNG({ width: 5, height: 3 }));

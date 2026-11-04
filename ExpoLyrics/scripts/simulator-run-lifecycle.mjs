@@ -32,6 +32,13 @@ export class SimulatorRunLifecycle {
     this.deadline = this.now() + budget;
     this.update(stage);
   }
+  recoverNativeCaptureReadiness() {
+    const now = this.now();
+    if (now >= this.overallDeadline) throw new Error('Overall timeout at native capture readiness');
+    if (this.stage !== 'startup:native-capture-readiness' || now < this.deadline || this.seen?.size) throw new Error('Native capture recovery requires expired startup readiness');
+    this.deadline = now + 20000;
+    this.update('startup:native-capture-cleanup');
+  }
   update(stage) { this.stage = stage; this.record(); }
   line(line) {
     if (line.includes('[KINESYNC_SIM]')) {

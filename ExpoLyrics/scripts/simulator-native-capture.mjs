@@ -47,6 +47,8 @@ export async function startNativeCapture(state, udid, startTransport, { command 
   if (typeof state.enterPhase === 'function') state.enterPhase('startup:native-capture-readiness', readinessBudget);
   else state.update('startup:native-capture-readiness');
   const started = Date.now();
+  const now = state.now || Date.now;
+  const readinessDeadline = state.deadline ?? now() + readinessBudget;
   const evidence = path.join(state.outputDir, `diagnostics/capture-startup-${attempt}`);
   fs.mkdirSync(evidence, { recursive: true });
   const child = startTransport('xcodebuild', ['-resultBundlePath', path.join(evidence, 'runner.xcresult'), '-xctestrun', configured, '-destination', `platform=iOS Simulator,id=${udid}`, '-parallel-testing-enabled', 'NO', 'test-without-building'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -58,34 +60,40 @@ export async function startNativeCapture(state, udid, startTransport, { command 
       retained += chunk.length;
     });
   }
-  const event = status => fs.appendFileSync(path.join(evidence, 'timeline.jsonl'), JSON.stringify({ status, at: new Date().toISOString(), session, mailbox, pid: child.pid }) + '\n');
+  const event = (status, details = {}) => fs.appendFileSync(path.join(evidence, 'timeline.jsonl'), JSON.stringify({ status, at: new Date().toISOString(), session, mailbox, pid: child.pid, ...details }) + '\n');
   event('transport-started');
   let stopped = false;
-  child.once('error', () => { stopped = true; });
-  child.once('close', () => { stopped = true; });
+  child.once('error', error => { stopped = true; event('transport-error', { message: error.message, code: error.code }); });
+  child.once('close', (code, signal) => { stopped = true; event('transport-close', { code, signal }); });
   while (!fs.existsSync(path.join(mailbox, 'ready.json'))) {
-    if (Date.now() - started >= readinessBudget) break;
-    state.check();
+    if (stopped) throw Error('Native capture runner exited before readiness');
+    if (now() >= readinessDeadline) break;
+    try { state.check(); }
+    catch (error) {
+      if (state.stage !== 'startup:native-capture-readiness' || now() < readinessDeadline) throw error;
+      break;
+    }
     if (stopped) throw Error('Native capture runner exited before readiness');
     await pause();
   }
   if (!fs.existsSync(path.join(mailbox, 'ready.json'))) {
     event('readiness-timeout');
     // Reset only the phase ceiling; the lifecycle retains its overall deadline.
-    state.enterPhase?.('startup:native-capture-cleanup', 20000);
+    if (state.recoverNativeCaptureReadiness) state.recoverNativeCaptureReadiness();
+    else state.check();
     const bounded = async (name, cmd, args) => {
       state.check();
       try {
         const result = await diagnosticRun(cmd, args, { timeout: Math.max(1, Math.min(4000, state.remaining?.() ?? 4000)), killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
         fs.writeFileSync(path.join(evidence, name), result.stdout + result.stderr);
-      } catch (error) { fs.writeFileSync(path.join(evidence, name), String(error)); }
+      } catch (error) { fs.writeFileSync(path.join(evidence, name), `${error.stdout || ''}\n${error.stderr || ''}\n${error.message} code=${error.code} signal=${error.signal}`); }
     };
+    await bounded('processes.log', '/bin/ps', ['-axo', 'pid,ppid,state,etime,command']);
     child.kill?.('SIGTERM');
     const cleanupEnd = Date.now() + 2000;
     while (!stopped && Date.now() < cleanupEnd) await new Promise(resolve => setTimeout(resolve, 50));
     if (!stopped) child.kill?.('SIGKILL');
     await bounded('runner-terminate.log', 'xcrun', ['simctl', 'terminate', udid, CAPTURE_BUNDLE]);
-    await bounded('processes.log', '/bin/ps', ['-axo', 'pid,ppid,state,etime,command']);
     await bounded('simulator-state.json', 'xcrun', ['simctl', 'list', 'devices', '-j']);
     await bounded('runner-testmanager.log', 'xcrun', ['simctl', 'spawn', udid, 'log', 'show', '--last', '5m', '--style', 'compact', '--predicate', 'process CONTAINS "Capture" OR process CONTAINS "testmanager"']);
     const crashDir = path.join(os.homedir(), 'Library/Logs/DiagnosticReports');
