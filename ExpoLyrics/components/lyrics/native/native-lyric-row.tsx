@@ -1,3 +1,4 @@
+import { NativeDevelopmentVoice } from './native-fast-voice';
 import React, { memo, useMemo } from 'react';
 import { StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { Pressable } from 'react-native-gesture-handler';
@@ -48,7 +49,8 @@ const NativeWordView = memo(function NativeWordView({ word, position, textStyle,
   </Animated.View>;
 });
 
-const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSize, lineHeight, background, right, animate, showTranslation, reveal, spicy, staticLyrics, blur, playing, prepared, rowActive, blurValue, hasDuet }: {
+const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSize, lineHeight, background, right, animate, showTranslation, reveal, spicy, staticLyrics, blur, playing, prepared, rowActive, blurValue, hasDuet, rowIndex, presentationWindow }: {
+  rowIndex: number; presentationWindow: SharedValue<PlaybackWindowState>;
   voice: NativeVoice; hasDuet: boolean; position: SharedValue<number>; fontSize: number; lineHeight: number; background: boolean;
   right: boolean; animate: boolean; showTranslation: boolean; reveal: NativeReveal; spicy: boolean; staticLyrics: boolean;
   blur: number; playing: boolean; prepared: boolean; rowActive: SharedValue<boolean>; blurValue: SharedValue<number>;
@@ -61,9 +63,10 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
     letterSpacing: staticLyrics ? 0.15 : 0, textAlign: right ? 'right' : 'left',
     ...(staticLyrics && background ? { color: 'rgba(255,255,255,0.78)' } : {}) }), [background, fontSize, lineHeight, right, staticLyrics]);
   const text = useMemo(() => voice.words.map(word => word.text).join(''), [voice.words]);
+  const Voice = __DEV__ ? NativeDevelopmentVoice : NativeSkiaVoice;
   return <Animated.View style={[background && (staticLyrics ? styles.staticBackground : spicy ? styles.background : undefined), voiceStyle]}>
     {(reveal === 'canvas' || reveal === 'tree')
-      ? <NativeSkiaVoice hasDuet={hasDuet} voice={voice} position={position} fontSize={fontSize} lineHeight={lineHeight} right={right}
+      ? <Voice {...(__DEV__ ? { rowIndex, presentationWindow } : undefined)} hasDuet={hasDuet} voice={voice} position={position} fontSize={fontSize} lineHeight={lineHeight} right={right}
           showTranslation={showTranslation} batched={reveal !== 'tree'} background={background} animate={animate} prepared={prepared} staticLyrics={staticLyrics} blur={blurValue} lineActive={rowActive} lineMotion={lineMotion} spicy={spicy} playing={playing} />
       : animate && !staticLyrics
       ? <View style={[styles.words, right && styles.rightWords]}>{voice.words.map((word, index) =>
@@ -104,7 +107,7 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
   const lineHeight = staticLyrics ? fontSize * 1.46 : (preview ? 36 : spicy ? (reveal === 'canvas' || reveal === 'tree') ? 42 * 1.05 : 42 : fontSize / fontScale * 1.2) * fontScale;
   const blur = staticLyrics || active ? 0 : spicy ? Math.min(6.83125, distance * 1.25) : Math.min(5, (distance + 1) * 0.8);
   const right = staticLyrics ? landscape : landscape ? !row.line.oppositeAligned : Boolean(row.line.oppositeAligned);
-  const backgroundViews = row.backgrounds.map((voice, index) => <NativeVoiceView hasDuet={hasDuet} key={getMappingKey(index, index)} voice={voice} position={position}
+  const backgroundViews = row.backgrounds.map((voice, index) => <NativeVoiceView rowIndex={row.index} presentationWindow={presentationWindow} hasDuet={hasDuet} key={getMappingKey(index, index)} voice={voice} position={position}
         fontSize={staticLyrics ? 18 * fontScale : fontSize * (spicy ? 0.75 : 0.7)} lineHeight={staticLyrics ? 25.2 * fontScale : lineHeight * (spicy ? 0.62 : 0.7)} background right={right} animate={active}
         prepared={distance <= 1} showTranslation={showTranslation} reveal={reveal} spicy={spicy} staticLyrics={staticLyrics} blur={blur} rowActive={rowActive} blurValue={blurValue} playing={playing} />);
   return <Animated.View style={[scrollStyle, presentation]}><Pressable accessibilityRole={tapToSeek ? 'button' : 'text'} accessibilityLabel={row.lead.words.map(word => word.text).join('')}
@@ -117,7 +120,7 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
     <View style={[styles.lane, { width: staticLyrics || !spicy && (reveal === 'canvas' || reveal === 'tree') ? '100%' : landscape ? '90%' : '88%' }, staticLyrics && styles.staticLane, right && styles.rightLane]}>
       {row.interlude && !staticLyrics && <NativeInterludeView interlude={row.interlude} position={position} seekVersion={seekVersion}
         spicy={spicy} fontSize={fontSize} viewportWidth={viewportWidth} right={right} />}
-      <NativeVoiceView hasDuet={hasDuet} voice={row.lead} position={position} fontSize={fontSize} lineHeight={lineHeight} background={false}
+      <NativeVoiceView rowIndex={row.index} presentationWindow={presentationWindow} hasDuet={hasDuet} voice={row.lead} position={position} fontSize={fontSize} lineHeight={lineHeight} background={false}
         right={right} animate={active} prepared={distance <= 1} showTranslation={showTranslation} reveal={reveal} spicy={spicy} staticLyrics={staticLyrics} blur={blur} rowActive={rowActive} blurValue={blurValue} playing={playing} />
       {!!row.backgrounds.length && (!spicy && !staticLyrics
         ? <AmllBackground fontSize={fontSize}>{backgroundViews}</AmllBackground>
