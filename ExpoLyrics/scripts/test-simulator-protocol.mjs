@@ -257,7 +257,7 @@ async function testSnapshotAnchors() {
 
 function testMainBaselinePreparation() {
   // Immutable main snapshot used for this audit, not the candidate renderer.
-  const mainCommit = 'e9abf50510b84db9f9f3a20c6f45ceb11685771f';
+  const mainCommit = 'main';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-main-baseline-'));
   const patch = fs.readFileSync(path.join(root, 'scripts/patches/harness-integration.patch'), 'utf8');
   const paths = [...patch.matchAll(/^diff --git a\/(.+) b\//gm)].map(m => m[1]);
@@ -351,9 +351,9 @@ function testManualWorkflow() {
     assert.match(verify.run, /verify-ci-cache.mjs/);
     assert.ok(verify.if.includes('!cancelled()'));
   }
-  const baseline = steps.find(step => step.name === 'Prepare trusted baseline source');
-  assert.equal(baseline.if, "matrix.variant == 'baseline'");
-  assert.match(baseline.run, /resolve-trusted-simulator-baseline.mjs/);
+  const baseline = steps.find(step => step.name === 'Prepare trusted requested source');
+  assert.equal(baseline.if, undefined);
+  assert.match(workflow.jobs.resolve.steps.find(step => step.id === 'refs').run, /resolve-trusted-simulator-baseline.mjs/);
   assert.match(baseline.run, /prepare-baseline-harness.mjs/);
   assert.ok(steps.indexOf(baseline) < steps.findIndex(step => step.name === 'Install JS dependencies'));
   const compare = workflow.jobs.compare;
@@ -364,7 +364,9 @@ function testManualWorkflow() {
   assert.equal(upload['continue-on-error'], undefined, 'Upload failure must fail the job');
   assert.equal(upload.with['if-no-files-found'], 'error');
   assert.deepEqual(workflow.jobs['ios-simulator-test'].strategy.matrix.variant, ['candidate', 'baseline']);
-  assert.equal(baseline.env.BASELINE_REF, 'e9abf50510b84db9f9f3a20c6f45ceb11685771f');
+  assert.equal(baseline.env.BASELINE_REF, '${{ needs.resolve.outputs.baseline }}');
+  assert.equal(workflow.on.workflow_dispatch.inputs.candidate_ref.default, 'main');
+  assert.equal(workflow.on.workflow_dispatch.inputs.baseline_ref.default, 'main');
   const acceptance = compare.steps.find(step => step.id === 'comparison');
   assert.match(acceptance.run, /needs.ios-simulator-test.result/);
   assert.equal(acceptance['continue-on-error'], undefined);

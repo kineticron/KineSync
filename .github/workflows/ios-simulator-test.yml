@@ -13,8 +13,13 @@ on:
         required: false
         default: false
         type: boolean
+      candidate_ref:
+        description: 'Candidate source ref reachable from trusted main'
+        required: false
+        default: 'main'
+        type: string
       baseline_ref:
-        description: 'Compatibility input; baseline is pinned to e9abf50510b84db9f9f3a20c6f45ceb11685771f'
+        description: 'Baseline source ref reachable from trusted main'
         required: false
         default: 'main'
         type: string
@@ -32,6 +37,31 @@ defaults:
     shell: bash
 
 jobs:
+  resolve:
+    if: github.event.inputs.diagnostic_only != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      candidate: ${{ steps.refs.outputs.candidate }}
+      baseline: ${{ steps.refs.outputs.baseline }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ci-sim
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - id: refs
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          set -euo pipefail
+          CANDIDATE="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${CANDIDATE_REF}")"
+          BASELINE="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
+          echo "candidate=${CANDIDATE}" >> "${GITHUB_OUTPUT}"
+          echo "baseline=${BASELINE}" >> "${GITHUB_OUTPUT}"
+
   diagnostic:
     if: github.event.inputs.diagnostic_only == 'true'
     runs-on: macos-26
@@ -41,6 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ci-sim
           persist-credentials: false
       - name: Observe simulator startup (no build or app)
         timeout-minutes: 15
@@ -55,6 +86,7 @@ jobs:
           if-no-files-found: error
 
   ios-simulator-test:
+    needs: resolve
     if: github.event.inputs.diagnostic_only != 'true'
     runs-on: macos-26
     timeout-minutes: 120
@@ -70,6 +102,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ci-sim
           persist-credentials: false
 
       - name: Setup build tools Node
@@ -89,7 +122,7 @@ jobs:
           WORKSPACE="$(cd "${GITHUB_WORKSPACE}" && pwd -P)"
           USER_HOME="$(cd "${HOME}" && pwd -P)"
           mkdir -p ExpoLyrics/.expo
-          git rev-parse HEAD > ExpoLyrics/.expo/candidate-commit.txt
+
           {
             echo "workspace=${WORKSPACE}"
             echo "pods=${WORKSPACE}/ExpoLyrics/ios/Pods"
@@ -131,18 +164,22 @@ jobs:
           node ExpoLyrics/scripts/run-with-ci-budget.mjs node ExpoLyrics/scripts/prepare-simulator-rotation.mjs "${TOOL_DIR}" 2>&1 | tee ExpoLyrics/.expo/rotation-tool-prepare.log
           echo "SIMULATOR_ROTATION_TOOL_DIR=${TOOL_DIR}" >> "${GITHUB_ENV}"
 
-      - name: Prepare trusted baseline source
+      - name: Prepare trusted requested source
         id: baseline_prep
-        if: matrix.variant == 'baseline'
         env:
-          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
+          BASELINE_REF: ${{ needs.resolve.outputs.baseline }}
+          SOURCE_SHA: ${{ needs.resolve.outputs[matrix.variant] }}
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate }}
           BASELINE_DIR: ${{ steps.paths.outputs.baseline }}
         run: |
           set -euo pipefail
           node ExpoLyrics/scripts/run-with-ci-budget.mjs bash <<'BASELINE' 2>&1 | tee ExpoLyrics/.expo/baseline-preparation.log
           set -euo pipefail
-          COMMIT="$(node ExpoLyrics/scripts/resolve-trusted-simulator-baseline.mjs "${BASELINE_REF}")"
-          printf '%s\n' "${COMMIT}" > ExpoLyrics/.expo/baseline-commit.txt
+          git fetch --no-tags origin "${SOURCE_SHA}"
+          COMMIT="$(git rev-parse --verify FETCH_HEAD^{commit})"
+          test "${COMMIT}" = "${SOURCE_SHA}"
+          printf '%s\n' "${CANDIDATE_SHA}" > ExpoLyrics/.expo/candidate-commit.txt
+          printf '%s\n' "${BASELINE_REF}" > ExpoLyrics/.expo/baseline-commit.txt
           git worktree add --detach "${BASELINE_DIR}" "${COMMIT}"
           node ExpoLyrics/scripts/prepare-baseline-harness.mjs --baseline-dir "${BASELINE_DIR}"
           # Keep canonical build/cache/hashFiles paths identical in both jobs.
@@ -326,8 +363,8 @@ jobs:
         env:
           STEP_RESULTS: ${{ toJSON(steps) }}
           VARIANT: ${{ matrix.variant }}
-          CANDIDATE_SHA: ${{ github.sha }}
-          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate }}
+          BASELINE_REF: ${{ needs.resolve.outputs.baseline }}
         run: |
           mkdir -p ExpoLyrics/.expo
           node --input-type=module <<'STATUS'
@@ -363,13 +400,14 @@ jobs:
           retention-days: 14
 
   compare:
-    needs: ios-simulator-test
+    needs: [resolve, ios-simulator-test]
     if: ${{ always() && !cancelled() && github.event.inputs.diagnostic_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ci-sim
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -383,10 +421,12 @@ jobs:
       - name: Validate screenshot artifact pairs for Kat
         id: comparison
         env:
-          BASELINE_REF: e9abf50510b84db9f9f3a20c6f45ceb11685771f
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate }}
+          BASELINE_REF: ${{ needs.resolve.outputs.baseline }}
         run: |
           BASELINE_SHA="$(cat comparison-input/ios-simulator-baseline-artifacts/baseline-commit.txt)"
-          test "${BASELINE_SHA}" = e9abf50510b84db9f9f3a20c6f45ceb11685771f
+          test "${BASELINE_SHA}" = "${BASELINE_REF}"
+          test "$(cat comparison-input/ios-simulator-candidate-artifacts/candidate-commit.txt)" = "${CANDIDATE_SHA}"
           test "${{ needs.ios-simulator-test.result }}" = success
           node ExpoLyrics/scripts/compare-simulator-screenshots.mjs --branch-dir comparison-input/ios-simulator-candidate-artifacts/simulator-test-output --baseline-dir comparison-input/ios-simulator-baseline-artifacts/simulator-test-output --baseline-ref "${BASELINE_SHA}" --output comparison-report.md
       - name: Publish comparison summary
@@ -394,7 +434,7 @@ jobs:
         env:
           COMPARISON_OUTCOME: ${{ steps.comparison.outcome }}
           BUILD_RESULT: ${{ needs.ios-simulator-test.result }}
-          CANDIDATE_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ needs.resolve.outputs.candidate }}
         run: |
           node --input-type=module <<'STATUS'
           import fs from 'node:fs';
@@ -416,4 +456,4 @@ jobs:
 
       - name: Report screenshot artifacts to Kat
         if: success()
-        run: echo "Kat, both candidate and pinned-main screenshot artifacts are available for review. No visual verdict was applied." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Kat, both candidate and baseline screenshot artifacts are available for review. No visual verdict was applied." >> "${GITHUB_STEP_SUMMARY}"

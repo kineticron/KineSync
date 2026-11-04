@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const baseline = path.resolve(process.argv[2]);
 const patch = path.join(root, 'ExpoLyrics/scripts/patches/harness-integration-main.patch');
 const git = args => execFileSync('git', args, { cwd: baseline, encoding: 'utf8' });
-assert.equal(git(['rev-parse', 'HEAD']).trim(), 'e9abf50510b84db9f9f3a20c6f45ceb11685771f');
+assert.equal(git(['rev-parse', 'HEAD']).trim(), git(['rev-parse', '--verify', process.env.BASELINE_SHA || 'main']).trim());
 const provider = fs.readFileSync(path.join(baseline, 'ExpoLyrics/providers/bridge-provider.tsx'), 'utf8');
 assert.match(provider, /if \(!initialized\) return;/);
 assert.match(provider, /notifySimulatorAppInitialized\(\)/);
