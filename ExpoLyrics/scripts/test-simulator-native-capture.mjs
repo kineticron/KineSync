@@ -35,13 +35,14 @@ try {
   // Host readiness must come from the manifest, carry the host nonce, and be live.
   const { EventEmitter } = await import('node:events');
   const plist = (await import('plist')).default;
-  for (const mode of ['ready', 'stale', 'wrong-path', 'exit', 'timeout']) {
+  for (const mode of ['ready', 'stale', 'wrong-path', 'exit', 'timeout', 'retry-success', 'exhausted', 'cleanup-failure']) {
     const outputDir = path.join(root, `startup-${mode}`); fs.mkdirSync(outputDir);
     const oldMailbox = path.join(outputDir, 'diagnostics/native-capture-mailbox');
     fs.mkdirSync(oldMailbox, { recursive: true });
     fs.writeFileSync(path.join(oldMailbox, 'ready.json'), JSON.stringify({ session: 'stale-before-launch' }));
-    let checks = 0, child;
-    const state = { outputDir, children: [], update() {}, check() { if (++checks > 8) throw Error('startup timeout'); } };
+    let checks = 0, child, launches = 0;
+    const sessions = new Set();
+    const state = { outputDir, children: [], update() {}, check() { if (++checks > 8 && !['retry-success', 'exhausted', 'cleanup-failure'].includes(mode)) throw Error('startup timeout'); } };
     const command = async (cmd, args) => {
       assert.equal(cmd, 'xcodebuild'); assert.ok(args.includes('build-for-testing'));
       const products = path.join(args[args.indexOf('-derivedDataPath') + 1], 'Build/Products');
@@ -50,20 +51,24 @@ try {
     };
     const transport = (cmd, args) => {
       child = new EventEmitter();
+      launches++;
+      child.kill = () => { if (mode !== 'cleanup-failure') child.emit('close', 0); };
       assert.ok(!args.includes('-project'));
       const manifest = plist.parse(fs.readFileSync(args[args.indexOf('-xctestrun') + 1], 'utf8'));
       const env = manifest.Capture.EnvironmentVariables;
       const mailbox = env.KINESYNC_CAPTURE_MAILBOX;
+      assert.ok(!sessions.has(env.KINESYNC_CAPTURE_SESSION)); sessions.add(env.KINESYNC_CAPTURE_SESSION);
       assert.ok(!fs.existsSync(path.join(mailbox, 'ready.json')), 'Old readiness must be removed before launch');
-      if (mode !== 'timeout' && mode !== 'exit') fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({
+      if (!['timeout', 'exit', 'exhausted', 'cleanup-failure'].includes(mode) && (mode !== 'retry-success' || launches === 2)) fs.writeFileSync(path.join(mailbox, 'ready.json'), JSON.stringify({
         session: mode === 'stale' ? 'old-session' : env.KINESYNC_CAPTURE_SESSION,
         mailbox: mode === 'wrong-path' ? '/other/cache' : mailbox }));
       if (mode === 'exit') queueMicrotask(() => child.emit('close', 7));
       return child;
     };
-    const pending = startNativeCapture(state, 'device', transport, { command, pause: async () => {} });
-    if (mode === 'ready') assert.equal((await pending).mailbox, path.join(outputDir, 'diagnostics/native-capture-mailbox'));
-    else await assert.rejects(pending, /ownership mismatch|exited before readiness|startup timeout/);
+    const pending = startNativeCapture(state, 'device', transport, { command, pause: async () => {}, readinessBudget: ['retry-success', 'exhausted', 'cleanup-failure'].includes(mode) ? 0 : 240000, diagnosticRun: async () => ({ stdout: '', stderr: '' }) });
+    if (mode === 'retry-success') { assert.match((await pending).mailbox, /-retry$/); assert.equal(launches, 2); }
+    else if (mode === 'ready') assert.equal((await pending).mailbox, path.join(outputDir, 'diagnostics/native-capture-mailbox'));
+    else await assert.rejects(pending, /ownership mismatch|exited before readiness|startup timeout|readiness timeout after two attempts|cleanup did not complete/);
   }
   const portrait = PNG.sync.write(new PNG({ width: 3, height: 5 }));
   const landscape = PNG.sync.write(new PNG({ width: 5, height: 3 }));
