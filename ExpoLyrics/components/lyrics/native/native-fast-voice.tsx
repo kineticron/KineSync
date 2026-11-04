@@ -26,19 +26,22 @@ export function NativeFastVoice(props: React.ComponentProps<typeof NativeSkiaVoi
 }) {
   const { rowIndex, presentationWindow, ...voiceProps } = props;
   const { voice, position } = props;
+  // Capture primitive deadlines in UI worklets, not the full word/paint graph.
+  const voiceStart = voice.start;
+  const voiceEnd = voice.end;
   const identity = useMemo(() => ({ paintWords: voice.paintWords, words: voice.words, start: voice.start, end: voice.end }), [voice.paintWords, voice.words, voice.start, voice.end]);
   const current = useRef(identity);
   current.current = identity;
-  const required = () => needsExactGlyphs(rowIndex, voice.start, voice.end, position.value, presentationWindow.value);
+  const required = () => needsExactGlyphs(rowIndex, voiceStart, voiceEnd, position.value, presentationWindow.value);
   const [prepared, setPrepared] = useState(() => required() ? identity : null);
   const promote = useCallback(() => {
     // A seek can supersede an approaching cue while its RN callback is queued.
-    if (current.current === identity && needsExactGlyphs(rowIndex, voice.start, voice.end, position.value, presentationWindow.value))
+    if (current.current === identity && needsExactGlyphs(rowIndex, voiceStart, voiceEnd, position.value, presentationWindow.value))
       setPrepared(identity);
-  }, [identity, rowIndex, voice.start, voice.end, position, presentationWindow]);
-  useAnimatedReaction(() => needsExactGlyphs(rowIndex, voice.start, voice.end, position.value, presentationWindow.value),
+  }, [identity, rowIndex, voiceStart, voiceEnd, position, presentationWindow]);
+  useAnimatedReaction(() => needsExactGlyphs(rowIndex, voiceStart, voiceEnd, position.value, presentationWindow.value),
     (needed, previous) => { if (needed && needed !== previous) scheduleOnRN(promote); },
-    [identity, rowIndex, voice.start, voice.end, position, presentationWindow, promote]);
+    [identity, rowIndex, voiceStart, voiceEnd, position, presentationWindow, promote]);
   return <NativeLazySkiaVoice {...voiceProps} prepareGlyphs={prepared === identity || required()} />;
 }
 
