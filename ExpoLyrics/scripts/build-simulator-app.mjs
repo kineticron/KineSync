@@ -145,7 +145,7 @@ export function configureStandaloneSimulator(iosDirectory) {
   // Expo sources this file again AFTER its unconditional Debug SKIP_BUNDLING=1.
   const envFile = path.join(iosDirectory, '.xcode.env.local');
   const envSource = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
-  if (!envSource.includes('# Standalone simulator harness')) fs.appendFileSync(envFile, '\n# Standalone simulator harness\nunset SKIP_BUNDLING\nexport FORCE_BUNDLING=1\n');
+  if (!envSource.includes('# Standalone simulator harness')) fs.appendFileSync(envFile, '\n# Standalone simulator harness\nunset SKIP_BUNDLING\nif [ \"${KINESYNC_EXTERNAL_BUNDLE:-0}\" = \"1\" ]; then\n  export SKIP_BUNDLING=1\nelse\n  unset SKIP_BUNDLING\n  export FORCE_BUNDLING=1\nfi\n');
 }
 
 export function buildSimulatorApp(options = {}) {
@@ -189,6 +189,8 @@ export function buildSimulatorApp(options = {}) {
     'PROVISIONING_PROFILE=',
     'EXPANDED_CODE_SIGN_IDENTITY=',
     'COMPILER_INDEX_STORE_ENABLE=NO',
+    'DEBUG_INFORMATION_FORMAT=dwarf',
+    'GCC_GENERATE_DEBUGGING_SYMBOLS=NO',
   ];
 
   const ccache = process.env.KINESYNC_USE_CCACHE === '1' && process.env.KINESYNC_CC_WRAPPER
@@ -216,7 +218,8 @@ export function buildSimulatorApp(options = {}) {
   const appPath = path.resolve(targetBuildDir, fullProductName);
   if (!appPath.startsWith(`${derivedDataPath}${path.sep}`)) throw new Error('Application product escapes the canonical DerivedData path');
   fs.rmSync(path.join(iosDirectory, '.built_app_path'), { force: true });
-  fs.rmSync(path.join(appPath, 'main.jsbundle'), { force: true });
+  if (options.nativeOnly) fs.rmSync(appPath, { recursive: true, force: true });
+  else fs.rmSync(path.join(appPath, 'main.jsbundle'), { force: true });
   console.log(`[BUILD] Invoking actual xcodebuild for ${scheme} (Release arm64 iphonesimulator)...`);
   execCommand('xcodebuild', args, {
     stdio: 'inherit',
@@ -224,6 +227,7 @@ export function buildSimulatorApp(options = {}) {
     env: {
       ...process.env,
       EXPO_PUBLIC_SIMULATOR_TEST: '1',
+      KINESYNC_EXTERNAL_BUNDLE: options.nativeOnly ? '1' : '0',
     },
   });
 
@@ -241,7 +245,9 @@ export function buildSimulatorApp(options = {}) {
   if (architectures !== 'arm64' || !/platform\s+IOSSIMULATOR\b/.test(loadCommands)) throw new Error('Executable must be exactly arm64 IOSSIMULATOR');
   console.log(`[BUILD] Verified product ${appPath}; executable=${executableName}; archs=${architectures}; ${loadCommands.trim()}`);
 
-  if (!fs.existsSync(path.join(appPath, 'main.jsbundle')) || fs.statSync(path.join(appPath, 'main.jsbundle')).size === 0) throw new Error('Simulator app has no main.jsbundle: bundling was skipped despite FORCE_BUNDLING; inspect generated Xcode bundle phase and .xcode.env files');
+  if (!options.nativeOnly && (!fs.existsSync(path.join(appPath, 'main.jsbundle')) || fs.statSync(path.join(appPath, 'main.jsbundle')).size === 0)) throw new Error('Simulator app has no main.jsbundle: bundling was skipped despite FORCE_BUNDLING; inspect generated Xcode bundle phase and .xcode.env files');
+
+  if (options.nativeOnly && fs.existsSync(path.join(appPath, 'main.jsbundle'))) throw new Error('Native-only build unexpectedly bundled JS');
 
   // Ad-hoc codesign app bundle for simulator execution
   console.log('[BUILD] Ad-hoc codesigning app bundle...');

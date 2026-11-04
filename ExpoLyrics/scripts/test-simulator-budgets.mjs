@@ -74,15 +74,19 @@ try {
   const workflow = YAML.parse(fs.readFileSync(new URL('../../.github/workflows/ios-simulator-test.yml', import.meta.url), 'utf8'));
   const job = workflow.jobs['ios-simulator-test'];
   const steps = job.steps;
-  assert.equal(job['timeout-minutes'], 60 + 40 + 15 + 5);
-  assert.match(steps.find(s => s.id === 'paths').run, /STARTED_MS \+ 60 \* 60 \* 1000/);
-  assert.match(steps.find(s => s.id === 'scenario').run, /STARTED_MS \+ 100 \* 60 \* 1000/);
+  const native = workflow.jobs['native-apps'];
+  assert.equal(native['timeout-minutes'], 120);
+  assert.equal(job['timeout-minutes'], 55);
+  assert.match(native.steps.find(s => s.name === 'Select and verify installed toolchain').run, /95 \* 60 \* 1000/);
+  assert.match(steps.find(s => s.name === 'Record job work start').run, /45 \* 60 \* 1000/);
   assert.match(steps.find(s => s.id === 'scenario').run, /--timeout-minutes 40/);
   assert.equal(steps.find(s => s.id === 'scenario')['timeout-minutes'], 40);
-  assert.ok(!steps.find(s => s.id === 'candidate_build').run.includes('- 6 *'));
+  assert.deepEqual(job.strategy.matrix.variant, ['candidate', 'baseline']);
+  assert.ok(job.needs.includes('native-apps'));
   assert.equal(600 + 120 + 300 + 120 + 120 + 240 + 7 * 120, 39 * 60);
   assert.equal(40 * 60 - (600 + 120 + 300 + 120 + 120 + 240 + 7 * 120), 60);
   assert.equal(workflow.jobs.diagnostic['timeout-minutes'], 20);
-  assert.match(job.if, /diagnostic_only != 'true'/);
+  assert.match(workflow.jobs.resolve.if, /diagnostic_only != 'true'/);
+  assert.equal(workflow.jobs.resolve.outputs.candidate, '${{ steps.refs.outputs.candidate }}');
   console.log('Independent phase budgets, subprocess EOF/raw logs, and workflow reserve tests passed.');
 } finally { fs.rmSync(dir, { recursive: true, force: true }); }

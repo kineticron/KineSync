@@ -1,3 +1,5 @@
+import { digest, treeManifest, writeJson } from './simulator-app-reuse.mjs';
+import './test-simulator-app-reuse.mjs';
 import './test-simulator-review-png.mjs';
 import './test-simulator-artifact-acceptance.mjs';
 import './test-simulator-native-capture.mjs';
@@ -380,7 +382,7 @@ if (args.includes('runtimes')) console.log(JSON.stringify({ runtimes: [{ identif
 else if (args.includes('list')) console.log(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [{ udid: 'test-udid', name: 'iPhone Test', state: 'Booted', isAvailable: true }] } }));
 if (args.includes('install') && process.env.SIM_CASE === 'install-failure') process.exit(2);
 if (args.includes('get_app_container')) {
- const container = args.includes('dev.kineticron.simulator-capture.xctrunner') ? path.join(dir, 'capture-runner') : dir;
+ const container = args.at(-1) === 'app' ? path.join(dir, 'provenance.app') : args.includes('dev.kineticron.simulator-capture.xctrunner') ? path.join(dir, 'capture-runner') : dir;
  fs.mkdirSync(container, { recursive: true }); console.log(container);
 }
 if (args.includes('screenshot')) {
@@ -414,6 +416,7 @@ if (args.includes('stream')) {
   if (process.env.SIM_CASE === 'stalled-scenario') { console.log('[KINESYNC_SIM] INIT_READY'); console.log('[KINESYNC_SIM] SCENARIO_START token=run'); console.log('[KINESYNC_SIM] STAGE_BEGIN stage_1_launch timestamp=1'); return; }
   if (['early-exit', 'signal'].includes(process.env.SIM_CASE)) return;
   const logs = ${JSON.stringify(runLogs)}.filter(line => process.env.SIM_CASE !== 'missing-init' || !line.includes('INIT_READY')).map(line => process.env.SIM_CASE === 'bad-token' ? line.replace('token=run_stage_1_launch', 'token=invalid') : line).map(line => process.env.SIM_CASE === 'stale-run' ? line.replace('token=run_stage_1_launch', 'token=old_stage_1_launch') : line).map(line => process.env.SIM_CASE === 'stale-request' ? line.replace('READY_FOR_SCREENSHOT stage=stage_1_launch token=run_stage_1_launch', 'READY_FOR_SCREENSHOT stage=stage_2_playback token=run_stage_2_playback') : line).map(line => process.env.SIM_CASE === 'rotation-stale' && line.includes('TRIGGER_SIMULATOR_ROTATION') ? line.replace('token=run_', 'token=old_') : line).filter(line => process.env.SIM_CASE !== 'restore-missing' || !line.includes('READY_FOR_PORTRAIT_RESTORE')).map(line => process.env.SIM_CASE === 'restore-stale' ? line.replace('token=run_stage_7_restore', 'token=old_stage_7_restore') : process.env.SIM_CASE === 'restore-early' && line.includes('orientation=portrait style=spicy') ? line.replace('orientation=portrait', 'orientation=landscape') : line).map(line => '2026-11-01 00:00:00.000 Info KineSync[123:456] [com.facebook.react.log:javascript] ' + line).join('\\n') + '\\n';
+  if (process.env.SIM_CASE.startsWith('provenance-') && process.env.SIM_CASE !== 'provenance-missing') console.log('[KINESYNC_PROVENANCE] ' + (process.env.SIM_CASE === 'provenance-wrong' ? 'f'.repeat(64) : process.env.SIM_RUNTIME_ID));
   // Chunk boundary inside a protocol marker must not drop or duplicate it.
   const split = logs.indexOf('[KINESYNC_SIM]') + 6;
   if (process.env.SIM_CASE === 'console-duplicate') process.stderr.write(logs.trimEnd());
@@ -443,15 +446,31 @@ if (args.includes('launch')) {
     // Node resolves extensionless executable shims as CommonJS.
     fs.writeFileSync(path.join(dir, name), shim.replace("import fs from 'node:fs';", "const fs = require('node:fs');").replace("import path from 'node:path';", "const path = require('node:path');"), { mode: 0o755 });
   }
-  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['native-framebuffer', 'pass', 'unified-log-slow-ready', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
+  for (const scenario of (process.env.SIM_TEST_CASES?.split(',') || ['provenance-pass', 'provenance-wrong', 'provenance-missing', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'rotation-stale', 'restore-stale', 'restore-early', 'restore-missing', 'native-portrait-output', 'unterminated-complete', 'console-duplicate', 'stderr-banner', 'png-timeout', 'missing-init', 'bad-token', 'stale-run', 'stale-request', 'blank', 'unstable', 'capture-failure', 'early-exit', 'rotation-failure', 'rotation-noop', 'portrait-noop', 'rotation-rejected', 'rotation-hang', 'initial-landscape', 'stalled-startup', 'stalled-scenario', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready', 'stream-dies'])) {
     console.log(`Runner CLI scenario: ${scenario}`);
     for (const file of ['launched', 'stream-ready', 'Library/Caches/kinesync_sim_ack_stage_7_restore.json', ...Array.from({ length: 7 }, (_, i) => `Library/Caches/kinesync_sim_ack_${['stage_1_launch', 'stage_2_playback', 'stage_3_seek', 'stage_4_switch_amll', 'stage_5_skip_song', 'stage_6_switch_spicy', 'stage_7_rotation'][i]}.json`)]) fs.rmSync(path.join(dir, file), { force: true });
     const output = path.join(dir, scenario);
-    const shouldPass = ['unstable', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const shouldPass = ['provenance-pass', 'unstable', 'native-framebuffer', 'pass', 'unified-log-slow-ready', 'unterminated-complete', 'console-duplicate', 'stderr-banner'].includes(scenario);
+    const app = path.join(dir, 'provenance.app');
+    fs.mkdirSync(app, { recursive: true });
+    fs.writeFileSync(path.join(app, 'KineSync'), 'native');
+    fs.writeFileSync(path.join(app, 'main.jsbundle'), 'fresh Hermes bundle');
+    const identity = { sourceSha: 'a'.repeat(40), harnessSha: 'b'.repeat(40), variant: 'candidate' };
+    const provenance = { ...identity, identity, runtimeId: digest(identity) };
+    writeJson(path.join(app, 'ci-provenance.json'), provenance);
+    provenance.files = treeManifest(app); delete provenance.files['ci-provenance.json'];
+    const provenanceFile = path.join(dir, 'provenance.json'); writeJson(provenanceFile, provenance);
     const started = Date.now();
-    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', '/mock.app', '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--build-seconds', scenario === 'unified-log-slow-ready' ? '2' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer } });
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'run-ios-simulator-test.mjs'), '--app-path', app, '--output-dir', output, '--startup-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : '20', '--preflight-seconds', scenario === 'rotation-hang' ? '3' : '20', '--build-seconds', scenario === 'unified-log-slow-ready' ? '2' : '20', '--readiness-seconds', ['stalled-startup', 'stream-not-ready'].includes(scenario) ? '3' : scenario === 'unified-log-slow-ready' ? '2' : '20', '--stage-seconds', scenario === 'stalled-scenario' ? '1' : scenario === 'png-timeout' ? '3' : '15', '--timeout-minutes', '1'], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}`, SIM_CASE: scenario, DEVELOPER_DIR: developer, SIMULATOR_REQUIRE_PROVENANCE: scenario.startsWith('provenance-') ? '1' : '0', SIM_RUNTIME_ID: provenance.runtimeId, SIMULATOR_PROVENANCE_FILE: provenanceFile, SOURCE_SHA: identity.sourceSha, HARNESS_SHA: identity.harnessSha, VARIANT: identity.variant } });
     assert.equal(result.status, shouldPass ? 0 : 1, `${scenario}: ${result.stdout} ${result.stderr}`);
     if (!['rotation-hang', 'rotation-rejected', 'initial-landscape', 'signal', 'install-failure', 'stream-exit', 'stream-eof-banner', 'stream-not-ready'].includes(scenario)) assert.ok(fs.readFileSync(path.join(output, 'simulator-summary.md'), 'utf8').includes(`Status: ${shouldPass ? 'PASSED' : 'FAILED'}`));
+    if (scenario === 'provenance-pass') {
+      assert.equal(JSON.parse(fs.readFileSync(path.join(output, 'runtime-provenance.json'))).runtimeId, provenance.runtimeId);
+      assert.ok(fs.existsSync(path.join(output, 'installed-app-hashes.json')));
+    }
+    if (['provenance-wrong', 'provenance-missing'].includes(scenario)) {
+      assert.equal(fs.readdirSync(output).filter(name => /^stage_.*\.png$/.test(name)).length, 0, 'Provenance failure must prevent every capture');
+    }
     if (scenario === 'stale-request') {
       assert.ok(!fs.existsSync(path.join(output, 'stage_2_playback.png')), 'Stale request cannot start a capture');
       assert.ok(!fs.existsSync(path.join(dir, 'Library/Caches/kinesync_sim_ack_stage_2_playback.json')), 'Stale request cannot write an ACK');

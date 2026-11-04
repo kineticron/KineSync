@@ -314,7 +314,7 @@ function testManualWorkflow() {
   const workflow = YAML.parse(fs.readFileSync(path.join(root, '../.github/workflows/ios-simulator-test.yml'), 'utf8'));
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   const job = workflow.jobs['ios-simulator-test'];
-  assert.equal(job['timeout-minutes'], 120);
+  assert.equal(job['timeout-minutes'], 55);
   assert.equal(job['runs-on'], 'macos-26');
   assert.equal(job.strategy['fail-fast'], false, 'Candidate failure must not cancel baseline');
   assert.ok(job.strategy.matrix.variant.includes('candidate') && job.strategy.matrix.variant.includes('baseline'));
@@ -323,39 +323,33 @@ function testManualWorkflow() {
     assert.equal(parsed.status, 0, `${step.name}: ${parsed.stderr}`);
   }
   const steps = job.steps;
-  const selection = steps.findIndex(step => step.name === 'Select installed Xcode 26 explicitly');
-  const rotationTool = steps.findIndex(step => step.name === 'Prepare pinned CI-only native rotation tool');
-  assert.ok(selection >= 0 && selection < rotationTool, 'Native load preflight must inherit canonical Xcode selection');
-  assert.ok(rotationTool < steps.findIndex(step => step.id === 'baseline_prep'));
-  assert.ok(rotationTool < steps.findIndex(step => step.id === 'candidate_build'));
-  assert.match(steps[selection].run, /DEVELOPER_DIR=.*pwd -P/);
-  const paths = steps.find(step => step.id === 'paths');
-  assert.match(paths.run, /60 \* 60 \* 1000/);
-  assert.match(paths.run, /pwd -P/);
-  assert.match(steps.find(step => step.name === 'Expo prebuild (iOS)').run, /--no-install/);
-  for (const [id, minutes] of [['pods_cache', 4], ['compiler_cache', 8]]) {
-    const cache = steps.find(step => step.id === id);
-    const save = steps.find(step => step.uses?.startsWith('actions/cache/save@') && step.with.key.includes(`steps.${id}.outputs.cache-primary-key`));
-    assert.equal(cache.with.path, save.with.path);
-    assert.ok(!cache.with.path.includes('..') && !cache.with.path.includes('~'));
-    assert.ok(cache.with.key.includes('steps.compatibility.outputs.id'));
-    assert.ok(cache.with.key.includes('matrix.variant'));
-    assert.equal(save['timeout-minutes'], minutes);
-    assert.ok(!save['continue-on-error'], 'Cache failures must not be falsely green');
-    assert.ok(save.if.includes('!cancelled()'));
-    assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ matrix.variant \}\}$/, '-'));
-  }
-  assert.match(steps.find(step => step.id === 'pods_cache').with.key, /ios-sim-pods-v2-/);
-  for (const id of ['pods_verified', 'compiler_verified']) {
-    const verify = steps.find(step => step.id === id);
-    assert.match(verify.run, /verify-ci-cache.mjs/);
-    assert.ok(verify.if.includes('!cancelled()'));
-  }
-  const baseline = steps.find(step => step.name === 'Prepare trusted requested source');
-  assert.equal(baseline.if, undefined);
+  const rotation = steps.find(step => step.name === 'Select installed Xcode and prepare native rotation');
+  assert.match(rotation.run, /xcode-select --switch/);
+  assert.match(rotation.run, /prepare-simulator-rotation.mjs/);
+  assert.ok(steps.indexOf(rotation) < steps.findIndex(step => step.id === 'scenario'));
+  assert.ok(job.needs.includes('native-apps'));
+  assert.equal(job.env.SIMULATOR_REQUIRE_PROVENANCE, '1');
+  assert.equal(job.env.SOURCE_SHA, '${{ needs.resolve.outputs[matrix.variant] }}');
+  const native = workflow.jobs['native-apps'];
+  assert.equal(native['timeout-minutes'], 120);
+  assert.equal(native.env.USE_CCACHE, '1');
+  assert.equal(native.env.CCACHE_COMPILERCHECK, 'content');
+  const prep = native.steps.find(step => step.id === 'pair');
+  const build = native.steps.find(step => step.id === 'build');
+  assert.match(prep.run, /prepare-simulator-pair.mjs/);
+  assert.match(build.run, /build-simulator-pair.mjs/);
+  assert.equal(prep.env.BASELINE_SHA, '${{ needs.resolve.outputs.baseline }}');
+  assert.equal(prep.env.CANDIDATE_SHA, '${{ needs.resolve.outputs.candidate }}');
+  const cache = native.steps.find(step => step.id === 'native_cache');
+  const save = native.steps.find(step => step.id === 'cache_save');
+  assert.equal(cache.with.path, save.with.path);
+  assert.ok(cache.with.key.includes('steps.pair.outputs.key'));
+  assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}$/, '-'));
+  assert.equal(save['timeout-minutes'], 8);
+  assert.ok(!save['continue-on-error']);
+  assert.ok(save.if.includes('!cancelled()'));
+  assert.ok(native.steps.some(step => step.run?.includes('verify-ci-cache.mjs')));
   assert.match(workflow.jobs.resolve.steps.find(step => step.id === 'refs').run, /resolve-trusted-simulator-baseline.mjs/);
-  assert.match(baseline.run, /prepare-baseline-harness.mjs/);
-  assert.ok(steps.indexOf(baseline) < steps.findIndex(step => step.name === 'Install JS dependencies'));
   const compare = workflow.jobs.compare;
   assert.ok(compare.if.includes('always()'));
   assert.ok(compare.steps.some(step => step.name === 'Publish comparison summary' && step.if === 'always()'));
@@ -364,7 +358,6 @@ function testManualWorkflow() {
   assert.equal(upload['continue-on-error'], undefined, 'Upload failure must fail the job');
   assert.equal(upload.with['if-no-files-found'], 'error');
   assert.deepEqual(workflow.jobs['ios-simulator-test'].strategy.matrix.variant, ['candidate', 'baseline']);
-  assert.equal(baseline.env.BASELINE_REF, '${{ needs.resolve.outputs.baseline }}');
   assert.equal(workflow.on.workflow_dispatch.inputs.candidate_ref.default, 'main');
   assert.equal(workflow.on.workflow_dispatch.inputs.baseline_ref.default, 'main');
   const acceptance = compare.steps.find(step => step.id === 'comparison');

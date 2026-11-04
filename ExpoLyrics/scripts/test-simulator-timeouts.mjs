@@ -68,7 +68,9 @@ try {
   assert.equal(budget.status, 1); assert.match(budget.stderr, /budget exhausted/);
   const workflow = fs.readFileSync(new URL('../../.github/workflows/ios-simulator-test.yml', import.meta.url), 'utf8');
   const artifactPaths = YAML.parse(workflow).jobs['ios-simulator-test'].steps.find(step => step.name === 'Upload Simulator Test Artifacts').with.path.trim().split('\n').map(p => p.trim());
-  assert.ok(artifactPaths.includes('ExpoLyrics/.expo/cache-verification-*.json'));
+  const nativeEvidence = YAML.parse(workflow).jobs['native-apps'].steps.find(step => step.name === 'Preserve native fingerprints, timings and build evidence');
+  assert.ok(nativeEvidence.with.path.includes('ExpoLyrics/.expo/cache-verification-*.json'));
+  assert.ok(artifactPaths.includes('ExpoLyrics/.expo/simulator-test-output/'));
   for (const p of artifactPaths) assert.ok(!p.split('/').some(part => ['.', '..'].includes(part)) && !path.isAbsolute(p), p);
 
   assert.match(workflow, /Upload Simulator Test Artifacts\n        timeout-minutes: 2\n        if: always\(\)/);

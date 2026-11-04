@@ -1,3 +1,4 @@
+import { verifyVariantApp, verifyRuntimeProvenance, readJson, writeJson } from './simulator-app-reuse.mjs';
 // iOS Simulator Test Runner for KineSync
 // Boots simulator, installs Release app, streams logs, handles rotation, captures screenshots, and asserts results
 
@@ -135,6 +136,11 @@ async function main() {
   });
 
   fs.mkdirSync(outputDir, { recursive: true });
+  const provenance = process.env.SIMULATOR_REQUIRE_PROVENANCE === '1' ? verifyVariantApp(appPath, {
+    sourceSha: process.env.SOURCE_SHA, variant: process.env.VARIANT, harnessSha: process.env.HARNESS_SHA,
+  }, readJson(process.env.SIMULATOR_PROVENANCE_FILE)) : null;
+  let runtimeProvenance;
+  if (provenance) writeJson(path.join(outputDir, 'app-provenance.json'), provenance);
   let transportStopping = false;
   const logBytes = new Map();
   const appendLog = (file, chunk) => {
@@ -193,6 +199,11 @@ async function main() {
   console.log(`[RUNNER] Installing app bundle: ${appPath}...`);
   await runStartupCommand('xcrun', ['simctl', 'install', device.udid, appPath]);
   console.log('[RUNNER] App installed.');
+  if (provenance) {
+    const installed = (await runStartupCommand('xcrun', ['simctl', 'get_app_container', device.udid, 'dev.kineticron.KineSync', 'app'])).trim();
+    verifyVariantApp(installed, { sourceSha: process.env.SOURCE_SHA, variant: process.env.VARIANT, harnessSha: process.env.HARNESS_SHA }, provenance);
+    writeJson(path.join(outputDir, 'installed-app-hashes.json'), { installed, files: provenance.files });
+  }
 
   const parser = new SimulatorLogParser();
   fs.writeFileSync(rawLogFile, '');
@@ -211,6 +222,12 @@ async function main() {
   async function processIncomingLine(line) {
     const trimmed = String(line || '').trim();
     if (!trimmed) return;
+    if (provenance && trimmed.includes('[KINESYNC_PROVENANCE]')) {
+      const observed = trimmed.match(/\[KINESYNC_PROVENANCE\] ([a-f0-9]{64})/)?.[1];
+      runtimeProvenance = verifyRuntimeProvenance(provenance, observed);
+      writeJson(path.join(outputDir, 'runtime-provenance.json'), runtimeProvenance);
+    }
+    if (provenance && /\[KINESYNC_SIM\] STAGE_BEGIN/.test(trimmed) && !runtimeProvenance) throw new Error('Stage began before runtime provenance');
     if (/\[KINESYNC_SIM\] STAGE_BEGIN/.test(trimmed) && !parser.appLaunched) { parser.errors.push('Scenario began before app/bridge INIT_READY'); scenarioResolve(); return; }
     try { lifecycle.check(); lifecycle.line(trimmed); }
     catch (error) { parser.errors.push(error.message); scenarioResolve(); return; }
@@ -439,6 +456,7 @@ async function main() {
   console.log('[RUNNER] Test scenario completed. Validating assertions...');
 
   const assertionFailures = parser.validateAssertions();
+  if (provenance && !runtimeProvenance) assertionFailures.push('Missing runtime provenance');
   if (!nativePortraitRestored) assertionFailures.push('Missing native portrait restoration capture');
 
   // Validate screenshots

@@ -452,6 +452,21 @@ function testSchemeDiscovery() {
       assert.throws(() => buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, appDirectory: tempDir, execCommand: wrongRunner }), /not the expected/);
     }
     assert.ok(!fs.existsSync(path.join(testIosDir, '.built_app_path')), 'Failed build must invalidate stale product record');
+    const nativeRunner = (cmd, args, options) => {
+      if (cmd === 'xcodebuild' && args.includes('build')) {
+        assert.equal(fs.existsSync(expectedAppDir), false, 'Native shell must remove the whole stale app, including assets');
+        assert.equal(options.env.KINESYNC_EXTERNAL_BUNDLE, '1');
+        assert.ok(args.includes('GCC_GENERATE_DEBUGGING_SYMBOLS=NO'));
+        assert.ok(args.includes('DEBUG_INFORMATION_FORMAT=dwarf'));
+        fs.mkdirSync(expectedAppDir, { recursive: true });
+        fs.writeFileSync(path.join(expectedAppDir, 'KineSync'), 'fresh native executable');
+        return '';
+      }
+      return mockRunner(cmd, args, options);
+    };
+    assert.equal(buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, nativeOnly: true, execCommand: nativeRunner }), expectedAppDir);
+    assert.equal(fs.existsSync(path.join(expectedAppDir, 'main.jsbundle')), false);
+
   }
 
   console.log('Xcode scheme discovery and validation rules passed.');
@@ -478,6 +493,9 @@ function testInstalledTemplateShell() {
   assert.equal(execute(), '1|1|local|updates', 'Xcode arg alone must lose to actual generated phase');
   configureStandaloneSimulator(ios);
   assert.equal(execute('Release'), 'unset|1|local|updates', 'Release embed phase must override updates skip flag too');
+  process.env.KINESYNC_EXTERNAL_BUNDLE = '1';
+  assert.equal(execute('Release'), '1|1|local|updates', 'External fresh bundles must skip the native build bundle phase');
+  delete process.env.KINESYNC_EXTERNAL_BUNDLE;
   assert.equal(execute(), 'unset|1|local|updates', 'Late local override must win after Debug and updates exports');
   const first = fs.readFileSync(path.join(ios, '.xcode.env.local'), 'utf8');
   configureStandaloneSimulator(ios);
