@@ -35,6 +35,11 @@ for(const [enabled,dev] of [[false,true],[true,false]]) {
  assert.equal(node.type,'exact','actual wrapper disables experimental component');
 }
 const gate=fastHost();assert.equal(gate.NativeDevelopmentVoice({voice,batched:false,presentationWindow:{value:{}}}).type,'exact','tree retains original');assert.equal(gate.NativeDevelopmentVoice({voice,staticLyrics:true,presentationWindow:{value:{}}}).type,'exact','static retains original');
+function paragraphAlpha(node){if(!node||typeof node!=='object')return undefined;if(node.type==='Group'&&node.props.opacity)return node.props.opacity.value;for(const child of [node.props?.children].flat()){const alpha=paragraphAlpha(child);if(alpha!==undefined)return alpha;}}
+for(const background of [false,true])for(const sung of [false,true]){
+ const {tree}=mount(lazyCode,true,{prepareGlyphs:false,background,position:{value:sung?200000:0}},true);
+ assert.equal(paragraphAlpha(tree),sung?background?0.6:0.85:background?0.3:0.5,'paragraph preserves Spicy lead/background sung/unsung paint alpha');
+}
 const host=fastHost(),window={visualActiveLineStartIndex:5,visualActiveLineEndIndex:9,focusLineIndex:5};
 for(let i=0;i<15;i++)assert.equal(host.needsExactGlyphs(i,100000,101000,0,window),i>=5&&i<=11);
 assert.equal(host.needsExactGlyphs(20,1000,9000,2000,window),true,'independent overlapping background');

@@ -145,8 +145,11 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, translation, width]);
   useArrivalShapeAttribution(trace, shaped, translationLayout);
-  const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
-    : spicy ? position.value > voiceEnd ? 0.497 : 0.51 : lineMotion.value.dark);
+  // Match the exact inactive glyph paint alpha; the independent outer Spicy
+  // opacity animation still applies once, through presentation above.
+  const inactiveOpacity = useDerivedValue(() => spicy
+    ? position.value > voiceEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5
+    : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
   const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {
