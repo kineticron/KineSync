@@ -86,6 +86,7 @@ jobs:
           if-no-files-found: error
 
   native-apps:
+    if: github.event.inputs.diagnostic_only != 'true'
     needs: resolve
     runs-on: macos-26
     timeout-minutes: 120
@@ -96,7 +97,7 @@ jobs:
       EXPO_PUBLIC_SIMULATOR_TEST_BUILD: release-arm64
       USE_CCACHE: '1'
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 512M
       CI: '1'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -124,7 +125,7 @@ jobs:
           ccache --get-config compiler_check | grep -Fx content
           echo "CCACHE_DIR=$(cd .. && pwd -P)/kinesync-ios-ccache" >> "${GITHUB_ENV}"
           echo "CCACHE_BASEDIR=$(cd .. && pwd -P)" >> "${GITHUB_ENV}"
-          echo "SIMULATOR_CI_DEADLINE_MS=$(( $(date +%s) * 1000 + 95 * 60 * 1000 ))" >> "${GITHUB_ENV}"
+          echo "SIMULATOR_CI_DEADLINE_MS=$(( $(date +%s) * 1000 + 85 * 60 * 1000 ))" >> "${GITHUB_ENV}"
       - name: Prepare exact sources and strict native fingerprints
         id: pair
         timeout-minutes: 15
@@ -135,44 +136,97 @@ jobs:
           set -euo pipefail
           mkdir -p ExpoLyrics/.expo/pair
           node ExpoLyrics/scripts/run-with-ci-budget.mjs node ExpoLyrics/scripts/prepare-simulator-pair.mjs 2>&1 | tee ExpoLyrics/.expo/pair/prepare.log
-      - name: Restore exact native apps, Pods and compiler work
-        id: native_cache
+      - name: Restore verified baseline native entry
+        id: baseline_cache
+        if: ${{ steps.pair.outputs.baseline_key != '' }}
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: |
-            ../kinesync-native-cache
-            ../kinesync-native-work
-            ../kinesync-ios-ccache
-            ~/Library/Caches/CocoaPods
-            ~/.cocoapods
-          key: ios-sim-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ../kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
+          key: ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.baseline_key }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            ios-sim-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.key }}-
+            ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.baseline_key }}-
+      - name: Restore verified candidate native entry
+        id: candidate_cache
+        if: ${{ steps.pair.outputs.candidate_key != '' && steps.pair.outputs.candidate_key != steps.pair.outputs.baseline_key }}
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ../kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
+          key: ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.candidate_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-sim-app-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.candidate_key }}-
+      - name: Validate restored native entries
+        id: cache_before
+        run: node ExpoLyrics/scripts/inspect-simulator-cache.mjs before
+      - name: Restore bounded content-checked compiler cache on native miss
+        id: compiler_cache
+        if: steps.cache_before.outputs.needs_native == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ../kinesync-ios-ccache
+          key: ios-sim-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.compiler_key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ios-sim-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.pair.outputs.compiler_key }}-
       - name: Build native once on equality and freshly bundle both variants
         id: build
         run: |
           set -euo pipefail
           ccache --zero-stats
           node ExpoLyrics/scripts/run-with-ci-budget.mjs node ExpoLyrics/scripts/build-simulator-pair.mjs 2>&1 | tee ExpoLyrics/.expo/pair/build.log
-      - name: Save validated apps and partial compiler work
-        id: cache_save
-        if: ${{ !cancelled() && steps.build.outcome != 'skipped' && steps.native_cache.outputs.cache-primary-key != '' }}
-        timeout-minutes: 8
+      - name: Measure cache bytes and decide bounded publication
+        id: cache_policy
+        if: ${{ !cancelled() && steps.cache_before.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          ccache --max-size 512M
+          ccache --cleanup
+          node ExpoLyrics/scripts/inspect-simulator-cache.mjs after
+      - name: Save new verified baseline native entry
+        id: baseline_save
+        if: ${{ !cancelled() && steps.cache_policy.outputs.baseline_save == 'true' }}
+        timeout-minutes: 4
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: |
-            ../kinesync-native-cache
-            ../kinesync-native-work
-            ../kinesync-ios-ccache
-            ~/Library/Caches/CocoaPods
-            ~/.cocoapods
-          key: ${{ steps.native_cache.outputs.cache-primary-key }}
-      - name: Verify cache save on server
-        if: ${{ !cancelled() && steps.cache_save.outcome != 'skipped' }}
+          path: ../kinesync-native-cache/${{ steps.pair.outputs.baseline_key }}
+          key: ${{ steps.baseline_cache.outputs.cache-primary-key }}
+      - name: Verify baseline native cache save on server
+        if: ${{ !cancelled() && steps.baseline_save.outcome == 'success' }}
         timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ steps.native_cache.outputs.cache-primary-key }}
+          CACHE_LABEL: baseline-app
+          CACHE_KEY: ${{ steps.baseline_cache.outputs.cache-primary-key }}
+        run: node ExpoLyrics/scripts/verify-ci-cache.mjs
+      - name: Save new verified candidate native entry
+        id: candidate_save
+        if: ${{ !cancelled() && steps.cache_policy.outputs.candidate_save == 'true' }}
+        timeout-minutes: 4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ../kinesync-native-cache/${{ steps.pair.outputs.candidate_key }}
+          key: ${{ steps.candidate_cache.outputs.cache-primary-key }}
+      - name: Verify candidate native cache save on server
+        if: ${{ !cancelled() && steps.candidate_save.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_LABEL: candidate-app
+          CACHE_KEY: ${{ steps.candidate_cache.outputs.cache-primary-key }}
+        run: node ExpoLyrics/scripts/verify-ci-cache.mjs
+      - name: Save bounded compiler work only after a native miss
+        id: compiler_save
+        if: ${{ !cancelled() && steps.cache_policy.outputs.compiler_save == 'true' }}
+        timeout-minutes: 3
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ../kinesync-ios-ccache
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+      - name: Verify compiler cache save on server
+        if: ${{ !cancelled() && steps.compiler_save.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_LABEL: compiler
+          CACHE_KEY: ${{ steps.compiler_cache.outputs.cache-primary-key }}
         run: node ExpoLyrics/scripts/verify-ci-cache.mjs
       - name: Native cache diagnostics
         if: always()
@@ -187,7 +241,7 @@ jobs:
           import fs from 'node:fs';
           const steps = JSON.parse(process.env.STEP_RESULTS);
           const status = { candidate: process.env.CANDIDATE_SHA, baseline: process.env.BASELINE_SHA,
-            steps: Object.fromEntries(['pair', 'native_cache', 'build', 'cache_save'].map(id => [id, steps[id]?.outcome || 'not reached'])) };
+            steps: Object.fromEntries(['pair', 'baseline_cache', 'candidate_cache', 'build', 'cache_policy', 'baseline_save', 'candidate_save', 'compiler_save'].map(id => [id, steps[id]?.outcome || 'not reached'])) };
           fs.writeFileSync('ExpoLyrics/.expo/pair/native-status.json', JSON.stringify(status, null, 2));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Native app preparation: ${JSON.stringify(status)}\n`);
           STATUS
@@ -219,6 +273,7 @@ jobs:
           retention-days: 14
 
   ios-simulator-test:
+    if: github.event.inputs.diagnostic_only != 'true'
     needs: [resolve, native-apps]
     runs-on: macos-26
     timeout-minutes: 55

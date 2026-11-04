@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildSimulatorApp } from './build-simulator-app.mjs';
-import { mayShareNative, validateNativeCache, saveNativeCache, treeManifest, digest, readJson, writeJson, verifyVariantApp, materializeVariantResources, buildVariantPair } from './simulator-app-reuse.mjs';
+import { mayShareNative, validateNativeCache, saveNativeCache, treeManifest, digest, readJson, writeJson, verifyVariantApp, materializeVariantResources, buildVariantPair, provenanceEntry, resolveHermesCompiler, hermesCompileArguments } from './simulator-app-reuse.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const stateDir = path.join(root, 'ExpoLyrics/.expo/pair');
 const { variants, context } = readJson(path.join(stateDir, 'plan.json'));
@@ -28,14 +28,14 @@ function exportFresh(v) {
   fs.rmSync(destination, { recursive: true, force: true });
   fs.mkdirSync(destination, { recursive: true });
   const identity = { sourceSha: v.sourceSha, harnessSha: v.harnessSha, variant: v.variant, nativeKey: v.identity.key,
-    // Exact overlaid tree and build flags are bound to the runtime marker.
+    // Commit tree is unmodified source; the separately hashed trusted overlay and flags complete its identity.
     sourceTree: capture('git', ['rev-parse', 'HEAD^{tree}'], v.directory), harness: context.harness, env: context.env };
   const runtimeId = digest(identity);
   const entry = capture(process.execPath, ['-e', "require('expo/scripts/resolveAppEntry')", v.project, 'ios', 'absolute'], v.project);
   if (!path.isAbsolute(entry) || !fs.statSync(entry).isFile()) throw new Error('Invalid resolved bundle entry');
   const wrapper = path.join(v.project, '.expo/ci-provenance-entry.js');
   fs.mkdirSync(path.dirname(wrapper), { recursive: true });
-  fs.writeFileSync(wrapper, `console.info(${JSON.stringify(`[KINESYNC_PROVENANCE] ${runtimeId}`)});\nrequire(${JSON.stringify(entry)});\n`);
+  fs.writeFileSync(wrapper, provenanceEntry(runtimeId, entry));
   const log = fs.openSync(path.join(stateDir, `${v.variant}-bundle.log`), 'w');
   const timingFile = path.join(stateDir, `${v.variant}-bundle-timing.json`);
   fs.rmSync(timingFile, { force: true });
@@ -66,22 +66,12 @@ function nativeShell(v) {
   }
   console.log(`[NATIVE] ${v.variant}: cache miss, invalid cache, or ineligible fingerprint; building separately`);
   fs.rmSync(directory, { recursive: true, force: true });
-  // Prebuild first; restore Pods afterwards so --clean cannot erase a restored cache.
+  // Complete native generation before Metro may crawl this source tree.
   timed(`${v.variant}:prebuild`, () => run(process.execPath, ['node_modules/expo/bin/cli', 'prebuild', '--clean', '--platform', 'ios', '--no-install'], v.project));
   const ios = path.join(v.project, 'ios');
   const podfile = fs.readFileSync(path.join(ios, 'Podfile'), 'utf8');
   if (!podfile.includes(':ccache_enabled => ccache_enabled?(podfile_properties)') || !podfile.includes("return ENV['USE_CCACHE'] == '1'")) throw new Error('Installed template no longer passes ccache_enabled=true to RN');
-  const podCache = path.join(nativeWork, `${v.variant}-pods`);
-  const podKey = digest({ native: key, project: v.project, toolchain: context.toolchain, podfile });
-  const podStamp = path.join(podCache, 'stamp.json');
-  try {
-    const stamp = readJson(podStamp);
-    if (stamp.key === podKey && digest(stamp.files) === digest(treeManifest(path.join(podCache, 'payload'), { allowExternalLinks: true }))) {
-      fs.cpSync(path.join(podCache, 'payload/Pods'), path.join(ios, 'Pods'), { recursive: true, verbatimSymlinks: true });
-      fs.copyFileSync(path.join(podCache, 'payload/Podfile.lock'), path.join(ios, 'Podfile.lock'));
-    }
-  } catch { console.log('[PODS] No valid exact Pods snapshot; using pod install'); }
-  // Even restored Pods always go through dependency resolution; never trust a cached installation alone.
+  // No persisted Pods or DerivedData snapshots: a native miss resolves Pods into this fresh source tree.
   const podLog = path.join(stateDir, `${v.variant}-pods.log`);
   timed(`${v.variant}:pods`, () => {
     const fd = fs.openSync(podLog, 'w');
@@ -98,16 +88,12 @@ function nativeShell(v) {
     properties, ccacheEnabled: true, compilerCheck, rnCorePrebuilt: /React-Core-prebuilt/.test(lock), rnDependencies: /ReactNativeDependencies/.test(lock),
     podsLockHash: digest(lock), note: 'Installed template defaults retained; source fallback is supported. See Pods log and lock.' };
   writeJson(path.join(stateDir, `${v.variant}-precompiled.json`), precompiled);
-  // Update only after successful dependency installation. Full integrity check rejects truncated/stale Pods.
-  fs.rmSync(podCache, { recursive: true, force: true });
-  fs.mkdirSync(path.join(podCache, 'payload'), { recursive: true });
-  fs.cpSync(path.join(ios, 'Pods'), path.join(podCache, 'payload/Pods'), { recursive: true, verbatimSymlinks: true });
-  fs.copyFileSync(path.join(ios, 'Podfile.lock'), path.join(podCache, 'payload/Podfile.lock'));
-  writeJson(podStamp, { key: podKey, files: treeManifest(path.join(podCache, 'payload'), { allowExternalLinks: true }) });
-  const app = timed(`${v.variant}:native-build`, () => buildSimulatorApp({ iosDirectory: ios,
-    derivedDataPath: path.join(nativeWork, `${v.variant}-derived`), nativeOnly: true }));
-  const hermesc = path.join(ios, 'Pods/hermes-engine/destroot/bin/hermesc');
-  // Use the compiler delivered alongside the actual Pods VM, never a potentially different npm compiler.
+  const built = timed(`${v.variant}:native-build`, () => buildSimulatorApp({ iosDirectory: ios,
+    derivedDataPath: path.join(nativeWork, `${v.variant}-derived`), nativeOnly: true, returnBuildDetails: true }));
+  const app = built.appPath;
+  const hermesc = resolveHermesCompiler(built.buildSettings, ios);
+  precompiled.hermesCompiler = { effectiveSetting: built.buildSettings.HERMES_CLI_PATH || null, resolved: hermesc };
+  writeJson(path.join(stateDir, `${v.variant}-precompiled.json`), precompiled);
   saveNativeCache(directory, v.identity, app, hermesc, precompiled);
   return { directory, cacheHit: false };
 }
@@ -116,8 +102,7 @@ function assemble(v, shell, bundle) {
   const payload = path.join(shell.directory, 'payload');
   const app = path.join(output, `${v.variant}/KineSync.app`);
   const exported = materializeVariantResources(path.join(payload, 'KineSync.app'), app, bundle.destination);
-  timed(`${v.variant}:hermes`, () => run(path.join(payload, 'hermesc'), ['-emit-binary', '-max-diagnostic-width=80', '-O',
-    '-out', path.join(app, 'main.jsbundle'), path.join(bundle.destination, 'main.jsbundle')], v.project));
+  timed(`${v.variant}:hermes`, () => run(path.join(payload, 'hermesc'), hermesCompileArguments(path.join(bundle.destination, 'main.jsbundle'), path.join(app, 'main.jsbundle')), v.project));
   if (!fs.statSync(path.join(app, 'main.jsbundle')).size) throw new Error('Missing fresh Hermes bundle');
   if (capture('xcrun', ['lipo', '-archs', path.join(app, 'KineSync')]) !== 'arm64' ||
       !/platform\s+IOSSIMULATOR\b/.test(capture('xcrun', ['vtool', '-show-build', path.join(app, 'KineSync')]))) throw new Error('Invalid cached native executable');

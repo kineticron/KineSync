@@ -1,5 +1,6 @@
 // CI-only native shell cache. Never cache a variant's JS or Metro assets.
 import fs from 'node:fs';
+import { Buffer } from 'node:buffer';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -141,14 +142,65 @@ export async function buildVariantPair(variants, { exportBundle, buildNative, as
   const shared = mayShareNative(variants.baseline.identity, variants.candidate.identity);
   let activeBundle;
   try {
-    activeBundle = exportBundle(variants.baseline);
     const baselineShell = buildNative(variants.baseline);
+    // Baseline's tree is now stable. Only a different candidate tree may build during its export.
+    activeBundle = exportBundle(variants.baseline);
+    const candidateShell = shared ? baselineShell : buildNative(variants.candidate);
     await activeBundle.finish();
     assemble(variants.baseline, baselineShell, activeBundle);
     activeBundle = exportBundle(variants.candidate);
-    const candidateShell = shared ? baselineShell : buildNative(variants.candidate);
     await activeBundle.finish();
     assemble(variants.candidate, candidateShell, activeBundle);
   } finally { activeBundle?.stop(); }
   return { shared };
+}
+
+export const MAX_NATIVE_CACHE_BYTES = 1024 * 1024 * 1024;
+export const MAX_COMPILER_CACHE_BYTES = 512 * 1024 * 1024;
+export function directoryBytes(directory) {
+  if (!fs.existsSync(directory)) return 0;
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink()) return Buffer.byteLength(fs.readlinkSync(directory));
+  if (stat.isFile()) return stat.size;
+  return fs.readdirSync(directory).reduce((total, name) => total + directoryBytes(path.join(directory, name)), 0);
+}
+
+// Per-native identity only: changing the other variant cannot invalidate this entry.
+export function nativeCacheToken(identity) {
+  return identity?.eligible && /^[a-f0-9]{64}$/.test(identity.key) ? identity.key : null;
+}
+
+export function nativeCacheState(cacheRoot, identity, previouslyValid = false, limit = MAX_NATIVE_CACHE_BYTES) {
+  const token = nativeCacheToken(identity);
+  if (!token) return { eligible: false, valid: false, bytes: 0, save: false, reason: 'fingerprint ineligible' };
+  const directory = path.join(cacheRoot, token);
+  const valid = validateNativeCache(directory, identity);
+  const bytes = directoryBytes(directory);
+  return { eligible: true, valid, bytes, save: valid && !previouslyValid && bytes <= limit,
+    reason: !valid ? 'missing or invalid' : previouslyValid ? 'verified hit; no new snapshot' : bytes > limit ? 'entry exceeds byte cap' : 'new verified entry' };
+}
+
+export function provenanceEntry(runtimeId, entry) {
+  if (!/^[a-f0-9]{64}$/.test(runtimeId) || !path.isAbsolute(entry)) throw new Error('Invalid provenance entry inputs');
+  return `console.info(${JSON.stringify(`[KINESYNC_PROVENANCE] ${runtimeId}`)});\nrequire(${JSON.stringify(entry)});\n`;
+}
+
+// Follow the app target's effective Pods-generated setting, including source-built Hermes.
+// Do not guess a compiler from npm or choose any existing binary from another VM train.
+export function resolveHermesCompiler(settings, iosDirectory) {
+  const variables = { ...settings, PODS_ROOT: settings.PODS_ROOT || path.join(iosDirectory, 'Pods') };
+  let compiler = settings.HERMES_CLI_PATH || '$(PODS_ROOT)/hermes-engine/destroot/bin/hermesc';
+  for (let pass = 0; pass < 10 && /\$[({]/.test(compiler); pass++) {
+    compiler = compiler.replace(/\$\(([^)]+)\)|\$\{([^}]+)\}/g, (match, a, b) => variables[a || b] ?? match);
+  }
+  if (!path.isAbsolute(compiler) || /\$[({]/.test(compiler)) throw new Error('Unresolved effective HERMES_CLI_PATH from app build settings');
+  try {
+    if (!fs.statSync(compiler).isFile()) throw new Error('not a file');
+    fs.accessSync(compiler, fs.constants.X_OK);
+  } catch { throw new Error(`Matching Hermes compiler missing or not executable at effective HERMES_CLI_PATH: ${compiler}`); }
+  return fs.realpathSync(compiler);
+}
+
+export function hermesCompileArguments(input, output) {
+  return ['-emit-binary', '-max-diagnostic-width=80', '-O', '-w', '-out', output, input];
 }

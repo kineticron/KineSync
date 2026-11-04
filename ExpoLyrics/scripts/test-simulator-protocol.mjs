@@ -340,15 +340,34 @@ function testManualWorkflow() {
   assert.match(build.run, /build-simulator-pair.mjs/);
   assert.equal(prep.env.BASELINE_SHA, '${{ needs.resolve.outputs.baseline }}');
   assert.equal(prep.env.CANDIDATE_SHA, '${{ needs.resolve.outputs.candidate }}');
-  const cache = native.steps.find(step => step.id === 'native_cache');
-  const save = native.steps.find(step => step.id === 'cache_save');
-  assert.equal(cache.with.path, save.with.path);
-  assert.ok(cache.with.key.includes('steps.pair.outputs.key'));
-  assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}$/, '-'));
-  assert.equal(save['timeout-minutes'], 8);
-  assert.ok(!save['continue-on-error']);
-  assert.ok(save.if.includes('!cancelled()'));
+  assert.equal(native.env.CCACHE_MAXSIZE, '512M');
+  for (const variant of ['baseline', 'candidate']) {
+    const cache = native.steps.find(step => step.id === `${variant}_cache`);
+    const save = native.steps.find(step => step.id === `${variant}_save`);
+    assert.equal(cache.with.path, save.with.path);
+    assert.equal(cache.with.path, `../kinesync-native-cache/\${{ steps.pair.outputs.${variant}_key }}`);
+    assert.ok(cache.with.key.includes(`steps.pair.outputs.${variant}_key`));
+    assert.ok(!cache.with.key.includes(`steps.pair.outputs.${variant === 'baseline' ? 'candidate' : 'baseline'}_key`));
+    assert.equal(cache.with['restore-keys'].trim(), cache.with.key.replace(/-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}$/, '-'));
+    assert.equal(save['timeout-minutes'], 4);
+    assert.ok(!save['continue-on-error']);
+    assert.ok(save.if.includes(`steps.cache_policy.outputs.${variant}_save == 'true'`));
+  }
+  const compiler = native.steps.find(step => step.id === 'compiler_cache');
+  assert.equal(compiler.with.path, '../kinesync-ios-ccache');
+  assert.match(compiler.if, /needs_native == 'true'/);
+  assert.ok(!native.steps.filter(step => step.uses?.includes('actions/cache/')).some(step => /Pods|Derived|CocoaPods|native-work/.test(step.with.path)));
+  const policy = native.steps.find(step => step.id === 'cache_policy');
+  assert.match(policy.run, /ccache --cleanup/);
+  assert.match(policy.run, /inspect-simulator-cache.mjs after/);
   assert.ok(native.steps.some(step => step.run?.includes('verify-ci-cache.mjs')));
+  for (const name of ['resolve', 'native-apps', 'ios-simulator-test']) {
+    assert.equal(workflow.jobs[name].if, "github.event.inputs.diagnostic_only != 'true'", `${name} must explicitly skip diagnostic-only requests`);
+    assert.ok(!workflow.jobs[name].if.includes('always()'));
+  }
+  assert.equal(workflow.jobs.diagnostic.if, "github.event.inputs.diagnostic_only == 'true'");
+  assert.equal(native.needs, 'resolve');
+  assert.deepEqual(job.needs, ['resolve', 'native-apps']);
   assert.match(workflow.jobs.resolve.steps.find(step => step.id === 'refs').run, /resolve-trusted-simulator-baseline.mjs/);
   const compare = workflow.jobs.compare;
   assert.ok(compare.if.includes('always()'));

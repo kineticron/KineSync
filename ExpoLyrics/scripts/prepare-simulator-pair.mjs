@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareBaselineHarness } from './prepare-baseline-harness.mjs';
-import { nativeIdentity, digest, sha256, treeManifest, writeJson } from './simulator-app-reuse.mjs';
+import { nativeIdentity, digest, sha256, treeManifest, writeJson, nativeCacheToken } from './simulator-app-reuse.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const stateDir = path.join(root, 'ExpoLyrics/.expo/pair');
 fs.mkdirSync(stateDir, { recursive: true });
@@ -20,7 +20,10 @@ const toolchain = {
 };
 if (toolchain.arch !== 'arm64' || !toolchain.xcode.startsWith('Xcode 26.6\n') || toolchain.sdk !== '26.5') throw new Error('Unsupported native toolchain');
 const overlay = Object.fromEntries(['lib/fixtures/simulator-test-fixtures.ts', 'lib/simulator-playback-clock.ts', 'lib/simulator-test-bridge.ts', 'lib/simulator-test-harness.ts', 'components/simulator-test-controller.tsx'].map(name => [name, sha256(fs.readFileSync(path.join(root, 'ExpoLyrics', name)))]));
-const context = { toolchain, harness: digest({ scripts: treeManifest(path.join(root, 'ExpoLyrics/scripts')), overlay }),
+const context = { toolchain,
+  // Shared path namespace preserves canonical-path compatibility without coupling native identities.
+  sourceRoots: ['baseline', 'candidate'].map(variant => path.resolve(root, `../kinesync-source-${variant}/ExpoLyrics`)),
+  harness: digest({ scripts: treeManifest(path.join(root, 'ExpoLyrics/scripts')), overlay }),
   build: 'Release-arm64-no-dsym-external-bundle-v1',
   env: { CI: '1', EXPO_PUBLIC_SIMULATOR_TEST: '1', EXPO_PUBLIC_SIMULATOR_TEST_BUILD: 'release-arm64', USE_CCACHE: '1', CCACHE_COMPILERCHECK: 'content', EXPO_NO_DOTENV: '1' },
 };
@@ -42,8 +45,11 @@ for (const variant of ['baseline', 'candidate']) {
   variants[variant] = { directory, project, variant, sourceSha, harnessSha, identity: await nativeIdentity(project, context) };
   writeJson(path.join(stateDir, `${variant}-fingerprint.json`), variants[variant].identity);
 }
-const key = digest({ context, roots: Object.values(variants).map(v => v.project), identities: Object.values(variants).map(v => v.identity.key),
-  // No fingerprint -> no cross-run fallback cache.
-  failureNonce: Object.values(variants).some(v => !v.identity.eligible) ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}` : null });
-writeJson(path.join(stateDir, 'plan.json'), { variants, context, key });
-fs.appendFileSync(process.env.GITHUB_OUTPUT, `key=${key}\n`);
+const compilerKey = digest({ toolchain, harness: context.harness,
+  roots: Object.values(variants).map(v => v.project), compilerCheck: 'content', maxSize: '512M' });
+writeJson(path.join(stateDir, 'plan.json'), { variants, context, compilerKey });
+for (const [variant, source] of Object.entries(variants)) {
+  const token = nativeCacheToken(source.identity);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `${variant}_key=${token || ''}\n`);
+}
+fs.appendFileSync(process.env.GITHUB_OUTPUT, `compiler_key=${compilerKey}\n`);

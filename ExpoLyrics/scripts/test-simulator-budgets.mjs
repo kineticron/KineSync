@@ -77,7 +77,7 @@ try {
   const native = workflow.jobs['native-apps'];
   assert.equal(native['timeout-minutes'], 120);
   assert.equal(job['timeout-minutes'], 55);
-  assert.match(native.steps.find(s => s.name === 'Select and verify installed toolchain').run, /95 \* 60 \* 1000/);
+  assert.match(native.steps.find(s => s.name === 'Select and verify installed toolchain').run, /85 \* 60 \* 1000/);
   assert.match(steps.find(s => s.name === 'Record job work start').run, /45 \* 60 \* 1000/);
   assert.match(steps.find(s => s.id === 'scenario').run, /--timeout-minutes 40/);
   assert.equal(steps.find(s => s.id === 'scenario')['timeout-minutes'], 40);

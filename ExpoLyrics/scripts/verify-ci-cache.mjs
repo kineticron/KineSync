@@ -31,18 +31,21 @@ export async function verifyCache({ key, ref, repository, token, api = 'https://
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const label = process.env.CACHE_LABEL;
+  if (label && !/^[a-z][a-z-]{0,31}$/.test(label)) throw new Error('Invalid cache evidence label');
+  const evidenceLabel = label || (process.env.CACHE_KEY?.startsWith('ios-sim-pods-') ? 'pods' : 'compiler');
   try {
     const result = await verifyCache({ key: process.env.CACHE_KEY, ref: process.env.GITHUB_REF, repository: process.env.GITHUB_REPOSITORY, token: process.env.GH_TOKEN, api: process.env.GITHUB_API_URL });
     console.log(`Cache save server-confirmed: ${JSON.stringify(result)}`);
     const dir = path.resolve('ExpoLyrics/.expo');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `cache-verification-${result.key.startsWith('ios-sim-pods-') ? 'pods' : 'compiler'}.json`), JSON.stringify(result, null, 2));
+    fs.writeFileSync(path.join(dir, `cache-verification-${evidenceLabel}.json`), JSON.stringify(result, null, 2));
     if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `cache-id=${result.id}\ncache-size=${result.sizeInBytes}\nverified=true\n`);
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nCache save verified on server: ID ${result.id}, ${result.sizeInBytes} bytes, key \`${result.key}\`.\n`);
   } catch (error) {
     console.error(error.message);
     fs.mkdirSync('ExpoLyrics/.expo', { recursive: true });
-    fs.writeFileSync(`ExpoLyrics/.expo/cache-verification-${process.env.CACHE_KEY?.startsWith('ios-sim-pods-') ? 'pods' : 'compiler'}.json`, JSON.stringify({ verified: false, key: process.env.CACHE_KEY, ref: process.env.GITHUB_REF, error: error.message }, null, 2));
+    fs.writeFileSync(`ExpoLyrics/.expo/cache-verification-${evidenceLabel}.json`, JSON.stringify({ verified: false, key: process.env.CACHE_KEY, ref: process.env.GITHUB_REF, error: error.message }, null, 2));
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\nCache save verification FAILED: ${error.message}\n`);
     process.exitCode = 1;
   }

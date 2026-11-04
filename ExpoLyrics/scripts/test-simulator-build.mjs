@@ -466,6 +466,9 @@ function testSchemeDiscovery() {
     };
     assert.equal(buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, nativeOnly: true, execCommand: nativeRunner }), expectedAppDir);
     assert.equal(fs.existsSync(path.join(expectedAppDir, 'main.jsbundle')), false);
+    const details = buildSimulatorApp({ derivedDataPath: testDerivedDir, iosDirectory: testIosDir, nativeOnly: true, returnBuildDetails: true, execCommand: nativeRunner });
+    assert.equal(details.appPath, expectedAppDir);
+    assert.equal(details.buildSettings.PRODUCT_BUNDLE_IDENTIFIER, 'dev.kineticron.KineSync');
 
   }
 

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { digest, treeManifest, writeJson, nativeIdentity, mayShareNative, validateNativeCache, saveNativeCache,
-  materializeVariantResources, verifyVariantApp, verifyRuntimeProvenance, buildVariantPair } from './simulator-app-reuse.mjs';
+  materializeVariantResources, verifyVariantApp, verifyRuntimeProvenance, buildVariantPair, nativeCacheToken, nativeCacheState, directoryBytes, resolveHermesCompiler, hermesCompileArguments } from './simulator-app-reuse.mjs';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sim-reuse-'));
 const file = (name, data) => { fs.mkdirSync(path.dirname(name), { recursive: true }); fs.writeFileSync(name, data); };
 const a = { eligible: true, key: digest('native-A') }, b = { eligible: true, key: digest('native-B') };
@@ -17,6 +19,13 @@ try {
     });
     assert.equal(builds, expected); assert.equal(bundles, 2); assert.equal(assemblies, 2); assert.equal(stopped, 1);
   }
+  const events = [];
+  await buildVariantPair({ baseline: { variant: 'baseline', identity: a }, candidate: { variant: 'candidate', identity: b } }, {
+    buildNative: v => { events.push(`build:${v.variant}`); return {}; },
+    exportBundle: v => { events.push(`export:${v.variant}`); return { finish: async () => events.push(`finish:${v.variant}`), stop() {} }; },
+    assemble: v => events.push(`assemble:${v.variant}`),
+  });
+  assert.deepEqual(events, ['build:baseline', 'export:baseline', 'build:candidate', 'finish:baseline', 'assemble:baseline', 'export:candidate', 'finish:candidate', 'assemble:candidate'], 'Never mutate a tree while its Metro export crawls it; only the other tree may build');
   let assembled = false, stopped = false;
   await assert.rejects(buildVariantPair({ baseline: { identity: a }, candidate: { identity: a } }, {
     exportBundle: () => ({ finish: async () => { throw new Error('export failed'); }, stop: () => { stopped = true; } }),
@@ -36,6 +45,22 @@ try {
   file(path.join(native, 'KineSync'), 'arm64 native'); file(path.join(native, 'Info.plist'), 'native config'); file(compiler, 'matching compiler');
   saveNativeCache(cache, a, native, compiler);
   assert.equal(validateNativeCache(cache, a), true);
+  // An unchanged baseline uses its own token even when the candidate native identity changes.
+  assert.equal(nativeCacheToken(a), a.key);
+  assert.equal(nativeCacheToken({ ...a, eligible: false }), null);
+  const keyedRoot = path.join(root, 'per-native'), keyedEntry = path.join(keyedRoot, a.key);
+  saveNativeCache(keyedEntry, a, native, compiler);
+  const measured = nativeCacheState(keyedRoot, a);
+  assert.equal(measured.bytes, directoryBytes(keyedEntry));
+  assert.ok(measured.bytes > 0);
+  assert.equal(measured.save, true);
+  assert.equal(nativeCacheState(keyedRoot, a, true).save, false, 'Warm hits must not upload a duplicate immutable snapshot');
+  assert.equal(nativeCacheState(keyedRoot, a, false, measured.bytes - 1).save, false, 'Oversize entries stay usable but are not persisted');
+  assert.equal(nativeCacheState(keyedRoot, b).valid, false);
+  assert.equal(nativeCacheState(keyedRoot, a).valid, true, 'Changing candidate cannot prevent baseline retrieval');
+  file(path.join(keyedEntry, 'payload/hermesc'), 'damaged');
+  assert.equal(nativeCacheState(keyedRoot, a).save, false);
+
   assert.equal(validateNativeCache(cache, b), false);
   assert.equal(validateNativeCache(cache, { eligible: false, key: a.key }), false);
   file(path.join(cache, 'payload/hermesc'), 'corrupt'); assert.equal(validateNativeCache(cache, a), false);
@@ -45,6 +70,27 @@ try {
   fs.unlinkSync(path.join(cache, 'payload/KineSync.app/KineSync')); assert.equal(validateNativeCache(cache, a), false);
   file(path.join(native, 'main.jsbundle'), 'must not cache'); assert.throws(() => saveNativeCache(cache, a, native, compiler), /Refusing to cache JS/);
   fs.unlinkSync(path.join(native, 'main.jsbundle'));
+  const ios = path.join(root, 'ios'), pods = path.join(ios, 'Pods');
+  for (const relative of ['hermes-engine/destroot/bin/hermesc', 'hermes-engine/build_host_hermesc/bin/hermesc']) {
+    const actualCompiler = path.join(pods, relative); file(actualCompiler, 'matching VM compiler'); fs.chmodSync(actualCompiler, 0o755);
+    const settings = { PODS_ROOT: pods, HERMES_CLI_PATH: '${PODS_ROOT}/' + relative };
+    assert.equal(resolveHermesCompiler(settings, ios), actualCompiler);
+  }
+  const podSelectedNpm = path.join(root, 'node_modules/hermes-compiler/hermesc/osx-bin/hermesc');
+  file(podSelectedNpm, 'Pod-selected compiler'); fs.chmodSync(podSelectedNpm, 0o755);
+  assert.equal(resolveHermesCompiler({ PODS_ROOT: pods, HERMES_CLI_PATH: '$(PODS_ROOT)/../../node_modules/hermes-compiler/hermesc/osx-bin/hermesc' }, ios), podSelectedNpm);
+  assert.throws(() => resolveHermesCompiler({ PODS_ROOT: pods, HERMES_CLI_PATH: '$(PODS_ROOT)/missing/bin/hermesc' }, ios), /Matching Hermes compiler missing/, 'Never substitute an existing default for a missing effective compiler');
+  assert.throws(() => resolveHermesCompiler({ HERMES_CLI_PATH: '$(UNKNOWN)/hermesc' }, ios), /Unresolved/);
+  fs.chmodSync(podSelectedNpm, 0o644);
+  assert.throws(() => resolveHermesCompiler({ HERMES_CLI_PATH: podSelectedNpm }, ios), /not executable/);
+  if (process.platform === 'linux') {
+    const require = createRequire(import.meta.url);
+    const actualCompiler = path.join(path.dirname(require.resolve('hermes-compiler/package.json')), 'hermesc/linux64-bin/hermesc');
+    const raw = path.join(root, 'actual-provenance.js'), bytecode = path.join(root, 'actual-provenance.hbc');
+    file(raw, "console.info('[KINESYNC_PROVENANCE] compiler regression');");
+    execFileSync(actualCompiler, hermesCompileArguments(raw, bytecode));
+    assert.ok(fs.statSync(bytecode).size > 0, 'Actual shipped compiler accepts Release -O/-w invocation and produces bytecode');
+  }
   const bundle = path.join(root, 'fresh'), app = path.join(root, 'assembled.app');
   file(path.join(bundle, 'main.jsbundle'), 'fresh JS'); file(path.join(bundle, 'assets/new.png'), 'new image');
   file(path.join(app, 'assets/removed.png'), 'stale image'); file(path.join(app, 'main.jsbundle'), 'stale JS');

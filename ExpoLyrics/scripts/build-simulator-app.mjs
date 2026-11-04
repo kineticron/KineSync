@@ -257,7 +257,7 @@ export function buildSimulatorApp(options = {}) {
   fs.writeFileSync(builtAppRecord, appPath, 'utf8');
   console.log(`[BUILD] Successfully built and codesigned app bundle at: ${appPath}`);
 
-  return appPath;
+  return options.returnBuildDetails ? { appPath, buildSettings: discovered.buildSettings } : appPath;
 }
 
 const isDirectExecution = process.argv[1] && (
