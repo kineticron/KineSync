@@ -472,7 +472,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [...(pictureTraceEnabled ? [measurement] : []), active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  }, [measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 };
