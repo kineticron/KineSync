@@ -423,72 +423,184 @@ assert.ok(Math.abs(frame40HostResidual) < 1.0, 'Frame 40 host residual has nearl
 assert.ok(frame40RowP > 0, 'Frame 40 row spring is still settling');
 assert.ok(frame40LowerBoundary >= 252 + frame40RowP - 0.001, 'Frame 40 row settling is still fully protected after host settled');
 
-// 8c-2. Watchdog Reproduction & Regression: Transform->Uniform 1-Frame Scheduling Skew
+// 8c-2. Watchdog Reproduction & Actual-Hook Regression: Transform->Uniform Scheduling Skew
 // Under commit 364e619 without velocity lead, when the mask uniform is scheduled one frame
 // before row transform execution (mask reads frame N-1 state while row renders with frame N state),
-// the row advanced ahead of the mask by exactly 3.73px at peak velocity (reproduced below).
-// With measured per-frame velocity lead (vLead based on harmonic oscillator maximum velocity),
-// verify ZERO breach across all 120 frames under 1-frame transform->uniform scheduling lag!
+// the row advanced ahead of the mask by up to 3.73px at peak velocity (reproduced below).
+//
+// 1) Reproduction of uncompensated watchdog slip (commit 364e619):
 const watchdogP0 = 63.7; // Standard line displacement in AMLL spring
-let schedHost = { p: watchdogP0, v: 0, stiffness: 90, damping: 15 };
-const schedRowCfg = amllScrollSpring({ firstVisible: 0, index: 1, interval: 800, interlude: false }, 1);
-let schedRow = { p: watchdogP0, v: 0, renderedP: watchdogP0, delay: schedRowCfg.delay, stiffness: schedRowCfg.stiffness, damping: schedRowCfg.damping };
-
-let prevFrameMotion = {
-  row: 0,
-  cell: 0,
-  vLead: Math.abs(watchdogP0) * 0.085,
-  settled: false,
-};
-let schedulingBreach = 0;
+let uncompHost = { p: watchdogP0, v: 0, stiffness: 90, damping: 15 };
+const uncompRowCfg = amllScrollSpring({ firstVisible: 0, index: 1, interval: 800, interlude: false }, 1);
+let uncompRow = { p: watchdogP0, v: 0, renderedP: watchdogP0, delay: uncompRowCfg.delay, stiffness: uncompRowCfg.stiffness, damping: uncompRowCfg.damping };
+let prevUncompDy = 0;
 let reproducedMaxLag = 0;
-
 for (let frame = 1; frame <= 120; frame++) {
-  const nextH = stepAmllSpring(schedHost, 0, 0.9, schedHost.damping, schedHost.stiffness, dt);
+  const nextH = stepAmllSpring(uncompHost, 0, 0.9, uncompHost.damping, uncompHost.stiffness, dt);
   const hostSettled = Math.abs(nextH.p) < 0.01 && Math.abs(nextH.v) < 0.01;
-  schedHost = { ...schedHost, p: hostSettled ? 0 : nextH.p, v: hostSettled ? 0 : nextH.v };
-
-  if (schedRow.delay > 0) {
-    schedRow = { ...schedRow, renderedP: schedRow.p, delay: Math.max(0, schedRow.delay - dt) };
+  uncompHost = { ...uncompHost, p: hostSettled ? 0 : nextH.p, v: hostSettled ? 0 : nextH.v };
+  if (uncompRow.delay > 0) {
+    uncompRow = { ...uncompRow, renderedP: uncompRow.p, delay: Math.max(0, uncompRow.delay - dt) };
   } else {
-    const nextR = stepAmllSpring(schedRow, 0, 0.9, schedRow.damping, schedRow.stiffness, dt);
+    const nextR = stepAmllSpring(uncompRow, 0, 0.9, uncompRow.damping, uncompRow.stiffness, dt);
     const rowSettled = Math.abs(nextR.p) < 0.01 && Math.abs(nextR.v) < 0.01;
-    schedRow = { ...schedRow, p: rowSettled ? 0 : nextR.p, v: rowSettled ? 0 : nextR.v, renderedP: rowSettled ? 0 : nextR.p };
+    uncompRow = { ...uncompRow, p: rowSettled ? 0 : nextR.p, v: rowSettled ? 0 : nextR.v, renderedP: rowSettled ? 0 : nextR.p };
   }
-  const currentDy = schedRow.renderedP - schedHost.p;
-  const isSettled = schedRow.p === 0 && schedHost.p === 0;
-  const vLead = isSettled ? 0 : Math.max(
-    Math.abs(schedRow.v) * dt,
-    Math.abs(schedHost.v) * dt,
-    Math.abs(schedRow.p) * 0.085,
-    Math.abs(schedHost.p) * 0.085,
-    0.01
-  );
-  const currentMotion = { row: currentDy, cell: 0, vLead, settled: isSettled };
-
-  // Rendered row on frame N uses currentMotion (actual physical position):
-  const renderedRowBottom = amllRows[1].y + amllRows[1].height + currentDy;
-
-  // 1) Test WITHOUT velocity lead (reproducing commit 364e619 watchdog 3.73px slip):
-  const uncompensatedMaskBottom = amllRows[1].y + amllRows[1].height + prevFrameMotion.row;
-  const uncompensatedLag = renderedRowBottom - uncompensatedMaskBottom;
-  if (uncompensatedLag > reproducedMaxLag) reproducedMaxLag = uncompensatedLag;
-
-  // 2) Test WITH production velocity lead (mask uniform scheduled from prevFrameMotion):
-  amllMotionsRef.value = { 1: prevFrameMotion };
-  amllResidualRef.value = 0;
-  const compensatedMaskBottom = styles[3]().transform[0].translateY;
-  const breach = renderedRowBottom - compensatedMaskBottom;
-  if (breach > schedulingBreach) schedulingBreach = breach;
-
-  prevFrameMotion = currentMotion;
+  const currentDy = uncompRow.renderedP - uncompHost.p;
+  const uncompLag = currentDy - prevUncompDy;
+  if (uncompLag > reproducedMaxLag) reproducedMaxLag = uncompLag;
+  prevUncompDy = currentDy;
 }
-
 assert.ok(reproducedMaxLag >= 3.70 && reproducedMaxLag <= 3.75,
   `Watchdog 3.73px lag reproduced in uncompensated 1-frame scheduling (was ${reproducedMaxLag.toFixed(2)}px)`);
-assert.ok(schedulingBreach <= 0.001,
-  `With measured velocity lead, 1-frame scheduling skew has zero breach (was ${schedulingBreach.toFixed(4)}px)`);
-assert.equal(prevFrameMotion.vLead, 0, 'Velocity lead returns strictly to 0 when settled');
+
+// 2) Actual Production Hook Replay covering row + cell simultaneously across variable dt
+// (8.333ms / 120fps, 16.667ms / 60fps, 33.333ms / 30fps, 64ms max dt) and both callback orders:
+const scrollSource = buildSync({
+  entryPoints: [path.join(root, 'components/lyrics/native/reference-scroll.tsx')],
+  bundle: true, platform: 'node', format: 'cjs', write: false,
+  external: ['react', 'react-native', 'react-native-reanimated'],
+}).outputFiles[0].text;
+const cellSource = buildSync({
+  entryPoints: [path.join(root, 'components/lyrics/native/amll-layout-cell.tsx')],
+  bundle: true, platform: 'node', format: 'cjs', write: false,
+  external: ['react', 'react-native', 'react-native-reanimated', './reference-scroll'],
+}).outputFiles[0].text;
+
+for (const hookDt of [0.008333, 0.016667, 0.033333, 0.064]) {
+  for (const hostFirst of [true, false]) {
+    const sharedCell = value => {
+      let current = value;
+      return {
+        get value() { return current; },
+        set value(v) { current = v; },
+      };
+    };
+    const hookHost = {
+      command: sharedCell({ serial: 1, offset: 300, delta: 63.7, index: 1, firstVisible: 0, interval: 800, instant: false, interlude: false, snap: true }),
+      residual: sharedCell(63.7),
+      renderedResidual: sharedCell(63.7),
+      actualOffset: sharedCell(0),
+      spicy: false,
+      motions: sharedCell({}),
+    };
+    const hookReactions = [];
+    const hookFrames = [];
+    const hookRowStyles = [];
+
+    const hookReanimated = {
+      default: { ScrollView: 'ScrollView', View: 'View' },
+      useSharedValue: sharedCell,
+      useAnimatedRef: () => () => {},
+      useScrollOffset: () => {},
+      useAnimatedReaction: (prepare, react) => hookReactions.push({ prepare, react, previous: null }),
+      useAnimatedStyle: callback => { hookRowStyles.push(callback); return {}; },
+      useFrameCallback: callback => {
+        const frame = { callback, active: true };
+        hookFrames.push(frame);
+        return { setActive: a => { frame.active = a; } };
+      },
+      defineAnimation: (_init, factory) => factory(),
+      cancelAnimation: () => {},
+      withTiming: to => to,
+      scrollTo: () => {},
+    };
+
+    const hookReact = {
+      createContext: () => ({}),
+      forwardRef: fn => fn,
+      useCallback: fn => fn,
+      useMemo: fn => fn(),
+      useContext: () => hookHost,
+      useEffect: fn => { if (typeof fn === 'function') fn(); },
+      createElement: () => ({}),
+    };
+
+    const scrollMod = { exports: {} };
+    vm.runInNewContext(scrollSource, {
+      module: scrollMod, exports: scrollMod.exports,
+      require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
+    });
+    const { useReferenceRowScroll } = scrollMod.exports;
+
+    const cellMod = { exports: {} };
+    vm.runInNewContext(cellSource, {
+      module: cellMod, exports: cellMod.exports,
+      require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
+    });
+    const { AmllLayoutCell } = cellMod.exports;
+
+    // Call actual production hooks for row 1:
+    useReferenceRowScroll(hookHost, 1, true);
+
+    // Call actual production layout hook for row 1:
+    const cellLayout = AmllLayoutCell({ index: 1 }, null).props.layout;
+    const cellAnim = cellLayout({ currentOriginY: 200, targetOriginY: 250 });
+    const anim = cellAnim.animations.transform[0].translateY;
+    anim.onStart(anim, -30, 0, null);
+
+    // Initial command reaction:
+    for (const rx of hookReactions) {
+      const next = rx.prepare();
+      rx.react(next, rx.previous);
+      rx.previous = next;
+    }
+
+    let maxSkewBreach = 0;
+    let maxSameBreach = 0;
+    let prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
+    let hostSpring = { p: 63.7, v: 0, stiffness: 90, damping: 15 };
+
+    const totalFrames = Math.round(1.5 / hookDt);
+    for (let f = 1; f <= totalFrames; f++) {
+      const now = f * hookDt * 1000;
+      const stepHost = () => {
+        if (hookHost.residual.value !== 0) {
+          const nextH = stepAmllSpring(hostSpring, 0, 0.9, hostSpring.damping, hostSpring.stiffness, hookDt);
+          const settled = Math.abs(nextH.p) < 0.01 && Math.abs(nextH.v) < 0.01;
+          hostSpring = { ...hostSpring, p: settled ? 0 : nextH.p, v: settled ? 0 : nextH.v };
+          hookHost.residual.value = hostSpring.p;
+          hookHost.renderedResidual.value = hostSpring.p;
+        }
+      };
+      const stepRowAndCell = () => {
+        for (const frame of hookFrames) {
+          if (frame.active) frame.callback({ timeSincePreviousFrame: hookDt * 1000 });
+        }
+        anim.onFrame(anim, now);
+      };
+
+      if (hostFirst) {
+        stepHost();
+        stepRowAndCell();
+      } else {
+        stepRowAndCell();
+        stepHost();
+      }
+
+      // Actual row translateY from useReferenceRowScroll:
+      const renderedRowDy = hookRowStyles[0]().transform[0].translateY;
+      const totalCellOffset = hookHost.motions.value[1]?.cell ?? 0;
+      const actualRowBottom = amllRows[1].y + amllRows[1].height + renderedRowDy + totalCellOffset;
+
+      // 1) Same-frame mask:
+      const sameProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, hookHost.motions.value, 0);
+      const sameBreach = actualRowBottom - sameProtected.bottom;
+      if (sameBreach > maxSameBreach) maxSameBreach = sameBreach;
+
+      // 2) 1-frame scheduling skew mask: uniform reads prevMotionsSnapshot
+      const skewProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, prevMotionsSnapshot, 0);
+      const skewBreach = actualRowBottom - skewProtected.bottom;
+      if (skewBreach > maxSkewBreach) maxSkewBreach = skewBreach;
+
+      prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
+    }
+
+    assert.ok(maxSameBreach <= 0.001, `Same-frame actual-hook breach at dt=${(hookDt * 1000).toFixed(1)}ms (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSameBreach.toFixed(4)})`);
+    assert.ok(maxSkewBreach <= 0.001, `1-frame skew actual-hook breach at dt=${(hookDt * 1000).toFixed(1)}ms (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSkewBreach.toFixed(4)})`);
+    assert.equal(prevMotionsSnapshot[1].vLead, 0, 'Velocity lead returns strictly to 0 when settled');
+  }
+}
 
 // 8d. Concurrent AmllLayoutCell motion test:
 // Layout shift adds 50px of displacement (motion.value.p = 50)

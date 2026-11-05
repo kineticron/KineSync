@@ -109,10 +109,19 @@ const react = {
 };
 const modules = {
   react,
+  '@/lib/fast-lyric-loading': { useFastLyricLoading: () => true },
+  'expo-blur': { BlurTargetView: 'BlurTargetView' },
+  './native-shared-blur': {
+    NativeSharedBlur: 'NativeSharedBlur',
+    NativeSharedBlurContext: { Provider: 'NativeSharedBlurContext.Provider' },
+    NativeBlurGeometryContext: { Provider: 'NativeBlurGeometryContext.Provider' },
+    hasBlurGeometry: (rows, window, time) => Array.isArray(rows) && rows.length > 0 && rows.every(r => r && r.height > 0),
+    SHARED_BLUR_PROFILES: { amll: true, spicy: true },
+  },
   '@/lib/lyrics-arrival-context': { LyricsArrivalContext: { Provider: 'TraceProvider' }, LyricsArrivalCommit: 'TraceCommit', useArrivalGeometry: () => ({}), useArrivalIdentity: () => ({ handle: undefined, identity: { id: 0 }, context: {}, producers: {} }) },
-  '@/lib/lyrics-arrival-trace': {},
+  '@/lib/lyrics-arrival-trace': { arrivalSpan: (_t, _id, _n, fn) => fn(), arrivalEvent: () => {} },
   '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {} },
-  'react-native': { AppState: appState, FlatList: 'FlatList', Linking: { openURL() {} }, Pressable: 'Pressable', StyleSheet: { create: x => x }, Text: 'Text', View: 'View' },
+  'react-native': { Platform: { OS: 'ios', Version: '17' }, AppState: appState, FlatList: 'FlatList', Linking: { openURL() {} }, Pressable: 'Pressable', StyleSheet: { create: x => x }, Text: 'Text', View: 'View' },
   'expo-image': { Image: 'Image' }, '@shopify/flash-list': { FlashList: 'FlashList' },
   'react-native-reanimated': { useAnimatedReaction() {}, useDerivedValue: fn => ({ value: fn() }), useSharedValue: value => ({ value }) },
   'react-native-worklets': { scheduleOnRN() {} },
@@ -121,7 +130,7 @@ const modules = {
   '@/lib/lyrics-timing': { detectLyricsTimingMode: () => 'synced' },
   '@/lib/lyrics-layout': { getAutoScrollTargetRange: () => null, getBackgroundActiveLines: () => [], getLyricTimingIndex: () => ({}),
     getPlaybackWindowState: () => ({ visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 }) },
-  './native-lyrics-model': { buildNativeRows: () => [{ key: 'row', line: {}, backgrounds: [], index: 0 }], nativeFollowIndex: (_rows, index) => index, nativeScrollSourceKey: () => 'mock-source' },
+  './native-lyrics-model': { buildNativeRows: () => [{ key: 'row', line: {}, lead: { start: 0, end: 1000 }, backgrounds: [], index: 0 }], nativeFollowIndex: (_rows, index) => index, nativeScrollSourceKey: () => 'mock-source' },
   './native-lyric-row': { NativeLyricRowView: 'NativeLyricRowView' },
   './use-native-lyrics-clock': { useNativeLyricsClock: () => ({ position: { value: 0 }, running: false, seekVersion: 0 }) },
   './native-lyrics-fonts': { NativeLyricsFontContext: { Provider: 'Provider' }, useNativeLyricsFonts: () => undefined },
@@ -134,7 +143,7 @@ const modules = {
   'react/jsx-runtime': { jsx, jsxs: jsx },
 };
 const viewModule = { exports: {} };
-vm.runInNewContext(viewCode, { __DEV__: false, module: viewModule, exports: viewModule.exports,
+vm.runInNewContext(viewCode, { __DEV__: true, module: viewModule, exports: viewModule.exports,
   require: name => { assert(name in modules, `native view mock missing ${name}`); return modules[name]; } });
 const NativeLyricsView = viewModule.exports.NativeLyricsView;
 const lyrics = [{ lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'x', startTime: 0, endTime: 1000 }] }];
@@ -161,6 +170,63 @@ viewTree = renderView({ ...props, active: true });
 findFlash(viewTree).props.onContentSizeChange();
 assert.equal(refreshes, 6, 'actual hook reactivation can retry once after rejected pending readiness');
 unregister();
+
+// Blur readiness track-change and virtualization regression:
+const findNode = (node, type) => !node || typeof node !== 'object' ? null :
+  node.type === type ? node :
+  (Array.isArray(node.props?.children) ? node.props.children : [node.props?.children]).map(c => findNode(c, type)).find(Boolean);
+
+let measured = false;
+const flashHost = {
+  getLayout: () => measured ? { y: 0, height: 77, isHeightMeasured: true } : undefined,
+  getFirstItemOffset: () => 0,
+  onContentSizeChange: flash.props.onContentSizeChange,
+};
+findFlash(viewTree).props.ref.current = flashHost;
+
+// 1. Initial mount of track-1: starts unready before measurement
+let blurProvider = findNode(viewTree, 'NativeSharedBlurContext.Provider');
+assert.equal(blurProvider.props.value, false, 'Initial mount starts unready before measurement');
+assert.ok(!findNode(viewTree, 'NativeSharedBlur'), 'NativeSharedBlur not mounted when unready');
+
+// 2. Virtualization keeps blur unready when unmeasured
+let blurGeomProvider = findNode(viewTree, 'NativeBlurGeometryContext.Provider');
+let refreshGeometry = blurGeomProvider.props.value;
+refreshGeometry(); // measured is false -> hasBlurGeometry returns false
+viewTree = renderView(props);
+assert.equal(findNode(viewTree, 'NativeSharedBlurContext.Provider').props.value, false, 'Virtualization withholding keeps blur unready');
+
+// 3. Measured geometry marks blur ready and mounts NativeSharedBlur
+measured = true;
+findFlash(viewTree).props.ref.current = flashHost;
+refreshGeometry();
+viewTree = renderView(props);
+assert.equal(findNode(viewTree, 'NativeSharedBlurContext.Provider').props.value, true, 'Ready once geometry is measured');
+assert.ok(findNode(viewTree, 'NativeSharedBlur'), 'NativeSharedBlur mounted when ready');
+
+// 4. Track change to track-b: immediately revokes readiness and unmounts blur
+playback.currentTrack = { id: 'track-b' };
+viewTree = renderView(props);
+assert.equal(findNode(viewTree, 'NativeSharedBlurContext.Provider').props.value, false, 'Track change immediately revokes blur readiness');
+assert.ok(!findNode(viewTree, 'NativeSharedBlur'), 'Previous track blur immediately unmounted on track change');
+
+// 5. Track-b stays unready until measured
+measured = false;
+blurGeomProvider = findNode(viewTree, 'NativeBlurGeometryContext.Provider');
+refreshGeometry = blurGeomProvider.props.value;
+findFlash(viewTree).props.ref.current = flashHost;
+refreshGeometry();
+viewTree = renderView(props);
+assert.equal(findNode(viewTree, 'NativeSharedBlurContext.Provider').props.value, false, 'Track-b unmeasured geometry keeps blur unready');
+
+// 6. Track-b measured geometry mounts fresh blur
+measured = true;
+findFlash(viewTree).props.ref.current = flashHost;
+refreshGeometry();
+viewTree = renderView(props);
+assert.equal(findNode(viewTree, 'NativeSharedBlurContext.Provider').props.value, true, 'Track-b blur becomes ready once measured');
+assert.ok(findNode(viewTree, 'NativeSharedBlur'), 'Track-b NativeSharedBlur mounted');
+
 for (const slot of hookSlots) slot?.cleanup?.();
 assert.equal(appListeners.size, 0, 'actual native view lifecycle removes its AppState observer');
-console.log('Native renderer ready refresh checks passed: mount, repeated readiness, switches, stale callbacks, detector-registration race, desktop/demo exclusion, foreground cached readiness, unmount, re-entry, and no sync loop.');
+console.log('Native renderer ready refresh checks passed: mount, repeated readiness, switches, stale callbacks, detector-registration race, desktop/demo exclusion, foreground cached readiness, unmount, re-entry, no sync loop, and blur track-change/virtualization readiness.');

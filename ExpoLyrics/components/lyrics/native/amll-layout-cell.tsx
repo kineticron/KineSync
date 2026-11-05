@@ -21,13 +21,13 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
         if (host?.motions) {
           const cur = host.motions.value[motion.value.index];
           const currentRow = cur?.row ?? 0;
-          const currentVLead = cur?.vLead ?? 0;
-          const cellVLead = Math.abs(animation.current) * 0.085;
-          host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, vLead: Math.max(currentVLead, cellVLead), cellVLead, settled: false } };
+          const curRowVLead = cur?.rowVLead ?? 0;
+          const cellVLead = Math.abs(animation.current) * Math.min(1, 5.2 * 0.064);
+          host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, vLead: curRowVLead + cellVLead, rowVLead: curRowVLead, cellVLead, settled: false } };
         }
       },
       onFrame(animation, now) {
-        const dt = Math.min(0.064, Math.max(0, (now - animation.timestamp) / 1000));
+        const dt = Math.min(0.064, Math.max(0, (now - animation.timestamp) / 1000)) || (1 / 60);
         const next = stepAmllSpring({ p: animation.current, v: animation.velocity }, 0, 0.9, damping, stiffness, dt);
         const settled = Math.abs(next.p) < 0.01 && Math.abs(next.v) < 0.01;
         animation.current = settled ? 0 : next.p;
@@ -37,14 +37,15 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
         if (host?.motions) {
           const cur = host.motions.value[motion.value.index];
           const currentRow = cur?.row ?? 0;
-          const currentVLead = cur?.vLead ?? 0;
-          const cellVLead = settled ? 0 : Math.max(Math.abs(next.v) * dt, Math.abs(next.p) * 0.085, 0.01);
+          const curRowVLead = cur?.rowVLead ?? 0;
+          const cellVLead = settled ? 0 : Math.max(Math.abs(next.v) * dt, Math.abs(next.p) * Math.min(1, 5.2 * dt), 0.01);
           host.motions.value = {
             ...host.motions.value,
             [motion.value.index]: {
               row: currentRow,
               cell: animation.current,
-              vLead: Math.max(currentVLead, cellVLead),
+              vLead: curRowVLead + cellVLead,
+              rowVLead: curRowVLead,
               cellVLead,
               settled: settled && currentRow === 0,
             },
