@@ -58,6 +58,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
       if (/translation/u.test(text)) counters.translationParagraphBuilds++;
       else counters.mainParagraphBuilds++;
       return { text, layout() { counters[/translation/u.test(text) ? 'translationParagraphLayouts' : 'mainParagraphLayouts']++; },
+        getLineMetrics() { return layouts.lineMetrics?.(text) ?? text.split('\n').map((_, i) => ({ left: 0, width: 40, height: 21, baseline: 17 + i * 21, ascent: 17 })); },
         extendedVisit(visitor) { counters.coldRunExtractions++;
           const runs = layouts.nativeRuns ?? [{ font: { name: 'fallback' }, origin: { x: 3, y: 19 }, glyphs: [7, 2], positions: [{ x: 14, y: 0 }, { x: 0, y: 0 }] }];
           runs.forEach(run => visitor(0, run)); visitor(0, null);

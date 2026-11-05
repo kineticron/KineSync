@@ -106,7 +106,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     voicePaintText, voicePaintWords, voiceWords, voiceStart, voiceEnd, width]);
   // Restrict to simple Latin without custom word gaps or translations. Other scripts retain native glyph fallback.
   const [incompatibleLayout, setIncompatibleLayout] = useState<unknown>(null);
-  const rnCompatible = sharedBlur && spicy && !right && !background && !(showTranslation && translation) && isLoaded('KineSync-SF-Bold') && incompatibleLayout !== layout && /^[\x20-\x7e\n]*$/.test(voicePaintText) && !voicePaintWords.some(word => word.gapAfter);
+  const rnCompatible = sharedBlur && spicy && !hasDuet && !right && !background && !(showTranslation && translation) && isLoaded('KineSync-SF-Bold') && incompatibleLayout !== layout && /^[\x20-\x7e\n]*$/.test(voicePaintText) && !voicePaintWords.some(word => word.gapAfter);
   const coldText = rnCompatible && !exactGlyphs;
   const shaped = useMemo(() => {
     if (!layout) return null;
@@ -180,7 +180,20 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     const next = event.nativeEvent.layout.width;
     setWidth(previous => Math.abs(previous - next) > 0.1 ? next : previous);
   }}>
-    {coldText && layout && <Animated.View pointerEvents="none" style={[{ height: layout.height, paddingTop: layout.mainPadding }, nativeAlpha]}><Text accessible={false} allowFontScaling={false} textBreakStrategy="simple" onTextLayout={event => { const expected = layout.text.split('\n'); if (event.nativeEvent.lines.length !== expected.length || event.nativeEvent.lines.some((line, index) => line.text.trim() !== expected[index]?.trim())) setIncompatibleLayout(layout); }} style={{ color: 'white', fontFamily: 'KineSync-SF-Bold', fontSize, lineHeight, width: textWidth, height: layout.height, includeFontPadding: false }}>{layout.text}</Text></Animated.View>}
+    {coldText && layout && <Animated.View pointerEvents="none" style={[{ height: layout.height, paddingTop: layout.mainPadding }, nativeAlpha]}><Text accessible={false} allowFontScaling={false} textBreakStrategy="simple" onTextLayout={event => { const expected = layout.text.split('\n');
+      // Installed Skia LineMetrics uses paragraph-local baseline/left/height.
+      // Canvas top -64 + Spicy translateY 63 places Skia one point above RN.
+      // RN iOS exposes local baseline as ascender; Android also supplies baseline.
+      try {
+        const metrics = layout.paragraph.getLineMetrics();
+        const close = (a: number, b: number) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1.25;
+        if (event.nativeEvent.lines.length !== expected.length || metrics.length !== expected.length || event.nativeEvent.lines.some((line, index) => {
+          const metric = metrics[index];
+          const baseline = (line as typeof line & { baseline?: number }).baseline ?? line.y + line.ascender;
+          return line.text.trim() !== expected[index]?.trim() || !close(line.width, metric.width) || !close(line.x, metric.left) ||
+            !close(line.y, metric.baseline - metric.ascent - 1) || !close(line.height, metric.height) || !close(baseline, metric.baseline - 1);
+        })) setIncompatibleLayout(layout);
+      } catch { setIncompatibleLayout(layout); } }} style={{ color: 'white', fontFamily: 'KineSync-SF-Bold', fontSize, lineHeight, width: textWidth, height: layout.height, includeFontPadding: false }}>{layout.text}</Text></Animated.View>}
     {shaped && !coldText && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={!sharedBlur && (batched || !spicy) ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>

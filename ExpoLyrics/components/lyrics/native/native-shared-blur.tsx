@@ -10,30 +10,43 @@ export const NativeSharedBlurContext = createContext(false);
 export const NativeBlurGeometryContext = createContext<(() => void) | undefined>(undefined);
 export type BlurGeometry = { y: number; height: number; start: number; end: number }[];
 
-/** Content coordinates remain independent of the viewport during manual drags. */
+export function hasBlurGeometry(rows: BlurGeometry) {
+  return rows.some(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
+}
+
+/** FlashList cells are ordered/nonoverlapping. Unknown cells are protected
+ * between real neighboring cell edges, never extrapolated from guessed heights.
+ * Missing lookahead can extend one edge without discarding the other safe edge. */
 export function sharedBlurRegion(rows: BlurGeometry, window: PlaybackWindowState, time: number, offset: number) {
   'worklet';
-  let top = Infinity, bottom = -Infinity, missing = false;
+  let top = Infinity, bottom = -Infinity;
   const first = window.visualActiveLineStartIndex;
   const last = window.visualActiveLineEndIndex;
   const focus = Math.max(0, window.focusLineIndex);
+  const known = rows.map(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
+  const nextEdges: number[] = [];
+  let next = Infinity;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    nextEdges[i] = next;
+    if (known[i]) next = rows[i].y;
+  }
+  let previous = -Infinity;
   rows.forEach((row, index) => {
     if (first >= 0 && index >= first && index <= last ||
       index >= (last >= 0 ? last + 1 : focus) && index <= (last >= 0 ? last + 2 : focus + 1) ||
       time >= row.start - 1500 && time <= row.end) {
-      if (!Number.isFinite(row.y) || !Number.isFinite(row.height) || row.height <= 0) missing = true;
-      top = Math.min(top, row.y - offset - 96);
-      bottom = Math.max(bottom, row.y + row.height - offset + 96);
+      top = Math.min(top, (known[index] ? row.y : previous) - offset - 96);
+      bottom = Math.max(bottom, (known[index] ? row.y + row.height : nextEdges[index]) - offset + 96);
     }
+    if (known[index]) previous = row.y + row.height;
   });
-  // Unknown layout: fail open, with no tinted blur across live lyrics.
-  return !missing && Number.isFinite(top) ? { top, bottom } : { top: -100000, bottom: 100000 };
+  return top !== Infinity ? { top, bottom } : { top: -Infinity, bottom: Infinity };
 }
 
 export function sharedBlurViewport(region: { top: number; bottom: number }, offset: number, height: number) {
   'worklet';
   const limit = height + 160;
-  if (region.top === -100000 && region.bottom === 100000) return { top: -limit, bottom: limit };
+  if (region.top === -Infinity && region.bottom === Infinity) return { top: -limit, bottom: limit };
   return { top: Math.max(-limit, Math.min(limit, region.top - offset)), bottom: Math.max(-limit, Math.min(limit, region.bottom - offset)) };
 }
 
@@ -41,7 +54,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number;
 }) {
-  const region = useSharedValue({ top: -100000, bottom: 100000 });
+  const region = useSharedValue({ top: -Infinity, bottom: Infinity });
   useAnimatedReaction(() => {
     // Discrete timing bucket: scanning occurs only at an approach/end deadline,
     // a presentation cue, or a new geometry snapshot, never on scroll frames.

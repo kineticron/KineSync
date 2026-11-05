@@ -69,11 +69,12 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  assert.equal(find(cold,'Canvas'),null); assert.equal(find(cold,h.NativeGlyphPicture),null);
  assert.equal(find(cold,'Text').props.children,'hello\nworld');
  assert.equal(h.counters.coldRunExtractions,0);
- find(cold,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'hello'},{text:'world'}]}});
+ find(cold,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'hello',width:40,x:0,y:-1,height:21,ascender:17},{text:'world',width:40,x:0,y:20,height:21,ascender:17}]}});
  const height=cold.props.style[0].height;
  const promoted=h.render(latin,{prepareGlyphs:true,showTranslation:false});
  assert.equal(promoted.props.style[0].height,height);assert(find(promoted,'Canvas'));
  assert.equal(find(h.render(latin,{prepareGlyphs:false,showTranslation:false,right:true}),'Text'),null);
+ assert.equal(find(h.render(latin,{prepareGlyphs:false,showTranslation:false,hasDuet:true,right:false}),'Text'),null,'left duet retains Skia');
  assert.equal(find(h.render({...latin,translation:'translation'},{prepareGlyphs:false}),'Text'),null);
  const rotated=h.render(latin,{prepareGlyphs:false,showTranslation:false});
  rotated.props.onLayout({nativeEvent:{layout:{width:640}}});
@@ -98,7 +99,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const a=sharedBlurRegion(rows,w,0,0),b=sharedBlurRegion(rows,w,0,137);
  assert.equal(a.top-b.top,137);assert.equal(a.bottom-b.bottom,137);
  assert.equal(a.bottom,696); // active + next two + transition clearance
- assert.equal(sharedBlurRegion([],w,0,0).top,-100000);
+ assert.equal(sharedBlurRegion([],w,0,0).top,-Infinity);
  assert(sharedBlurRegion(rows,w,0,2000).bottom<0,'offscreen content stays offscreen');
  assert.equal(sharedBlurRegion(rows,{...w,visualActiveLineStartIndex:7,visualActiveLineEndIndex:7},0,0).top,604);
  const rotated=rows.map(r=>({...r,y:r.y*2,height:200}));
@@ -123,7 +124,8 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  position.value=98500;let next=prepare();react(next,previous);previous=next;assert.equal(scans,2,'approach updates region once');
  const missing=geometry.map((r,i)=>i===3?{...r,height:0}:r);
  rows.value=missing;next=prepare();react(next,previous);previous=next;
- const open=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(open.top,-100000,'unknown active geometry fails open');
+ const bounded=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(bounded.top,204,'unknown active bounded by preceding real cell');assert.equal(bounded.bottom,696,'known safe lookahead retained');
+ const open=api.sharedBlurRegion([],window.value,0,0);
  assert.deepEqual(plain(api.sharedBlurViewport(open,1e7,800)),{top:-960,bottom:960},'unknown geometry stays open for any offset');
  rows.value=[];next=prepare();react(next,previous);previous=next;
  assert.equal(styles[0]().transform[0].translateY,-960,'track invalidation clears previous mask');
@@ -140,15 +142,55 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback;
  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
  let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.some(row=>row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
  const refresh=vm.runInNewContext(callback,context);refresh();
- assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');
- measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.blurRows.value[0].start,8000);
+ assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');assert.equal(context.ready,'','no safe geometry restores original per-voice blur');
+ measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.ready,'song:portrait');assert.equal(context.blurRows.value[0].start,8000);
  measured={y:600,height:160};refresh();assert.equal(context.blurRows.value[0].y,750);assert.equal(context.blurRows.value[0].height,160);
  context.rows=[{lead:{start:40000,end:41000},backgrounds:[]}];measured=undefined;refresh();
- assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');
+ assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');assert.equal(context.ready,'');
  const rowSource=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyric-row.tsx'),'utf8');
  assert(rowSource.includes('onLayout={refreshGeometry}'));assert(rowSource.includes('[refreshGeometry, row]'));
  assert(source.includes('blurRows.value = []'));assert(source.includes("Platform.OS === 'ios' ||"));
  console.log('Shared geometry refresh PASS: missing/rotation/reuse snapshots, row layout+identity wiring, iOS opt-in and invalidation wiring.');
+}
+// Execute onTextLayout with matching strings and independently altered native
+// measurements. These mock coordinates exercise rejection, not phone parity.
+{
+ const latin={...voice,paintText:'hello\nworld',paintWords:[],translation:''};
+ const matching=()=>[{text:'hello',width:40,x:0,y:-1,height:21,ascender:17},{text:'world',width:40,x:0,y:20,height:21,ascender:17}];
+ for(const field of ['width','x','y','height','ascender','baseline','missing','skia-width','skia-baseline','within-tolerance']){
+  let metricReads=0;
+  const h=createVoiceHarness(lazyCode,true,{dev:true,sharedBlur:true,arrivalTrace:trace,lineMetrics:()=>{
+   metricReads++;return [0,1].map(i=>({left:0,width:field==='skia-width'?45:40,height:21,baseline:17+i*21+(field==='skia-baseline'?4:0),ascent:17}));
+  }});
+  let tree=h.render(latin,{prepareGlyphs:false,showTranslation:false});tree.props.onLayout({nativeEvent:{layout:{width:320}}});
+  tree=h.render(latin,{prepareGlyphs:false,showTranslation:false});const height=tree.props.style[0].height;
+  const lines=matching();
+  if(field==='baseline')lines[0].baseline=20;
+  else if(field==='missing')delete lines[0].width;
+  else if(field==='within-tolerance')lines[0].width+=0.75;
+  else if(!field.startsWith('skia-'))lines[0][field]+=4;
+  find(tree,'Text').props.onTextLayout({nativeEvent:{lines}});
+  const result=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+  assert.equal(metricReads,1,'uses paragraph.getLineMetrics from the actual prepared layout');
+  assert.equal(!!find(result,'Text'),field==='within-tolerance',field+' metric validation');
+  assert.equal(result.props.style[0].height,height,'metric rejection preserves outer geometry');
+ }
+ const api=load('components/lyrics/native/native-shared-blur.tsx',{
+ react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+ '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
+ const rows=Array.from({length:8},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
+ const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
+ rows[5]={...rows[5],y:0,height:0};
+ let region=api.sharedBlurRegion(rows,w,0,0);
+ assert.equal(region.top,204);assert.equal(region.bottom,696,'unknown lookahead protected up to real following anchor');
+ rows[6]={...rows[6],height:0};rows[7]={...rows[7],height:0};
+ region=api.sharedBlurRegion(rows,w,0,0);assert.equal(region.top,204);assert.equal(region.bottom,Infinity);
+ assert.equal(api.sharedBlurViewport(region,0,800).top,204,'top distant text still blurred when lower extent unknown');
+ rows[3]={...rows[3],y:0,height:0};region=api.sharedBlurRegion(rows,w,0,0);
+ assert.equal(region.top,204,'unknown active never uses guessed zero origin');
+ assert.equal(api.hasBlurGeometry([]),false);assert.equal(api.hasBlurGeometry(rows.map(r=>({...r,height:0}))),false);
+ assert.equal(api.hasBlurGeometry(rows),true);
+ console.log('Review regressions PASS: actual metric callback rejects width/x/y/height/baseline differences; tolerance; fixed fallback height; partial missing-lookahead preserves safe blur; no geometry restores fallback; left duet excluded.');
 }

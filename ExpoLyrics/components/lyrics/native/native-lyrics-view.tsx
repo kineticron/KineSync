@@ -1,6 +1,6 @@
 import { BlurTargetView } from 'expo-blur';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
-import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, type BlurGeometry } from './native-shared-blur';
+import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, type BlurGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -54,6 +54,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && style === 'spicy' && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
+  const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
   const lyrics = usePlaybackStore(state => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
@@ -88,6 +89,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   if (previousScrollSourceKey.current !== scrollSourceKey) {
     previousScrollSourceKey.current = scrollSourceKey;
     blurRows.value = [];
+    setBlurReadyKey('');
     translationOnlyLayout.current = false;
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
   const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);
@@ -175,10 +177,13 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const [viewportWidth, setViewportWidth] = useState(0);
   const traceContext = useArrivalGeometry(traceScope, __DEV__ ? [trace, traceGeneration, landscapeMode, fontScale, viewportHeight, viewportWidth, fonts, list, reveal, showTranslatedText] : undefined);
   const layoutConfiguration = `${fontScale}:${landscapeMode}:${list}:${reveal}:${showTranslatedText}:${viewportHeight}:${viewportWidth}`;
+  const blurGeometryKey = `${scrollSourceKey}:${layoutConfiguration}`;
+  const sharedBlurReady = sharedBlurEnabled && blurReadyKey === blurGeometryKey;
   const previousLayoutConfiguration = useRef(layoutConfiguration);
   if (previousLayoutConfiguration.current !== layoutConfiguration) {
     previousLayoutConfiguration.current = layoutConfiguration;
     blurRows.value = [];
+    setBlurReadyKey('');
     translationOnlyLayout.current = false;
   }
   const preview = !!demoLyrics && demoLayout === 'preview';
@@ -304,12 +309,15 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
   const blurDeadlines = useMemo(() => sharedBlurEnabled ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.end + 0.001])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled]);
   const refreshBlurGeometry = useCallback(() => {
-    if (sharedBlurEnabled) blurRows.value = rows.map((row, index) => {
+    if (!sharedBlurEnabled) return;
+    const snapshot = rows.map((row, index) => {
       const geometry = flashRef.current?.getLayout(index);
       return { y: (geometry?.y ?? 0) + (flashRef.current?.getFirstItemOffset() ?? 0), height: geometry?.height ?? 0,
         start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)) };
     });
-  }, [blurRows, rows, sharedBlurEnabled]);
+    blurRows.value = snapshot;
+    setBlurReadyKey(hasBlurGeometry(snapshot) ? blurGeometryKey : '');
+  }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled]);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
     presentationWindow={presentationWindow}
@@ -382,7 +390,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={true}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView><NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} /></NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
