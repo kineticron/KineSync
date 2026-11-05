@@ -3,9 +3,9 @@ import { useAnimatedReaction, useSharedValue, withTiming, type SharedValue } fro
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import type { BlurGeometry } from './native-shared-blur';
 
-type MeasuredRow = BlurGeometry[number] & { interlude?: { start: number; end: number }; voices?: { start: number; end: number }[] };
+export type MeasuredRow = BlurGeometry[number];
 export type ProgressiveGeometry = MeasuredRow[];
-type Protection = { first: number; index: number; top: number; bottom: number };
+export type Protection = { first: number; index: number; top: number; bottom: number };
 type ProgressiveBlur = { rows: SharedValue<ProgressiveGeometry>; anchor: SharedValue<number>; upperAnchor: SharedValue<number>; protection: SharedValue<Protection> };
 export const NativeProgressiveBlurContext = createContext<ProgressiveBlur | null>(null);
 
@@ -17,7 +17,7 @@ export function measuredProtection(rows: ProgressiveGeometry, window: PlaybackWi
   let first = window.visualActiveLineStartIndex;
   let dots = -1;
   rows.forEach((row, index) => {
-    if (row.voices ? row.voices.some(voice => time >= voice.start && time < voice.end) : time >= row.start && time < row.end) { last = Math.max(last, index); first = first < 0 ? index : Math.min(first, index); }
+    if (row.voices ? row.voices.some((voice: { start: number; end: number }) => time >= voice.start && time < voice.end) : time >= row.start && time < row.end) { last = Math.max(last, index); first = first < 0 ? index : Math.min(first, index); }
     if (row.interlude && time >= row.interlude.start && time < row.interlude.end) dots = Math.max(dots, index);
   });
   const index = Math.min(rows.length - 1, Math.max(last + 1, dots, last < 0 ? window.focusLineIndex : -1, 0));

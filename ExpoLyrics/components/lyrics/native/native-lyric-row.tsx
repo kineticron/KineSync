@@ -1,4 +1,3 @@
-import { NativeProgressiveBlurContext, measuredBlurRadius } from './native-progressive-blur';
 import { NativeBlurGeometryContext } from './native-shared-blur';
 import { NativeDevelopmentVoice } from './native-fast-voice';
 import React, { memo, useContext, useEffect, useMemo } from 'react';
@@ -92,7 +91,6 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
 }) {
   const { getMappingKey } = useMappingHelper();
   const spicy = style === 'spicy';
-  const progressiveBlur = useContext(NativeProgressiveBlurContext);
   const refreshGeometry = useContext(NativeBlurGeometryContext);
   useEffect(() => { refreshGeometry?.(); }, [refreshGeometry, row]);
   const scrollStyle = useReferenceRowScroll(referenceScroll, row.index, !staticLyrics);
@@ -100,8 +98,6 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
   const blurValue = useDerivedValue(() => {
     const focus = Math.max(0, presentationWindow.value.focusLineIndex);
     const distance = Math.abs(row.index - focus);
-    if (progressiveBlur && spicy) return staticLyrics || rowActive.value ? 0 : measuredBlurRadius(
-      row.index, progressiveBlur.rows.value, progressiveBlur.protection.value, progressiveBlur.anchor.value, progressiveBlur.upperAnchor.value);
     const target = staticLyrics || rowActive.value ? 0 : spicy ? Math.min(6.83125, distance * 1.25) : Math.min(5, (distance + (row.index < focus ? 2 : 1)) * 0.8);
     return spicy ? target : withTiming(target, { duration: 400, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   });
