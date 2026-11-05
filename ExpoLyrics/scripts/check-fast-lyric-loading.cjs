@@ -267,7 +267,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  }visit(ast);
  let layouts=[undefined,{y:100,height:100},undefined];
  const rows=[{lead:{start:0,end:9000},backgrounds:[]},{lead:{start:1000,end:9000},backgrounds:[]},{lead:{start:20000,end:21000},backgrounds:[]}];
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}},currentPosition:{current:0},latestWindow:{current:undefined},latestLyrics:{current:rows},latestBackgrounds:{current:[]},latestTiming:{current:{}},lyrics:[],backgrounds:[],timing:{},getPlaybackWindowState:()=>undefined};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},motionRegistry:{value:{}},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}},currentPosition:{current:0},latestWindow:{current:undefined},latestLyrics:{current:rows},latestBackgrounds:{current:[]},latestTiming:{current:{}},lyrics:[],backgrounds:[],timing:{},getPlaybackWindowState:()=>undefined};
  const refresh=vm.runInNewContext(callback,context),ready=()=>vm.runInNewContext(readiness,context);
  refresh();const w={visualActiveLineStartIndex:1,visualActiveLineEndIndex:1,focusLineIndex:1};
  const unsafe=api.sharedBlurRegion(context.blurRows.value,w,1000,0);
@@ -328,6 +328,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
     blurGeometryKeyRef: { current: 'Song1:cfg' },
     hasBlurGeometry: api.hasBlurGeometry,
     blurRows: { value: [] },
+    motionRegistry: { value: {} },
     rows: song1Rows,
     flashRef: { current: { getLayout: i => song1Layouts[i], getFirstItemOffset: () => 0 } },
     previousScrollSourceKey: { current: 'Song1' },

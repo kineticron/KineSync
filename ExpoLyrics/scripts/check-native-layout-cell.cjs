@@ -8,10 +8,10 @@ const source = buildSync({ entryPoints: [path.join(__dirname, '../components/lyr
   bundle: true, platform: 'node', format: 'cjs', write: false,
   external: ['react', 'react-native', 'react-native-reanimated', './reference-scroll'],
 }).outputFiles[0].text;
-const host = { command: { value: { firstVisible: 0, index: 5, interval: 800, interlude: false } } };
+const host = { command: { value: { firstVisible: 0, index: 5, interval: 800, interlude: false } }, motions: { value: {} } };
 const sharedValues = [];
 let hookIndex = 0;
-const react = { forwardRef: fn => fn, useContext: () => host, useMemo: fn => fn() };
+const react = { forwardRef: fn => fn, useContext: () => host, useMemo: fn => fn(), useEffect: fn => { if (typeof fn === 'function') fn(); } };
 const reanimated = { default: { View: 'View' },
   useSharedValue: value => sharedValues[hookIndex++] ?? (sharedValues[hookIndex - 1] = { value }),
   defineAnimation: (_initial, factory) => factory() };
