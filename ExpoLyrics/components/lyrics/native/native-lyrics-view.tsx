@@ -307,7 +307,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const longPress = useCallback((row: NativeLyricRow) => { onUserInteraction?.(); onLineLongPress?.(row.line); }, [onLineLongPress, onUserInteraction]);
   // Canvas presentation stays on the UI clock; background flow is permanent.
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
-  const blurDeadlines = useMemo(() => sharedBlurEnabled ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.end + 0.001])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled]);
+  const blurDeadlines = useMemo(() => sharedBlurEnabled ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.start, v.end + 0.001])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled]);
   const refreshBlurGeometry = useCallback(() => {
     if (!sharedBlurEnabled) return;
     const snapshot = rows.map((row, index) => {
@@ -390,7 +390,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 

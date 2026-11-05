@@ -108,23 +108,36 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 }
 // Run the actual overlay hooks: scroll frames must never rescan song geometry.
 {
- const styles=[], timings=[];let prepare,react;
+ const styles=[], timings=[], shared=[];let prepare,react;
+ const advance=fraction=>shared.forEach(v=>{if(v.animation)v.current=v.animation.from+(v.animation.to-v.animation.from)*fraction;});
  const modules={react:{createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
  '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
- 'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return value;},useSharedValue:value=>({value}),useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{prepare=p;react=r;}}};
+ 'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return {timing:value};},useSharedValue:value=>{const v={current:value,animation:null,get value(){return this.current;},set value(next){if(next && typeof next==='object' && 'timing' in next)this.animation={from:this.current,to:next.timing};else {this.current=next;this.animation=null;}}};shared.push(v);return v;},useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{prepare=p;react=r;}}};
  const api=load('components/lyrics/native/native-shared-blur.tsx',modules);
  let scans=0;
  const geometry=Array.from({length:1000},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
  geometry.forEach=function(fn){scans++;Array.prototype.forEach.call(this,fn);};
  const rows={value:geometry},offset={value:0},position={value:0},window={value:{visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3}};
- api.NativeSharedBlur({target:{current:null},rows,window,position,offset,height:800,deadlines:[98500,101000.001]});
+ const seekVersion={value:0};
+ api.NativeSharedBlur({target:{current:null},rows,window,position,offset,height:800,seekVersion,deadlines:[98500,100000,101000.001]});
  let previous=prepare();react(previous,null);assert.equal(scans,1);
  for(let frame=0;frame<120;frame++){offset.value=frame*20;position.value=frame;const next=prepare();react(next,previous);previous=next;styles.forEach(fn=>fn());}
  assert.equal(timings.length,0,'initial geometry and direct scroll never animate');
  assert.equal(scans,1,'no song scan in scroll or ordinary playback frames');
- position.value=98500;let next=prepare();react(next,previous);previous=next;assert.equal(scans,2,'approach updates region once');assert.equal(timings.length,2);assert.equal(timings[0].config.duration,240);
- window.value={...window.value,visualActiveLineStartIndex:7,visualActiveLineEndIndex:7};next=prepare();react(next,previous);previous=next;assert.equal(timings.length,4,'seek retargets content timing');
- window.value={...window.value,visualActiveLineStartIndex:3,visualActiveLineEndIndex:3};next=prepare();react(next,previous);previous=next;assert.equal(timings.length,6,'rapid retarget uses ongoing shared values');
+ offset.value=0;
+ position.value=98500;let next=prepare();react(next,previous);previous=next;assert.equal(scans,2);
+ assert.equal(timings.length,0,'unchanged destination does not restart timing');
+ window.value={...window.value,visualActiveLineStartIndex:4,visualActiveLineEndIndex:4};next=prepare();react(next,previous);previous=next;
+ assert.equal(styles[1]().transform[0].translateY,424,'forward cue begins at previous effective lower edge');
+ advance(.5);assert.equal(styles[1]().transform[0].translateY,474);assert.equal(styles[0]().transform[0].translateY,326);
+ rows.value=geometry.map(r=>({...r}));next=prepare();react(next,previous);previous=next;
+ assert.equal(styles[1]().transform[0].translateY,474,'identical geometry preserves intermediate motion');assert.equal(timings.length,2);
+ window.value={...window.value,visualActiveLineStartIndex:3,visualActiveLineEndIndex:3};next=prepare();react(next,previous);previous=next;
+ assert.equal(styles[1]().transform[0].translateY,474,'rapid reverse retarget has no jump');advance(.5);assert.equal(styles[1]().transform[0].translateY,449);
+ offset.value=37;assert.equal(styles[1]().transform[0].translateY,412,'scroll subtracts actual offset during animation');offset.value=0;
+ seekVersion.value++;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,424,'explicit seek initializes immediately');
+ position.value=100000;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,424,'time-only onset starts continuously');advance(.5);assert.equal(styles[1]().transform[0].translateY,960,'background actual onset retargets without window change, clamped safely');
+ position.value=0;seekVersion.value++;next=prepare();react(next,previous);previous=next;
  const missing=geometry.map((r,i)=>i===3?{...r,height:0}:r);
  rows.value=missing;next=prepare();react(next,previous);previous=next;
  const bounded=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(bounded.top,276,'unknown active bounded by preceding real cell');assert.equal(bounded.bottom,424,'known safe lookahead retained');
@@ -143,6 +156,11 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 {
  const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback;
+ let deadlineFactory;
+ function deadlineVisit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='blurDeadlines')deadlineFactory=node.initializer.arguments[0].getText(ast);ts.forEachChild(node,deadlineVisit);}deadlineVisit(ast);
+ const makeDeadlines=new Function('rows','sharedBlurEnabled',`return (${deadlineFactory})();`);
+ assert.deepEqual(makeDeadlines([{lead:{start:2000,end:4000},backgrounds:[{start:2500,end:4500}]}],true),[500,1000,2000,2500,4000.001,4500.001],'actual lead/background starts join protection deadlines');
+
  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
  let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
  const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};

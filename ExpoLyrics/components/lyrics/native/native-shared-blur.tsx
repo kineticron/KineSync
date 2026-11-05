@@ -16,6 +16,12 @@ export function hasBlurGeometry(rows: BlurGeometry) {
   return rows.length > 0 && rows.every(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
 }
 
+export function sameBlurGeometry(a: BlurGeometry, b: BlurGeometry) {
+  'worklet';
+  return a.length === b.length && a.every((row, i) =>
+    row.y === b[i].y && row.height === b[i].height && row.start === b[i].start && row.end === b[i].end);
+}
+
 /** FlashList cells are ordered/nonoverlapping. Unknown cells are protected
  * between real neighboring cell edges, never extrapolated from guessed heights.
  * Missing lookahead can extend one edge without discarding the other safe edge. */
@@ -52,26 +58,27 @@ export function sharedBlurViewport(region: { top: number; bottom: number }, offs
   return { top: Math.max(-limit, Math.min(limit, region.top - offset)), bottom: Math.max(-limit, Math.min(limit, region.bottom - offset)) };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
-  deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number;
+  deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
 }) {
   const region = useSharedValue({ top: -Infinity, bottom: Infinity });
   const animatedTop = useSharedValue(0);
   const animatedBottom = useSharedValue(0);
   useAnimatedReaction(() => {
-    // Discrete timing bucket: scanning occurs only at an approach/end deadline,
+    // Discrete timing bucket: scanning occurs only at an approach/start/end deadline,
     // a presentation cue, or a new geometry snapshot, never on scroll frames.
     let low = 0, high = deadlines.length;
     while (low < high) { const mid = (low + high) >>> 1; if (deadlines[mid] <= position.value) low = mid + 1; else high = mid; }
-    return { bucket: low, geometry: rows.value, window: window.value };
+    return { bucket: low, geometry: rows.value, window: window.value, seek: seekVersion.value };
   }, (next, previous) => {
-    if (!previous || next.bucket !== previous.bucket || next.geometry !== previous.geometry || next.window !== previous.window)
-      {
+    if (!previous || next.bucket !== previous.bucket || next.geometry !== previous.geometry || next.window !== previous.window || next.seek !== previous.seek) {
       const targetRegion = sharedBlurRegion(next.geometry, next.window, position.value, 0);
       const safe = Number.isFinite(targetRegion.top) && Number.isFinite(targetRegion.bottom);
-      const initialize = !previous || next.geometry !== previous.geometry || !Number.isFinite(region.value.top) || !Number.isFinite(region.value.bottom);
-      if (safe) {
+      const initialize = !previous || (next.geometry !== previous.geometry && !sameBlurGeometry(next.geometry, previous.geometry)) || next.seek !== previous.seek || !Number.isFinite(region.value.top) || !Number.isFinite(region.value.bottom);
+      // Ordinary cues may briefly overlap the soft mask; only explicit seeks
+      // and semantic geometry changes bypass interpolation.
+      if (safe && (initialize || targetRegion.top !== region.value.top || targetRegion.bottom !== region.value.bottom)) {
         animatedTop.value = initialize ? targetRegion.top : withTiming(targetRegion.top, { duration: 240 });
         animatedBottom.value = initialize ? targetRegion.bottom : withTiming(targetRegion.bottom, { duration: 240 });
       }
@@ -79,11 +86,11 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     }
   });
   const upper = useAnimatedStyle(() => {
-    const r = sharedBlurViewport({ top: Math.min(animatedTop.value, region.value.top), bottom: Math.max(animatedBottom.value, region.value.bottom) }, offset.value, height);
+    const r = sharedBlurViewport({ top: Number.isFinite(region.value.top) ? animatedTop.value : region.value.top, bottom: Number.isFinite(region.value.bottom) ? animatedBottom.value : region.value.bottom }, offset.value, height);
     return { transform: [{ translateY: r.top }] };
   });
   const lower = useAnimatedStyle(() => {
-    const r = sharedBlurViewport({ top: Math.min(animatedTop.value, region.value.top), bottom: Math.max(animatedBottom.value, region.value.bottom) }, offset.value, height);
+    const r = sharedBlurViewport({ top: Number.isFinite(region.value.top) ? animatedTop.value : region.value.top, bottom: Number.isFinite(region.value.bottom) ? animatedBottom.value : region.value.bottom }, offset.value, height);
     return { transform: [{ translateY: r.bottom }] };
   });
   return <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
