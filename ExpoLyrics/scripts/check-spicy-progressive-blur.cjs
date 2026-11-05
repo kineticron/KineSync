@@ -51,6 +51,15 @@ assert.equal(context.protection.value.index,3);assert.equal(context.protection.v
 context.anchor.advance(0.5);assert.equal(context.anchor.value,466.5);
 assert.equal(output(4),0,'Ramp remains below whole current protected row during interpolation');
 assert.equal(output(5),(684-466.5)/80);
+// Reverse cue retargets the current anchor, and the effective radius follows it.
+const overlappingWindow=window.value;
+window.value={...window.value,visualActiveLineEndIndex:0};reaction();
+assert.equal(context.anchor.value,466.5,'Reverse retarget preserves current animated position');
+assert.equal(output(3),(474-466.5)/80);
+context.anchor.advance(0.5);assert.equal(context.anchor.value,425.25);
+assert.equal(output(3),(474-425.25)/80,'Reverse midpoint changes effective Gaussian radius');
+window.value=overlappingWindow;reaction();
+
 seek.value++;reaction();assert.equal(context.anchor.value,584,'Explicit seek resets to measured edge');
 assert.equal(output(4),0);
 // Intro dots belong to upcoming row 0, even when visual active is empty.
