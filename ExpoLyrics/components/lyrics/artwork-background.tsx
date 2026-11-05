@@ -46,9 +46,11 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   // active state, so mounting without onSize can strand measurement at zero.
   // Skia measures on the UI thread. Reanimated's Fabric measure includes the
   // display transform; undo our scale to recover the backing surface's points.
+  // Delayed/unavailable native measurement must never collapse the prepared
+  // image destination or live shader resolution to a single point.
   const canvasSize = useSharedValue({ width: 0, height: 0 });
-  const canvasWidth = useDerivedValue(() => Math.max(1, Math.floor(canvasSize.get().width / renderSize.scale)));
-  const canvasHeight = useDerivedValue(() => Math.max(1, Math.floor(canvasSize.get().height / renderSize.scale)));
+  const canvasWidth = useDerivedValue(() => canvasSize.get().width > 0 ? Math.max(1, Math.floor(canvasSize.get().width / renderSize.scale)) : renderSize.width);
+  const canvasHeight = useDerivedValue(() => canvasSize.get().height > 0 ? Math.max(1, Math.floor(canvasSize.get().height / renderSize.scale)) : renderSize.height);
   const uniforms = useDerivedValue(() => ({ resolution: [canvasWidth.get(), canvasHeight.get()], time: time.get(), blend: 1 }));
 
   useEffect(() => {

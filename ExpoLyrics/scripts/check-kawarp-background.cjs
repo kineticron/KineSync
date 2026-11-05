@@ -11,8 +11,8 @@ const root = path.resolve(__dirname, '..');
 
 function load(entry, dependencies = {}, contents, globals = {}) {
   const source = buildSync({
-    ...(contents ? { stdin: { contents, resolveDir: root, loader: 'ts' } } : { entryPoints: [path.join(root, entry)] }),
-    bundle: true, platform: 'node', format: 'cjs', write: false,
+    ...(contents ? { stdin: { contents, resolveDir: entry ? path.dirname(path.join(root, entry)) : root, loader: 'tsx' } } : { entryPoints: [path.join(root, entry)] }),
+    bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false,
     external: ['@shopify/react-native-skia', ...Object.keys(dependencies)],
   }).outputFiles[0].text;
   const module = { exports: {} };
@@ -268,7 +268,7 @@ async function checkLifecycle() {
     './kawarp-artwork-loader': { prepareKawarpArtwork: (...args) => new Promise((resolve, reject) => jobs.push({ args, resolve, reject })) },
     './artwork-background-fallback': { ArtworkBackgroundFallback: 'Fallback' },
     '@/components/ui/launch-visibility': {}, '@/components/ui/promotional-backdrop': { PromotionalBackdrop: 'Promotional' },
-  }, undefined, { AbortController, setTimeout, clearTimeout,
+  }, process.env.BACKGROUND_SOURCE_REV ? execFileSync('git', ['show', `${process.env.BACKGROUND_SOURCE_REV}:ExpoLyrics/components/lyrics/artwork-background.tsx`], { cwd: root, encoding: 'utf8' }) : undefined, { AbortController, setTimeout, clearTimeout,
     fetch: (uri, { signal }) => new Promise((resolve, reject) => requests.set(uri, { resolve, reject, signal })) }).ArtworkBackground;
   const render = updates => {
     props = { ...props, ...updates };
@@ -285,6 +285,8 @@ async function checkLifecycle() {
   render();
   tree.props.onLayout({ nativeEvent: { layout: { width: 390, height: 844 } } }); render();
   assert.equal(nodes(tree, 'Canvas').length, 1, 'The native surface mounts before the artwork arrives');
+  // Native measurement may be delayed or unavailable; never rasterize a 1x1 destination.
+
   assert.ok(nodes(tree, 'Canvas')[0].props.onSize, 'Hidden first mount must register measurement: Reanimated retains initial autostart');
   render({ active: true });
   assert.equal(frames[0].active, false);
@@ -295,6 +297,8 @@ async function checkLifecycle() {
   assert.equal(frames[0].active, false, 'No motion callback during initial fade');
   assert.equal(nodes(tree, 'Shader').length, 0, 'Opacity fades never draw the expensive warp shader');
   assert.equal(nodes(tree, 'Image').length, 1);
+  assert.ok(nodes(tree, 'Image')[0].props.width.get() > 1);
+  assert.ok(nodes(tree, 'Image')[0].props.height.get() > 1, 'Zero measurement uses prepared backing size');
   assert.equal(nodes(tree, 'Image')[0].props.opacity, blends[0]);
   assert.equal(transitions.find(t => t.shared === blends[0]).duration, 1200);
   // Emulate native percentage layout independently of React's delayed onLayout.
