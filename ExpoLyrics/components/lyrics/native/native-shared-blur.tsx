@@ -11,7 +11,9 @@ export const NativeBlurGeometryContext = createContext<(() => void) | undefined>
 export type BlurGeometry = { y: number; height: number; start: number; end: number }[];
 
 export function hasBlurGeometry(rows: BlurGeometry) {
-  return rows.some(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
+  // Conservative prototype gate: partial snapshots can leave both protected
+  // edges unbounded. Keep original per-voice blur until every cell is valid.
+  return rows.length > 0 && rows.every(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
 }
 
 /** FlashList cells are ordered/nonoverlapping. Unknown cells are protected

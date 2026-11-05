@@ -142,7 +142,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback;
  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
  let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.some(row=>row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
  const refresh=vm.runInNewContext(callback,context);refresh();
  assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');assert.equal(context.ready,'','no safe geometry restores original per-voice blur');
  measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.ready,'song:portrait');assert.equal(context.blurRows.value[0].start,8000);
@@ -191,6 +191,48 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  rows[3]={...rows[3],y:0,height:0};region=api.sharedBlurRegion(rows,w,0,0);
  assert.equal(region.top,204,'unknown active never uses guessed zero origin');
  assert.equal(api.hasBlurGeometry([]),false);assert.equal(api.hasBlurGeometry(rows.map(r=>({...r,height:0}))),false);
- assert.equal(api.hasBlurGeometry(rows),true);
+ assert.equal(api.hasBlurGeometry(rows),false,'partial geometry never enables shared context');
+ assert.equal(api.hasBlurGeometry(rows.map((r,i)=>({...r,y:i*100,height:100}))),true);
  console.log('Review regressions PASS: actual metric callback rejects width/x/y/height/baseline differences; tolerance; fixed fallback height; partial missing-lookahead preserves safe blur; no geometry restores fallback; left duet excluded.');
+}
+
+// Exact independent-review counterexample, plus actual readiness expression,
+// geometry callback and source/layout invalidation guards across transitions.
+{
+ const api=load('components/lyrics/native/native-shared-blur.tsx',{
+ react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+ '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
+ const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
+ const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let callback,readiness,trackGuard,layoutGuard;
+ function visit(node){
+  if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);
+  if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='sharedBlurReady')readiness=node.initializer.getText(ast);
+  if(ts.isIfStatement(node)&&node.expression.getText(ast)==='previousScrollSourceKey.current !== scrollSourceKey')trackGuard=node.getText(ast);
+  if(ts.isIfStatement(node)&&node.expression.getText(ast)==='previousLayoutConfiguration.current !== layoutConfiguration')layoutGuard=node.getText(ast);
+  ts.forEachChild(node,visit);
+ }visit(ast);
+ let layouts=[undefined,{y:100,height:100},undefined];
+ const rows=[{lead:{start:0,end:9000},backgrounds:[]},{lead:{start:1000,end:9000},backgrounds:[]},{lead:{start:20000,end:21000},backgrounds:[]}];
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}}};
+ const refresh=vm.runInNewContext(callback,context),ready=()=>vm.runInNewContext(readiness,context);
+ refresh();const w={visualActiveLineStartIndex:1,visualActiveLineEndIndex:1,focusLineIndex:1};
+ const unsafe=api.sharedBlurRegion(context.blurRows.value,w,1000,0);
+ assert.equal(unsafe.top,-Infinity);assert.equal(unsafe.bottom,Infinity);
+ assert.equal(ready(),false,'two-sided unknown geometry restores original blur, no shared overlay');
+ // Cue/seek changes cannot accidentally activate partial geometry.
+ for(const index of [0,1,2,1]){api.sharedBlurRegion(context.blurRows.value,{...w,visualActiveLineStartIndex:index,visualActiveLineEndIndex:index,focusLineIndex:index},index*1000,0);assert.equal(ready(),false);}
+ layouts=[{y:0,height:100},{y:100,height:100},{y:200,height:100}];refresh();assert.equal(ready(),true);
+ for(const index of [0,1,2]){const region=api.sharedBlurRegion(context.blurRows.value,{...w,visualActiveLineStartIndex:index,visualActiveLineEndIndex:index,focusLineIndex:index},index*1000,0);assert(Number.isFinite(region.top)&&Number.isFinite(region.bottom),'all-valid geometry bounds every cue');}
+ layouts[2]=undefined;refresh();assert.equal(ready(),false,'losing any geometry restores original blur');
+ layouts[2]={y:200,height:100};refresh();assert.equal(ready(),true);
+ Object.assign(context,{previousScrollSourceKey:{current:'A'},scrollSourceKey:'B',translationOnlyLayout:{current:true},previousRows:{current:null}});
+ vm.runInNewContext(trackGuard,context);context.blurGeometryKey='B:portrait';assert.equal(ready(),false);assert.equal(context.blurRows.value.length,0);
+ layouts=[undefined,{y:100,height:100},undefined];refresh();assert.equal(ready(),false,'new track partial geometry stays baseline');
+ layouts=[{y:0,height:100},{y:100,height:100},{y:200,height:100}];refresh();assert.equal(ready(),true);
+ Object.assign(context,{previousLayoutConfiguration:{current:'portrait'},layoutConfiguration:'landscape'});
+ vm.runInNewContext(layoutGuard,context);context.blurGeometryKey='B:landscape';assert.equal(ready(),false);assert.equal(context.blurRows.value.length,0);
+ layouts=layouts.map(r=>({y:r.y*2,height:200}));refresh();assert.equal(ready(),true,'complete rotated snapshot re-enables prototype');
+ layouts[1]={y:NaN,height:200};refresh();assert.equal(ready(),false,'nonfinite geometry rejected');
+ console.log('Two-sided geometry regression PASS: exact three-row counterexample, cue/seek invariance, completeness gain/loss, actual source/layout reset and recovery.');
 }
