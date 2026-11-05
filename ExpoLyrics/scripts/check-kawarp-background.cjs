@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 const { transformSync } = require('@babel/core');
+const { execFileSync } = require('node:child_process');
 const CanvasKitInit = require('canvaskit-wasm/bin/full/canvaskit.js');
 const root = path.resolve(__dirname, '..');
 
@@ -169,8 +170,47 @@ async function checkPixels() {
   [red, blue, mixed, blurred, white, art, encoded, ...Object.values(effects)].forEach(value => value.dispose());
 }
 
+// Execute the installed hook, including its retained active ref, rather than
+// assuming changing autostart starts a previously inactive callback.
+function checkInstalledMeasurementLifecycle() {
+  let ref, effect, active;
+  class Registry {
+    registerFrameCallback() { return 1; }
+    unregisterFrameCallback() {}
+    manageStateFrameCallback(_id, value) { active = value; }
+  }
+  const source = fs.readFileSync(path.join(root, 'node_modules/react-native-reanimated/src/hook/useFrameCallback.ts'), 'utf8');
+  const { useFrameCallback } = load(null, {
+    react: { useRef: initial => ref ??= { current: initial }, useEffect: fn => { effect = fn; } },
+    '../frameCallback/FrameCallbackRegistryJS': { __esModule: true, default: Registry },
+  }, source);
+  const callback = () => {};
+  useFrameCallback(callback, false); effect(); assert.equal(active, false);
+  useFrameCallback(callback, true); effect(); assert.equal(active, false,
+    'Installed hook reproduces hidden-first stale measurement despite autostart becoming true');
+  ref = undefined;
+  useFrameCallback(callback, true); effect(); assert.equal(active, true);
+  useFrameCallback(callback, true); effect(); assert.equal(active, true);
+  for (const revision of ['cee7439', '3e2ba41', '9b6ee5c', 'c0c27dc', 'b6dd6eb', 'WORKTREE']) {
+    const source = revision === 'WORKTREE' ? fs.readFileSync(path.join(root, 'components/lyrics/artwork-background.tsx'), 'utf8')
+      : execFileSync('git', ['show', `${revision}:ExpoLyrics/components/lyrics/artwork-background.tsx`], { cwd: root, encoding: 'utf8' });
+    for (const fast of [false, true]) {
+      assert.ok(!source.includes('fastLoading'), 'Background does not branch on Fast');
+      const conditional = source.includes('onSize={visible ? canvasSize : undefined}');
+      const measured = source.includes('onSize={canvasSize}') || conditional;
+      ref = undefined;
+      useFrameCallback(callback, measured && !conditional); effect();
+      useFrameCallback(callback, measured); effect();
+      const stranded = measured && !active;
+      assert.equal(stranded, ['c0c27dc', 'b6dd6eb'].includes(revision));
+      console.log(`Background source/hook matrix ${revision} Fast${fast ? 'ON' : 'OFF'}: ${stranded ? 'hidden-first measurement stranded' : measured ? 'measurement active' : 'explicit renderSize (no measurement dependency)'}`);
+    }
+  }
+}
+checkInstalledMeasurementLifecycle();
+
 async function checkLifecycle() {
-  let cursor = 0, dirty = false, tree, props = { uri: 'https://art/first', playing: true, active: true };
+  let cursor = 0, dirty = false, tree, props = { uri: 'https://art/first', playing: true, active: false };
   const slots = [], pending = [], requests = new Map(), jobs = [], listeners = new Map(), frames = [];
   const transitions = [], blends = [], disposed = [];
   const memo = (fn, deps) => {
@@ -245,6 +285,8 @@ async function checkLifecycle() {
   render();
   tree.props.onLayout({ nativeEvent: { layout: { width: 390, height: 844 } } }); render();
   assert.equal(nodes(tree, 'Canvas').length, 1, 'The native surface mounts before the artwork arrives');
+  assert.ok(nodes(tree, 'Canvas')[0].props.onSize, 'Hidden first mount must register measurement: Reanimated retains initial autostart');
+  render({ active: true });
   assert.equal(frames[0].active, false);
   resolveArtwork(props.uri, 0); await settle();
   assert.equal(jobs.length, 1);
@@ -304,11 +346,11 @@ async function checkLifecycle() {
   assert.equal(nodes(tree, 'Shader').length, 1);
   for (const changes of [{ playing: false }, { active: false }]) {
     render(changes); assert.equal(frames[0].active, false);
-    if (changes.active === false) assert.equal(nodes(tree, 'Canvas')[0].props.onSize, undefined, 'Hidden backgrounds do not measure their surface');
+    if (changes.active === false) assert.ok(nodes(tree, 'Canvas')[0].props.onSize, 'Hidden surfaces retain measurement registration');
     render({ playing: true, active: true }); assert.equal(frames[0].active, true);
   }
   listeners.get('change')('background'); render(); assert.equal(frames[0].active, false);
-  assert.equal(nodes(tree, 'Canvas')[0].props.onSize, undefined, 'Backgrounded apps do not measure their surface');
+  assert.ok(nodes(tree, 'Canvas')[0].props.onSize, 'Backgrounded surfaces retain measurement registration');
   listeners.get('change')('active'); render(); assert.equal(frames[0].active, true);
   listeners.get('reduceMotionChanged')(true); render(); assert.equal(frames[0].active, false);
   listeners.get('reduceMotionChanged')(false); render(); assert.equal(frames[0].active, true);

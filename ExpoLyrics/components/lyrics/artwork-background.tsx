@@ -42,6 +42,8 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   const canvasStyle = useMemo(() => ({
     width: `${100 / renderSize.scale}%` as const, height: `${100 / renderSize.scale}%` as const, transformOrigin: 'top left',
     transform: [{ scale: renderSize.scale }] }), [renderSize]);
+  // Keep onSize registered even while hidden: useFrameCallback retains its initial
+  // active state, so mounting without onSize can strand measurement at zero.
   // Skia measures on the UI thread. Reanimated's Fabric measure includes the
   // display transform; undo our scale to recover the backing surface's points.
   const canvasSize = useSharedValue({ width: 0, height: 0 });
@@ -141,7 +143,7 @@ export const ArtworkBackground = memo(function ArtworkBackground({ uri, playing,
   return <View pointerEvents="none" aria-hidden onLayout={onLayout} style={styles.root}>
     <PromotionalBackdrop />
     <Animated.View style={[StyleSheet.absoluteFill, appearanceStyle]}>
-      {layoutReady ? <View style={canvasBoundsStyle}><Canvas style={canvasStyle} onSize={visible ? canvasSize : undefined}>
+      {layoutReady ? <View style={canvasBoundsStyle}><Canvas style={canvasStyle} onSize={canvasSize}>
         {scene ? transitioning ? <>
           {scene.previousFrame ? <Image image={scene.previousFrame} x={0} y={0} width={canvasWidth} height={canvasHeight} fit="fill" sampling={SAMPLING} /> : null}
           <Image image={scene.frame} x={0} y={0} width={canvasWidth} height={canvasHeight} fit="fill" sampling={SAMPLING} opacity={scene.blend} />
