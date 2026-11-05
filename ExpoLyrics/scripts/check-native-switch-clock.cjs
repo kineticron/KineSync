@@ -83,6 +83,7 @@ function scenario({ initialPacket, development = false } = {}) {
     memo: fn => fn,
     useMemo: memo, useCallback: (fn, deps) => memo(() => fn, deps),
     useRef: initial => slot(() => ({ current: initial })),
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
     useState: initial => {
       const item = slot(() => ({ value: typeof initial === 'function' ? initial() : initial }));
       return [item.value, next => { const value = typeof next === 'function' ? next(item.value) : next;

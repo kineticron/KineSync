@@ -10,7 +10,6 @@ import { build } from 'esbuild';
 const bundle = await build({ stdin: { resolveDir: process.cwd(), contents: `
 export { SpotifyDetector } from './lib/spotify-detector/client';
 export { DealerDeliveryBaseline } from './lib/spotify-detector/dealer-delivery-baseline';
-export { setDealerDeliveryExperimentEnabled } from './lib/spotify-detector/dealer-delivery-experiment-toggle';
 export { logDealerDeliveryDecision } from './lib/spotify-detector/dealer-delivery-experiment-log';
 export { projectedPosition, sampleFrom } from './lib/spotify-detector/protocol';
 export { detectorPacket } from './lib/spotify-detector/packet';
@@ -36,6 +35,49 @@ runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports,
   clearTimeout() {}, clearInterval() {}, AbortController, TextDecoder, TextEncoder, URL, Buffer,
 });
 const api = module.exports;
+// Execute the same compiled source in release mode, including detector/model/packet/store.
+const release = { exports: {} };
+const releaseLogs = [];
+runInNewContext(bundle.outputFiles[0].text, { module: release, exports: release.exports,
+  require: createRequire(import.meta.url), __DEV__: false, process: { env: { NODE_ENV: 'production' } },
+  console: { log: (...args) => releaseLogs.push(args), warn() {}, error() {} },
+  Date: class extends Date { static now() { return wall; } }, performance: { now: () => mono },
+  clearTimeout() {}, clearInterval() {}, AbortController, TextDecoder, TextEncoder, URL, Buffer });
+const releaseStore = release.exports.usePlaybackStore;
+releaseStore.setState({ playbackMode: 'mobile', currentTrack: null, anchorPositionMs: 0,
+  anchorMonotonicMs: mono, anchorTimestampMs: wall, playbackPosition: 0, isPlaying: false,
+  clockSkewBaselineMs: NaN, lastSourceClockMs: 0, playbackCompensationMs: 0, bridgeTiming: {} });
+const releaseSamples = [];
+const releaseDetector = new release.exports.SpotifyDetector({ sample: s => {
+  releaseSamples.push(s);
+  releaseStore.getState().ingestPacket(release.exports.detectorPacket(s), 'mobile');
+},
+  ready() {}, status() {}, sessionNeeded() {}, authenticated() {} });
+const releaseEmit = (origin, body) => releaseDetector.emit(body, wall, {
+  origin, receipt: { wallMs: wall, monotonicMs: mono } });
+releaseEmit('dealer', state(epoch, epoch));
+wall += 100; mono += 100;
+releaseEmit('registration', state(epoch + 60, epoch + 50));
+assert.equal(releaseSamples.at(-1).dealerDeliveryExcessMs, 40);
+assert.equal(release.exports.detectorPacket(releaseSamples.at(-1)).positionMs, 10050);
+releaseEmit('registration', state(epoch + 60, epoch + 50));
+assert.equal(releaseSamples.length, 2, 'release duplicates do not republish');
+assert.equal(releaseStore.getState().anchorPositionMs, 10000, 'release retains ordinary anchor deadband');
+wall = epoch + 1000; mono = 2000;
+releaseEmit('dealer', state(epoch + 1000, epoch + 1000, 5000));
+wall = epoch + 1200; mono = 2200;
+releaseEmit('registration', state(epoch + 1160, epoch + 1150, 4000));
+assert.equal(releaseStore.getState().anchorPositionMs, 4050,
+  'release store accepts source age plus delivery correction on a backward seek');
+wall += 4000; mono += 4000;
+releaseEmit('registration', state(epoch + 5160, epoch + 5150));
+assert.equal(releaseSamples.at(-1).dealerDeliveryExcessMs, undefined, 'release expired baseline falls back');
+release.exports.logDealerDeliveryDecision('registration-correction', { accepted: true,
+  reason: 'registration-excess-within-cap', excessMs: 40, sampleCount: 1 });
+assert.equal(releaseLogs.length, 0, 'release diagnostics remain silent');
+releaseDetector.clear();
+wall = epoch; mono = 1000;
+
 const identity = { device: 'device', session: 'session', routeEpoch: 1, authEpoch: 1 };
 const stamp = (ms, wallOffset = 0) => ({ monotonicMs: 1000 + ms, wallMs: epoch + ms + wallOffset });
 const observation = (ms, serverMs, playerTimestampMs = epoch + ms, currentIdentity = identity, ageMs = 0) => ({
@@ -43,7 +85,7 @@ const observation = (ms, serverMs, playerTimestampMs = epoch + ms, currentIdenti
 });
 
 // Native model A/B audit: pair the existing baseline methods with the
-// experimental projection gate at the same receipt. These cases are synthetic
+// delivery correction at the same receipt. These cases are synthetic
 // and report model deltas only, never audio or Bluetooth presentation latency.
 const auditRows = [];
 function auditScenario(name, events, { seed = true, dealerIdentity = identity, clearBefore = false,
@@ -64,8 +106,8 @@ function auditScenario(name, events, { seed = true, dealerIdentity = identity, c
       receivedAt: receipt.wallMs, positionTimestampMs: item.playerTimestampMs,
       sourceServerTimestampMs: item.serverMs, positionObservedAt: receipt,
       dealerDeliveryExcessMs: excess };
-    const off = api.projectedPosition({ ...sample, dealerDeliveryExperimentEnabled: false }, receipt.wallMs, receipt.monotonicMs);
-    const on = api.projectedPosition({ ...sample, dealerDeliveryExperimentEnabled: true }, receipt.wallMs, receipt.monotonicMs);
+    const off = api.projectedPosition({ ...sample, dealerDeliveryExcessMs: undefined }, receipt.wallMs, receipt.monotonicMs);
+    const on = api.projectedPosition({ ...sample }, receipt.wallMs, receipt.monotonicMs);
     const deltaMs = on - off;
     assert(Math.abs(deltaMs - (event.expectedDeltaMs ?? 0)) < 0.001,
       `${name}: expected ${event.expectedDeltaMs ?? 0}ms ON/OFF model delta, got ${deltaMs}ms (${decision.reason})`);
@@ -254,7 +296,7 @@ auditScenario('phone-clock-step-reseed', [row], { seedObservation: stepped });
 }
 
 // Foreground replay and renderer switching reuse a frozen raw anchor. The real
-// client/store toggle path above verifies ON/OFF reanchor behavior without an
+// client/store path verifies delivery correction without an
 // extra refresh; this synthetic view comparison records the same model delta.
 auditScenario('foreground-replay-same-anchor', [event(300, 10000)]);
 auditScenario('renderer-switch-same-anchor', [event(300, 10000)]);
@@ -305,8 +347,8 @@ for (const capture of bootstrapCaptures.cases) {
       const base = { positionMs: parsed.positionMs, durationMs: parsed.durationMs, playing: parsed.playing,
         receivedAt: receipt.wallMs, positionTimestampMs: parsed.positionTimestampMs,
         sourceServerTimestampMs: parsed.sourceServerTimestampMs, positionObservedAt: receipt };
-      const off = api.projectedPosition({ ...base, dealerDeliveryExperimentEnabled: false }, receipt.wallMs, receipt.monotonicMs);
-      const on = api.projectedPosition({ ...base, dealerDeliveryExperimentEnabled: true,
+      const off = api.projectedPosition({ ...base }, receipt.wallMs, receipt.monotonicMs);
+      const on = api.projectedPosition({ ...base,
         dealerDeliveryExcessMs: correction }, receipt.wallMs, receipt.monotonicMs);
       registrations.push({ phase: callback.phase, correctionMs: correction ?? null, onMinusOffMs: on - off,
         reason: decision.reason });
@@ -322,7 +364,6 @@ const store = api.usePlaybackStore;
 store.setState({ playbackMode: 'mobile', currentTrack: null, anchorPositionMs: 0,
   anchorMonotonicMs: mono, anchorTimestampMs: wall, playbackPosition: 0, isPlaying: false,
   clockSkewBaselineMs: NaN, lastSourceClockMs: 0, playbackCompensationMs: 0, bridgeTiming: {} });
-api.setDealerDeliveryExperimentEnabled(true);
 const accepted = [];
 const detector = new api.SpotifyDetector({ sample: s => {
   accepted.push(s);
@@ -339,7 +380,7 @@ function state(serverMs, playerMs, positionMs = 10000) {
   } };
 }
 // Invoke the real private event acceptance method with captured-equivalent
-// decoded frames; this leaves parsing/acceptance/model/toggle/packet/store real.
+// decoded frames; this leaves parsing/acceptance/model/packet/store real.
 const emit = (origin, body) => detector.emit(body, wall, { origin,
   connectionId: 'synthetic-connection', generation: 1, receipt: { wallMs: wall, monotonicMs: mono } });
 
@@ -351,7 +392,6 @@ emit('registration', state(epoch + 60, epoch + 50));
 assert.equal(accepted.length, 2);
 const registration = accepted.at(-1);
 assert.equal(registration.dealerDeliveryExcessMs, 40);
-assert.equal(registration.dealerDeliveryExperimentEnabled, true);
 const markerLines = () => consoleLines.filter(line => line.startsWith('[Spotify delivery experiment] '));
 assert.equal(markerLines().length, 2, 'enabled experiment logs Dealer baseline and registration decision');
 const registrationLog = JSON.parse(markerLines().at(-1).slice('[Spotify delivery experiment] '.length));
@@ -370,52 +410,18 @@ assert(!JSON.stringify(registrationLog).includes('Synthetic artist'));
 assert.equal(api.detectorPacket(registration).positionMs, 10050, 'enabled packet contains the 40ms correction');
 assert.equal(store.getState().anchorPositionMs, 10000,
   'ordinary registration remains inside the pre-existing 80ms store deadband');
-const receivedAt = registration.positionObservedAt.monotonicMs;
-const frozenCorrection = registration.dealerDeliveryExcessMs;
 
-// Each toggle republishes the same raw anchor and never makes a network call.
-api.setDealerDeliveryExperimentEnabled(false);
-const logsBeforeOff = markerLines().length;
-const beforeOffDuplicate = store.getState().anchorPositionMs;
 emit('registration', state(epoch + 60, epoch + 50));
-assert.equal(accepted.length, 3);
-assert.equal(accepted.at(-1).dealerDeliveryExcessMs, frozenCorrection);
-assert.equal(accepted.at(-1).dealerDeliveryExperimentEnabled, false);
-assert.equal(accepted.at(-1).positionObservedAt.monotonicMs, receivedAt);
-assert.equal(store.getState().anchorPositionMs, 10010,
-  'OFF forces the actual store to remove 40ms despite its ordinary 80ms deadband');
-assert.equal(store.getState().anchorPositionMs, beforeOffDuplicate, 'an OFF-mode duplicate does not change the anchor');
-assert.equal(markerLines().length, logsBeforeOff, 'the actual detector emits no delivery log while the toggle is OFF');
-api.logDealerDeliveryDecision('registration-correction', { accepted: true, reason: 'registration-excess-within-cap',
-  excessMs: 40, sampleCount: 1, token: 'must-not-log' });
-assert.equal(markerLines().length, logsBeforeOff, 'OFF is silent for delivery experiment diagnostics');
-
-api.setDealerDeliveryExperimentEnabled(true);
-assert.equal(accepted.length, 4);
-assert.equal(store.getState().anchorPositionMs, 10050,
-  'ON forces the same native anchor back to its frozen 40ms corrected value');
-assert.equal(accepted.at(-1).positionObservedAt.monotonicMs, receivedAt);
-
-// Ordinary same-track 40ms changes retain the established anchor deadband.
-const ordinary = { ...accepted.at(-1), dealerDeliveryExperimentEnabled: false,
-  dealerDeliveryExperimentReanchor: false, positionMs: accepted.at(-1).positionMs - 40 };
-const beforeOrdinary = store.getState().anchorPositionMs;
-store.getState().ingestPacket(api.detectorPacket(ordinary), 'mobile');
-assert.equal(store.getState().anchorPositionMs, beforeOrdinary,
-  'non-toggle 40ms updates still preserve the existing anchor');
-
+assert.equal(accepted.length, 2, 'duplicates never republish samples');
 wall = epoch + 1000; mono = 2000;
 emit('dealer', state(epoch + 1000, epoch + 1000, 5000));
 assert.equal(accepted.at(-1).positionMs, 5000, 'a newer Dealer player timestamp can report a real backward seek');
 assert.equal(store.getState().anchorPositionMs, 5000, 'store keeps the real backward seek without monotonic clamping');
-api.setDealerDeliveryExperimentEnabled(false);
 wall = epoch + 1200; mono = 2200;
 emit('registration', state(epoch + 1160, epoch + 1150, 4000));
 assert.equal(accepted.at(-1).dealerDeliveryExcessMs, 40);
-assert.equal(api.detectorPacket(accepted.at(-1)).positionMs, 4010, 'OFF playback projection retains source age but excludes the frozen correction after a backward seek');
-assert.equal(store.getState().anchorPositionMs, 4010, 'OFF accepts the real backward seek without the experimental excess');
-api.setDealerDeliveryExperimentEnabled(true);
-assert.equal(store.getState().anchorPositionMs, 4050, 'ON reapplies only the same registration correction after the seek');
+assert.equal(api.detectorPacket(accepted.at(-1)).positionMs, 4050, 'projection retains source age and correction after a backward seek');
+assert.equal(store.getState().anchorPositionMs, 4050, 'accepts the corrected backward seek');
 wall = epoch + 1300; mono = 2300;
 emit('registration', state(epoch + 1299, epoch + 1300, 4000));
 assert.equal(accepted.at(-1).dealerDeliveryExcessMs, undefined, 'invalid timestamp pairs retain the uncorrected fallback');
@@ -454,7 +460,5 @@ assert.equal(malformedDecision.reason, 'registration-server-before-player-timest
 assert.equal(malformedDecision.excessMs, undefined, 'invalid timestamp fallback remains uncorrected');
 
 detector.clear();
-console.log(JSON.stringify({ nativeSyntheticDeliveryAudit: { cases: auditRows.length, worstAbsModelDeltaMs: auditWorst,
-  worstReason: auditRows.find(row => Math.abs(row.onMinusOffMs) === auditWorst)?.reason, rows: auditRows },
-  capturedBootstrapAudit: bootstrapAudit }));
-console.log('Spotify Dealer delivery experiment checks passed: actual detector, packet and store toggle paths reanchor one frozen 40ms correction in both directions; passive diagnostics are toggle-gated, rate-limited and model-neutral; ordinary updates retain the 80ms deadband.');
+
+console.log('Spotify delivery checks passed: dev/release correction, safety fallbacks, duplicate suppression and bounded dev-only diagnostics.');

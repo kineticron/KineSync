@@ -204,7 +204,6 @@ function checkClosedMenu() {
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
     '@/lib/lyrics-timing': { getLyricsTimingLabel: () => 'Line' }, '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/bridge-client': {},
     './fast-lyric-loading-switch': { FastLyricLoadingSwitch: 'FastLyricLoadingSwitch' },
-    '@/components/lyrics/dealer-delivery-experiment-switch': { DealerDeliveryExperimentSwitch: 'DealerDeliveryExperimentSwitch' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' },
     'expo-camera': { CameraView: 'Camera', useCameraPermissions: () => [{ granted: false }, () => {}] },
     'react-native-reanimated': { __esModule: true, default: { View: 'AnimatedView' }, useReducedMotion: () => false,

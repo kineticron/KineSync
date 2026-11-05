@@ -27,8 +27,8 @@ const transitions = [
 ];
 const results = [];
 for (const transition of transitions) for (const stallMs of [500, 1000, 2000, 3000])
-for (const experiment of [false, true]) for (const phase of ['before-receipt', 'after-receipt']) {
-  const run = scenario({ initialPacket });
+for (const development of [false, true]) for (const phase of ['before-receipt', 'after-receipt']) {
+  const run = scenario({ initialPacket, development });
   const expected = () => 20000 + run.now - 10000;
   run.mount(transition.from, { landscapeMode: transition.before, width: transition.before ? 720 : 360 });
   run.flush(); run.frame(); run.ready();
@@ -45,7 +45,7 @@ for (const experiment of [false, true]) for (const phase of ['before-receipt', '
     run.advance(1273.152);
     if (phase === 'before-receipt') run.advance(stallMs);
     const receipt = { wallMs: epoch + run.now, monotonicMs: run.now };
-    const sample = { ...source, dealerDeliveryExperimentEnabled: experiment,
+    const sample = { ...source,
       // Model a newly received cluster envelope with the SAME raw source
       // anchor, normalized at least 1143.016ms behind the running store clock.
       // This is an imposed trace delta, not a server/network clock estimate.
@@ -68,7 +68,7 @@ for (const experiment of [false, true]) for (const phase of ['before-receipt', '
   for (let i = 0; i < 120; i++) run.frame(1000 / 30);
   const after30fpsDriftMs = run.observed()[0].consumed - expected();
   assert.equal(run.store.getState().anchorMonotonicMs, anchor, 'Rendering does not rewrite the store anchor');
-  results.push({ transition: transition.name, stallMs, phase, experiment, registrationMs: 1273.152,
+  results.push({ transition: transition.name, stallMs, phase, development, registrationMs: 1273.152,
     afterRefreshDriftMs, afterLongFrameDriftMs, after30fpsDriftMs });
   run.stop();
   assert.equal(run.subscriptions, 0, 'Final wrapper cleanup');

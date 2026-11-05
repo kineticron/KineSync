@@ -15,7 +15,6 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";
-import { DealerDeliveryExperimentSwitch } from "@/components/lyrics/dealer-delivery-experiment-switch";
 import type { PlaybackMode } from "@/lib/playback-source";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
 import { usePlaybackStore, type LyricsStyle } from "@/store/playback-store";
@@ -610,7 +609,6 @@ export const SettingsMenu = memo(function SettingsMenu({
 
               {__DEV__ && <MenuSection title="Developer Settings">
                 <FastLyricLoadingSwitch />
-                {playbackMode === "mobile" && <DealerDeliveryExperimentSwitch />}
               </MenuSection>}
 
               <MenuSection title="Help">

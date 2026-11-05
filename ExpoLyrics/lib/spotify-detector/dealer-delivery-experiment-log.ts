@@ -1,5 +1,4 @@
 import { dealerDeliveryExperimentBounds, type DeliveryDecision } from './dealer-delivery-baseline';
-import { isDealerDeliveryExperimentEnabled } from './dealer-delivery-experiment-toggle';
 
 const MARKER = '[Spotify delivery experiment]';
 const WINDOW_MS = 10_000;
@@ -31,7 +30,7 @@ const REASONS = new Set([
 
 /** Bounded native-console diagnostics. Inputs are numeric decision evidence and fixed reason codes only. */
 export function logDealerDeliveryDecision(stage: 'dealer-envelope' | 'registration-correction', decision: DeliveryDecision) {
-  if (!isDealerDeliveryExperimentEnabled()) return false;
+  if (!(typeof __DEV__ !== 'undefined' && __DEV__)) return false;
   const now = typeof performance !== 'undefined' ? performance.now() : Number.NaN;
   if (!Number.isFinite(now)) return false;
   if (now < windowStartedAt || now - windowStartedAt >= WINDOW_MS) {

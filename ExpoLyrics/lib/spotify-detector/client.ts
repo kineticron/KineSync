@@ -5,7 +5,6 @@ import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observer
 import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
 import { logDevelopmentTiming } from './development-timing-log';
 import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
-import { isDealerDeliveryExperimentEnabled, subscribeDealerDeliveryExperiment } from './dealer-delivery-experiment-toggle';
 import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
 import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureActive } from '../native-clock-diagnostics';
 const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
@@ -59,21 +58,7 @@ export class SpotifyDetector {
   private deliveryBaseline = new DealerDeliveryBaseline();
   private deliveryRouteEpoch = 0;
   private deliveryAuthEpoch = 0;
-  private lastDeliveryObservation: Sample | null = null;
-  private experimentEnabled = isDealerDeliveryExperimentEnabled();
-  private removeExperimentListener: (() => void) | null = null;
   constructor(private callbacks: Callbacks) {}
-
-  private listenForExperimentToggle() {
-    if (this.removeExperimentListener) return;
-    this.experimentEnabled = isDealerDeliveryExperimentEnabled();
-    this.removeExperimentListener = subscribeDealerDeliveryExperiment(enabled => {
-      this.experimentEnabled = enabled;
-      if (!this.enabled || !this.lastDeliveryObservation) return;
-      this.callbacks.sample({ ...this.lastDeliveryObservation, dealerDeliveryExperimentEnabled: enabled,
-        dealerDeliveryExperimentReanchor: true });
-    });
-  }
 
   capture(raw: string, origin: string): boolean {
     try {
@@ -84,7 +69,7 @@ export class SpotifyDetector {
       }
       if (e.type === 'credentials' && e.authenticated === true && typeof e.token === 'string' && e.token.length > 0 && e.token.length < 4096) {
         const changed = e.token !== this.token;
-        if (changed) { this.deliveryAuthEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
+        if (changed) { this.deliveryAuthEpoch++; this.deliveryBaseline.clear(); }
         this.token = e.token;
         if (typeof e.clientToken === 'string' && e.clientToken.length < 4096) this.clientToken = e.clientToken;
         let expiresAt = Number(e.expiresAt) || 0;
@@ -99,12 +84,12 @@ export class SpotifyDetector {
       if (e.type === 'observerEndpoint' && typeof e.url === 'string') {
         const route = observerEndpoint(e.url, this.deviceId);
         if (route) {
-          if (this.route !== route) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
+          if (this.route !== route) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); }
           this.route = route; this.connectIfReady(); return true;
         }
       }
       if (e.type === 'socket' && typeof e.url === 'string' && spotifyHost(e.url, true) && /(^|\.)[^.]*dealer[^.]*\./i.test(new URL(e.url).hostname)) {
-        if (this.dealer !== e.url) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); this.lastDeliveryObservation = null; }
+        if (this.dealer !== e.url) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); }
         this.dealer = e.url; this.connectIfReady(); return true;
       }
     } catch { /* Ignore untrusted/malformed bridge data. */ }
@@ -113,7 +98,6 @@ export class SpotifyDetector {
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
     if (enabled) {
-      this.listenForExperimentToggle();
       // Returning from suspension reprojects the last authoritative anchor.
       if (this.lastSample) {
         recordTiming('foreground-replay', this.lastSample.timingProvenance);
@@ -121,15 +105,14 @@ export class SpotifyDetector {
         // Keep legacy fallback behavior; immutable provenance retains original receipt.
         this.callbacks.sample({ ...this.lastSample, receivedAt: Date.now(),
           // A cached replay cannot certify a newly authenticated/routed source.
-          sourceClockScope: this.lastSample.sourceClockScope === this.sourceClockScope ? this.sourceClockScope : undefined,
-          dealerDeliveryExperimentEnabled: this.experimentEnabled });
+          sourceClockScope: this.lastSample.sourceClockScope === this.sourceClockScope ? this.sourceClockScope : undefined });
       }
       this.connectIfReady();
     } else this.disconnect();
   }
   refresh() {
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
-      generation: this.generation, reason: 'explicit-refresh', registered: this.registered, experiment: this.experimentEnabled,
+      generation: this.generation, reason: 'explicit-refresh', registered: this.registered,
       ...this.deliveryBaseline.diagnosticSummary() });
     this.deliveryBaseline.preserveForExplicitRefresh(performance.now(), this.currentDeliveryIdentity());
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-preserved', {
@@ -141,9 +124,8 @@ export class SpotifyDetector {
   clear() {
     this.enabled = false; this.disconnect(); this.token = ''; this.clientToken = '';
     this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
-    this.deliveryBaseline.clear(); this.lastDeliveryObservation = null;
+    this.deliveryBaseline.clear();
     this.deliveryAuthEpoch++;
-    this.removeExperimentListener?.(); this.removeExperimentListener = null;
     this.resetOrdering();
     this.blocked = false;
     this.metadataCache.clear(); this.metadataPending.clear();
@@ -228,7 +210,7 @@ export class SpotifyDetector {
   }
   private needSession(message: string) {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
-    this.deliveryAuthEpoch++; this.lastDeliveryObservation = null;
+    this.deliveryAuthEpoch++;
     this.callbacks.status(message); this.callbacks.sessionNeeded();
   }
   private resetOrdering() {
@@ -241,7 +223,7 @@ export class SpotifyDetector {
     if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
       rawPosition: s.positionMs, playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
       receiptWall: timing.receipt?.wallMs, receiptMono: timing.receipt?.monotonicMs, receivedAt,
-      playing: s.playing, experiment: this.experimentEnabled,
+      playing: s.playing,
       ...this.deliveryBaseline.diagnosticSummary() });
     s.receivedAt = receivedAt;
     // Reconnect generations do not change source authority. Positive auth/route
@@ -289,26 +271,26 @@ export class SpotifyDetector {
     // useful; duplicate envelope stamps cannot renew freshness in the model.
     if (timing.origin === 'dealer') {
       if (observation) {
-        const diagnosticBaseline = this.experimentEnabled ? this.deliveryBaseline.fork() : null;
+        const diagnosticBaseline = nativeDiagnosticsEnabled ? this.deliveryBaseline.fork() : null;
         const accepted = this.deliveryBaseline.observeDealer(observation);
         if (diagnosticBaseline) {
           const decision = diagnosticBaseline.observeDealerDecision(observation);
           logDealerDeliveryDecision('dealer-envelope', { ...decision, accepted });
         }
-      } else if (this.experimentEnabled) {
+      } else if (nativeDiagnosticsEnabled) {
         logDealerDeliveryDecision('dealer-envelope', { accepted: false, reason: 'dealer-missing-valid-timestamp-pair', sampleCount: 0 });
       }
     } else if (timing.origin === 'registration') {
       if (observation) {
-        const diagnosticBaseline = this.experimentEnabled ? this.deliveryBaseline.fork() : null;
+        const diagnosticBaseline = nativeDiagnosticsEnabled ? this.deliveryBaseline.fork() : null;
         s.dealerDeliveryExcessMs = this.deliveryBaseline.registrationExcess(observation, s.playing);
-        if (this.experimentEnabled) {
+        if (nativeDiagnosticsEnabled) {
           const decision = diagnosticBaseline!.registrationDecision(observation, s.playing);
           logDealerDeliveryDecision('registration-correction', { ...decision, excessMs: s.dealerDeliveryExcessMs });
         }
       } else {
         s.dealerDeliveryExcessMs = undefined;
-        if (this.experimentEnabled) logDealerDeliveryDecision('registration-correction', {
+        if (nativeDiagnosticsEnabled) logDealerDeliveryDecision('registration-correction', {
           accepted: false, reason: 'registration-missing-valid-timestamp-pair', sampleCount: 0,
         });
       }
@@ -323,12 +305,11 @@ export class SpotifyDetector {
     this.lastSample = s; this.reconnects = 0;
     recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
     logDevelopmentTiming('accepted', s);
-    this.lastDeliveryObservation = s;
-    this.callbacks.sample({ ...s, dealerDeliveryExperimentEnabled: this.experimentEnabled });
+    this.callbacks.sample(s);
     return true;
   }
   private logDeliveryRejection(sample: Sample, origin: TimingContext['origin'], reason: string) {
-    if (!this.experimentEnabled || (origin !== 'dealer' && origin !== 'registration')) return;
+    if (!nativeDiagnosticsEnabled || (origin !== 'dealer' && origin !== 'registration')) return;
     const receipt = sample.positionObservedAt;
     const nowMono = performance.now();
     logDealerDeliveryDecision(origin === 'dealer' ? 'dealer-envelope' : 'registration-correction', {

@@ -36,7 +36,7 @@ async function main() {
     export { usePlaybackStore } from './store/playback-store';` },
   bundle: true, platform: 'node', format: 'cjs', write: false, plugins });
 
-  function runtime(experiment = false) {
+  function runtime(development = false) {
     let wall = epoch, mono = 1000;
     const sockets = [], requests = [];
     class Socket {
@@ -49,7 +49,7 @@ async function main() {
     }
     const module = { exports: {} };
     vm.runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require,
-      __DEV__: true, console: { log() {}, debug() {}, warn() {}, error() {} },
+      __DEV__: development, console: { log() {}, debug() {}, warn() {}, error() {} },
       process: { env: { NODE_ENV: 'test' } }, Buffer, TextDecoder, TextEncoder, URL, AbortController,
       WebSocket: Socket, fetch: () => new Promise(resolve => requests.push(resolve)),
       Date: class extends Date { static now() { return wall; } }, performance: { now: () => mono },
@@ -60,7 +60,7 @@ async function main() {
       uri, positionMs: 10000, durationMs: 300000, playing: true, device: 'Synthetic phone',
       activeDeviceId: 'device-A', playbackSessionId: 'session-A', sourceClockScope: 'detector-A/auth-1/route-1',
       receivedAt: wall, positionTimestampMs: epoch - 10000, sourceServerTimestampMs: epoch,
-      positionObservedAt: { wallMs: wall, monotonicMs: mono }, dealerDeliveryExperimentEnabled: experiment, ...extra });
+      positionObservedAt: { wallMs: wall, monotonicMs: mono }, ...extra });
     const packet = (extra = {}) => detectorPacket(sample(extra), wall, mono);
     return { store, sample, packet, sockets, requests,
       createDetector() {
@@ -107,13 +107,13 @@ async function main() {
     assert.equal(p.trackUri, uri); assert.equal(p.uri, uri);
   });
 
-  for (const experiment of [false, true]) for (const delay of [500, 1000, 1273.1522079706192, 2000, 3000]) {
-    test(`same-anchor-delay-${delay}-experiment-${experiment}`, () => {
-      const r = runtime(experiment); r.ingest();
+  for (const development of [false, true]) for (const delay of [500, 1000, 1273.1522079706192, 2000, 3000]) {
+    test(`same-anchor-delay-${delay}-development-${development}`, () => {
+      const r = runtime(development); r.ingest();
       const before = r.store.getState(); r.at(delay);
       const incoming = r.packet(); const expected = r.position();
       const result = r.ingest(incoming), actual = r.position();
-      const evidence = { delayMs: delay, experiment, incomingMs: incoming.positionMs,
+      const evidence = { delayMs: delay, development, incomingMs: incoming.positionMs,
         beforeMs: expected, afterMs: actual, correctionMs: actual - expected, seekDetected: result.seekDetected };
       console.log(JSON.stringify({ sourceAnchorMeasurement: evidence, baselineRef }));
       near(actual, expected, 'same complete source must keep the running anchor');
@@ -125,8 +125,8 @@ async function main() {
 
   // Exact sanitized switch6 source/store data. The preceding 75ms deadband is
   // intentional; no assumption that Spotify wall and phone wall epochs agree.
-  for (const experiment of [false, true]) test(`phone-mvvwcnh2-switch6-experiment-${experiment}`, () => {
-    const r = runtime(experiment);
+  for (const development of [false, true]) test(`phone-mvvwcnh2-switch6-development-${development}`, () => {
+    const r = runtime(development);
     const common = { uri, activeDeviceId: 'device-1', playbackSessionId: 'session-2',
       sourceClockScope: 'captured-detector/auth-1/route-1' };
     r.stamp(1793420684352, 417219185.547125);
@@ -147,7 +147,7 @@ async function main() {
     near(registration.positionMs, 63586.71395802498, 'captured normalized position');
     r.stamp(1793420729264, 417264098.227291);
     const expected = r.position(); const result = r.ingest(registration); const after = r.position();
-    const evidence = { experiment, requestMs: 1273.1522079706192,
+    const evidence = { development, requestMs: 1273.1522079706192,
       receiptToStoreMs: 417264098.227291 - 417264096.343583,
       incomingMs: registration.positionMs, beforeMs: expected, afterMs: after, correctionMs: after - expected,
       capturedOldCorrectionMs: -1143.0161669254303, seekDetected: result.seekDetected };
@@ -157,15 +157,15 @@ async function main() {
     return evidence;
   });
 
-  for (const experiment of [false, true]) for (const target of [5000, 90000]) {
-    test(`real-${target < 20000 ? 'backward' : 'forward'}-seek-experiment-${experiment}`, () => {
-      const r = runtime(experiment); r.ingest(); r.at(3000);
+  for (const development of [false, true]) for (const target of [5000, 90000]) {
+    test(`real-${target < 20000 ? 'backward' : 'forward'}-seek-development-${development}`, () => {
+      const r = runtime(development); r.ingest(); r.at(3000);
       const p = r.packet({ positionMs: target, positionTimestampMs: epoch + 3000, sourceServerTimestampMs: epoch + 3000 });
       const result = r.ingest(p); near(r.position(), target, 'changed source anchor seek applies');
       assert.equal(result.seekDetected, true);
     });
-    test(`same-raw-new-timestamp-${target}-experiment-${experiment}`, () => {
-      const r = runtime(experiment); r.ingest(); r.at(3000);
+    test(`same-raw-new-timestamp-${target}-development-${development}`, () => {
+      const r = runtime(development); r.ingest(); r.at(3000);
       // Equal raw position with a NEW source timestamp is a real new anchor.
       const p = r.packet({ positionMs: 10000, positionTimestampMs: epoch + 3000, sourceServerTimestampMs: epoch + 3000 });
       const result = r.ingest(p); near(r.position(), 10000, 'new player timestamp with equal raw position applies');
@@ -215,13 +215,6 @@ async function main() {
     const r = runtime(); r.ingest(); r.at(3000);
     const p = r.packet(); p[field] = field === 'trackId' ? 'spotify-connect:0000000000000000000002' : '0000000000000000000002';
     r.ingest(p); near(r.position(), p.positionMs, 'URI/id mismatch cannot qualify as same source');
-  });
-
-  for (const experiment of [false, true]) test(`forced-experiment-reanchor-${experiment}`, () => {
-    const r = runtime(experiment); r.ingest(); r.at(3000);
-    const p = r.packet({ dealerDeliveryExperimentReanchor: true });
-    assert.equal(p.nativeDeliveryExperimentReanchor, true); r.ingest(p);
-    near(r.position(), p.positionMs, 'explicit toggle must retain forced reanchor behavior');
   });
 
   test('metadata-only-refresh-keeps-source-continuity', () => {

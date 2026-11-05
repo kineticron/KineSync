@@ -35,8 +35,6 @@ export type PlaybackPacket = {
   playbackSessionId?: string;
   /** Detector instance/auth/route scope; contains no credentials. */
   sourceClockScope?: string;
-  /** Dev-only Spotify detector experiment reanchor; never set by normal packets. */
-  nativeDeliveryExperimentReanchor?: boolean;
   timing?: BridgeTimingDiagnostics;
 };
 

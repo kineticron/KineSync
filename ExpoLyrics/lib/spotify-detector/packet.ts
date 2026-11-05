@@ -16,7 +16,6 @@ export function detectorPacket(sample: Sample, now = Date.now(), nowMonotonic = 
     trackUri: sample.uri, uri: sample.uri, sourceServerTimestampMs: sample.sourceServerTimestampMs,
     activeDeviceId: sample.activeDeviceId, playbackSessionId: sample.playbackSessionId,
     sourceClockScope: sample.sourceClockScope,
-    ...(sample.dealerDeliveryExperimentReanchor ? { nativeDeliveryExperimentReanchor: true } : {}),
     timing: { anchorPositionMs: positionMs, projectedPositionMs: positionMs,
       isPlaying: sample.playing, nativeExtrapolationEnabled: true },
   };
