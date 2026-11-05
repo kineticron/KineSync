@@ -58,7 +58,16 @@ export function getSharedBlurProfile(style?: NativeLyricsStyle): SharedBlurProfi
   return (style && SHARED_BLUR_PROFILES[style]) || SHARED_BLUR_PROFILES.spicy;
 }
 
-export function hasBlurGeometry(rows: BlurGeometry, window?: PlaybackWindowState, time?: number): boolean {
+export function hasBlurGeometry(
+  rows: BlurGeometry,
+  window?: PlaybackWindowState,
+  time?: number,
+  attribution?: AttributionGeometry | null,
+  hasAttribution?: boolean,
+): boolean {
+  if (hasAttribution && (!attribution || !Number.isFinite(attribution.y) || attribution.y <= 0 || !Number.isFinite(attribution.height) || attribution.height <= 0)) {
+    return false;
+  }
   if (rows.length === 0) return false;
   if (!window) {
     return rows.every(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
@@ -126,47 +135,6 @@ export function sharedBlurMaskWeights(distance: number, _spanHeight = 1000, d1 =
 }
 
 /**
- * Exact numerical weights for complementary multi-tier shared blur masks at screen Y,
- * strictly excluding attribution bounds. Inside attribution: near=0, far=0, sum=0.
- */
-export function sharedBlurMaskWeightAtY(
-  yScreen: number,
-  region: { top: number; bottom: number },
-  attributionScreen: { top: number; bottom: number } | null,
-  profile: SharedBlurProfile,
-): { near: number; far: number; sum: number } {
-  'worklet';
-  if (attributionScreen && Number.isFinite(attributionScreen.top) && Number.isFinite(attributionScreen.bottom)) {
-    if (yScreen >= attributionScreen.top && yScreen <= attributionScreen.bottom) {
-      return { near: 0, far: 0, sum: 0 };
-    }
-  }
-  if (yScreen >= region.top && yScreen <= region.bottom) {
-    return { near: 0, far: 0, sum: 0 };
-  }
-  if (yScreen < region.top) {
-    let effectiveTop = region.top;
-    if (attributionScreen && Number.isFinite(attributionScreen.top) && attributionScreen.top < region.top) {
-      effectiveTop = attributionScreen.top;
-    }
-    const distance = effectiveTop - yScreen;
-    if (distance <= 0) return { near: 0, far: 0, sum: 0 };
-    return sharedBlurMaskWeights(distance, 1000, profile.d1, profile.dNear, profile.dCross);
-  }
-  if (yScreen > region.bottom) {
-    if (attributionScreen && Number.isFinite(attributionScreen.top) && attributionScreen.top <= region.bottom) {
-      return { near: 0, far: 0, sum: 0 };
-    }
-    if (attributionScreen && Number.isFinite(attributionScreen.top) && yScreen >= attributionScreen.top) {
-      return { near: 0, far: 0, sum: 0 };
-    }
-    const distance = yScreen - region.bottom;
-    return sharedBlurMaskWeights(distance, 1000, profile.d1, profile.dNear, profile.dCross);
-  }
-  return { near: 0, far: 0, sum: 0 };
-}
-
-/**
  * Computes measured protection boundaries for active voices and the complete next
  * semantic row (wraps, translations, interludes/dots). Strictly zero constant offset.
  * Missing/unmeasured geometry opens the safe zone to infinity.
@@ -230,11 +198,12 @@ export function amllAnimatedProtection(
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions, attribution }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions, attribution, hasAttribution }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
   style?: NativeLyricsStyle; residual?: SharedValue<number>; motions?: SharedValue<Record<number, RowMotionEntry>>;
   attribution?: SharedValue<AttributionGeometry | null>;
+  hasAttribution?: boolean;
 }) {
   const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
@@ -305,7 +274,14 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, offset.value, height);
     const attr = attribution?.value;
     let lowerHeight = spanHeight;
-    if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
+    if (hasAttribution) {
+      if (!attr || !Number.isFinite(attr.y) || attr.y <= 0 || !Number.isFinite(attr.height) || attr.height <= 0) {
+        lowerHeight = 0;
+      } else {
+        const attrScreenTop = attr.y - offset.value;
+        lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
+      }
+    } else if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
       const attrScreenTop = attr.y - offset.value;
       lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
     }

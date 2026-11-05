@@ -79,24 +79,74 @@ for (const file of ['amll-webview-entry.ts', 'spicy-webview-entry.ts']) {
 // Render the native footer with lightweight host elements and exercise its actual handlers.
 const nativeSource = read('components/lyrics/native/native-lyrics-view.tsx');
 const footer = nativeSource.slice(nativeSource.indexOf('const footer = useMemo('), nativeSource.indexOf('const retryFlatScroll ='));
-const nativeJs = ts.transpileModule(`${footer}\nresult = footer;`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020 } }).outputText;
+const refresh = nativeSource.slice(nativeSource.indexOf('const refreshBlurGeometry = useCallback('), nativeSource.indexOf('const renderItem = useCallback('));
+const nativeJs = ts.transpileModule(`${footer}\n${refresh}\nresult = footer; refreshBlurGeometryResult = refreshBlurGeometry;`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020 } }).outputText;
 const opened = [];
+let testLayouts = [
+  { y: 0, height: 100, isHeightMeasured: true },
+  { y: 100, height: 150, isHeightMeasured: true },
+];
 const context = vm.createContext({
   result: null,
+  refreshBlurGeometryResult: null,
   React: { createElement: (tag, props, ...children) => ({ tag, props, children }) },
-  Pressable: 'Pressable', Text: 'Text', Image: 'Image', useMemo: callback => callback(),
+  Pressable: 'Pressable', Text: 'Text', Image: 'Image',
+  useMemo: callback => callback(),
+  useCallback: callback => callback,
+  hasFooter: true,
   metadata: { attribution }, styles: { profileLink: { textDecorationLine: 'underline' } },
   landscapeMode: false, lyrics: [], onCreditsTimestampPress: undefined, onUserInteraction: undefined,
-  attributionGeometry: { value: null }, blurRows: { value: [] },
+  attributionGeometry: { value: null }, blurRows: { value: [] }, footerLayoutRef: { current: null },
+  rows: [
+    { lead: { start: 0, end: 1000 }, backgrounds: [] },
+    { lead: { start: 1000, end: 2000 }, backgrounds: [] },
+  ],
+  flashRef: { current: { getLayout: i => testLayouts[i], getFirstItemOffset: () => 0 } },
+  sharedBlurEnabled: true,
+  currentPosition: { current: 500 },
+  latestWindow: { current: { visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 } },
+  latestLyrics: { current: [] }, latestBackgrounds: { current: [] }, latestTiming: { current: {} },
+  getPlaybackWindowState: () => ({ visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 }),
+  hasBlurGeometry: () => true,
+  blurGeometryKey: 'test-blur-key',
+  setBlurReadyKey: () => {},
   Linking: { openURL(url) { opened.push(url); return Promise.resolve(); } },
 });
 vm.runInContext(nativeJs, context);
 assert.equal(typeof context.result.props.onLayout, 'function', 'Footer Pressable registers onLayout for mask exclusion');
-context.result.props.onLayout({ nativeEvent: { layout: { y: 450, height: 120 } } });
-assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 450, height: 120 }, 'Footer onLayout updates attributionGeometry with measured y and height');
+
+// 1. Initial mount: blurRows is empty -> attributionGeometry remains null until rows are measured
+context.result.props.onLayout({ nativeEvent: { layout: { y: 18, height: 120 } } });
+assert.equal(context.attributionGeometry.value, null, 'Attribution geometry remains null until rows are measured');
+
+// 2. Footer wrapper coordinate calculation: footer layout.y (18) is relative to footer wrapper (at rowsBottom = 250)
 context.blurRows.value = [{ y: 0, height: 100 }, { y: 100, height: 150 }];
-context.result.props.onLayout({ nativeEvent: { layout: { y: 0, height: 120 } } });
-assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 268, height: 120 }, 'Footer onLayout falls back to last row bottom when layout y is 0');
+context.result.props.onLayout({ nativeEvent: { layout: { y: 18, height: 120 } } });
+assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 268, height: 120 },
+  'Footer onLayout updates attributionGeometry to rowsBottom (250) + layout.y (18) = 268');
+
+// 3. Row-height change after first measurement: earlier row 0 expands from 100 to 180 (rowsBottom becomes 330)
+testLayouts = [
+  { y: 0, height: 180, isHeightMeasured: true },
+  { y: 180, height: 150, isHeightMeasured: true },
+];
+context.refreshBlurGeometryResult();
+assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 348, height: 120 },
+  'Row-height change dynamically updates attribution geometry to rowsBottom (330) + footerLayout.y (18) = 348');
+
+// 4. Rotation / layoutConfiguration change after first measurement: resets geometry to null
+context.attributionGeometry.value = null;
+context.footerLayoutRef.current = null;
+assert.equal(context.attributionGeometry.value, null, 'Rotation resets attributionGeometry to null');
+// Then landscape footer measures with y: 12, height: 80
+context.result.props.onLayout({ nativeEvent: { layout: { y: 12, height: 80 } } });
+assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 342, height: 80 },
+  'Landscape footer onLayout updates geometry to rowsBottom (330) + landscape y (12) = 342');
+
+// 5. Track reset: clears attribution geometry to null
+context.attributionGeometry.value = null;
+context.footerLayoutRef.current = null;
+assert.equal(context.attributionGeometry.value, null, 'Track reset safely clears attribution geometry');
 const nativeLinks = descendants(context.result).filter(node => node?.props?.accessibilityRole === 'link');
 assert.equal(nativeLinks.length, 2);
 for (const link of nativeLinks) {

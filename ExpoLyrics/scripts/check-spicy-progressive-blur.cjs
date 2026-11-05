@@ -699,11 +699,13 @@ assert(!viewSource.includes("list === 'flat' && sharedBlurEnabled"), 'FlatList e
 
 // 16. Attribution Blur Exclusion Regression: Both Renderers (Spicy + AMLL) and Both Orientations (Portrait + Landscape)
 // Attribution at the bottom of lyrics must NEVER be blurred under any scroll offset, orientation, or geometry change.
+assert.match(viewSource, /hasAttribution=\{hasFooter\}/, 'Passes hasAttribution to NativeSharedBlur');
 assert.match(viewSource, /attribution=\{attributionGeometry\}/, 'Passes attribution geometry to NativeSharedBlur');
 assert.match(viewSource, /attributionGeometry\.value = null;/, 'Resets attribution geometry on track or layout change');
+assert.match(viewSource, /footerLayoutRef\.current = null;/, 'Resets footer layout on track or layout change');
+assert.match(viewSource, /hasKnownAttribution/, 'Gates sharedBlurReady on known attribution geometry when footer exists');
 assert.match(viewSource, /styles\.footer, landscapeMode && styles\.rightFooter/, 'Preserves existing footer rotation and layout');
 assert.match(sharedSource, /export type AttributionGeometry/);
-assert.match(sharedSource, /export function sharedBlurMaskWeightAtY/);
 
 for (const rendererStyle of ['spicy', 'amll']) {
   const prof = sharedApi.getSharedBlurProfile(rendererStyle);
@@ -731,7 +733,7 @@ for (const rendererStyle of ['spicy', 'amll']) {
     const testResidualRef = { value: 0 };
 
     styles.length = 0; // reset styles array to capture test upper and lower
-    sharedApi.NativeSharedBlur({
+    const blurElement = sharedApi.NativeSharedBlur({
       target: { current: null },
       rows: testRowsRef,
       window: testWinRef,
@@ -744,7 +746,24 @@ for (const rendererStyle of ['spicy', 'amll']) {
       residual: testResidualRef,
       motions: testMotionsRef,
       attribution: testAttrRef,
+      hasAttribution: true,
     });
+
+    // Inspect actual JSX structure: verify Near and Far tiers use MaskedView enclosing LinearGradients
+    assert.equal(blurElement.type, 'View', 'Root blur container is View');
+    assert.equal(blurElement.props.children.length, 2, 'Two passes: Near Tier and Far Tier');
+    const [nearPass, farPass] = blurElement.props.children;
+    assert.equal(nearPass.type, 'MaskedView', 'Near pass is MaskedView');
+    assert.equal(farPass.type, 'MaskedView', 'Far pass is MaskedView');
+    assert.equal(nearPass.props.children.props.intensity, prof.nearIntensity, 'Near tier has nearIntensity');
+    assert.equal(farPass.props.children.props.intensity, prof.farIntensity, 'Far tier has farIntensity');
+
+    const nearMaskChildren = nearPass.props.maskElement.props.children;
+    const farMaskChildren = farPass.props.maskElement.props.children;
+    assert.equal(nearMaskChildren[0].props.children.type, 'LinearGradient', 'Near upper gradient is LinearGradient');
+    assert.equal(nearMaskChildren[1].props.children.type, 'LinearGradient', 'Near lower gradient is LinearGradient');
+    assert.equal(farMaskChildren[0].props.children.type, 'LinearGradient', 'Far upper gradient is LinearGradient');
+    assert.equal(farMaskChildren[1].props.children.type, 'LinearGradient', 'Far lower gradient is LinearGradient');
 
     const testPrep = sharedPrepare();
     sharedReact(testPrep, null);
@@ -760,7 +779,6 @@ for (const rendererStyle of ['spicy', 'amll']) {
       const lowerRes = testLowerStyle();
 
       const attrScreenTop = attrY - scrollOffset;
-      const attrScreenBottom = attrScreenTop + attrH;
 
       const rawBottom = 140; // row 1 bottom is 140
       const r = sharedApi.sharedBlurViewport({ top: 0, bottom: rawBottom }, scrollOffset, vHeight);
@@ -770,22 +788,21 @@ for (const rendererStyle of ['spicy', 'amll']) {
         `[${rendererStyle} ${orientation} offset=${scrollOffset}] lower mask height (${lowerRes.height}) must terminate at attribution top (${expectedLowerHeight})`);
       assert.equal(lowerRes.overflow, 'hidden', 'Lower mask must have overflow: hidden to clip gradient');
 
+      // Raster clipping proof: actual lower mask bottom boundary (translateY + height) must NEVER exceed attribution screen top
+      if (lowerRes.height > 0) {
+        const maskBottomInScreen = lowerRes.transform[0].translateY + lowerRes.height;
+        assert.ok(maskBottomInScreen <= attrScreenTop + 1e-6,
+          `[${rendererStyle} ${orientation} offset=${scrollOffset}] mask bottom (${maskBottomInScreen}) exceeds attribution top (${attrScreenTop})`);
+      }
+
       if (attrScreenTop < r.top) {
         assert.ok(upperRes.transform[0].translateY <= attrScreenTop,
           `[${rendererStyle} ${orientation} offset=${scrollOffset}] upper mask translateY (${upperRes.transform[0].translateY}) must be <= attrScreenTop (${attrScreenTop})`);
       }
-
-      // For EVERY screen Y point within attribution bounds, blur mask weight MUST be strictly 0.0000
-      for (let y = Math.floor(attrScreenTop); y <= Math.ceil(attrScreenBottom); y++) {
-        const weights = sharedApi.sharedBlurMaskWeightAtY(y, { top: r.top, bottom: r.bottom }, { top: attrScreenTop, bottom: attrScreenBottom }, prof);
-        assert.equal(weights.near, 0, `Near blur weight at y=${y} inside attribution must be 0`);
-        assert.equal(weights.far, 0, `Far blur weight at y=${y} inside attribution must be 0`);
-        assert.equal(weights.sum, 0, `Total blur weight at y=${y} inside attribution must be 0`);
-      }
     }
 
-    // Dynamic geometry change: attribution height expands (e.g. multi-line songwriting credits)
-    attrH = isLandscape ? 140 : 220;
+    // Dynamic geometry change: row-height change / attribution expansion immediately updates clipping height
+    attrY = isLandscape ? 380 : 480;
     testAttrRef.value = { y: attrY, height: attrH };
     testOffsetRef.value = 100;
     const expandedLower = testLowerStyle();
@@ -794,10 +811,19 @@ for (const rendererStyle of ['spicy', 'amll']) {
     assert.equal(expandedLower.height, Math.max(0, Math.min(vSpanHeight, expAttrScreenTop - expR.bottom)),
       `Dynamic attribution height expansion immediately updates mask exclusion boundary in ${rendererStyle} ${orientation}`);
 
-    // Missing/null attribution falls back to full spanHeight
+    // Unknown geometry initially / on track reset / on rotation: safely suppress intersecting lower blur
     testAttrRef.value = null;
-    const fallbackLower = testLowerStyle();
-    assert.equal(fallbackLower.height, vSpanHeight, 'Null attribution leaves blur span unclipped');
+    const suppressedLower = testLowerStyle();
+    assert.equal(suppressedLower.height, 0, 'Unknown attribution geometry (null) safely sets lower mask height to 0');
+    assert.equal(suppressedLower.overflow, 'hidden', 'Suppressed lower mask retains overflow: hidden');
+    assert.equal(sharedApi.hasBlurGeometry(attrRows, testWinRef.value, 500, null, true), false,
+      'hasBlurGeometry safely returns false when footer exists and attribution is unknown');
+
+    testAttrRef.value = { y: 0, height: 120 };
+    const zeroYLower = testLowerStyle();
+    assert.equal(zeroYLower.height, 0, 'Unmeasured attribution (y=0) safely sets lower mask height to 0');
+    assert.equal(sharedApi.hasBlurGeometry(attrRows, testWinRef.value, 500, { y: 0, height: 120 }, true), false,
+      'hasBlurGeometry safely returns false when attribution y is 0');
   }
 }
 

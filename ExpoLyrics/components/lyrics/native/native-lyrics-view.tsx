@@ -62,6 +62,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const lyrics = usePlaybackStore(state => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
   const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : transition?.packet.lyricsSource ?? state.lyricsSource);
   const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
+  const hasFooter = Boolean(metadata?.credits?.songwriters?.length || metadata?.attribution);
+  const footerLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const status = usePlaybackStore(state => demoLyrics ? '' : transition?.packet.lyricsStatusMessage ?? state.lyricsStatusMessage);
   const trackDuration = usePlaybackStore(state => demoLyrics ? 0 : state.currentTrack?.durationMs ?? 0);
   const playing = usePlaybackStore(state => demoLyrics ? demoPlayback?.isPlaying ?? demoIsPlaying ?? true : state.isPlaying);
@@ -110,6 +112,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
     motionRegistry.value = {};
+    if (typeof footerLayoutRef !== 'undefined' && footerLayoutRef) footerLayoutRef.current = null;
     if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
   const rendererReadyGate = useRef(new NativeRendererReadyRefreshGate());
@@ -186,7 +189,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const traceContext = useArrivalGeometry(traceScope, __DEV__ ? [trace, traceGeneration, landscapeMode, fontScale, viewportHeight, viewportWidth, fonts, list, reveal, showTranslatedText] : undefined);
   const layoutConfiguration = `${fontScale}:${landscapeMode}:${list}:${reveal}:${showTranslatedText}:${viewportHeight}:${viewportWidth}`;
   const blurGeometryKey = `${scrollSourceKey}:${layoutConfiguration}`;
-  const sharedBlurReady = sharedBlurEnabled && blurReadyKey === blurGeometryKey;
+  const hasKnownAttribution = !hasFooter || Boolean(attributionGeometry?.value && attributionGeometry.value.height > 0 && attributionGeometry.value.y > 0);
+  const sharedBlurReady = sharedBlurEnabled && blurReadyKey === blurGeometryKey && (typeof hasKnownAttribution === 'undefined' ? true : hasKnownAttribution);
   const blurReadyKeyRef = useRef(blurReadyKey);
   blurReadyKeyRef.current = blurReadyKey;
   const blurGeometryKeyRef = useRef(blurGeometryKey);
@@ -197,6 +201,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     blurRows.value = [];
     setBlurReadyKey('');
     translationOnlyLayout.current = false;
+    if (typeof footerLayoutRef !== 'undefined' && footerLayoutRef) footerLayoutRef.current = null;
     if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
   }
   const preview = !!demoLyrics && demoLayout === 'preview';
@@ -272,10 +277,13 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     if (range) scrollTo(range.startIndex, !seek);
     if (sharedBlurEnabled && blurReadyKeyRef.current !== blurGeometryKeyRef.current) {
       const snapshot = blurRows.value;
-      if (snapshot && snapshot.length > 0 && hasBlurGeometry(snapshot, next, time)) {
+      const footerPresent = typeof hasFooter !== 'undefined' && hasFooter;
+      const knownAttr = !footerPresent || Boolean(typeof attributionGeometry !== 'undefined' && attributionGeometry?.value && attributionGeometry.value.height > 0 && attributionGeometry.value.y > 0);
+      if (snapshot && snapshot.length > 0 && knownAttr && hasBlurGeometry(snapshot, next, time, typeof attributionGeometry !== 'undefined' ? attributionGeometry?.value : null, footerPresent)) {
         setBlurReadyKey(blurGeometryKeyRef.current);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, blurRows, onActiveLineChange, reveal, scrollTo, sharedBlurEnabled, style]);
   const cueIdentity = useMemo(() => ({ sourceKey: scrollSourceKey, token: ++generation.current }), [scrollSourceKey]);
   const token = cueIdentity.token;
@@ -337,20 +345,23 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
         start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)), interlude: row.interlude, voices: [row.lead, ...row.backgrounds].map(voice => ({ start: voice.start, end: voice.end })) };
     });
     blurRows.value = snapshot;
-    if (typeof metadata !== 'undefined' && (metadata?.credits?.songwriters?.length || metadata?.attribution)) {
-      if (typeof attributionGeometry !== 'undefined' && attributionGeometry?.value) {
-        const currentAttr = attributionGeometry.value;
-        if (currentAttr && currentAttr.height > 0 && currentAttr.y <= 0 && snapshot.length > 0) {
-          const last = snapshot[snapshot.length - 1];
-          if (last && last.height > 0) {
-            attributionGeometry.value = { y: last.y + last.height + 18, height: currentAttr.height };
-          }
+    const footerPresent = typeof hasFooter !== 'undefined' && hasFooter;
+    if (footerPresent && typeof footerLayoutRef !== 'undefined' && footerLayoutRef.current && snapshot.length > 0) {
+      const last = snapshot[snapshot.length - 1];
+      if (last && Number.isFinite(last.y) && Number.isFinite(last.height) && last.height > 0) {
+        if (typeof attributionGeometry !== 'undefined' && attributionGeometry) {
+          attributionGeometry.value = {
+            y: last.y + last.height + footerLayoutRef.current.y,
+            height: footerLayoutRef.current.height,
+          };
         }
       }
     }
     const time = currentPosition.current;
     const currentWin = latestWindow.current ?? getPlaybackWindowState(time, latestLyrics.current, latestBackgrounds.current, latestTiming.current);
-    setBlurReadyKey(hasBlurGeometry(snapshot, currentWin, time) ? blurGeometryKey : '');
+    const knownAttr = !footerPresent || Boolean(typeof attributionGeometry !== 'undefined' && attributionGeometry?.value && attributionGeometry.value.height > 0 && attributionGeometry.value.y > 0);
+    setBlurReadyKey(knownAttr && hasBlurGeometry(snapshot, currentWin, time, typeof attributionGeometry !== 'undefined' ? attributionGeometry?.value : null, footerPresent) ? blurGeometryKey : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled]);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
@@ -362,17 +373,20 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     onPress={press} onLongPress={longPress} />,
   [fontScale, hasDuet, landscapeMode, longPress, playing, position, press, preview, referenceScroll, reveal, selectedLineKeys, showTranslatedText, staticLyrics, style, viewportWidth,
     tapToSeekEnabled, presentationWindow, experimentalWindow, seekVersion]);
-  const footer = useMemo(() => !metadata.credits?.songwriters?.length && !metadata.attribution ? null : <Pressable
+  const footer = useMemo(() => !hasFooter ? null : <Pressable
     style={[styles.footer, landscapeMode && styles.rightFooter]}
     onLayout={event => {
       const { y, height } = event.nativeEvent.layout;
       if (Number.isFinite(height) && height > 0) {
-        let actualY = y;
-        if ((!actualY || actualY <= 0) && blurRows.value.length > 0) {
-          const last = blurRows.value[blurRows.value.length - 1];
-          if (last && last.height > 0) actualY = last.y + last.height + 18;
+        const layoutY = Number.isFinite(y) ? y : 0;
+        footerLayoutRef.current = { y: layoutY, height };
+        const snapshot = blurRows.value;
+        if (snapshot && snapshot.length > 0) {
+          const last = snapshot[snapshot.length - 1];
+          if (last && Number.isFinite(last.y) && Number.isFinite(last.height) && last.height > 0) {
+            attributionGeometry.value = { y: last.y + last.height + layoutY, height };
+          }
         }
-        attributionGeometry.value = { y: actualY, height };
       }
     }}
     onPress={() => {
@@ -393,7 +407,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
       <Text style={styles.credits}><Text style={styles.strong}>{index === 1 ? 'Uploaded By: ' : 'Made By: '}</Text><Text style={profile.url && /^https:\/\//i.test(profile.url) ? styles.profileLink : undefined}>@{profile.username}</Text></Text>
       {!!profile.avatar && <Image source={{ uri: profile.avatar }} style={styles.avatar} accessibilityLabel={`${profile.username}'s avatar`} />}
     </Pressable>)}
-  </Pressable>, [attributionGeometry, blurRows, landscapeMode, lyrics, metadata, onCreditsTimestampPress, onUserInteraction]);
+  </Pressable>, [attributionGeometry, blurRows, hasFooter, landscapeMode, lyrics, metadata, onCreditsTimestampPress, onUserInteraction]);
   const retryFlatScroll = useCallback(({ index, averageItemLength }: { index: number; averageItemLength: number }) => {
     if (!following.current) return;
     pendingScroll.current = { index, animated: false };
@@ -436,7 +450,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} attribution={attributionGeometry} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} attribution={attributionGeometry} hasAttribution={hasFooter} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
