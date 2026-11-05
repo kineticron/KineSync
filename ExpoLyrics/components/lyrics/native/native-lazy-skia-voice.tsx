@@ -2,7 +2,9 @@ import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
 import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useContext, useMemo, useRef, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { isLoaded } from 'expo-font';
+import { NativeSharedBlurContext } from './native-shared-blur';
+import { StyleSheet, Text } from 'react-native';
 import { Blur, Canvas, Glyphs, Group, Paint, Paragraph, Skia, TextAlign } from '@shopify/react-native-skia';
 import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { type NativePaintWord, type NativeVoice } from './native-lyrics-model';
@@ -20,6 +22,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
   voice: NativeVoice; position: SharedValue<number>; fontSize: number; lineHeight: number;
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean; prepareGlyphs?: boolean;
 }) {
+  const sharedBlur = useContext(NativeSharedBlurContext);
   const trace = useArrivalVoice();
   if (__DEV__) arrivalCounter(trace.handle, 'voiceRenders');
   const fonts = useContext(NativeLyricsFontContext);
@@ -97,10 +100,14 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
       paragraph.layout(textWidth);
       if (__DEV__) arrivalEvent(trace.handle, trace.generation, 'paragraph-height-layout', layoutStart, arrivalNow(trace.handle), 1);
       const mainPadding = !spicy && background && !staticLyrics ? fontSize * 0.2 : 0;
-      return { paragraph, paintWords, height: paragraph.getHeight(), mainPadding };
+      return { paragraph, text, paintWords, height: paragraph.getHeight(), mainPadding };
     });
   }, [background, batched, fonts, fontSize, lineHeight, right, spicy, staticLyrics, textWidth,
     voicePaintText, voicePaintWords, voiceWords, voiceStart, voiceEnd, width]);
+  // Restrict to simple Latin without custom word gaps or translations. Other scripts retain native glyph fallback.
+  const [incompatibleLayout, setIncompatibleLayout] = useState<unknown>(null);
+  const rnCompatible = sharedBlur && spicy && !right && !background && !(showTranslation && translation) && isLoaded('KineSync-SF-Bold') && incompatibleLayout !== layout && /^[\x20-\x7e\n]*$/.test(voicePaintText) && !voicePaintWords.some(word => word.gapAfter);
+  const coldText = rnCompatible && !exactGlyphs;
   const shaped = useMemo(() => {
     if (!layout) return null;
     ++shapeRevision.current;
@@ -148,7 +155,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
   // Extract whole native runs once per exact geometry. Preserve fallback fonts,
   // native visual order and run origins; no word/letter slicing or masks.
   const coldRuns = useMemo(() => {
-    if (!layout || exactGlyphs) return [];
+    if (!layout || exactGlyphs || coldText) return [];
     return nativeGeometryCache.get(fonts!, ['cold-runs-v1', background, batched, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd, voiceWords, voicePaintText, voicePaintWords], voicePaintText.length, () => {
       const extract = () => {
         const runs: { font: import('@shopify/react-native-skia').SkFont;
@@ -161,10 +168,11 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
       };
       return __DEV__ ? arrivalSpan(trace.handle, trace.generation, 'cold-run-extraction', extract) : extract();
     });
-  }, [layout, exactGlyphs, fonts, background, batched, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd, voiceWords, voicePaintText, voicePaintWords]);
+  }, [layout, exactGlyphs, coldText, fonts, background, batched, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd, voiceWords, voicePaintText, voicePaintWords]);
   const inactiveOpacity = useDerivedValue(() => spicy
     ? position.value > voiceEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5
     : position.value > voiceEnd ? lineMotion.value.bright : lineMotion.value.dark);
+  const nativeAlpha = useAnimatedStyle(() => ({ opacity: inactiveOpacity.value }));
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
   const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {
@@ -172,9 +180,10 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     const next = event.nativeEvent.layout.width;
     setWidth(previous => Math.abs(previous - next) > 0.1 ? next : previous);
   }}>
-    {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
+    {coldText && layout && <Animated.View pointerEvents="none" style={[{ height: layout.height, paddingTop: layout.mainPadding }, nativeAlpha]}><Text accessible={false} allowFontScaling={false} textBreakStrategy="simple" onTextLayout={event => { const expected = layout.text.split('\n'); if (event.nativeEvent.lines.length !== expected.length || event.nativeEvent.lines.some((line, index) => line.text.trim() !== expected[index]?.trim())) setIncompatibleLayout(layout); }} style={{ color: 'white', fontFamily: 'KineSync-SF-Bold', fontSize, lineHeight, width: textWidth, height: layout.height, includeFontPadding: false }}>{layout.text}</Text></Animated.View>}
+    {shaped && !coldText && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
-        <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
+        <Group layer={!sharedBlur && (batched || !spicy) ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
         <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group color="white" opacity={inactiveOpacity}>{coldRuns.map((run, index) => <Glyphs key={index} font={run.font} glyphs={run.glyphs} />)}</Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
         }</Group>

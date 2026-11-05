@@ -58,3 +58,43 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  let resolve;const pending=load('lib/fast-lyric-loading.ts',{...modules,'@react-native-async-storage/async-storage':{...storage,getItem:()=>new Promise(done=>{resolve=done;})}});const loading=pending.loadFastLyricLoading();await pending.setFastLyricLoading(true);resolve('false');await loading;assert.equal(pending.getFastLyricLoading(),true);
  console.log('Fast lyric loading PASS: persistence/release gate, actual OFF differential, active+next2/overlap/background/approach, 60 cold distant mounts = 0 word/letter shaping (whole-run extraction used), upgrade/seek/rotation/translation/Indic/recycling/stale callbacks/settling retention. Native mocks; phone raster acceptance pending.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Execute the RN cold branch with the same prepared paragraph and fixed outer height.
+{
+ const h=createVoiceHarness(lazyCode,true,{dev:true,sharedBlur:true,arrivalTrace:trace});
+ const latin={...voice,paintText:'hello\nworld',paintWords:[],translation:''};
+ let cold=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ cold.props.onLayout({nativeEvent:{layout:{width:320}}});
+ cold=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ assert.equal(find(cold,'Canvas'),null); assert.equal(find(cold,h.NativeGlyphPicture),null);
+ assert.equal(find(cold,'Text').props.children,'hello\nworld');
+ assert.equal(h.counters.coldRunExtractions,0);
+ find(cold,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'hello'},{text:'world'}]}});
+ const height=cold.props.style[0].height;
+ const promoted=h.render(latin,{prepareGlyphs:true,showTranslation:false});
+ assert.equal(promoted.props.style[0].height,height);assert(find(promoted,'Canvas'));
+ assert.equal(find(h.render(latin,{prepareGlyphs:false,showTranslation:false,right:true}),'Text'),null);
+ assert.equal(find(h.render({...latin,translation:'translation'},{prepareGlyphs:false}),'Text'),null);
+ const rotated=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ rotated.props.onLayout({nativeEvent:{layout:{width:640}}});
+ const resized=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ assert.equal(resized.props.style[0].height,height);
+ find(resized,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'unexpected wrapping'}]}});
+ assert.equal(find(h.render(latin,{prepareGlyphs:false,showTranslation:false}),'Text'),null,'incompatible native breaks retain Skia');
+}
+{
+ const {sharedBlurRegion}=load('components/lyrics/native/native-shared-blur.tsx',{
+ react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+ '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
+ const rows=Array.from({length:12},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
+ const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
+ const a=sharedBlurRegion(rows,w,0,0),b=sharedBlurRegion(rows,w,0,137);
+ assert.equal(a.top-b.top,137);assert.equal(a.bottom-b.bottom,137);
+ assert.equal(a.bottom,696); // active + next two + transition clearance
+ assert.equal(sharedBlurRegion([],w,0,0).top,-100000);
+ assert(sharedBlurRegion(rows,w,0,2000).bottom<0,'offscreen content stays offscreen');
+ assert.equal(sharedBlurRegion(rows,{...w,visualActiveLineStartIndex:7,visualActiveLineEndIndex:7},0,0).top,604);
+ const rotated=rows.map(r=>({...r,y:r.y*2,height:200}));
+ assert.equal(sharedBlurRegion(rotated,w,0,0).top,504);
+ console.log('Shared blur prototype PASS: cold RN no Canvas/Picture/run extraction, fixed promotion/rotation height, RTL/translation fallback, actual-offset mask/seek/offscreen/rotation geometry.');
+}

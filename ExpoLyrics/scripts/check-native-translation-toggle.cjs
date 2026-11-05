@@ -71,9 +71,11 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const actualArrivalContext = layouts.arrivalContextFactory?.(react);
   const modules = {
     react,
+    'expo-font': { isLoaded: () => true },
+    './native-shared-blur': { NativeSharedBlurContext: { value: !!layouts.sharedBlur } },
     "@/lib/lyrics-arrival-context": actualArrivalContext ?? layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1, voiceInstance: 1 }), useArrivalShapeAttribution() {} },
     "@/lib/lyrics-arrival-trace": actualArrivalContext ?? layouts.arrivalTrace ?? {},
-    'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
+    'react-native': { Text: 'Text', StyleSheet: { create: styles => styles, absoluteFill: {} } },
     '@shopify/react-native-skia': { Glyphs: 'Glyphs', Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
       Mask: 'Mask', Paint: 'Paint', Paragraph: 'Paragraph', Rect: 'Rect', Skia: skia, TextAlign: { Left: 0, Right: 1 } },
     'react-native-reanimated': { __esModule: true, default: { View: 'Animated.View' }, Easing: { bezier: () => () => 0 },
