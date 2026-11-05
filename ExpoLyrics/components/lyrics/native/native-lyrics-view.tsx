@@ -1,10 +1,9 @@
 import { BlurTargetView } from 'expo-blur';
-import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, type BlurGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, AppState, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { useAnimatedReaction, useDerivedValue, useSharedValue } from 'react-native-reanimated';
@@ -49,9 +48,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
-  const fastLoading = useFastLyricLoading();
-  // iOS tint and masked backdrop sampling require phone acceptance.
-  const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && style === 'spicy' && list === 'flash' && reveal === 'canvas';
+  // Fixed-radius backdrop blur cannot reproduce Spicy's per-line Gaussian radius.
+  // Keep the prototype dormant; lazy glyph preparation remains enabled independently.
+  const sharedBlurEnabled = false;
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
   const [blurReadyKey, setBlurReadyKey] = useState('');

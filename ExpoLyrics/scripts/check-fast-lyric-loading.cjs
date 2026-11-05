@@ -1,5 +1,6 @@
 /* global __dirname */
 'use strict';
+require('./check-spicy-progressive-blur.cjs');
 const assert=require('node:assert/strict'),path=require('node:path'),vm=require('node:vm'),{execFileSync}=require('node:child_process'),{buildSync}=require('esbuild');
 const {bundle,createVoiceHarness,currentCode}=require('./check-native-translation-toggle.cjs');
 function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{assert(name in modules,name);return modules[name];}});return module.exports;}
@@ -40,6 +41,16 @@ for(const background of [false,true])for(const sung of [false,true]){
  const {tree}=mount(lazyCode,true,{prepareGlyphs:false,background,position:{value:sung?200000:0}},true);
  assert.equal(paragraphAlpha(tree),sung?background?0.6:0.85:background?0.3:0.5,'paragraph preserves Spicy lead/background sung/unsung paint alpha');
 }
+// Production Fast Spicy has no shared provider: cold and promoted glyphs
+// both carry the real Gaussian layer; cold RN Text cannot represent this blur.
+{
+ const {h,tree}=mount(lazyCode,true,{prepareGlyphs:false,blur:{value:4},lineActive:{value:false}},true);
+ function gaussian(node){if(!node||typeof node!=='object')return null;const blur=find(node.props?.layer,'Blur');if(blur)return blur;for(const child of [node.props?.children].flat()){const result=gaussian(child);if(result)return result;}return null;}
+ assert.equal(find(tree,'Text'),null);assert(find(tree,'Glyphs'));
+ assert.equal(gaussian(tree).props.blur.value,2);
+ const promoted=h.render(voice,{prepareGlyphs:true,blur:{value:4},lineActive:{value:false}});
+ assert(find(promoted,h.NativeGlyphPicture));assert.equal(gaussian(promoted).props.blur.value,2);
+}
 const host=fastHost(),window={visualActiveLineStartIndex:5,visualActiveLineEndIndex:9,focusLineIndex:5};
 for(let i=0;i<15;i++)assert.equal(host.needsExactGlyphs(i,100000,101000,0,window),i>=5&&i<=11);
 assert.equal(host.needsExactGlyphs(20,1000,9000,2000,window),true,'independent overlapping background');
@@ -59,7 +70,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  console.log('Fast lyric loading PASS: persistence/release gate, actual OFF differential, active+next2/overlap/background/approach, 60 cold distant mounts = 0 word/letter shaping (whole-run extraction used), upgrade/seek/rotation/translation/Indic/recycling/stale callbacks/settling retention. Native mocks; phone raster acceptance pending.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
-// Execute the RN cold branch with the same prepared paragraph and fixed outer height.
+// Dormant prototype coverage: execute the RN cold branch with the same prepared paragraph and fixed outer height.
 {
  const h=createVoiceHarness(lazyCode,true,{dev:true,sharedBlur:true,arrivalTrace:trace});
  const latin={...voice,paintText:'hello\nworld',paintWords:[],translation:''};
@@ -151,7 +162,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  let tree=exact.render(voice);tree.props.onLayout({nativeEvent:{layout:{width:320}}});tree=exact.render(voice);
  function outerBlur(node){if(!node||typeof node!=='object')return false;const layer=node.props?.layer;if(layer?.props?.children?.type==='Blur')return true;return [node.props?.children].flat().some(outerBlur);}
  assert.equal(outerBlur(tree),false,'experimental exact Skia owner omits outer blur');
- console.log('Shared blur hook checks PASS: 1000 rows/120 frames one scan; approach/geometry updates; missing geometry/track reset/rotation; exact Skia outer blur disabled.');
+ console.log('Dormant shared blur prototype hook checks PASS: 1000 rows/120 frames one scan; approach/geometry updates; missing geometry/track reset/rotation; exact Skia outer blur disabled.');
 }
 {
  const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
@@ -172,8 +183,8 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');assert.equal(context.ready,'');
  const rowSource=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyric-row.tsx'),'utf8');
  assert(rowSource.includes('onLayout={refreshGeometry}'));assert(rowSource.includes('[refreshGeometry, row]'));
- assert(source.includes('blurRows.value = []'));assert(source.includes("Platform.OS === 'ios' ||"));
- console.log('Shared geometry refresh PASS: missing/rotation/reuse snapshots, row layout+identity wiring, iOS opt-in and invalidation wiring.');
+ assert(source.includes('blurRows.value = []'));assert(source.includes('const sharedBlurEnabled = false;'));
+ console.log('Shared geometry refresh PASS: missing/rotation/reuse snapshots, row layout+identity wiring, dormant production gate and invalidation wiring.');
 }
 // Execute onTextLayout with matching strings and independently altered native
 // measurements. These mock coordinates exercise rejection, not phone parity.
