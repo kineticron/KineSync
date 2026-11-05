@@ -148,6 +148,9 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
   // Cold inactive AMLL has no partial reveal: the exact picture shader is
   // uniformly dark before the voice and bright after it. Retained/promoted
   // voices keep the exact painter for release motion and partial reveals.
+  // Paragraph paints its own intrinsic text color, ignoring inherited Group
+  // paint opacity. Composite only the inactive main paragraph through a Paint
+  // layer; keep translations outside it and retain the shared outer blur.
   // The independent outer Spicy opacity still applies once above.
   const inactiveOpacity = useDerivedValue(() => spicy
     ? position.value > voiceEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5
@@ -162,7 +165,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group opacity={inactiveOpacity}><Paragraph paragraph={shaped.paragraph} x={0} y={0} width={textWidth} /></Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group layer={<Paint opacity={inactiveOpacity} />}><Paragraph paragraph={shaped.paragraph} x={0} y={0} width={textWidth} /></Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
         }</Group>
         {translationLayout && <Paragraph paragraph={translationLayout.paragraph} x={spicy ? 2 : 0}

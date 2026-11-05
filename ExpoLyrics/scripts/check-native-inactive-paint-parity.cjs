@@ -2,6 +2,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { paragraphComposite } = require('./skia-paragraph-compositing-harness.cjs');
 const path = require('node:path');
 const { mount: exactMount, source } = require('./check-native-glyph-idle.cjs');
 const { bundle, createVoiceHarness, currentCode } = require('./check-native-translation-toggle.cjs');
@@ -45,15 +46,17 @@ for (const dark of [0.13, 0.2, 0.4]) for (const bright of [0.2, 0.73, 1]) for (c
   const props = { prepareGlyphs: false, background, right, showTranslation, lineActive: { value: false }, position: { value: time },
     lineMotion: { value: { scale: 0.97, velocity: 0, dark, bright } }, blur: { value: blur } };
   const lazy = render(lazyCode, spicy, props), original = render(currentCode, spicy, props);
-  const opacity = nodes(lazy.tree, node => node.type === 'Group' && node.props.opacity)[0].props.opacity.value;
-  assert.equal(opacity, alpha, JSON.stringify({ spicy, background, sung, dark, bright, blur }));
+  const mainGroup = nodes(lazy.tree, node => node.type === 'Group' &&
+    [node.props.children].flat().some(child => child?.type === 'Paragraph' && child.props.paragraph.text === voice.paintText))[0];
+  const composite = paragraphComposite(mainGroup);
+  assert.equal(composite.alpha, alpha, JSON.stringify({ spicy, background, sung, dark, bright, blur }));
   assert.equal(lazy.h.counters.glyphShapePasses, 0, 'cold inactive parity must not prepare glyphs');
   assert.equal(exact.blurFilters, 0, 'actual inactive painter has no internal blur at this HEAD');
   const presentation = tree => plain({ style: tree.props.style, canvas: nodes(tree, node => node.type === 'Canvas')[0].props.style,
     transforms: nodes(tree, node => node.type === 'Group' && node.props.transform).map(node => node.props.transform),
-    blur: nodes(tree, node => node.type === 'Group' && node.props.layer).map(node => node.props.layer),
+    blur: nodes(tree, node => node.type === 'Group' && nodes(node.props.layer, child => child.type === 'Blur').length).map(node => node.props.layer),
     translations: nodes(tree, node => node.type === 'Paragraph' && node.props.paragraph.text === 'translation').map(node => node.props) });
   assert.deepEqual(presentation(lazy.tree), presentation(original.tree), 'outer presentation, translations, transforms and blur equal exact wrapper');
   exact.unmount(); lazy.h.unmount(); original.h.unmount(); cases++;
 }
-console.log(`Inactive paint parity PASS: ${cases} actual exact-painter alpha and outer-presentation cases; native raster acceptance remains separate.`);
+console.log(`Inactive paint parity PASS: ${cases} actual exact-painter vs installed Skia paragraph-composite and outer-presentation cases; native raster acceptance remains separate.`);
