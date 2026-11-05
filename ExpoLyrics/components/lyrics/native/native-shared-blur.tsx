@@ -5,10 +5,22 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
+import { measuredProtection, type Protection } from './native-progressive-blur';
 
 export const NativeSharedBlurContext = createContext(false);
 export const NativeBlurGeometryContext = createContext<(() => void) | undefined>(undefined);
-export type BlurGeometry = { y: number; height: number; start: number; end: number }[];
+export type BlurRow = {
+  y: number;
+  height: number;
+  start: number;
+  end: number;
+  interlude?: { start: number; end: number };
+  voices?: { start: number; end: number }[];
+};
+export type BlurGeometry = BlurRow[];
+
+export const SHARED_BLUR_NEAR_INTENSITY = 10;
+export const SHARED_BLUR_FAR_INTENSITY = 24;
 
 export function hasBlurGeometry(rows: BlurGeometry) {
   // Conservative prototype gate: partial snapshots can leave both protected
@@ -22,86 +34,150 @@ export function sameBlurGeometry(a: BlurGeometry, b: BlurGeometry) {
     row.y === b[i].y && row.height === b[i].height && row.start === b[i].start && row.end === b[i].end);
 }
 
-/** FlashList cells are ordered/nonoverlapping. Unknown cells are protected
- * between real neighboring cell edges, never extrapolated from guessed heights.
- * Missing lookahead can extend one edge without discarding the other safe edge. */
-export function sharedBlurRegion(rows: BlurGeometry, window: PlaybackWindowState, time: number, offset: number) {
+/**
+ * Exact numerical weights for complementary multi-tier shared blur masks.
+ * Inside protected region (distance <= 0): near=0, far=0, sum=0.
+ * In transition: near + far = 1.0 (continuous, no seam).
+ * Everywhere: near + far <= 1.0.
+ */
+export function sharedBlurMaskWeights(distance: number, _spanHeight = 1000, d1 = 60, dNear = 100, dCross = 60) {
   'worklet';
-  let top = Infinity, bottom = -Infinity;
-  const first = window.visualActiveLineStartIndex;
-  const last = window.visualActiveLineEndIndex;
-  const focus = Math.max(0, window.focusLineIndex);
-  const known = rows.map(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
-  const nextEdges: number[] = [];
-  let next = Infinity;
-  for (let i = rows.length - 1; i >= 0; i--) {
-    nextEdges[i] = next;
-    if (known[i]) next = rows[i].y;
+  if (distance <= 0) return { near: 0, far: 0, sum: 0 };
+  let near = 0, far = 0;
+  if (distance < d1) {
+    near = distance / d1;
+    far = 0;
+  } else if (distance <= d1 + dNear) {
+    near = 1;
+    far = 0;
+  } else if (distance < d1 + dNear + dCross) {
+    const t = (distance - (d1 + dNear)) / dCross;
+    near = 1 - t;
+    far = t;
+  } else {
+    near = 0;
+    far = 1;
   }
-  let previous = -Infinity;
-  rows.forEach((row, index) => {
-    if (first >= 0 && index >= first && index <= last ||
-      first < 0 && index === focus ||
-      time >= row.start && time <= row.end) {
-      top = Math.min(top, (known[index] ? row.y : previous) - offset - 24);
-      bottom = Math.max(bottom, (known[index] ? row.y + row.height : nextEdges[index]) - offset + 24);
-    }
-    if (known[index]) previous = row.y + row.height;
-  });
-  return top !== Infinity ? { top, bottom } : { top: -Infinity, bottom: Infinity };
+  return { near, far, sum: near + far };
+}
+
+/**
+ * Computes measured protection boundaries for active voices and the complete next
+ * semantic row (wraps, translations, interludes/dots). Strictly zero constant offset.
+ * Missing/unmeasured geometry opens the safe zone to infinity.
+ */
+export function sharedBlurRegion(rows: BlurGeometry, window: PlaybackWindowState, time: number, offset = 0) {
+  'worklet';
+  const protection = measuredProtection(rows, window, time);
+  return {
+    top: Number.isFinite(protection.top) ? protection.top - offset : -Infinity,
+    bottom: Number.isFinite(protection.bottom) ? protection.bottom - offset : Infinity,
+  };
 }
 
 export function sharedBlurViewport(region: { top: number; bottom: number }, offset: number, height: number) {
   'worklet';
   const limit = height + 160;
   if (region.top === -Infinity && region.bottom === Infinity) return { top: -limit, bottom: limit };
-  return { top: Math.max(-limit, Math.min(limit, region.top - offset)), bottom: Math.max(-limit, Math.min(limit, region.bottom - offset)) };
+  return {
+    top: region.top === -Infinity ? -limit : Math.max(-limit, Math.min(limit, region.top - offset)),
+    bottom: region.bottom === Infinity ? limit : Math.max(-limit, Math.min(limit, region.bottom - offset)),
+  };
 }
 
 export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
 }) {
-  const region = useSharedValue({ top: -Infinity, bottom: Infinity });
-  const animatedTop = useSharedValue(0);
-  const animatedBottom = useSharedValue(0);
+  const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
+  const animatedTop = useSharedValue(-Infinity);
+  const animatedBottom = useSharedValue(Infinity);
+
   useAnimatedReaction(() => {
-    // Discrete timing bucket: scanning occurs only at an approach/start/end deadline,
-    // a presentation cue, or a new geometry snapshot, never on scroll frames.
     let low = 0, high = deadlines.length;
     while (low < high) { const mid = (low + high) >>> 1; if (deadlines[mid] <= position.value) low = mid + 1; else high = mid; }
     return { bucket: low, geometry: rows.value, window: window.value, seek: seekVersion.value };
   }, (next, previous) => {
     if (!previous || next.bucket !== previous.bucket || next.geometry !== previous.geometry || next.window !== previous.window || next.seek !== previous.seek) {
-      const targetRegion = sharedBlurRegion(next.geometry, next.window, position.value, 0);
-      const safe = Number.isFinite(targetRegion.top) && Number.isFinite(targetRegion.bottom);
-      const initialize = !previous || (next.geometry !== previous.geometry && !sameBlurGeometry(next.geometry, previous.geometry)) || next.seek !== previous.seek || !Number.isFinite(region.value.top) || !Number.isFinite(region.value.bottom);
-      // Ordinary cues may briefly overlap the soft mask; only explicit seeks
-      // and semantic geometry changes bypass interpolation.
-      if (safe && (initialize || targetRegion.top !== region.value.top || targetRegion.bottom !== region.value.bottom)) {
-        animatedTop.value = initialize ? targetRegion.top : withTiming(targetRegion.top, { duration: 240 });
-        animatedBottom.value = initialize ? targetRegion.bottom : withTiming(targetRegion.bottom, { duration: 240 });
+      const targetProtection = measuredProtection(next.geometry, next.window, position.value);
+      const old = protection.value;
+      const reset = !previous || (next.geometry !== previous.geometry && !sameBlurGeometry(next.geometry, previous.geometry)) || next.seek !== previous.seek || !Number.isFinite(old.bottom) || !Number.isFinite(targetProtection.bottom);
+      protection.value = targetProtection;
+      if (reset || targetProtection.top !== old.top) {
+        animatedTop.value = reset || !Number.isFinite(old.top) || !Number.isFinite(targetProtection.top) ? targetProtection.top : withTiming(targetProtection.top, { duration: 240 });
       }
-      region.value = targetRegion;
+      if (reset || targetProtection.bottom !== old.bottom) {
+        animatedBottom.value = reset || !Number.isFinite(old.bottom) || !Number.isFinite(targetProtection.bottom) ? targetProtection.bottom : withTiming(targetProtection.bottom, { duration: 240 });
+      }
     }
   });
+
+  // Critical Asymmetry:
+  // Forward cue: animatedBottom lags behind target.bottom -> max(animatedBottom, protection.bottom) guarantees next row is NEVER blurred.
+  // Reverse cue: animatedBottom smoothly moves up -> max(animatedBottom, protection.bottom) follows animatedBottom smoothly.
+  // Converse for top: min(animatedTop, protection.top) guarantees newly active row above is NEVER blurred while smoothly releasing downward.
   const upper = useAnimatedStyle(() => {
-    const r = sharedBlurViewport({ top: Number.isFinite(region.value.top) ? animatedTop.value : region.value.top, bottom: Number.isFinite(region.value.bottom) ? animatedBottom.value : region.value.bottom }, offset.value, height);
+    const rawTop = Number.isFinite(protection.value.top)
+      ? (Number.isFinite(animatedTop.value) ? Math.min(animatedTop.value, protection.value.top) : protection.value.top)
+      : -Infinity;
+    const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, offset.value, height);
     return { transform: [{ translateY: r.top }] };
   });
+
   const lower = useAnimatedStyle(() => {
-    const r = sharedBlurViewport({ top: Number.isFinite(region.value.top) ? animatedTop.value : region.value.top, bottom: Number.isFinite(region.value.bottom) ? animatedBottom.value : region.value.bottom }, offset.value, height);
+    const rawBottom = Number.isFinite(protection.value.bottom)
+      ? (Number.isFinite(animatedBottom.value) ? Math.max(animatedBottom.value, protection.value.bottom) : protection.value.bottom)
+      : Infinity;
+    const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, offset.value, height);
     return { transform: [{ translateY: r.bottom }] };
   });
-  return <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
-    style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
-      <Animated.View style={[{ position: 'absolute', top: -2 * height - 320, height: 2 * height + 320, width: '100%' }, upper]}>
-        <LinearGradient colors={['black', 'black', 'rgba(0,0,0,0.85)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.15)', 'transparent']} locations={[0, 1 - 160 / (2 * height + 320), 1 - 120 / (2 * height + 320), 1 - 80 / (2 * height + 320), 1 - 40 / (2 * height + 320), 1]} style={{ flex: 1 }} />
-      </Animated.View>
-      <Animated.View style={[{ position: 'absolute', height: 2 * height + 320, width: '100%' }, lower]}>
-        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.15)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.85)', 'black', 'black']} locations={[0, 40 / (2 * height + 320), 80 / (2 * height + 320), 120 / (2 * height + 320), 160 / (2 * height + 320), 1]} style={{ flex: 1 }} />
-      </Animated.View>
-    </View>}>
-    <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="default" intensity={18} />
-  </MaskedView>;
+
+  const spanHeight = 2 * height + 320;
+  const d1 = 60, dNear = 100, dCross = 60;
+  const l1 = d1 / spanHeight;
+  const l2 = (d1 + dNear) / spanHeight;
+  const l3 = (d1 + dNear + dCross) / spanHeight;
+
+  // Lower Near: 0 at anchor -> 1 at l1..l2 -> 0 at l3
+  const lowerNearColors: readonly [string, string, ...string[]] = ['transparent', 'rgba(0,0,0,0.5)', 'black', 'black', 'rgba(0,0,0,0.5)', 'transparent', 'transparent'];
+  const lowerNearLocs: readonly [number, number, ...number[]] = [0, l1 * 0.5, l1, l2, l2 + (l3 - l2) * 0.5, l3, 1];
+
+  // Lower Far: 0 at anchor..l2 -> 1 at l3..1
+  const lowerFarColors: readonly [string, string, ...string[]] = ['transparent', 'transparent', 'rgba(0,0,0,0.5)', 'black', 'black'];
+  const lowerFarLocs: readonly [number, number, ...number[]] = [0, l2, l2 + (l3 - l2) * 0.5, l3, 1];
+
+  // Upper Near: 0 at anchor (1) -> 1 at 1-l1..1-l2 -> 0 at 1-l3
+  const upperNearColors: readonly [string, string, ...string[]] = ['transparent', 'transparent', 'rgba(0,0,0,0.5)', 'black', 'black', 'rgba(0,0,0,0.5)', 'transparent'];
+  const upperNearLocs: readonly [number, number, ...number[]] = [0, 1 - l3, 1 - l3 + (l3 - l2) * 0.5, 1 - l2, 1 - l1, 1 - l1 * 0.5, 1];
+
+  // Upper Far: 0 at anchor (1)..1-l2 -> 1 at 1-l3..0
+  const upperFarColors: readonly [string, string, ...string[]] = ['black', 'black', 'rgba(0,0,0,0.5)', 'transparent', 'transparent'];
+  const upperFarLocs: readonly [number, number, ...number[]] = [0, 1 - l3, 1 - l3 + (l3 - l2) * 0.5, 1 - l2, 1];
+
+  return <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+    {/* Pass 1: Near Tier (Intensity 10, systemUltraThinMaterial) */}
+    <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+      style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
+        <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
+          <LinearGradient colors={upperNearColors} locations={upperNearLocs} style={{ flex: 1 }} />
+        </Animated.View>
+        <Animated.View style={[{ position: 'absolute', height: spanHeight, width: '100%' }, lower]}>
+          <LinearGradient colors={lowerNearColors} locations={lowerNearLocs} style={{ flex: 1 }} />
+        </Animated.View>
+      </View>}>
+      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="systemUltraThinMaterial" intensity={SHARED_BLUR_NEAR_INTENSITY} />
+    </MaskedView>
+    {/* Pass 2: Far Tier (Intensity 24, systemUltraThinMaterial) */}
+    <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
+      style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
+        <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
+          <LinearGradient colors={upperFarColors} locations={upperFarLocs} style={{ flex: 1 }} />
+        </Animated.View>
+        <Animated.View style={[{ position: 'absolute', height: spanHeight, width: '100%' }, lower]}>
+          <LinearGradient colors={lowerFarColors} locations={lowerFarLocs} style={{ flex: 1 }} />
+        </Animated.View>
+      </View>}>
+      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="systemUltraThinMaterial" intensity={SHARED_BLUR_FAR_INTENSITY} />
+    </MaskedView>
+  </View>;
 }
