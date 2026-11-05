@@ -1,5 +1,7 @@
+import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
+import { NativeProgressiveBlurContext, useMeasuredProgressiveBlur, type ProgressiveGeometry } from './native-progressive-blur';
 import { BlurTargetView } from 'expo-blur';
-import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, type BlurGeometry } from './native-shared-blur';
+import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -51,8 +53,10 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   // Fixed-radius backdrop blur cannot reproduce Spicy's per-line Gaussian radius.
   // Keep the prototype dormant; lazy glyph preparation remains enabled independently.
   const sharedBlurEnabled = false;
+  const fastLoading = useFastLyricLoading();
+  const measuredBlurEnabled = fastLoading && style === 'spicy' && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
-  const blurRows = useSharedValue<BlurGeometry>([]);
+  const blurRows = useSharedValue<ProgressiveGeometry>([]);
   const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
@@ -306,17 +310,19 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const longPress = useCallback((row: NativeLyricRow) => { onUserInteraction?.(); onLineLongPress?.(row.line); }, [onLineLongPress, onUserInteraction]);
   // Canvas presentation stays on the UI clock; background flow is permanent.
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
-  const blurDeadlines = useMemo(() => sharedBlurEnabled ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.start, v.end + 0.001])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled]);
+  const blurDeadlines = useMemo(() => (sharedBlurEnabled || measuredBlurEnabled) ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.start, v.end + 0.001]).concat(row.interlude ? [row.interlude.start, row.interlude.end] : [])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled, measuredBlurEnabled]);
   const refreshBlurGeometry = useCallback(() => {
-    if (!sharedBlurEnabled) return;
+    if (!sharedBlurEnabled && !measuredBlurEnabled) return;
+    const firstOffset = flashRef.current?.getFirstItemOffset();
     const snapshot = rows.map((row, index) => {
       const geometry = flashRef.current?.getLayout(index);
-      return { y: (geometry?.y ?? 0) + (flashRef.current?.getFirstItemOffset() ?? 0), height: geometry?.height ?? 0,
-        start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)) };
+      return { y: (geometry?.y ?? 0) + (firstOffset ?? 0), height: geometry && (!measuredBlurEnabled || geometry.isHeightMeasured && Number.isFinite(firstOffset)) ? geometry.height : 0,
+        start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)), interlude: row.interlude, voices: [row.lead, ...row.backgrounds].map(voice => ({ start: voice.start, end: voice.end })) };
     });
     blurRows.value = snapshot;
-    setBlurReadyKey(hasBlurGeometry(snapshot) ? blurGeometryKey : '');
-  }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled]);
+    if (sharedBlurEnabled) setBlurReadyKey(hasBlurGeometry(snapshot) ? blurGeometryKey : '');
+  }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled, measuredBlurEnabled]);
+  const progressiveBlur = useMeasuredProgressiveBlur(measuredBlurEnabled, blurRows, presentationWindow, position, seekVersion, blurDeadlines);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
     presentationWindow={presentationWindow}
@@ -389,7 +395,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : <NativeProgressiveBlurContext.Provider value={progressiveBlur}><NativeBlurGeometryContext.Provider value={measuredBlurEnabled ? refreshBlurGeometry : undefined}>{renderedContent}</NativeBlurGeometryContext.Provider></NativeProgressiveBlurContext.Provider>}
   </View>;
 }), { reuseSameSourcePackets: true });
 

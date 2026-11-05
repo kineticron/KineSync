@@ -169,18 +169,22 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback;
  let deadlineFactory;
  function deadlineVisit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='blurDeadlines')deadlineFactory=node.initializer.arguments[0].getText(ast);ts.forEachChild(node,deadlineVisit);}deadlineVisit(ast);
- const makeDeadlines=new Function('rows','sharedBlurEnabled',`return (${deadlineFactory})();`);
+ const makeDeadlines=new Function('rows','sharedBlurEnabled','measuredBlurEnabled',`return (${deadlineFactory})();`);
  assert.deepEqual(makeDeadlines([{lead:{start:2000,end:4000},backgrounds:[{start:2500,end:4500}]}],true),[500,1000,2000,2500,4000.001,4500.001],'actual lead/background starts join protection deadlines');
 
  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
  let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
  const refresh=vm.runInNewContext(callback,context);refresh();
  assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');assert.equal(context.ready,'','no safe geometry restores original per-voice blur');
  measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.ready,'song:portrait');assert.equal(context.blurRows.value[0].start,8000);
  measured={y:600,height:160};refresh();assert.equal(context.blurRows.value[0].y,750);assert.equal(context.blurRows.value[0].height,160);
  context.rows=[{lead:{start:40000,end:41000},backgrounds:[]}];measured=undefined;refresh();
  assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');assert.equal(context.ready,'');
+ context.sharedBlurEnabled=false;context.measuredBlurEnabled=true;
+ measured={y:600,height:160,isHeightMeasured:false};refresh();assert.equal(context.blurRows.value[0].height,0,'FlashList estimate cannot set protected edge');
+ measured.isHeightMeasured=true;refresh();assert.equal(context.blurRows.value[0].height,160);
+ context.flashRef.current.getFirstItemOffset=()=>undefined;refresh();assert.equal(context.blurRows.value[0].height,0,'Unknown content origin protects rows');
  const rowSource=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyric-row.tsx'),'utf8');
  assert(rowSource.includes('onLayout={refreshGeometry}'));assert(rowSource.includes('[refreshGeometry, row]'));
  assert(source.includes('blurRows.value = []'));assert(source.includes('const sharedBlurEnabled = false;'));
@@ -246,7 +250,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  }visit(ast);
  let layouts=[undefined,{y:100,height:100},undefined];
  const rows=[{lead:{start:0,end:9000},backgrounds:[]},{lead:{start:1000,end:9000},backgrounds:[]},{lead:{start:20000,end:21000},backgrounds:[]}];
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}}};
  const refresh=vm.runInNewContext(callback,context),ready=()=>vm.runInNewContext(readiness,context);
  refresh();const w={visualActiveLineStartIndex:1,visualActiveLineEndIndex:1,focusLineIndex:1};
  const unsafe=api.sharedBlurRegion(context.blurRows.value,w,1000,0);

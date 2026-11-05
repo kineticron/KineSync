@@ -2,55 +2,83 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const ts = require('typescript');
+const { buildSync } = require('esbuild');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const rowPath = 'components/lyrics/native/native-lyric-row.tsx';
 function radiusFactory(source) {
-  const ast = ts.createSourceFile('row.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let body;
-  function visit(node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'blurValue') body = node.initializer.arguments[0].body.getText(ast);
-    ts.forEachChild(node, visit);
-  }
-  visit(ast); assert(body);
-  return new Function('row', 'presentationWindow', 'rowActive', 'staticLyrics', 'spicy', 'fastLoading', 'withTiming', 'Easing', body);
+ const ast = ts.createSourceFile('row.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+ let body; function visit(node) { if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='blurValue') body=node.initializer.arguments[0].body.getText(ast); ts.forEachChild(node,visit); }
+ visit(ast);assert(body);
+ return new Function('row','presentationWindow','rowActive','staticLyrics','spicy','progressiveBlur','measuredBlurRadius','withTiming','Easing','fastLoading = true',body);
 }
-const factory = radiusFactory(process.env.SPICY_SOURCE_REV ? execFileSync('git', ['show', `${process.env.SPICY_SOURCE_REV}:ExpoLyrics/${rowPath}`], { cwd: root, encoding: 'utf8' }) : read(rowPath));
-const window = { value: { focusLineIndex: 3, visualActiveLineStartIndex: 3, visualActiveLineEndIndex: 4 } };
-function radius(index, fast = true, active = index >= 3 && index <= 4, staticLyrics = false) {
-  return factory({ index }, window, { value: active }, staticLyrics, true, fast,
-    (target, options) => ({ target, duration: options.duration }), { bezier() {} });
+let reaction, previous;
+const cells=[];
+const shared=initial=>{let value=initial;const cell={animation:null,get value(){return value;},set value(next){if(next?.timing){cell.animation={from:value,to:next.target};}else{value=next;cell.animation=null;}},advance(fraction){value=this.animation.from+(this.animation.to-this.animation.from)*fraction;}};cells.push(cell);return cell;};
+const modules={react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:shared,useAnimatedReaction:(prepare,apply)=>{reaction=()=>{const next=prepare();apply(next,previous);previous=next;};},withTiming:(target,options)=>{assert.equal(options.duration,240);return {timing:true,target};}}};
+const code=buildSync({entryPoints:[path.join(root,'components/lyrics/native/native-progressive-blur.ts')],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;
+const moduleObject={exports:{}};vm.runInNewContext(code,{module:moduleObject,exports:moduleObject.exports,require:name=>{assert(name in modules,name);return modules[name];}});
+const api=moduleObject.exports;
+const rows=shared([
+ {y:0,height:84,start:1000,end:2000},
+ // Entire three-wrap next semantic row, including its translation block.
+ {y:84,height:230,start:2000,end:3000},
+ {y:314,height:90,start:3000,end:4000},
+ {y:404,height:110,start:4000,end:5000},
+ {y:514,height:100,start:5000,end:6000},
+ {y:614,height:100,start:6000,end:7000},
+]);
+const window=shared({focusLineIndex:0,visualActiveLineStartIndex:0,visualActiveLineEndIndex:0});
+const position=shared(1500),seek=shared(0);
+const context=api.useMeasuredProgressiveBlur(true,rows,window,position,seek,[1000,2000,3000,4000,5000,6000]);
+reaction();assert.equal(context.protection.value.bottom,314);assert.equal(context.anchor.value,314);
+const rowFactory=radiusFactory(process.env.SPICY_SOURCE_REV ? execFileSync('git',['show',`${process.env.SPICY_SOURCE_REV}:ExpoLyrics/${rowPath}`],{cwd:root,encoding:'utf8'}) : read(rowPath));
+const output=index=>rowFactory({index},window,{value:index>=window.value.visualActiveLineStartIndex&&index<=window.value.visualActiveLineEndIndex},false,true,context,api.measuredBlurRadius,x=>x,{bezier(){}});
+assert.equal(output(0),0);assert.equal(output(1),0,'Whole wrapped+translated next row is sharp');
+assert.equal(output(2),0,'Ramp starts at measured protected bottom, no fixed clearance');
+assert.equal(output(3),90/80);assert.equal(output(4),200/80);
+rows.value=rows.value.map((row,i)=>({...row,y:row.y+(i>1?70:0),height:row.height+(i===1?70:0)}));
+reaction();assert.equal(context.protection.value.bottom,384,'Translation/extra wrapping moves actual boundary by measured 70 points');
+context.anchor.advance(0.5);assert.equal(context.anchor.value,349);assert.equal(output(1),0);
+assert.equal(output(3),(474-349)/80,'Effective Gaussian output reads interpolated anchor');
+const retained=context.anchor.animation;rows.value=rows.value.map(row=>({...row}));reaction();assert.equal(context.anchor.animation,retained,'Identical geometry never restarts motion');
+// Multiple active rows: protect after last, never after first.
+window.value={focusLineIndex:0,visualActiveLineStartIndex:0,visualActiveLineEndIndex:2};reaction();
+assert.equal(context.protection.value.index,3);assert.equal(context.protection.value.bottom,584);assert.equal(output(3),0);
+context.anchor.advance(0.5);assert.equal(context.anchor.value,466.5);
+assert.equal(output(4),0,'Ramp remains below whole current protected row during interpolation');
+assert.equal(output(5),(684-466.5)/80);
+seek.value++;reaction();assert.equal(context.anchor.value,584,'Explicit seek resets to measured edge');
+assert.equal(output(4),0);
+// Intro dots belong to upcoming row 0, even when visual active is empty.
+rows.value=rows.value.map((row,i)=>({...row,interlude:i===0?{start:0,end:1000}:undefined}));
+window.value={focusLineIndex:0,visualActiveLineStartIndex:-1,visualActiveLineEndIndex:-1};position.value=500;seek.value++;reaction();
+assert.equal(context.protection.value.index,0);assert.equal(context.anchor.value,84);assert.equal(output(0),0);
+// Actual overlapping voice beyond the visual range extends protection to latest.
+position.value=4500;reaction();assert.equal(context.protection.value.index,4);
+// Unknown protected geometry never invents an edge or inherits the old song's.
+rows.value=rows.value.map((row,i)=>({...row,height:i===4?0:row.height}));reaction();
+assert.equal(context.protection.value.bottom,Infinity);assert.equal(output(5),0);
+rows.value=rows.value.map((row,i)=>({...row,height:i===4?100:row.height}));reaction();assert.equal(context.anchor.value,684,'Recovery initializes safely');
+// Actual voice intervals, rather than the enclosing lead/background envelope.
+const isolated=rows.value.map((row,i)=>({...row,voices:i===4?[{start:0,end:100},{start:9000,end:10000}]:[{start:row.start,end:row.end}]}));
+assert.equal(api.measuredProtection(isolated,window.value,4500).index,4,'Inactive gap in later row does not extend protection');
+rows.value=[];reaction();assert.equal(output(5),0,'Track/layout invalidation protects all unknown rows');
+
+// Original OFF baseline remains byte-for-byte equivalent in executed closure outputs.
+for(const revision of ['7729a20','3791c00']){
+ const original=execFileSync('git',['show',`${revision}:ExpoLyrics/${rowPath}`],{cwd:root,encoding:'utf8'});
+ const oldFactory=radiusFactory(original);
+ for(let index=0;index<10;index++){
+  const args=[{index},window,{value:false},false,true,null,api.measuredBlurRadius,x=>x,{bezier(){}}];
+  assert.equal(rowFactory(...args),oldFactory(...args));
+ }
 }
-assert.equal(radius(3), 0); assert.equal(radius(4), 0); assert.equal(radius(5), 0, 'Immediate next row stays sharp');
-assert.deepEqual(radius(6), { target: 1.25, duration: 240 });
-assert.deepEqual(radius(7), { target: 2.5, duration: 240 });
-assert.deepEqual(radius(100), { target: 6.83125, duration: 240 });
-assert.equal(radius(100, true, false, true), 0);
-// Execute the actual closure with controlled timing to demonstrate a radius,
-// rather than opacity, transitioning between successive cue destinations.
-let current = 2.5, destination;
-factory({ index: 7 }, window, { value: false }, false, true, true,
-  (target, options) => { destination = target; assert.equal(options.duration, 240); return current; }, {});
-window.value = { ...window.value, focusLineIndex: 4, visualActiveLineEndIndex: 5 };
-factory({ index: 7 }, window, { value: false }, false, true, true,
-  target => { destination = target; return current; }, {});
-assert.equal(destination, 1.25); current += (destination - current) * 0.5;
-assert.equal(current, 1.875);
-for (const revision of ['7729a20', '3791c00']) {
-  const original = execFileSync('git', ['show', `${revision}:ExpoLyrics/${rowPath}`], { cwd: root, encoding: 'utf8' });
-  const oldFactory = radiusFactory(original);
-  for (let index = 0; index < 10; index++) {
-    const args = [{ index }, window, { value: index === 4 || index === 5 }, false, true, false, target => target, { bezier() {} }];
-    assert.equal(factory(...args), oldFactory(...args), 'Fast OFF preserves original radius semantics');
-  }
-}
-const host = read('components/lyrics/native/native-lyrics-view.tsx');
-assert.match(host, /const sharedBlurEnabled = false;/, 'Production mounts no shared backdrop overlay');
-for (const file of ['native-lazy-skia-voice.tsx', 'native-skia-voice.tsx']) {
-  const source = read(`components/lyrics/native/${file}`);
-  assert.match(source, /!sharedBlur && \(batched \|\| !spicy\)/);
-  assert.match(source, /<Blur blur=\{paintBlur\}/, 'Real Gaussian filter remains in voice canvas');
-}
-console.log('Spicy progressive blur PASS: active+next sharp, increasing capped radius, 240ms destinations, original OFF differential, shared overlay disabled. Timing mock, not native raster evidence.');
+const host=read('components/lyrics/native/native-lyrics-view.tsx');
+assert.match(host,/const sharedBlurEnabled = false;/);
+assert.match(host,/geometry.isHeightMeasured/,'Estimated FlashList heights cannot become measured protection');
+assert.match(host,/NativeProgressiveBlurContext.Provider value=\{progressiveBlur\}/);
+console.log('Measured Spicy blur PASS: multiwrap+translation edge, dots, last overlapping/actual active voice, unknown geometry, seek/recovery, effective animated Gaussian output, original OFF differential. Source/hook execution; no device proof.');
