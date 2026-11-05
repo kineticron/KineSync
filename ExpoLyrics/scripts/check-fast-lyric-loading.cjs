@@ -79,8 +79,15 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  rotated.props.onLayout({nativeEvent:{layout:{width:640}}});
  const resized=h.render(latin,{prepareGlyphs:false,showTranslation:false});
  assert.equal(resized.props.style[0].height,height);
- find(resized,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'unexpected wrapping'}]}});
+ find(resized,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'hel'},{text:'lo world'}]}});
  assert.equal(find(h.render(latin,{prepareGlyphs:false,showTranslation:false}),'Text'),null,'incompatible native breaks retain Skia');
+ const fallback=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ fallback.props.onLayout({nativeEvent:{layout:{width:960}}});
+ const newLayout=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ find(newLayout,'Text').props.onTextLayout({nativeEvent:{lines:[{text:'hello'},{text:'wor'},{text:'ld'}]}});
+ const extraWrap=h.render(latin,{prepareGlyphs:false,showTranslation:false});
+ assert.equal(find(extraWrap,'Text'),null,'extra RN wrap retains Skia');
+ assert.equal(extraWrap.props.style[0].height,height,'fallback keeps reserved geometry');
 }
 {
  const {sharedBlurRegion}=load('components/lyrics/native/native-shared-blur.tsx',{
@@ -97,4 +104,51 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const rotated=rows.map(r=>({...r,y:r.y*2,height:200}));
  assert.equal(sharedBlurRegion(rotated,w,0,0).top,504);
  console.log('Shared blur prototype PASS: cold RN no Canvas/Picture/run extraction, fixed promotion/rotation height, RTL/translation fallback, actual-offset mask/seek/offscreen/rotation geometry.');
+}
+// Run the actual overlay hooks: scroll frames must never rescan song geometry.
+{
+ const styles=[];let prepare,react;
+ const modules={react:{createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
+ '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
+ 'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,useSharedValue:value=>({value}),useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{prepare=p;react=r;}}};
+ const api=load('components/lyrics/native/native-shared-blur.tsx',modules);
+ let scans=0;
+ const geometry=Array.from({length:1000},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
+ geometry.forEach=function(fn){scans++;Array.prototype.forEach.call(this,fn);};
+ const rows={value:geometry},offset={value:0},position={value:0},window={value:{visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3}};
+ api.NativeSharedBlur({target:{current:null},rows,window,position,offset,height:800,deadlines:[98500,101000.001]});
+ let previous=prepare();react(previous,null);assert.equal(scans,1);
+ for(let frame=0;frame<120;frame++){offset.value=frame*20;position.value=frame;const next=prepare();react(next,previous);previous=next;styles.forEach(fn=>fn());}
+ assert.equal(scans,1,'no song scan in scroll or ordinary playback frames');
+ position.value=98500;let next=prepare();react(next,previous);previous=next;assert.equal(scans,2,'approach updates region once');
+ const missing=geometry.map((r,i)=>i===3?{...r,height:0}:r);
+ rows.value=missing;next=prepare();react(next,previous);previous=next;
+ const open=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(open.top,-100000,'unknown active geometry fails open');
+ assert.deepEqual(plain(api.sharedBlurViewport(open,1e7,800)),{top:-960,bottom:960},'unknown geometry stays open for any offset');
+ rows.value=[];next=prepare();react(next,previous);previous=next;
+ assert.equal(styles[0]().transform[0].translateY,-960,'track invalidation clears previous mask');
+ rows.value=geometry.map(r=>({...r,y:r.y*2,height:200}));position.value=0;next=prepare();react(next,previous);
+ offset.value=0;assert.equal(styles[0]().transform[0].translateY,504,'fresh rotation/reuse snapshot replaces stale bounds');
+ const exact=createVoiceHarness(currentCode,true,{dev:true,sharedBlur:true,arrivalTrace:trace});
+ let tree=exact.render(voice);tree.props.onLayout({nativeEvent:{layout:{width:320}}});tree=exact.render(voice);
+ function outerBlur(node){if(!node||typeof node!=='object')return false;const layer=node.props?.layer;if(layer?.props?.children?.type==='Blur')return true;return [node.props?.children].flat().some(outerBlur);}
+ assert.equal(outerBlur(tree),false,'experimental exact Skia owner omits outer blur');
+ console.log('Shared blur hook checks PASS: 1000 rows/120 frames one scan; approach/geometry updates; missing geometry/track reset/rotation; exact Skia outer blur disabled.');
+}
+{
+ const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
+ const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let callback;
+ function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
+ let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
+ const refresh=vm.runInNewContext(callback,context);refresh();
+ assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');
+ measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.blurRows.value[0].start,8000);
+ measured={y:600,height:160};refresh();assert.equal(context.blurRows.value[0].y,750);assert.equal(context.blurRows.value[0].height,160);
+ context.rows=[{lead:{start:40000,end:41000},backgrounds:[]}];measured=undefined;refresh();
+ assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');
+ const rowSource=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyric-row.tsx'),'utf8');
+ assert(rowSource.includes('onLayout={refreshGeometry}'));assert(rowSource.includes('[refreshGeometry, row]'));
+ assert(source.includes('blurRows.value = []'));assert(source.includes("Platform.OS === 'ios' ||"));
+ console.log('Shared geometry refresh PASS: missing/rotation/reuse snapshots, row layout+identity wiring, iOS opt-in and invalidation wiring.');
 }

@@ -1,5 +1,6 @@
+import { NativeBlurGeometryContext } from './native-shared-blur';
 import { NativeDevelopmentVoice } from './native-fast-voice';
-import React, { memo, useMemo } from 'react';
+import React, { memo, useContext, useEffect, useMemo } from 'react';
 import { StyleSheet, Text, View, type TextStyle } from 'react-native';
 import { Pressable } from 'react-native-gesture-handler';
 import MaskedView from '@react-native-masked-view/masked-view';
@@ -90,6 +91,8 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
 }) {
   const { getMappingKey } = useMappingHelper();
   const spicy = style === 'spicy';
+  const refreshGeometry = useContext(NativeBlurGeometryContext);
+  useEffect(() => { refreshGeometry?.(); }, [refreshGeometry, row]);
   const scrollStyle = useReferenceRowScroll(referenceScroll, row.index, !staticLyrics);
   const rowActive = useDerivedValue(() => row.index >= presentationWindow.value.visualActiveLineStartIndex && row.index <= presentationWindow.value.visualActiveLineEndIndex);
   const blurValue = useDerivedValue(() => {
@@ -110,7 +113,7 @@ export const NativeLyricRowView = memo(function NativeLyricRowView({ row, positi
   const backgroundViews = row.backgrounds.map((voice, index) => <NativeVoiceView rowIndex={row.index} presentationWindow={presentationWindow} hasDuet={hasDuet} key={getMappingKey(index, index)} voice={voice} position={position}
         fontSize={staticLyrics ? 18 * fontScale : fontSize * (spicy ? 0.75 : 0.7)} lineHeight={staticLyrics ? 25.2 * fontScale : lineHeight * (spicy ? 0.62 : 0.7)} background right={right} animate={active}
         prepared={distance <= 1} showTranslation={showTranslation} reveal={reveal} spicy={spicy} staticLyrics={staticLyrics} blur={blur} rowActive={rowActive} blurValue={blurValue} playing={playing} />);
-  return <Animated.View style={[scrollStyle, presentation]}><Pressable accessibilityRole={tapToSeek ? 'button' : 'text'} accessibilityLabel={row.lead.words.map(word => word.text).join('')}
+  return <Animated.View onLayout={refreshGeometry} style={[scrollStyle, presentation]}><Pressable accessibilityRole={tapToSeek ? 'button' : 'text'} accessibilityLabel={row.lead.words.map(word => word.text).join('')}
     accessibilityState={{ selected }} delayLongPress={540}
     onPress={() => { if (tapToSeek) onPress?.(row); }} onLongPress={() => onLongPress?.(row)}
     style={[styles.row, { minHeight: staticLyrics ? 0 : (spicy ? 84 : 72) * fontScale,

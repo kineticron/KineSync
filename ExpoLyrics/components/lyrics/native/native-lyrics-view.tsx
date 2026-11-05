@@ -1,6 +1,6 @@
 import { BlurTargetView } from 'expo-blur';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
-import { NativeSharedBlur, NativeSharedBlurContext, type BlurGeometry } from './native-shared-blur';
+import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, type BlurGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -50,8 +50,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
   const fastLoading = useFastLyricLoading();
-  // Android 31+ is the bounded first prototype; iOS tint/backdrop masking remains unverified.
-  const sharedBlurEnabled = __DEV__ && fastLoading && Platform.OS === 'android' && Number(Platform.Version) >= 31 && style === 'spicy' && list === 'flash' && reveal === 'canvas';
+  // iOS tint and masked backdrop sampling require phone acceptance.
+  const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && style === 'spicy' && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
   const transition = useLyricsPacketTransition();
@@ -302,6 +302,14 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const longPress = useCallback((row: NativeLyricRow) => { onUserInteraction?.(); onLineLongPress?.(row.line); }, [onLineLongPress, onUserInteraction]);
   // Canvas presentation stays on the UI clock; background flow is permanent.
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
+  const blurDeadlines = useMemo(() => sharedBlurEnabled ? [...new Set(rows.flatMap(row => [row.lead, ...row.backgrounds].flatMap(v => [Math.max(0, v.start - 1500), v.end + 0.001])))].sort((a, b) => a - b) : [], [rows, sharedBlurEnabled]);
+  const refreshBlurGeometry = useCallback(() => {
+    if (sharedBlurEnabled) blurRows.value = rows.map((row, index) => {
+      const geometry = flashRef.current?.getLayout(index);
+      return { y: (geometry?.y ?? 0) + (flashRef.current?.getFirstItemOffset() ?? 0), height: geometry?.height ?? 0,
+        start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)) };
+    });
+  }, [blurRows, rows, sharedBlurEnabled]);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
     presentationWindow={presentationWindow}
@@ -339,11 +347,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     // Retry only after new rows have laid out; no delayed retries can steal a user drag.
   }, []);
   const onContentSizeChange = useCallback(() => {
-    if (sharedBlurEnabled) blurRows.value = rows.map((row, index) => {
-      const geometry = flashRef.current?.getLayout(index);
-      return { y: (geometry?.y ?? 0) + (flashRef.current?.getFirstItemOffset() ?? 0), height: geometry?.height ?? 0,
-        start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)) };
-    });
+    refreshBlurGeometry();
     transition?.onReady();
     markRendererReady(rendererReadyKey);
     if (pendingScroll.current && following.current) {
@@ -359,7 +363,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
       const range = getAutoScrollTargetRange(current, currentPosition.current, currentLyrics);
       if (range) scrollTo(range.startIndex, true);
     }
-  }, [blurRows, rows, sharedBlurEnabled, markRendererReady, rendererReadyKey, scrollTo, transition]);
+  }, [refreshBlurGeometry, markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
   const content = <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
@@ -378,7 +382,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={true}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView><NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} /></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={true}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView><NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} /></NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
