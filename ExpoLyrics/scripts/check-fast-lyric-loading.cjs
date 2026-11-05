@@ -3,7 +3,11 @@
 require('./check-spicy-progressive-blur.cjs');
 const assert=require('node:assert/strict'),path=require('node:path'),vm=require('node:vm'),{execFileSync}=require('node:child_process'),{buildSync}=require('esbuild');
 const {bundle,createVoiceHarness,currentCode}=require('./check-native-translation-toggle.cjs');
-function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{assert(name in modules,name);return modules[name];}});return module.exports;}
+function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{if(name==='./native-progressive-blur'&&progModule)return progModule;assert(name in modules,name);return modules[name];}});return module.exports;}
+const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
+ react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+ './native-shared-blur':{},
+});
 function fastHost(enabled=true,dev=true){
  const slots=[];let cursor=0;const queue=[];
  const memo=(fn,deps)=>{const i=cursor++;if(!slots[i]||deps.some((x,n)=>x!==slots[i].deps[n]))slots[i]={deps,value:fn()};return slots[i].value;};
@@ -102,27 +106,39 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  assert.equal(extraWrap.props.style[0].height,height,'fallback keeps reserved geometry');
 }
 {
+ const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
+  react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+  './native-shared-blur':{},
+ });
  const {sharedBlurRegion}=load('components/lyrics/native/native-shared-blur.tsx',{
- react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
- '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
+  react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+  '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{},
+  './native-progressive-blur':progModule,
+ });
  const rows=Array.from({length:12},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
  const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
  const a=sharedBlurRegion(rows,w,0,0),b=sharedBlurRegion(rows,w,0,137);
  assert.equal(a.top-b.top,137);assert.equal(a.bottom-b.bottom,137);
- assert.equal(a.bottom,424); // visual active only; preparation lookahead stays separate
+ assert.equal(a.bottom,500); // next whole row 4 (y=400, h=100) protected strictly to 500 without constant offset
+ assert.equal(a.top,300); // active row 3 top strictly at 300 without constant offset
  assert.equal(sharedBlurRegion([],w,0,0).top,-Infinity);
  assert(sharedBlurRegion(rows,w,0,2000).bottom<0,'offscreen content stays offscreen');
- assert.equal(sharedBlurRegion(rows,{...w,visualActiveLineStartIndex:7,visualActiveLineEndIndex:7},0,0).top,676);
+ assert.equal(sharedBlurRegion(rows,{...w,visualActiveLineStartIndex:7,visualActiveLineEndIndex:7},0,0).top,700);
  const rotated=rows.map(r=>({...r,y:r.y*2,height:200}));
- assert.equal(sharedBlurRegion(rotated,w,0,0).top,576);
+ assert.equal(sharedBlurRegion(rotated,w,0,0).top,600);
  console.log('Shared blur prototype PASS: cold RN no Canvas/Picture/run extraction, fixed promotion/rotation height, RTL/translation fallback, actual-offset mask/seek/offscreen/rotation geometry.');
 }
 // Run the actual overlay hooks: scroll frames must never rescan song geometry.
 {
+ const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
+  react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+  './native-shared-blur':{},
+ });
  const styles=[], timings=[], shared=[];let prepare,react;
  const advance=fraction=>shared.forEach(v=>{if(v.animation)v.current=v.animation.from+(v.animation.to-v.animation.from)*fraction;});
  const modules={react:{createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
- '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
+ '@react-native-masked-view/masked-view':'MaskedView','expo-linear-gradient':{LinearGradient:'LinearGradient'},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
+ './native-progressive-blur':progModule,
  'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return {timing:value};},useSharedValue:value=>{const v={current:value,animation:null,get value(){return this.current;},set value(next){if(next && typeof next==='object' && 'timing' in next)this.animation={from:this.current,to:next.timing};else {this.current=next;this.animation=null;}}};shared.push(v);return v;},useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{prepare=p;react=r;}}};
  const api=load('components/lyrics/native/native-shared-blur.tsx',modules);
  let scans=0;
@@ -139,25 +155,26 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  position.value=98500;let next=prepare();react(next,previous);previous=next;assert.equal(scans,2);
  assert.equal(timings.length,0,'unchanged destination does not restart timing');
  window.value={...window.value,visualActiveLineStartIndex:4,visualActiveLineEndIndex:4};next=prepare();react(next,previous);previous=next;
- assert.equal(styles[1]().transform[0].translateY,424,'forward cue begins at previous effective lower edge');
- advance(.5);assert.equal(styles[1]().transform[0].translateY,474);assert.equal(styles[0]().transform[0].translateY,326);
+ assert.equal(styles[1]().transform[0].translateY,600,'forward cue protects row 5 immediately via max(animated, target)');
+ advance(.5);assert.equal(styles[1]().transform[0].translateY,600);assert.equal(styles[0]().transform[0].translateY,350);
  rows.value=geometry.map(r=>({...r}));next=prepare();react(next,previous);previous=next;
- assert.equal(styles[1]().transform[0].translateY,474,'identical geometry preserves intermediate motion');assert.equal(timings.length,2);
+ assert.equal(styles[1]().transform[0].translateY,600,'identical geometry preserves intermediate motion');assert.equal(timings.length,2);
+ advance(1.0);
  window.value={...window.value,visualActiveLineStartIndex:3,visualActiveLineEndIndex:3};next=prepare();react(next,previous);previous=next;
- assert.equal(styles[1]().transform[0].translateY,474,'rapid reverse retarget has no jump');advance(.5);assert.equal(styles[1]().transform[0].translateY,449);
- offset.value=37;assert.equal(styles[1]().transform[0].translateY,412,'scroll subtracts actual offset during animation');offset.value=0;
- seekVersion.value++;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,424,'explicit seek initializes immediately');
- position.value=100000;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,424,'time-only onset starts continuously');advance(.5);assert.equal(styles[1]().transform[0].translateY,960,'background actual onset retargets without window change, clamped safely');
+ assert.equal(styles[1]().transform[0].translateY,600,'rapid reverse retarget starts at previous position');advance(.5);assert.equal(styles[1]().transform[0].translateY,550);
+ offset.value=37;assert.equal(styles[1]().transform[0].translateY,513,'scroll subtracts actual offset during animation');offset.value=0;
+ seekVersion.value++;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,500,'explicit seek initializes immediately');
+ position.value=100000;next=prepare();react(next,previous);previous=next;assert.equal(styles[1]().transform[0].translateY,960,'background actual onset retargets and protects, clamped safely');
  position.value=0;seekVersion.value++;next=prepare();react(next,previous);previous=next;
  const missing=geometry.map((r,i)=>i===3?{...r,height:0}:r);
  rows.value=missing;next=prepare();react(next,previous);previous=next;
- const bounded=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(bounded.top,276,'unknown active bounded by preceding real cell');assert.equal(bounded.bottom,424,'known safe lookahead retained');
+ const bounded=api.sharedBlurRegion(missing,window.value,0,0);assert.equal(bounded.top,-Infinity,'unknown active bounded opens top safe zone');assert.equal(bounded.bottom,500,'known safe lookahead retained');
  const open=api.sharedBlurRegion([],window.value,0,0);
  assert.deepEqual(plain(api.sharedBlurViewport(open,1e7,800)),{top:-960,bottom:960},'unknown geometry stays open for any offset');
  rows.value=[];next=prepare();react(next,previous);previous=next;
  assert.equal(styles[0]().transform[0].translateY,-960,'track invalidation clears previous mask');
  rows.value=geometry.map(r=>({...r,y:r.y*2,height:200}));position.value=0;next=prepare();react(next,previous);
- offset.value=0;assert.equal(styles[0]().transform[0].translateY,576,'fresh rotation/reuse snapshot replaces stale bounds');
+ offset.value=0;assert.equal(styles[0]().transform[0].translateY,600,'fresh rotation/reuse snapshot replaces stale bounds');
  const exact=createVoiceHarness(currentCode,true,{dev:true,sharedBlur:true,arrivalTrace:trace});
  let tree=exact.render(voice);tree.props.onLayout({nativeEvent:{layout:{width:320}}});tree=exact.render(voice);
  function outerBlur(node){if(!node||typeof node!=='object')return false;const layer=node.props?.layer;if(layer?.props?.children?.type==='Blur')return true;return [node.props?.children].flat().some(outerBlur);}
@@ -181,13 +198,13 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  measured={y:600,height:160};refresh();assert.equal(context.blurRows.value[0].y,750);assert.equal(context.blurRows.value[0].height,160);
  context.rows=[{lead:{start:40000,end:41000},backgrounds:[]}];measured=undefined;refresh();
  assert.equal(context.blurRows.value[0].height,0,'reused content cannot retain old measured height');assert.equal(context.ready,'');
- context.sharedBlurEnabled=false;context.measuredBlurEnabled=true;
+ context.sharedBlurEnabled=true;
  measured={y:600,height:160,isHeightMeasured:false};refresh();assert.equal(context.blurRows.value[0].height,0,'FlashList estimate cannot set protected edge');
  measured.isHeightMeasured=true;refresh();assert.equal(context.blurRows.value[0].height,160);
  context.flashRef.current.getFirstItemOffset=()=>undefined;refresh();assert.equal(context.blurRows.value[0].height,0,'Unknown content origin protects rows');
  const rowSource=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyric-row.tsx'),'utf8');
  assert(rowSource.includes('onLayout={refreshGeometry}'));assert(rowSource.includes('[refreshGeometry, row]'));
- assert(source.includes('blurRows.value = []'));assert(source.includes('const sharedBlurEnabled = false;'));
+ assert(source.includes('blurRows.value = []'));assert(source.includes('const sharedBlurEnabled = __DEV__ && fastLoading'));
  console.log('Shared geometry refresh PASS: missing/rotation/reuse snapshots, row layout+identity wiring, dormant production gate and invalidation wiring.');
 }
 // Execute onTextLayout with matching strings and independently altered native
@@ -220,12 +237,12 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
  rows[5]={...rows[5],y:0,height:0};
  let region=api.sharedBlurRegion(rows,w,0,0);
- assert.equal(region.top,276);assert.equal(region.bottom,424,'unknown lookahead protected up to real following anchor');
+ assert.equal(region.top,300);assert.equal(region.bottom,500,'unknown lookahead protected up to real following anchor');
  rows[6]={...rows[6],height:0};rows[7]={...rows[7],height:0};
- region=api.sharedBlurRegion(rows,w,0,0);assert.equal(region.top,276);assert.equal(region.bottom,424);
- assert.equal(api.sharedBlurViewport(region,0,800).top,276,'top distant text still blurred when lower extent unknown');
+ region=api.sharedBlurRegion(rows,w,0,0);assert.equal(region.top,300);assert.equal(region.bottom,500);
+ assert.equal(api.sharedBlurViewport(region,0,800).top,300,'top distant text still blurred when lower extent unknown');
  rows[3]={...rows[3],y:0,height:0};region=api.sharedBlurRegion(rows,w,0,0);
- assert.equal(region.top,276,'unknown active never uses guessed zero origin');
+ assert.equal(region.top,-Infinity,'unknown active never uses guessed zero origin');
  assert.equal(api.hasBlurGeometry([]),false);assert.equal(api.hasBlurGeometry(rows.map(r=>({...r,height:0}))),false);
  assert.equal(api.hasBlurGeometry(rows),false,'partial geometry never enables shared context');
  assert.equal(api.hasBlurGeometry(rows.map((r,i)=>({...r,y:i*100,height:100}))),true);
@@ -254,7 +271,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const refresh=vm.runInNewContext(callback,context),ready=()=>vm.runInNewContext(readiness,context);
  refresh();const w={visualActiveLineStartIndex:1,visualActiveLineEndIndex:1,focusLineIndex:1};
  const unsafe=api.sharedBlurRegion(context.blurRows.value,w,1000,0);
- assert.equal(unsafe.top,-Infinity);assert.equal(unsafe.bottom,224);
+ assert.equal(unsafe.top,-Infinity);assert.equal(unsafe.bottom,Infinity,'unmeasured next row opens safe zone to Infinity');
  assert.equal(ready(),false,'two-sided unknown geometry restores original blur, no shared overlay');
  // Cue/seek changes cannot accidentally activate partial geometry.
  for(const index of [0,1,2,1]){api.sharedBlurRegion(context.blurRows.value,{...w,visualActiveLineStartIndex:index,visualActiveLineEndIndex:index,focusLineIndex:index},index*1000,0);assert.equal(ready(),false);}
