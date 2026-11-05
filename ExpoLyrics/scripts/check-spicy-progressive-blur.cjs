@@ -275,12 +275,13 @@ let amllP = progApi.measuredProtection(amllRows, amllWin, 500);
 assert.equal(amllP.index, 1, 'AMLL protects full next semantic row');
 assert.equal(amllP.bottom, 252, 'AMLL protected boundary matches measured row height strictly');
 
-// 8. Test NativeSharedBlur execution with AMLL style
+// 8. Test NativeSharedBlur execution with AMLL style and spring motion envelope
 const amllRowsRef = { value: amllRows };
 const amllWinRef = { value: amllWin };
 const amllPosRef = { value: 500 };
 const amllOffsetRef = { value: 0 };
 const amllSeekRef = { value: 0 };
+const amllResidualRef = { value: 0 };
 sharedApi.NativeSharedBlur({
   target: { current: null },
   rows: amllRowsRef,
@@ -291,29 +292,69 @@ sharedApi.NativeSharedBlur({
   seekVersion: amllSeekRef,
   deadlines: [0, 1200, 2400, 3600, 4800],
   style: 'amll',
+  residual: amllResidualRef,
 });
 
-// 9. Verify accessibility and tree invariants from component source
+let amllPrev = sharedPrepare();
+sharedReact(amllPrev, null);
+
+// AMLL spring motion envelope: when spring is moving (residual = -45), expand protected region
+amllResidualRef.value = -45;
+assert.equal(styles[2]().transform[0].translateY, -45, 'Upper boundary expands upward by |residual|');
+assert.equal(styles[3]().transform[0].translateY, 297, 'Lower boundary expands downward by |residual| (252 + 45)');
+
+// AMLL spring settled: returns strictly to static row bounds
+amllResidualRef.value = 0;
+assert.equal(styles[2]().transform[0].translateY, 0, 'Settled upper boundary returns strictly to 0');
+assert.equal(styles[3]().transform[0].translateY, 252, 'Settled lower boundary returns strictly to 252');
+
+// 9. Test virtualization readiness (hasBlurGeometry) without full-song deadlock
+const virtualizedRows = Array.from({ length: 40 }, (_, i) => ({
+  y: i * 80,
+  height: i < 3 ? 80 : 0, // only first 3 items mounted by FlashList
+  start: i * 1000,
+  end: (i + 1) * 1000,
+}));
+assert(sharedApi.hasBlurGeometry(virtualizedRows, win, 1500), 'Active + next rows measured: ready even when offscreen rows are 0');
+
+const coldUnmountedRows = virtualizedRows.map((r, i) => ({ ...r, height: i === 0 ? 0 : r.height }));
+assert(!sharedApi.hasBlurGeometry(coldUnmountedRows, win, 1500), 'Unmeasured active row safely delays ready flag to prevent jump');
+
+// 10. Test Source-Over optical composited output
+assert.equal(typeof sharedApi.compositeAlpha, 'function');
+assert.equal(sharedApi.compositeAlpha(0, 0), 0, 'Protected zone composite is strictly 0');
+assert.equal(sharedApi.compositeAlpha(1, 0), 1, 'Near plateau composite is 1.0');
+assert.equal(sharedApi.compositeAlpha(0, 1), 1, 'Far plateau composite is 1.0');
+// Arithmetic 0.5 + 0.5 = 1.0 yields 0.75 optical composite in dual Source-Over passes:
+assert.equal(sharedApi.compositeAlpha(0.5, 0.5), 0.75, 'Source-Over midpoint composite is 0.75, not an opaque 1.0 crossfade');
+
+// 11. Test offscreen viewport clipping
+const distantViewport = sharedApi.sharedBlurViewport({ top: 0, bottom: 300 }, 5000, 800);
+assert(distantViewport.top <= -800, 'Distant scroll shifts upper mask out of viewport');
+assert(distantViewport.bottom <= 0, 'Distant scroll clamps lower mask within safe limits');
+
+// 12. Verify accessibility and tree invariants from component source
 const sharedSource = read('components/lyrics/native/native-shared-blur.tsx');
 assert.match(sharedSource, /pointerEvents="none"/);
 assert.match(sharedSource, /accessibilityElementsHidden/);
 assert.match(sharedSource, /importantForAccessibility="no-hide-descendants"/);
 assert.match(sharedSource, /tint={tint}/, 'Uses profile tint');
 
-// 10. Verify no per-voice Gaussian blur context or execution in native-lyric-row.tsx
+// 13. Verify no per-voice Gaussian blur context or execution in native-lyric-row.tsx
 const rowSource = read('components/lyrics/native/native-lyric-row.tsx');
 assert(!rowSource.includes('NativeProgressiveBlurContext'), 'NativeProgressiveBlurContext removed from native-lyric-row.tsx');
 assert(!rowSource.includes('measuredBlurRadius'), 'measuredBlurRadius removed from native-lyric-row.tsx');
 
-// 11. Verify native-lyrics-view.tsx wiring for BOTH AMLL and Spicy (no spicy-only gate)
+// 14. Verify native-lyrics-view.tsx wiring for BOTH AMLL and Spicy (no spicy-only gate)
 const viewSource = read('components/lyrics/native/native-lyrics-view.tsx');
 assert.match(viewSource, /const sharedBlurEnabled = __DEV__ && fastLoading && \(Platform\.OS === 'ios' \|\| Platform\.OS === 'android' && Number\(Platform\.Version\) >= 31\) && Boolean\(SHARED_BLUR_PROFILES\[style\]\) && list === 'flash' && reveal === 'canvas';/);
 assert(!viewSource.includes("style === 'spicy' && list === 'flash'"), 'No style spicy gate remains');
 assert.match(viewSource, /NativeSharedBlurContext\.Provider value=\{sharedBlurReady\}/);
 assert.match(viewSource, /geometry\.isHeightMeasured/, 'Requires real measured height, not estimates');
 assert.match(viewSource, /style=\{style\}/, 'Passes renderer style to NativeSharedBlur');
+assert.match(viewSource, /residual=\{scrollResidual\}/, 'Passes scroll residual for AMLL spring motion envelope');
 
-// 12. Verify exclusions: webviews, non-canvas reveals, and FlatList are NOT eligible for shared blur
+// 15. Verify exclusions: webviews, non-canvas reveals, and FlatList are NOT eligible for shared blur
 assert(!viewSource.includes("reveal === 'cold' && sharedBlurEnabled"), 'Cold reveal excluded');
 assert(!viewSource.includes("list === 'flat' && sharedBlurEnabled"), 'FlatList excluded');
 

@@ -55,16 +55,44 @@ export function getSharedBlurProfile(style?: NativeLyricsStyle): SharedBlurProfi
   return (style && SHARED_BLUR_PROFILES[style]) || SHARED_BLUR_PROFILES.spicy;
 }
 
-export function hasBlurGeometry(rows: BlurGeometry) {
-  // Conservative prototype gate: partial snapshots can leave both protected
-  // edges unbounded. Keep original per-voice blur until every cell is valid.
-  return rows.length > 0 && rows.every(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
+export function hasBlurGeometry(rows: BlurGeometry, window?: PlaybackWindowState, time?: number): boolean {
+  if (rows.length === 0) return false;
+  if (!window) {
+    return rows.every(row => Number.isFinite(row.y) && Number.isFinite(row.height) && row.height > 0);
+  }
+  const activeStart = window.visualActiveLineStartIndex >= 0 ? window.visualActiveLineStartIndex : window.focusLineIndex;
+  const first = Math.max(0, Math.min(rows.length - 1, activeStart));
+  let last = first;
+  let dots = -1;
+  const t = typeof time === 'number' ? time : (rows[first]?.start ?? 0);
+  rows.forEach((row, index) => {
+    if (row.voices ? row.voices.some((v: { start: number; end: number }) => t >= v.start && t < v.end) : t >= row.start && t < row.end) {
+      last = Math.max(last, index);
+    }
+    if (row.interlude && t >= row.interlude.start && t < row.interlude.end) dots = Math.max(dots, index);
+  });
+  const nextTarget = Math.min(rows.length - 1, Math.max(last + 1, dots, first, 0));
+  const checkStart = Math.min(first, last);
+  for (let i = checkStart; i <= nextTarget; i++) {
+    const r = rows[i];
+    if (!r || !Number.isFinite(r.y) || !Number.isFinite(r.height) || r.height <= 0) return false;
+  }
+  return true;
 }
 
 export function sameBlurGeometry(a: BlurGeometry, b: BlurGeometry) {
   'worklet';
   return a.length === b.length && a.every((row, i) =>
     row.y === b[i].y && row.height === b[i].height && row.start === b[i].start && row.end === b[i].end);
+}
+
+/**
+ * Standard GPU Source-Over composite of two independent transparent passes:
+ * alpha_out = alpha_near + alpha_far * (1 - alpha_near).
+ */
+export function compositeAlpha(near: number, far: number) {
+  'worklet';
+  return near + far * (1 - near);
 }
 
 /**
@@ -118,10 +146,10 @@ export function sharedBlurViewport(region: { top: number; bottom: number }, offs
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
-  style?: NativeLyricsStyle;
+  style?: NativeLyricsStyle; residual?: SharedValue<number>;
 }) {
   const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
@@ -151,17 +179,20 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   // Forward cue: animatedBottom lags behind target.bottom -> max(animatedBottom, protection.bottom) guarantees next row is NEVER blurred.
   // Reverse cue: animatedBottom smoothly moves up -> max(animatedBottom, protection.bottom) follows animatedBottom smoothly.
   // Converse for top: min(animatedTop, protection.top) guarantees newly active row above is NEVER blurred while smoothly releasing downward.
+  // In AMLL, staggered row and viewport springs translate moving lines; expand protected envelope by residual until settled.
   const upper = useAnimatedStyle(() => {
+    const amllMotionMargin = style === 'amll' && residual ? Math.abs(residual.value) : 0;
     const rawTop = Number.isFinite(protection.value.top)
-      ? (Number.isFinite(animatedTop.value) ? Math.min(animatedTop.value, protection.value.top) : protection.value.top)
+      ? (Number.isFinite(animatedTop.value) ? Math.min(animatedTop.value, protection.value.top) - amllMotionMargin : protection.value.top - amllMotionMargin)
       : -Infinity;
     const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, offset.value, height);
     return { transform: [{ translateY: r.top }] };
   });
 
   const lower = useAnimatedStyle(() => {
+    const amllMotionMargin = style === 'amll' && residual ? Math.abs(residual.value) : 0;
     const rawBottom = Number.isFinite(protection.value.bottom)
-      ? (Number.isFinite(animatedBottom.value) ? Math.max(animatedBottom.value, protection.value.bottom) : protection.value.bottom)
+      ? (Number.isFinite(animatedBottom.value) ? Math.max(animatedBottom.value, protection.value.bottom) + amllMotionMargin : protection.value.bottom + amllMotionMargin)
       : Infinity;
     const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, offset.value, height);
     return { transform: [{ translateY: r.bottom }] };

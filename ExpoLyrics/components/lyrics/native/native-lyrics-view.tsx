@@ -173,6 +173,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   latestTiming.current = timing;
   const followControl = useRef({ enabled: autoFollowEnabled, signal: resumeAutoFollowSignal });
   const [window, setWindow] = useState(() => getPlaybackWindowState(0, lyrics, backgrounds, timing));
+  const latestWindow = useRef(window);
+  latestWindow.current = window;
   const [viewportHeight, setViewportHeight] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
   const traceContext = useArrivalGeometry(traceScope, __DEV__ ? [trace, traceGeneration, landscapeMode, fontScale, viewportHeight, viewportWidth, fonts, list, reveal, showTranslatedText] : undefined);
@@ -243,6 +245,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     const currentTiming = latestTiming.current;
     currentPosition.current = time;
     const next = getPlaybackWindowState(time, currentLyrics, currentBackgrounds, currentTiming);
+    latestWindow.current = next;
     if (reveal !== 'canvas') setWindow(previous => previous.activeLineStartIndex === next.activeLineStartIndex &&
       previous.activeLineEndIndex === next.activeLineEndIndex && previous.visualActiveLineStartIndex === next.visualActiveLineStartIndex &&
       previous.visualActiveLineEndIndex === next.visualActiveLineEndIndex && previous.focusLineIndex === next.focusLineIndex &&
@@ -317,7 +320,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
         start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)), interlude: row.interlude, voices: [row.lead, ...row.backgrounds].map(voice => ({ start: voice.start, end: voice.end })) };
     });
     blurRows.value = snapshot;
-    setBlurReadyKey(hasBlurGeometry(snapshot) ? blurGeometryKey : '');
+    setBlurReadyKey(hasBlurGeometry(snapshot, typeof latestWindow !== 'undefined' ? latestWindow.current : undefined, typeof currentPosition !== 'undefined' ? currentPosition.current : undefined) ? blurGeometryKey : '');
   }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled]);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}
@@ -391,7 +394,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
