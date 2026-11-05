@@ -1,6 +1,6 @@
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 import { BlurTargetView } from 'expo-blur';
-import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, type BlurGeometry } from './native-shared-blur';
+import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, SHARED_BLUR_PROFILES, type BlurGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -51,7 +51,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const fonts = useNativeLyricsFonts();
   const fastLoading = useFastLyricLoading();
   // iOS tint and masked backdrop sampling require phone acceptance.
-  const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && (style === 'spicy' || style === 'amll') && list === 'flash' && reveal === 'canvas';
+  const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && Boolean(SHARED_BLUR_PROFILES[style]) && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
   const [blurReadyKey, setBlurReadyKey] = useState('');

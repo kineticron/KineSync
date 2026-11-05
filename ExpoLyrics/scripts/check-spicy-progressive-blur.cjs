@@ -305,9 +305,10 @@ const rowSource = read('components/lyrics/native/native-lyric-row.tsx');
 assert(!rowSource.includes('NativeProgressiveBlurContext'), 'NativeProgressiveBlurContext removed from native-lyric-row.tsx');
 assert(!rowSource.includes('measuredBlurRadius'), 'measuredBlurRadius removed from native-lyric-row.tsx');
 
-// 11. Verify native-lyrics-view.tsx wiring for BOTH AMLL and Spicy
+// 11. Verify native-lyrics-view.tsx wiring for BOTH AMLL and Spicy (no spicy-only gate)
 const viewSource = read('components/lyrics/native/native-lyrics-view.tsx');
-assert.match(viewSource, /const sharedBlurEnabled = __DEV__ && fastLoading && \(Platform\.OS === 'ios' \|\| Platform\.OS === 'android' && Number\(Platform\.Version\) >= 31\) && \(style === 'spicy' \|\| style === 'amll'\) && list === 'flash' && reveal === 'canvas';/);
+assert.match(viewSource, /const sharedBlurEnabled = __DEV__ && fastLoading && \(Platform\.OS === 'ios' \|\| Platform\.OS === 'android' && Number\(Platform\.Version\) >= 31\) && Boolean\(SHARED_BLUR_PROFILES\[style\]\) && list === 'flash' && reveal === 'canvas';/);
+assert(!viewSource.includes("style === 'spicy' && list === 'flash'"), 'No style spicy gate remains');
 assert.match(viewSource, /NativeSharedBlurContext\.Provider value=\{sharedBlurReady\}/);
 assert.match(viewSource, /geometry\.isHeightMeasured/, 'Requires real measured height, not estimates');
 assert.match(viewSource, /style=\{style\}/, 'Passes renderer style to NativeSharedBlur');
