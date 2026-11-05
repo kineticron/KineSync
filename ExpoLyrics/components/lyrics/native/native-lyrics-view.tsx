@@ -82,6 +82,20 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
     previousRows.current = rows;
   }, [rows]);
+  const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);
+  const timing = useMemo(() => getLyricTimingIndex(lyrics), [lyrics]);
+  const latestLyrics = useRef(lyrics);
+  latestLyrics.current = lyrics;
+  const latestRows = useRef(rows);
+  latestRows.current = rows;
+  const latestBackgrounds = useRef(backgrounds);
+  latestBackgrounds.current = backgrounds;
+  const latestTiming = useRef(timing);
+  latestTiming.current = timing;
+  const currentPosition = useRef(0);
+  const [window, setWindow] = useState(() => getPlaybackWindowState(0, lyrics, backgrounds, timing));
+  const latestWindow = useRef(window);
+  latestWindow.current = window;
   const scrollSourceKey = useMemo(() => JSON.stringify([liveTrackId, source, style, staticLyrics, nativeScrollSourceKey(rows)]),
     [liveTrackId, rows, source, staticLyrics, style]);
   const previousScrollSourceKey = useRef(scrollSourceKey);
@@ -91,9 +105,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     blurRows.value = [];
     setBlurReadyKey('');
     translationOnlyLayout.current = false;
+    currentPosition.current = 0;
+    latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
-  const backgrounds = useMemo(() => getBackgroundActiveLines(lyrics), [lyrics]);
-  const timing = useMemo(() => getLyricTimingIndex(lyrics), [lyrics]);
   const rendererReadyGate = useRef(new NativeRendererReadyRefreshGate());
   const readyGate = rendererReadyGate.current;
   const rendererIdentity = useRef({ style, list, reveal, demo: !!demoLyrics, trackId: liveTrackId, source, lyrics, generation: 0 });
@@ -157,30 +171,22 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
     actualOffset: actualScrollOffset, spicy: style === 'spicy' }), [actualScrollOffset, renderedScrollResidual, scrollCommand, scrollResidual, style]);
   const following = useRef(autoFollowEnabled);
-  const currentPosition = useRef(0);
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
   const activeIndex = useRef(-2);
   const generation = useRef(0);
   const mounted = useRef(true);
-  const latestLyrics = useRef(lyrics);
-  latestLyrics.current = lyrics;
-  const latestRows = useRef(rows);
-  latestRows.current = rows;
-  const latestBackgrounds = useRef(backgrounds);
-  latestBackgrounds.current = backgrounds;
-  const latestTiming = useRef(timing);
-  latestTiming.current = timing;
   const followControl = useRef({ enabled: autoFollowEnabled, signal: resumeAutoFollowSignal });
-  const [window, setWindow] = useState(() => getPlaybackWindowState(0, lyrics, backgrounds, timing));
-  const latestWindow = useRef(window);
-  latestWindow.current = window;
   const [viewportHeight, setViewportHeight] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(0);
   const traceContext = useArrivalGeometry(traceScope, __DEV__ ? [trace, traceGeneration, landscapeMode, fontScale, viewportHeight, viewportWidth, fonts, list, reveal, showTranslatedText] : undefined);
   const layoutConfiguration = `${fontScale}:${landscapeMode}:${list}:${reveal}:${showTranslatedText}:${viewportHeight}:${viewportWidth}`;
   const blurGeometryKey = `${scrollSourceKey}:${layoutConfiguration}`;
   const sharedBlurReady = sharedBlurEnabled && blurReadyKey === blurGeometryKey;
+  const blurReadyKeyRef = useRef(blurReadyKey);
+  blurReadyKeyRef.current = blurReadyKey;
+  const blurGeometryKeyRef = useRef(blurGeometryKey);
+  blurGeometryKeyRef.current = blurGeometryKey;
   const previousLayoutConfiguration = useRef(layoutConfiguration);
   if (previousLayoutConfiguration.current !== layoutConfiguration) {
     previousLayoutConfiguration.current = layoutConfiguration;
@@ -259,7 +265,13 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     const range = getAutoScrollTargetRange(next, time, currentLyrics);
     if (seek) lastScrollTarget.current = '';
     if (range) scrollTo(range.startIndex, !seek);
-  }, [active, onActiveLineChange, reveal, scrollTo, style]);
+    if (sharedBlurEnabled && blurReadyKeyRef.current !== blurGeometryKeyRef.current) {
+      const snapshot = blurRows.value;
+      if (snapshot && snapshot.length > 0 && hasBlurGeometry(snapshot, next, time)) {
+        setBlurReadyKey(blurGeometryKeyRef.current);
+      }
+    }
+  }, [active, blurRows, onActiveLineChange, reveal, scrollTo, sharedBlurEnabled, style]);
   const cueIdentity = useMemo(() => ({ sourceKey: scrollSourceKey, token: ++generation.current }), [scrollSourceKey]);
   const token = cueIdentity.token;
   useAnimatedReaction(() => {
@@ -320,7 +332,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
         start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)), interlude: row.interlude, voices: [row.lead, ...row.backgrounds].map(voice => ({ start: voice.start, end: voice.end })) };
     });
     blurRows.value = snapshot;
-    setBlurReadyKey(hasBlurGeometry(snapshot, typeof latestWindow !== 'undefined' ? latestWindow.current : undefined, typeof currentPosition !== 'undefined' ? currentPosition.current : undefined) ? blurGeometryKey : '');
+    const time = currentPosition.current;
+    const currentWin = latestWindow.current ?? getPlaybackWindowState(time, latestLyrics.current, latestBackgrounds.current, latestTiming.current);
+    setBlurReadyKey(hasBlurGeometry(snapshot, currentWin, time) ? blurGeometryKey : '');
   }, [blurGeometryKey, blurRows, rows, sharedBlurEnabled]);
   const renderItem = useCallback(({ item }: { item: NativeLyricRow }) => <NativeLyricRowView hasDuet={hasDuet} row={item} position={position} seekVersion={seekVersion}
     style={style} fontScale={fontScale} landscape={landscapeMode} preview={preview} playing={playing} viewportWidth={viewportWidth} referenceScroll={referenceScroll}

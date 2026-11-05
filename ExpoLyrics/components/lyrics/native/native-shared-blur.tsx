@@ -7,6 +7,7 @@ import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTi
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import type { NativeLyricsStyle } from './native-lyrics-model';
 import { measuredProtection, type Protection } from './native-progressive-blur';
+export { measuredProtection, type Protection };
 
 export const NativeSharedBlurContext = createContext(false);
 export const NativeBlurGeometryContext = createContext<(() => void) | undefined>(undefined);

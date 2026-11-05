@@ -284,6 +284,9 @@ function checkCanvasPresentation() {
   const lyrics = [{}];
   const context = { __DEV__: false, update: null, mounted: { current: true }, generation: { current: 1 }, latestLyrics: { current: lyrics }, lyrics,
     active: true, AppState: { currentState: 'active' }, currentPosition: { current: 0 }, latestBackgrounds: { current: [] }, latestTiming: { current: {} }, reveal: 'canvas',
+    latestWindow: { current: { activeLineStartIndex: 0 } },
+    sharedBlurEnabled: false, blurReadyKeyRef: { current: '' }, blurGeometryKeyRef: { current: '' }, blurRows: { value: [] },
+    hasBlurGeometry: () => false, setBlurReadyKey: () => {},
     activeIndex: { current: -1 }, lastScrollTarget: { current: '' }, getPlaybackWindowState: time => ({ activeLineStartIndex: time }),
     getAutoScrollTargetRange: () => ({ startIndex: 0 }), setWindow: () => renders++, scrollTo: () => scrolls++, onActiveLineChange: () => notifications++ };
   vm.runInNewContext(ts.transpileModule(`update = ${callback}`, {}).outputText, context);

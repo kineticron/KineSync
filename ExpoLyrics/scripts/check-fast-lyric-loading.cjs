@@ -191,7 +191,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 
  function visit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')callback=node.initializer.getText(ast);ts.forEachChild(node,visit);}visit(ast);
  let measured;const cell={lead:{start:10000,end:11000},backgrounds:[{start:8000,end:12000}]};
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'song:portrait',setBlurReadyKey:value=>{context.ready=value;},hasBlurGeometry:rows=>rows.length>0&&rows.every(row=>Number.isFinite(row.y)&&Number.isFinite(row.height)&&row.height>0),blurRows:{value:[]},rows:[cell],flashRef:{current:{getLayout:()=>measured,getFirstItemOffset:()=>150}},currentPosition:{current:0},latestWindow:{current:undefined},latestLyrics:{current:[cell]},latestBackgrounds:{current:[]},latestTiming:{current:{}},getPlaybackWindowState:()=>undefined};
  const refresh=vm.runInNewContext(callback,context);refresh();
  assert.equal(context.blurRows.value[0].height,0,'unmeasured rows stay explicitly unknown');assert.equal(context.ready,'','no safe geometry restores original per-voice blur');
  measured={y:300,height:80};refresh();assert.equal(context.blurRows.value[0].y,450);assert.equal(context.ready,'song:portrait');assert.equal(context.blurRows.value[0].start,8000);
@@ -267,7 +267,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  }visit(ast);
  let layouts=[undefined,{y:100,height:100},undefined];
  const rows=[{lead:{start:0,end:9000},backgrounds:[]},{lead:{start:1000,end:9000},backgrounds:[]},{lead:{start:20000,end:21000},backgrounds:[]}];
- const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}}};
+ const context={useCallback:fn=>fn,sharedBlurEnabled:true,measuredBlurEnabled:false,blurGeometryKey:'A:portrait',blurReadyKey:'',setBlurReadyKey:value=>{context.blurReadyKey=value;},hasBlurGeometry:api.hasBlurGeometry,blurRows:{value:[]},rows,flashRef:{current:{getLayout:i=>layouts[i],getFirstItemOffset:()=>0}},currentPosition:{current:0},latestWindow:{current:undefined},latestLyrics:{current:rows},latestBackgrounds:{current:[]},latestTiming:{current:{}},lyrics:[],backgrounds:[],timing:{},getPlaybackWindowState:()=>undefined};
  const refresh=vm.runInNewContext(callback,context),ready=()=>vm.runInNewContext(readiness,context);
  refresh();const w={visualActiveLineStartIndex:1,visualActiveLineEndIndex:1,focusLineIndex:1};
  const unsafe=api.sharedBlurRegion(context.blurRows.value,w,1000,0);
@@ -288,4 +288,136 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  layouts=layouts.map(r=>({y:r.y*2,height:200}));refresh();assert.equal(ready(),true,'complete rotated snapshot re-enables prototype');
  layouts[1]={y:NaN,height:200};refresh();assert.equal(ready(),false,'nonfinite geometry rejected');
  console.log('Two-sided geometry regression PASS: exact three-row counterexample, cue/seek invariance, completeness gain/loss, actual source/layout reset and recovery.');
+}
+
+// Component lifecycle regressions: long song line 42 -> new song line 0, distant unmeasured, cue advance, seek, same geometry pending readiness
+{
+  const prog=load('components/lyrics/native/native-progressive-blur.ts',{
+   react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{}});
+  const api=load('components/lyrics/native/native-shared-blur.tsx',{
+   react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+   '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'./native-progressive-blur':prog,'react/jsx-runtime':{}});
+  const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
+  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let refreshCode, trackGuardCode, updateCode;
+  function visit(node){
+    if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='refreshBlurGeometry')refreshCode=node.initializer.getText(ast);
+    if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='updateWindow')updateCode=node.initializer.arguments[0].getText(ast);
+    if(ts.isIfStatement(node)&&node.expression.getText(ast)==='previousScrollSourceKey.current !== scrollSourceKey')trackGuardCode=node.getText(ast);
+    ts.forEachChild(node,visit);
+  }
+  visit(ast);
+
+  // Setup Song 1 (50 lines, currently at line 42, t=150000)
+  const song1Rows = Array.from({ length: 50 }, (_, i) => ({
+    lead: { start: i * 3000, end: (i + 1) * 3000 },
+    backgrounds: [],
+  }));
+  const song1Layouts = Array.from({ length: 50 }, (_, i) => i >= 40 && i <= 44 ? { y: i * 80, height: 80 } : undefined);
+  const song1Window = { visualActiveLineStartIndex: 42, visualActiveLineEndIndex: 42, focusLineIndex: 42 };
+
+  const ctx = {
+    __DEV__: false,
+    style: 'spicy',
+    useCallback: fn => fn,
+    sharedBlurEnabled: true,
+    blurGeometryKey: 'Song1:cfg',
+    blurReadyKey: 'Song1:cfg',
+    setBlurReadyKey: val => { ctx.blurReadyKey = val; },
+    blurReadyKeyRef: { current: 'Song1:cfg' },
+    blurGeometryKeyRef: { current: 'Song1:cfg' },
+    hasBlurGeometry: api.hasBlurGeometry,
+    blurRows: { value: [] },
+    rows: song1Rows,
+    flashRef: { current: { getLayout: i => song1Layouts[i], getFirstItemOffset: () => 0 } },
+    previousScrollSourceKey: { current: 'Song1' },
+    scrollSourceKey: 'Song2',
+    translationOnlyLayout: { current: false },
+    currentPosition: { current: 150000 },
+    latestWindow: { current: song1Window },
+    lyrics: Array.from({ length: 20 }, (_, i) => ({ lineStartTime: i * 3000, lineEndTime: (i + 1) * 3000 })),
+    backgrounds: [],
+    timing: {},
+    getPlaybackWindowState: (time) => {
+      const idx = Math.floor(time / 3000);
+      return { visualActiveLineStartIndex: idx, visualActiveLineEndIndex: idx, focusLineIndex: idx };
+    },
+    latestLyrics: { current: [] },
+    latestBackgrounds: { current: [] },
+    latestTiming: { current: {} },
+    mounted: { current: true },
+    generation: { current: 1 },
+    active: true,
+    AppState: { currentState: 'active' },
+    reveal: 'canvas',
+    activeIndex: { current: 42 },
+    lastScrollTarget: { current: '' },
+    getAutoScrollTargetRange: () => ({ startIndex: 0 }),
+    setWindow: () => {},
+    scrollTo: () => {},
+    onActiveLineChange: () => {},
+  };
+  ctx.latestLyrics.current = ctx.lyrics;
+
+  // 1. Lifecycle transition: Song 1 at line 42 -> Song 2 at line 0 (distant unmeasured)
+  // Track guard executes: resets position, window, clears rows, invalidates ready key
+  vm.runInNewContext(trackGuardCode, ctx);
+  assert.equal(ctx.blurReadyKey, '', 'Old track ready key invalidated');
+  assert.equal(ctx.currentPosition.current, 0, 'Current position reset to 0 for new song');
+  assert.equal(ctx.latestWindow.current.visualActiveLineStartIndex, 0, 'Window reset to new song line 0');
+  assert.equal(ctx.blurRows.value.length, 0, 'Blur rows cleared on source change');
+
+  // Song 2 mounts: 20 rows, only rows 0..2 measured in FlashList
+  const song2Rows = Array.from({ length: 20 }, (_, i) => ({
+    lead: { start: i * 3000, end: (i + 1) * 3000 },
+    backgrounds: [],
+  }));
+  const song2Layouts = Array.from({ length: 20 }, (_, i) => i <= 2 ? { y: i * 80, height: 80 } : undefined);
+  ctx.rows = song2Rows;
+  ctx.flashRef.current.getLayout = i => song2Layouts[i];
+  ctx.blurGeometryKey = 'Song2:cfg';
+  ctx.blurGeometryKeyRef.current = 'Song2:cfg';
+  ctx.blurReadyKeyRef.current = ctx.blurReadyKey;
+
+  const refreshBlur = vm.runInNewContext(refreshCode, ctx);
+  refreshBlur();
+  assert.equal(ctx.blurReadyKey, 'Song2:cfg', 'Song 2 immediately activates shared blur for line 0 (no line 42 deadlock!)');
+  ctx.blurReadyKeyRef.current = ctx.blurReadyKey;
+
+  // 2. Distant unmeasured seek: user seeks to line 15 (distant rows 14..16 not yet laid out by FlashList)
+  song2Layouts[15] = undefined;
+  song2Layouts[16] = undefined;
+  ctx.currentPosition.current = 45000;
+  ctx.latestWindow.current = ctx.getPlaybackWindowState(45000);
+  refreshBlur();
+  assert.equal(ctx.blurReadyKey, '', 'Distant unmeasured row leaves readiness pending');
+  ctx.blurReadyKeyRef.current = '';
+
+  // While pending, measuredProtection safely opens to Infinity on UI thread
+  const safeOpen = prog.measuredProtection(ctx.blurRows.value, ctx.latestWindow.current, 45000);
+  assert.equal(safeOpen.top, -Infinity, 'UI thread protection safely open at top while pending');
+  assert.equal(safeOpen.bottom, Infinity, 'UI thread protection safely open at bottom while pending');
+
+  // 3. Same geometry pending readiness resolved on cue/seek:
+  // FlashList lays out row 15 & 16, snapshot reflects it, cue/seek triggers updateWindow
+  song2Layouts[15] = { y: 15 * 80, height: 80 };
+  song2Layouts[16] = { y: 16 * 80, height: 80 };
+  refreshBlur();
+  ctx.blurReadyKey = '';
+  ctx.blurReadyKeyRef.current = '';
+  ctx.update = null;
+  vm.runInNewContext(ts.transpileModule(`update = ${updateCode}`, {}).outputText, ctx);
+  const update = ctx.update;
+  // Cue advance to 45500 ms at token 1
+  update(45500, 1, false);
+  assert.equal(ctx.blurReadyKey, 'Song2:cfg', 'Cue advance recomputes localized readiness from same geometry and activates blur');
+  ctx.blurReadyKeyRef.current = ctx.blurReadyKey;
+
+  // 4. Seek change with pending readiness
+  ctx.blurReadyKey = '';
+  ctx.blurReadyKeyRef.current = '';
+  update(46000, 1, true);
+  assert.equal(ctx.blurReadyKey, 'Song2:cfg', 'Seek recomputes localized readiness and activates blur');
+
+  console.log('Component lifecycle regressions PASS: song1 line 42 -> song2 line 0, distant unmeasured safe open, cue advance, and seek readiness recovery.');
 }
