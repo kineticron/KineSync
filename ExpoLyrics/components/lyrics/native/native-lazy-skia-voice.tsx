@@ -145,11 +145,13 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, translation, width]);
   useArrivalShapeAttribution(trace, shaped, translationLayout);
-  // Match the exact inactive glyph paint alpha; the independent outer Spicy
-  // opacity animation still applies once, through presentation above.
+  // Cold inactive AMLL has no partial reveal: the exact picture shader is
+  // uniformly dark before the voice and bright after it. Retained/promoted
+  // voices keep the exact painter for release motion and partial reveals.
+  // The independent outer Spicy opacity still applies once above.
   const inactiveOpacity = useDerivedValue(() => spicy
     ? position.value > voiceEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5
-    : lineMotion.value.dark);
+    : position.value > voiceEnd ? lineMotion.value.bright : lineMotion.value.dark);
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
   const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {

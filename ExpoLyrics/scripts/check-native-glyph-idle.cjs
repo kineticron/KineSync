@@ -16,7 +16,7 @@ const bundle = filename => buildSync({ stdin: { contents: fs.readFileSync(filena
 const source = bundle(path.join(directory, 'native-glyph-picture.tsx'));
 const baselineSource = baselinePath && bundle(baselinePath);
 
-function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords = null, inputLineEnd = start + count * 600) {
+function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords = null, inputLineEnd = start + count * 600, options = {}) {
   const frames = [], shared = [], cleanups = [];
   let shaderCreates = 0, reads = 0, pictures = 0, paints = 0, blurFilters = 0, blurFilterDisposals = 0, paintSlotWrites = 0;
   const countedArrays = new WeakSet();
@@ -93,7 +93,7 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords
   const position = { value: 0 }, active = { value: false };
   const lineMotion = { value: { scale: 0.97, velocity: 0, bright: 0.2, dark: 0.2 } };
   moduleObject.exports.NativeGlyphPicture({ words, width: count * 22, height: 24, position, active, spicy,
-    background: false, fontSize: 36, lineEnd: inputLineEnd, lineMotion });
+    background: !!options.background, fontSize: 36, lineEnd: inputLineEnd, lineMotion });
   return { position, active, lineMotion,
     tick(time, dt = 1000 / 120) { position.value = time; for (const frame of frames) if (frame.active) frame.fn({ timeSincePreviousFrame: dt }); },
     get shaderCreates() { return shaderCreates; },
