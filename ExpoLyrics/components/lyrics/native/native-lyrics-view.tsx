@@ -18,7 +18,7 @@ import { buildNativeRows, nativeFollowIndex, nativeScrollSourceKey, type NativeL
 import { NativeLyricRowView, type NativeReveal } from './native-lyric-row';
 import { useNativeLyricsClock } from './use-native-lyrics-clock';
 import { NativeLyricsFontContext, useNativeLyricsFonts } from './native-lyrics-fonts';
-import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView } from './reference-scroll';
+import { initialScrollCommand, ReferenceScrollContext, ReferenceScrollView, type RowMotionEntry } from './reference-scroll';
 import { AmllLayoutCell } from './amll-layout-cell';
 import type { PreviewPlaybackAnchor } from '../use-playback-timeline-clock';
 import { buildNativeCueTimeline } from './native-cue-timeline';
@@ -54,6 +54,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && Boolean(SHARED_BLUR_PROFILES[style]) && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
+  const motionRegistry = useSharedValue<Record<number, RowMotionEntry>>({});
   const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
@@ -107,6 +108,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     translationOnlyLayout.current = false;
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
+    motionRegistry.value = {};
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
   const rendererReadyGate = useRef(new NativeRendererReadyRefreshGate());
   const readyGate = rendererReadyGate.current;
@@ -169,7 +171,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const renderedScrollResidual = useSharedValue(0);
   const actualScrollOffset = useSharedValue(0);
   const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
-    actualOffset: actualScrollOffset, spicy: style === 'spicy' }), [actualScrollOffset, renderedScrollResidual, scrollCommand, scrollResidual, style]);
+    actualOffset: actualScrollOffset, spicy: style === 'spicy', motions: motionRegistry }), [actualScrollOffset, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, style]);
   const following = useRef(autoFollowEnabled);
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
@@ -408,7 +410,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 

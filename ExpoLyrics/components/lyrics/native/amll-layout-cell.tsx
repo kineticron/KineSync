@@ -1,14 +1,14 @@
-import React, { forwardRef, useContext, useMemo } from 'react';
+import React, { forwardRef, useContext, useEffect, useMemo } from 'react';
 import { type View, type ViewProps } from 'react-native';
 import Animated, { defineAnimation, useSharedValue, type Animation, type LayoutAnimationFunction, type SharedValue } from 'react-native-reanimated';
 import { amllScrollSpring, stepAmllSpring } from './reference-motion';
-import { ReferenceScrollContext } from './reference-scroll';
+import { ReferenceScrollContext, type ReferenceScroll } from './reference-scroll';
 
 type CellMotion = { p: number; v: number; index: number };
 interface CellSpring extends Animation<CellSpring> { current: number; velocity: number; timestamp: number }
 
 /** Same solver as viewport/row motion, with retained position and velocity on interruption. */
-function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, damping: number): number {
+function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, damping: number, host?: ReferenceScroll): number {
   'worklet';
   return defineAnimation<CellSpring>(0, () => {
     'worklet';
@@ -18,6 +18,10 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
         animation.current = Number(value);
         animation.velocity = motion.value.v;
         animation.timestamp = now;
+        if (host?.motions) {
+          const currentRow = host.motions.value[motion.value.index]?.row ?? 0;
+          host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, settled: false } };
+        }
       },
       onFrame(animation, now) {
         const next = stepAmllSpring({ p: animation.current, v: animation.velocity }, 0, 0.9, damping, stiffness,
@@ -27,6 +31,10 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
         animation.velocity = settled ? 0 : next.v;
         animation.timestamp = now;
         motion.value = { ...motion.value, p: animation.current, v: animation.velocity };
+        if (host?.motions) {
+          const currentRow = host.motions.value[motion.value.index]?.row ?? 0;
+          host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: settled ? 0 : next.p, settled: settled && currentRow === 0 } };
+        }
         return settled;
       },
     };
@@ -46,8 +54,25 @@ export const AmllLayoutCell = forwardRef<View, ViewProps & { index: number }>(fu
     motion.value = { p, v: current.index === index ? current.v : 0, index };
     return {
       initialValues: { transform: [{ translateY: p }] },
-      animations: { transform: [{ translateY: withLayoutSpring(motion, stiffness, damping) }] },
+      animations: { transform: [{ translateY: withLayoutSpring(motion, stiffness, damping, host) }] },
     };
   }, [host, index, motion]);
+  useEffect(() => {
+    return () => {
+      if (host?.motions) {
+        const cur = host.motions.value;
+        if (cur[index]) {
+          const curRow = cur[index].row ?? 0;
+          if (curRow === 0) {
+            const next = { ...cur };
+            delete next[index];
+            host.motions.value = next;
+          } else {
+            host.motions.value = { ...cur, [index]: { row: curRow, cell: 0, settled: curRow === 0 } };
+          }
+        }
+      }
+    };
+  }, [host, index]);
   return <Animated.View {...props} ref={ref} layout={layout} collapsable={false} />;
 });

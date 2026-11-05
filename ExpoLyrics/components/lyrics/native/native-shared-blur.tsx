@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import type { NativeLyricsStyle } from './native-lyrics-model';
+import type { RowMotionEntry } from './reference-scroll';
 import { measuredProtection, type Protection } from './native-progressive-blur';
 export { measuredProtection, type Protection };
 
@@ -147,10 +148,10 @@ export function sharedBlurViewport(region: { top: number; bottom: number }, offs
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
-  style?: NativeLyricsStyle; residual?: SharedValue<number>;
+  style?: NativeLyricsStyle; residual?: SharedValue<number>; motions?: SharedValue<Record<number, RowMotionEntry>>;
 }) {
   const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
@@ -180,9 +181,28 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   // Forward cue: animatedBottom lags behind target.bottom -> max(animatedBottom, protection.bottom) guarantees next row is NEVER blurred.
   // Reverse cue: animatedBottom smoothly moves up -> max(animatedBottom, protection.bottom) follows animatedBottom smoothly.
   // Converse for top: min(animatedTop, protection.top) guarantees newly active row above is NEVER blurred while smoothly releasing downward.
-  // In AMLL, staggered row and viewport springs translate moving lines; expand protected envelope by residual until settled.
+  // In AMLL, staggered row and layout cell springs translate moving lines; expand protected envelope by actual combined displacement until settled.
   const upper = useAnimatedStyle(() => {
-    const amllMotionMargin = style === 'amll' && residual ? Math.abs(residual.value) : 0;
+    let amllMotionMargin = 0;
+    if (style === 'amll') {
+      const hostResidual = residual ? residual.value : 0;
+      amllMotionMargin = Math.abs(hostResidual);
+      if (motions && motions.value) {
+        const m = motions.value;
+        const p = protection.value;
+        const rList = rows.value;
+        for (let i = p.first; i <= p.index; i++) {
+          const r = rList[i];
+          if (r && Number.isFinite(r.y)) {
+            const entry = m[i];
+            const dy = (entry?.row ?? hostResidual) + (entry?.cell ?? 0);
+            const transformedTop = r.y + dy;
+            const diff = p.top - transformedTop;
+            if (diff > amllMotionMargin) amllMotionMargin = diff;
+          }
+        }
+      }
+    }
     const rawTop = Number.isFinite(protection.value.top)
       ? (Number.isFinite(animatedTop.value) ? Math.min(animatedTop.value, protection.value.top) - amllMotionMargin : protection.value.top - amllMotionMargin)
       : -Infinity;
@@ -191,7 +211,26 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   });
 
   const lower = useAnimatedStyle(() => {
-    const amllMotionMargin = style === 'amll' && residual ? Math.abs(residual.value) : 0;
+    let amllMotionMargin = 0;
+    if (style === 'amll') {
+      const hostResidual = residual ? residual.value : 0;
+      amllMotionMargin = Math.abs(hostResidual);
+      if (motions && motions.value) {
+        const m = motions.value;
+        const p = protection.value;
+        const rList = rows.value;
+        for (let i = p.first; i <= p.index; i++) {
+          const r = rList[i];
+          if (r && Number.isFinite(r.y) && Number.isFinite(r.height)) {
+            const entry = m[i];
+            const dy = (entry?.row ?? hostResidual) + (entry?.cell ?? 0);
+            const transformedBottom = r.y + r.height + dy;
+            const diff = transformedBottom - p.bottom;
+            if (diff > amllMotionMargin) amllMotionMargin = diff;
+          }
+        }
+      }
+    }
     const rawBottom = Number.isFinite(protection.value.bottom)
       ? (Number.isFinite(animatedBottom.value) ? Math.max(animatedBottom.value, protection.value.bottom) + amllMotionMargin : protection.value.bottom + amllMotionMargin)
       : Infinity;

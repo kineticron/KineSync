@@ -275,13 +275,22 @@ let amllP = progApi.measuredProtection(amllRows, amllWin, 500);
 assert.equal(amllP.index, 1, 'AMLL protects full next semantic row');
 assert.equal(amllP.bottom, 252, 'AMLL protected boundary matches measured row height strictly');
 
-// 8. Test NativeSharedBlur execution with AMLL style and spring motion envelope
+// 8. Test NativeSharedBlur execution with AMLL style, spring motion envelope, and motion registry
+const motionCode = buildSync({
+  entryPoints: [path.join(root, 'components/lyrics/native/reference-motion.ts')],
+  bundle: true, external: ['*'], platform: 'node', format: 'cjs', write: false,
+}).outputFiles[0].text;
+const motionModule = { exports: {} };
+vm.runInNewContext(motionCode, { module: motionModule, exports: motionModule.exports, require });
+const { stepAmllSpring, amllScrollSpring } = motionModule.exports;
+
 const amllRowsRef = { value: amllRows };
 const amllWinRef = { value: amllWin };
 const amllPosRef = { value: 500 };
 const amllOffsetRef = { value: 0 };
 const amllSeekRef = { value: 0 };
 const amllResidualRef = { value: 0 };
+const amllMotionsRef = { value: {} };
 sharedApi.NativeSharedBlur({
   target: { current: null },
   rows: amllRowsRef,
@@ -293,6 +302,7 @@ sharedApi.NativeSharedBlur({
   deadlines: [0, 1200, 2400, 3600, 4800],
   style: 'amll',
   residual: amllResidualRef,
+  motions: amllMotionsRef,
 });
 
 let amllPrev = sharedPrepare();
@@ -307,6 +317,87 @@ assert.equal(styles[3]().transform[0].translateY, 297, 'Lower boundary expands d
 amllResidualRef.value = 0;
 assert.equal(styles[2]().transform[0].translateY, 0, 'Settled upper boundary returns strictly to 0');
 assert.equal(styles[3]().transform[0].translateY, 252, 'Settled lower boundary returns strictly to 252');
+
+// 8b. Reviewer exact solver 120 delta simulation reproduction:
+// Step both host spring and row 1 spring over 120 frames at 60fps (dt = 1/60).
+// Staggered delay for row 1 holds rowRenderedP while host residual begins decaying.
+// Under old code, host residual decayed to 28.79px at frame 11 while row 1 had 53.10px displacement (24.31px leak).
+// At frames 30..55, host residual reached 0 while row was still settling (3.8px leak).
+// With motions registry and transformed row envelope, verify ZERO breach across all 120 frames!
+let hostSpring = { p: 120, v: 0, stiffness: 90, damping: 15 };
+const rowSpringCfg = amllScrollSpring({ firstVisible: 0, index: 1, interval: 800, interlude: false }, 1);
+let rowSpring = { p: 120, v: 0, renderedP: 120, delay: rowSpringCfg.delay, stiffness: rowSpringCfg.stiffness, damping: rowSpringCfg.damping };
+const dt = 1 / 60;
+let maxBreach = 0;
+let frame11Displacement = 0;
+let frame11LowerBoundary = 0;
+let frame40HostResidual = 0;
+let frame40RowP = 0;
+let frame40LowerBoundary = 0;
+
+for (let frame = 1; frame <= 120; frame++) {
+  // Step host spring
+  const nextHost = stepAmllSpring(hostSpring, 0, 0.9, hostSpring.damping, hostSpring.stiffness, dt);
+  const hostSettled = Math.abs(nextHost.p) < 0.01 && Math.abs(nextHost.v) < 0.01;
+  hostSpring = { ...hostSpring, p: hostSettled ? 0 : nextHost.p, v: hostSettled ? 0 : nextHost.v };
+  const hostResidual = hostSpring.p;
+  amllResidualRef.value = hostResidual;
+
+  // Step row 1 spring
+  if (rowSpring.delay > 0) {
+    rowSpring = { ...rowSpring, renderedP: rowSpring.p, delay: Math.max(0, rowSpring.delay - dt) };
+  } else {
+    const nextRow = stepAmllSpring(rowSpring, 0, 0.9, rowSpring.damping, rowSpring.stiffness, dt);
+    const rowSettled = Math.abs(nextRow.p) < 0.01 && Math.abs(nextRow.v) < 0.01;
+    rowSpring = { ...rowSpring, p: rowSettled ? 0 : nextRow.p, v: rowSettled ? 0 : nextRow.v, renderedP: rowSettled ? 0 : nextRow.p };
+  }
+  const rowDy = rowSpring.renderedP - hostResidual;
+
+  // Publish to motions registry as in production useReferenceRowScroll
+  amllMotionsRef.value = { 1: { row: rowDy, cell: 0, settled: rowSpring.p === 0 && hostResidual === 0 } };
+
+  // Evaluate NativeSharedBlur lower boundary
+  const lowerBoundary = styles[3]().transform[0].translateY;
+  const rowBottom = amllRows[1].y + amllRows[1].height + rowDy;
+  const breach = rowBottom - lowerBoundary;
+  if (breach > maxBreach) maxBreach = breach;
+
+  if (frame === 11) {
+    frame11Displacement = rowDy;
+    frame11LowerBoundary = lowerBoundary;
+  }
+  if (frame === 40) {
+    frame40HostResidual = hostResidual;
+    frame40RowP = rowDy;
+    frame40LowerBoundary = lowerBoundary;
+  }
+}
+
+assert.ok(maxBreach <= 0.001, `No breach allowed across 120 frames of solver timeline (max breach was ${maxBreach})`);
+assert.ok(frame11LowerBoundary >= 252 + frame11Displacement - 0.001, 'Frame 11 peak displacement fully covered by lower blur boundary');
+assert.ok(Math.abs(frame40HostResidual) < 1.0, 'Frame 40 host residual has nearly settled');
+assert.ok(frame40RowP > 0, 'Frame 40 row spring is still settling');
+assert.ok(frame40LowerBoundary >= 252 + frame40RowP - 0.001, 'Frame 40 row settling is still fully protected after host settled');
+
+// 8c. Concurrent AmllLayoutCell motion test:
+// Layout shift adds 50px of displacement (motion.value.p = 50)
+amllMotionsRef.value = { 1: { row: 15, cell: 50, settled: false } };
+amllResidualRef.value = 0;
+assert.equal(styles[3]().transform[0].translateY, 252 + 15 + 50, 'Lower boundary includes combined row + AmllLayoutCell motion (65px total)');
+
+// 8d. Interrupted cue and seek:
+amllSeekRef.value++;
+let seekNext = sharedPrepare();
+sharedReact(seekNext, amllPrev);
+amllPrev = seekNext;
+// Seek retargets with new row position without dropping protection
+amllMotionsRef.value = { 1: { row: 30, cell: 0, settled: false } };
+assert.equal(styles[3]().transform[0].translateY, 252 + 30, 'Seek retargeting retains transformed envelope protection');
+
+// 8e. Settled recovery:
+amllMotionsRef.value = { 1: { row: 0, cell: 0, settled: true } };
+amllResidualRef.value = 0;
+assert.equal(styles[3]().transform[0].translateY, 252, 'Settled motions return strictly to static row bottom');
 
 // 9. Test virtualization readiness (hasBlurGeometry) without full-song deadlock
 const virtualizedRows = Array.from({ length: 40 }, (_, i) => ({
@@ -353,6 +444,7 @@ assert.match(viewSource, /NativeSharedBlurContext\.Provider value=\{sharedBlurRe
 assert.match(viewSource, /geometry\.isHeightMeasured/, 'Requires real measured height, not estimates');
 assert.match(viewSource, /style=\{style\}/, 'Passes renderer style to NativeSharedBlur');
 assert.match(viewSource, /residual=\{scrollResidual\}/, 'Passes scroll residual for AMLL spring motion envelope');
+assert.match(viewSource, /motions=\{motionRegistry\}/, 'Passes motion registry for AMLL row/cell spring motion envelope');
 
 // 15. Verify exclusions: webviews, non-canvas reveals, and FlatList are NOT eligible for shared blur
 assert(!viewSource.includes("reveal === 'cold' && sharedBlurEnabled"), 'Cold reveal excluded');

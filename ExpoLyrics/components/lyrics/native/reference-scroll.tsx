@@ -8,7 +8,8 @@ export type ScrollCommand = { serial: number; offset: number; delta: number; ind
   interval: number; instant: boolean; interlude: boolean; snap: boolean; geometry?: boolean };
 export const initialScrollCommand: ScrollCommand = { serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0,
   interval: 800, instant: true, interlude: false, snap: false };
-export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean };
+export type RowMotionEntry = { row: number; cell: number; settled: boolean };
+export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>> };
 export const ReferenceScrollContext = createContext<ReferenceScroll | null>(null);
 
 /** Scroll the real viewport continuously so recycled cells never teleport. */
@@ -81,30 +82,93 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   useAnimatedReaction(() => ({ command: host.command.value, index }), ({ command, index: rowIndex }, previous) => {
     if (host.spicy) return;
     if (!previous || rowIndex !== previous.index) {
+      if (previous && host.motions) {
+        const cur = host.motions.value;
+        if (cur[previous.index]) {
+          const next = { ...cur };
+          delete next[previous.index];
+          host.motions.value = next;
+        }
+      }
       state.value = { ...state.value, p: host.residual.value, v: 0, renderedP: host.renderedResidual.value, delay: 0 };
+      if (host.motions) {
+        const curCell = host.motions.value[rowIndex]?.cell ?? 0;
+        host.motions.value = { ...host.motions.value, [rowIndex]: { row: 0, cell: curCell, settled: curCell === 0 } };
+      }
       return;
     }
     if (command.serial === previous.command.serial) return;
-    if (command.instant) { state.value = { ...state.value, p: 0, v: 0, renderedP: 0, delay: 0 }; return; }
+    if (command.instant) {
+      state.value = { ...state.value, p: 0, v: 0, renderedP: 0, delay: 0 };
+      if (host.motions) {
+        const curCell = host.motions.value[rowIndex]?.cell ?? 0;
+        host.motions.value = { ...host.motions.value, [rowIndex]: { row: 0, cell: curCell, settled: curCell === 0 } };
+      }
+      return;
+    }
     if (command.geometry) {
       state.value = { ...state.value, p: state.value.p + command.delta,
         ...amllScrollSpring(command, index), delay: 0 };
+      if (host.motions) {
+        const rowDy = state.value.p - host.renderedResidual.value;
+        const curCell = host.motions.value[rowIndex]?.cell ?? 0;
+        host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, settled: false } };
+      }
       return;
     }
     state.value = { ...state.value, p: state.value.p + (previous.command.snap ? command.delta : command.offset - host.actualOffset.value), ...amllScrollSpring(previous.command.snap ? command : { ...command, firstVisible: command.index }, index) };
+    if (host.motions) {
+      const rowDy = state.value.p - host.renderedResidual.value;
+      const curCell = host.motions.value[rowIndex]?.cell ?? 0;
+      host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, settled: false } };
+    }
   });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     const s = state.value;
-    if (s.p === 0 && s.v === 0 && s.renderedP === 0 && host.residual.value === 0) return;
+    if (s.p === 0 && s.v === 0 && s.renderedP === 0 && host.residual.value === 0) {
+      if (host.motions) {
+        const cur = host.motions.value[index];
+        if (cur && (cur.row !== 0 || !cur.settled)) {
+          host.motions.value = { ...host.motions.value, [index]: { row: 0, cell: cur.cell ?? 0, settled: (cur.cell ?? 0) === 0 } };
+        }
+      }
+      return;
+    }
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
-    if (s.delay > 0) { state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt) }; return; }
+    if (s.delay > 0) {
+      state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt) };
+      if (host.motions) {
+        const rowDy = s.p - host.renderedResidual.value;
+        const curCell = host.motions.value[index]?.cell ?? 0;
+        host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, settled: false } };
+      }
+      return;
+    }
     const next = stepAmllSpring(s, 0, 0.9, s.damping, s.stiffness, dt);
     const settled = Math.abs(next.p) < 0.01 && Math.abs(next.v) < 0.01;
     state.value = { ...s, p: settled ? 0 : next.p, v: settled ? 0 : next.v,
       renderedP: settled ? 0 : next.p };
-  }, [host, state]), false);
-  useEffect(() => { frame.setActive(enabled && !host.spicy); return () => frame.setActive(false); }, [enabled, frame, host.spicy]);
+    if (host.motions) {
+      const rowDy = settled ? 0 : next.p - host.renderedResidual.value;
+      const curCell = host.motions.value[index]?.cell ?? 0;
+      host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, settled: settled && curCell === 0 } };
+    }
+  }, [host, state, index]), false);
+  useEffect(() => {
+    frame.setActive(enabled && !host.spicy);
+    return () => {
+      frame.setActive(false);
+      if (host.motions) {
+        const cur = host.motions.value;
+        if (cur[index]) {
+          const next = { ...cur };
+          delete next[index];
+          host.motions.value = next;
+        }
+      }
+    };
+  }, [enabled, frame, host.motions, host.spicy, index]);
   // Command reactions run independently. Subtracting the host residual here
   // exposes its full cue delta before the row reaction catches up, briefly
   // moving the outgoing line above the top bar. Use only frame-published values
