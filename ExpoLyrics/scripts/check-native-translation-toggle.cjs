@@ -18,7 +18,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const effects = [];
   let hookCursor = 0;
   const counters = { rectQueries: 0, paragraphBuilds: 0, spacingProbeBuilds: 0, mainParagraphBuilds: 0, translationParagraphBuilds: 0, mainParagraphLayouts: 0,
-    translationParagraphLayouts: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
+    translationParagraphLayouts: 0, coldRunExtractions: 0, glyphShapePasses: 0, spicyGlyphPictures: 0 };
   const arrivalContext = {};
   const fonts = layouts.fonts ?? { name: 'test-fonts' };
   const react = {
@@ -58,6 +58,10 @@ function createVoiceHarness(code, spicy, layouts = {}) {
       if (/translation/u.test(text)) counters.translationParagraphBuilds++;
       else counters.mainParagraphBuilds++;
       return { text, layout() { counters[/translation/u.test(text) ? 'translationParagraphLayouts' : 'mainParagraphLayouts']++; },
+        extendedVisit(visitor) { counters.coldRunExtractions++;
+          const runs = layouts.nativeRuns ?? [{ font: { name: 'fallback' }, origin: { x: 3, y: 19 }, glyphs: [7, 2], positions: [{ x: 14, y: 0 }, { x: 0, y: 0 }] }];
+          runs.forEach(run => visitor(0, run)); visitor(0, null);
+        },
         getHeight: () => /translation/u.test(text) ? 18 : 42,
         getRectsForRange(start, end) { counters.rectQueries++; return layouts.rectsForRange?.(start, end) ?? [{ x: start * 8, y: 0, width: (end - start) * 8, height: 24 }]; } };
     } };
@@ -70,7 +74,7 @@ function createVoiceHarness(code, spicy, layouts = {}) {
     "@/lib/lyrics-arrival-context": actualArrivalContext ?? layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1, voiceInstance: 1 }), useArrivalShapeAttribution() {} },
     "@/lib/lyrics-arrival-trace": actualArrivalContext ?? layouts.arrivalTrace ?? {},
     'react-native': { StyleSheet: { create: styles => styles, absoluteFill: {} } },
-    '@shopify/react-native-skia': { Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
+    '@shopify/react-native-skia': { Glyphs: 'Glyphs', Blur: 'Blur', Canvas: 'Canvas', Group: 'Group', LinearGradient: 'LinearGradient',
       Mask: 'Mask', Paint: 'Paint', Paragraph: 'Paragraph', Rect: 'Rect', Skia: skia, TextAlign: { Left: 0, Right: 1 } },
     'react-native-reanimated': { __esModule: true, default: { View: 'Animated.View' }, Easing: { bezier: () => () => 0 },
       useAnimatedReaction(prepare, react) { if (layouts.animatePresentation) react(prepare(), null); },

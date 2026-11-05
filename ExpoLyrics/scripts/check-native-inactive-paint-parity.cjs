@@ -47,9 +47,18 @@ for (const dark of [0.13, 0.2, 0.4]) for (const bright of [0.2, 0.73, 1]) for (c
     lineMotion: { value: { scale: 0.97, velocity: 0, dark, bright } }, blur: { value: blur } };
   const lazy = render(lazyCode, spicy, props), original = render(currentCode, spicy, props);
   const mainGroup = nodes(lazy.tree, node => node.type === 'Group' &&
-    [node.props.children].flat().some(child => child?.type === 'Paragraph' && child.props.paragraph.text === voice.paintText))[0];
+    [node.props.children].flat().some(child => child?.type === 'Glyphs'))[0];
+  const run = nodes(mainGroup, node => node.type === 'Glyphs')[0].props;
+  assert.equal(run.font.name, 'fallback', 'use native fallback font');
+  assert.deepEqual(plain(run.glyphs), [{ id: 7, pos: { x: 17, y: 19 } }, { id: 2, pos: { x: 3, y: 19 } }], 'retain native RTL order and origin');
   const composite = paragraphComposite(mainGroup);
+  assert.deepEqual(composite.layerAlphas, [], 'cold runs add no saveLayer');
   assert.equal(composite.alpha, alpha, JSON.stringify({ spicy, background, sung, dark, bright, blur }));
+  const builds = lazy.h.counters.paragraphBuilds, extracts = lazy.h.counters.coldRunExtractions;
+  lazy.h.render(voice, { ...props, position: { value: time + 1 }, lineMotion: { value: { dark: dark + 0.001, bright } } });
+  assert.equal(lazy.h.counters.paragraphBuilds, builds, 'scroll cannot rebuild paragraphs');
+  assert.equal(lazy.h.counters.coldRunExtractions, extracts, 'scroll cannot reextract runs');
+  assert.equal(extracts, 1);
   assert.equal(lazy.h.counters.glyphShapePasses, 0, 'cold inactive parity must not prepare glyphs');
   assert.equal(exact.blurFilters, 0, 'actual inactive painter has no internal blur at this HEAD');
   const presentation = tree => plain({ style: tree.props.style, canvas: nodes(tree, node => node.type === 'Canvas')[0].props.style,

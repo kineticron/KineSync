@@ -8,7 +8,7 @@ const { buildSync } = require('esbuild');
 const installed = path.dirname(require.resolve('@shopify/react-native-skia/package.json'));
 const imports = {
   visit: 'sksg/Recorder/Visitor', Recorder: 'sksg/Recorder/Recorder', replay: 'sksg/Recorder/Player',
-  createDrawingContext: 'sksg/Recorder/DrawingContext', Group: 'renderer/components/Group', Paint: 'renderer/components/Paint',
+  createDrawingContext: 'sksg/Recorder/DrawingContext', Group: 'renderer/components/Group', Glyphs: 'renderer/components/text/Glyphs', Paint: 'renderer/components/Paint',
 };
 const code = buildSync({ stdin: { contents: Object.entries(imports).map(([name, file]) =>
   `export {${name}} from ${JSON.stringify(path.join(installed, 'src', file))};`).join('\n'), resolveDir: __dirname },
@@ -36,11 +36,12 @@ function paragraphComposite(group) {
       const layer = layers.pop();
       layers.at(-1).samples.push(...layer.samples.map(sample => ({ ...sample, alpha: sample.alpha * layer.alpha })));
     },
+    drawGlyphs(_glyphs, _positions, _x, _y, _font, paint) { this.paragraph('main', paint.getAlphaf()); },
     paragraph(label, alpha) { layers.at(-1).samples.push({ label, alpha }); },
   };
   const makePaint = () => ({ alpha: 1, getAlphaf() { return this.alpha; }, setAlphaf(value) { this.alpha = value; },
     copy() { const next = makePaint(); next.assign(this); return next; }, assign(other) { this.alpha = other.alpha; },
-    setAntiAlias() {}, dispose() {} });
+    setShader() {}, setColor() {}, setAntiAlias() {}, dispose() {} });
   const paragraph = (label, alpha) => ({ layout() {}, paint(target) { target.paragraph(label, alpha); } });
   function element(node) {
     if (!node || typeof node !== 'object') return null;
@@ -48,7 +49,7 @@ function paragraphComposite(group) {
     if ('opacity' in props) props.opacity = numeric(props.opacity);
     if (layer) props.layer = typeof layer === 'object' && layer.type ? element(layer) : layer;
     if (node.type === 'Paragraph') props.paragraph = paragraph('main', 1);
-    const type = { Group: renderer.Group, Paint: renderer.Paint, Paragraph: 'skParagraph' }[node.type];
+    const type = { Group: renderer.Group, Glyphs: renderer.Glyphs, Paint: renderer.Paint, Paragraph: 'skParagraph' }[node.type];
     assert(type, `unexpected isolated paragraph host ${node.type}`);
     return React.createElement(type, props, ...[children].flat().map(element));
   }
@@ -61,7 +62,7 @@ function paragraphComposite(group) {
   const root = [expand(element(group)), { type: 'skParagraph', props: { paragraph: paragraph('translation', 0.3), x: 0, y: 0, width: 100 }, children: [] }];
   const recorder = new renderer.Recorder();
   renderer.visit(recorder, root);
-  const context = renderer.createDrawingContext({ Paint: makePaint }, [], canvas);
+  const context = renderer.createDrawingContext({ Paint: makePaint, Color: value => value }, [], canvas);
   renderer.replay(context, recorder.getRecording().commands);
   context.dispose();
   assert.equal(layers.length, 1, 'layer restored before translation sibling');

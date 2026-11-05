@@ -3,7 +3,7 @@ import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arriva
 import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useContext, useMemo, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
-import { Blur, Canvas, Group, Paint, Paragraph, Skia, TextAlign } from '@shopify/react-native-skia';
+import { Blur, Canvas, Glyphs, Group, Paint, Paragraph, Skia, TextAlign } from '@shopify/react-native-skia';
 import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { type NativePaintWord, type NativeVoice } from './native-lyrics-model';
 import { type ReferenceLineMotion } from './use-reference-line-motion';
@@ -145,13 +145,23 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     return __DEV__ ? arrivalProduced(trace.handle, trace.generation, result) : result;
   }, [background, fontSize, fonts, right, showTranslation, spicy, staticLyrics, textWidth, translation, width]);
   useArrivalShapeAttribution(trace, shaped, translationLayout);
-  // Cold inactive AMLL has no partial reveal: the exact picture shader is
-  // uniformly dark before the voice and bright after it. Retained/promoted
-  // voices keep the exact painter for release motion and partial reveals.
-  // Paragraph paints its own intrinsic text color, ignoring inherited Group
-  // paint opacity. Composite only the inactive main paragraph through a Paint
-  // layer; keep translations outside it and retain the shared outer blur.
-  // The independent outer Spicy opacity still applies once above.
+  // Extract whole native runs once per exact geometry. Preserve fallback fonts,
+  // native visual order and run origins; no word/letter slicing or masks.
+  const coldRuns = useMemo(() => {
+    if (!layout || exactGlyphs) return [];
+    return nativeGeometryCache.get(fonts!, ['cold-runs-v1', background, batched, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd, voiceWords, voicePaintText, voicePaintWords], voicePaintText.length, () => {
+      const extract = () => {
+        const runs: { font: import('@shopify/react-native-skia').SkFont;
+          glyphs: { id: number; pos: { x: number; y: number } }[] }[] = [];
+        layout.paragraph.extendedVisit((_line, run) => {
+          if (run) runs.push({ font: run.font, glyphs: run.glyphs.map((id, i) => ({ id,
+            pos: { x: run.origin.x + run.positions[i].x, y: run.origin.y + run.positions[i].y } })) });
+        });
+        return runs;
+      };
+      return __DEV__ ? arrivalSpan(trace.handle, trace.generation, 'cold-run-extraction', extract) : extract();
+    });
+  }, [layout, exactGlyphs, fonts, background, batched, fontSize, lineHeight, right, spicy, staticLyrics, textWidth, width, voiceStart, voiceEnd, voiceWords, voicePaintText, voicePaintWords]);
   const inactiveOpacity = useDerivedValue(() => spicy
     ? position.value > voiceEnd ? background ? 0.6 : 0.85 : background ? 0.3 : 0.5
     : position.value > voiceEnd ? lineMotion.value.bright : lineMotion.value.dark);
@@ -165,7 +175,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={batched || !spicy ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group layer={<Paint opacity={inactiveOpacity} />}><Paragraph paragraph={shaped.paragraph} x={0} y={0} width={textWidth} /></Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group color="white" opacity={inactiveOpacity}>{coldRuns.map((run, index) => <Glyphs key={index} font={run.font} glyphs={run.glyphs} />)}</Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
         }</Group>
         {translationLayout && <Paragraph paragraph={translationLayout.paragraph} x={spicy ? 2 : 0}
