@@ -5,6 +5,7 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
+import type { NativeLyricsStyle } from './native-lyrics-model';
 import { measuredProtection, type Protection } from './native-progressive-blur';
 
 export const NativeSharedBlurContext = createContext(false);
@@ -19,8 +20,40 @@ export type BlurRow = {
 };
 export type BlurGeometry = BlurRow[];
 
-export const SHARED_BLUR_NEAR_INTENSITY = 10;
-export const SHARED_BLUR_FAR_INTENSITY = 24;
+export type SharedBlurProfile = {
+  nearIntensity: number;
+  farIntensity: number;
+  d1: number;
+  dNear: number;
+  dCross: number;
+  tint: 'systemUltraThinMaterial' | 'default';
+};
+
+export const SHARED_BLUR_PROFILES: Record<NativeLyricsStyle, SharedBlurProfile> = {
+  spicy: {
+    nearIntensity: 10,
+    farIntensity: 24,
+    d1: 60,
+    dNear: 100,
+    dCross: 60,
+    tint: 'systemUltraThinMaterial',
+  },
+  amll: {
+    nearIntensity: 6,
+    farIntensity: 16,
+    d1: 70,
+    dNear: 110,
+    dCross: 70,
+    tint: 'systemUltraThinMaterial',
+  },
+};
+
+export const SHARED_BLUR_NEAR_INTENSITY = SHARED_BLUR_PROFILES.spicy.nearIntensity;
+export const SHARED_BLUR_FAR_INTENSITY = SHARED_BLUR_PROFILES.spicy.farIntensity;
+
+export function getSharedBlurProfile(style?: NativeLyricsStyle): SharedBlurProfile {
+  return (style && SHARED_BLUR_PROFILES[style]) || SHARED_BLUR_PROFILES.spicy;
+}
 
 export function hasBlurGeometry(rows: BlurGeometry) {
   // Conservative prototype gate: partial snapshots can leave both protected
@@ -85,10 +118,12 @@ export function sharedBlurViewport(region: { top: number; bottom: number }, offs
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
+  style?: NativeLyricsStyle;
 }) {
+  const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
   const animatedTop = useSharedValue(-Infinity);
   const animatedBottom = useSharedValue(Infinity);
@@ -133,7 +168,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   });
 
   const spanHeight = 2 * height + 320;
-  const d1 = 60, dNear = 100, dCross = 60;
+  const { d1, dNear, dCross, nearIntensity, farIntensity, tint } = profile;
   const l1 = d1 / spanHeight;
   const l2 = (d1 + dNear) / spanHeight;
   const l3 = (d1 + dNear + dCross) / spanHeight;
@@ -155,7 +190,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   const upperFarLocs: readonly [number, number, ...number[]] = [0, 1 - l3, 1 - l3 + (l3 - l2) * 0.5, 1 - l2, 1];
 
   return <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
-    {/* Pass 1: Near Tier (Intensity 10, systemUltraThinMaterial) */}
+    {/* Pass 1: Near Tier */}
     <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
       style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
         <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
@@ -165,9 +200,9 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
           <LinearGradient colors={lowerNearColors} locations={lowerNearLocs} style={{ flex: 1 }} />
         </Animated.View>
       </View>}>
-      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="systemUltraThinMaterial" intensity={SHARED_BLUR_NEAR_INTENSITY} />
+      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint={tint} intensity={nearIntensity} />
     </MaskedView>
-    {/* Pass 2: Far Tier (Intensity 24, systemUltraThinMaterial) */}
+    {/* Pass 2: Far Tier */}
     <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
       style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
         <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
@@ -177,7 +212,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
           <LinearGradient colors={lowerFarColors} locations={lowerFarLocs} style={{ flex: 1 }} />
         </Animated.View>
       </View>}>
-      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="systemUltraThinMaterial" intensity={SHARED_BLUR_FAR_INTENSITY} />
+      <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint={tint} intensity={farIntensity} />
     </MaskedView>
   </View>;
 }
