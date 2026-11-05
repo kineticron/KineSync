@@ -240,26 +240,80 @@ sharedReact(sharedNext, sharedPrev);
 sharedPrev = sharedNext;
 assert.equal(styles[1]().transform[0].translateY, 314, 'Seek initializes to measured edge immediately');
 
-// 6. Verify bounded strengths (max 3 across both edges) and conservative tint
-assert(sharedApi.SHARED_BLUR_NEAR_INTENSITY <= 18, `Near intensity must be <= 18: ${sharedApi.SHARED_BLUR_NEAR_INTENSITY}`);
-assert(sharedApi.SHARED_BLUR_FAR_INTENSITY <= 25, `Far intensity must be <= 25: ${sharedApi.SHARED_BLUR_FAR_INTENSITY}`);
+// 6. Verify bounded strengths and per-renderer profiles for AMLL and Spicy
+assert(sharedApi.SHARED_BLUR_PROFILES, 'SHARED_BLUR_PROFILES exported');
+const spicyProfile = sharedApi.getSharedBlurProfile('spicy');
+const amllProfile = sharedApi.getSharedBlurProfile('amll');
 
-// 7. Verify accessibility and tree invariants from component source
+assert.equal(spicyProfile.nearIntensity, 10);
+assert.equal(spicyProfile.farIntensity, 24);
+assert.equal(spicyProfile.tint, 'systemUltraThinMaterial');
+
+// AMLL profile preserves original softness/opacity (softer than Spicy, not blindly identical)
+assert.equal(amllProfile.nearIntensity, 6, 'AMLL near blur is softer than Spicy (6 vs 10)');
+assert.equal(amllProfile.farIntensity, 16, 'AMLL far blur is softer than Spicy (16 vs 24)');
+assert.equal(amllProfile.tint, 'systemUltraThinMaterial');
+assert(amllProfile.nearIntensity < spicyProfile.nearIntensity, 'AMLL must be softer than Spicy near');
+assert(amllProfile.farIntensity < spicyProfile.farIntensity, 'AMLL must be softer than Spicy far');
+
+// AMLL mask distances also guarantee sum <= 1.0 everywhere
+for (let d = -100; d <= 1000; d++) {
+  const w = sharedApi.sharedBlurMaskWeights(d, 1000, amllProfile.d1, amllProfile.dNear, amllProfile.dCross);
+  assert(w.sum <= 1.0001, `AMLL weight sum exceeds 1 at d=${d}: ${w.sum}`);
+  assert(w.near >= 0 && w.far >= 0, `AMLL negative weight at d=${d}`);
+}
+
+// 7. Test AMLL geometry protection (multi-wrap + AmllBackground + translations)
+const amllRows = [
+  { y: 0, height: 72, start: 0, end: 1200 },
+  { y: 72, height: 180, start: 1200, end: 2400 }, // wrapped line with background voices
+  { y: 252, height: 95, start: 2400, end: 3600 },
+  { y: 347, height: 85, start: 3600, end: 4800 },
+];
+const amllWin = { focusLineIndex: 0, visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0 };
+let amllP = progApi.measuredProtection(amllRows, amllWin, 500);
+assert.equal(amllP.index, 1, 'AMLL protects full next semantic row');
+assert.equal(amllP.bottom, 252, 'AMLL protected boundary matches measured row height strictly');
+
+// 8. Test NativeSharedBlur execution with AMLL style
+const amllRowsRef = { value: amllRows };
+const amllWinRef = { value: amllWin };
+const amllPosRef = { value: 500 };
+const amllOffsetRef = { value: 0 };
+const amllSeekRef = { value: 0 };
+sharedApi.NativeSharedBlur({
+  target: { current: null },
+  rows: amllRowsRef,
+  window: amllWinRef,
+  position: amllPosRef,
+  offset: amllOffsetRef,
+  height: 800,
+  seekVersion: amllSeekRef,
+  deadlines: [0, 1200, 2400, 3600, 4800],
+  style: 'amll',
+});
+
+// 9. Verify accessibility and tree invariants from component source
 const sharedSource = read('components/lyrics/native/native-shared-blur.tsx');
 assert.match(sharedSource, /pointerEvents="none"/);
 assert.match(sharedSource, /accessibilityElementsHidden/);
 assert.match(sharedSource, /importantForAccessibility="no-hide-descendants"/);
-assert.match(sharedSource, /tint="systemUltraThinMaterial"/, 'Uses conservative systemUltraThinMaterial');
+assert.match(sharedSource, /tint={tint}/, 'Uses profile tint');
 
-// 8. Verify no per-voice Gaussian blur context or execution in native-lyric-row.tsx
+// 10. Verify no per-voice Gaussian blur context or execution in native-lyric-row.tsx
 const rowSource = read('components/lyrics/native/native-lyric-row.tsx');
 assert(!rowSource.includes('NativeProgressiveBlurContext'), 'NativeProgressiveBlurContext removed from native-lyric-row.tsx');
 assert(!rowSource.includes('measuredBlurRadius'), 'measuredBlurRadius removed from native-lyric-row.tsx');
 
-// 9. Verify native-lyrics-view.tsx wiring
+// 11. Verify native-lyrics-view.tsx wiring for BOTH AMLL and Spicy
 const viewSource = read('components/lyrics/native/native-lyrics-view.tsx');
-assert.match(viewSource, /const sharedBlurEnabled = __DEV__ && fastLoading/);
+assert.match(viewSource, /const sharedBlurEnabled = __DEV__ && fastLoading && \(Platform\.OS === 'ios' \|\| Platform\.OS === 'android' && Number\(Platform\.Version\) >= 31\) && \(style === 'spicy' \|\| style === 'amll'\) && list === 'flash' && reveal === 'canvas';/);
 assert.match(viewSource, /NativeSharedBlurContext\.Provider value=\{sharedBlurReady\}/);
 assert.match(viewSource, /geometry\.isHeightMeasured/, 'Requires real measured height, not estimates');
+assert.match(viewSource, /style=\{style\}/, 'Passes renderer style to NativeSharedBlur');
 
-console.log('Spicy progressive shared blur PASS: complementary mask weights sum<=1, whole 3-row next+translation+dot protection, forward/reverse asymmetry clamping, scroll offset, seek, max3 bounded tiers, no per-voice Gaussian execution. Source/hook execution; no device proof.');
+// 12. Verify exclusions: webviews, non-canvas reveals, and FlatList are NOT eligible for shared blur
+assert(!viewSource.includes("reveal === 'cold' && sharedBlurEnabled"), 'Cold reveal excluded');
+assert(!viewSource.includes("list === 'flat' && sharedBlurEnabled"), 'FlatList excluded');
+
+console.log('Spicy + AMLL progressive shared blur PASS: per-renderer profiles (AMLL soft vs Spicy strong), complementary mask weights sum<=1, whole 3-row next+translation+dot protection, forward/reverse asymmetry clamping, scroll offset, seek, max3 bounded tiers, no per-voice Gaussian execution. Source/hook execution; no device proof.');
