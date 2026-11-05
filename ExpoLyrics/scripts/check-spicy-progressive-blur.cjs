@@ -308,22 +308,64 @@ sharedApi.NativeSharedBlur({
 let amllPrev = sharedPrepare();
 sharedReact(amllPrev, null);
 
-// AMLL spring motion envelope: when spring is moving (residual = -45), expand protected region
+// 8. Test NativeSharedBlur execution with AMLL style, frame-by-frame animated row tracking in both directions
+// Upward motion (dy = -45): row 0 top = -45, row 1 bottom = 207 (252 - 45)
 amllResidualRef.value = -45;
-assert.equal(styles[2]().transform[0].translateY, -45, 'Upper boundary expands upward by |residual|');
-assert.equal(styles[3]().transform[0].translateY, 297, 'Lower boundary expands downward by |residual| (252 + 45)');
+amllMotionsRef.value = {};
+assert.equal(styles[2]().transform[0].translateY, -45, 'Upper boundary tracks moving row 0 upward to -45');
+assert.equal(styles[3]().transform[0].translateY, 207, 'Lower boundary tracks moving row 1 upward to 207 (no settled lag at 252 or abs residual expansion to 297)');
 
-// AMLL spring settled: returns strictly to static row bounds
+// Downward motion (dy = +45): row 0 top = +45, row 1 bottom = 297 (252 + 45)
+amllResidualRef.value = 45;
+assert.equal(styles[2]().transform[0].translateY, 45, 'Upper boundary tracks moving row 0 downward to +45');
+assert.equal(styles[3]().transform[0].translateY, 297, 'Lower boundary tracks moving row 1 downward to 297');
+
+// Settled motion: returns strictly to static row bounds (0 and 252)
 amllResidualRef.value = 0;
 assert.equal(styles[2]().transform[0].translateY, 0, 'Settled upper boundary returns strictly to 0');
 assert.equal(styles[3]().transform[0].translateY, 252, 'Settled lower boundary returns strictly to 252');
 
-// 8b. Reviewer exact solver 120 delta simulation reproduction:
+// 8b. Regression: Moving row with host residual zero and frame-by-frame boundary coverage in both directions
+// Simulates independent row spring oscillation while host residual has settled to 0
+for (const direction of [-1, 1]) {
+  amllResidualRef.value = 0;
+  for (let step = 1; step <= 60; step++) {
+    // Underdamped oscillation: dy swings between positive and negative while host residual is 0
+    const rowDy = direction * 40 * Math.exp(-step * 0.05) * Math.cos(step * 0.2);
+    const cellDy = direction * 15 * Math.exp(-step * 0.08) * Math.sin(step * 0.3);
+    const totalDy = rowDy + cellDy;
+
+    // Row 0 has small follow motion, Row 1 has main oscillation
+    const row0Dy = totalDy * 0.5;
+    amllMotionsRef.value = {
+      0: { row: row0Dy, cell: 0, settled: false },
+      1: { row: rowDy, cell: cellDy, settled: false },
+    };
+
+    const actualRow0Top = amllRows[0].y + row0Dy;
+    const actualRow1Top = amllRows[1].y + totalDy;
+    const expectedTop = Math.min(actualRow0Top, actualRow1Top);
+
+    const actualRow0Bottom = amllRows[0].y + amllRows[0].height + row0Dy;
+    const actualRow1Bottom = amllRows[1].y + amllRows[1].height + totalDy;
+    const expectedBottom = Math.max(actualRow0Bottom, actualRow1Bottom);
+
+    const upperBoundary = styles[2]().transform[0].translateY;
+    const lowerBoundary = styles[3]().transform[0].translateY;
+
+    assert.ok(Math.abs(upperBoundary - expectedTop) < 0.001,
+      `Frame ${step} (${direction > 0 ? 'down' : 'up'}): upper boundary (${upperBoundary}) must track actual row top (${expectedTop}) each frame with host residual zero`);
+    assert.ok(Math.abs(lowerBoundary - expectedBottom) < 0.001,
+      `Frame ${step} (${direction > 0 ? 'down' : 'up'}): lower boundary (${lowerBoundary}) must track actual row bottom (${expectedBottom}) each frame with host residual zero`);
+  }
+}
+
+// 8c. Reviewer exact solver 120 delta simulation reproduction:
 // Step both host spring and row 1 spring over 120 frames at 60fps (dt = 1/60).
 // Staggered delay for row 1 holds rowRenderedP while host residual begins decaying.
 // Under old code, host residual decayed to 28.79px at frame 11 while row 1 had 53.10px displacement (24.31px leak).
 // At frames 30..55, host residual reached 0 while row was still settling (3.8px leak).
-// With motions registry and transformed row envelope, verify ZERO breach across all 120 frames!
+// With motions registry and frame-by-frame animated tracking, verify ZERO breach across all 120 frames!
 let hostSpring = { p: 120, v: 0, stiffness: 90, damping: 15 };
 const rowSpringCfg = amllScrollSpring({ firstVisible: 0, index: 1, interval: 800, interlude: false }, 1);
 let rowSpring = { p: 120, v: 0, renderedP: 120, delay: rowSpringCfg.delay, stiffness: rowSpringCfg.stiffness, damping: rowSpringCfg.damping };
@@ -379,13 +421,21 @@ assert.ok(Math.abs(frame40HostResidual) < 1.0, 'Frame 40 host residual has nearl
 assert.ok(frame40RowP > 0, 'Frame 40 row spring is still settling');
 assert.ok(frame40LowerBoundary >= 252 + frame40RowP - 0.001, 'Frame 40 row settling is still fully protected after host settled');
 
-// 8c. Concurrent AmllLayoutCell motion test:
+// 8d. Concurrent AmllLayoutCell motion test:
 // Layout shift adds 50px of displacement (motion.value.p = 50)
 amllMotionsRef.value = { 1: { row: 15, cell: 50, settled: false } };
 amllResidualRef.value = 0;
 assert.equal(styles[3]().transform[0].translateY, 252 + 15 + 50, 'Lower boundary includes combined row + AmllLayoutCell motion (65px total)');
 
-// 8d. Interrupted cue and seek:
+// 8e. Unknown geometry fail-safe during animation:
+// If a protected row has unmeasured height during motion, safe open to full viewport
+const brokenAmllRows = amllRows.map((r, i) => ({ ...r, height: i === 1 ? 0 : r.height }));
+amllRowsRef.value = brokenAmllRows;
+assert.equal(styles[2]().transform[0].translateY, -960, 'Unknown row geometry opens upper blur to -limit (-960)');
+assert.equal(styles[3]().transform[0].translateY, 960, 'Unknown row geometry opens lower blur to limit (960)');
+amllRowsRef.value = amllRows;
+
+// 8f. Interrupted cue and seek:
 amllSeekRef.value++;
 let seekNext = sharedPrepare();
 sharedReact(seekNext, amllPrev);
@@ -394,7 +444,7 @@ amllPrev = seekNext;
 amllMotionsRef.value = { 1: { row: 30, cell: 0, settled: false } };
 assert.equal(styles[3]().transform[0].translateY, 252 + 30, 'Seek retargeting retains transformed envelope protection');
 
-// 8e. Settled recovery:
+// 8g. Settled recovery:
 amllMotionsRef.value = { 1: { row: 0, cell: 0, settled: true } };
 amllResidualRef.value = 0;
 assert.equal(styles[3]().transform[0].translateY, 252, 'Settled motions return strictly to static row bottom');
