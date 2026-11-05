@@ -467,139 +467,155 @@ const cellSource = buildSync({
   external: ['react', 'react-native', 'react-native-reanimated', './reference-scroll'],
 }).outputFiles[0].text;
 
+function testActualHookReplay(schedule, label, hostFirst) {
+  const sharedCell = value => {
+    let current = value;
+    return {
+      get value() { return current; },
+      set value(v) { current = v; },
+    };
+  };
+  const hookHost = {
+    command: sharedCell({ serial: 1, offset: 300, delta: 63.7, index: 1, firstVisible: 0, interval: 800, instant: false, interlude: false, snap: true }),
+    residual: sharedCell(63.7),
+    renderedResidual: sharedCell(63.7),
+    actualOffset: sharedCell(0),
+    spicy: false,
+    motions: sharedCell({}),
+  };
+  const hookReactions = [];
+  const hookFrames = [];
+  const hookRowStyles = [];
+
+  const hookReanimated = {
+    default: { ScrollView: 'ScrollView', View: 'View' },
+    useSharedValue: sharedCell,
+    useAnimatedRef: () => () => {},
+    useScrollOffset: () => {},
+    useAnimatedReaction: (prepare, react) => hookReactions.push({ prepare, react, previous: null }),
+    useAnimatedStyle: callback => { hookRowStyles.push(callback); return {}; },
+    useFrameCallback: callback => {
+      const frame = { callback, active: true };
+      hookFrames.push(frame);
+      return { setActive: a => { frame.active = a; } };
+    },
+    defineAnimation: (_init, factory) => factory(),
+    cancelAnimation: () => {},
+    withTiming: to => to,
+    scrollTo: () => {},
+  };
+
+  const hookReact = {
+    createContext: () => ({}),
+    forwardRef: fn => fn,
+    useCallback: fn => fn,
+    useMemo: fn => fn(),
+    useContext: () => hookHost,
+    useEffect: fn => { if (typeof fn === 'function') fn(); },
+    createElement: () => ({}),
+  };
+
+  const scrollMod = { exports: {} };
+  vm.runInNewContext(scrollSource, {
+    module: scrollMod, exports: scrollMod.exports,
+    require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
+  });
+  const { useReferenceRowScroll } = scrollMod.exports;
+
+  const cellMod = { exports: {} };
+  vm.runInNewContext(cellSource, {
+    module: cellMod, exports: cellMod.exports,
+    require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
+  });
+  const { AmllLayoutCell } = cellMod.exports;
+
+  // Call actual production hooks for row 1:
+  useReferenceRowScroll(hookHost, 1, true);
+
+  // Call actual production layout hook for row 1:
+  const cellLayout = AmllLayoutCell({ index: 1 }, null).props.layout;
+  const cellAnim = cellLayout({ currentOriginY: 200, targetOriginY: 250 });
+  const anim = cellAnim.animations.transform[0].translateY;
+  anim.onStart(anim, -30, 0, null);
+
+  // Initial command reaction:
+  for (const rx of hookReactions) {
+    const next = rx.prepare();
+    rx.react(next, rx.previous);
+    rx.previous = next;
+  }
+
+  let maxSkewBreach = 0;
+  let maxSameBreach = 0;
+  let prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
+  let hostSpring = { p: 63.7, v: 0, stiffness: 90, damping: 15 };
+
+  let clock = 0;
+  const totalFrames = typeof schedule === 'function' ? 180 : Math.round(1.5 / schedule);
+  for (let f = 1; f <= totalFrames; f++) {
+    const frameDt = typeof schedule === 'function' ? schedule(f) : schedule;
+    const now = (clock += frameDt * 1000);
+    const stepHost = () => {
+      if (hookHost.residual.value !== 0) {
+        const nextH = stepAmllSpring(hostSpring, 0, 0.9, hostSpring.damping, hostSpring.stiffness, frameDt);
+        const settled = Math.abs(nextH.p) < 0.01 && Math.abs(nextH.v) < 0.01;
+        hostSpring = { ...hostSpring, p: settled ? 0 : nextH.p, v: settled ? 0 : nextH.v };
+        hookHost.residual.value = hostSpring.p;
+        hookHost.renderedResidual.value = hostSpring.p;
+      }
+    };
+    const stepRowAndCell = () => {
+      for (const frame of hookFrames) {
+        if (frame.active) frame.callback({ timeSincePreviousFrame: frameDt * 1000 });
+      }
+      anim.onFrame(anim, now);
+    };
+
+    if (hostFirst) {
+      stepHost();
+      stepRowAndCell();
+    } else {
+      stepRowAndCell();
+      stepHost();
+    }
+
+    // Actual row translateY from useReferenceRowScroll:
+    const renderedRowDy = hookRowStyles[0]().transform[0].translateY;
+    const totalCellOffset = hookHost.motions.value[1]?.cell ?? 0;
+    const actualRowBottom = amllRows[1].y + amllRows[1].height + renderedRowDy + totalCellOffset;
+
+    // 1) Same-frame mask:
+    const sameProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, hookHost.motions.value, 0);
+    const sameBreach = actualRowBottom - sameProtected.bottom;
+    if (sameBreach > maxSameBreach) maxSameBreach = sameBreach;
+
+    // 2) 1-frame scheduling skew mask: uniform reads prevMotionsSnapshot
+    const skewProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, prevMotionsSnapshot, 0);
+    const skewBreach = actualRowBottom - skewProtected.bottom;
+    if (skewBreach > maxSkewBreach) maxSkewBreach = skewBreach;
+
+    prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
+  }
+
+  assert.ok(maxSameBreach <= 0.001, `Same-frame actual-hook breach at ${label} (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSameBreach.toFixed(4)})`);
+  assert.ok(maxSkewBreach <= 0.001, `1-frame skew actual-hook breach at ${label} (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSkewBreach.toFixed(4)})`);
+  assert.equal(prevMotionsSnapshot[1].vLead, 0, 'Velocity lead returns strictly to 0 when settled');
+}
+
+// 2a) Fixed dt sweeps:
 for (const hookDt of [0.008333, 0.016667, 0.033333, 0.064]) {
   for (const hostFirst of [true, false]) {
-    const sharedCell = value => {
-      let current = value;
-      return {
-        get value() { return current; },
-        set value(v) { current = v; },
-      };
-    };
-    const hookHost = {
-      command: sharedCell({ serial: 1, offset: 300, delta: 63.7, index: 1, firstVisible: 0, interval: 800, instant: false, interlude: false, snap: true }),
-      residual: sharedCell(63.7),
-      renderedResidual: sharedCell(63.7),
-      actualOffset: sharedCell(0),
-      spicy: false,
-      motions: sharedCell({}),
-    };
-    const hookReactions = [];
-    const hookFrames = [];
-    const hookRowStyles = [];
-
-    const hookReanimated = {
-      default: { ScrollView: 'ScrollView', View: 'View' },
-      useSharedValue: sharedCell,
-      useAnimatedRef: () => () => {},
-      useScrollOffset: () => {},
-      useAnimatedReaction: (prepare, react) => hookReactions.push({ prepare, react, previous: null }),
-      useAnimatedStyle: callback => { hookRowStyles.push(callback); return {}; },
-      useFrameCallback: callback => {
-        const frame = { callback, active: true };
-        hookFrames.push(frame);
-        return { setActive: a => { frame.active = a; } };
-      },
-      defineAnimation: (_init, factory) => factory(),
-      cancelAnimation: () => {},
-      withTiming: to => to,
-      scrollTo: () => {},
-    };
-
-    const hookReact = {
-      createContext: () => ({}),
-      forwardRef: fn => fn,
-      useCallback: fn => fn,
-      useMemo: fn => fn(),
-      useContext: () => hookHost,
-      useEffect: fn => { if (typeof fn === 'function') fn(); },
-      createElement: () => ({}),
-    };
-
-    const scrollMod = { exports: {} };
-    vm.runInNewContext(scrollSource, {
-      module: scrollMod, exports: scrollMod.exports,
-      require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
-    });
-    const { useReferenceRowScroll } = scrollMod.exports;
-
-    const cellMod = { exports: {} };
-    vm.runInNewContext(cellSource, {
-      module: cellMod, exports: cellMod.exports,
-      require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: (type, props) => ({ type, props }) } : name === 'react-native' ? {} : hookReanimated,
-    });
-    const { AmllLayoutCell } = cellMod.exports;
-
-    // Call actual production hooks for row 1:
-    useReferenceRowScroll(hookHost, 1, true);
-
-    // Call actual production layout hook for row 1:
-    const cellLayout = AmllLayoutCell({ index: 1 }, null).props.layout;
-    const cellAnim = cellLayout({ currentOriginY: 200, targetOriginY: 250 });
-    const anim = cellAnim.animations.transform[0].translateY;
-    anim.onStart(anim, -30, 0, null);
-
-    // Initial command reaction:
-    for (const rx of hookReactions) {
-      const next = rx.prepare();
-      rx.react(next, rx.previous);
-      rx.previous = next;
-    }
-
-    let maxSkewBreach = 0;
-    let maxSameBreach = 0;
-    let prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
-    let hostSpring = { p: 63.7, v: 0, stiffness: 90, damping: 15 };
-
-    const totalFrames = Math.round(1.5 / hookDt);
-    for (let f = 1; f <= totalFrames; f++) {
-      const now = f * hookDt * 1000;
-      const stepHost = () => {
-        if (hookHost.residual.value !== 0) {
-          const nextH = stepAmllSpring(hostSpring, 0, 0.9, hostSpring.damping, hostSpring.stiffness, hookDt);
-          const settled = Math.abs(nextH.p) < 0.01 && Math.abs(nextH.v) < 0.01;
-          hostSpring = { ...hostSpring, p: settled ? 0 : nextH.p, v: settled ? 0 : nextH.v };
-          hookHost.residual.value = hostSpring.p;
-          hookHost.renderedResidual.value = hostSpring.p;
-        }
-      };
-      const stepRowAndCell = () => {
-        for (const frame of hookFrames) {
-          if (frame.active) frame.callback({ timeSincePreviousFrame: hookDt * 1000 });
-        }
-        anim.onFrame(anim, now);
-      };
-
-      if (hostFirst) {
-        stepHost();
-        stepRowAndCell();
-      } else {
-        stepRowAndCell();
-        stepHost();
-      }
-
-      // Actual row translateY from useReferenceRowScroll:
-      const renderedRowDy = hookRowStyles[0]().transform[0].translateY;
-      const totalCellOffset = hookHost.motions.value[1]?.cell ?? 0;
-      const actualRowBottom = amllRows[1].y + amllRows[1].height + renderedRowDy + totalCellOffset;
-
-      // 1) Same-frame mask:
-      const sameProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, hookHost.motions.value, 0);
-      const sameBreach = actualRowBottom - sameProtected.bottom;
-      if (sameBreach > maxSameBreach) maxSameBreach = sameBreach;
-
-      // 2) 1-frame scheduling skew mask: uniform reads prevMotionsSnapshot
-      const skewProtected = sharedApi.amllAnimatedProtection(amllRows, { first: 0, index: 1, top: 0, bottom: 252 }, prevMotionsSnapshot, 0);
-      const skewBreach = actualRowBottom - skewProtected.bottom;
-      if (skewBreach > maxSkewBreach) maxSkewBreach = skewBreach;
-
-      prevMotionsSnapshot = JSON.parse(JSON.stringify(hookHost.motions.value));
-    }
-
-    assert.ok(maxSameBreach <= 0.001, `Same-frame actual-hook breach at dt=${(hookDt * 1000).toFixed(1)}ms (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSameBreach.toFixed(4)})`);
-    assert.ok(maxSkewBreach <= 0.001, `1-frame skew actual-hook breach at dt=${(hookDt * 1000).toFixed(1)}ms (${hostFirst ? 'host-first' : 'row-first'}) must be <= 0.001 (was ${maxSkewBreach.toFixed(4)})`);
-    assert.equal(prevMotionsSnapshot[1].vLead, 0, 'Velocity lead returns strictly to 0 when settled');
+    testActualHookReplay(hookDt, `dt=${(hookDt * 1000).toFixed(1)}ms`, hostFirst);
   }
+}
+
+// 2b) Alternating variable-frame timing regression [8.333, 64, 16.667, 33.333]ms:
+for (const hostFirst of [true, false]) {
+  testActualHookReplay(
+    f => [0.008333, 0.064, 0.016667, 0.033333][f % 4],
+    'alternating dt=[8.333, 64, 16.667, 33.333]ms',
+    hostFirst
+  );
 }
 
 // 8d. Concurrent AmllLayoutCell motion test:

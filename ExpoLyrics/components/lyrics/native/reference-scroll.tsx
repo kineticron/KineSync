@@ -118,8 +118,10 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
         const cur = host.motions.value[rowIndex];
         const curCell = cur?.cell ?? 0;
         const cellVLead = cur?.cellVLead ?? 0;
-        const hostLead = Math.abs(host.residual.value) * Math.min(1, 5.2 * 0.064);
-        const rowVLead = Math.abs(state.value.p) * Math.min(1, 5.2 * 0.064) + hostLead;
+        const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
+        const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096);
+        const worstRow = stepAmllSpring({ p: state.value.p, v: 0 }, 0, 0.9, state.value.damping, state.value.stiffness, 0.064);
+        const rowVLead = Math.abs(worstRow.p - state.value.p) + hostLead;
         host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: false } };
       }
       return;
@@ -130,8 +132,10 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       const cur = host.motions.value[rowIndex];
       const curCell = cur?.cell ?? 0;
       const cellVLead = cur?.cellVLead ?? 0;
-      const hostLead = Math.abs(host.residual.value) * Math.min(1, 5.2 * 0.064);
-      const rowVLead = Math.abs(state.value.p) * Math.min(1, 5.2 * 0.064) + hostLead;
+      const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
+      const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096);
+      const worstRow = stepAmllSpring({ p: state.value.p, v: 0 }, 0, 0.9, state.value.damping, state.value.stiffness, 0.064);
+      const rowVLead = Math.abs(worstRow.p - state.value.p) + hostLead;
       host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: false } };
     }
   });
@@ -148,8 +152,9 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       return;
     }
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000)) || (1 / 60);
+    const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
     const measuredHostLead = Math.abs(host.renderedResidual.value - s.prevResidual);
-    const hostLead = host.residual.value !== 0 ? Math.max(measuredHostLead, Math.abs(host.residual.value) * Math.min(1, 5.2 * dt)) : 0;
+    const hostLead = host.residual.value !== 0 ? Math.max(measuredHostLead, Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096) : 0;
     if (s.delay > 0) {
       state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt), prevResidual: host.renderedResidual.value };
       if (host.motions) {
@@ -157,7 +162,8 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
         const cur = host.motions.value[index];
         const curCell = cur?.cell ?? 0;
         const cellVLead = cur?.cellVLead ?? 0;
-        const rowVLead = Math.abs(s.p) * Math.min(1, 5.2 * dt) + hostLead;
+        const worstRow = stepAmllSpring({ p: s.p, v: 0 }, 0, 0.9, s.damping, s.stiffness, 0.064);
+        const rowVLead = Math.abs(worstRow.p - s.p) + hostLead;
         host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: false } };
       }
       return;
@@ -171,7 +177,8 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       const cur = host.motions.value[index];
       const curCell = cur?.cell ?? 0;
       const cellVLead = cur?.cellVLead ?? 0;
-      const rowLead = settled ? 0 : Math.max(Math.abs(next.v) * dt, Math.abs(next.p) * Math.min(1, 5.2 * dt), 0.01);
+      const worstRow = stepAmllSpring({ p: next.p, v: next.v }, 0, 0.9, s.damping, s.stiffness, 0.064);
+      const rowLead = settled ? 0 : Math.max(Math.abs(worstRow.p - next.p), Math.abs(next.v) * 0.064, 0.01);
       const rowVLead = settled && host.residual.value === 0 ? 0 : rowLead + hostLead;
       host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: settled && curCell === 0 } };
     }

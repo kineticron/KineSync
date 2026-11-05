@@ -22,7 +22,8 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
           const cur = host.motions.value[motion.value.index];
           const currentRow = cur?.row ?? 0;
           const curRowVLead = cur?.rowVLead ?? 0;
-          const cellVLead = Math.abs(animation.current) * Math.min(1, 5.2 * 0.064);
+          const worstCell = stepAmllSpring({ p: animation.current, v: 0 }, 0, 0.9, damping, stiffness, 0.064);
+          const cellVLead = Math.abs(worstCell.p - animation.current);
           host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, vLead: curRowVLead + cellVLead, rowVLead: curRowVLead, cellVLead, settled: false } };
         }
       },
@@ -38,7 +39,8 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
           const cur = host.motions.value[motion.value.index];
           const currentRow = cur?.row ?? 0;
           const curRowVLead = cur?.rowVLead ?? 0;
-          const cellVLead = settled ? 0 : Math.max(Math.abs(next.v) * dt, Math.abs(next.p) * Math.min(1, 5.2 * dt), 0.01);
+          const worstCell = stepAmllSpring({ p: animation.current, v: animation.velocity }, 0, 0.9, damping, stiffness, 0.064);
+          const cellVLead = settled ? 0 : Math.max(Math.abs(worstCell.p - animation.current), Math.abs(next.v) * 0.064, 0.01);
           host.motions.value = {
             ...host.motions.value,
             [motion.value.index]: {
