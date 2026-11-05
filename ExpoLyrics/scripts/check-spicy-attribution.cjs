@@ -87,9 +87,16 @@ const context = vm.createContext({
   Pressable: 'Pressable', Text: 'Text', Image: 'Image', useMemo: callback => callback(),
   metadata: { attribution }, styles: { profileLink: { textDecorationLine: 'underline' } },
   landscapeMode: false, lyrics: [], onCreditsTimestampPress: undefined, onUserInteraction: undefined,
+  attributionGeometry: { value: null }, blurRows: { value: [] },
   Linking: { openURL(url) { opened.push(url); return Promise.resolve(); } },
 });
 vm.runInContext(nativeJs, context);
+assert.equal(typeof context.result.props.onLayout, 'function', 'Footer Pressable registers onLayout for mask exclusion');
+context.result.props.onLayout({ nativeEvent: { layout: { y: 450, height: 120 } } });
+assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 450, height: 120 }, 'Footer onLayout updates attributionGeometry with measured y and height');
+context.blurRows.value = [{ y: 0, height: 100 }, { y: 100, height: 150 }];
+context.result.props.onLayout({ nativeEvent: { layout: { y: 0, height: 120 } } });
+assert.deepEqual(JSON.parse(JSON.stringify(context.attributionGeometry.value)), { y: 268, height: 120 }, 'Footer onLayout falls back to last row bottom when layout y is 0');
 const nativeLinks = descendants(context.result).filter(node => node?.props?.accessibilityRole === 'link');
 assert.equal(nativeLinks.length, 2);
 for (const link of nativeLinks) {

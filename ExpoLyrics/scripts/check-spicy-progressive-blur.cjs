@@ -697,4 +697,108 @@ assert.match(viewSource, /motions=\{motionRegistry\}/, 'Passes motion registry f
 assert(!viewSource.includes("reveal === 'cold' && sharedBlurEnabled"), 'Cold reveal excluded');
 assert(!viewSource.includes("list === 'flat' && sharedBlurEnabled"), 'FlatList excluded');
 
-console.log('Spicy + AMLL progressive shared blur PASS: per-renderer profiles (AMLL soft vs Spicy strong), complementary mask weights sum<=1, whole 3-row next+translation+dot protection, forward/reverse asymmetry clamping, scroll offset, seek, max3 bounded tiers, no per-voice Gaussian execution. Source/hook execution; no device proof.');
+// 16. Attribution Blur Exclusion Regression: Both Renderers (Spicy + AMLL) and Both Orientations (Portrait + Landscape)
+// Attribution at the bottom of lyrics must NEVER be blurred under any scroll offset, orientation, or geometry change.
+assert.match(viewSource, /attribution=\{attributionGeometry\}/, 'Passes attribution geometry to NativeSharedBlur');
+assert.match(viewSource, /attributionGeometry\.value = null;/, 'Resets attribution geometry on track or layout change');
+assert.match(viewSource, /styles\.footer, landscapeMode && styles\.rightFooter/, 'Preserves existing footer rotation and layout');
+assert.match(sharedSource, /export type AttributionGeometry/);
+assert.match(sharedSource, /export function sharedBlurMaskWeightAtY/);
+
+for (const rendererStyle of ['spicy', 'amll']) {
+  const prof = sharedApi.getSharedBlurProfile(rendererStyle);
+  for (const orientation of ['portrait', 'landscape']) {
+    const isLandscape = orientation === 'landscape';
+    const vHeight = isLandscape ? 390 : 844;
+    const vSpanHeight = 2 * vHeight + 320;
+
+    // Test a list with rows and attribution at the bottom
+    const attrRows = [
+      { y: 0, height: 70, start: 0, end: 1000 },
+      { y: 70, height: 70, start: 1000, end: 2000 },
+      { y: 140, height: 70, start: 2000, end: 3000 },
+    ];
+    let attrY = isLandscape ? 300 : 400;
+    let attrH = isLandscape ? 60 : 120;
+
+    const testRowsRef = { value: attrRows };
+    const testWinRef = { value: { focusLineIndex: 0, visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0 } };
+    const testPosRef = { value: 500 };
+    const testOffsetRef = { value: 0 };
+    const testSeekRef = { value: 0 };
+    const testAttrRef = { value: { y: attrY, height: attrH } };
+    const testMotionsRef = { value: {} };
+    const testResidualRef = { value: 0 };
+
+    styles.length = 0; // reset styles array to capture test upper and lower
+    sharedApi.NativeSharedBlur({
+      target: { current: null },
+      rows: testRowsRef,
+      window: testWinRef,
+      position: testPosRef,
+      offset: testOffsetRef,
+      height: vHeight,
+      seekVersion: testSeekRef,
+      deadlines: [0, 1000, 2000, 3000],
+      style: rendererStyle,
+      residual: testResidualRef,
+      motions: testMotionsRef,
+      attribution: testAttrRef,
+    });
+
+    const testPrep = sharedPrepare();
+    sharedReact(testPrep, null);
+
+    const testUpperStyle = styles[0];
+    const testLowerStyle = styles[1];
+
+    // Sweep scroll offsets from -50 to 600 in 10px increments
+    for (let scrollOffset = -50; scrollOffset <= 600; scrollOffset += 10) {
+      testOffsetRef.value = scrollOffset;
+
+      const upperRes = testUpperStyle();
+      const lowerRes = testLowerStyle();
+
+      const attrScreenTop = attrY - scrollOffset;
+      const attrScreenBottom = attrScreenTop + attrH;
+
+      const rawBottom = 140; // row 1 bottom is 140
+      const r = sharedApi.sharedBlurViewport({ top: 0, bottom: rawBottom }, scrollOffset, vHeight);
+      const expectedLowerHeight = Math.max(0, Math.min(vSpanHeight, attrScreenTop - r.bottom));
+
+      assert.equal(lowerRes.height, expectedLowerHeight,
+        `[${rendererStyle} ${orientation} offset=${scrollOffset}] lower mask height (${lowerRes.height}) must terminate at attribution top (${expectedLowerHeight})`);
+      assert.equal(lowerRes.overflow, 'hidden', 'Lower mask must have overflow: hidden to clip gradient');
+
+      if (attrScreenTop < r.top) {
+        assert.ok(upperRes.transform[0].translateY <= attrScreenTop,
+          `[${rendererStyle} ${orientation} offset=${scrollOffset}] upper mask translateY (${upperRes.transform[0].translateY}) must be <= attrScreenTop (${attrScreenTop})`);
+      }
+
+      // For EVERY screen Y point within attribution bounds, blur mask weight MUST be strictly 0.0000
+      for (let y = Math.floor(attrScreenTop); y <= Math.ceil(attrScreenBottom); y++) {
+        const weights = sharedApi.sharedBlurMaskWeightAtY(y, { top: r.top, bottom: r.bottom }, { top: attrScreenTop, bottom: attrScreenBottom }, prof);
+        assert.equal(weights.near, 0, `Near blur weight at y=${y} inside attribution must be 0`);
+        assert.equal(weights.far, 0, `Far blur weight at y=${y} inside attribution must be 0`);
+        assert.equal(weights.sum, 0, `Total blur weight at y=${y} inside attribution must be 0`);
+      }
+    }
+
+    // Dynamic geometry change: attribution height expands (e.g. multi-line songwriting credits)
+    attrH = isLandscape ? 140 : 220;
+    testAttrRef.value = { y: attrY, height: attrH };
+    testOffsetRef.value = 100;
+    const expandedLower = testLowerStyle();
+    const expAttrScreenTop = attrY - 100;
+    const expR = sharedApi.sharedBlurViewport({ top: 0, bottom: 140 }, 100, vHeight);
+    assert.equal(expandedLower.height, Math.max(0, Math.min(vSpanHeight, expAttrScreenTop - expR.bottom)),
+      `Dynamic attribution height expansion immediately updates mask exclusion boundary in ${rendererStyle} ${orientation}`);
+
+    // Missing/null attribution falls back to full spanHeight
+    testAttrRef.value = null;
+    const fallbackLower = testLowerStyle();
+    assert.equal(fallbackLower.height, vSpanHeight, 'Null attribution leaves blur span unclipped');
+  }
+}
+
+console.log('Spicy + AMLL progressive shared blur PASS: per-renderer profiles (AMLL soft vs Spicy strong), complementary mask weights sum<=1, whole 3-row next+translation+dot protection, forward/reverse asymmetry clamping, scroll offset, seek, max3 bounded tiers, no per-voice Gaussian execution, attribution blur exclusion across portrait/landscape and scrolling. Source/hook execution; no device proof.');

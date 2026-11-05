@@ -21,6 +21,7 @@ export type BlurRow = {
   voices?: { start: number; end: number }[];
 };
 export type BlurGeometry = BlurRow[];
+export type AttributionGeometry = { y: number; height: number };
 
 export type SharedBlurProfile = {
   nearIntensity: number;
@@ -125,6 +126,47 @@ export function sharedBlurMaskWeights(distance: number, _spanHeight = 1000, d1 =
 }
 
 /**
+ * Exact numerical weights for complementary multi-tier shared blur masks at screen Y,
+ * strictly excluding attribution bounds. Inside attribution: near=0, far=0, sum=0.
+ */
+export function sharedBlurMaskWeightAtY(
+  yScreen: number,
+  region: { top: number; bottom: number },
+  attributionScreen: { top: number; bottom: number } | null,
+  profile: SharedBlurProfile,
+): { near: number; far: number; sum: number } {
+  'worklet';
+  if (attributionScreen && Number.isFinite(attributionScreen.top) && Number.isFinite(attributionScreen.bottom)) {
+    if (yScreen >= attributionScreen.top && yScreen <= attributionScreen.bottom) {
+      return { near: 0, far: 0, sum: 0 };
+    }
+  }
+  if (yScreen >= region.top && yScreen <= region.bottom) {
+    return { near: 0, far: 0, sum: 0 };
+  }
+  if (yScreen < region.top) {
+    let effectiveTop = region.top;
+    if (attributionScreen && Number.isFinite(attributionScreen.top) && attributionScreen.top < region.top) {
+      effectiveTop = attributionScreen.top;
+    }
+    const distance = effectiveTop - yScreen;
+    if (distance <= 0) return { near: 0, far: 0, sum: 0 };
+    return sharedBlurMaskWeights(distance, 1000, profile.d1, profile.dNear, profile.dCross);
+  }
+  if (yScreen > region.bottom) {
+    if (attributionScreen && Number.isFinite(attributionScreen.top) && attributionScreen.top <= region.bottom) {
+      return { near: 0, far: 0, sum: 0 };
+    }
+    if (attributionScreen && Number.isFinite(attributionScreen.top) && yScreen >= attributionScreen.top) {
+      return { near: 0, far: 0, sum: 0 };
+    }
+    const distance = yScreen - region.bottom;
+    return sharedBlurMaskWeights(distance, 1000, profile.d1, profile.dNear, profile.dCross);
+  }
+  return { near: 0, far: 0, sum: 0 };
+}
+
+/**
  * Computes measured protection boundaries for active voices and the complete next
  * semantic row (wraps, translations, interludes/dots). Strictly zero constant offset.
  * Missing/unmeasured geometry opens the safe zone to infinity.
@@ -188,10 +230,11 @@ export function amllAnimatedProtection(
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions, attribution }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
   style?: NativeLyricsStyle; residual?: SharedValue<number>; motions?: SharedValue<Record<number, RowMotionEntry>>;
+  attribution?: SharedValue<AttributionGeometry | null>;
 }) {
   const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
@@ -222,6 +265,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   // Reverse cue: animatedBottom smoothly moves up -> max(animatedBottom, protection.bottom) follows animatedBottom smoothly.
   // Converse for top: min(animatedTop, protection.top) guarantees newly active row above is NEVER blurred while smoothly releasing downward.
   // In AMLL, effective boundaries track the actual animated protected row positions EACH UI FRAME (staggered row springs + layout cell motion).
+  // Attribution text at the bottom is strictly excluded: lower blur terminates before attribution top, upper blur remains above attribution top.
   const upper = useAnimatedStyle(() => {
     let rawTop = -Infinity;
     if (style === 'amll') {
@@ -233,7 +277,19 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
         : -Infinity;
     }
     const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, offset.value, height);
-    return { transform: [{ translateY: r.top }] };
+    const attr = attribution?.value;
+    let upperTranslateY = r.top;
+    if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
+      const attrScreenTop = attr.y - offset.value;
+      if (attrScreenTop < r.top) {
+        upperTranslateY = Math.min(r.top, attrScreenTop);
+      }
+    }
+    return {
+      transform: [{ translateY: upperTranslateY }],
+      height: spanHeight,
+      overflow: 'hidden',
+    };
   });
 
   const lower = useAnimatedStyle(() => {
@@ -247,7 +303,17 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
         : Infinity;
     }
     const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, offset.value, height);
-    return { transform: [{ translateY: r.bottom }] };
+    const attr = attribution?.value;
+    let lowerHeight = spanHeight;
+    if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
+      const attrScreenTop = attr.y - offset.value;
+      lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
+    }
+    return {
+      transform: [{ translateY: r.bottom }],
+      height: lowerHeight,
+      overflow: 'hidden',
+    };
   });
 
   const spanHeight = 2 * height + 320;
@@ -277,10 +343,10 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
       style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
         <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
-          <LinearGradient colors={upperNearColors} locations={upperNearLocs} style={{ flex: 1 }} />
+          <LinearGradient colors={upperNearColors} locations={upperNearLocs} style={{ height: spanHeight, width: '100%' }} />
         </Animated.View>
         <Animated.View style={[{ position: 'absolute', height: spanHeight, width: '100%' }, lower]}>
-          <LinearGradient colors={lowerNearColors} locations={lowerNearLocs} style={{ flex: 1 }} />
+          <LinearGradient colors={lowerNearColors} locations={lowerNearLocs} style={{ height: spanHeight, width: '100%' }} />
         </Animated.View>
       </View>}>
       <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint={tint} intensity={nearIntensity} />
@@ -289,10 +355,10 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
       style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
         <Animated.View style={[{ position: 'absolute', top: -spanHeight, height: spanHeight, width: '100%' }, upper]}>
-          <LinearGradient colors={upperFarColors} locations={upperFarLocs} style={{ flex: 1 }} />
+          <LinearGradient colors={upperFarColors} locations={upperFarLocs} style={{ height: spanHeight, width: '100%' }} />
         </Animated.View>
         <Animated.View style={[{ position: 'absolute', height: spanHeight, width: '100%' }, lower]}>
-          <LinearGradient colors={lowerFarColors} locations={lowerFarLocs} style={{ flex: 1 }} />
+          <LinearGradient colors={lowerFarColors} locations={lowerFarLocs} style={{ height: spanHeight, width: '100%' }} />
         </Animated.View>
       </View>}>
       <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint={tint} intensity={farIntensity} />

@@ -1,6 +1,6 @@
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 import { BlurTargetView } from 'expo-blur';
-import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, SHARED_BLUR_PROFILES, type BlurGeometry } from './native-shared-blur';
+import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, SHARED_BLUR_PROFILES, type BlurGeometry, type AttributionGeometry } from './native-shared-blur';
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -54,6 +54,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && Boolean(SHARED_BLUR_PROFILES[style]) && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
+  const attributionGeometry = useSharedValue<AttributionGeometry | null>(null);
   const motionRegistry = useSharedValue<Record<number, RowMotionEntry>>({});
   const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
@@ -109,6 +110,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
     motionRegistry.value = {};
+    if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
   const rendererReadyGate = useRef(new NativeRendererReadyRefreshGate());
   const readyGate = rendererReadyGate.current;
@@ -195,6 +197,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     blurRows.value = [];
     setBlurReadyKey('');
     translationOnlyLayout.current = false;
+    if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
   }
   const preview = !!demoLyrics && demoLayout === 'preview';
   const topPadding = preview ? 12 : landscapeMode ? 168 : 150;
@@ -334,6 +337,17 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
         start: Math.min(row.lead.start, ...row.backgrounds.map(v => v.start)), end: Math.max(row.lead.end, ...row.backgrounds.map(v => v.end)), interlude: row.interlude, voices: [row.lead, ...row.backgrounds].map(voice => ({ start: voice.start, end: voice.end })) };
     });
     blurRows.value = snapshot;
+    if (typeof metadata !== 'undefined' && (metadata?.credits?.songwriters?.length || metadata?.attribution)) {
+      if (typeof attributionGeometry !== 'undefined' && attributionGeometry?.value) {
+        const currentAttr = attributionGeometry.value;
+        if (currentAttr && currentAttr.height > 0 && currentAttr.y <= 0 && snapshot.length > 0) {
+          const last = snapshot[snapshot.length - 1];
+          if (last && last.height > 0) {
+            attributionGeometry.value = { y: last.y + last.height + 18, height: currentAttr.height };
+          }
+        }
+      }
+    }
     const time = currentPosition.current;
     const currentWin = latestWindow.current ?? getPlaybackWindowState(time, latestLyrics.current, latestBackgrounds.current, latestTiming.current);
     setBlurReadyKey(hasBlurGeometry(snapshot, currentWin, time) ? blurGeometryKey : '');
@@ -349,7 +363,19 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   [fontScale, hasDuet, landscapeMode, longPress, playing, position, press, preview, referenceScroll, reveal, selectedLineKeys, showTranslatedText, staticLyrics, style, viewportWidth,
     tapToSeekEnabled, presentationWindow, experimentalWindow, seekVersion]);
   const footer = useMemo(() => !metadata.credits?.songwriters?.length && !metadata.attribution ? null : <Pressable
-    style={[styles.footer, landscapeMode && styles.rightFooter]} onPress={() => {
+    style={[styles.footer, landscapeMode && styles.rightFooter]}
+    onLayout={event => {
+      const { y, height } = event.nativeEvent.layout;
+      if (Number.isFinite(height) && height > 0) {
+        let actualY = y;
+        if ((!actualY || actualY <= 0) && blurRows.value.length > 0) {
+          const last = blurRows.value[blurRows.value.length - 1];
+          if (last && last.height > 0) actualY = last.y + last.height + 18;
+        }
+        attributionGeometry.value = { y: actualY, height };
+      }
+    }}
+    onPress={() => {
       onUserInteraction?.();
       onCreditsTimestampPress?.(Math.max(0, ...lyrics.map(line => line.lineEndTime)));
     }}>
@@ -367,7 +393,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
       <Text style={styles.credits}><Text style={styles.strong}>{index === 1 ? 'Uploaded By: ' : 'Made By: '}</Text><Text style={profile.url && /^https:\/\//i.test(profile.url) ? styles.profileLink : undefined}>@{profile.username}</Text></Text>
       {!!profile.avatar && <Image source={{ uri: profile.avatar }} style={styles.avatar} accessibilityLabel={`${profile.username}'s avatar`} />}
     </Pressable>)}
-  </Pressable>, [landscapeMode, lyrics, metadata, onCreditsTimestampPress, onUserInteraction]);
+  </Pressable>, [attributionGeometry, blurRows, landscapeMode, lyrics, metadata, onCreditsTimestampPress, onUserInteraction]);
   const retryFlatScroll = useCallback(({ index, averageItemLength }: { index: number; averageItemLength: number }) => {
     if (!following.current) return;
     pendingScroll.current = { index, animated: false };
@@ -410,7 +436,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} attribution={attributionGeometry} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
