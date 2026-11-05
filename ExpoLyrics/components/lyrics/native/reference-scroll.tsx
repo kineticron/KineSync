@@ -8,7 +8,7 @@ export type ScrollCommand = { serial: number; offset: number; delta: number; ind
   interval: number; instant: boolean; interlude: boolean; snap: boolean; geometry?: boolean };
 export const initialScrollCommand: ScrollCommand = { serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0,
   interval: 800, instant: true, interlude: false, snap: false };
-export type RowMotionEntry = { row: number; cell: number; settled: boolean };
+export type RowMotionEntry = { row: number; cell: number; vLead?: number; cellVLead?: number; settled: boolean };
 export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>> };
 export const ReferenceScrollContext = createContext<ReferenceScroll | null>(null);
 
@@ -111,16 +111,22 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
         ...amllScrollSpring(command, index), delay: 0 };
       if (host.motions) {
         const rowDy = state.value.p - host.renderedResidual.value;
-        const curCell = host.motions.value[rowIndex]?.cell ?? 0;
-        host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, settled: false } };
+        const cur = host.motions.value[rowIndex];
+        const curCell = cur?.cell ?? 0;
+        const cellVLead = cur?.cellVLead ?? 0;
+        const rowVLead = Math.max(Math.abs(state.value.p) * 0.085, Math.abs(host.residual.value) * 0.085);
+        host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: Math.max(rowVLead, cellVLead), cellVLead, settled: false } };
       }
       return;
     }
     state.value = { ...state.value, p: state.value.p + (previous.command.snap ? command.delta : command.offset - host.actualOffset.value), ...amllScrollSpring(previous.command.snap ? command : { ...command, firstVisible: command.index }, index) };
     if (host.motions) {
       const rowDy = state.value.p - host.renderedResidual.value;
-      const curCell = host.motions.value[rowIndex]?.cell ?? 0;
-      host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, settled: false } };
+      const cur = host.motions.value[rowIndex];
+      const curCell = cur?.cell ?? 0;
+      const cellVLead = cur?.cellVLead ?? 0;
+      const rowVLead = Math.max(Math.abs(state.value.p) * 0.085, Math.abs(host.residual.value) * 0.085);
+      host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: Math.max(rowVLead, cellVLead), cellVLead, settled: false } };
     }
   });
   const frame = useFrameCallback(useCallback(info => {
@@ -129,8 +135,8 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     if (s.p === 0 && s.v === 0 && s.renderedP === 0 && host.residual.value === 0) {
       if (host.motions) {
         const cur = host.motions.value[index];
-        if (cur && (cur.row !== 0 || !cur.settled)) {
-          host.motions.value = { ...host.motions.value, [index]: { row: 0, cell: cur.cell ?? 0, settled: (cur.cell ?? 0) === 0 } };
+        if (cur && (cur.row !== 0 || !cur.settled || (cur.vLead ?? 0) !== 0)) {
+          host.motions.value = { ...host.motions.value, [index]: { row: 0, cell: cur.cell ?? 0, vLead: cur.cellVLead ?? 0, cellVLead: cur.cellVLead ?? 0, settled: (cur.cell ?? 0) === 0 } };
         }
       }
       return;
@@ -140,8 +146,11 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt) };
       if (host.motions) {
         const rowDy = s.p - host.renderedResidual.value;
-        const curCell = host.motions.value[index]?.cell ?? 0;
-        host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, settled: false } };
+        const cur = host.motions.value[index];
+        const curCell = cur?.cell ?? 0;
+        const cellVLead = cur?.cellVLead ?? 0;
+        const rowVLead = Math.max(Math.abs(s.p) * 0.085, Math.abs(host.residual.value) * 0.085, 0.01);
+        host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, vLead: Math.max(rowVLead, cellVLead), cellVLead, settled: false } };
       }
       return;
     }
@@ -151,8 +160,11 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       renderedP: settled ? 0 : next.p };
     if (host.motions) {
       const rowDy = settled ? 0 : next.p - host.renderedResidual.value;
-      const curCell = host.motions.value[index]?.cell ?? 0;
-      host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, settled: settled && curCell === 0 } };
+      const cur = host.motions.value[index];
+      const curCell = cur?.cell ?? 0;
+      const cellVLead = cur?.cellVLead ?? 0;
+      const rowVLead = settled ? 0 : Math.max(Math.abs(next.v) * dt, Math.abs(next.p) * 0.085, Math.abs(host.residual.value) * 0.085, 0.01);
+      host.motions.value = { ...host.motions.value, [index]: { row: rowDy, cell: curCell, vLead: Math.max(rowVLead, cellVLead), cellVLead, settled: settled && curCell === 0 } };
     }
   }, [host, state, index]), false);
   useEffect(() => {
@@ -173,6 +185,10 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   // exposes its full cue delta before the row reaction catches up, briefly
   // moving the outgoing line above the top bar. Use only frame-published values
   // for BOTH springs, so their callback order cannot introduce a one-frame lag.
-  return useAnimatedStyle(() => ({ transform: [{ translateY:
-    host.spicy || !host.command.value.snap ? 0 : state.value.renderedP - host.renderedResidual.value }] }));
+  return useAnimatedStyle(() => {
+    if (host.spicy || !host.command.value.snap) return { transform: [{ translateY: 0 }] };
+    const entry = host.motions?.value[index];
+    const dy = entry ? entry.row : state.value.renderedP - host.renderedResidual.value;
+    return { transform: [{ translateY: dy }] };
+  });
 }

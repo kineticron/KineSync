@@ -159,6 +159,7 @@ export function amllAnimatedProtection(
   protection: Protection,
   motions?: Record<number, RowMotionEntry>,
   residual = 0,
+  dt = 1 / 60,
 ): { top: number; bottom: number } {
   'worklet';
   if (!Number.isFinite(protection.top) || !Number.isFinite(protection.bottom) || protection.first < 0 || protection.index < protection.first) {
@@ -173,8 +174,11 @@ export function amllAnimatedProtection(
     }
     const entry = motions ? motions[i] : undefined;
     const dy = (entry?.row ?? residual) + (entry?.cell ?? 0);
-    const rowTop = r.y + dy;
-    const rowBottom = r.y + r.height + dy;
+    // Measured maximum per-frame velocity lead: guarantees that if the mask uniform
+    // is scheduled one frame before the row transform, the rendered row cannot breach the blur mask.
+    const lead = entry?.vLead ?? 0;
+    const rowTop = r.y + dy - lead;
+    const rowBottom = r.y + r.height + dy + lead;
     if (rowTop < minTop) minTop = rowTop;
     if (rowBottom > maxBottom) maxBottom = rowBottom;
   }

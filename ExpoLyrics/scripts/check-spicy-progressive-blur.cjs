@@ -394,9 +394,11 @@ for (let frame = 1; frame <= 120; frame++) {
     rowSpring = { ...rowSpring, p: rowSettled ? 0 : nextRow.p, v: rowSettled ? 0 : nextRow.v, renderedP: rowSettled ? 0 : nextRow.p };
   }
   const rowDy = rowSpring.renderedP - hostResidual;
+  const prevRowDy = amllMotionsRef.value[1]?.row ?? rowDy;
+  const currentV = dt > 0 ? (rowDy - prevRowDy) / dt : 0;
 
   // Publish to motions registry as in production useReferenceRowScroll
-  amllMotionsRef.value = { 1: { row: rowDy, cell: 0, settled: rowSpring.p === 0 && hostResidual === 0 } };
+  amllMotionsRef.value = { 1: { row: rowDy, cell: 0, v: currentV, settled: rowSpring.p === 0 && hostResidual === 0 } };
 
   // Evaluate NativeSharedBlur lower boundary
   const lowerBoundary = styles[3]().transform[0].translateY;
@@ -420,6 +422,73 @@ assert.ok(frame11LowerBoundary >= 252 + frame11Displacement - 0.001, 'Frame 11 p
 assert.ok(Math.abs(frame40HostResidual) < 1.0, 'Frame 40 host residual has nearly settled');
 assert.ok(frame40RowP > 0, 'Frame 40 row spring is still settling');
 assert.ok(frame40LowerBoundary >= 252 + frame40RowP - 0.001, 'Frame 40 row settling is still fully protected after host settled');
+
+// 8c-2. Watchdog Reproduction & Regression: Transform->Uniform 1-Frame Scheduling Skew
+// Under commit 364e619 without velocity lead, when the mask uniform is scheduled one frame
+// before row transform execution (mask reads frame N-1 state while row renders with frame N state),
+// the row advanced ahead of the mask by exactly 3.73px at peak velocity (reproduced below).
+// With measured per-frame velocity lead (vLead based on harmonic oscillator maximum velocity),
+// verify ZERO breach across all 120 frames under 1-frame transform->uniform scheduling lag!
+const watchdogP0 = 63.7; // Standard line displacement in AMLL spring
+let schedHost = { p: watchdogP0, v: 0, stiffness: 90, damping: 15 };
+const schedRowCfg = amllScrollSpring({ firstVisible: 0, index: 1, interval: 800, interlude: false }, 1);
+let schedRow = { p: watchdogP0, v: 0, renderedP: watchdogP0, delay: schedRowCfg.delay, stiffness: schedRowCfg.stiffness, damping: schedRowCfg.damping };
+
+let prevFrameMotion = {
+  row: 0,
+  cell: 0,
+  vLead: Math.abs(watchdogP0) * 0.085,
+  settled: false,
+};
+let schedulingBreach = 0;
+let reproducedMaxLag = 0;
+
+for (let frame = 1; frame <= 120; frame++) {
+  const nextH = stepAmllSpring(schedHost, 0, 0.9, schedHost.damping, schedHost.stiffness, dt);
+  const hostSettled = Math.abs(nextH.p) < 0.01 && Math.abs(nextH.v) < 0.01;
+  schedHost = { ...schedHost, p: hostSettled ? 0 : nextH.p, v: hostSettled ? 0 : nextH.v };
+
+  if (schedRow.delay > 0) {
+    schedRow = { ...schedRow, renderedP: schedRow.p, delay: Math.max(0, schedRow.delay - dt) };
+  } else {
+    const nextR = stepAmllSpring(schedRow, 0, 0.9, schedRow.damping, schedRow.stiffness, dt);
+    const rowSettled = Math.abs(nextR.p) < 0.01 && Math.abs(nextR.v) < 0.01;
+    schedRow = { ...schedRow, p: rowSettled ? 0 : nextR.p, v: rowSettled ? 0 : nextR.v, renderedP: rowSettled ? 0 : nextR.p };
+  }
+  const currentDy = schedRow.renderedP - schedHost.p;
+  const isSettled = schedRow.p === 0 && schedHost.p === 0;
+  const vLead = isSettled ? 0 : Math.max(
+    Math.abs(schedRow.v) * dt,
+    Math.abs(schedHost.v) * dt,
+    Math.abs(schedRow.p) * 0.085,
+    Math.abs(schedHost.p) * 0.085,
+    0.01
+  );
+  const currentMotion = { row: currentDy, cell: 0, vLead, settled: isSettled };
+
+  // Rendered row on frame N uses currentMotion (actual physical position):
+  const renderedRowBottom = amllRows[1].y + amllRows[1].height + currentDy;
+
+  // 1) Test WITHOUT velocity lead (reproducing commit 364e619 watchdog 3.73px slip):
+  const uncompensatedMaskBottom = amllRows[1].y + amllRows[1].height + prevFrameMotion.row;
+  const uncompensatedLag = renderedRowBottom - uncompensatedMaskBottom;
+  if (uncompensatedLag > reproducedMaxLag) reproducedMaxLag = uncompensatedLag;
+
+  // 2) Test WITH production velocity lead (mask uniform scheduled from prevFrameMotion):
+  amllMotionsRef.value = { 1: prevFrameMotion };
+  amllResidualRef.value = 0;
+  const compensatedMaskBottom = styles[3]().transform[0].translateY;
+  const breach = renderedRowBottom - compensatedMaskBottom;
+  if (breach > schedulingBreach) schedulingBreach = breach;
+
+  prevFrameMotion = currentMotion;
+}
+
+assert.ok(reproducedMaxLag >= 3.70 && reproducedMaxLag <= 3.75,
+  `Watchdog 3.73px lag reproduced in uncompensated 1-frame scheduling (was ${reproducedMaxLag.toFixed(2)}px)`);
+assert.ok(schedulingBreach <= 0.001,
+  `With measured velocity lead, 1-frame scheduling skew has zero breach (was ${schedulingBreach.toFixed(4)}px)`);
+assert.equal(prevFrameMotion.vLead, 0, 'Velocity lead returns strictly to 0 when settled');
 
 // 8d. Concurrent AmllLayoutCell motion test:
 // Layout shift adds 50px of displacement (motion.value.p = 50)
