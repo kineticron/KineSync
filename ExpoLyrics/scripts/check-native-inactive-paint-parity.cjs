@@ -54,8 +54,10 @@ for (const dark of [0.13, 0.2, 0.4]) for (const bright of [0.2, 0.73, 1]) for (c
   const composite = paragraphComposite(mainGroup);
   assert.deepEqual(composite.layerAlphas, [], 'cold runs add no saveLayer');
   assert.equal(composite.alpha, alpha, JSON.stringify({ spicy, background, sung, dark, bright, blur }));
+  const layouts = lazy.h.counters.mainParagraphLayouts;
   const builds = lazy.h.counters.paragraphBuilds, extracts = lazy.h.counters.coldRunExtractions;
   lazy.h.render(voice, { ...props, position: { value: time + 1 }, lineMotion: { value: { dark: dark + 0.001, bright } } });
+  assert.equal(lazy.h.counters.mainParagraphLayouts, layouts, 'scroll cannot relayout main paragraphs');
   assert.equal(lazy.h.counters.paragraphBuilds, builds, 'scroll cannot rebuild paragraphs');
   assert.equal(lazy.h.counters.coldRunExtractions, extracts, 'scroll cannot reextract runs');
   assert.equal(extracts, 1);
@@ -69,3 +71,44 @@ for (const dark of [0.13, 0.2, 0.4]) for (const bright of [0.2, 0.73, 1]) for (c
   exact.unmount(); lazy.h.unmount(); original.h.unmount(); cases++;
 }
 console.log(`Inactive paint parity PASS: ${cases} actual exact-painter vs installed Skia paragraph-composite and outer-presentation cases; native raster acceptance remains separate.`);
+
+// Real bounded geometry cache, synthetic native run data (no native raster claim).
+const vm = require('node:vm');
+const cacheModule = { exports: {} };
+vm.runInNewContext(bundle(fs.readFileSync(path.join(__dirname, '../components/lyrics/native/native-geometry-cache.ts'), 'utf8')),
+  { module: cacheModule, exports: cacheModule.exports });
+const nativeGeometryCache = cacheModule.exports.createNativeGeometryCache();
+const fonts = {};
+const fallback = { name: 'synthetic-fallback' }, emoji = { name: 'synthetic-color-emoji' };
+const nativeRuns = [
+  { font: fallback, origin: { x: 9, y: 21 }, glyphs: [12, 13, 4],
+    positions: [{ x: 5, y: 0 }, { x: 5, y: 0 }, { x: -3, y: 0 }], advances: [8, 0, 7] },
+  { font: emoji, origin: { x: 27, y: 43 }, glyphs: [800], positions: [{ x: 0, y: -2 }] },
+];
+const props = { prepareGlyphs: false, showTranslation: false };
+function cachedMount(width) {
+  const h = createVoiceHarness(lazyCode, false, { dev: true, arrivalTrace: trace, fonts, nativeRuns,
+    geometryCache: { nativeGeometryCache } });
+  const initial = h.render(voice, props);
+  initial.props.onLayout({ nativeEvent: { layout: { width } } });
+  return { h, tree: h.render(voice, props) };
+}
+const first = cachedMount(320.125), second = cachedMount(320.125);
+const glyphNodes = tree => nodes(tree, node => node.type === 'Glyphs');
+const forwarded = glyphNodes(first.tree);
+assert.equal(forwarded[0].props.font, fallback);
+assert.equal(forwarded[1].props.font, emoji);
+assert.deepEqual(plain(forwarded.map(node => node.props.glyphs)), [
+  [{ id: 12, pos: { x: 14, y: 21 } }, { id: 13, pos: { x: 14, y: 21 } }, { id: 4, pos: { x: 6, y: 21 } }],
+  [{ id: 800, pos: { x: 27, y: 41 } }],
+], 'coincident zero-advance mark, visual order, emoji run and all native positions forwarded');
+assert.equal(second.h.counters.mainParagraphBuilds, 0, 'same exact geometry reuses paragraph');
+assert.equal(second.h.counters.mainParagraphLayouts, 0, 'same exact geometry reuses layout');
+assert.equal(second.h.counters.coldRunExtractions, 0, 'same exact geometry reuses extracted runs');
+assert.equal(glyphNodes(second.tree)[0].props.glyphs, forwarded[0].props.glyphs);
+const changed = cachedMount(320.125001);
+assert(changed.h.counters.mainParagraphBuilds > 0, 'even tiny geometry change rebuilds exact paragraph');
+assert(changed.h.counters.mainParagraphLayouts > 0);
+assert.equal(changed.h.counters.coldRunExtractions, 1);
+for (const fixture of [first, second, changed]) fixture.h.unmount();
+console.log('Cold-run cache PASS: real exact geometry cache reuse/change; synthetic coincident mark and color-emoji/fallback forwarding. Native phone emoji raster unproven.');
