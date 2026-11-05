@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 
 export const NativeSharedBlurContext = createContext(false);
@@ -35,10 +35,10 @@ export function sharedBlurRegion(rows: BlurGeometry, window: PlaybackWindowState
   let previous = -Infinity;
   rows.forEach((row, index) => {
     if (first >= 0 && index >= first && index <= last ||
-      index >= (last >= 0 ? last + 1 : focus) && index <= (last >= 0 ? last + 2 : focus + 1) ||
-      time >= row.start - 1500 && time <= row.end) {
-      top = Math.min(top, (known[index] ? row.y : previous) - offset - 96);
-      bottom = Math.max(bottom, (known[index] ? row.y + row.height : nextEdges[index]) - offset + 96);
+      first < 0 && index === focus ||
+      time >= row.start && time <= row.end) {
+      top = Math.min(top, (known[index] ? row.y : previous) - offset - 24);
+      bottom = Math.max(bottom, (known[index] ? row.y + row.height : nextEdges[index]) - offset + 24);
     }
     if (known[index]) previous = row.y + row.height;
   });
@@ -57,6 +57,8 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number;
 }) {
   const region = useSharedValue({ top: -Infinity, bottom: Infinity });
+  const animatedTop = useSharedValue(0);
+  const animatedBottom = useSharedValue(0);
   useAnimatedReaction(() => {
     // Discrete timing bucket: scanning occurs only at an approach/end deadline,
     // a presentation cue, or a new geometry snapshot, never on scroll frames.
@@ -65,23 +67,32 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     return { bucket: low, geometry: rows.value, window: window.value };
   }, (next, previous) => {
     if (!previous || next.bucket !== previous.bucket || next.geometry !== previous.geometry || next.window !== previous.window)
-      region.value = sharedBlurRegion(next.geometry, next.window, position.value, 0);
+      {
+      const targetRegion = sharedBlurRegion(next.geometry, next.window, position.value, 0);
+      const safe = Number.isFinite(targetRegion.top) && Number.isFinite(targetRegion.bottom);
+      const initialize = !previous || next.geometry !== previous.geometry || !Number.isFinite(region.value.top) || !Number.isFinite(region.value.bottom);
+      if (safe) {
+        animatedTop.value = initialize ? targetRegion.top : withTiming(targetRegion.top, { duration: 240 });
+        animatedBottom.value = initialize ? targetRegion.bottom : withTiming(targetRegion.bottom, { duration: 240 });
+      }
+      region.value = targetRegion;
+    }
   });
   const upper = useAnimatedStyle(() => {
-    const r = sharedBlurViewport(region.value, offset.value, height);
+    const r = sharedBlurViewport({ top: Math.min(animatedTop.value, region.value.top), bottom: Math.max(animatedBottom.value, region.value.bottom) }, offset.value, height);
     return { transform: [{ translateY: r.top }] };
   });
   const lower = useAnimatedStyle(() => {
-    const r = sharedBlurViewport(region.value, offset.value, height);
+    const r = sharedBlurViewport({ top: Math.min(animatedTop.value, region.value.top), bottom: Math.max(animatedBottom.value, region.value.bottom) }, offset.value, height);
     return { transform: [{ translateY: r.bottom }] };
   });
   return <MaskedView pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants"
     style={StyleSheet.absoluteFill} androidRenderingMode="software" maskElement={<View style={StyleSheet.absoluteFill}>
-      <Animated.View style={[{ position: 'absolute', top: -height - 160, height: height + 160, width: '100%' }, upper]}>
-        <LinearGradient colors={['black', 'black', 'transparent']} locations={[0, height / (height + 160), 1]} style={{ flex: 1 }} />
+      <Animated.View style={[{ position: 'absolute', top: -2 * height - 320, height: 2 * height + 320, width: '100%' }, upper]}>
+        <LinearGradient colors={['black', 'black', 'rgba(0,0,0,0.85)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.15)', 'transparent']} locations={[0, 1 - 160 / (2 * height + 320), 1 - 120 / (2 * height + 320), 1 - 80 / (2 * height + 320), 1 - 40 / (2 * height + 320), 1]} style={{ flex: 1 }} />
       </Animated.View>
-      <Animated.View style={[{ position: 'absolute', height: height + 160, width: '100%' }, lower]}>
-        <LinearGradient colors={['transparent', 'black', 'black']} locations={[0, 160 / (height + 160), 1]} style={{ flex: 1 }} />
+      <Animated.View style={[{ position: 'absolute', height: 2 * height + 320, width: '100%' }, lower]}>
+        <LinearGradient colors={['transparent', 'rgba(0,0,0,0.15)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.85)', 'black', 'black']} locations={[0, 40 / (2 * height + 320), 80 / (2 * height + 320), 120 / (2 * height + 320), 160 / (2 * height + 320), 1]} style={{ flex: 1 }} />
       </Animated.View>
     </View>}>
     <BlurView style={StyleSheet.absoluteFill} blurTarget={target} blurMethod="dimezisBlurViewSdk31Plus" tint="default" intensity={18} />
