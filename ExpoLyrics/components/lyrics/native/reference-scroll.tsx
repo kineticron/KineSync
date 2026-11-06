@@ -114,12 +114,12 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
       state.value = { ...state.value, p: state.value.p + command.delta,
         ...amllScrollSpring(command, index), delay: 0, prevResidual: host.renderedResidual.value };
       if (host.motions) {
-        const rowDy = state.value.p - host.renderedResidual.value;
+        const rowDy = state.value.renderedP - host.renderedResidual.value;
         const cur = host.motions.value[rowIndex];
         const curCell = cur?.cell ?? 0;
         const cellVLead = cur?.cellVLead ?? 0;
         const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
-        const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096);
+        const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.45);
         const worstRow = stepAmllSpring({ p: state.value.p, v: 0 }, 0, 0.9, state.value.damping, state.value.stiffness, 0.064);
         const rowVLead = Math.abs(worstRow.p - state.value.p) + hostLead;
         host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: false } };
@@ -128,12 +128,12 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     }
     state.value = { ...state.value, p: state.value.p + (previous.command.snap ? command.delta : command.offset - host.actualOffset.value), ...amllScrollSpring(previous.command.snap ? command : { ...command, firstVisible: command.index }, index), prevResidual: host.renderedResidual.value };
     if (host.motions) {
-      const rowDy = state.value.p - host.renderedResidual.value;
+      const rowDy = state.value.renderedP - host.renderedResidual.value;
       const cur = host.motions.value[rowIndex];
       const curCell = cur?.cell ?? 0;
       const cellVLead = cur?.cellVLead ?? 0;
       const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
-      const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096);
+      const hostLead = Math.max(Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.45);
       const worstRow = stepAmllSpring({ p: state.value.p, v: 0 }, 0, 0.9, state.value.damping, state.value.stiffness, 0.064);
       const rowVLead = Math.abs(worstRow.p - state.value.p) + hostLead;
       host.motions.value = { ...host.motions.value, [rowIndex]: { row: rowDy, cell: curCell, vLead: rowVLead + cellVLead, rowVLead, cellVLead, settled: false } };
@@ -154,7 +154,7 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000)) || (1 / 60);
     const worstHost = stepAmllSpring({ p: host.residual.value, v: 0 }, 0, 0.9, 15, 90, 0.064);
     const measuredHostLead = Math.abs(host.renderedResidual.value - s.prevResidual);
-    const hostLead = host.residual.value !== 0 ? Math.max(measuredHostLead, Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.4096) : 0;
+    const hostLead = host.residual.value !== 0 ? Math.max(measuredHostLead, Math.abs(worstHost.p - host.residual.value), Math.abs(host.residual.value) * 0.45) : 0;
     if (s.delay > 0) {
       state.value = { ...s, renderedP: s.p, delay: Math.max(0, s.delay - dt), prevResidual: host.renderedResidual.value };
       if (host.motions) {
@@ -201,10 +201,5 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   // exposes its full cue delta before the row reaction catches up, briefly
   // moving the outgoing line above the top bar. Use only frame-published values
   // for BOTH springs, so their callback order cannot introduce a one-frame lag.
-  return useAnimatedStyle(() => {
-    if (host.spicy || !host.command.value.snap) return { transform: [{ translateY: 0 }] };
-    const entry = host.motions?.value[index];
-    const dy = entry ? entry.row : state.value.renderedP - host.renderedResidual.value;
-    return { transform: [{ translateY: dy }] };
-  });
+  return useAnimatedStyle(() => ({ transform: [{ translateY: host.spicy || !host.command.value.snap ? 0 : state.value.renderedP - host.renderedResidual.value }] }));
 }

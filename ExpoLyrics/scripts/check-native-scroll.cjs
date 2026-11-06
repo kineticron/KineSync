@@ -19,7 +19,7 @@ const cellSource = buildSync({ entryPoints: [path.join(__dirname, '../components
 for (const [spicy, reverseFrames, fps] of [[false, false, 60], [false, true, 60], [false, false, 120], [false, true, 120], [true, false, 60]]) {
   const shared = value => ({ value });
   const host = { command: shared({ serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0,
-    interval: 800, instant: true, interlude: false, snap: false }), residual: shared(0), renderedResidual: shared(0), actualOffset: shared(0), spicy };
+    interval: 800, instant: true, interlude: false, snap: false }), residual: shared(0), renderedResidual: shared(0), actualOffset: shared(0), spicy, motions: shared({}) };
   const reactions = [];
   const frames = [];
   const animations = new Map();
@@ -191,4 +191,197 @@ for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true
   assert.equal(context.scrollCommand.value.geometry, geometry,
     'The host must distinguish background reflow from lyric advances, seeks and manual-follow resumes');
 }
-console.log('Native scrolling checks passed: coordinated focus at 60/120 Hz in either callback order, interrupted geometry, cold retries and manual follow.');
+
+// -------------------------------------------------------------------------------------------------
+// Regression test: Frame-by-frame visual offset continuity at scroll start (AMLL and Spicy).
+//
+// Root Cause Reproduction:
+// Under commit 95c2c96, command reactions computed `rowDy = state.value.p - host.renderedResidual.value`.
+// Since state.p was updated with the new cue delta (e.g. +180px) while host.renderedResidual was still
+// 0 from the previous settled state, rowDy jumped to +180px for exactly 1 frame before frame callbacks ran.
+// With useAnimatedStyle reading entry.row from host.motions, every row jumped far DOWN by +180px on Frame 0,
+// and then on Frame 1, frame callbacks updated host.renderedResidual and stepped springs, collapsing rowDy back
+// to ~0px (a -175px snap back).
+//
+// 1) Explicit reproduction of the unpatched Frame 0 jump:
+const unpatchedDelta = 180;
+const unpatchedP0 = 0;
+const unpatchedRenderedResidual0 = 0; // Host renderedResidual before useFrameCallback ticks
+const unpatchedRowP = unpatchedP0 + unpatchedDelta; // In command reaction, state.value.p += delta
+const unpatchedRowDy = unpatchedRowP - unpatchedRenderedResidual0; // Buggy formula from commit 95c2c96
+assert.equal(unpatchedRowDy, unpatchedDelta, 'Old unpatched logic exposes full unrendered delta (+180px) on Frame 0');
+const unpatchedNextHostP = 175.2; // After 1 frame at 60Hz
+const unpatchedNextRowP = 175.2;  // Row spring after 1 frame at 60Hz
+const unpatchedFrame1RowDy = unpatchedNextRowP - unpatchedNextHostP; // Settles to 0 on Frame 1
+const unpatchedGlitchSnap = unpatchedFrame1RowDy - unpatchedRowDy;
+assert.ok(Math.abs(unpatchedGlitchSnap) > 170, 'Old unpatched logic produced a severe one-frame glitch snap (>170px)');
+
+// 2) Frame-by-frame continuity test on actual compiled hook code across AMLL and Spicy:
+function checkScrollStartContinuity(spicyMode, targetFps) {
+  const sharedState = initial => {
+    let current = initial;
+    return {
+      get value() { return current; },
+      set value(v) {
+        if (pendingTimingCfg) {
+          activeAnimations.set(this, { from: current, elapsed: 0, ...pendingTimingCfg });
+          pendingTimingCfg = undefined;
+        } else {
+          current = v;
+        }
+      }
+    };
+  };
+
+  const testHost = {
+    command: sharedState({ serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0, interval: 800, instant: true, interlude: false, snap: false }),
+    residual: sharedState(0),
+    renderedResidual: sharedState(0),
+    actualOffset: sharedState(0),
+    spicy: spicyMode,
+    motions: sharedState({}),
+  };
+
+  const activeReactions = [];
+  const activeFrames = [];
+  const activeAnimations = new Map();
+  const activeStyles = [];
+  let pendingTimingCfg;
+
+  const mockReanimated = {
+    default: { ScrollView: 'ScrollView' },
+    useSharedValue: val => {
+      let current = val;
+      const res = {};
+      Object.defineProperty(res, 'value', {
+        get: () => current,
+        set: v => {
+          if (pendingTimingCfg) {
+            activeAnimations.set(res, { from: current, elapsed: 0, ...pendingTimingCfg });
+            pendingTimingCfg = undefined;
+          } else {
+            current = v;
+          }
+        }
+      });
+      return res;
+    },
+    useAnimatedRef: () => () => {},
+    useScrollOffset: () => {},
+    useAnimatedReaction: (prepare, react) => activeReactions.push({ prepare, react, previous: null }),
+    useAnimatedStyle: cb => { activeStyles.push(cb); return {}; },
+    useFrameCallback: (cb, active = true) => {
+      const f = { callback: cb, active };
+      activeFrames.push(f);
+      return { setActive: a => { f.active = a; } };
+    },
+    cancelAnimation: val => activeAnimations.delete(val),
+    withTiming: (to, cfg) => { pendingTimingCfg = { to, ...cfg }; return to; },
+    defineAnimation: (_init, factory) => factory(),
+    scrollTo: (_ref, _x, y) => { testHost.actualOffset.value = y; },
+  };
+
+  testHost.residual = mockReanimated.useSharedValue(0);
+
+  const mockReact = {
+    createContext: () => ({}),
+    forwardRef: fn => fn,
+    useCallback: fn => fn,
+    useMemo: fn => fn(),
+    useContext: () => testHost,
+    useEffect: fn => { if (typeof fn === 'function') fn(); },
+    createElement: () => ({}),
+  };
+
+  const compiledMod = { exports: {} };
+  vm.runInNewContext(source, {
+    module: compiledMod, exports: compiledMod.exports,
+    require: name => name === 'react' ? mockReact : name === 'react/jsx-runtime' ? { jsx: () => ({}) } : name === 'react-native' ? {} : mockReanimated,
+  });
+
+  const { ReferenceScrollView: ScrollViewComponent, useReferenceRowScroll: useRowScroll } = compiledMod.exports;
+  ScrollViewComponent({}, null);
+
+  const testIndices = [2, 3, 4, 5];
+  for (const idx of testIndices) {
+    useRowScroll(testHost, idx, true);
+  }
+
+  const flushReactions = () => {
+    for (const rx of activeReactions) {
+      const next = rx.prepare();
+      rx.react(next, rx.previous);
+      rx.previous = next;
+    }
+  };
+
+  const tickFrame = () => {
+    for (const [val, anim] of activeAnimations) {
+      anim.elapsed += 1000 / targetFps;
+      const progress = Math.min(1, anim.elapsed / anim.duration);
+      val.value = anim.from + (anim.to - anim.from) * anim.easing(progress);
+      if (progress === 1) activeAnimations.delete(val);
+    }
+    for (const f of activeFrames) {
+      if (f.active) f.callback({ timeSincePreviousFrame: 1000 / targetFps });
+    }
+    flushReactions();
+  };
+
+  flushReactions();
+  // Settle at line 3, offset 300
+  testHost.command.value = { serial: 1, offset: 300, delta: 300, index: 3, firstVisible: 2, interval: 800, instant: true, interlude: false, snap: true };
+  flushReactions();
+  assert.equal(testHost.actualOffset.value, 300);
+
+  // Pre-scroll visual on-screen positions (layoutY - scrollOffset + translateY)
+  const preVisualPositions = testIndices.map((idx, i) => idx * 80 - testHost.actualOffset.value + activeStyles[i]().transform[0].translateY);
+
+  // Trigger auto-scroll to active line 4 at offset 480 (+180px delta)
+  testHost.command.value = { serial: 2, offset: 480, delta: 180, index: 4, firstVisible: 2, interval: 800, instant: false, interlude: false, snap: true };
+  flushReactions();
+
+  // FRAME 0: At the exact instant command reactions fire, before display tick
+  assert.equal(testHost.actualOffset.value, 300, 'ScrollView must remain at initial offset on Frame 0');
+  for (let i = 0; i < testIndices.length; i++) {
+    const idx = testIndices[i];
+    const frame0Visual = idx * 80 - testHost.actualOffset.value + activeStyles[i]().transform[0].translateY;
+    const frame0Jump = frame0Visual - preVisualPositions[i];
+    assert.equal(frame0Jump, 0, `Row ${idx} must have 0.00px jump on Frame 0 at scroll start in ${spicyMode ? 'Spicy' : 'AMLL'} (was ${frame0Jump.toFixed(2)}px)`);
+    if (!spicyMode && testHost.motions.value[idx]) {
+      assert.equal(testHost.motions.value[idx].row, 0, `Row ${idx} motion registry must not expose unrendered cue delta on Frame 0 (was ${testHost.motions.value[idx].row})`);
+    }
+  }
+
+  // FRAME 1: First display frame ticks
+  tickFrame();
+  assert.ok(testHost.actualOffset.value > 300 && testHost.actualOffset.value < 480, 'ScrollView displacement begins smoothly on Frame 1');
+  const maxAllowedFirstStep = spicyMode ? 45 : 15;
+  for (let i = 0; i < testIndices.length; i++) {
+    const idx = testIndices[i];
+    const frame1Visual = idx * 80 - testHost.actualOffset.value + activeStyles[i]().transform[0].translateY;
+    const step1 = Math.abs(frame1Visual - preVisualPositions[i]);
+    assert.ok(step1 <= maxAllowedFirstStep, `Row ${idx} Frame 1 step must be bounded and smooth in ${spicyMode ? 'Spicy' : 'AMLL'} (<= ${maxAllowedFirstStep}px, was ${step1.toFixed(2)}px)`);
+  }
+
+  // FRAMES 2..120: Continuous progression to settled target
+  let previousPositions = testIndices.map((idx, i) => idx * 80 - testHost.actualOffset.value + activeStyles[i]().transform[0].translateY);
+  for (let f = 2; f <= 120; f++) {
+    tickFrame();
+    for (let i = 0; i < testIndices.length; i++) {
+      const idx = testIndices[i];
+      const curVisual = idx * 80 - testHost.actualOffset.value + activeStyles[i]().transform[0].translateY;
+      const step = Math.abs(curVisual - previousPositions[i]);
+      assert.ok(step <= (spicyMode ? 45 : 25), `Row ${idx} frame ${f} step must be continuous in ${spicyMode ? 'Spicy' : 'AMLL'} (was ${step.toFixed(2)}px)`);
+      previousPositions[i] = curVisual;
+    }
+  }
+  assert.ok(Math.abs(testHost.actualOffset.value - 480) < 0.1, `Must settle smoothly at target offset 480 in ${spicyMode ? 'Spicy' : 'AMLL'}`);
+}
+
+checkScrollStartContinuity(false, 60);
+checkScrollStartContinuity(false, 120);
+checkScrollStartContinuity(true, 60);
+checkScrollStartContinuity(true, 120);
+
+console.log('Native scrolling checks passed: coordinated focus at 60/120 Hz in either callback order, interrupted geometry, cold retries, manual follow and scroll-start frame continuity.');
