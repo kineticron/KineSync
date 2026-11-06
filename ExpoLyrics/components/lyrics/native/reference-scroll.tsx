@@ -201,5 +201,8 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   // exposes its full cue delta before the row reaction catches up, briefly
   // moving the outgoing line above the top bar. Use only frame-published values
   // for BOTH springs, so their callback order cannot introduce a one-frame lag.
-  return useAnimatedStyle(() => ({ transform: [{ translateY: host.spicy || !host.command.value.snap ? 0 : state.value.renderedP - host.renderedResidual.value }] }));
+  const spicy = host.spicy;
+  const command = host.command;
+  const renderedResidual = host.renderedResidual;
+  return useAnimatedStyle(() => ({ transform: [{ translateY: spicy || !command.value.snap ? 0 : state.value.renderedP - renderedResidual.value }] }));
 }

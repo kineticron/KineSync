@@ -384,4 +384,176 @@ checkScrollStartContinuity(false, 120);
 checkScrollStartContinuity(true, 60);
 checkScrollStartContinuity(true, 120);
 
-console.log('Native scrolling checks passed: coordinated focus at 60/120 Hz in either callback order, interrupted geometry, cold retries, manual follow and scroll-start frame continuity.');
+// Active-Line Change Cost & Lag Regression: Workload Instrumentation
+function checkActiveLineWorkload(fps) {
+  const NUM_ROWS = 15;
+  const activeLine = 5;
+  let motionWrites = 0;
+  let motionsVal = {};
+
+  const hostMotions = {
+    get value() { return motionsVal; },
+    set value(v) {
+      motionWrites++;
+      motionsVal = v;
+    },
+  };
+
+  const workHost = {
+    command: { value: { serial: 1, offset: 200, delta: 0, index: 2, firstVisible: 0, interval: 800, instant: true, interlude: false, snap: true } },
+    residual: { value: 0 },
+    renderedResidual: { value: 0 },
+    actualOffset: { value: 200 },
+    spicy: false,
+    motions: hostMotions,
+  };
+
+  const workReactions = [];
+  const workFrames = [];
+  const workStyles = [];
+
+  const hookReanimated = {
+    default: { ScrollView: 'ScrollView' },
+    useAnimatedRef: () => () => {},
+    useScrollOffset: () => {},
+    useSharedValue: initial => {
+      let v = initial;
+      return {
+        get value() { return v; },
+        set value(next) { v = next; },
+      };
+    },
+    useAnimatedReaction: (prepare, react) => workReactions.push({ prepare, react, previous: null }),
+    useAnimatedStyle: cb => { workStyles.push(cb); return {}; },
+    useFrameCallback: (cb, active = true) => {
+      const f = { callback: cb, active };
+      workFrames.push(f);
+      return { setActive: a => { f.active = a; } };
+    },
+    cancelAnimation: () => {},
+    withTiming: to => to,
+    defineAnimation: (_init, factory) => factory(),
+    scrollTo: (_ref, _x, y) => { workHost.actualOffset.value = y; },
+  };
+
+  const hookReact = {
+    createContext: () => ({}),
+    forwardRef: fn => fn,
+    useCallback: fn => fn,
+    useMemo: fn => fn(),
+    useContext: () => workHost,
+    useEffect: fn => fn(),
+    createElement: () => ({}),
+  };
+
+  const compiledMod = { exports: {} };
+  vm.runInNewContext(source, {
+    module: compiledMod,
+    exports: compiledMod.exports,
+    require: name => name === 'react' ? hookReact : name === 'react/jsx-runtime' ? { jsx: () => ({}) } : name === 'react-native' ? {} : hookReanimated,
+  });
+
+  const { ReferenceScrollView, useReferenceRowScroll } = compiledMod.exports;
+  ReferenceScrollView({}, null);
+
+  for (let i = 0; i < NUM_ROWS; i++) {
+    useReferenceRowScroll(workHost, i, true);
+  }
+
+  // Initial settle
+  for (const rx of workReactions) {
+    const next = rx.prepare();
+    rx.react(next, rx.previous);
+    rx.previous = next;
+  }
+  motionWrites = 0; // Reset counter after initial mount
+
+  // Issue cue transition to line 5 (+180px delta)
+  workHost.command.value = { serial: 2, offset: 380, delta: 180, index: activeLine, firstVisible: 3, interval: 800, instant: false, interlude: false, snap: true };
+  for (const rx of workReactions) {
+    const next = rx.prepare();
+    rx.react(next, rx.previous);
+    rx.previous = next;
+  }
+
+  // Distant rows 3+ after active (e.g. lines 8, 9, 10) must be tracked for multi-active,
+  // wrapped lines, translations, and landscape viewports where blur protection extends beyond active+1.
+  assert.ok(workHost.motions.value[activeLine + 3] !== undefined, 'Row 3+ after active must be registered for blur parity');
+  assert.ok(workHost.motions.value[0] !== undefined, 'Prior rows must be registered for reverse/interlude blur parity');
+
+  // Step 60 frames (1 second of scroll)
+  for (let f = 1; f <= fps; f++) {
+    for (const frame of workFrames) {
+      if (frame.active) frame.callback({ timeSincePreviousFrame: 1000 / fps });
+    }
+  }
+
+  // Active line 5 and rows 3+ after active must be fully tracked in motion registry
+  assert.ok(workHost.motions.value[activeLine] !== undefined, 'Active row 5 must be registered');
+  assert.ok(workHost.motions.value[activeLine + 1] !== undefined, 'Next row 6 must be registered for blur protection');
+  assert.ok(workHost.motions.value[activeLine + 3] !== undefined, 'Row 8 (3+ after active) must be tracked for blur parity');
+}
+
+checkActiveLineWorkload(60);
+checkActiveLineWorkload(120);
+
+// Worklet Closure Dependency Count & Reanimated Input Extraction Regression
+function checkWorkletClosureDependencies() {
+  const rootDir = path.resolve(__dirname, '..');
+  const babel = require(require.resolve('@babel/core', { paths: [rootDir] }));
+  const sourcePath = path.resolve(__dirname, '../components/lyrics/native/reference-scroll.tsx');
+  const res = babel.transformFileSync(sourcePath, {
+    configFile: false,
+    babelrc: false,
+    presets: [
+      [require.resolve('@babel/preset-typescript', { paths: [rootDir] }), { isTSX: true, allExtensions: true }]
+    ],
+    plugins: [
+      [require.resolve('react-native-worklets/plugin', { paths: [rootDir] })]
+    ]
+  });
+
+  const matches = [...res.code.matchAll(/__closure\s*=\s*\[([^\]]+)\]/g)].map(m => m[1].split(',').map(s => s.trim()));
+  const styleClosure = matches[matches.length - 1]; // useAnimatedStyle worklet in useReferenceRowScroll
+
+  assert.ok(!styleClosure.includes('host'), 'useAnimatedStyle must NOT capture plain object host in worklet closure');
+  assert.ok(styleClosure.includes('command'), 'useAnimatedStyle must capture destructured command');
+  assert.ok(styleClosure.includes('renderedResidual'), 'useAnimatedStyle must capture destructured renderedResidual');
+  assert.ok(styleClosure.includes('state'), 'useAnimatedStyle must capture state');
+
+  function isSharedValue(v) { return Boolean(v && v._isReanimatedSharedValue); }
+  function extractInputs(inputs, resultArray) {
+    if (Array.isArray(inputs)) {
+      for (const input of inputs) if (input) extractInputs(input, resultArray);
+    } else if (isSharedValue(inputs)) {
+      resultArray.push(inputs);
+    } else if (Object.getPrototypeOf(inputs) === Object.prototype) {
+      for (const element of Object.values(inputs)) if (element) extractInputs(element, resultArray);
+    }
+    return resultArray;
+  }
+
+  const mockHost = {
+    command: { _isReanimatedSharedValue: true, name: 'command' },
+    residual: { _isReanimatedSharedValue: true, name: 'residual' },
+    renderedResidual: { _isReanimatedSharedValue: true, name: 'renderedResidual' },
+    actualOffset: { _isReanimatedSharedValue: true, name: 'actualOffset' },
+    spicy: false,
+    motions: { _isReanimatedSharedValue: true, name: 'motions' },
+  };
+  const mockState = { _isReanimatedSharedValue: true, name: 'state' };
+
+  // Old closure captured [host, state]:
+  const oldExtracted = extractInputs([mockHost, mockState], []);
+  assert.equal(oldExtracted.length, 6, 'Old closure leaked all 6 SharedValues including host.motions');
+  assert.ok(oldExtracted.some(x => x.name === 'motions'), 'Old closure leaked host.motions');
+
+  // New closure captures [spicy, command, state, renderedResidual]:
+  const newExtracted = extractInputs([mockHost.spicy, mockHost.command, mockState, mockHost.renderedResidual], []);
+  assert.equal(newExtracted.length, 3, 'New closure extracts strictly 3 SharedValues');
+  assert.ok(!newExtracted.some(x => x.name === 'motions'), 'New closure strictly excludes host.motions');
+}
+
+checkWorkletClosureDependencies();
+
+console.log('Native scrolling checks passed: coordinated focus at 60/120 Hz in either callback order, interrupted geometry, cold retries, manual follow, scroll-start frame continuity, active-line workload optimization, and worklet closure dependency verification.');
