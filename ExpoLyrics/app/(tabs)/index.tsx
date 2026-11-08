@@ -252,14 +252,34 @@ async function shareGifOnWeb({
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
-function nativePlaybackUnavailable() {
+function nativePlaybackUnavailable(action?: 'pause' | 'resume' | 'previous' | 'next' | 'seek') {
   const state = usePlaybackStore.getState();
-  return (Platform.OS === 'ios' || Platform.OS === 'android') && state.playbackMode === 'mobile' && state.connectionStatus !== 'connected' &&
+  const unavailable = (Platform.OS === 'ios' || Platform.OS === 'android') && state.playbackMode === 'mobile' && state.connectionStatus !== 'connected' &&
     !usePlayerTourStore.getState().active && !useSpotifyConnectionStore.getState().health.controlsEnabled;
+  if (unavailable) return true;
+  if (action) {
+    const isMobile = (Platform.OS === 'ios' || Platform.OS === 'android') && state.playbackMode === 'mobile' && state.connectionStatus !== 'connected' &&
+      !usePlayerTourStore.getState().active;
+    if (isMobile) {
+      const health = useSpotifyConnectionStore.getState().health;
+      if (health.allowed) {
+        if (action === 'pause' && !health.allowed.pause) return true;
+        if (action === 'resume' && !health.allowed.resume) return true;
+        if (action === 'previous' && !health.allowed.previous) return true;
+        if (action === 'next' && !health.allowed.next) return true;
+        if (action === 'seek' && !health.allowed.seek) return true;
+      }
+    }
+  }
+  return false;
 }
 
 type PlaybackControlsDockProps = {
   controlsDisabled?: boolean;
+  previousDisabled?: boolean;
+  nextDisabled?: boolean;
+  playPauseDisabled?: boolean;
+  seekDisabled?: boolean;
   isPlaying: boolean;
   durationMs: number;
   shareSelectionCount?: number;
@@ -292,6 +312,10 @@ type PlaybackControlsDockProps = {
 
 const PlaybackControlsDock = memo(function PlaybackControlsDock({
   controlsDisabled,
+  previousDisabled,
+  nextDisabled,
+  playPauseDisabled,
+  seekDisabled,
   isPlaying,
   durationMs,
   shareSelectionCount,
@@ -324,6 +348,10 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   return (
     <PlaybackControls
       controlsDisabled={controlsDisabled}
+      previousDisabled={previousDisabled}
+      nextDisabled={nextDisabled}
+      playPauseDisabled={playPauseDisabled}
+      seekDisabled={seekDisabled}
       previewPlayback={previewPlayback}
       tourStep={tourStep}
       previewTranslated={previewTranslated}
@@ -357,9 +385,11 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
 });
 
 export default function HomeScreen() {
-  const nativeControlsEnabled = useSpotifyConnectionStore(s => s.health.controlsEnabled);
+  const spotifyHealth = useSpotifyConnectionStore(s => s.health);
+  const nativeControlsEnabled = spotifyHealth.controlsEnabled;
   const nativeSelected = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
-  const nativeUnavailable = (Platform.OS === 'ios' || Platform.OS === 'android') && nativeSelected && !nativeControlsEnabled;
+  const isMobileNative = (Platform.OS === 'ios' || Platform.OS === 'android') && nativeSelected;
+  const nativeUnavailable = isMobileNative && !nativeControlsEnabled;
   const router = useRouter();
   const [isScreenFocused, setIsScreenFocused] = useState(true);
   useFocusEffect(
@@ -384,6 +414,11 @@ export default function HomeScreen() {
   const errorMessage = usePlaybackStore((s) => s.errorMessage);
   const liveIsPlaying = usePlaybackStore((s) => s.isPlaying);
   const isPlaying = tour.active ? tour.isPlaying : liveIsPlaying;
+  const positionBeyondThreeSeconds = usePlaybackStore((s) => s.playbackPosition > 3000);
+  const previousDisabled = isMobileNative && (!nativeControlsEnabled || (spotifyHealth.allowed ? (positionBeyondThreeSeconds ? !spotifyHealth.allowed.seek : !spotifyHealth.allowed.previous) : false));
+  const nextDisabled = isMobileNative && (!nativeControlsEnabled || (spotifyHealth.allowed ? !spotifyHealth.allowed.next : false));
+  const playPauseDisabled = isMobileNative && (!nativeControlsEnabled || (spotifyHealth.allowed ? (isPlaying ? !spotifyHealth.allowed.pause : !spotifyHealth.allowed.resume) : false));
+  const seekDisabled = isMobileNative && (!nativeControlsEnabled || (spotifyHealth.allowed ? !spotifyHealth.allowed.seek : false));
   const liveLyricsSource = usePlaybackStore((s) => s.lyricsSource);
   const lyricsSource = tour.active ? 'demo-syllable' : liveLyricsSource;
   const liveLyrics = usePlaybackStore((s) => s.lyrics);
@@ -431,7 +466,7 @@ export default function HomeScreen() {
     number | null
   >(null);
   const handleScrubPreview = useCallback((positionMs: number | null) => {
-      if (nativePlaybackUnavailable() && positionMs !== null) return;
+      if (nativePlaybackUnavailable('seek') && positionMs !== null) return;
     setScrubPreviewPositionMs(positionMs);
   }, []);
   const activeLineIndex = useRef(-1);
@@ -800,7 +835,7 @@ export default function HomeScreen() {
   }, []);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
-      if (nativePlaybackUnavailable()) return;
+      if (nativePlaybackUnavailable('seek')) return;
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.seekTo(positionMs);
       return;
@@ -809,7 +844,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackPlayPause = useCallback(() => {
-      if (nativePlaybackUnavailable()) return;
+      if (nativePlaybackUnavailable(usePlaybackStore.getState().isPlaying ? 'pause' : 'resume')) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().togglePlayback(); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.togglePlayPause();
@@ -828,7 +863,7 @@ export default function HomeScreen() {
   }, []);
 
   const handlePlaybackNext = useCallback(() => {
-      if (nativePlaybackUnavailable()) return;
+      if (nativePlaybackUnavailable('next')) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
     if (usePlaybackStore.getState().connectionStatus === "connected") {
       bridgeClient.skipNext();
@@ -837,7 +872,7 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.skipNext();
   }, []);
   const handleLyricLinePress = useCallback((line: LyricLine) => {
-      if (nativePlaybackUnavailable()) return;
+      if (nativePlaybackUnavailable('seek')) return;
     if (usePlayerTourStore.getState().active) {
       usePlayerTourStore.getState().seek(line.lineStartTime);
       usePlayerTourStore.getState().advance('seek');
@@ -866,7 +901,7 @@ export default function HomeScreen() {
 
   const handleSeek = useCallback(
     (positionMs: number) => {
-      if (nativePlaybackUnavailable()) return;
+      if (nativePlaybackUnavailable('seek')) return;
       if (usePlayerTourStore.getState().active) {
         usePlayerTourStore.getState().seek(positionMs);
         usePlayerTourStore.getState().advance('seek');
@@ -903,9 +938,10 @@ export default function HomeScreen() {
   );
 
   const handlePlaybackPrevious = useCallback(() => {
-      if (nativePlaybackUnavailable()) return;
+    const pos = usePlaybackStore.getState().playbackPosition;
+    if (nativePlaybackUnavailable(pos > 3000 ? 'seek' : 'previous')) return;
     if (usePlayerTourStore.getState().active) { usePlayerTourStore.getState().seek(0); return; }
-    if (usePlaybackStore.getState().playbackPosition > 3000) {
+    if (pos > 3000) {
       handleSeek(0);
       return;
     }
@@ -1332,6 +1368,10 @@ export default function HomeScreen() {
                 controlsOverlay={
                   <PlaybackControlsDock
                     controlsDisabled={!tour.active && nativeUnavailable}
+                    previousDisabled={!tour.active && previousDisabled}
+                    nextDisabled={!tour.active && nextDisabled}
+                    playPauseDisabled={!tour.active && playPauseDisabled}
+                    seekDisabled={!tour.active && seekDisabled}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}
@@ -1351,6 +1391,10 @@ export default function HomeScreen() {
                 utilityRow={
                   <PlaybackControlsDock
                     controlsDisabled={!tour.active && nativeUnavailable}
+                    previousDisabled={!tour.active && previousDisabled}
+                    nextDisabled={!tour.active && nextDisabled}
+                    playPauseDisabled={!tour.active && playPauseDisabled}
+                    seekDisabled={!tour.active && seekDisabled}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}
@@ -1704,6 +1748,10 @@ export default function HomeScreen() {
         >
           <PlaybackControlsDock
                     controlsDisabled={!tour.active && nativeUnavailable}
+                    previousDisabled={!tour.active && previousDisabled}
+                    nextDisabled={!tour.active && nextDisabled}
+                    playPauseDisabled={!tour.active && playPauseDisabled}
+                    seekDisabled={!tour.active && seekDisabled}
                     previewPlayback={previewPlayback}
                     tourStep={tour.active ? tour.step : undefined}
                     previewTranslated={tour.active ? tour.translated : undefined}

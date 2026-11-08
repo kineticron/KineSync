@@ -58,6 +58,10 @@ export type PlaybackControlsLayout =
 
 type PlaybackControlsProps = {
   controlsDisabled?: boolean;
+  previousDisabled?: boolean;
+  nextDisabled?: boolean;
+  playPauseDisabled?: boolean;
+  seekDisabled?: boolean;
   isPlaying: boolean;
   durationMs: number;
   shareSelectionCount?: number;
@@ -242,6 +246,10 @@ function TransportButton({
 
 export const PlaybackControls = memo(function PlaybackControls({
   controlsDisabled = false,
+  previousDisabled = false,
+  nextDisabled = false,
+  playPauseDisabled = false,
+  seekDisabled = false,
   isPlaying,
   durationMs,
   shareSelectionCount: _shareSelectionCount,
@@ -484,7 +492,7 @@ onPressIn={onUserInteraction}
         isOverlay && styles.cardOverlay,
       ]}>
       <PlaybackTimeline
-        controlsDisabled={controlsDisabled}
+        controlsDisabled={controlsDisabled || seekDisabled}
         previewPlayback={previewPlayback}
         durationMs={durationMs}
         onScrubPreview={onScrubPreview}
@@ -495,7 +503,7 @@ onPressIn={onUserInteraction}
 
       <View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay]}>
         <TransportButton
-          disabled={controlsDisabled}
+          disabled={controlsDisabled || previousDisabled}
           accessibilityLabel="Previous track"
           onPress={onPrevious}
           onUserInteraction={onUserInteraction}
@@ -509,7 +517,7 @@ onPressIn={onUserInteraction}
         </TransportButton>
 
         <TransportButton
-          disabled={controlsDisabled}
+          disabled={controlsDisabled || playPauseDisabled}
           accessibilityLabel={isPlaying ? 'Pause playback' : 'Play music'}
           onPress={onPlayPause}
           onLongPress={
@@ -548,7 +556,7 @@ onPressIn={onUserInteraction}
         </TransportButton>
 
         <TransportButton
-          disabled={controlsDisabled}
+          disabled={controlsDisabled || nextDisabled}
           accessibilityLabel="Next track"
           onPress={onNext}
           onUserInteraction={onUserInteraction}

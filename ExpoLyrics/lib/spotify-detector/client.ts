@@ -1,8 +1,8 @@
-import { initialSpotifyHealth, type SpotifyHealth, type SpotifyPhase, type Reachability, type CommandPhase, type SpotifyReason } from './health';
+import { initialSpotifyHealth, type SpotifyHealth, type SpotifyPhase, type Reachability, type CommandPhase, type SpotifyReason, type SpotifyDisabledReason, type SpotifyAllowedControls } from './health';
 import { Buffer } from 'buffer';
 import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
-  sampleFrom, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
+  sampleFrom, sampleWithContext, type SelectedPlayerContext, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
 import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
 import { logDevelopmentTiming } from './development-timing-log';
 import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
@@ -56,13 +56,40 @@ function idleState(value: unknown, depth = 0): boolean {
   return ['cluster', 'payloads', 'state', 'data'].some(key => idleState(o[key], depth + 1));
 }
 
-function restrictedState(value: unknown, depth = 0): boolean {
-  if (!value || typeof value !== 'object' || depth > 9) return false;
-  const o = value as Record<string, unknown>;
-  const restrictions = o.restrictions;
-  if (restrictions && typeof restrictions === 'object' && Object.entries(restrictions).some(([key, value]) =>
-    key.startsWith('disallow_') && (value === true || (Array.isArray(value) && value.length > 0)))) return true;
-  return Object.values(o).some(v => restrictedState(v, depth + 1));
+type Operation = keyof SpotifyAllowedControls;
+export type SpotifyRestrictions = Partial<Record<Operation, boolean>>;
+const reasonOperations: Record<string, Operation[]> = {
+  disallow_pausing_reasons: ['pause'], disallow_resuming_reasons: ['resume'],
+  disallow_skipping_next_reasons: ['next'], disallow_skipping_prev_reasons: ['previous'],
+  disallow_seeking_reasons: ['seek'], disallow_playing_reasons: ['resume'],
+  disallow_remote_control_reasons: ['resume', 'pause', 'next', 'previous', 'seek'],
+};
+function selectedRestrictions(selected: SelectedPlayerContext) {
+  const blocked: SpotifyRestrictions = {};
+  const reasons: Record<string, string[]> = {};
+  for (const source of [selected.playerState?.restrictions, selected.cluster?.restrictions]) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    for (const [key, operations] of Object.entries(reasonOperations)) {
+      const value = source[key];
+      const entries = Array.isArray(value) ? value.filter((v: unknown): v is string => typeof v === 'string' && !!v) :
+        typeof value === 'string' && value ? [value] : value === true ? ['true'] : [];
+      if (!entries.length) continue;
+      reasons[key] = [...new Set([...(reasons[key] ?? []), ...entries])].sort();
+      for (const operation of operations) blocked[operation] = true;
+    }
+  }
+  const owner = selected.cluster;
+  const id = selected.sample.activeDeviceId;
+  let deviceRestricted = false;
+  if (owner && typeof id === 'string' && id) {
+    for (const devices of [owner.devices, owner.device]) {
+      if (!devices || typeof devices !== 'object') continue;
+      const device = Array.isArray(devices) ? devices.find(d => (d?.id ?? d?.device_id ?? d?.device_info?.device_id) === id) : devices[id];
+      if (device?.is_restricted === true || device?.device_info?.is_restricted === true) deviceRestricted = true;
+    }
+  }
+  const signature = JSON.stringify([deviceRestricted, Object.keys(reasonOperations).map(k => reasons[k] ?? [])]);
+  return {blocked, deviceRestricted, signature};
 }
 
 /** One non-playing Connect observer. Credentials/routes are memory-only.
@@ -98,7 +125,11 @@ export class SpotifyDetector {
   private currentTarget: string | undefined;
   private blocked = false;
   private sessionRequired = false;
-  private restricted = false;
+  private deviceRestricted = false;
+  private payloadRestrictions: SpotifyRestrictions = {};
+  private blockedOperations = new Set<Operation>();
+  private restrictionSignature = '';
+  private acceptedAuthority = '';
   private acceptCapture = true;
   private pendingState: { payload: unknown; receivedAt: number; timing: TimingContext; sourceClockScope: string } | null = null;
   private requests = new Set<AbortController>();
@@ -142,15 +173,38 @@ export class SpotifyDetector {
     this.deviceId = Array.from({ length: 40 }, () => Math.floor(this.runtime.random() * 16).toString(16)).join('');
   }
   get health(): SpotifyHealth {
-    const target = this.observed ? this.restricted ? 'restricted' : this.currentTarget ? 'available' : 'absent' : 'unknown';
-    const controlsEnabled = this.enabled && this.activity === 'active' && this.phase === 'ready' && this.registered && this.observed && !!this.currentTarget && !this.restricted && this.commandPhase === 'idle' && !this.commandPending && this.runtime.wall() < this.expiresAt - 30000 && this.cooldownRemaining() <= 0;
+    const baseReady = this.enabled && this.activity === 'active' && this.phase === 'ready' &&
+      this.registered && this.observed && !!this.currentTarget &&
+      this.commandPhase === 'idle' && !this.commandPending &&
+      this.runtime.wall() < this.expiresAt - 30000 && this.cooldownRemaining() <= 0;
+
+    const allowed: SpotifyAllowedControls = Object.freeze({
+      resume: baseReady && !this.deviceRestricted && !this.payloadRestrictions.resume && !this.blockedOperations.has('resume'),
+      pause: baseReady && !this.deviceRestricted && !this.payloadRestrictions.pause && !this.blockedOperations.has('pause'),
+      next: baseReady && !this.deviceRestricted && !this.payloadRestrictions.next && !this.blockedOperations.has('next'),
+      previous: baseReady && !this.deviceRestricted && !this.payloadRestrictions.previous && !this.blockedOperations.has('previous'),
+      seek: baseReady && !this.deviceRestricted && !this.payloadRestrictions.seek && !this.blockedOperations.has('seek'),
+    });
+
+    const hasAnyAllowed = allowed.resume || allowed.pause || allowed.next || allowed.previous || allowed.seek;
+    const controlsEnabled = baseReady && !this.deviceRestricted && hasAnyAllowed;
+    const isFullyRestricted = this.deviceRestricted || (baseReady && !hasAnyAllowed);
+    const target = this.observed ? isFullyRestricted ? 'restricted' : this.currentTarget ? 'available' : 'absent' : 'unknown';
+    const disabledReason: SpotifyDisabledReason = controlsEnabled ? '' :
+      this.activity !== 'active' ? 'inactive' :
+      isFullyRestricted ? 'restricted' :
+      this.commandPhase !== 'idle' ? this.commandPhase :
+      target === 'absent' ? 'noActiveDevice' : this.reason;
+
     return { ...initialSpotifyHealth, phase: this.phase, reason: this.reason, generation: this.generation, attempt: this.reconnects,
       phaseStartedMono: this.phaseStarted, nextRetryAtWall: this.nextRetry, retryNotBeforeWall: this.cooldownWall,
       reachability: this.reachability, appActivity: this.activity, session: this.blocked ? 'denied' : this.sessionRequired ? 'signInRequired' : this.phase === 'renewingSession' ? 'renewing' : this.token ? 'valid' : 'unknown',
       transportConfirmed: !!this.socket && this.socket.readyState === 1, observerConfirmed: this.registered && this.observed,
       lastContactMono: this.lastContact, lastStateReceiptMono: this.lastState, lastStateGeneration: this.observed ? this.generation : -1,
       target, targetVersion: this.targetVersion, command: this.commandPhase, controlsEnabled,
-      disabledReason: controlsEnabled ? '' : this.activity !== 'active' ? 'inactive' : this.restricted ? 'restricted' : this.commandPhase !== 'idle' ? this.commandPhase : target === 'absent' ? 'noActiveDevice' : this.reason, lastError: this.lastError };
+      disabledReason,
+      allowed,
+      lastError: this.lastError };
   }
   private publishHealth() { this.callbacks.health?.(this.health); }
   private transition(phase: SpotifyPhase, reason: SpotifyReason = phase) {
@@ -181,9 +235,9 @@ export class SpotifyDetector {
     }, 500);
   }
   private binding() { return JSON.stringify([this.generation, this.connectionId, this.currentTarget, this.lastSample?.uri, this.lastSample?.playbackSessionId]); }
-  private stateConfirmed(target: string | undefined, restricted = false, positive = true) {
+  private stateConfirmed(target: string | undefined, positive = true) {
     if (positive) this.stateRevision++;
-    this.restricted = restricted; this.observed = true; this.currentTarget = target; this.lastState = this.runtime.mono();
+    this.observed = true; this.currentTarget = target; this.lastState = this.runtime.mono();
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
     if (this.healthySince === null) this.healthySince = this.runtime.mono();
     if ((positive || this.reconciling) && this.commandPhase !== 'sending' &&
@@ -193,6 +247,17 @@ export class SpotifyDetector {
     }
     this.reconciling = false;
     this.transition('ready'); this.callbacks.ready();
+  }
+
+  private authorityToken() {
+    return JSON.stringify([this.generation, this.connectionId, this.acceptedAuthority, this.stateRevision]);
+  }
+  private applyAuthoritativeState(restrictions: ReturnType<typeof selectedRestrictions>, key: string) {
+    this.blockedOperations.clear();
+    this.deviceRestricted = restrictions.deviceRestricted;
+    this.payloadRestrictions = restrictions.blocked;
+    this.restrictionSignature = restrictions.signature;
+    this.acceptedAuthority = key;
   }
 
   private listenForExperimentToggle() {
@@ -312,6 +377,9 @@ export class SpotifyDetector {
     this.blocked = false; this.sessionRequired = false; this.cooldownWall = 0; this.cooldownMono = 0; this.rateLimits = 0;
     this.metadataCache.clear(); this.metadataPending.clear();
     this.reconnects = 0; this.rejectedFreshToken = false; this.commandPhase = 'idle';
+    this.deviceRestricted = false;
+    this.payloadRestrictions = {};
+    this.blockedOperations.clear();
     this.transition('idle');
   }
   async metadata(uri: string): Promise<TrackMetadata> {
@@ -338,7 +406,15 @@ export class SpotifyDetector {
     const target = this.currentTarget;
     if (!this.health.controlsEnabled || !target) throw new SpotifyPlaybackUnavailableError('Spotify controls are unavailable until current playback is confirmed.', this.health.disabledReason);
     if (command.type === 'seek' && !Number.isFinite(command.positionMs)) throw new Error('Invalid seek position.');
-    const endpoint = { toggle: this.lastSample?.playing ? 'pause' : 'resume', previous: 'skip_prev', next: 'skip_next', seek: 'seek_to' }[command.type];
+    const isPlaying = this.lastSample?.playing ?? false;
+    const op: Operation =
+      command.type === 'toggle' ? (isPlaying ? 'pause' : 'resume') :
+      command.type === 'previous' ? 'previous' :
+      command.type === 'next' ? 'next' : 'seek';
+    if (!this.health.allowed[op]) {
+      throw new SpotifyPlaybackUnavailableError(`Spotify ${command.type} is restricted.`, 'restricted');
+    }
+    const endpoint = { toggle: isPlaying ? 'pause' : 'resume', previous: 'skip_prev', next: 'skip_next', seek: 'seek_to' }[command.type];
     // Route to the device observed by Dealer, not a newly mounted web player.
     const from = new URL(this.route).pathname.split('/').pop()!;
     const path = `/connect-state/v1/player/command/from/${encodeURIComponent(from)}/to/${encodeURIComponent(target)}`;
@@ -349,6 +425,7 @@ export class SpotifyDetector {
     const commandId = {}; this.commandPending = commandId;
     const binding = this.binding(); const run = this.generation; const connection = this.connectionId;
     let revision = this.stateRevision;
+    let authority = this.authorityToken();
     const superseded = () => run === this.generation && connection === this.connectionId &&
       this.phase === 'ready' && this.registered && this.observed && this.stateRevision > revision &&
       (binding !== this.binding() ||
@@ -359,6 +436,7 @@ export class SpotifyDetector {
     try {
       if (this.commandPending !== commandId || binding !== this.binding()) throw new SpotifyPlaybackUnavailableError('Spotify authority changed before command dispatch.', 'unavailable');
       revision = this.stateRevision;
+      authority = this.authorityToken();
       await this.request(path, 'POST', body);
       if (this.commandPending === commandId && superseded()) {
         // Dealer can report the resulting track/pause/seek before HTTP settles.
@@ -376,6 +454,9 @@ export class SpotifyDetector {
       this.confirmation = confirmation; this.publishHealth();
       this.callbacks.status(`Spotify ${endpoint} accepted; awaiting the device update.`);
     } catch (error) {
+      if (error instanceof SpotifyControlRejectedError && error.httpStatus === 403 &&
+          this.commandPending === commandId && run === this.generation && connection === this.connectionId &&
+          authority === this.authorityToken()) this.blockedOperations.add(op);
       if (error instanceof SpotifyControlRejectedError || error instanceof SpotifyPlaybackUnavailableError) {
         if (this.commandPending === commandId) this.commandPhase = 'idle';
         throw error;
@@ -408,10 +489,8 @@ export class SpotifyDetector {
         method, status: response.status, requestGeneration: run, currentGeneration: this.generation,
         elapsedMs: this.runtime.mono() - started, staleGeneration: run !== this.generation, cacheProvenance: 'network-response' });
       if (run !== this.generation || requestConnection !== this.connectionId) throw new Error('Spotify session changed during request.');
-      if (method === 'POST' && !response.ok) { this.commandPending = null; this.commandPhase = 'idle'; }
       if (response.status === 401) this.needSession('Spotify session expired. Refreshing login…', true);
       if (response.status === 429) this.rateLimited(response);
-      if (method === 'POST' && response.status === 403) { this.restricted = true; this.publishHealth(); }
       if (method === 'POST' && response.status === 404) { this.retryObservation(); throw new SpotifyPlaybackUnavailableError('Spotify playback target changed. Restoring observation; command was not retried.'); }
       if (!response.ok) throw new SpotifyControlRejectedError(`Spotify ${method === 'GET' ? 'metadata' : 'control'} HTTP ${response.status}.`, response.status);
       // Read while the abort/timeout is still installed, including slow bodies.
@@ -440,6 +519,10 @@ export class SpotifyDetector {
     const ws = this.socket; this.socket = null;
     if (ws) { ws.onopen = null; ws.onmessage = null; ws.onerror = null; ws.onclose = null; try { ws.close(); } catch {} }
     this.connectionId = ''; this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null;
+    this.deviceRestricted = false;
+    this.payloadRestrictions = {};
+    this.blockedOperations.clear();
+    this.restrictionSignature = ''; this.acceptedAuthority = '';
     this.publishHealth();
   }
   private needSession(message: string, unauthorized = false) {
@@ -464,8 +547,15 @@ export class SpotifyDetector {
     this.orderingDeviceId = undefined; this.orderingSessionId = undefined; this.lastDealerConnection = '';
   }
   private emit(payload: unknown, receivedAt = this.runtime.wall(), timing: TimingContext = {}, authorityScope = this.sourceClockScope) {
-    const s = sampleFrom(payload, 0, timing);
-    if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) { if (idleState(payload)) { this.stateConfirmed(undefined); return true; } return false; }
+    const selected = sampleWithContext(payload, 0, timing);
+    const s = selected?.sample;
+    if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) {
+      if (idleState(payload)) {
+        this.stateConfirmed(undefined, false);
+        return true;
+      }
+      return false;
+    }
     if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
       rawPosition: s.positionMs, playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
       receiptWall: timing.receipt?.wallMs, receiptMono: timing.receipt?.monotonicMs, receivedAt,
@@ -492,12 +582,19 @@ export class SpotifyDetector {
     // Unknown identity is not evidence of a handoff. Keep the known scope and
     // its watermark; only a positive identity change can reset source ordering.
     if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
-      this.stateConfirmed(s.activeDeviceId, restrictedState(payload), false);
+      const restoreRegisteredTarget = timing.origin === 'registration' &&
+        this.registered && !this.observed && !this.currentTarget &&
+        timing.generation === this.generation && timing.connectionId === this.connectionId &&
+        !!device && device === this.orderingDeviceId;
+      // Fresh registration proves the replacement connection, not the old command outcome.
+      // Its old command promise still settles independently, with no playback replay.
+      if (restoreRegisteredTarget && !this.commandPending && this.commandPhase === 'outcomeUnknown') this.commandPhase = 'idle';
+      this.stateConfirmed(restoreRegisteredTarget ? this.orderingDeviceId : this.currentTarget, false);
       this.logDeliveryRejection(s, timing.origin, 'source-timestamp-older-than-watermark');
       logDevelopmentTiming('stale', s);
       recordTiming('stale', s.timingProvenance); return true;
     }
-    if (this.currentTarget !== s.activeDeviceId || this.lastSample?.uri !== s.uri || this.lastSample?.playbackSessionId !== s.playbackSessionId) this.targetVersion++;
+    if (this.currentTarget !== (device ?? this.orderingDeviceId) || this.lastSample?.uri !== s.uri || this.lastSample?.playbackSessionId !== s.playbackSessionId) this.targetVersion++;
     if (identityChanged) {
       this.lastSourceTimestamp = 0; this.fingerprint = '';
       this.deliveryBaseline.clear();
@@ -545,11 +642,21 @@ export class SpotifyDetector {
     // session-only handoffs must not disappear behind an equal state fingerprint.
     const key = JSON.stringify([connection, this.orderingDeviceId, this.orderingSessionId,
       stateFingerprint({ ...s, activeDeviceId: this.orderingDeviceId })]);
-    if (key === this.fingerprint) { this.stateConfirmed(s.activeDeviceId, restrictedState(payload)); logDevelopmentTiming('duplicate', s); recordTiming('duplicate', s.timingProvenance); return true; }
+    const restrictions = selectedRestrictions(selected!);
+    const changedRestrictions = restrictions.signature !== this.restrictionSignature;
+    const target = device ?? this.orderingDeviceId;
+    if (key === this.fingerprint) {
+      if (changedRestrictions) this.applyAuthoritativeState(restrictions, key);
+      this.stateConfirmed(target, changedRestrictions);
+      logDevelopmentTiming('duplicate', s);
+      recordTiming('duplicate', s.timingProvenance);
+      return true;
+    }
     this.fingerprint = key;
     if (s.positionTimestampMs) this.lastSourceTimestamp = s.positionTimestampMs;
     this.lastSample = s;
-    this.stateConfirmed(s.activeDeviceId, restrictedState(payload));
+    this.applyAuthoritativeState(restrictions, key);
+    this.stateConfirmed(target);
     recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
     logDevelopmentTiming('accepted', s);
     this.lastDeliveryObservation = s;
@@ -632,6 +739,7 @@ export class SpotifyDetector {
         if (this.healthySince !== null && lastReceived - this.healthySince >= 60000) { this.reconnects = 0; this.rateLimits = 0; this.rejectedFreshToken = false; }
         if (payload.type === 'pong') return;
         if (id && id !== this.connectionId) { this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null;
+          this.blockedOperations.clear();
           if (this.confirmation) this.runtime.clearTimeout(this.confirmation); this.confirmation = null;
           if (this.commandPending || this.commandPhase === 'awaitingConfirmation') this.commandPhase = 'outcomeUnknown';
           this.commandPending = null; for (const request of this.requests) request.abort();

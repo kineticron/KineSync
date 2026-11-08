@@ -178,6 +178,14 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const sendCommand = useCallback((command: BrowserCommand) => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }
     if (!['toggle', 'previous', 'next', 'seek'].includes(command.type) || !detector.health.controlsEnabled) return;
+    const h = detector.health;
+    if (h.allowed) {
+      const isPlaying = lastSample.current?.playing ?? false;
+      if (command.type === 'toggle' && (isPlaying ? !h.allowed.pause : !h.allowed.resume)) return;
+      if (command.type === 'previous' && !h.allowed.previous) return;
+      if (command.type === 'next' && !h.allowed.next) return;
+      if (command.type === 'seek' && !h.allowed.seek) return;
+    }
     void detector.control(command as { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }).catch(error => {
       if (!canIngest()) return;
       const message = error instanceof Error ? error.message : 'Spotify command failed.';

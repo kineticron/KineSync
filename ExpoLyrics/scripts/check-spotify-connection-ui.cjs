@@ -45,11 +45,12 @@ const ast = ts.createSourceFile('index.tsx',screenSource,ts.ScriptTarget.Latest,
 const gated = new Set(['handlePlaybackPlayPause','handlePlaybackPrevious','handlePlaybackNext','handleLyricLinePress','handleSeek','sendSeekToPlaybackSource','handleScrubPreview']);
 let guardCode;
 function visit(node) {
-  if (ts.isFunctionDeclaration(node) && node.name?.text === 'nativePlaybackUnavailable') guardCode = node.getText(ast);
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'nativePlaybackUnavailable') guardCode = ts.transpileModule(node.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   if (ts.isVariableDeclaration(node) && gated.has(node.name.getText(ast))) {
     const fn=node.initializer.arguments[0].getText(ast);
     const code=ts.transpileModule(`const handler = ${fn}; handler({lineStartTime:1000});`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-    vm.runInNewContext(code,{nativePlaybackUnavailable:()=>true});
+    vm.runInNewContext(code,{nativePlaybackUnavailable:()=>true,
+    usePlaybackStore:{getState:()=>({isPlaying:false})},});
     gated.delete(node.name.getText(ast));
   }
   ts.forEachChild(node,visit);

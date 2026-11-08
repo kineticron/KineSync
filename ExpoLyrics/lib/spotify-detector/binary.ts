@@ -46,6 +46,24 @@ function track(bytes: Uint8Array) {
   }
   return out;
 }
+const restrictionFields: Record<number, string> = {
+  1: 'disallow_pausing_reasons',
+  2: 'disallow_resuming_reasons',
+  3: 'disallow_seeking_reasons',
+  6: 'disallow_skipping_prev_reasons',
+  7: 'disallow_skipping_next_reasons',
+  14: 'disallow_remote_control_reasons',
+  22: 'disallow_playing_reasons',
+};
+function restrictions(bytes: Uint8Array): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const f of fields(bytes)) {
+    const key = restrictionFields[f.id];
+    if (f.wire !== 2 || !key) continue;
+    (out[key] ??= []).push(text(f.value as Uint8Array));
+  }
+  return out;
+}
 function player(bytes: Uint8Array) {
   // Proto3 omits false/zero fields. Supply defaults to preserve pause/position.
   const out: any = { position_as_of_timestamp: 0, duration: 0, is_playing: false, is_paused: false, is_buffering: false };
@@ -55,6 +73,13 @@ function player(bytes: Uint8Array) {
     if (f.wire === 0 && numbers[f.id]) out[numbers[f.id]] = f.value;
     if (f.wire === 0 && bools[f.id]) out[bools[f.id]] = !!f.value;
     if (f.wire === 2 && f.id === 7) out.track = track(f.value as Uint8Array);
+    if (f.wire === 2 && f.id === 17) {
+      const decoded = restrictions(f.value as Uint8Array);
+      const target = (out.restrictions ??= {});
+      for (const [key, entries] of Object.entries(decoded)) {
+        (target[key] ??= []).push(...entries);
+      }
+    }
     if (f.wire === 2 && f.id === 23) out.session_id = text(f.value as Uint8Array);
   }
   return out;

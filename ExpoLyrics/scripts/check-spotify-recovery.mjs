@@ -214,11 +214,188 @@ await check('abort-respecting fetch and rejected DNS/TLS both settle commands as
   const pending=h.d.control({type:'toggle'});const rejected=assert.rejects(pending,/unknown/);await flush();if(mode==='abort')await h.clock.advance(10000);await rejected;assert.equal(h.d.health.phase,'retryWait');assert.equal(h.posts().length,1);h.d.clear();
  }
 });
-await check('metadata 404 is nonblocking; control 403 exposes restricted capability; a fresh state clears restriction',async()=>{
- const h=setup();h.start();const ws=await h.identify();h.response={status:404};await assert.rejects(h.d.metadata(uri));assert(h.d.health.controlsEnabled);assert.equal(h.sockets.length,1);
- h.response={status:403};await assert.rejects(h.d.control({type:'next'}));assert.equal(h.d.health.target,'restricted');await allDisabled(h);ws.event({payloads:[state()]});assert(h.d.health.controlsEnabled);
- ws.event({payloads:[{...state(),player_state:{...state().player_state,restrictions:{disallow_seeking_reasons:['restricted']}}}]});assert.equal(h.d.health.target,'restricted');await allDisabled(h);h.d.clear();
+await check('metadata 404 stays nonblocking; POST 403 scopes next until fresh accepted state',async()=>{
+ const h=setup();
+ try {
+  h.start();const ws=await h.identify();
+  h.response={status:404};
+  await assert.rejects(h.d.metadata(uri),/metadata HTTP 404/);
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.sockets.length,1);
+  const puts=h.requests.filter(r=>r.method==='PUT').length;
+  h.response={status:403};
+  await assert.rejects(h.d.control({type:'next'}),/control HTTP 403/);
+  assert.equal(h.posts().length,1);
+  assert.equal(h.d.health.phase,'ready');
+  assert.equal(h.d.health.target,'available');
+  assert.equal(h.d.health.command,'idle');
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.d.health.allowed.next,false);
+  for(const key of ['resume','pause','previous','seek']) assert.equal(h.d.health.allowed[key],true,key);
+  await assert.rejects(h.d.control({type:'next'}),/restricted/);
+  assert.equal(h.posts().length,1,'blocked next is not dispatched or replayed');
+  ws.event({payloads:[state()]});
+  assert.equal(h.d.health.allowed.next,false,'exact replay must not clear denied operation');
+  ws.event({payloads:[state('phone',uri,1899999999000)]});
+  assert.equal(h.d.health.allowed.next,false,'older state cannot clear denied operation');
+  ws.event({payloads:[state('phone',uri,1900000001000)]});
+  assert.equal(h.d.health.allowed.next,true,'fresh accepted state clears operation denial');
+  assert.equal(h.d.health.target,'available');
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.posts().length,1,'state recovery cannot replay playback');
+  assert.equal(h.sockets.length,1);
+  assert.equal(h.requests.filter(r=>r.method==='PUT').length,puts);
+ } finally {h.d.clear();}
 });
+
+await check('seek-only restriction preserves other operations and blocks seek before POST',async()=>{
+ const h=setup();
+ try {
+  h.start();const ws=await h.identify();
+  const fresh=state('phone',uri,1900000001000);
+  fresh.player_state.restrictions={disallow_seeking_reasons:['restricted']};
+  ws.event({payloads:[fresh]});
+  assert.equal(h.d.health.target,'available');
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.d.health.allowed.seek,false);
+  for(const key of ['resume','pause','next','previous']) assert.equal(h.d.health.allowed[key],true,key);
+  await assert.rejects(h.d.control({type:'seek',positionMs:9000}),/restricted/);
+  assert.equal(h.posts().length,0);
+  h.response={status:204};
+  await h.d.control({type:'toggle'});
+  assert.equal(h.posts().length,1);
+  assert.equal(h.d.health.command,'awaitingConfirmation','204 is not device confirmation');
+  await allDisabled(h);
+  assert.equal(h.posts().length,1);
+  const paused=state('phone',uri,1900000002000);
+  paused.player_state.is_paused=true;
+  paused.player_state.restrictions={disallow_seeking_reasons:['restricted']};
+  ws.event({payloads:[paused]});
+  assert.equal(h.d.health.command,'idle');
+  assert.equal(h.d.health.allowed.seek,false);
+  assert.equal(h.d.health.allowed.resume,true);
+  assert.equal(h.sockets.length,1);
+ } finally {h.d.clear();}
+});
+
+
+// POST denial is scoped to the authority at dispatch, not transient idle visibility.
+for(const [event,settleAtIdle,expectDenied] of [
+ ['exact',false,true],['older',false,true],['newer',false,false],
+ ['permission',false,false],['handoff',false,false],
+ ['idle-replay',false,true],['idle-replay',true,true],
+ ['idle-newer',false,false],
+])await check('review: scoped POST403 '+event+' settleAtIdle='+settleAtIdle,async()=>{
+ const h=setup();try{
+  h.start();const ws=await h.identify();const gate=deferred();
+  h.response=()=>gate.promise;
+  const rejected=assert.rejects(h.d.control({type:'next'}),error=>error?.httpStatus===403 && /control HTTP 403/.test(error.message));
+  await flush();assert.equal(h.posts().length,1);
+  const puts=h.requests.filter(r=>r.method==='PUT').length;
+  const send=o=>ws.event({payloads:[o]});
+  const idle=()=>send({active_device_id:'',player_state:{timestamp:1900000000100,is_playing:false}});
+  if(event.startsWith('idle-')){
+   idle();await allDisabled(h);assert.equal(h.posts().length,1);
+   if(settleAtIdle){gate.resolve({status:403});await rejected;await allDisabled(h);}
+   send(state('phone',uri,event==='idle-newer'?1900000000200:1900000000000));
+  }else{
+   const value=state(event==='handoff'?'speaker':'phone',uri,event==='older'?1899999999000:event==='newer'?1900000000100:1900000000000);
+   if(event==='permission')value.player_state.restrictions={disallow_seeking_reasons:['new-authority']};
+   send(value);
+  }
+  if(!settleAtIdle){gate.resolve({status:403});await rejected;}
+  await flush();
+  assert.equal(h.d.health.allowed.next,!expectDenied);
+  assert.equal(h.d.health.allowed.pause,true);
+  assert.equal(h.d.health.allowed.seek,event!=='permission');
+  assert.equal(h.d.health.command,'idle');assert.equal(h.d.health.phase,'ready');
+  assert.equal(h.d.health.target,'available');
+  if(expectDenied)await assert.rejects(h.d.control({type:'next'}),/restricted/);
+  assert.equal(h.posts().length,1,'no replay or extra POST');
+  assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,puts);
+ }finally{h.d.clear();}
+});
+await check('review: existing POST403 survives idle and exact replay',async()=>{
+ const h=setup();try{
+  h.start();const ws=await h.identify();h.response={status:403};
+  await assert.rejects(h.d.control({type:'next'}),e=>e?.httpStatus===403);
+  ws.event({payloads:[{active_device_id:'',player_state:{is_playing:false}}]});
+  await allDisabled(h);
+  ws.event({payloads:[state()]});
+  assert.equal(h.d.health.allowed.next,false);assert.equal(h.d.health.allowed.pause,true);
+  await assert.rejects(h.d.control({type:'next'}),/restricted/);
+  assert.equal(h.posts().length,1);assert.equal(h.sockets.length,1);
+ }finally{h.d.clear();}
+});
+
+// Independent same-socket rotation regression coverage
+
+const rotationTS=1900000000000;
+async function rotationFresh(){const h=setup();h.start();const ws=await h.identify();return {h,ws};}
+async function rotationDenied(h,type='next'){h.response={status:403};await assert.rejects(h.d.control({type}),e=>e?.httpStatus===403);await flush();}
+async function rotationCan(h,type){h.response={status:204};const n=h.posts().length;try{await h.d.control({type,positionMs:50});}catch{}await flush();return h.posts().length>n;}
+function rotationS({ts=rotationTS,position=1000}={}){const v=state('phone',uri,ts);v.player_state.position_as_of_timestamp=position;return {payloads:[v]};}
+async function rotateWithSnapshot(h,ws,snapshot){
+ h.response={status:200,body:snapshot};
+ ws.event({headers:{'spotify-connection-id':'rotated-race-connection'}});
+ await flush();
+}
+await check('same-socket connection rotation invalidates prior403 even with older same-device registration',async()=>{
+ const {h,ws}=await rotationFresh();try{
+ await rotationDenied(h,'next');
+ await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
+ assert.equal(h.sockets.length,1);
+ assert.equal(h.d.health.allowed.next,true,'new connection cannot inherit prior connection HTTP denial');
+ assert.equal(await rotationCan(h,'next'),true);
+ assert.equal(h.posts().length,2);
+ }finally{h.d.clear();}
+});
+await check('same-socket late old403 cannot deny rotated connection after stale same-device registration',async()=>{
+ const {h,ws}=await rotationFresh();try{
+ const gate=deferred();h.response=()=>gate.promise;
+ const pending=h.d.control({type:'next'}).catch(e=>e);await flush();
+ await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
+ gate.resolve({status:403});await pending;await flush();
+ assert.equal(h.sockets.length,1);
+ assert.equal(h.d.health.allowed.next,true);
+ assert.equal(await rotationCan(h,'next'),true);
+ assert.equal(h.posts().length,2);
+ }finally{h.d.clear();}
+});
+for(const identity of ['omitted','empty'])await check('rotated registration '+identity+' identity cannot restore retained target',async()=>{
+ const {h,ws}=await rotationFresh();try{
+ const snapshot=state('phone',uri,rotationTS-100);
+ if(identity==='omitted')delete snapshot.active_device_id;else snapshot.active_device_id='';
+ await rotateWithSnapshot(h,ws,snapshot);
+ assert.equal(h.d.health.target,'absent');
+ assert.equal(await rotationCan(h,'next'),false);assert.equal(h.posts().length,0);
+ }finally{h.d.clear();}
+});
+await check('pending Dealer idle before rotated stale registration prevents target resurrection',async()=>{
+ const {h,ws}=await rotationFresh();try{
+ const registration=deferred();h.response=()=>registration.promise;
+ ws.event({headers:{'spotify-connection-id':'rotated-idle-connection'}});
+ await flush();
+ ws.event({payloads:[{active_device_id:'',player_state:{is_playing:false}}]});
+ registration.resolve({status:200,body:state('phone',uri,rotationTS-100)});await flush();
+ assert.equal(h.d.health.target,'absent');
+ assert.equal(await rotationCan(h,'next'),false);assert.equal(h.posts().length,0);
+ assert.equal(h.sockets.length,1);
+ }finally{h.d.clear();}
+});
+await check('rotated stale registration restores known target without replacing playback or accepted watermark',async()=>{
+ const {h,ws}=await rotationFresh();try{
+ ws.event(rotationS({ts:rotationTS+100,position:8000}));await flush();
+ const accepted=h.samples.at(-1),count=h.samples.length;
+ await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
+ assert.equal(h.d.health.target,'available');
+ assert.equal(h.samples.length,count);assert.equal(h.samples.at(-1),accepted);
+ ws.event(rotationS({ts:rotationTS,position:2000}));await flush();
+ assert.equal(h.samples.length,count,'restoration must not regress accepted watermark');
+ assert.equal(await rotationCan(h,'next'),true);assert.equal(decodeURIComponent(new URL(h.posts().at(-1).url).pathname.split('/').at(-1)),'phone');
+ }finally{h.d.clear();}
+});
+
 await check('registration 410 and socket constructor failure recover through observation only',async()=>{
  const h=setup();h.response={status:410};h.start();await h.identify();assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,0);h.d.clear();
  const e=setup();e.d.runtime.socket=()=>{throw Error('TLS');};e.start();assert.equal(e.d.health.phase,'retryWait');assert.equal(e.posts().length,0);e.d.clear();
@@ -307,8 +484,12 @@ await check('review: whole-episode deadline parks passive capture until intended
 await check('health presentation distinguishes no device, offline, denial and sign-in without routing mutation',async()=>{
  const h=setup();h.start();h.response={status:200,body:{player_state:{is_paused:true}}};await h.identify();assert.match(spotifyHealthMessage(h.d.health),/no active/);h.d.setReachability('offline');assert.match(spotifyHealthMessage(h.d.health),/Offline/);assert.equal(h.d.health.source,'nativeSpotify');h.d.clear();
  const source=readFileSync('components/lyrics/spotify-connection-strip.tsx','utf8');assert(source.includes("s.playbackMode === 'mobile' && s.connectionStatus !== 'connected'"));assert(!source.includes('setState'));
- const screen=readFileSync('app/(tabs)/index.tsx','utf8');for(const handler of ['handleLyricLinePress','handleSeek','handlePlaybackPrevious','sendSeekToPlaybackSource','handlePlaybackPlayPause','handlePlaybackNext','handleScrubPreview']){const start=screen.indexOf(`const ${handler} =`);assert(start>=0);assert(screen.slice(start,start+180).includes('nativePlaybackUnavailable()'),handler);}
- const controls=readFileSync('components/lyrics/playback-controls.tsx','utf8');assert(controls.includes('.enabled(!controlsDisabled)'));assert(controls.includes('accessibilityState={{ disabled }}'));assert(controls.includes('if (controlsDisabled) { setIsScrubbing(false)'));assert.equal((controls.match(/disabled=\{controlsDisabled\}/g)??[]).length,3);
+ const screen=readFileSync('app/(tabs)/index.tsx','utf8');
+ for(const [handler,guard] of Object.entries({handleLyricLinePress:"nativePlaybackUnavailable('seek')",handleSeek:"nativePlaybackUnavailable('seek')",handlePlaybackPrevious:"nativePlaybackUnavailable(pos > 3000 ? 'seek' : 'previous')",sendSeekToPlaybackSource:"nativePlaybackUnavailable('seek')",handlePlaybackPlayPause:"nativePlaybackUnavailable(usePlaybackStore.getState().isPlaying ? 'pause' : 'resume')",handlePlaybackNext:"nativePlaybackUnavailable('next')",handleScrubPreview:"nativePlaybackUnavailable('seek')"})){
+  const start=screen.indexOf(`const ${handler} =`);assert(start>=0,handler);
+  assert(screen.slice(start,start+500).includes(guard),handler+' must gate the actual operation');
+ }
+ const controls=readFileSync('components/lyrics/playback-controls.tsx','utf8');assert(controls.includes('.enabled(!controlsDisabled)'));assert(controls.includes('accessibilityState={{ disabled }}'));assert(controls.includes('if (controlsDisabled) { setIsScrubbing(false)'));for(const operation of ['previousDisabled','nextDisabled','playPauseDisabled'])assert(controls.includes('disabled={controlsDisabled || '+operation+'}'));assert(controls.includes('controlsDisabled={controlsDisabled || seekDisabled}'));
 });
 if(!baseline)console.log(`Spotify recovery matrix passed: ${cases} deterministic cases; actual detector/bootstrap, injected clocks/fetch/socket/body/callbacks, no external playback.`);
 

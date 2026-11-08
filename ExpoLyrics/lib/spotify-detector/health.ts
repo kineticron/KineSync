@@ -3,6 +3,20 @@ export type SpotifyReason = SpotifyPhase | 'disconnected' | 'discoveringRoutes' 
 export type SpotifyDisabledReason = SpotifyReason | CommandPhase | 'noActiveDevice' | 'restricted' | 'inactive' | '';
 export type Reachability = 'online' | 'offline' | 'unknown';
 export type CommandPhase = 'idle' | 'sending' | 'awaitingConfirmation' | 'outcomeUnknown';
+export type SpotifyAllowedControls = Readonly<{
+  resume: boolean;
+  pause: boolean;
+  next: boolean;
+  previous: boolean;
+  seek: boolean;
+}>;
+export const defaultAllowedControls: SpotifyAllowedControls = Object.freeze({
+  resume: false,
+  pause: false,
+  next: false,
+  previous: false,
+  seek: false,
+});
 export type SpotifyHealth = Readonly<{
   source: 'nativeSpotify'; phase: SpotifyPhase; reason: SpotifyReason; generation: number; attempt: number;
   phaseStartedMono: number; nextRetryAtWall: number; retryNotBeforeWall: number;
@@ -12,13 +26,15 @@ export type SpotifyHealth = Readonly<{
   lastStateReceiptMono: number; lastStateGeneration: number;
   target: 'unknown' | 'available' | 'absent' | 'restricted'; targetVersion: number;
   command: CommandPhase; controlsEnabled: boolean; disabledReason: SpotifyDisabledReason;
+  allowed: SpotifyAllowedControls;
   lastError?: { category: 'transport' | 'timeout' | 'http' | 'rateLimit' | 'denied' | 'authentication'; httpStatus?: number; occurredAtWall: number };
 }>;
 export const initialSpotifyHealth: SpotifyHealth = { source: 'nativeSpotify', phase: 'idle', reason: 'disconnected', generation: 0,
   attempt: 0, phaseStartedMono: 0, nextRetryAtWall: 0, retryNotBeforeWall: 0, reachability: 'unknown', appActivity: 'active',
   session: 'unknown', transportConfirmed: false, observerConfirmed: false, lastContactMono: 0,
   lastStateReceiptMono: 0, lastStateGeneration: -1, target: 'unknown', targetVersion: 0,
-  command: 'idle', controlsEnabled: false, disabledReason: 'disconnected' };
+  command: 'idle', controlsEnabled: false, disabledReason: 'disconnected',
+  allowed: defaultAllowedControls };
 export function spotifyHealthMessage(h: SpotifyHealth): string {
   if (h.command === 'outcomeUnknown' && (h.phase === 'ready' || h.phase === 'retryWait' || h.phase === 'connecting' || h.phase === 'registering')) return 'Playback outcome unknown. Checking Spotify…';
   if (h.command === 'sending') return 'Sending Spotify command…';
