@@ -45,6 +45,26 @@ export function stepSpicySpringInto(s: SpringState, goal: number, frequency: num
   s.p = p;
 }
 
+// Worklet closures capture helpers eagerly: initialize dependencies before callers.
+
+function stepSprings(s: Springs, scale: number, y: number, glow: number, snap: boolean, dt: number) {
+    'worklet';
+    if (snap) {
+      s.scale.p = scale; s.scale.v = 0;
+      s.y.p = y; s.y.v = 0;
+      s.glow.p = glow; s.glow.v = 0;
+    } else {
+      stepSpicySpringInto(s.scale, scale, 0.88, 0.64, dt);
+      stepSpicySpringInto(s.y, y, 1.45, 0.4, dt);
+      stepSpicySpringInto(s.glow, glow, 1.18, 0.56, dt);
+    }
+}
+
+function emphasisSample(x: number) {
+  'worklet';
+  return x < 0.5 ? cubicBezier(x * 2, 0.2, 0.4, 0.58, 1) : 1 - cubicBezier((x - 0.5) * 2, 0.3, 0, 0.58, 1);
+}
+
 export function amllEmphasisInto(out: AmllEmphasisMotion, position: number, start: number, end: number, index: number, count: number, last: boolean, background: boolean) {
   'worklet';
   let duration = Math.max(1000, end - start);
@@ -115,22 +135,4 @@ export function advanceWordMotionInto(word: NativePaintWord, previous: WordSprin
   previous.settled = settled;
   motion.scale = parent.scale.p; motion.y = parent.y.p; motion.glow = parent.glow.p;
   motion.gradient = -0.2 + 1.2 * p;
-}
-
-function stepSprings(s: Springs, scale: number, y: number, glow: number, snap: boolean, dt: number) {
-    'worklet';
-    if (snap) {
-      s.scale.p = scale; s.scale.v = 0;
-      s.y.p = y; s.y.v = 0;
-      s.glow.p = glow; s.glow.v = 0;
-    } else {
-      stepSpicySpringInto(s.scale, scale, 0.88, 0.64, dt);
-      stepSpicySpringInto(s.y, y, 1.45, 0.4, dt);
-      stepSpicySpringInto(s.glow, glow, 1.18, 0.56, dt);
-    }
-}
-
-function emphasisSample(x: number) {
-  'worklet';
-  return x < 0.5 ? cubicBezier(x * 2, 0.2, 0.4, 0.58, 1) : 1 - cubicBezier((x - 0.5) * 2, 0.3, 0, 0.58, 1);
 }
