@@ -1,6 +1,6 @@
 import { changedScalar } from './relaxed-epsilon';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { Blur, ColorMatrix, Fill, Glyphs, Group, LinearGradient, Paint, Path, Picture, Skia, type SkColor, type SkRect } from '@shopify/react-native-skia';
+import { Blur, ColorMatrix, Fill, ClipOp, createPicture, Group, LinearGradient, Paint, Path, Picture, Skia, type SkColor, type SkRect } from '@shopify/react-native-skia';
 import { makeMutable, useFrameCallback, type SharedValue } from 'react-native-reanimated';
 import type { ShapedGlyphWord } from './native-glyph-picture';
 import { initialWordSpringState, type WordMotion, type WordSpringState } from './reference-word-motion';
@@ -128,10 +128,24 @@ function SliceClip({ word, letter, children, clipMode }: { word: ShapedGlyphWord
   </Group>;
 }
 function SliceInk({ word, letter, cell }: { word: ShapedGlyphWord; letter: number; cell: Cell }) {
-  const gradient = <LinearGradient start={cell.start} end={cell.end} colors={cell.colors} />;
-  return word.emojiMask[letter] || word.overlapMask[letter] || word.unionGroup !== undefined ? <Group layer>
-    <Picture picture={word.pictures[letter]} /><Fill blendMode="srcIn" opacity={cell.inkOpacity}>{gradient}</Fill>
-  </Group> : <Group opacity={cell.inkOpacity}>{gradient}{word.runs[letter].map((run, index) => <Glyphs key={index} glyphs={run.glyphs.map((id, i) => ({ id, pos: run.positions[i] }))} font={run.font} antiAlias />)}</Group>;
+  return <Group layer>
+    <Picture picture={word.pictures[letter]} /><Fill blendMode="srcIn" opacity={cell.inkOpacity}>
+      <LinearGradient start={cell.start} end={cell.end} colors={cell.colors} />
+    </Fill>
+  </Group>;
+}
+/** All ink is recorded once per shape, including ordinary AMLL slices. Existing
+ * shaped Spicy/emoji/union pictures are shared; shader and transform state stay live.
+ */
+function pictureWords(words: ShapedGlyphWord[]): ShapedGlyphWord[] {
+  const paint = Skia.Paint();
+  paint.setAntiAlias(true); paint.setColor(Skia.Color('white'));
+  return words.map(word => word.pictures.length === word.runs.length ? word : {
+    ...word, pictures: word.runs.map((runs, letter) => createPicture(canvas => {
+      canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
+      for (const run of runs) canvas.drawGlyphs(run.glyphs, run.positions, 0, 0, run.font, paint);
+    })),
+  });
 }
 export function RelaxedGlyphGraph({ words, state, spicy, clipMode = 'group' }: { words: ShapedGlyphWord[]; state: RelaxedGlyphState; spicy: boolean; clipMode?: 'mask' | 'group' }) {
   const nodes: React.ReactNode[] = [];
@@ -162,9 +176,10 @@ export function RelaxedGlyphGraph({ words, state, spicy, clipMode = 'group' }: {
   return <Group layer={<Paint opacity={state.ready} />}>{nodes}</Group>;
 }
 /** Static glyph ink plus live transforms, reveal and glow. No per-frame app picture recording. */
-export const RelaxedGlyphPicture = memo(function RelaxedGlyphPicture({ words, position, active, lineMotion, spicy, background, fontSize, lineEnd, epsilon = false, clipMode = 'group' }: {
+export const RelaxedGlyphPicture = memo(function RelaxedGlyphPicture({ words: inputWords, position, active, lineMotion, spicy, background, fontSize, lineEnd, epsilon = false, clipMode = 'group' }: {
   clipMode?: 'mask' | 'group'; words: ShapedGlyphWord[]; position: SharedValue<number>; active: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>;
 } & RelaxedGlyphOptions) {
+  const words = useMemo(() => pictureWords(inputWords), [inputWords]);
   const buffers = useMemo(() => createRelaxedGlyphState(words), [words]);
   const state = useMemo(() => makeMutable(buffers), [buffers]);
   const options = useMemo(() => ({ spicy, background, fontSize, lineEnd, epsilon }), [spicy, background, fontSize, lineEnd, epsilon]);

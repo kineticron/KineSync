@@ -14,7 +14,7 @@ function load(file, mocks = {}, bundle = true, dev = true) {
     if (name === 'react/jsx-runtime') return { jsx: (_type, props) => props, jsxs: (_type, props) => props };
     if (name === 'react') return { memo: fn => fn };
     if (name === 'react-native-reanimated') return { makeMutable: mutable };
-    if (name === '@shopify/react-native-skia') return { Skia: { Color: () => new Float32Array([1, 1, 1, 1]) } };
+    if (name === '@shopify/react-native-skia') return { Skia: { Color: () => new Float32Array([1, 1, 1, 1]), Paint: () => ({ setAntiAlias() {}, setColor() {} }) } };
     throw Error(`Unmocked boundary ${name}`);
   } });
   return module.exports;
