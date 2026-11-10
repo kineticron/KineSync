@@ -258,8 +258,9 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
       if (old.top !== candidate.top || old.bottom !== candidate.bottom) envelope.value = candidate;
     }
     // Attribution is always protected, including while it enters during manual scrolling.
-    if (reset || next.attr === null || envelopeAttribution.value === null || next.attr < envelopeAttribution.value || settled) {
-      if (next.attr !== envelopeAttribution.value) envelopeAttribution.value = next.attr;
+    if (reset || next.attr === null || envelopeAttribution.value === null || next.attr < envelopeAttribution.value + 32 || settled) {
+      const safeAttribution = next.attr === null ? null : next.attr - 96;
+      if (safeAttribution !== envelopeAttribution.value) envelopeAttribution.value = safeAttribution;
     }
   });
 
@@ -284,7 +285,7 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, relaxedEnvelope ? 0 : offset.value, height);
     const attr = relaxedEnvelope ? envelopeAttribution.value === null ? null : { y: envelopeAttribution.value, height: 1 } : attribution?.value;
     let upperTranslateY = r.top;
-    if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
+    if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && (relaxedEnvelope || attr.y > 0)) {
       const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
       if (attrScreenTop < r.top) {
         upperTranslateY = Math.min(r.top, attrScreenTop);
@@ -313,13 +314,13 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     const attr = relaxedEnvelope ? envelopeAttribution.value === null ? null : { y: envelopeAttribution.value, height: 1 } : attribution?.value;
     let lowerHeight = spanHeight;
     if (hasAttribution) {
-      if (!attr || !Number.isFinite(attr.y) || attr.y <= 0 || !Number.isFinite(attr.height) || attr.height <= 0) {
+      if (!attr || !Number.isFinite(attr.y) || !relaxedEnvelope && attr.y <= 0 || !Number.isFinite(attr.height) || attr.height <= 0) {
         lowerHeight = 0;
       } else {
         const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
         lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
       }
-    } else if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
+    } else if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && (relaxedEnvelope || attr.y > 0)) {
       const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
       lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
     }

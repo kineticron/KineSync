@@ -188,6 +188,7 @@ function scenario({ initialPacket, development = false } = {}) {
   for (const name of ['Blur', 'Canvas', 'Group', 'LinearGradient', 'Mask', 'Paint', 'Paragraph', 'Rect']) skia[name] = name;
   const fontContext = react.createContext({ fakeFonts: true });
   const localMocks = new Map([
+    ['lib/relaxed-rendering.ts', { useRelaxedRendering: () => ({ glyphPicture: false, blurEnvelope: false, epsilon: false }) }],
     ['components/lyrics/native/native-lyrics-fonts.ts', { NativeLyricsFontContext: fontContext, useNativeLyricsFonts: () => ({ fakeFonts: true }) }],
     ['components/lyrics/native/reference-scroll.tsx', {
       initialScrollCommand: { serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0, interval: 800, instant: true },
@@ -204,6 +205,8 @@ function scenario({ initialPacket, development = false } = {}) {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx }, zustand: { create: createStore }, 'zustand/react/shallow': { useShallow: selector => selector },
     'react-native': { AppState: appState, Platform: { OS: 'web' }, FlatList: 'FlatList', Linking: {},
       View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value, absoluteFill: {} } },
+    'expo-font': { isLoaded: () => false },
+    'expo-blur': { BlurTargetView: 'BlurTargetView', BlurView: 'BlurView' },
     'expo-router': { useFocusEffect: callback => react.useEffect(callback, [callback]) },
     '@shopify/flash-list': { FlashList: 'FlashList', useMappingHelper: () => ({ getMappingKey: index => index }),
       useRecyclingState: (...args) => react.useState(args[0]) },

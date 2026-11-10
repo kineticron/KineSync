@@ -7,7 +7,7 @@ const dir = path.resolve(__dirname, '../components/lyrics/native');
 const mutable = value => ({ value, modify(fn) { this.value = fn(this.value); } });
 function load(file, mocks = {}, bundle = true) {
   const code = buildSync({ entryPoints: [path.resolve(dir, file)], bundle, platform: 'node', format: 'cjs', write: false,
-    external: bundle ? ['react', 'react-native-reanimated', '@shopify/react-native-skia', 'react-native-worklets', '@react-native-async-storage/async-storage', '@/lib/relaxed-rendering'] : undefined }).outputFiles[0].text;
+    external: bundle ? ['react-native', 'expo-blur', '@react-native-masked-view/masked-view', 'expo-linear-gradient', 'react', 'react-native-reanimated', '@shopify/react-native-skia', 'react-native-worklets', '@react-native-async-storage/async-storage', '@/lib/relaxed-rendering'] : undefined }).outputFiles[0].text;
   const module = { exports: {} };
   vm.runInNewContext(code, { module, exports: module.exports, __DEV__: true, require: name => {
     if (name in mocks) return mocks[name];
@@ -74,3 +74,32 @@ for (const gated of [false, true]) {
   cleanup(); assert.equal(enabled, false);
 }
 console.log('Relaxed rendering PASS: ON/OFF, continuous emphasis/reveal, pause convergence, seeks, song/rotation state isolation, conservative moving blur envelope, and callback cleanup. Host hooks only; no phone lifecycle claim.');
+
+// Execute the real overlay hooks; masks must remain stable within a conservative envelope.
+for (const style of ['spicy', 'amll']) for (const height of [800, 380]) for (const enabled of [false, true]) {
+  const reactions = [], styles = [];
+  const api = load('native-shared-blur.tsx', {
+    react: { createContext: value => ({ value }) },
+    'react-native': { View: 'View', StyleSheet: { absoluteFill: {} } },
+    'expo-blur': { BlurView: 'BlurView' }, '@react-native-masked-view/masked-view': 'MaskedView', 'expo-linear-gradient': { LinearGradient: 'Gradient' },
+    'react-native-reanimated': { default: { View: 'Animated.View' }, __esModule: true, useSharedValue: mutable,
+      withTiming: value => value, useAnimatedReaction: (p, r) => reactions.push({ p, r, previous: null }), useAnimatedStyle: fn => { styles.push(fn); return {}; } },
+  });
+  const rows = mutable([{ y: 100, height: 80, start: 0, end: 3000 }, { y: 220, height: 80, start: 3000, end: 6000 }]);
+  const position = mutable(1000), offset = mutable(0), window = mutable({ visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 });
+  const seekVersion = mutable(0), motions = mutable({}), attr = mutable({ y: 700, height: 30 });
+  api.NativeSharedBlur({ target: { current: null }, rows, position, offset, window, seekVersion, motions, height, style, deadlines: [0, 3000, 6000], attribution: attr, hasAttribution: true, relaxedEnvelope: enabled });
+  const tick = () => { for (const reaction of reactions) { const next = reaction.p(); reaction.r(next, reaction.previous); reaction.previous = next; } };
+  tick(); const initial = styles.map(fn => JSON.stringify(fn()));
+  for (let frame = 1; frame <= 20; frame++) { offset.value = frame; tick(); }
+  if (enabled) assert.deepEqual(styles.map(fn => JSON.stringify(fn())), initial, 'ordinary motion does not redraw masks');
+  offset.value = 250; motions.value = { 0: { row: -80, cell: 20, vLead: 10, settled: false }, 1: { row: 100, cell: 10, vLead: 20, settled: false } }; tick();
+  const top = styles[0]().transform[0].translateY, bottom = styles[1]().transform[0].translateY;
+  assert(top <= -150 && bottom >= 50, 'moving protected rows remain outside blur');
+  seekVersion.value++; offset.value = 0; motions.value = {}; window.value = { visualActiveLineStartIndex: 1, visualActiveLineEndIndex: 1, focusLineIndex: 1 }; tick();
+  assert(styles[0]().transform[0].translateY <= 220 && styles[1]().transform[0].translateY >= 300, 'seek resets immediately');
+  attr.value = { y: 700, height: 30 }; offset.value = 710; tick();
+  assert(styles[0]().transform[0].translateY <= -10 && (styles[1]().height === 0 || styles[1]().transform[0].translateY + styles[1]().height <= -10), 'partly visible attribution above viewport remains sharp');
+  rows.value = []; tick(); assert.equal(styles[1]().height, 0, 'unknown geometry and attribution remain safe');
+}
+console.log('Actual shared-blur hooks PASS: independent ON/OFF, both styles/orientations, stable masks, manual scroll, moving rows, seeks, unknown geometry and partly visible attribution.');
