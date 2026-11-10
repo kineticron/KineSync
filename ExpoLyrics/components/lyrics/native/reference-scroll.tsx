@@ -3,14 +3,16 @@ import { type ScrollView, type ScrollViewProps } from 'react-native';
 import Animated, { cancelAnimation, scrollTo, useAnimatedReaction, useAnimatedRef, useAnimatedStyle,
   useFrameCallback, useScrollOffset, useSharedValue, withTiming, runOnUI, type SharedValue } from 'react-native-reanimated';
 import { advanceBatchedMotion, prepareBatchedRow, removeBatchedMotion, type BatchedMotion } from './batched-amll-motion';
+import { advanceSimpleAmllMotion, applySimpleScrollCommand, prepareSimpleScrollRow, removeSimpleScrollRow, type SimpleScrollState } from './simple-amll-motion';
 import { amllScrollSpring, spicyScrollDuration, spicyScrollEasing, stepAmllSpring } from './reference-motion';
 
 export type ScrollCommand = { serial: number; offset: number; delta: number; index: number; firstVisible: number;
   interval: number; instant: boolean; interlude: boolean; snap: boolean; geometry?: boolean };
 export const initialScrollCommand: ScrollCommand = { serial: 0, offset: 0, delta: 0, index: 0, firstVisible: 0,
   interval: 800, instant: true, interlude: false, snap: false };
+export type RowState = { p: number; v: number; renderedP: number; delay: number; prevResidual: number; stiffness: number; damping: number };
 export type RowMotionEntry = { row: number; cell: number; vLead?: number; rowVLead?: number; cellVLead?: number; settled: boolean; owner?: SharedValue<number> };
-export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>>; batch?: SharedValue<BatchedMotion>; batchRows?: SharedValue<Record<number, RowMotionEntry>> };
+export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>>; batch?: SharedValue<BatchedMotion>; batchRows?: SharedValue<Record<number, RowMotionEntry>>; simple?: SharedValue<SimpleScrollState> };
 export const ReferenceScrollContext = createContext<ReferenceScroll | null>(null);
 
 function applyScrollCommand(host: ReferenceScroll, spring: SharedValue<{ p: number; v: number; stiffness: number; damping: number }>,
@@ -53,10 +55,25 @@ export const ReferenceScrollView = forwardRef<ScrollView, ScrollViewProps>(funct
   const spring = useSharedValue({ p: 0, v: 0, stiffness: 90, damping: 15 });
   useScrollOffset(nativeRef, host.actualOffset);
   useAnimatedReaction(() => host.command.value, (command, previous) => {
-    if (!host.batch) applyScrollCommand(host, spring, nativeRef, command, previous);
+    if (!host.batch && !host.simple) applyScrollCommand(host, spring, nativeRef, command, previous);
   });
   useFrameCallback(useCallback(info => {
     'worklet';
+    if (host.simple) {
+      const command = host.command.value, previous = host.simple.value.command;
+      if (command.serial !== previous?.serial) {
+        applySimpleScrollCommand(host, nativeRef, command, previous ?? null, scrollTo);
+        const rows = host.simple.value.rows;
+        for (const key in rows) {
+          const index = Number(key), slot = rows[index];
+          prepareSimpleScrollRow(host, index, true, slot.state, slot.output, command,
+            { command: slot.command, index });
+        }
+        host.simple.modify(value => { value.command = command; return value; }, false);
+      }
+      advanceSimpleAmllMotion(host, info.timeSincePreviousFrame, nativeRef, scrollTo);
+      return;
+    }
     if (host.batch) {
       const command = host.command.value, previous = host.batch.value.command;
       if (command.serial !== previous?.serial) {
@@ -106,7 +123,7 @@ export const ReferenceScrollView = forwardRef<ScrollView, ScrollViewProps>(funct
 export function useReferenceRowScroll(host: ReferenceScroll, index: number, enabled: boolean) {
   const state = useSharedValue({ p: 0, v: 0, renderedP: 0, delay: 0, prevResidual: 0, stiffness: 90, damping: 15 });
   const output = useSharedValue(0);
-  useAnimatedReaction(host.batch ? () => {
+  useAnimatedReaction(host.batch || host.simple ? () => {
     'worklet';
     return { command: initialScrollCommand, index };
   } : () => {
@@ -114,7 +131,7 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     return { command: host.command.value, index };
   }, ({ command, index: rowIndex }, previous) => {
     if (host.spicy) return;
-    if (host.batch) return;
+    if (host.batch || host.simple) return;
     if (!previous || rowIndex !== previous.index) {
       if (previous && host.motions) {
         const cur = host.motions.value;
@@ -218,8 +235,12 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     }
   }, [host, state, index]), false);
   useEffect(() => {
-    frame.setActive(enabled && !host.spicy && !host.batch);
-    if (host.batch && enabled && !host.spicy) runOnUI(() => {
+    frame.setActive(enabled && !host.spicy && !host.batch && !host.simple);
+    if (host.simple && enabled && !host.spicy) runOnUI(() => {
+      'worklet';
+      prepareSimpleScrollRow(host, index, true, state, output, host.command.value, null);
+    })();
+    else if (host.batch && enabled && !host.spicy) runOnUI(() => {
       'worklet';
       // Register outside the mapper pass. Commands are consumed by the single
       // viewport callback, so the publisher never depends on reaction ordering.
@@ -227,7 +248,9 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
     })();
     return () => {
       frame.setActive(false);
-      if (host.batch) {
+      if (host.simple) {
+        runOnUI(removeSimpleScrollRow)(host, index, output);
+      } else if (host.batch) {
         runOnUI(removeBatchedMotion)(host.batch, index, output, false);
       } else if (host.motions) {
         const cur = host.motions.value;
@@ -246,7 +269,7 @@ export function useReferenceRowScroll(host: ReferenceScroll, index: number, enab
   const spicy = host.spicy;
   const command = host.command;
   const renderedResidual = host.renderedResidual;
-  const batched = !!host.batch;
+  const batched = !!(host.batch || host.simple);
   return useAnimatedStyle(batched ? () => {
     'worklet';
     return { transform: [{ translateY: output.value }] };
