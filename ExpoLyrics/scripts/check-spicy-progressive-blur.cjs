@@ -28,7 +28,7 @@ const shared = initial => {
 };
 
 const progressiveModules = {
-  react: { createContext: value => ({ value }), useMemo: fn => fn() },
+  react: { useEffect: () => {}, createContext: value => ({ value }), useMemo: fn => fn() },
   'react-native-reanimated': {
     useSharedValue: shared,
     useAnimatedReaction: (prepare, apply) => {
@@ -56,7 +56,7 @@ const progApi = progressiveModule.exports;
 const styles = [], timings = [], sharedValues = [];
 let sharedPrepare, sharedReact;
 const sharedModules = {
-  react: { createContext: value => ({ value }), useMemo: fn => fn() },
+  react: { useEffect: () => {}, createContext: value => ({ value }), useMemo: fn => fn() },
   'react/jsx-runtime': { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }) },
   'react-native': { StyleSheet: { absoluteFill: {} }, View: 'View' },
   'expo-blur': { BlurView: 'BlurView' },

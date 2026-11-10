@@ -77,13 +77,21 @@ console.log('Relaxed rendering PASS: ON/OFF, continuous emphasis/reveal, pause c
 
 // Execute the real overlay hooks; masks must remain stable within a conservative envelope.
 for (const style of ['spicy', 'amll']) for (const height of [800, 380]) for (const enabled of [false, true]) {
-  const reactions = [], styles = [];
+  const reactions = [], styles = [], pendingTimers = new Set(), cleanups = [];
+  const timedMutable = initial => {
+    let value = initial, target;
+    const cell = { get value() { return value; }, set value(next) {
+      if (next && typeof next === 'object' && 'delayed' in next) { target = next.delayed; pendingTimers.add(cell); }
+      else value = next;
+    }, fire() { value = target; pendingTimers.delete(cell); }, cancel() { pendingTimers.delete(cell); } };
+    return cell;
+  };
   const api = load('native-shared-blur.tsx', {
-    react: { createContext: value => ({ value }) },
+    react: { createContext: value => ({ value }), useEffect: fn => cleanups.push(fn()) },
     'react-native': { View: 'View', StyleSheet: { absoluteFill: {} } },
     'expo-blur': { BlurView: 'BlurView' }, '@react-native-masked-view/masked-view': 'MaskedView', 'expo-linear-gradient': { LinearGradient: 'Gradient' },
-    'react-native-reanimated': { default: { View: 'Animated.View' }, __esModule: true, useSharedValue: mutable,
-      withTiming: value => value, useAnimatedReaction: (p, r) => reactions.push({ p, r, previous: null }), useAnimatedStyle: fn => { styles.push(fn); return {}; } },
+    'react-native-reanimated': { default: { View: 'Animated.View' }, __esModule: true, useSharedValue: timedMutable,
+      withDelay: (_delay, value) => ({ delayed: value }), cancelAnimation: cell => cell.cancel(), withTiming: value => value, useAnimatedReaction: (p, r) => reactions.push({ p, r, previous: null }), useAnimatedStyle: fn => { styles.push(fn); return {}; } },
   });
   const rows = mutable([{ y: 100, height: 80, start: 0, end: 3000 }, { y: 220, height: 80, start: 3000, end: 6000 }]);
   const position = mutable(1000), offset = mutable(0), window = mutable({ visualActiveLineStartIndex: 0, visualActiveLineEndIndex: 0, focusLineIndex: 0 });
@@ -93,6 +101,7 @@ for (const style of ['spicy', 'amll']) for (const height of [800, 380]) for (con
   tick(); const initial = styles.map(fn => JSON.stringify(fn()));
   for (let frame = 1; frame <= 20; frame++) { offset.value = frame; tick(); }
   if (enabled) assert.deepEqual(styles.map(fn => JSON.stringify(fn())), initial, 'ordinary motion does not redraw masks');
+  if (enabled) { pendingTimers.forEach(timer => timer.fire()); tick(); assert.notDeepEqual(styles.map(fn => JSON.stringify(fn())), initial, 'paused scroll contracts after the deferred rest signal'); }
   offset.value = 250; motions.value = { 0: { row: -80, cell: 20, vLead: 10, settled: false }, 1: { row: 100, cell: 10, vLead: 20, settled: false } }; tick();
   const top = styles[0]().transform[0].translateY, bottom = styles[1]().transform[0].translateY;
   assert(top <= -150 && bottom >= 50, 'moving protected rows remain outside blur');
@@ -101,6 +110,7 @@ for (const style of ['spicy', 'amll']) for (const height of [800, 380]) for (con
   attr.value = { y: 700, height: 30 }; offset.value = 710; tick();
   assert(styles[0]().transform[0].translateY <= -10 && (styles[1]().height === 0 || styles[1]().transform[0].translateY + styles[1]().height <= -10), 'partly visible attribution above viewport remains sharp');
   rows.value = []; tick(); assert.equal(styles[1]().height, 0, 'unknown geometry and attribution remain safe');
+  cleanups.forEach(fn => fn?.()); assert.equal(pendingTimers.size, 0, 'blur settle timer is cancelled on cleanup');
 }
 console.log('Actual shared-blur hooks PASS: independent ON/OFF, both styles/orientations, stable masks, manual scroll, moving rows, seeks, unknown geometry and partly visible attribution.');
 

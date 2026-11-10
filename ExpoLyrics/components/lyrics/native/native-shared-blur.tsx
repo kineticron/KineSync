@@ -1,10 +1,10 @@
 import { relaxBlurEnvelope } from './relaxed-blur-envelope';
-import React, { createContext } from 'react';
+import React, { createContext, useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
+import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withTiming, withDelay, cancelAnimation, type SharedValue } from 'react-native-reanimated';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import type { NativeLyricsStyle } from './native-lyrics-model';
 import type { RowMotionEntry } from './reference-scroll';
@@ -232,6 +232,8 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
 
   const envelope = useSharedValue({ top: -Infinity, bottom: Infinity });
   const envelopeAttribution = useSharedValue<number | null>(null);
+  const settleVersion = useSharedValue(0);
+  useEffect(() => () => cancelAnimation(settleVersion), [settleVersion]);
   useAnimatedReaction(() => {
     if (!relaxedEnvelope) return null;
     const p = protection.value;
@@ -242,16 +244,22 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     const moving = (residual?.value ?? 0) !== 0 || !!rowMotions && Object.keys(rowMotions).some(key => !rowMotions[Number(key)].settled);
     const attr = attribution?.value;
     return { top: animated.top - offset.value, bottom: animated.bottom - offset.value,
-      offset: offset.value, moving, protection: p, geometry: rows.value, seek: seekVersion.value,
+      offset: offset.value, moving, settle: settleVersion.value, protection: p, geometry: rows.value, seek: seekVersion.value,
       attr: attr && attr.y > 0 && attr.height > 0 ? attr.y - offset.value : null };
   }, (next, previous) => {
     if (!next) return;
     const reset = !previous || next.geometry !== previous.geometry || next.seek !== previous.seek;
     const semantic = !previous || next.protection !== previous.protection;
-    const settled = !next.moving && !!previous && !previous.moving && next.offset === previous.offset;
+    // A paused manual drag can stop without another geometry/position event.
+    // Debounce on the UI runtime so rest contracts once, even with playback paused.
+    if (!previous || next.offset !== previous.offset || next.moving !== previous.moving) {
+      cancelAnimation(settleVersion);
+      settleVersion.value = withDelay(120, withTiming(next.settle + 1, { duration: 0 }));
+    }
+    const settled = !next.moving && !!previous && next.offset === previous.offset && next.settle !== previous.settle;
     const old = envelope.value;
     // At rest avoid repeated contraction while the semantic boundary itself animates.
-    const contract = semantic || settled && (!previous || previous.top !== next.top || previous.bottom !== next.bottom || previous.offset !== next.offset || previous.moving);
+    const contract = semantic || settled;
     const candidate = relaxBlurEnvelope(old, next, reset, contract);
     // Only expand when protected ink approaches an edge; do not chase every subpixel.
     if (reset || contract || next.top < old.top + 32 || next.bottom > old.bottom - 32) {

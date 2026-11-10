@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),vm=require(
 const {bundle,createVoiceHarness,currentCode}=require('./check-native-translation-toggle.cjs');
 function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{if(name==='./relaxed-blur-envelope')return {};if(name==='./native-progressive-blur'&&progModule)return progModule;assert(name in modules,name);return modules[name];}});return module.exports;}
 const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
- react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+ react:{useEffect:()=>{},createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
  './native-shared-blur':{},
 });
 function fastHost(enabled=true,dev=true){
@@ -105,11 +105,11 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 }
 {
  const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
-  react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+  react:{useEffect:()=>{},createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
   './native-shared-blur':{},
  });
  const {sharedBlurRegion}=load('components/lyrics/native/native-shared-blur.tsx',{
-  react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+  react:{useEffect:()=>{},createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
   '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{},
  './native-progressive-blur':progModule,
  });
@@ -129,12 +129,12 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 // Run the actual overlay hooks: scroll frames must never rescan song geometry.
 {
  const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
-  react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
+  react:{useEffect:()=>{},createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
   './native-shared-blur':{},
  });
  const styles=[], timings=[], shared=[];let prepare,react;
  const advance=fraction=>shared.forEach(v=>{if(v.animation)v.current=v.animation.from+(v.animation.to-v.animation.from)*fraction;});
- const modules={react:{createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
+ const modules={react:{useEffect:()=>{},createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
  '@react-native-masked-view/masked-view':'MaskedView','expo-linear-gradient':{LinearGradient:'LinearGradient'},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
  './native-progressive-blur':progModule,
  'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return {timing:value};},useSharedValue:value=>{const v={current:value,animation:null,get value(){return this.current;},set value(next){if(next && typeof next==='object' && 'timing' in next)this.animation={from:this.current,to:next.timing};else {this.current=next;this.animation=null;}}};shared.push(v);return v;},useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{if(p()!==null){prepare=p;react=r;}}}};
@@ -229,7 +229,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
   assert.equal(result.props.style[0].height,height,'metric rejection preserves outer geometry');
  }
  const api=load('components/lyrics/native/native-shared-blur.tsx',{
- react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+ react:{useEffect:()=>{},createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
  '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
  const rows=Array.from({length:8},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
  const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
@@ -251,7 +251,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 // geometry callback and source/layout invalidation guards across transitions.
 {
  const api=load('components/lyrics/native/native-shared-blur.tsx',{
- react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+ react:{useEffect:()=>{},createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
  '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{}});
  const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
  const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -291,9 +291,9 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
 // Component lifecycle regressions: long song line 42 -> new song line 0, distant unmeasured, cue advance, seek, same geometry pending readiness
 {
   const prog=load('components/lyrics/native/native-progressive-blur.ts',{
-   react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{}});
+   react:{useEffect:()=>{},createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{}});
   const api=load('components/lyrics/native/native-shared-blur.tsx',{
-   react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
+   react:{useEffect:()=>{},createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
    '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'./native-progressive-blur':prog,'react/jsx-runtime':{}});
   const ts=require('typescript'),source=fs.readFileSync(path.join(__dirname,'../components/lyrics/native/native-lyrics-view.tsx'),'utf8');
   const ast=ts.createSourceFile('view.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
