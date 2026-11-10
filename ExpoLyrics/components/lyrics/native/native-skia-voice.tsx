@@ -1,3 +1,4 @@
+import { useTightBlurBounds } from '@/lib/tight-blur-bounds';
 import { NativeSharedBlurContext } from './native-shared-blur';
 import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
@@ -228,6 +229,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
   useArrivalShapeAttribution(trace, shaped, translationLayout);
   const inactiveOpacity = useDerivedValue(() => staticLyrics ? background ? 0.78 : 1
     : spicy ? position.value > voiceEnd ? 0.497 : 0.51 : lineMotion.value.dark);
+  const tightBlurBounds = useTightBlurBounds();
   const paintBlur = useDerivedValue(() => spicy ? lineActive.value ? 0 : blur.value / 2 : blur.value);
   const height = shaped ? shaped.height + shaped.mainPadding * 2 + (translationLayout ? translationLayout.margin + translationLayout.height : 0) : lineHeight;
   return <Animated.View style={[{ height }, presentation]} onLayout={event => {
@@ -238,7 +240,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={!sharedBlur && (batched || !spicy) ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} tightBlurBounds={tightBlurBounds} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}

@@ -1,3 +1,4 @@
+import { blurLayerBounds } from './blur-layer-bounds';
 import { useArrivalPictureMeasurement } from '@/lib/lyrics-arrival-picture';
 import { arrivalPicture, type ArrivalHandle, type ArrivalUiTotals } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
@@ -280,7 +281,7 @@ function unionBounds(words: ShapedGlyphWord[], motions: WordMotion[], start: num
 
 function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMotion[], time: number, active: boolean,
   spicy: boolean, background: boolean, fontSize: number, lineEnd: number, line: ReferenceLineMotion, floatClock: AmllFloatClock,
-  paints: ReusableGlyphPaints) {
+  paints: ReusableGlyphPaints, tightBlurBounds = false) {
   'worklet';
   const { paint, glowPaint } = paints;
   paint.setAntiAlias(true);
@@ -368,7 +369,10 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         // Ligatures shared by two slices must not emit their full glow twice.
         const sigma = Math.max(0.01, radius);
         glowPaint.setImageFilter(glowFilterForDraw(paints, sigma));
-        canvas.saveLayer(glowPaint);
+        if (tightBlurBounds) {
+          const layer = blurLayerBounds(word.clips[letter].getBounds(), sigma);
+          canvas.saveLayer(glowPaint, Skia.XYWHRect(layer.x, layer.y, layer.width, layer.height));
+        } else canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
           canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
@@ -393,9 +397,9 @@ function reportArrivalPicture(handle: ArrivalHandle, generation: number, duratio
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
 const pictureNativeMonotonicNow = typeof performance !== 'undefined' ? performance.now : null;
 const pictureTraceEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
-const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0 }: {
+const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, tightBlurBounds = false, arrivalOwner, arrivalGeneration = 0 }: {
   arrivalOwner?: ArrivalHandle; arrivalGeneration?: number;
-  words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
+  tightBlurBounds?: boolean; words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
   const measurement = useArrivalPictureMeasurement(arrivalOwner, arrivalGeneration, words, width, height);
@@ -405,7 +409,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
   const paints = useSharedValue<ReusableGlyphPaints | null>(null);
   const traceFrames = useSharedValue(0);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
-    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
+    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, tightBlurBounds, cached: false });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     const time = position.value;
@@ -413,7 +417,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     const previous = state.value;
     const isActive = active.value;
     // A proven idle picture needs no word scans while its presentation is unchanged.
-    if (previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
+    if (previous.tightBlurBounds === tightBlurBounds && previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
       (time === previous.time || !isActive && (time < lineEnd) === (previous.time < lineEnd) &&
         (time < words[0].word.start || time > lineEnd + 1500))) {
       if (time !== previous.time) state.modify(s => { s.time = time; return s; }, false);
@@ -424,14 +428,14 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     const floatSettled = spicy || words.every(w => amllWordFloatPosition(floatClock, time, w.word.start, w.word.end) <= w.word.start);
     const idle = floatSettled && !isActive && !previous.active && (time < lineEnd) === (previous.time < lineEnd);
     const settled = !spicy || previous.words.every(w => w.settled);
-    if (settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
+    if (previous.tightBlurBounds === tightBlurBounds && settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) {
       state.modify(s => { s.cached = true; return s; }, false);
       return;
     }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
     // composited by the parent without rebuilding glyph commands each frame.
-    if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
+    if (previous.tightBlurBounds === tightBlurBounds && settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
       state.modify(s => { s.time = time; s.cached = true; return s; }, false);
       return;
@@ -446,7 +450,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     if (pictureTraceEnabled && totals) reusablePaints.arrivalCounts = totals;
     const arrivalStarted = pictureTraceEnabled && totals && !totals.reported ? performance.now() : 0;
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
-      lineMotion.value, floatClock, reusablePaints), bounds);
+      lineMotion.value, floatClock, reusablePaints, tightBlurBounds), bounds);
     if (pictureTraceEnabled && measurement && totals) {
       totals.pictureBuilds++;
       if (!totals.reported) {
@@ -471,15 +475,15 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     reusablePaints.glowPaint.setImageFilter(null);
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, tightBlurBounds, cached: false };
+  }, [measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, tightBlurBounds, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 };
 
-// Exact c2aaa20 component body: no arrival hooks, shared values or callback captures.
-const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
-  words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
+// Production path has no arrival measurement hooks.
+const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, tightBlurBounds = false }: {
+  tightBlurBounds?: boolean; words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
@@ -488,7 +492,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
   const paints = useSharedValue<ReusableGlyphPaints | null>(null);
   const traceFrames = useSharedValue(0);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
-    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
+    floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, tightBlurBounds, cached: false });
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     const time = position.value;
@@ -496,7 +500,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     const previous = state.value;
     const isActive = active.value;
     // A proven idle picture needs no word scans while its presentation is unchanged.
-    if (previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
+    if (previous.tightBlurBounds === tightBlurBounds && previous.cached && isActive === previous.active && lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright &&
       (time === previous.time || !isActive && (time < lineEnd) === (previous.time < lineEnd) &&
         (time < words[0].word.start || time > lineEnd + 1500))) {
       if (time !== previous.time) state.modify(s => { s.time = time; return s; }, false);
@@ -507,14 +511,14 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     const floatSettled = spicy || words.every(w => amllWordFloatPosition(floatClock, time, w.word.start, w.word.end) <= w.word.start);
     const idle = floatSettled && !isActive && !previous.active && (time < lineEnd) === (previous.time < lineEnd);
     const settled = !spicy || previous.words.every(w => w.settled);
-    if (settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
+    if (previous.tightBlurBounds === tightBlurBounds && settled && previous.motions.length && isActive === previous.active && (isActive || floatSettled) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright && time === previous.time) {
       state.modify(s => { s.cached = true; return s; }, false);
       return;
     }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
     // composited by the parent without rebuilding glyph commands each frame.
-    if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
+    if (previous.tightBlurBounds === tightBlurBounds && settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
       state.modify(s => { s.time = time; s.cached = true; return s; }, false);
       return;
@@ -525,7 +529,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     const cachedPaints = paints.value;
     const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
-      lineMotion.value, floatClock, reusablePaints), bounds);
+      lineMotion.value, floatClock, reusablePaints, tightBlurBounds), bounds);
     if (pictureTraceEnabled && isActive && traceFrames.value < 2) {
       traceFrames.value++;
       let nativeNow: number | null = null;
@@ -541,8 +545,8 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     reusablePaints.glowPaint.setImageFilter(null);
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, tightBlurBounds, cached: false };
+  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, tightBlurBounds, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 };
