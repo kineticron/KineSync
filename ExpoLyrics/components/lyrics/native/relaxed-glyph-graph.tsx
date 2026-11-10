@@ -7,10 +7,11 @@ import { initialWordSpringState, type WordMotion, type WordSpringState } from '.
 import { advanceReferenceWordMotion } from './reference-word-motion';
 import { amllEmphasis, amllFloat, clamp01 } from './reference-motion';
 import { amllWordFloatPosition, type AmllFloatClock } from './amll-float-clock';
-type AmllEmphasis = ReturnType<typeof amllEmphasis>;
 import { amllRevealStart } from './native-glyph-layout';
 import { spicyIsRtl } from './spicy-text-policy';
 import type { ReferenceLineMotion } from './use-reference-line-motion';
+
+type AmllEmphasis = ReturnType<typeof amllEmphasis>;
 
 type Cell = { emphasis: AmllEmphasis; matrix: SharedValue<number[]>; start: SharedValue<{ x: number; y: number }>; end: SharedValue<{ x: number; y: number }>;
   colors: SharedValue<SkColor[]>; glow: SharedValue<number>; inkOpacity: SharedValue<number>; radius: SharedValue<number> };

@@ -441,7 +441,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
     // composited by the parent without rebuilding glyph commands each frame.
-    if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
+    if (!epsilon && settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
       state.modify(s => { s.time = time; s.cached = true; return s; }, false);
       return;
@@ -451,11 +451,11 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     if (epsilon) {
       const signature = glyphPresentation(words, motions, time, spicy, background, lineMotion.value, floatClock);
-      const force = isActive !== previous.active || time < previous.time || Math.abs(time - previous.time) > 1000 ||
+      const force = isActive !== previous.active || (time > lineEnd) !== (previous.time > lineEnd) || !isActive && floatSettled || time < previous.time || Math.abs(time - previous.time) > 1000 ||
         (spicy && next.every(w => w.state.settled) && !settled) || time === previous.time;
       if (!changedPresentation(published.value, signature, force)) {
         state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: epsilon && settled && idle && (time < words[0].word.start || time > lineEnd + 1500) };
         return;
       }
       published.value = signature;
@@ -492,7 +492,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     reusablePaints.glowPaint.setImageFilter(null);
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: epsilon && settled && idle && (time < words[0].word.start || time > lineEnd + 1500) };
   }, [epsilon, published, measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
@@ -536,7 +536,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     }
     // Future/settled voices keep a cached picture. Their position/blur/alpha is
     // composited by the parent without rebuilding glyph commands each frame.
-    if (settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
+    if (!epsilon && settled && previous.motions.length && idle && (time < words[0].word.start || time > lineEnd + 1500) &&
       lineMotion.value.dark === previous.dark && lineMotion.value.bright === previous.bright) {
       state.modify(s => { s.time = time; s.cached = true; return s; }, false);
       return;
@@ -546,11 +546,11 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
     if (epsilon) {
       const signature = glyphPresentation(words, motions, time, spicy, background, lineMotion.value, floatClock);
-      const force = isActive !== previous.active || time < previous.time || Math.abs(time - previous.time) > 1000 ||
+      const force = isActive !== previous.active || (time > lineEnd) !== (previous.time > lineEnd) || !isActive && floatSettled || time < previous.time || Math.abs(time - previous.time) > 1000 ||
         (spicy && next.every(w => w.state.settled) && !settled) || time === previous.time;
       if (!changedPresentation(published.value, signature, force)) {
         state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: epsilon && settled && idle && (time < words[0].word.start || time > lineEnd + 1500) };
         return;
       }
       published.value = signature;
@@ -574,7 +574,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     reusablePaints.glowPaint.setImageFilter(null);
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
-      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+      dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: epsilon && settled && idle && (time < words[0].word.start || time > lineEnd + 1500) };
   }, [epsilon, published, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
