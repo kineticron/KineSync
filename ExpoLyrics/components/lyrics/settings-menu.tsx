@@ -1,3 +1,4 @@
+import { RetainedActiveLineSwitch } from './retained-active-line-switch';
 import { FastLyricLoadingSwitch } from './fast-lyric-loading-switch';
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -609,6 +610,7 @@ export const SettingsMenu = memo(function SettingsMenu({
 
               {__DEV__ && <MenuSection title="Developer Settings">
                 <FastLyricLoadingSwitch />
+                <RetainedActiveLineSwitch />
               </MenuSection>}
 
               <MenuSection title="Help">

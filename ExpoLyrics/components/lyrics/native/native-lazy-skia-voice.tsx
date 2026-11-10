@@ -1,3 +1,5 @@
+import { useRetainedActiveLine } from '@/lib/retained-active-line';
+import { RetainedGlyphPicture } from './retained-glyph-graph';
 import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
 import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
@@ -22,6 +24,8 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
   voice: NativeVoice; position: SharedValue<number>; fontSize: number; lineHeight: number;
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean; prepareGlyphs?: boolean;
 }) {
+  const retained = useRetainedActiveLine();
+  const GlyphPicture = retained ? RetainedGlyphPicture : NativeGlyphPicture;
   const sharedBlur = useContext(NativeSharedBlurContext);
   const trace = useArrivalVoice();
   if (__DEV__) arrivalCounter(trace.handle, 'voiceRenders');
@@ -197,7 +201,7 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
     {shaped && !coldText && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={!sharedBlur && (batched || !spicy) ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group color="white" opacity={inactiveOpacity}>{coldRuns.map((run, index) => <Glyphs key={index} font={run.font} glyphs={run.glyphs} />)}</Group> : <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{!exactGlyphs ? <Group color="white" opacity={inactiveOpacity}>{coldRuns.map((run, index) => <Glyphs key={index} font={run.font} glyphs={run.glyphs} />)}</Group> : <GlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
         }</Group>
         {translationLayout && <Paragraph paragraph={translationLayout.paragraph} x={spicy ? 2 : 0}

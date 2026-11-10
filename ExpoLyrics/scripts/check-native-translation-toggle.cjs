@@ -72,6 +72,8 @@ function createVoiceHarness(code, spicy, layouts = {}) {
   const actualArrivalContext = layouts.arrivalContextFactory?.(react);
   const modules = {
     react,
+    '@/lib/retained-active-line': { useRetainedActiveLine: () => !!layouts.retained },
+    './retained-glyph-graph': { RetainedGlyphPicture: 'RetainedGlyphPicture' },
     'expo-font': { isLoaded: () => true },
     './native-shared-blur': { NativeSharedBlurContext: { value: !!layouts.sharedBlur } },
     "@/lib/lyrics-arrival-context": actualArrivalContext ?? layouts.arrivalContextModule ?? { useArrivalVoice: () => ({ handle: layouts.arrivalHandle, generation: 1, voiceInstance: 1 }), useArrivalShapeAttribution() {} },
