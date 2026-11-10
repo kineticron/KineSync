@@ -1,4 +1,3 @@
-import { SimpleAmllScrollSwitch } from './simple-amll-scroll-switch';
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
@@ -606,10 +605,6 @@ export const SettingsMenu = memo(function SettingsMenu({
                 {playbackMode === "mobile" && <MenuAction icon="desktop-outline" label="Switch to Desktop Bridge" onPress={() => { onClose(); router.push({ pathname: "/explore", params: { action: "desktop" } }); }} showChevron />}
                 <MenuAction icon="settings-outline" label="Settings" onPress={onOpenBridgeSettings} showChevron />
               </MenuSection>
-
-              {__DEV__ && <MenuSection title="Developer Settings">
-                <SimpleAmllScrollSwitch />
-              </MenuSection>}
 
 
               <MenuSection title="Help">
