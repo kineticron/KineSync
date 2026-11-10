@@ -39,6 +39,7 @@ function harness(style,list,options={}){
   'expo-blur': { BlurTargetView: 'BlurTargetView' },
   './native-shared-blur': { NativeSharedBlur: 'NativeSharedBlur', NativeSharedBlurContext: { Provider: 'SharedBlurProvider' }, NativeBlurGeometryContext: { Provider: 'BlurGeometryProvider' }, SHARED_BLUR_PROFILES: {}, hasBlurGeometry: () => false },
   './batched-amll-motion': { composeBatchedRegistry: () => ({}) },
+  './simple-amll-motion': { createSimpleScrollState: () => ({ rows: {}, cells: {}, segments: [], awake: false, dirty: false, command: null }), composeSimpleRegistry: () => ({}) },
   '@/lib/lyrics-arrival-trace':arrivalContextModule??{},
   '@/lib/native-clock-diagnostics':{emitNativeClockDiagnostic(){}},
   'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},FlatList:'FlatList',Linking:{openURL(){}},Pressable:'Pressable',StyleSheet:{create:x=>x},Text:'Text',View:'View'},
@@ -97,10 +98,10 @@ for(const style of ['amll','spicy'])for(const list of ['flash','flat']){
 }
 {
  const h=harness('amll','flash');
- const motionKey=node=>{if(!node||typeof node!=='object')return undefined;if(typeof node.key==='string'&&node.key.includes('motion'))return node.key;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const key=motionKey(child);if(key)return key;}};
- const initial=motionKey(h.treeSnapshot());assert(initial?.endsWith(':batched-motion'));
+ const motionKey=node=>{if(!node||typeof node!=='object')return undefined;if(typeof node.key==='string'&&(node.key.includes('motion')||node.key.includes('scroll')))return node.key;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const key=motionKey(child);if(key)return key;}};
+ const initial=motionKey(h.treeSnapshot());assert(initial?.endsWith(':simple-scroll'));
  h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='late translation';h.render();
- assert.equal(motionKey(h.treeSnapshot()),initial,'translation preserves batched spring ownership');
+ assert.equal(motionKey(h.treeSnapshot()),initial,'translation preserves simple scroll ownership');
  h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].syllables[0].endTime-=27;h.render();
  assert.notEqual(motionKey(h.treeSnapshot()),initial,'real source change retires old spring ownership');
  const spicy=harness('spicy','flash');

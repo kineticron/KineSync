@@ -335,67 +335,12 @@ function testIntegrationAndBlurProtection() {
   console.log('Simple AMLL scroll integration PASS: all cues, seeks, geometry, instant, manual drag, and same-frame blur mask protection.');
 }
 
-// 3. Settings Toggle and Store Convention Test
-async function testSettingsToggle() {
-  const code = buildSync({
-    entryPoints: [path.join(root, 'lib/simple-amll-scroll.ts')],
-    bundle: true,
-    external: ['*'],
-    platform: 'node',
-    format: 'cjs',
-    write: false,
-  }).outputFiles[0].text;
-
-  async function checkStore(dev, os) {
-    let resolveLoad; const changes = [], effects = [], listeners = new Set();
-    const mod = { exports: {} };
-    vm.runInNewContext(code, {
-      __DEV__: dev, module: mod, exports: mod.exports,
-      require(name) {
-        if (name === 'react-native') return { Platform: { OS: os } };
-        if (name === '@react-native-async-storage/async-storage') {
-          return {
-            getItem: () => new Promise(r => { resolveLoad = r; }),
-            setItem: async (_key, value) => changes.push(value),
-          };
-        }
-        return {
-          useSyncExternalStore(subscribe, snapshot) { listeners.add(subscribe(() => {})); return snapshot(); },
-          useEffect(fn) { effects.push(fn); }
-        };
-      }
-    });
-    const api = mod.exports;
-    assert.equal(api.getSimpleAmllScroll(), false, 'default OFF');
-    api.useSimpleAmllScroll();
-    effects.forEach(fn => fn());
-    await api.setSimpleAmllScroll(true);
-    resolveLoad?.('false');
-    await api.loadSimpleAmllScroll();
-    assert.equal(api.getSimpleAmllScroll(), dev && os !== 'web', 'late load cannot revert user toggle');
-    await api.setSimpleAmllScroll(false);
-    assert.equal(api.getSimpleAmllScroll(), false);
-    for (const unsub of listeners) unsub();
-    if (dev && os !== 'web') assert.deepEqual(changes, ['true', 'false']);
-    else assert.deepEqual(changes, []);
-  }
-
-  await checkStore(true, 'ios');
-  await checkStore(false, 'ios');
-  await checkStore(true, 'web');
-  console.log('Settings toggle PASS: default OFF, persistence, load race, web/release gate, and listener cleanup.');
-}
-
 if (require.main === module) {
-  (async () => {
+  (() => {
     testAnalyticCurveMath();
     testIntegrationAndBlurProtection();
-    await testSettingsToggle();
     console.log('ALL SIMPLE AMLL SCROLL TESTS PASSED!');
-  })().catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
+  })();
 }
 
 module.exports = { mountSimple, scenarioSimple };

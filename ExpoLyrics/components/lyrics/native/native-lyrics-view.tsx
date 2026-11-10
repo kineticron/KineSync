@@ -1,5 +1,4 @@
-import { composeBatchedRegistry, type BatchedMotion } from './batched-amll-motion';
-import { useSimpleAmllScroll } from '@/lib/simple-amll-scroll';
+import type { BatchedMotion } from './batched-amll-motion';
 import { composeSimpleRegistry, createSimpleScrollState, type SimpleScrollState } from './simple-amll-motion';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 import { BlurTargetView } from 'expo-blur';
@@ -53,9 +52,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
   const fastLoading = useFastLyricLoading();
-  const simpleScrollSetting = useSimpleAmllScroll();
-  const simpleScroll = simpleScrollSetting && style === 'amll';
-  const batchedMotion = style === 'amll' && !simpleScroll;
+  const simpleScroll = style === 'amll';
   const motionBatch = useSharedValue<BatchedMotion>({ rows: {}, cells: {}, dirty: false });
   const simpleState = useSharedValue<SimpleScrollState>(createSimpleScrollState());
   // iOS tint and masked backdrop sampling require phone acceptance.
@@ -67,10 +64,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const batchRows = useSharedValue<Record<number, RowMotionEntry>>({});
   const composedMotionRegistry = useDerivedValue(() => {
     if (simpleScroll) return composeSimpleRegistry(batchRows.value, simpleState.value, motionBatch.value);
-    if (batchedMotion) return composeBatchedRegistry(batchRows.value, motionBatch.value);
     return {};
   });
-  const motionRegistry = (batchedMotion || simpleScroll) && style === 'amll' ? composedMotionRegistry : baselineMotionRegistry;
+  const motionRegistry = simpleScroll ? composedMotionRegistry : baselineMotionRegistry;
   const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
@@ -127,8 +123,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
     baselineMotionRegistry.value = {};
-    if (batchedMotion) motionBatch.value = { rows: {}, cells: {}, dirty: true };
-    if (typeof simpleScroll !== 'undefined' && simpleScroll && typeof simpleState !== 'undefined') simpleState.value = createSimpleScrollState();
+    if (typeof simpleScroll !== 'undefined' && simpleScroll && typeof simpleState !== 'undefined') { if (typeof motionBatch !== 'undefined') motionBatch.value = { rows: {}, cells: {}, dirty: true }; simpleState.value = createSimpleScrollState(); }
     batchRows.value = {};
     if (typeof footerLayoutRef !== 'undefined' && footerLayoutRef) footerLayoutRef.current = null;
     if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
@@ -193,10 +188,10 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const scrollResidual = useSharedValue(0);
   const renderedScrollResidual = useSharedValue(0);
   const actualScrollOffset = useSharedValue(0);
-  const previousMotionMode = useRef({ batchedMotion, simpleScroll });
-  if (previousMotionMode.current.batchedMotion !== batchedMotion || previousMotionMode.current.simpleScroll !== simpleScroll) {
-    previousMotionMode.current = { batchedMotion, simpleScroll };
-    // A developer mode change remounts the list at the current command's exact
+  const previousMotionMode = useRef(simpleScroll);
+  if (previousMotionMode.current !== simpleScroll) {
+    previousMotionMode.current = simpleScroll;
+    // A style mode change remounts the list at the current command's exact
     // endpoint. Never carry an old viewport residual into a new spring owner.
     scrollResidual.value = 0;
     renderedScrollResidual.value = 0;
@@ -207,8 +202,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   }
   const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
     actualOffset: actualScrollOffset, spicy: style === 'spicy', motions: motionRegistry,
-    batch: (batchedMotion || simpleScroll) && style === 'amll' ? motionBatch : undefined, batchRows,
-    simple: simpleScroll ? simpleState : undefined }), [actualScrollOffset, batchedMotion, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, simpleScroll, simpleState, style]);
+    batch: simpleScroll ? motionBatch : undefined, batchRows,
+    simple: simpleScroll ? simpleState : undefined }), [actualScrollOffset, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, simpleScroll, simpleState, style]);
   const following = useRef(autoFollowEnabled);
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
@@ -465,7 +460,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
   }, [refreshBlurGeometry, markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  const content = <NativeLyricsFontContext.Provider key={simpleScroll ? `${scrollSourceKey}:simple-scroll` : batchedMotion ? `${scrollSourceKey}:batched-motion` : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
+  const content = <NativeLyricsFontContext.Provider key={simpleScroll ? `${scrollSourceKey}:simple-scroll` : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
           extraData={renderItem}

@@ -118,6 +118,7 @@ const modules = {
     hasBlurGeometry: (rows, window, time) => Array.isArray(rows) && rows.length > 0 && rows.every(r => r && r.height > 0),
     SHARED_BLUR_PROFILES: { amll: true, spicy: true },
   },
+  './simple-amll-motion': { composeSimpleRegistry: () => ({}), createSimpleScrollState: () => ({}) },
   './batched-amll-motion': { composeBatchedRegistry: () => ({}) },
   '@/lib/lyrics-arrival-context': { LyricsArrivalContext: { Provider: 'TraceProvider' }, LyricsArrivalCommit: 'TraceCommit', useArrivalGeometry: () => ({}), useArrivalIdentity: () => ({ handle: undefined, identity: { id: 0 }, context: {}, producers: {} }) },
   '@/lib/lyrics-arrival-trace': { arrivalSpan: (_t, _id, _n, fn) => fn(), arrivalEvent: () => {} },
