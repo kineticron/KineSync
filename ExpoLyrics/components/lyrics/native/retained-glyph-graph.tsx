@@ -29,8 +29,10 @@ function setMatrix(cell: SharedValue<number[]>, rect: SkRect, scale: number, x: 
   'worklet';
   const ox = rect.x + rect.width * origin, oy = rect.y + rect.height / 2;
   const matrix = cell.value;
+  const tx = x + ox - scale * ox, ty = y + oy - scale * oy;
+  if (matrix[0] === scale && matrix[4] === scale && matrix[2] === tx && matrix[5] === ty) return;
   matrix[0] = scale; matrix[4] = scale;
-  matrix[2] = x + ox - scale * ox; matrix[5] = y + oy - scale * oy;
+  matrix[2] = tx; matrix[5] = ty;
   cell.modify(notify);
 }
 /** UI-runtime property updates only. The native recorder owns the draw traversal. */
@@ -87,14 +89,20 @@ export function updateRetainedGlyphState(state: RetainedGlyphState, words: Shape
       const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
       const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
       const start = slice.start.value, end = slice.end.value;
-      start.x = x; start.y = rect.y; end.x = x + length; end.y = rect.y;
-      slice.start.modify(notify); slice.end.modify(notify);
+      if (start.x !== x || start.y !== rect.y) {
+        start.x = x; start.y = rect.y; slice.start.modify(notify);
+      }
+      if (end.x !== x + length || end.y !== rect.y) {
+        end.x = x + length; end.y = rect.y; slice.end.modify(notify);
+      }
       const uniform = spicy && !active;
       const bright = spicy ? background ? 0.6 : 0.85 : line.bright;
       const dark = spicy ? background ? 0.3 : 0.5 : line.dark;
       const colors = slice.colors.value;
-      colors[0][3] = uniform ? 1 : bright; colors[1][3] = uniform ? 1 : dark;
-      slice.colors.modify(notify);
+      const firstAlpha = uniform ? 1 : bright, lastAlpha = uniform ? 1 : dark;
+      if (colors[0][3] !== firstAlpha || colors[1][3] !== lastAlpha) {
+        colors[0][3] = firstAlpha; colors[1][3] = lastAlpha; slice.colors.modify(notify);
+      }
       slice.inkOpacity.value = uniform ? time > lineEnd ? bright : dark : 1;
       slice.glow.value = active && glow > 0.001 ? glow : 0; slice.radius.value = Math.max(0.01, radius);
     }
