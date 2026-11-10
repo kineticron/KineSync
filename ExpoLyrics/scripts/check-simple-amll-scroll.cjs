@@ -184,19 +184,16 @@ function testAnalyticCurveMath() {
   console.log('Analytic critically damped curve math PASS: velocity-preserving retarget, stagger continuity, rest acceleration bound, finite difference coverage, backward seek, and settling.');
 }
 
-// 2. Integration & Blur Protection Test
-function testIntegrationAndBlurProtection() {
-  const blurSource = fs.readFileSync(path.join(dir, 'native-shared-blur.tsx'), 'utf8');
-  const blurSnippet = blurSource.slice(blurSource.indexOf('export function amllAnimatedProtection'), blurSource.indexOf('export function NativeSharedBlur'));
-  const blurModule = { exports: {} };
-  vm.runInNewContext(buildSync({ stdin: { contents: blurSnippet, loader: 'ts' }, format: 'cjs', write: false }).outputFiles[0].text,
-    { module: blurModule, exports: blurModule.exports });
+const blurSource = fs.readFileSync(path.join(dir, 'native-shared-blur.tsx'), 'utf8');
+const blurSnippet = blurSource.slice(blurSource.indexOf('export function amllAnimatedProtection'), blurSource.indexOf('export function NativeSharedBlur'));
+const blurModule = { exports: {} };
+vm.runInNewContext(buildSync({ stdin: { contents: blurSnippet, loader: 'ts' }, format: 'cjs', write: false }).outputFiles[0].text,
+  { module: blurModule, exports: blurModule.exports });
 
-  // Custom mount with simpleScroll = true
-  const simpleModuleSource = bundle('simple-amll-motion.ts');
-  const refScrollSource = bundle('reference-scroll.tsx');
+const simpleModuleSource = bundle('simple-amll-motion.ts');
+const refScrollSource = bundle('reference-scroll.tsx');
 
-  function mountSimple({ N = 16, fps = 60 } = {}) {
+function mountSimple({ N = 16, fps = 60 } = {}) {
     const frames = [], reactions = [], styles = [], cleanups = [], values = [], styleDeps = [], dirty = new Set();
     const counts = { callbacks: 0, registryPublications: 0, rowSnapshots: 0, styleCalls: 0, styleEmissions: 0 };
     let lastElement;
@@ -286,21 +283,27 @@ function testIntegrationAndBlurProtection() {
     return { host, counts, trace, times, issue, tick };
   }
 
-  // Run full scenario with forward, backward, geometry, instant, and manual drag
+function scenarioSimple({ N = 16, fps = 60 } = {}) {
+  const h = mountSimple({ N, fps });
+  for (let f = 0; f < 12 * fps; f++) {
+    if (f === fps) h.issue({ offset: 100, delta: 100, index: 2, firstVisible: 0, interval: 800, instant: false, snap: true });
+    if (f === 2 * fps) h.issue({ offset: 220, delta: 120, index: 4, firstVisible: 0, interval: 240, instant: false, snap: true, interlude: true });
+    // Fast retarget with BOTH firstVisible and index changing within 33ms
+    if (f === 2 * fps + Math.max(1, Math.floor(fps / 30))) h.issue({ offset: 310, delta: 90, index: 6, firstVisible: 3, interval: 200, instant: false, snap: true, interlude: true });
+    if (f === 2 * fps + Math.floor(fps / 5)) h.issue({ offset: 40, delta: -270, index: 1, firstVisible: 0, interval: 100, instant: false, snap: true, interlude: false });
+    if (f === 4 * fps) h.issue({ offset: 120, delta: 80, index: 3, interval: 800, instant: false, snap: true, geometry: true });
+    if (f === 5 * fps) h.issue({ offset: 400, delta: 280, index: 5, instant: true, snap: true, geometry: false });
+    if (f === 6 * fps) { h.issue({ instant: true, snap: false }); h.host.actualOffset.value = 650; }
+    if (f === 7 * fps) h.issue({ offset: 200, delta: 0, index: 3, instant: false, snap: true });
+    h.tick();
+  }
+  return h;
+}
+
+// 2. Integration & Blur Protection Test
+function testIntegrationAndBlurProtection() {
   for (const N of [8, 16]) for (const fps of [60, 120]) {
-    const h = mountSimple({ N, fps });
-    for (let f = 0; f < 12 * fps; f++) {
-      if (f === fps) h.issue({ offset: 100, delta: 100, index: 2, firstVisible: 0, interval: 800, instant: false, snap: true });
-      if (f === 2 * fps) h.issue({ offset: 220, delta: 120, index: 4, firstVisible: 0, interval: 240, instant: false, snap: true, interlude: true });
-      // Fast retarget with BOTH firstVisible and index changing within 33ms
-      if (f === 2 * fps + Math.max(1, Math.floor(fps / 30))) h.issue({ offset: 310, delta: 90, index: 6, firstVisible: 3, interval: 200, instant: false, snap: true, interlude: true });
-      if (f === 2 * fps + Math.floor(fps / 5)) h.issue({ offset: 40, delta: -270, index: 1, firstVisible: 0, interval: 100, instant: false, snap: true, interlude: false });
-      if (f === 4 * fps) h.issue({ offset: 120, delta: 80, index: 3, interval: 800, instant: false, snap: true, geometry: true });
-      if (f === 5 * fps) h.issue({ offset: 400, delta: 280, index: 5, instant: true, snap: true, geometry: false });
-      if (f === 6 * fps) { h.issue({ instant: true, snap: false }); h.host.actualOffset.value = 650; }
-      if (f === 7 * fps) h.issue({ offset: 200, delta: 0, index: 3, instant: false, snap: true });
-      h.tick();
-    }
+    const h = scenarioSimple({ N, fps });
 
     // Verify blur mask protection on every frame
     const tolerance = 1e-4;
@@ -383,9 +386,16 @@ async function testSettingsToggle() {
   console.log('Settings toggle PASS: default OFF, persistence, load race, web/release gate, and listener cleanup.');
 }
 
-(async () => {
-  testAnalyticCurveMath();
-  testIntegrationAndBlurProtection();
-  await testSettingsToggle();
-  console.log('ALL SIMPLE AMLL SCROLL TESTS PASSED!');
-})();
+if (require.main === module) {
+  (async () => {
+    testAnalyticCurveMath();
+    testIntegrationAndBlurProtection();
+    await testSettingsToggle();
+    console.log('ALL SIMPLE AMLL SCROLL TESTS PASSED!');
+  })().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { mountSimple, scenarioSimple };
