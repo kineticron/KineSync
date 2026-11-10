@@ -120,6 +120,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
     baselineMotionRegistry.value = {};
+    if (batchedMotion) motionBatch.value = { rows: {}, cells: {}, dirty: true };
     batchRows.value = {};
     if (typeof footerLayoutRef !== 'undefined' && footerLayoutRef) footerLayoutRef.current = null;
     if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
@@ -454,7 +455,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
   }, [refreshBlurGeometry, markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  const content = <NativeLyricsFontContext.Provider key={batchedMotion ? 'batched-motion' : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
+  const content = <NativeLyricsFontContext.Provider key={batchedMotion ? `${scrollSourceKey}:batched-motion` : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
           extraData={renderItem}
