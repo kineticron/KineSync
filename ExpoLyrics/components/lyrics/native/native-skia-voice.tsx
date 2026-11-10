@@ -1,3 +1,4 @@
+import { RelaxedGlyphSwitch } from './relaxed-glyph-switch';
 import { NativeSharedBlurContext } from './native-shared-blur';
 import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
@@ -11,7 +12,7 @@ import { type NativePaintWord, type NativeVoice } from './native-lyrics-model';
 import { amllEmphasis, amllFloat, clamp01 } from './reference-motion';
 import { useReferenceWordMotion, type WordMotion } from './use-reference-word-motion';
 import { type ReferenceLineMotion } from './use-reference-line-motion';
-import { NativeGlyphPicture, shapeGlyphWords } from './native-glyph-picture';
+import { shapeGlyphWords } from './native-glyph-picture';
 import { wrapSpicyText } from './spicy-native-layout';
 import { spicyIsRtl } from './spicy-text-policy';
 import { amllRevealStart } from './native-glyph-layout';
@@ -238,7 +239,7 @@ export const NativeSkiaVoice = memo(function NativeSkiaVoice({ voice, position, 
     {shaped && <Canvas pointerEvents="none" style={[styles.canvas, { height: height + 128 }]}>
       <Group transform={[{ translateY: staticLyrics ? 64 : spicy ? 63 : 62 }, { translateX: 64 + (right && !spicy && !staticLyrics ? width - textWidth : 0) }]}><Group>
         <Group layer={!sharedBlur && (batched || !spicy) ? <Paint><Blur blur={paintBlur} /></Paint> : undefined}>
-        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <NativeGlyphPicture {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
+        <Group transform={[{ translateY: shaped.mainPadding }]}>{batched && !staticLyrics ? <RelaxedGlyphSwitch {...(__DEV__ ? { arrivalOwner: trace.handle, arrivalGeneration: trace.generation } : undefined)} key={`${voiceStart}:${voiceEnd}:${shapeRevision.current}`} words={shaped.glyphWords} width={textWidth} height={shaped.height}
           position={position} active={lineActive} spicy={spicy} background={background} fontSize={fontSize} lineEnd={voiceEnd} lineMotion={lineMotion} />
           : !staticLyrics ? shaped.words.map((word, index) => <AnimatedWord key={index} shaped={word}
           paragraph={shaped.paragraph} width={textWidth} position={position} fontSize={fontSize} spicy={spicy} background={background}

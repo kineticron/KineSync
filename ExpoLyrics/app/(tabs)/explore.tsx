@@ -1,3 +1,4 @@
+import { useRelaxedRendering, setRelaxedRendering } from '@/lib/relaxed-rendering';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
@@ -156,6 +157,7 @@ async function resetOnboardingCompleted(): Promise<void> {
 }
 
 export default function BridgeSettingsScreen() {
+  const relaxed = useRelaxedRendering();
   const router = useRouter();
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
@@ -615,6 +617,18 @@ export default function BridgeSettingsScreen() {
               </SettingSection> : null}
 
               {playbackMode === 'mobile' ? <View style={styles.divider} /> : null}
+
+              {__DEV__ && <SettingSection title="Developer Settings" collapsible>
+                {([
+                  ['glyphPicture', 'Active-line glyph picture'],
+                  ['blurEnvelope', 'Shared blur envelope'],
+                  ['epsilon', 'Subpixel animation gating'],
+                ] as const).map(([flag, label]) => <View key={flag} style={styles.sectionToggle}>
+                  <Text style={styles.fieldLabel}>{label}</Text>
+                  <Switch accessibilityLabel={label} value={relaxed[flag]} onValueChange={value => setRelaxedRendering(flag, value)} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
+                </View>)}
+                <Text style={styles.fieldLabel}>Native Spicy and AMLL performance experiments. Each starts off and may slightly change animation or blur.</Text>
+              </SettingSection>}
 
               <SettingSection title="Translations">
                 <View style={styles.sectionToggle}>

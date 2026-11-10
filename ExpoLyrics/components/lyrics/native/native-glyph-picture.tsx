@@ -17,7 +17,7 @@ import { advanceAmllFloatClock, amllWordFloatPosition, type AmllFloatClock } fro
 
 type GlyphRun = { glyphs: number[]; positions: SkPoint[]; font: SkFont };
 export type PictureWord = { word: NativePaintWord; rects: SkRect[]; letters: SkRect[][]; width: number; before: number };
-type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[]; unionGroup?: number; unionInk?: SkRect };
+export type ShapedGlyphWord = PictureWord & { runs: GlyphRun[][]; clips: SkPath[]; pictures: SkPicture[]; emojiMask: boolean[]; overlapMask: boolean[]; revealRects: SkRect[]; unionGroup?: number; unionInk?: SkRect };
 type RevealShader = { x: number; y: number; endX: number; bright: number; dark: number; shader: SkShader };
 type ReusableGlyphPaints = { unionPaints?: { encode: SkPaint; decode: SkPaint }; arrivalCounts?: ArrivalUiTotals; revealShaders: RevealShader[]; paint: SkPaint; glowPaint: SkPaint; blurRadii: number[]; blurFilters: SkImageFilter[] };
 
