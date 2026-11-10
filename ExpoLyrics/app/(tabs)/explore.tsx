@@ -157,6 +157,8 @@ async function resetOnboardingCompleted(): Promise<void> {
 
 export default function BridgeSettingsScreen() {
   const router = useRouter();
+  const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
+  const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
   const translationLanguage = usePlaybackStore(s => s.translationLanguage);
@@ -599,6 +601,16 @@ export default function BridgeSettingsScreen() {
                     {spotifySignedIn ? 'Log out' : 'Sign in with Spotify'}
                   </Text>
                 </Pressable>
+                </View>
+                <View style={styles.sectionToggle}>
+                  <Text style={styles.fieldLabel}>Spotify connection status bar</Text>
+                  <Switch
+                    accessibilityLabel="Spotify connection status bar"
+                    value={showSpotifyStatusBar}
+                    onValueChange={setShowSpotifyStatusBar}
+                    trackColor={_stableTrackColor1}
+                    thumbColor="#FFFFFF"
+                  />
                 </View>
               </SettingSection> : null}
 

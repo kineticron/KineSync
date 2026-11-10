@@ -149,6 +149,8 @@ type PlaybackState = {
   simulatedLatencyMs: number;
   packetDropRate: number;
   playbackCompensationMs: number;
+  showSpotifyStatusBar: boolean;
+  setShowSpotifyStatusBar: (value: boolean) => void;
   showTranslatedText: boolean;
   translationLanguage: TranslationLanguage;
   setShowTranslatedText: (value: boolean) => void;
@@ -185,6 +187,7 @@ type PlaybackState = {
 
 let rendererChanged = false;
 let translationSettingsChanged = false;
+let spotifyStatusBarSettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
   void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
@@ -269,6 +272,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   simulatedLatencyMs: 0,
   packetDropRate: 0,
   playbackCompensationMs: 0,
+  showSpotifyStatusBar: false,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -462,6 +466,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ playbackCompensationMs: Math.max(-2000, Math.min(4000, Math.floor(safe))) });
   },
+  setShowSpotifyStatusBar: (value) => {
+    spotifyStatusBarSettingChanged = true;
+    const showSpotifyStatusBar = Boolean(value);
+    set({ showSpotifyStatusBar });
+    void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
+  },
   setShowTranslatedText: (value) => {
     const showTranslatedText = Boolean(value);
     set({ showTranslatedText });
@@ -508,6 +518,11 @@ export function stopPlaybackClock() {
 
 void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
   if (!rendererChanged && (style === 'amll' || style === 'spicy')) usePlaybackStore.setState({ lyricsStyle: style });
+}).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
+  if (value === null || spotifyStatusBarSettingChanged) return;
+  usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {

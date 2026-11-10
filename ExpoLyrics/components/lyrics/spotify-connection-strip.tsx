@@ -10,10 +10,13 @@ import { requestOpenSpotifyBrowser, requestReloadSpotifyBrowser } from '@/lib/sp
 /** Independent of lyrics, artwork, renderer readiness and the bootstrap browser. */
 export const SpotifyConnectionStrip = memo(function SpotifyConnectionStrip() {
   const selected = usePlaybackStore(s => s.playbackMode === 'mobile' && s.connectionStatus !== 'connected');
+  const showStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
   const tour = usePlayerTourStore(s => s.active || s.pending);
   const h = useSpotifyConnectionStore(s => s.health);
   const insets = useSafeAreaInsets();
-  if (!selected || tour) return null;
+  if (!showStatusBar || !selected || tour) return null;
+  const healthy = h.phase === 'ready' && h.target === 'available' && h.command !== 'outcomeUnknown';
+  if (healthy) return null;
   const signIn = h.phase === 'signInRequired' || h.phase === 'denied' || h.phase === 'idle';
   const openDevice = h.phase === 'ready' && h.target === 'absent';
   const retry = h.phase === 'retryWait';
