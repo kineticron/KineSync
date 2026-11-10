@@ -372,7 +372,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         // Unemphasized Spicy glows keep the original surface: changing its
         // bounds can change sub-byte blur tails exposed as zero-alpha PNG RGB.
         if (!spicy || word.word.emphasized) {
-          const layer = blurLayerBounds(word.clips[letter].getBounds(), sigma);
+          const clip = word.clips[letter];
+          const clipBounds = typeof clip?.getBounds === 'function' ? clip.getBounds() : rect;
+          const layer = blurLayerBounds(clipBounds, sigma);
           canvas.saveLayer(glowPaint, Skia.XYWHRect(layer.x, layer.y, layer.width, layer.height));
         } else canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);

@@ -1,3 +1,4 @@
+import { composeBatchedRegistry, type BatchedMotion } from './batched-amll-motion';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 import { BlurTargetView } from 'expo-blur';
 import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, hasBlurGeometry, SHARED_BLUR_PROFILES, type BlurGeometry, type AttributionGeometry } from './native-shared-blur';
@@ -50,12 +51,18 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
   const fastLoading = useFastLyricLoading();
+  const batchedMotion = style === 'amll';
+  const motionBatch = useSharedValue<BatchedMotion>({ rows: {}, cells: {}, dirty: false });
   // iOS tint and masked backdrop sampling require phone acceptance.
   const sharedBlurEnabled = __DEV__ && fastLoading && (Platform.OS === 'ios' || Platform.OS === 'android' && Number(Platform.Version) >= 31) && Boolean(SHARED_BLUR_PROFILES[style]) && list === 'flash' && reveal === 'canvas';
   const blurTarget = useRef<View>(null);
   const blurRows = useSharedValue<BlurGeometry>([]);
   const attributionGeometry = useSharedValue<AttributionGeometry | null>(null);
-  const motionRegistry = useSharedValue<Record<number, RowMotionEntry>>({});
+  const baselineMotionRegistry = useSharedValue<Record<number, RowMotionEntry>>({});
+  const batchRows = useSharedValue<Record<number, RowMotionEntry>>({});
+  const composedMotionRegistry = useDerivedValue(() => batchedMotion && style === 'amll'
+    ? composeBatchedRegistry(batchRows.value, motionBatch.value) : {});
+  const motionRegistry = batchedMotion && style === 'amll' ? composedMotionRegistry : baselineMotionRegistry;
   const [blurReadyKey, setBlurReadyKey] = useState('');
   const transition = useLyricsPacketTransition();
   const liveTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
@@ -111,7 +118,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     translationOnlyLayout.current = false;
     currentPosition.current = 0;
     latestWindow.current = getPlaybackWindowState(0, lyrics, backgrounds, timing);
-    motionRegistry.value = {};
+    baselineMotionRegistry.value = {};
+    if (batchedMotion) motionBatch.value = { rows: {}, cells: {}, dirty: true };
+    batchRows.value = {};
     if (typeof footerLayoutRef !== 'undefined' && footerLayoutRef) footerLayoutRef.current = null;
     if (typeof attributionGeometry !== 'undefined' && attributionGeometry) attributionGeometry.value = null;
   } else if (previousRows.current && previousRows.current !== rows) translationOnlyLayout.current = true;
@@ -175,8 +184,20 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const scrollResidual = useSharedValue(0);
   const renderedScrollResidual = useSharedValue(0);
   const actualScrollOffset = useSharedValue(0);
+  const previousMotionMode = useRef(batchedMotion);
+  if (previousMotionMode.current !== batchedMotion) {
+    previousMotionMode.current = batchedMotion;
+    // A developer mode change remounts the list at the current command's exact
+    // endpoint. Never carry an old viewport residual into a new spring owner.
+    scrollResidual.value = 0;
+    renderedScrollResidual.value = 0;
+    scrollCommand.value = { ...scrollCommand.value, serial: scrollCommand.value.serial + 1, instant: true, delta: 0 };
+    motionBatch.value = { rows: {}, cells: {}, dirty: true };
+    batchRows.value = {};
+  }
   const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
-    actualOffset: actualScrollOffset, spicy: style === 'spicy', motions: motionRegistry }), [actualScrollOffset, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, style]);
+    actualOffset: actualScrollOffset, spicy: style === 'spicy', motions: motionRegistry,
+    batch: batchedMotion && style === 'amll' ? motionBatch : undefined, batchRows }), [actualScrollOffset, batchedMotion, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, style]);
   const following = useRef(autoFollowEnabled);
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
@@ -433,7 +454,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
   }, [refreshBlurGeometry, markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  const content = <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
+  const content = <NativeLyricsFontContext.Provider key={batchedMotion ? `${scrollSourceKey}:batched-motion` : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
           extraData={renderItem}
