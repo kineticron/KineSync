@@ -39,7 +39,7 @@ async function main() {
   const source = fs.readFileSync(filename, 'utf8');
   function load(contents) {
     const code = buildSync({ stdin: { contents: contents + '\nexport { drawVoice, advanceReferenceWordMotion, initialWordSpringState };', resolveDir: directory, loader: 'tsx' }, bundle: true,
-      platform: 'node', format: 'cjs', write: false, external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'] }).outputFiles[0].text;
+      platform: 'node', format: 'cjs', write: false, external: ['react-native', 'react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'] }).outputFiles[0].text;
     const module = { exports: {} };
     vm.runInNewContext(code, { module, exports: module.exports, require: name => name === 'react' ? { memo: fn => fn } : name === '@shopify/react-native-skia' ?
       { Skia, createPicture, BlendMode, ClipOp, TileMode } : {} });

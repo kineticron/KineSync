@@ -209,6 +209,8 @@ function scenario({ initialPacket, development = false } = {}) {
       useRecyclingState: (...args) => react.useState(args[0]) },
     '@shopify/react-native-skia': skia, 'react-native-reanimated': reanimated, 'react-native-worklets': worklets,
     'react-native-gesture-handler': { Pressable: 'Pressable' }, '@react-native-masked-view/masked-view': 'MaskedView',
+    'expo-blur': { BlurView: 'BlurView', BlurTargetView: 'BlurTargetView' },
+    'expo-font': { isLoaded: () => true },
     'expo-linear-gradient': { LinearGradient: 'LinearGradient' }, 'expo-image': { Image: 'Image' },
     '@react-native-async-storage/async-storage': { getItem: async () => null, setItem: async () => {} },
   };
@@ -284,7 +286,7 @@ function scenario({ initialPacket, development = false } = {}) {
       seenPaths.add(key); instance.cursor = 0; instance.props = props;
       const previous = currentInstance; currentInstance = instance;
       const result = type(props); currentInstance = previous;
-      if (type === NativeGlyphPicture) glyphFrames.push(instance);
+      if ((type === NativeGlyphPicture || type.name.startsWith('NativeGlyphPicture')) && instance.slots.some(item => item._value?.floatClock)) glyphFrames.push(instance);
       if (type === NativeLyricRowView) instance.rowPosition = props.position;
       return walk(result, `${key}/render`);
     }

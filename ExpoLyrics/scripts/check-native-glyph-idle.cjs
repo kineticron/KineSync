@@ -11,13 +11,14 @@ const compareOnly = compareIndex >= 0;
 const baselinePath = compareOnly ? process.argv[compareIndex + 1] : baselineIndex < 0 ? null : process.argv[baselineIndex + 1];
 const bundle = filename => buildSync({ stdin: { contents: fs.readFileSync(filename, 'utf8'), resolveDir: directory, loader: 'tsx' },
   bundle: true, platform: 'node', format: 'cjs', write: false,
-  external: ['react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'],
+  external: ['react-native', 'react', 'react-native-reanimated', 'react-native-worklets', '@shopify/react-native-skia'],
 }).outputFiles[0].text;
 const source = bundle(path.join(directory, 'native-glyph-picture.tsx'));
 const baselineSource = baselinePath && bundle(baselinePath);
 
 function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords = null, inputLineEnd = start + count * 600, options = {}) {
   const frames = [], shared = [], cleanups = [];
+  let notifications = 0;
   let shaderCreates = 0, reads = 0, pictures = 0, paints = 0, blurFilters = 0, blurFilterDisposals = 0, paintSlotWrites = 0;
   const countedArrays = new WeakSet();
   const counted = values => {
@@ -44,8 +45,8 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords
     let current = initial;
     const wrap = next => next && Array.isArray(next.words) ? { ...next, words: counted(next.words) } : next;
     current = wrap(current);
-    const result = { get value() { return current; }, set value(next) { if (initial === null && next !== current) paintSlotWrites++; current = wrap(next); },
-      modify(fn) { current = fn(current); } };
+    const result = { get value() { return current; }, set value(next) { if (next !== current) notifications++; if (initial === null && next !== current) paintSlotWrites++; current = wrap(next); },
+      modify(fn, force = true) { const next = fn(current); if (force || next !== current) notifications++; current = next; } };
     shared.push(result);
     return result;
   };
@@ -92,10 +93,11 @@ function mount(code, spicy, count = 3, start = 5000, letterCount = 4, inputWords
   vm.runInContext(code, context);
   const position = { value: 0 }, active = { value: false };
   const lineMotion = { value: { scale: 0.97, velocity: 0, bright: 0.2, dark: 0.2 } };
-  moduleObject.exports.NativeGlyphPicture({ words, width: count * 22, height: 24, position, active, spicy,
+  moduleObject.exports[options.component ?? 'NativeGlyphPicture']({ words, width: count * 22, height: 24, position, active, spicy,
     background: !!options.background, fontSize: 36, lineEnd: inputLineEnd, lineMotion });
   return { position, active, lineMotion,
     tick(time, dt = 1000 / 120) { position.value = time; for (const frame of frames) if (frame.active) frame.fn({ timeSincePreviousFrame: dt }); },
+    get notifications() { return notifications; },
     get shaderCreates() { return shaderCreates; },
     get motionState() { return shared.find(item => item.value?.floatClock)?.value; },
     get picture() { return shared[0].value; }, get reads() { return reads; }, get pictures() { return pictures; }, get paints() { return paints; },
