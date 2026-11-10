@@ -1,3 +1,4 @@
+import { relaxBlurEnvelope } from './relaxed-blur-envelope';
 import React, { createContext } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -198,12 +199,12 @@ export function amllAnimatedProtection(
   };
 }
 
-export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions, attribution, hasAttribution }: {
+export function NativeSharedBlur({ target, rows, window, position, offset, height, deadlines, seekVersion, style, residual, motions, attribution, hasAttribution, relaxedEnvelope = false }: {
   target: React.RefObject<View | null>; rows: SharedValue<BlurGeometry>; window: SharedValue<PlaybackWindowState>;
   deadlines: number[]; position: SharedValue<number>; offset: SharedValue<number>; height: number; seekVersion: SharedValue<number>;
   style?: NativeLyricsStyle; residual?: SharedValue<number>; motions?: SharedValue<Record<number, RowMotionEntry>>;
   attribution?: SharedValue<AttributionGeometry | null>;
-  hasAttribution?: boolean;
+  hasAttribution?: boolean; relaxedEnvelope?: boolean;
 }) {
   const profile = getSharedBlurProfile(style);
   const protection = useSharedValue<Protection>({ first: 0, index: -1, top: -Infinity, bottom: Infinity });
@@ -229,6 +230,39 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
     }
   });
 
+  const envelope = useSharedValue({ top: -Infinity, bottom: Infinity });
+  const envelopeAttribution = useSharedValue<number | null>(null);
+  useAnimatedReaction(() => {
+    if (!relaxedEnvelope) return null;
+    const p = protection.value;
+    const animated = style === 'amll' ? amllAnimatedProtection(rows.value, p, motions?.value, residual?.value ?? 0) : {
+      top: Math.min(animatedTop.value, p.top), bottom: Math.max(animatedBottom.value, p.bottom),
+    };
+    const rowMotions = motions?.value;
+    const moving = (residual?.value ?? 0) !== 0 || !!rowMotions && Object.keys(rowMotions).some(key => !rowMotions[Number(key)].settled);
+    const attr = attribution?.value;
+    return { top: animated.top - offset.value, bottom: animated.bottom - offset.value,
+      offset: offset.value, moving, protection: p, geometry: rows.value, seek: seekVersion.value,
+      attr: attr && attr.y > 0 && attr.height > 0 ? attr.y - offset.value : null };
+  }, (next, previous) => {
+    if (!next) return;
+    const reset = !previous || next.geometry !== previous.geometry || next.seek !== previous.seek;
+    const semantic = !previous || next.protection !== previous.protection;
+    const settled = !next.moving && !!previous && !previous.moving && next.offset === previous.offset;
+    const old = envelope.value;
+    // At rest avoid repeated contraction while the semantic boundary itself animates.
+    const contract = semantic || settled && (!previous || previous.top !== next.top || previous.bottom !== next.bottom || previous.offset !== next.offset || previous.moving);
+    const candidate = relaxBlurEnvelope(old, next, reset, contract);
+    // Only expand when protected ink approaches an edge; do not chase every subpixel.
+    if (reset || contract || next.top < old.top + 32 || next.bottom > old.bottom - 32) {
+      if (old.top !== candidate.top || old.bottom !== candidate.bottom) envelope.value = candidate;
+    }
+    // Attribution is always protected, including while it enters during manual scrolling.
+    if (reset || next.attr === null || envelopeAttribution.value === null || next.attr < envelopeAttribution.value || settled) {
+      if (next.attr !== envelopeAttribution.value) envelopeAttribution.value = next.attr;
+    }
+  });
+
   // Critical Asymmetry:
   // Forward cue: animatedBottom lags behind target.bottom -> max(animatedBottom, protection.bottom) guarantees next row is NEVER blurred.
   // Reverse cue: animatedBottom smoothly moves up -> max(animatedBottom, protection.bottom) follows animatedBottom smoothly.
@@ -237,7 +271,9 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
   // Attribution text at the bottom is strictly excluded: lower blur terminates before attribution top, upper blur remains above attribution top.
   const upper = useAnimatedStyle(() => {
     let rawTop = -Infinity;
-    if (style === 'amll') {
+    if (relaxedEnvelope) {
+      rawTop = envelope.value.top;
+    } else if (style === 'amll') {
       const animated = amllAnimatedProtection(rows.value, protection.value, motions?.value, residual?.value ?? 0);
       rawTop = animated.top;
     } else {
@@ -245,11 +281,11 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
         ? (Number.isFinite(animatedTop.value) ? Math.min(animatedTop.value, protection.value.top) : protection.value.top)
         : -Infinity;
     }
-    const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, offset.value, height);
-    const attr = attribution?.value;
+    const r = sharedBlurViewport({ top: rawTop, bottom: Infinity }, relaxedEnvelope ? 0 : offset.value, height);
+    const attr = relaxedEnvelope ? envelopeAttribution.value === null ? null : { y: envelopeAttribution.value, height: 1 } : attribution?.value;
     let upperTranslateY = r.top;
     if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
-      const attrScreenTop = attr.y - offset.value;
+      const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
       if (attrScreenTop < r.top) {
         upperTranslateY = Math.min(r.top, attrScreenTop);
       }
@@ -263,7 +299,9 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
 
   const lower = useAnimatedStyle(() => {
     let rawBottom = Infinity;
-    if (style === 'amll') {
+    if (relaxedEnvelope) {
+      rawBottom = envelope.value.bottom;
+    } else if (style === 'amll') {
       const animated = amllAnimatedProtection(rows.value, protection.value, motions?.value, residual?.value ?? 0);
       rawBottom = animated.bottom;
     } else {
@@ -271,18 +309,18 @@ export function NativeSharedBlur({ target, rows, window, position, offset, heigh
         ? (Number.isFinite(animatedBottom.value) ? Math.max(animatedBottom.value, protection.value.bottom) : protection.value.bottom)
         : Infinity;
     }
-    const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, offset.value, height);
-    const attr = attribution?.value;
+    const r = sharedBlurViewport({ top: -Infinity, bottom: rawBottom }, relaxedEnvelope ? 0 : offset.value, height);
+    const attr = relaxedEnvelope ? envelopeAttribution.value === null ? null : { y: envelopeAttribution.value, height: 1 } : attribution?.value;
     let lowerHeight = spanHeight;
     if (hasAttribution) {
       if (!attr || !Number.isFinite(attr.y) || attr.y <= 0 || !Number.isFinite(attr.height) || attr.height <= 0) {
         lowerHeight = 0;
       } else {
-        const attrScreenTop = attr.y - offset.value;
+        const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
         lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
       }
     } else if (attr && Number.isFinite(attr.y) && Number.isFinite(attr.height) && attr.y > 0) {
-      const attrScreenTop = attr.y - offset.value;
+      const attrScreenTop = attr.y - (relaxedEnvelope ? 0 : offset.value);
       lowerHeight = Math.max(0, Math.min(spanHeight, attrScreenTop - r.bottom));
     }
     return {

@@ -1,3 +1,4 @@
+import { useRelaxedRendering } from '@/lib/relaxed-rendering';
 import type { BatchedMotion } from './batched-amll-motion';
 import { composeSimpleRegistry, createSimpleScrollState, type SimpleScrollState } from './simple-amll-motion';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
@@ -50,6 +51,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   resumeAutoFollowSignal = 0, selectedLineKeys, onLinePress, onLineLongPress, onActiveLineChange,
   onAutoFollowChange, onCreditsTimestampPress, onUserInteraction, fontScale = 1, landscapeMode = false, active = true,
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
+  const relaxed = useRelaxedRendering();
   const fonts = useNativeLyricsFonts();
   const fastLoading = useFastLyricLoading();
   const simpleScroll = style === 'amll';
@@ -477,7 +479,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
-    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} attribution={attributionGeometry} hasAttribution={hasFooter} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
+    {sharedBlurEnabled ? <NativeSharedBlurContext.Provider value={sharedBlurReady}><NativeBlurGeometryContext.Provider value={refreshBlurGeometry}><BlurTargetView ref={blurTarget} style={styles.root}>{renderedContent}</BlurTargetView>{sharedBlurReady && <NativeSharedBlur relaxedEnvelope={__DEV__ && relaxed.blurEnvelope} target={blurTarget} rows={blurRows} window={presentationWindow} position={position} offset={actualScrollOffset} height={viewportHeight} deadlines={blurDeadlines} seekVersion={seekVersion} style={style} residual={scrollResidual} motions={motionRegistry} attribution={attributionGeometry} hasAttribution={hasFooter} />}</NativeBlurGeometryContext.Provider></NativeSharedBlurContext.Provider> : renderedContent}
   </View>;
 }), { reuseSameSourcePackets: true });
 
