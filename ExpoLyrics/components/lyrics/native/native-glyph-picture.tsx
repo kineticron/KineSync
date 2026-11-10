@@ -1,3 +1,4 @@
+import { blurLayerBounds } from './blur-layer-bounds';
 import { useArrivalPictureMeasurement } from '@/lib/lyrics-arrival-picture';
 import { arrivalPicture, type ArrivalHandle, type ArrivalUiTotals } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
@@ -368,7 +369,12 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         // Ligatures shared by two slices must not emit their full glow twice.
         const sigma = Math.max(0.01, radius);
         glowPaint.setImageFilter(glowFilterForDraw(paints, sigma));
-        canvas.saveLayer(glowPaint);
+        // Unemphasized Spicy glows keep the original surface: changing its
+        // bounds can change sub-byte blur tails exposed as zero-alpha PNG RGB.
+        if (!spicy || word.word.emphasized) {
+          const layer = blurLayerBounds(word.clips[letter].getBounds(), sigma);
+          canvas.saveLayer(glowPaint, Skia.XYWHRect(layer.x, layer.y, layer.width, layer.height));
+        } else canvas.saveLayer(glowPaint);
         if (spicy) canvas.drawPicture(word.pictures[letter]);
         else {
           canvas.clipPath(word.clips[letter], ClipOp.Intersect, true);
