@@ -4,7 +4,6 @@ import { scheduleOnRN } from 'react-native-worklets';
 import type { PlaybackWindowState } from '@/lib/lyrics-layout';
 import { NativeSkiaVoice } from './native-skia-voice';
 import { NativeLazySkiaVoice } from './native-lazy-skia-voice';
-import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
 
 /** All visual active rows plus two subsequent rows, and early voice deadlines.
  * Backgrounds participate independently; overlaps never consume lookahead slots. */
@@ -50,9 +49,8 @@ export function NativeFastVoice(props: React.ComponentProps<typeof NativeSkiaVoi
 export function NativeDevelopmentVoice(props: React.ComponentProps<typeof NativeSkiaVoice> & {
   rowIndex?: number; presentationWindow?: SharedValue<PlaybackWindowState>;
 }) {
-  const enabled = useFastLyricLoading();
   const { rowIndex = 0, presentationWindow, ...voiceProps } = props;
-  return __DEV__ && enabled && !props.staticLyrics && props.batched !== false && presentationWindow
+  return !props.staticLyrics && props.batched !== false && presentationWindow
     ? <NativeFastVoice {...voiceProps} rowIndex={rowIndex} presentationWindow={presentationWindow} />
     : <NativeSkiaVoice {...voiceProps} />;
 }

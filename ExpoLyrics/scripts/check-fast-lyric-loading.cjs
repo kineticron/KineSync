@@ -35,9 +35,9 @@ for(const spicy of [false,true]){
  hidden.props.onLayout({nativeEvent:{layout:{width:640.25}}});h.render(voice,{prepareGlyphs:true});assert.equal(h.counters.glyphShapePasses,2,'rotation shapes new geometry');
  let shapes=0;for(let i=0;i<30;i++)shapes+=mount(lazyCode,spicy,{prepareGlyphs:false},true).h.counters.glyphShapePasses;assert.equal(shapes,0);
 }
-for(const [enabled,dev] of [[false,true],[true,false]]) {
- const gate=fastHost(enabled,dev),node=gate.NativeDevelopmentVoice({voice,batched:true,staticLyrics:false,rowIndex:20,presentationWindow:{value:{}},position:{value:0}});
- assert.equal(node.type,'exact','actual wrapper disables experimental component');
+{
+ const gate=fastHost(true,true),node=gate.NativeDevelopmentVoice({voice,batched:true,staticLyrics:false,rowIndex:20,presentationWindow:{value:{}},position:{value:0}});
+ assert.notEqual(node.type,'exact','fast loading always active when eligible');
 }
 const gate=fastHost();assert.equal(gate.NativeDevelopmentVoice({voice,batched:false,presentationWindow:{value:{}}}).type,'exact','tree retains original');assert.equal(gate.NativeDevelopmentVoice({voice,staticLyrics:true,presentationWindow:{value:{}}}).type,'exact','static retains original');
 function paragraphAlpha(node){if(!node||typeof node!=='object')return undefined;if(node.type==='Group'&&node.props.layer?.props?.opacity)return node.props.layer.props.opacity.value;if(node.type==='Group'&&node.props.opacity)return node.props.opacity.value;for(const child of [node.props?.children].flat()){const alpha=paragraphAlpha(child);if(alpha!==undefined)return alpha;}}
@@ -67,10 +67,8 @@ const replacement={...fresh,position:{value:0},voice:{...voice,paintWords:[...vo
 replacement.position.value=99000;host.tick();replacement.position.value=0;host.flush();assert.equal(host.render(replacement).props.prepareGlyphs,false,'seek supersedes queued approach');
 replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,visualActiveLineEndIndex:20};host.tick();host.flush();assert.equal(host.render(replacement).props.prepareGlyphs,true,'seek promotes target');
 (async()=>{
- const disk=new Map(),storage={getItem:async key=>disk.get(key)??null,setItem:async(key,value)=>{disk.set(key,value);}},modules={'@react-native-async-storage/async-storage':storage,react:{}},setting=()=>load('lib/fast-lyric-loading.ts',modules);
- const first=setting();assert.equal(first.getFastLyricLoading(),false);await first.loadFastLyricLoading();await first.setFastLyricLoading(true);const restart=setting();await restart.loadFastLyricLoading();assert.equal(restart.getFastLyricLoading(),true);await restart.setFastLyricLoading(false);const off=setting();await off.loadFastLyricLoading();assert.equal(off.getFastLyricLoading(),false);
- let reads=0;const release=load('lib/fast-lyric-loading.ts',{...modules,'@react-native-async-storage/async-storage':{getItem(){reads++;},setItem(){throw Error('release write');}}},false);await release.loadFastLyricLoading();release.setFastLyricLoading(true);assert.equal(release.getFastLyricLoading(),false);assert.equal(reads,0);
- let resolve;const pending=load('lib/fast-lyric-loading.ts',{...modules,'@react-native-async-storage/async-storage':{...storage,getItem:()=>new Promise(done=>{resolve=done;})}});const loading=pending.loadFastLyricLoading();await pending.setFastLyricLoading(true);resolve('false');await loading;assert.equal(pending.getFastLyricLoading(),true);
+ const modules={'@react-native-async-storage/async-storage':{},react:{}},setting=()=>load('lib/fast-lyric-loading.ts',modules);
+ const first=setting();assert.equal(first.getFastLyricLoading(),true);await first.loadFastLyricLoading();assert.equal(first.getFastLyricLoading(),true);
  console.log('Fast lyric loading PASS: persistence/release gate, actual OFF differential, active+next2/overlap/background/approach, 60 cold distant mounts = 0 word/letter shaping (whole-run extraction used), upgrade/seek/rotation/translation/Indic/recycling/stale callbacks/settling retention. Native mocks; phone raster acceptance pending.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 

@@ -86,7 +86,7 @@ no longer trigger native updates. No lyric timeline is transferred, and no
 line-boundary timers or stale lyric deadlines run in the host.
 
 An existing activity is reused across songs and recovered after reload.
-Dismissed activities stay dismissed for that song until **Restart Live Activity**.
+Dismissed activities stay dismissed for that song until the next song starts.
 Old lyric sessions are retired when syncing the `metadata-v1` presentation.
 
 The activity keeps its last supplied playback details when iOS suspends the
@@ -176,7 +176,7 @@ Before releasing, test a freshly built SideStore/Sideloadly-installed IPA:
 - Pause/resume, change source, change artwork, and advance to the next song.
   Confirm no previous-song cover flashes or duplicate activities appear.
 - Leave the app and confirm the last supplied details remain visible.
-- Disable Live Activities, dismiss the activity, and use **Restart Live Activity**.
+- Disable Live Activities, dismiss the activity, and verify recovery on the next song.
 - Export an IPA with the widget removed. The verifier must reject it.
 
 ## References

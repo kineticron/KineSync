@@ -40,7 +40,6 @@ import {
   parseBrowserEvent,
 } from '@/lib/spotify-browser';
 import { requestOpenSpotifyBrowser, requestLogoutSpotifyBrowser, requestReloadSpotifyBrowser } from '@/components/lyrics/spotify-browser-fallback';
-import { restartLiveActivity, useLiveActivityStatus } from '@/lib/live-activity';
 import { MotionPressable as Pressable } from '@/components/ui/motion-pressable';
 import { Design } from '@/constants/design';
 import { TranslationLanguagePicker } from '@/components/lyrics/translation-language-picker';
@@ -157,7 +156,6 @@ async function resetOnboardingCompleted(): Promise<void> {
 }
 
 export default function BridgeSettingsScreen() {
-  const liveActivityMessage = useLiveActivityStatus((state) => state.message);
   const router = useRouter();
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
@@ -736,13 +734,6 @@ export default function BridgeSettingsScreen() {
             </Animated.View>
 
             <View style={styles.card}>
-              {Platform.OS === 'ios' ? <SettingSection title="Live Activity">
-                <Text style={styles.onboardingHint}>{liveActivityMessage}</Text>
-                <Pressable style={styles.secondaryButton} onPress={restartLiveActivity}>
-                  <Ionicons name="mic-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.secondaryButtonText}>Restart Live Activity</Text>
-                </Pressable>
-              </SettingSection> : null}
               <SettingSection title="Onboarding">
                 <Pressable
                   style={({ pressed }) => [

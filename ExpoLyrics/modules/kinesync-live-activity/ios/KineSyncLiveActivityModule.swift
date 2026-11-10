@@ -135,7 +135,7 @@ private final class LyricsActivityController {
         if state == .dismissed || state == .ended {
           self.suppressedTrack = self.snapshot?.trackId
           self.activity = nil
-          self.setStatus("dismissed", "Live Activity ended. Tap Restart Live Activity to show it again.")
+          self.setStatus("dismissed", "Live Activity ended.")
           return
         }
       }

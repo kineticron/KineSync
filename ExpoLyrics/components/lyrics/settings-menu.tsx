@@ -1,4 +1,3 @@
-import { FastLyricLoadingSwitch } from './fast-lyric-loading-switch';
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
@@ -607,9 +606,6 @@ export const SettingsMenu = memo(function SettingsMenu({
                 <MenuAction icon="settings-outline" label="Settings" onPress={onOpenBridgeSettings} showChevron />
               </MenuSection>
 
-              {__DEV__ && <MenuSection title="Developer Settings">
-                <FastLyricLoadingSwitch />
-              </MenuSection>}
 
               <MenuSection title="Help">
                 <MenuAction
