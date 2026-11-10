@@ -21,14 +21,14 @@ export function useReferenceLineMotion(activeLine: SharedValue<boolean>, enabled
       pending.value = -1;
     });
   }, [enabled, pending, running]);
-  useAnimatedReaction(() => ({ active: activeLine.value, line: activeLine, enabled: running.value, background, playing }), (next, previous) => {
+  useAnimatedReaction(() => ({ active: activeLine.value, line: activeLine, enabled: running.value, background, playing, epsilon }), (next, previous) => {
     'worklet';
     // An in-flight loop already reads the latest active line on the UI runtime.
-    if (next.enabled && pending.value !== -1 && previous && next.line === previous.line && next.background === previous.background && next.playing === previous.playing) return;
+    if (next.enabled && pending.value !== -1 && previous && next.line === previous.line && next.background === previous.background && next.playing === previous.playing && next.epsilon === previous.epsilon) return;
     cancelAnimationFrame(pending.value);
     pending.value = -1;
     if (!next.enabled) return;
-    const reset = !previous || !previous.enabled || next.line !== previous.line || next.background !== previous.background || next.playing !== previous.playing;
+    const reset = !previous || !previous.enabled || next.line !== previous.line || next.background !== previous.background || next.playing !== previous.playing || next.epsilon !== previous.epsilon;
     // A suspended frame may settle the loop with a delta too large for the next cue.
     clock.value = { timestamp: -1, delta: reset || clock.value.delta > 0.064 ? 0 : clock.value.delta };
     function tick(timestamp: number) {

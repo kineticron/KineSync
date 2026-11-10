@@ -5,11 +5,11 @@ const vm = require('node:vm');
 const { buildSync } = require('esbuild');
 const dir = path.resolve(__dirname, '../components/lyrics/native');
 const mutable = value => ({ value, modify(fn) { this.value = fn(this.value); } });
-function load(file, mocks = {}, bundle = true) {
+function load(file, mocks = {}, bundle = true, dev = true) {
   const code = buildSync({ entryPoints: [path.resolve(dir, file)], bundle, platform: 'node', format: 'cjs', write: false,
     external: bundle ? ['react-native', 'expo-blur', '@react-native-masked-view/masked-view', 'expo-linear-gradient', 'react', 'react-native-reanimated', '@shopify/react-native-skia', 'react-native-worklets', '@react-native-async-storage/async-storage', '@/lib/relaxed-rendering'] : undefined }).outputFiles[0].text;
   const module = { exports: {} };
-  vm.runInNewContext(code, { module, exports: module.exports, __DEV__: true, require: name => {
+  vm.runInNewContext(code, { module, exports: module.exports, __DEV__: dev, require: name => {
     if (name in mocks) return mocks[name];
     if (name === 'react/jsx-runtime') return { jsx: (_type, props) => props, jsxs: (_type, props) => props };
     if (name === 'react') return { memo: fn => fn };
@@ -103,3 +103,49 @@ for (const style of ['spicy', 'amll']) for (const height of [800, 380]) for (con
   rows.value = []; tick(); assert.equal(styles[1]().height, 0, 'unknown geometry and attribution remain safe');
 }
 console.log('Actual shared-blur hooks PASS: independent ON/OFF, both styles/orientations, stable masks, manual scroll, moving rows, seeks, unknown geometry and partly visible attribution.');
+
+// Execute the recording path with epsilon alone, not only the retained graph.
+const recording = require('./check-native-glyph-idle.cjs');
+for (const spicy of [true, false]) {
+  const exact = recording.mount(recording.source, spicy, 3, 1000);
+  const gated = recording.mount(recording.source, spicy, 3, 1000, 4, null, 2800, { epsilon: true });
+  exact.active.value = gated.active.value = true;
+  exact.tick(1000); gated.tick(1000); const first = gated.picture;
+  for (let i = 1; i < 90; i++) { exact.tick(1000 + i * 16); gated.tick(1000 + i * 16); }
+  assert.notEqual(gated.picture, first, 'epsilon alone keeps reveal/glow moving');
+  exact.tick(1200); gated.tick(1200); assert.equal(gated.picture, exact.picture, 'backward seek bypasses recording gate');
+  for (let i = 0; i < 600; i++) { exact.tick(1200); gated.tick(1200); }
+  assert.equal(gated.picture, exact.picture, 'paused recording converges exactly');
+  exact.active.value = gated.active.value = false;
+  for (let i = 0; i < 600; i++) { exact.tick(9000); gated.tick(9000); }
+  assert.equal(gated.picture, exact.picture, 'released recording converges exactly');
+  exact.unmount(); gated.unmount();
+}
+console.log('Actual NativeGlyphPicture epsilon-only path PASS: continuous visuals, pause, seek, release and exact rest.');
+
+for (const dev of [true, false]) for (const glyphPicture of [false, true]) for (const epsilonFlag of [false, true]) for (const blurEnvelope of [false, true]) {
+  const flags = { glyphPicture, epsilon: epsilonFlag, blurEnvelope };
+  const api = load('relaxed-glyph-switch.tsx', {
+    '@/lib/relaxed-rendering': { useRelaxedRendering: () => flags },
+    './native-glyph-picture': { NativeGlyphPicture: 'recorded' }, './relaxed-glyph-graph': { RelaxedGlyphPicture: 'persistent' },
+    'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
+  }, false, dev);
+  const result = api.RelaxedGlyphSwitch({ lineEnd: 1234 });
+  assert.equal(result.type, dev && glyphPicture ? 'persistent' : 'recorded');
+  assert.equal(result.props.epsilon, dev && epsilonFlag);
+}
+(async () => {
+  let hydrate; const writes = [];
+  const settings = load('../../../lib/relaxed-rendering.ts', {
+    react: { useSyncExternalStore: (_subscribe, snapshot) => snapshot() },
+    '@react-native-async-storage/async-storage': { getItem: () => new Promise(resolve => { hydrate = resolve; }), setItem: async (_key, value) => { writes.push(JSON.parse(value)); } },
+  }, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(settings.useRelaxedRendering())), { glyphPicture: false, blurEnvelope: false, epsilon: false }, 'three independent default-OFF flags');
+  const pending = settings.loadRelaxedRendering(); settings.setRelaxedRendering('epsilon', true);
+  hydrate(JSON.stringify({ glyphPicture: true, blurEnvelope: true, epsilon: false })); await pending;
+  assert.equal(settings.useRelaxedRendering().glyphPicture, false, 'late hydration cannot overwrite a user change');
+  settings.setRelaxedRendering('glyphPicture', true); settings.setRelaxedRendering('epsilon', false);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.deepEqual(writes.at(-1), { glyphPicture: true, blurEnvelope: false, epsilon: false }, 'serialized writes preserve independent choices');
+  console.log('Actual setting/switch boundaries PASS: all combinations, development/release guard, default OFF, hydration race and ordered persistence.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
