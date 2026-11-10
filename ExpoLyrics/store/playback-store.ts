@@ -151,6 +151,8 @@ type PlaybackState = {
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
   setShowSpotifyStatusBar: (value: boolean) => void;
+  simpleAmllScroll: boolean;
+  setSimpleAmllScroll: (value: boolean) => void;
   showTranslatedText: boolean;
   translationLanguage: TranslationLanguage;
   setShowTranslatedText: (value: boolean) => void;
@@ -188,6 +190,7 @@ type PlaybackState = {
 let rendererChanged = false;
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
+let simpleAmllScrollSettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
   void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
@@ -273,6 +276,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
+  simpleAmllScroll: false,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -472,6 +476,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
+  setSimpleAmllScroll: (value) => {
+    simpleAmllScrollSettingChanged = true;
+    const simpleAmllScroll = Boolean(value);
+    set({ simpleAmllScroll });
+    void AsyncStorage.setItem('kinesync_dev_simple_amll_scroll_v1', String(simpleAmllScroll)).catch(() => {});
+  },
   setShowTranslatedText: (value) => {
     const showTranslatedText = Boolean(value);
     set({ showTranslatedText });
@@ -523,6 +533,11 @@ void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
 void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   if (value === null || spotifyStatusBarSettingChanged) return;
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
+}).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_dev_simple_amll_scroll_v1').then(value => {
+  if (value === null || simpleAmllScrollSettingChanged) return;
+  usePlaybackStore.setState({ simpleAmllScroll: value === 'true' });
 }).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
