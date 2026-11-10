@@ -59,3 +59,34 @@ assert.match(source, /else canvas.saveLayer\(glowPaint\)/);
 assert.equal((source.match(/previous.tightBlurBounds === tightBlurBounds/g) ?? []).length, 6,
   'Both development and production invalidate every cached-picture early return');
 console.log('Blur bounds serialized UI worklets: transitive Babel capture and conservative local bounds PASS.');
+
+// Exercise the actual persistent setting, including a user change racing load.
+function setting(storage, dev = true) {
+  const module = { exports: {} };
+  const code = require('esbuild').buildSync({ entryPoints: [path.join(__dirname, '../lib/tight-blur-bounds.ts')],
+    bundle: true, external: ['*'], platform: 'node', format: 'cjs', write: false }).outputFiles[0].text;
+  vm.runInNewContext(code, { __DEV__: dev, module, exports: module.exports,
+    require: name => name === 'react' ? {} : storage });
+  return module.exports;
+}
+(async () => {
+  const disk = new Map();
+  const storage = { getItem: async key => disk.get(key) ?? null, setItem: async (key, value) => { disk.set(key, value); } };
+  const first = setting(storage);
+  assert.equal(first.getTightBlurBounds(), false);
+  await first.loadTightBlurBounds();
+  await first.setTightBlurBounds(true);
+  const restart = setting(storage); await restart.loadTightBlurBounds();
+  assert.equal(restart.getTightBlurBounds(), true);
+  await restart.setTightBlurBounds(false);
+  const off = setting(storage); await off.loadTightBlurBounds();
+  assert.equal(off.getTightBlurBounds(), false);
+  const release = setting({ getItem() { throw Error('release read'); }, setItem() { throw Error('release write'); } }, false);
+  await release.loadTightBlurBounds(); await release.setTightBlurBounds(true);
+  assert.equal(release.getTightBlurBounds(), false);
+  let finish;
+  const pending = setting({ ...storage, getItem: () => new Promise(resolve => { finish = resolve; }) });
+  const loading = pending.loadTightBlurBounds(); await pending.setTightBlurBounds(true); finish('false'); await loading;
+  assert.equal(pending.getTightBlurBounds(), true);
+  console.log('Tight blur setting: default OFF, persistence, release gate and load race PASS.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
