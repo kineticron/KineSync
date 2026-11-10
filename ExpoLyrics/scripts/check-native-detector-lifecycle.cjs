@@ -25,6 +25,7 @@ const developmentTiming = diagnosticModule('development-timing-log');
 const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
+const captures = [];
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
 let cursor = 0, dirty = false, actions, instance;
 let tour = { active: false, pending: false };
@@ -43,10 +44,12 @@ const ReactMock = { ...React, forwardRef: fn => fn,
     if (!old || deps.some((d, n) => !Object.is(d, old.deps[n]))) { effects.push(() => { old?.cleanup?.(); hooks[i] = { deps, cleanup: fn() }; }); } },
 };
 class Detector {
-  enabled = false; clears = 0;
+  enabled = false; clears = 0; health = { controlsEnabled: true, phase: 'ready' };
+  setActivity() {}
+  setReachability() {}
   constructor(callbacks) { this.callbacks = callbacks; instance = this; }
   setEnabled(value) { this.enabled = value; }
-  capture() { return true; }
+  capture(raw) { captures.push(raw); return true; }
   refresh() {}
   async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
   async control(command) { commands.push(command); if (controlError) throw controlError; }
@@ -55,6 +58,8 @@ class Detector {
 const callableStore = state => Object.assign(fn => fn(state), { getState: () => state });
 const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } };
 const mocks = {
+  '@/store/spotify-connection-store': { useSpotifyConnectionStore: Object.assign(selector => selector({ health: { phase: 'ready' } }), { setState() {} }) },
+  '@/lib/spotify-detector/reachability': { subscribeSpotifyReachability: () => () => {} },
   '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {}, nativeClockCaptureActive: () => false, NATIVE_CLOCK_HTTP_TRACE_SCRIPT: '' },
   react: ReactMock, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Button: 'Button', ActivityIndicator: 'Spinner', AppState, Platform: { OS: platform },
@@ -104,6 +109,21 @@ assert.equal(web.props.userAgent.includes('Chrome/'), platform === 'android');
 assert.equal(web.props.injectedJavaScriptBeforeContentLoaded.includes('android-observer'), platform === 'android');
 if (platform === 'android') assert.equal(tree.props.style[1].opacity, 0.01, 'Chromium bootstrap stays in the viewport');
 assert.equal(instance.enabled, true);
+// Renewal deliberately remounts a document, even if sessionNeeded is already
+// true. It does not depend on restarting an exhausted window.__probeToken.
+const oldDocument = web;
+instance.callbacks.sessionNeeded(); render(); web = find(tree);
+assert.notEqual(web.key, oldDocument.key, 'renewal changes the actual WebView key');
+const secondDocument = web;
+instance.callbacks.sessionNeeded(); render(); web = find(tree);
+assert.notEqual(web.key, secondDocument.key, 'already-needed renewal still gets a fresh document');
+const beforeOldDocument = captures.length;
+oldDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+secondDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+assert.equal(captures.length, beforeOldDocument, 'obsolete document callbacks cannot capture credentials');
+web.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
+assert.equal(captures.length, beforeOldDocument + 1, 'only the newly mounted document can capture');
+web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'playback', positionMs: 9999 }), url: 'https://open.spotify.com/' } });
 assert.equal(packets.length, 0, 'browser playback is never mixed with native detector timing');
 const receipt = Object.freeze({ wallMs: Date.now(), monotonicMs: performance.now() });
@@ -139,25 +159,16 @@ assert.deepEqual(timingCalls, ['start', 'clear']);
 ref.current.togglePlayPause();
 assert.equal(commands.at(-1).type, 'toggle', 'controls target native device while browser is unmounted');
 assert.equal(find(tree), null);
+const alertsBeforeFailure = alerts.length;
 controlError = new SpotifyPlaybackUnavailableError('No device');
-ref.current.togglePlayPause();
-await Promise.resolve();
-assert.equal(alerts.at(-1)[0], "Can't Start Playback Just Yet");
-assert.equal(alerts.at(-1)[1], "KineSync can't start the playback without you starting the Spotify app on one of your other devices.");
-assert.equal(alerts.at(-1)[2][0].text, 'Close');
-assert.equal(alerts.at(-1)[2][1].text, 'Open Spotify');
-alerts.at(-1)[2][1].onPress();
-await Promise.resolve();
-assert.equal(openedUrls.at(-1), platform === 'ios' ? 'spotify://eevee/open.spotify.com/' : 'spotify://');
-rejectLaunch = true;
-alerts.at(-1)[2][1].onPress();
-for (let n = 0; n < 10; n++) await Promise.resolve();
-assert.equal(openedUrls.at(-1), 'spotify://', 'standard launch is the final fallback');
-assert.equal(alerts.at(-1)[0], 'Couldn’t Open Spotify');
-controlError = new Error('Spotify control HTTP 429.');
-ref.current.togglePlayPause();
-await Promise.resolve();
-assert.equal(alerts.at(-1)[0], 'Spotify control', 'other errors retain their diagnostic message');
+ref.current.togglePlayPause(); await Promise.resolve();
+assert.equal(alerts.length, alertsBeforeFailure, 'unavailable controls use persistent health, without modal flood');
+instance.health.controlsEnabled = false;
+const disabledCommands = commands.length;
+for (const action of ['togglePlayPause', 'skipNext', 'skipPrevious']) ref.current[action]();
+ref.current.seekTo(1234);
+assert.equal(commands.length, disabledCommands, 'every imperative native transport path is gated');
+instance.health.controlsEnabled = true;
 controlError = undefined;
 ref.current.openBrowser(); render(); web = find(tree); assert(web, 'browser remains available on demand');
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };

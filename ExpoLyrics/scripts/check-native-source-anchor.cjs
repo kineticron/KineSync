@@ -303,7 +303,7 @@ async function main() {
       else if (change === 'observer-route') client.capture({ type: 'observerEndpoint',
         url: 'https://spclient2.spotify.com/connect-state/v1/devices/synthetic-observer' });
       else if (change === 'dealer-route') client.capture({ type: 'socket', url: 'wss://dealer2.spotify.com/' });
-      else if (change === 'clear') { client.detector.clear(); client.configure(); }
+      else if (change === 'clear') { client.detector.clear(); client.detector.setEnabled(true); client.configure(); }
       else { nextClient = r.createDetector(); nextClient.configure(); }
       // Change position only to avoid ordinary duplicate suppression in this
       // scope test; equal-anchor preservation is tested independently above.
@@ -348,7 +348,7 @@ async function main() {
     const oldSocket = r.sockets.at(-1);
     oldSocket.event({ headers: { 'Spotify-Connection-Id': 'connection-old' } });
     assert.equal(r.requests.length, 1, 'old connection starts actual registration');
-    client.detector.refresh();
+    client.detector.setEnabled(false); client.detector.setEnabled(true);
     const newSocket = r.sockets.at(-1); assert.notEqual(newSocket, oldSocket);
     r.requests[0]({ ok: true, status: 200, arrayBuffer: async () =>
       new TextEncoder().encode(JSON.stringify(client.raw())).buffer });
@@ -380,17 +380,8 @@ async function main() {
         new TextEncoder().encode(JSON.stringify(client.raw())).buffer });
       await flush();
       oldSocket.event({ payloads: [client.raw({ positionMs: 10002 })] });
-      if (change === 'auth') assert.equal(client.accepted.length, before,
-        'existing generation guard rejects old-auth request and socket');
-      else {
-        // Route delivery/retry behavior remains unchanged. Existing callbacks
-        // may publish, but revoked authority can never certify current scope.
-        assert(client.accepted.length > before, 'route test exercises actual old-connection publication');
-        for (const stale of client.accepted.slice(before)) {
-          assert.equal(stale.sourceClockScope, undefined, 'old route response/socket must omit source proof');
-          r.ingest(r.packet(stale)); assert.equal(r.store.getState().sourceAnchorProof, null);
-        }
-      }
+      assert.equal(client.accepted.length, before,
+        'old auth/route registration and socket are discarded after authority changes');
       r.at(6000); client.emit({ positionMs: 10001 });
       const fresh = r.packet(client.accepted.at(-1));
       assert(fresh.sourceClockScope, 'new direct observation is scoped to current authority');

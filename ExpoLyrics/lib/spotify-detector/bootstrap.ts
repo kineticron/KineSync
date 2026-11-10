@@ -5,7 +5,7 @@ export const bootstrap = String.raw`(function () {
   var send = function (v) {
     // Production only needs session verification and connection discovery.
     // Browser playback never feeds the direct detector or its lyrics clock.
-    if (!/^(credentials|observerEndpoint|socket|notice)$/.test(v.type)) return;
+    if (!/^(credentials|observerEndpoint|socket|notice|session)$/.test(v.type)) return;
     window.ReactNativeWebView.postMessage(JSON.stringify(v));
   };
   var trusted = function (raw) { try { var u = new URL(raw, location.href); return /(^|\.)spotify\.com$/.test(u.hostname); } catch (_) { return false; } };
@@ -27,13 +27,15 @@ export const bootstrap = String.raw`(function () {
         !/^Bearer\s+\S+$/i.test(requestHeaders.authorization || '')) return;
     var length = Number(response.headers.get('content-length') || 0);
     if (length > 262144) return;
+    var run = epoch;
     response.clone().text().then(function(text) {
+      if (run !== epoch || stopped) return;
       if (!text || text.length > 262144) return;
       try {
         var parsed = JSON.parse(text);
         // Verify the exact request's bearer, including responses without devices.
         if (hasPlayerState(parsed)) {
-          send({type:'credentials',token:requestHeaders.authorization.replace(/^Bearer\s+/i,''),
+          verifiedCredentials({type:'credentials',token:requestHeaders.authorization.replace(/^Bearer\s+/i,''),
             clientToken:requestHeaders['client-token'],authenticated:true,verification:'observer-response'});
         }
       } catch (_) {}
@@ -62,14 +64,14 @@ export const bootstrap = String.raw`(function () {
   XMLHttpRequest.prototype.send = function (body) {
     try {
       if (this.__probe) {
-        var request = this.__probe, xhr = this;
+        var request = this.__probe, xhr = this, requestEpoch = epoch;
         observe(request.url,request.method,request.headers);
         if (observer(request.url) && /^Bearer\s+\S+$/i.test(request.headers.authorization || '')) this.addEventListener('loadend',function(){
-          if (xhr.status !== 200) return;
+          if (xhr.status !== 200 || requestEpoch !== epoch || stopped) return;
           try {
             var parsed = xhr.responseType === 'json' ? xhr.response : JSON.parse(xhr.responseText);
             if (hasPlayerState(parsed)) {
-              send({type:'credentials',token:request.headers.authorization.replace(/^Bearer\s+/i,''),
+              verifiedCredentials({type:'credentials',token:request.headers.authorization.replace(/^Bearer\s+/i,''),
                 clientToken:request.headers['client-token'],authenticated:true,verification:'observer-response'});
             }
           } catch (_) {}
@@ -89,15 +91,65 @@ export const bootstrap = String.raw`(function () {
   ProbeSocket.prototype = OriginalSocket.prototype;
   ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k) { ProbeSocket[k] = OriginalSocket[k]; });
   window.WebSocket = ProbeSocket;
+  var epoch = 0, attempts = 0, timer = 0, deadline = 0, controller = null, stopped = false, inFlight = false;
+  var stop = function () {
+    epoch++; stopped = true; inFlight = false;
+    clearTimeout(timer); clearTimeout(deadline);
+    if (controller) controller.abort(); controller = null;
+  };
+  var verifiedCredentials = function (message) {
+    if (stopped) return;
+    epoch++; attempts = 2; inFlight = false; clearTimeout(timer); clearTimeout(deadline);
+    if (controller) controller.abort(); controller = null;
+    send(message);
+  };
   var probeToken = function () {
-    nativeFetch('/api/token?reason=init&productType=web_player',{credentials:'include'}).then(function(r){return r.json();}).then(function(p){
-      if (p.accessToken && p.isAnonymous === false) send({type:'credentials',token:p.accessToken,expiresAt:p.accessTokenExpirationTimestampMs,authenticated:true});
-    }).catch(function(){send({type:'notice',message:'Session token probe unavailable; waiting for browser requests.'});});
+    if (stopped || inFlight || attempts >= 2) return;
+    var run = epoch; attempts++; inFlight = true;
+    controller = new AbortController();
+    var own = controller;
+    var limit, cancel;
+    var timeout = new Promise(function(_, reject) {
+      cancel = function(){ reject(new Error('probe canceled')); };
+      own.signal.addEventListener('abort',cancel,{once:true});
+      limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 15000);
+    });
+    var work = Promise.resolve().then(function(){
+      return nativeFetch('/api/token?reason=init&productType=web_player',{credentials:'include',signal:own.signal});
+    }).then(function(r){
+      if (r.status === 401 || r.status === 403) return {challenge:true};
+      if (r.status && (r.status < 200 || r.status >= 300)) throw new Error('token HTTP');
+      return r.json();
+    });
+    Promise.race([work,timeout]).then(function(p){
+      if (run !== epoch || stopped) return;
+      if (p.accessToken && p.isAnonymous === false) {
+        attempts = 2; clearTimeout(deadline);
+        verifiedCredentials({type:'credentials',token:p.accessToken,expiresAt:p.accessTokenExpirationTimestampMs,authenticated:true});
+      } else if (p.isAnonymous === true || p.challenge) {
+        attempts = 2; clearTimeout(deadline); send({type:'session',state:'anonymous'});
+      } else throw new Error('unverified token');
+    }).catch(function(){
+      if (run !== epoch || stopped) return;
+      send({type:'notice',message:'Session token probe unavailable; waiting for browser requests.'});
+      if (attempts >= 2) { clearTimeout(deadline); send({type:'session',state:'unavailable'}); }
+    }).finally(function(){
+      clearTimeout(limit); own.signal.removeEventListener('abort',cancel);
+      if (run !== epoch || stopped) return;
+      inFlight = false; controller = null;
+      if (attempts < 2) timer = setTimeout(probeToken,2000);
+    });
+  };
+  var start = function () {
+    if (!stopped && (inFlight || attempts > 0)) return;
+    stopped = false; attempts = 0; epoch++;
+    deadline = setTimeout(function(){stop();send({type:'session',state:'unavailable'});},45000);
+    probeToken();
   };
   window.__probeToken = probeToken;
-  probeToken();
-  var timer = setInterval(probeToken,15000);
-  window.addEventListener('pagehide',function(){clearInterval(timer);});
+  window.addEventListener('pagehide',stop);
+  window.addEventListener('pageshow',start);
+  start();
   send({type:'notice',message:'Network capture installed.'});
 })(); true;`;
 

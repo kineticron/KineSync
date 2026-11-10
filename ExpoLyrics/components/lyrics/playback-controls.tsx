@@ -57,6 +57,11 @@ export type PlaybackControlsLayout =
   | 'landscape-utilities';
 
 type PlaybackControlsProps = {
+  controlsDisabled?: boolean;
+  previousDisabled?: boolean;
+  nextDisabled?: boolean;
+  playPauseDisabled?: boolean;
+  seekDisabled?: boolean;
   isPlaying: boolean;
   durationMs: number;
   shareSelectionCount?: number;
@@ -88,6 +93,7 @@ type PlaybackControlsProps = {
 };
 
 type TransportButtonProps = {
+  disabled?: boolean;
   accessibilityLabel: string;
   onPress: () => void;
   onLongPress?: () => void;
@@ -99,6 +105,7 @@ type TransportButtonProps = {
 };
 
 function TransportButton({
+  disabled = false,
   accessibilityLabel,
   onPress,
   onLongPress,
@@ -202,6 +209,9 @@ function TransportButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      accessibilityState={{ disabled }}
+      style={{ opacity: disabled ? 0.4 : 1 }}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
       delayLongPress={delayLongPress}
@@ -235,6 +245,11 @@ function TransportButton({
 }
 
 export const PlaybackControls = memo(function PlaybackControls({
+  controlsDisabled = false,
+  previousDisabled = false,
+  nextDisabled = false,
+  playPauseDisabled = false,
+  seekDisabled = false,
   isPlaying,
   durationMs,
   shareSelectionCount: _shareSelectionCount,
@@ -477,6 +492,7 @@ onPressIn={onUserInteraction}
         isOverlay && styles.cardOverlay,
       ]}>
       <PlaybackTimeline
+        controlsDisabled={controlsDisabled || seekDisabled}
         previewPlayback={previewPlayback}
         durationMs={durationMs}
         onScrubPreview={onScrubPreview}
@@ -487,6 +503,7 @@ onPressIn={onUserInteraction}
 
       <View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay]}>
         <TransportButton
+          disabled={controlsDisabled || previousDisabled}
           accessibilityLabel="Previous track"
           onPress={onPrevious}
           onUserInteraction={onUserInteraction}
@@ -500,6 +517,7 @@ onPressIn={onUserInteraction}
         </TransportButton>
 
         <TransportButton
+          disabled={controlsDisabled || playPauseDisabled}
           accessibilityLabel={isPlaying ? 'Pause playback' : 'Play music'}
           onPress={onPlayPause}
           onLongPress={
@@ -538,6 +556,7 @@ onPressIn={onUserInteraction}
         </TransportButton>
 
         <TransportButton
+          disabled={controlsDisabled || nextDisabled}
           accessibilityLabel="Next track"
           onPress={onNext}
           onUserInteraction={onUserInteraction}
@@ -578,6 +597,7 @@ onPressIn={onUserInteraction}
 });
 
 const PlaybackTimeline = memo(function PlaybackTimeline({
+  controlsDisabled = false,
   durationMs,
   onScrubPreview,
   onSeek,
@@ -586,7 +606,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   previewPlayback,
 }: Pick<
   PlaybackControlsProps,
-  'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlayback'
+  'controlsDisabled' | 'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlayback'
 > & {
   compact?: boolean;
 }) {
@@ -600,6 +620,12 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   const pendingSeekPositionMsShared = useSharedValue<number | null>(null);
   const maxDuration = Math.max(1, durationMs || 1);
   const playbackPositionShared = usePlaybackTimelineClock(maxDuration, previewPlayback);
+
+  useEffect(() => {
+    if (!controlsDisabled) return;
+    setIsScrubbing(false); isScrubbingShared.value = false; pendingSeekPositionMsShared.value = null;
+    onScrubPreview?.(null);
+  }, [controlsDisabled, isScrubbingShared, pendingSeekPositionMsShared, onScrubPreview]);
 
   const displayPositionShared = useDerivedValue(() => {
     if (isScrubbingShared.value) {
@@ -637,6 +663,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 
   const finishScrub = useCallback(
     (explicitRatio?: number) => {
+      if (controlsDisabled) { setIsScrubbing(false); pendingSeekPositionMsShared.value = null; onScrubPreview?.(null); return; }
       onUserInteraction?.();
       if (explicitRatio !== undefined) {
         scrubValueRef.current = explicitRatio;
@@ -650,7 +677,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
       pendingSeekPositionMsShared.value = null;
       onScrubPreview?.(null);
     },
-    [maxDuration, onScrubPreview, onSeek, onUserInteraction, pendingSeekPositionMsShared],
+    [controlsDisabled, maxDuration, onScrubPreview, onSeek, onUserInteraction, pendingSeekPositionMsShared],
   );
 
   const cancelScrub = useCallback(() => {
@@ -661,6 +688,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   const scrubGesture = useMemo(
     () =>
       Gesture.Pan()
+        .enabled(!controlsDisabled)
         .minDistance(0)
         .onBegin((event) => {
           const ratio = Math.max(
@@ -702,6 +730,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           }
         }),
     [
+      controlsDisabled,
       cancelScrub,
       finishScrub,
       flushScrubPreview,
@@ -743,7 +772,8 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
     <>
       <GestureDetector gesture={scrubGesture}>
         <View
-          style={styles.timelineTouchTarget}
+          accessibilityState={{ disabled: controlsDisabled }}
+          style={[styles.timelineTouchTarget, controlsDisabled && { opacity: 0.4 }]}
           onLayout={(event) => {
             setTrackWidth(Math.max(1, event.nativeEvent.layout.width));
           }}>

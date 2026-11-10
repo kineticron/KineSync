@@ -154,10 +154,20 @@ export function redact(value: unknown): unknown {
   return value;
 }
 
+export type SelectedPlayerContext = {
+  sample: Sample;
+  playerState?: Record<string, any>;
+  cluster?: Record<string, any>;
+};
+
 // Accept only recognizable playback objects; arbitrary network messages aren't proof of state.
 export function sampleFrom(value: unknown, depth = 0, timing: TimingContext = {}): Sample | null {
+  return sampleWithContext(value, depth, timing)?.sample ?? null;
+}
+
+export function sampleWithContext(value: unknown, depth = 0, timing: TimingContext = {}): SelectedPlayerContext | null {
   const capture = timingCaptureActive(), development = developmentTimingActive();
-  return parseSample(value, depth, capture || development ? {
+  return parseSampleWithContext(value, depth, capture || development ? {
     capture, development, context: timing, path: '$', serverPath: null,
     receipt: timing.receipt ? Object.freeze({ ...timing.receipt }) : timingNow(), cluster: {}, device: undefined,
   } : undefined);
@@ -165,21 +175,29 @@ export function sampleFrom(value: unknown, depth = 0, timing: TimingContext = {}
 type Trace = { capture: boolean; development: boolean; context: TimingContext; path: string; serverPath: string | null; receipt: TimingAnchor['receipt']; cluster: Record<string, unknown>; device: unknown };
 // Schema keys only: arbitrary payload keys can contain account/device identifiers.
 const schemaKeys = new Set(['player_state', 'cluster', 'payloads', 'state', 'data', 'item']);
-function parseSample(value: unknown, depth: number, trace?: Trace): Sample | null {
+function parseSampleWithContext(value: unknown, depth: number, trace?: Trace): SelectedPlayerContext | null {
   if (depth > 9 || !value) return null;
-  if (typeof value === 'string') { try { return parseSample(JSON.parse(value), depth + 1, trace); } catch { return null; } }
+  if (typeof value === 'string') { try { return parseSampleWithContext(JSON.parse(value), depth + 1, trace); } catch { return null; } }
   if (typeof value !== 'object') return null;
   const o = value as Record<string, any>;
   if (trace && o.player_state) trace = { ...trace, cluster: o, serverPath: trace.path,
     device: o.active_device_id ?? o.activeDeviceId };
   if (o.player_state) {
-    const s = parseSample(o.player_state, depth + 1, trace && { ...trace, path: `${trace.path}.player_state` });
+    const s = parseSampleWithContext(o.player_state, depth + 1, trace && { ...trace, path: `${trace.path}.player_state` });
     if (s) {
       const id = o.active_device_id ?? o.activeDeviceId;
       const info = o.device?.[id] ?? o.devices?.[id];
       const server = Number(o.server_timestamp_ms);
-      return { ...s, activeDeviceId: id, device: info?.name ?? info?.device_info?.name ?? id ?? s.device,
-        ...(Number.isSafeInteger(server) && server > 1_000_000_000_000 ? { sourceServerTimestampMs: server } : {}) };
+      return {
+        ...s,
+        cluster: o,
+        sample: {
+          ...s.sample,
+          activeDeviceId: id,
+          device: info?.name ?? info?.device_info?.name ?? id ?? s.sample.device,
+          ...(Number.isSafeInteger(server) && server > 1_000_000_000_000 ? { sourceServerTimestampMs: server } : {}),
+        },
+      };
     }
   }
   const track = o.track_window?.current_track ?? o.track ?? o.item;
@@ -207,23 +225,26 @@ function parseSample(value: unknown, depth: number, trace?: Trace): Sample | nul
       device: trace.device ?? o.device?.device_id, session: o.session_id, connection: trace.context.connectionId,
       generation: trace.context.generation, state: o, cluster: trace.cluster }) : undefined;
     return {
-      title: track.name ?? m.title ?? 'Unknown track',
-      artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
-      album: track.album?.name ?? m.album_title ?? '',
-      artworkUrl: String(track.album?.images?.[0]?.url ?? m.image_xlarge_url ?? m.image_large_url ?? m.image_url ?? '').replace(/^spotify:image:/, 'https://i.scdn.co/image/'),
-      uri: track.uri ?? '', positionMs: Math.max(0, position),
-      durationMs: Number(o.duration ?? track.duration_ms ?? m.duration) || 0,
-      playing: playing && !o.loading && !o.is_buffering,
-      device: o.device?.name ?? o.device?.device_id ?? '', receivedAt: Date.now(),
-      positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
-      playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
-      ...(timingProvenance ? { timingProvenance } : {}),
-      ...(developmentTiming ? { developmentTiming } : {}),
+      sample: {
+        title: track.name ?? m.title ?? 'Unknown track',
+        artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
+        album: track.album?.name ?? m.album_title ?? '',
+        artworkUrl: String(track.album?.images?.[0]?.url ?? m.image_xlarge_url ?? m.image_large_url ?? m.image_url ?? '').replace(/^spotify:image:/, 'https://i.scdn.co/image/'),
+        uri: track.uri ?? '', positionMs: Math.max(0, position),
+        durationMs: Number(o.duration ?? track.duration_ms ?? m.duration) || 0,
+        playing: playing && !o.loading && !o.is_buffering,
+        device: o.device?.name ?? o.device?.device_id ?? '', receivedAt: Date.now(),
+        positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
+        playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
+        ...(timingProvenance ? { timingProvenance } : {}),
+        ...(developmentTiming ? { developmentTiming } : {}),
+      },
+      playerState: o,
     };
   }
   for (const [key, v] of Object.entries(o)) {
     const segment = Array.isArray(o) ? '[*]' : schemaKeys.has(key) ? `.${key}` : '.*';
-    const s = parseSample(v, depth + 1, trace && { ...trace, path: trace.path + segment }); if (s) return s;
+    const s = parseSampleWithContext(v, depth + 1, trace && { ...trace, path: trace.path + segment }); if (s) return s;
   }
   return null;
 }
