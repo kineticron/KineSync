@@ -29,13 +29,16 @@ function harness(style,list,options={}){
  const position={value:500},running={value:true},seekVersion={value:0};let measuredY=500;
  const host={getLayout:()=>({y:measuredY}),getFirstItemOffset:()=>150,getAbsoluteLastScrollOffset:()=>0,getFirstVisibleIndex:()=>0,
   scrollToIndex:command=>commands.push(command),scrollToOffset(){}};
- const jsx=(type,props)=>({type,props:props??{}});
+ const jsx=(type,props,key)=>({type,props:props??{},key});
  const hookCalls=[];
  for(const name of ['useRef','useState','useMemo','useCallback','useEffect']){const original=react[name];react[name]=(...args)=>{hookCalls.push(name);return original(...args);};}
  const arrivalContextModule=options.arrivalContextFactory?.(react,state)??options.arrivalContextModule;
  const modules={react,
   '@/lib/lyrics-arrival-context':arrivalContextModule??{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit',useArrivalGeometry:()=>({}),useArrivalIdentity:()=>({handle:undefined,identity:{id:0},context:{},producers:{}})},
-  '@/lib/batched-amll-motion': { useBatchedAmllMotion: () => false },
+  '@/lib/fast-lyric-loading': { useFastLyricLoading: () => false },
+  'expo-blur': { BlurTargetView: 'BlurTargetView' },
+  './native-shared-blur': { NativeSharedBlur: 'NativeSharedBlur', NativeSharedBlurContext: { Provider: 'SharedBlurProvider' }, NativeBlurGeometryContext: { Provider: 'BlurGeometryProvider' }, SHARED_BLUR_PROFILES: {}, hasBlurGeometry: () => false },
+  '@/lib/batched-amll-motion': { useBatchedAmllMotion: () => !!options.batched },
   './batched-amll-motion': { composeBatchedRegistry: () => ({}) },
   '@/lib/lyrics-arrival-trace':arrivalContextModule??{},
   '@/lib/native-clock-diagnostics':{emitNativeClockDiagnostic(){}},
@@ -92,6 +95,19 @@ for(const style of ['amll','spicy'])for(const list of ['flash','flat']){
  h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='updated translation';h.render();h.content();
  assert.equal(h.commands.length,manual,'translation cannot resume manual-disabled auto-follow');
  console.log(`${style}/${list}: real native host hooks preserve translation scroll state, timing changes, geometry retries and manual follow.`);
+}
+{
+ const mode={batched:true},h=harness('amll','flash',mode);
+ const motionKey=node=>{if(!node||typeof node!=='object')return undefined;if(typeof node.key==='string'&&node.key.includes('motion'))return node.key;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const key=motionKey(child);if(key)return key;}};
+ const initial=motionKey(h.treeSnapshot());assert(initial?.endsWith(':batched-motion'));
+ h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].translatedText='late translation';h.render();
+ assert.equal(motionKey(h.treeSnapshot()),initial,'translation preserves batched spring ownership');
+ h.state.lyrics=clone(h.state.lyrics);h.state.lyrics[0].syllables[0].endTime-=27;h.render();
+ assert.notEqual(motionKey(h.treeSnapshot()),initial,'real source change retires old spring ownership');
+ mode.batched=false;h.render();assert.equal(motionKey(h.treeSnapshot()),'baseline-motion');
+ assert.equal(h.commands.at(-1).instant,true,'mode change ends at exact command endpoint');
+ const spicyMode={batched:false},spicy=harness('spicy','flash',spicyMode),before=spicy.commands.length;
+ spicyMode.batched=true;spicy.render();assert.equal(spicy.commands.length,before,'AMLL toggle leaves Spicy unchanged');
 }
 console.log('Native translation scroll checks PASS; mocked list/clock/ready hosts, not measured device layout or animation.');
 
