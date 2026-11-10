@@ -63,12 +63,6 @@ export const ReferenceScrollView = forwardRef<ScrollView, ScrollViewProps>(funct
       const command = host.command.value, previous = host.simple.value.command;
       if (command.serial !== previous?.serial) {
         applySimpleScrollCommand(host, nativeRef, command, previous ?? null, scrollTo);
-        const rows = host.simple.value.rows;
-        for (const key in rows) {
-          const index = Number(key), slot = rows[index];
-          prepareSimpleScrollRow(host, index, true, slot.state, slot.output, command,
-            { command: slot.command, index });
-        }
         host.simple.modify(value => { value.command = command; return value; }, false);
       }
       advanceSimpleAmllMotion(host, info.timeSincePreviousFrame, nativeRef, scrollTo);

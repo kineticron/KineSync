@@ -200,10 +200,23 @@ export function applySimpleScrollCommand(
   const c2 = v0 + omega * p0;
   host.residual.value = p0;
   simple.modify(value => {
+    let maxDelay = 0;
+    for (const key in value.rows) {
+      const index = Number(key);
+      const slot = value.rows[index];
+      slot.targetDelay = command.geometry ? 0 : amllRowCascadeDelay(command, index);
+      if (slot.sleeping || command.geometry) {
+        slot.delay = slot.targetDelay;
+      }
+      if (slot.delay > maxDelay) maxDelay = slot.delay;
+      if (slot.targetDelay > maxDelay) maxDelay = slot.targetDelay;
+      slot.sleeping = false;
+    }
+    const horizon = Math.max(3.0, maxDelay + 1.0);
     if (value.segments.length > 0) {
       value.segments[value.segments.length - 1].endTime = T;
       for (const seg of value.segments) seg.targetShift += delta;
-      while (value.segments.length > 1 && value.segments[0].endTime < T - 1.5) {
+      while (value.segments.length > 1 && value.segments[0].endTime < T - horizon) {
         value.segments.shift();
       }
     }
@@ -217,12 +230,6 @@ export function applySimpleScrollCommand(
       c2,
       targetShift: 0,
     });
-    for (const key in value.rows) {
-      const index = Number(key);
-      const slot = value.rows[index];
-      slot.targetDelay = command.geometry ? 0 : amllRowCascadeDelay(command, index);
-      slot.sleeping = false;
-    }
     value.awake = true;
     value.dirty = true;
     return value;
@@ -259,25 +266,22 @@ export function advanceSimpleAmllMotion(
     for (const key in value.rows) {
       const index = Number(key);
       const slot = value.rows[index];
-      const prevDelay = slot.delay;
-      if (Math.abs(slot.delay - slot.targetDelay) > 1e-4) {
-        const step = 0.5 * dt;
-        slot.delay += Math.max(-step, Math.min(step, slot.targetDelay - slot.delay));
-      }
-      const delayRate = dt > 0 ? (slot.delay - prevDelay) / dt : 0;
       const rowSample = sampleTrajectory(value.segments, T - slot.delay);
       const rowP = rowSample.settled ? 0 : rowSample.p;
       const rowV = rowSample.settled ? 0 : rowSample.v;
-      const rowVActual = rowV * (1 - delayRate);
       const settled = rowSample.settled && viewportSample.settled;
       slot.sleeping = settled && viewportP === 0;
-      if (!slot.sleeping) value.awake = true;
+      if (slot.sleeping) {
+        slot.delay = slot.targetDelay;
+      } else {
+        value.awake = true;
+      }
       const exact = host.command.value.snap ? rowP - rendered : 0;
       if (exact === 0 || Math.abs(exact - slot.output.value) >= 1e-7) slot.output.value = exact;
       const hidden = Math.abs(exact - slot.output.value);
-      const rowDev = boundAnalyticDisplacement(value.segments, T - slot.delay, 0.096);
+      const rowDev = boundAnalyticDisplacement(value.segments, T - slot.delay, 0.064);
       const viewportDev = boundAnalyticDisplacement(value.segments, T, 0.064);
-      const vBound = (Math.abs(rowVActual) + Math.abs(viewportV)) * 0.064;
+      const vBound = (Math.abs(rowV) + Math.abs(viewportV)) * 0.064;
       const hostStep = Math.abs(rendered - slot.state.value.prevResidual);
       const rowLead = settled && viewportP === 0 ? 0 : Math.max(rowDev + viewportDev, vBound, hostStep) + 0.02;
       const rowVLead = rowLead + hidden;
@@ -294,7 +298,7 @@ export function advanceSimpleAmllMotion(
       };
       slot.state.modify(current => {
         current.p = rowP;
-        current.v = rowVActual;
+        current.v = rowV;
         current.renderedP = rowP;
         current.delay = slot.delay;
         current.prevResidual = rendered;
@@ -338,7 +342,7 @@ export function composeSimpleRegistry(rows: Record<number, RowMotionEntry>, simp
       rowVLead: rowLead,
       cellVLead: cellLead,
       vLead: rowLead + cellLead,
-      settled: (row?.settled ?? true) && cellP === 0,
+      settled: (row ? row.settled : slot.sleeping) && cellP === 0,
     };
   }
   const cells = batch?.cells || simple.cells;
