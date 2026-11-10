@@ -119,6 +119,8 @@ const modules = {
     SHARED_BLUR_PROFILES: { amll: true, spicy: true },
   },
   '@/lib/lyrics-arrival-context': { LyricsArrivalContext: { Provider: 'TraceProvider' }, LyricsArrivalCommit: 'TraceCommit', useArrivalGeometry: () => ({}), useArrivalIdentity: () => ({ handle: undefined, identity: { id: 0 }, context: {}, producers: {} }) },
+  '@/lib/batched-amll-motion': { useBatchedAmllMotion: () => false },
+  './batched-amll-motion': { composeBatchedRegistry: () => ({}) },
   '@/lib/lyrics-arrival-trace': { arrivalSpan: (_t, _id, _n, fn) => fn(), arrivalEvent: () => {} },
   '@/lib/native-clock-diagnostics': { emitNativeClockDiagnostic() {} },
   'react-native': { Platform: { OS: 'ios', Version: '17' }, AppState: appState, FlatList: 'FlatList', Linking: { openURL() {} }, Pressable: 'Pressable', StyleSheet: { create: x => x }, Text: 'Text', View: 'View' },
