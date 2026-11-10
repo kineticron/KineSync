@@ -58,7 +58,7 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
 }) {
   const { getMappingKey } = useMappingHelper();
   const lineMotion = useReferenceLineMotion(rowActive, !spicy && !staticLyrics, background, !spicy && playing);
-  const voiceStyle = useAnimatedStyle(() => ({ transform: [{ scale: spicy || staticLyrics ? 1 : lineMotion.value.scale }], transformOrigin: right ? 'right center' : 'left center' }));
+  const voiceStyle = useAnimatedStyle(() => ({ transform: [{ scale: spicy || staticLyrics || background ? 1 : lineMotion.value.scale }], transformOrigin: right ? 'right center' : 'left center' }));
   const textStyle = useMemo<TextStyle>(() => ({ color: '#fff', fontSize, lineHeight, fontFamily: background ? 'KineSync-SF-Regular' : 'KineSync-SF-Bold',
     fontWeight: background ? '500' : staticLyrics ? '600' : '800', includeFontPadding: false,
     letterSpacing: staticLyrics ? 0.15 : 0, textAlign: right ? 'right' : 'left',

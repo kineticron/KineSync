@@ -268,3 +268,46 @@ if (baselineSource) {
   for (const row of oldBuffer) row.unmount();
 }
 console.log('12 settled mounted voices at 120 Hz: 0 line callbacks over 5s (previous continuously registered design: 7,200).');
+
+// Execute the production row transform as a serialized UI worklet against live
+// springs: alpha keeps its spring; background font geometry must stay fixed.
+const root = path.resolve(nativeDir, '../../..');
+const rowSource = fs.readFileSync(path.join(nativeDir, 'native-lyric-row.tsx'), 'utf8');
+const styleDeclaration = rowSource.match(/const voiceStyle = useAnimatedStyle\([^\n]+/u)?.[0];
+assert.ok(styleDeclaration, 'Find the production voice transform');
+const styleCode = transformSync(`import { useAnimatedStyle } from 'react-native-reanimated';
+export function useVoiceStyle(spicy, staticLyrics, background, right, lineMotion) {
+${styleDeclaration}
+return voiceStyle;
+}`, { filename: sourcePath, presets: ['babel-preset-expo'] }).code;
+const styleBundle = buildSync({ stdin: { contents: styleCode, resolveDir: root }, bundle: true, platform: 'node', format: 'cjs', write: false,
+  external: ['react-native-reanimated'] }).outputFiles[0].text;
+const styleModule = { exports: {} };
+const styleContext = vm.createContext({ module: styleModule, exports: styleModule.exports, require: () => ({
+  useAnimatedStyle: fn => {
+    assert.ok(fn.__initData, 'Style must be compiled as a UI worklet');
+    assert.ok(fn.__closure.every(value => value !== undefined), 'No undefined worklet captures');
+    return vm.runInContext(fn.__initData.code, styleContext).bind({ __closure: fn.__closure });
+  },
+}) });
+styleContext.global = styleContext;
+vm.runInContext(styleBundle, styleContext);
+for (const fps of [60, 120]) for (const background of [false, true]) for (const right of [false, true]) {
+  const hook = mount(source, fps, { background });
+  const lineMotion = { value: hook.motion };
+  const style = styleModule.exports.useVoiceStyle(false, false, background, right, lineMotion);
+  for (const active of [false, true, false, true]) {
+    hook.setActive(active);
+    for (let frame = 0; frame < fps * 3; frame++) {
+      hook.tick(); lineMotion.value = hook.motion;
+      const value = style();
+      assert.equal(value.transform[0].scale, background ? 1 : hook.motion.scale,
+        'Background geometry is fixed through attack/release; foreground follows its original spring');
+      assert.equal(value.transformOrigin, right ? 'right center' : 'left center');
+      for (const [spicy, staticLyrics] of [[true, false], [false, true]])
+        assert.equal(styleModule.exports.useVoiceStyle(spicy, staticLyrics, background, right, lineMotion)().transform[0].scale, 1);
+    }
+  }
+  hook.unmount();
+}
+console.log('Serialized voice transform: fixed background size through active/inactive transitions, foreground spring, Spicy/static and both alignments passed.');
