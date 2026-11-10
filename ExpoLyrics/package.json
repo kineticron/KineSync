@@ -18,7 +18,7 @@
     "benchmark:emulator": "node ./scripts/benchmark-emulator.cjs",
     "profile:android": "node ./scripts/capture-android-performance.cjs",
     "profile:lyrics-native": "node ./scripts/profile-native-lyrics.cjs",
-    "test:lyrics-native": "node ./scripts/check-native-playback-clock.cjs && node ./scripts/check-native-lyrics.cjs && node ./scripts/check-native-motion.cjs && node ./scripts/check-batched-amll-motion.cjs && node ./scripts/check-native-syllable-preservation.cjs && node ./scripts/check-native-shaping-work.cjs && node ./scripts/check-native-gradient-cache.cjs",
+    "test:lyrics-native": "node ./scripts/check-native-playback-clock.cjs && node ./scripts/check-native-lyrics.cjs && node ./scripts/check-native-motion.cjs && node ./scripts/check-batched-amll-motion.cjs && node ./scripts/check-simple-amll-scroll.cjs && node ./scripts/check-native-syllable-preservation.cjs && node ./scripts/check-native-shaping-work.cjs && node ./scripts/check-native-gradient-cache.cjs",
     "test:blur-bounds": "node ./scripts/check-blur-bounds-worklets.cjs",
     "test:native-playback-clock": "node ./scripts/check-native-playback-clock.cjs",
     "test:native-switch-clock": "node ./scripts/check-native-clock-diagnostics.cjs && node ./scripts/check-native-switch-clock.cjs && node ./scripts/check-native-source-anchor.cjs && node ./scripts/check-native-source-switch.cjs",
