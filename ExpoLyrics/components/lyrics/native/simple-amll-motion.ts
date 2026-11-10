@@ -91,6 +91,32 @@ export function sampleTrajectory(segments: SimpleScrollSegment[], T: number): { 
   return { p: first.c1 + first.targetShift, v: 0, settled: false };
 }
 
+export function boundAnalyticDisplacement(
+  segments: SimpleScrollSegment[],
+  tCurrent: number,
+  windowSec: number,
+): number {
+  'worklet';
+  const cur = sampleTrajectory(segments, tCurrent);
+  if (cur.settled) return 0;
+  const atEnd = sampleTrajectory(segments, tCurrent + windowSec);
+  const atMid = sampleTrajectory(segments, tCurrent + windowSec * 0.5);
+  let maxDev = Math.max(Math.abs(atEnd.p - cur.p), Math.abs(atMid.p - cur.p));
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (tCurrent + windowSec < seg.startTime) continue;
+    if (tCurrent > seg.endTime) break;
+    if (Math.abs(seg.c2) > 1e-6) {
+      const tStar = seg.startTime + seg.v0 / (seg.omega * seg.c2);
+      if (tStar > tCurrent && tStar < tCurrent + windowSec) {
+        const atStar = sampleTrajectory(segments, tStar);
+        maxDev = Math.max(maxDev, Math.abs(atStar.p - cur.p));
+      }
+    }
+  }
+  return maxDev;
+}
+
 export function removeSimpleScrollRow(host: ReferenceScroll, index: number, owner: Readonly<{ value: unknown }>) {
   'worklet';
   if (!host.simple) return;
@@ -233,20 +259,27 @@ export function advanceSimpleAmllMotion(
     for (const key in value.rows) {
       const index = Number(key);
       const slot = value.rows[index];
+      const prevDelay = slot.delay;
       if (Math.abs(slot.delay - slot.targetDelay) > 1e-4) {
         const step = 0.5 * dt;
         slot.delay += Math.max(-step, Math.min(step, slot.targetDelay - slot.delay));
       }
+      const delayRate = dt > 0 ? (slot.delay - prevDelay) / dt : 0;
       const rowSample = sampleTrajectory(value.segments, T - slot.delay);
       const rowP = rowSample.settled ? 0 : rowSample.p;
       const rowV = rowSample.settled ? 0 : rowSample.v;
+      const rowVActual = rowV * (1 - delayRate);
       const settled = rowSample.settled && viewportSample.settled;
       slot.sleeping = settled && viewportP === 0;
       if (!slot.sleeping) value.awake = true;
       const exact = host.command.value.snap ? rowP - rendered : 0;
       if (exact === 0 || Math.abs(exact - slot.output.value) >= 1e-7) slot.output.value = exact;
       const hidden = Math.abs(exact - slot.output.value);
-      const rowLead = settled && viewportP === 0 ? 0 : Math.abs(rowV) * 0.064 + Math.abs(viewportV) * 0.064 + 0.02;
+      const rowDev = boundAnalyticDisplacement(value.segments, T - slot.delay, 0.096);
+      const viewportDev = boundAnalyticDisplacement(value.segments, T, 0.064);
+      const vBound = (Math.abs(rowVActual) + Math.abs(viewportV)) * 0.064;
+      const hostStep = Math.abs(rendered - slot.state.value.prevResidual);
+      const rowLead = settled && viewportP === 0 ? 0 : Math.max(rowDev + viewportDev, vBound, hostStep) + 0.02;
       const rowVLead = rowLead + hidden;
       const cellP = 0;
       const cellLead = 0;
@@ -261,7 +294,7 @@ export function advanceSimpleAmllMotion(
       };
       slot.state.modify(current => {
         current.p = rowP;
-        current.v = rowV;
+        current.v = rowVActual;
         current.renderedP = rowP;
         current.delay = slot.delay;
         current.prevResidual = rendered;

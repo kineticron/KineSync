@@ -131,7 +131,57 @@ function testAnalyticCurveMath() {
     assert(settledBack.settled && settledBack.p === 0, 'backward seek settles to 0');
   }
 
-  console.log('Analytic critically damped curve math PASS: velocity-preserving retarget, stagger continuity, backward seek, and settling.');
+  // Motion blur lead conservatism test from rest/acceleration (v0 = 0)
+  for (const p0 of [50, 100, 200]) {
+    const sRest = {
+      startTime: 0,
+      endTime: Infinity,
+      p0,
+      v0: 0,
+      omega,
+      c1: p0,
+      c2: omega * p0,
+      targetShift: 0,
+    };
+    const historyRest = [sRest];
+    const bound = api.boundAnalyticDisplacement(historyRest, 0, 0.064);
+    assert(bound > 0, 'bound must be strictly positive from rest');
+    for (let t = 0.001; t <= 0.064; t += 0.002) {
+      const sample = api.sampleTrajectory(historyRest, t);
+      const disp = Math.abs(sample.p - p0);
+      assert(disp <= bound + 1e-4, 'disp ' + disp + ' exceeds bound ' + bound + ' at t=' + t);
+    }
+  }
+
+  // Delay transition rate and finite difference coverage under chain rule
+  {
+    const seg = {
+      startTime: 0,
+      endTime: Infinity,
+      p0: 100,
+      v0: 0,
+      omega,
+      c1: 100,
+      c2: omega * 100,
+      targetShift: 0,
+    };
+    // Active motion window at T = 0.25s
+    const T = 0.25;
+    for (const delayRate of [-0.5, 0.0, 0.5]) {
+      const delay = 0.10;
+      const dt = 0.001;
+      const t1 = T - delay;
+      const t2 = (T + dt) - (delay + delayRate * dt);
+      const s1 = api.sampleTrajectory([seg], t1);
+      const s2 = api.sampleTrajectory([seg], t2);
+      const fd = (s2.p - s1.p) / dt;
+      const sMid = api.sampleTrajectory([seg], (t1 + t2) / 2);
+      const expectedV = sMid.v * (1 - delayRate);
+      assert(Math.abs(fd - expectedV) < 0.01, 'chain rule finite difference matches at rate ' + delayRate + ': fd=' + fd + ' expected=' + expectedV);
+    }
+  }
+
+  console.log('Analytic critically damped curve math PASS: velocity-preserving retarget, stagger continuity, rest acceleration bound, finite difference coverage, backward seek, and settling.');
 }
 
 // 2. Integration & Blur Protection Test
@@ -241,8 +291,10 @@ function testIntegrationAndBlurProtection() {
     const h = mountSimple({ N, fps });
     for (let f = 0; f < 12 * fps; f++) {
       if (f === fps) h.issue({ offset: 100, delta: 100, index: 2, firstVisible: 0, interval: 800, instant: false, snap: true });
-      if (f === 2 * fps) h.issue({ offset: 220, delta: 120, index: 4, interval: 240, instant: false, snap: true, interlude: true });
-      if (f === 2 * fps + Math.floor(fps / 5)) h.issue({ offset: 40, delta: -180, index: 1, interval: 100, instant: false, snap: true, interlude: false });
+      if (f === 2 * fps) h.issue({ offset: 220, delta: 120, index: 4, firstVisible: 0, interval: 240, instant: false, snap: true, interlude: true });
+      // Fast retarget with BOTH firstVisible and index changing within 33ms
+      if (f === 2 * fps + Math.max(1, Math.floor(fps / 30))) h.issue({ offset: 310, delta: 90, index: 6, firstVisible: 3, interval: 200, instant: false, snap: true, interlude: true });
+      if (f === 2 * fps + Math.floor(fps / 5)) h.issue({ offset: 40, delta: -270, index: 1, firstVisible: 0, interval: 100, instant: false, snap: true, interlude: false });
       if (f === 4 * fps) h.issue({ offset: 120, delta: 80, index: 3, interval: 800, instant: false, snap: true, geometry: true });
       if (f === 5 * fps) h.issue({ offset: 400, delta: 280, index: 5, instant: true, snap: true, geometry: false });
       if (f === 6 * fps) { h.issue({ instant: true, snap: false }); h.host.actualOffset.value = 650; }
@@ -264,6 +316,15 @@ function testIntegrationAndBlurProtection() {
         if (entry) {
           assert(Math.abs(frame.positions[i] - entry.row) <= (entry.vLead ?? 0) + tolerance,
             'frame ' + f + ' row ' + i + ': vLead bounds delta');
+          const issueFrames = [fps, 2 * fps, 2 * fps + Math.max(1, Math.floor(fps / 30)), 2 * fps + Math.floor(fps / 5), 4 * fps, 5 * fps, 6 * fps, 7 * fps];
+          const nextIssue = issueFrames.find(frm => frm > f) ?? h.trace.length;
+          // Lookahead within the same segment (up to next retarget) within 64ms window
+          const maxLookahead = Math.min(nextIssue - 1, f + Math.floor(0.064 * fps + 1e-4));
+          for (let look = f + 1; look <= maxLookahead; look++) {
+            const forwardDelta = Math.abs(h.trace[look].positions[i] - frame.positions[i]);
+            assert(forwardDelta <= (entry.vLead ?? 0) + 0.05,
+              'frame ' + f + ' lookahead frame ' + look + ' row ' + i + ': forwardDelta ' + forwardDelta + ' exceeds vLead ' + entry.vLead);
+          }
         }
       }
     }
