@@ -369,7 +369,9 @@ function drawVoice(canvas: SkCanvas, words: ShapedGlyphWord[], motions: WordMoti
         // Ligatures shared by two slices must not emit their full glow twice.
         const sigma = Math.max(0.01, radius);
         glowPaint.setImageFilter(glowFilterForDraw(paints, sigma));
-        if (tightBlurBounds) {
+        // Unemphasized Spicy glows keep the original surface: changing its
+        // bounds can change sub-byte blur tails exposed as zero-alpha PNG RGB.
+        if (tightBlurBounds && (!spicy || word.word.emphasized)) {
           const layer = blurLayerBounds(word.clips[letter].getBounds(), sigma);
           canvas.saveLayer(glowPaint, Skia.XYWHRect(layer.x, layer.y, layer.width, layer.height));
         } else canvas.saveLayer(glowPaint);

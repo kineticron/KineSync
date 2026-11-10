@@ -54,7 +54,7 @@ for (const sigma of [0, 0.01, 0.125, 2, 8, 20.5, 100]) {
   assert.ok(result.x <= clip.x - 3 * sigma && result.y <= clip.y - 3 * sigma);
 }
 const source = fs.readFileSync(path.join(directory, 'native-glyph-picture.tsx'), 'utf8');
-assert.match(source, /if \(tightBlurBounds\) \{/);
+assert.match(source, /if \(tightBlurBounds && \(!spicy \|\| word.word.emphasized\)\) \{/);
 assert.match(source, /else canvas.saveLayer\(glowPaint\)/);
 assert.equal((source.match(/previous.tightBlurBounds === tightBlurBounds/g) ?? []).length, 6,
   'Both development and production invalidate every cached-picture early return');
