@@ -35,6 +35,8 @@ function harness(style,list,options={}){
  const arrivalContextModule=options.arrivalContextFactory?.(react,state)??options.arrivalContextModule;
  const modules={react,
   '@/lib/lyrics-arrival-context':arrivalContextModule??{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit',useArrivalGeometry:()=>({}),useArrivalIdentity:()=>({handle:undefined,identity:{id:0},context:{},producers:{}})},
+  '@/lib/batched-amll-motion': { useBatchedAmllMotion: () => false },
+  './batched-amll-motion': { composeBatchedRegistry: () => ({}) },
   '@/lib/lyrics-arrival-trace':arrivalContextModule??{},
   '@/lib/native-clock-diagnostics':{emitNativeClockDiagnostic(){}},
   'react-native':{AppState:{currentState:'active',addEventListener:()=>({remove(){}})},FlatList:'FlatList',Linking:{openURL(){}},Pressable:'Pressable',StyleSheet:{create:x=>x},Text:'Text',View:'View'},

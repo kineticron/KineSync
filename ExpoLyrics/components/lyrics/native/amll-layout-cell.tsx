@@ -1,6 +1,7 @@
 import React, { forwardRef, useContext, useEffect, useMemo } from 'react';
 import { type View, type ViewProps } from 'react-native';
-import Animated, { defineAnimation, useSharedValue, type Animation, type LayoutAnimationFunction, type SharedValue } from 'react-native-reanimated';
+import Animated, { defineAnimation, useSharedValue, runOnUI, type Animation, type LayoutAnimationFunction, type SharedValue } from 'react-native-reanimated';
+import { removeBatchedMotion, stageBatchedCell } from './batched-amll-motion';
 import { amllScrollSpring, stepAmllSpring } from './reference-motion';
 import { ReferenceScrollContext, type ReferenceScroll } from './reference-scroll';
 
@@ -8,13 +9,14 @@ type CellMotion = { p: number; v: number; index: number };
 interface CellSpring extends Animation<CellSpring> { current: number; velocity: number; timestamp: number }
 
 /** Same solver as viewport/row motion, with retained position and velocity on interruption. */
-function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, damping: number, host?: ReferenceScroll): number {
+function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, damping: number, host?: ReferenceScroll, expectedIndex = motion.value.index): number {
   'worklet';
   return defineAnimation<CellSpring>(0, () => {
     'worklet';
     return {
       current: 0, velocity: 0, timestamp: 0,
       onStart(animation, value, now) {
+        if (host?.batch && motion.value.index !== expectedIndex) return;
         animation.current = Number(value);
         animation.velocity = motion.value.v;
         animation.timestamp = now;
@@ -24,10 +26,12 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
           const curRowVLead = cur?.rowVLead ?? 0;
           const worstCell = stepAmllSpring({ p: animation.current, v: 0 }, 0, 0.9, damping, stiffness, 0.064);
           const cellVLead = Math.abs(worstCell.p - animation.current);
-          host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, vLead: curRowVLead + cellVLead, rowVLead: curRowVLead, cellVLead, settled: false } };
+          if (host.batch) stageBatchedCell(host, motion.value.index, motion, animation.current, cellVLead, false);
+          else host.motions.value = { ...host.motions.value, [motion.value.index]: { row: currentRow, cell: animation.current, vLead: curRowVLead + cellVLead, rowVLead: curRowVLead, cellVLead, settled: false } };
         }
       },
       onFrame(animation, now) {
+        if (host?.batch && motion.value.index !== expectedIndex) return true;
         const dt = Math.min(0.064, Math.max(0, (now - animation.timestamp) / 1000)) || (1 / 60);
         const next = stepAmllSpring({ p: animation.current, v: animation.velocity }, 0, 0.9, damping, stiffness, dt);
         const settled = Math.abs(next.p) < 0.01 && Math.abs(next.v) < 0.01;
@@ -41,7 +45,8 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
           const curRowVLead = cur?.rowVLead ?? 0;
           const worstCell = stepAmllSpring({ p: animation.current, v: animation.velocity }, 0, 0.9, damping, stiffness, 0.064);
           const cellVLead = settled ? 0 : Math.max(Math.abs(worstCell.p - animation.current), Math.abs(next.v) * 0.064, 0.01);
-          host.motions.value = {
+          if (host.batch) stageBatchedCell(host, motion.value.index, motion, animation.current, cellVLead, settled);
+          else host.motions.value = {
             ...host.motions.value,
             [motion.value.index]: {
               row: currentRow,
@@ -59,6 +64,12 @@ function withLayoutSpring(motion: SharedValue<CellMotion>, stiffness: number, da
   }) as unknown as number;
 }
 
+function retireBatchedCell(host: ReferenceScroll, index: number, motion: SharedValue<CellMotion>) {
+  'worklet';
+  if (motion.value.index === index) motion.value = { ...motion.value, index: -1 };
+  removeBatchedMotion(host.batch!, index, motion, true);
+}
+
 /** Animate changed cell positions, never their measured Yoga height. */
 export const AmllLayoutCell = forwardRef<View, ViewProps & { index: number }>(function AmllLayoutCell({ index, ...props }, ref) {
   const host = useContext(ReferenceScrollContext)!;
@@ -72,12 +83,14 @@ export const AmllLayoutCell = forwardRef<View, ViewProps & { index: number }>(fu
     motion.value = { p, v: current.index === index ? current.v : 0, index };
     return {
       initialValues: { transform: [{ translateY: p }] },
-      animations: { transform: [{ translateY: withLayoutSpring(motion, stiffness, damping, host) }] },
+      animations: { transform: [{ translateY: withLayoutSpring(motion, stiffness, damping, host, index) }] },
     };
   }, [host, index, motion]);
   useEffect(() => {
     return () => {
-      if (host?.motions) {
+      if (host.batch) {
+        runOnUI(retireBatchedCell)(host, index, motion);
+      } else if (host?.motions) {
         const cur = host.motions.value;
         if (cur[index]) {
           const curRow = cur[index].row ?? 0;
@@ -91,6 +104,6 @@ export const AmllLayoutCell = forwardRef<View, ViewProps & { index: number }>(fu
         }
       }
     };
-  }, [host, index]);
+  }, [host, index, motion]);
   return <Animated.View {...props} ref={ref} layout={layout} collapsable={false} />;
 });
