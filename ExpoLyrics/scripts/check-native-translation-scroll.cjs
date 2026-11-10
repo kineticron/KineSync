@@ -35,6 +35,7 @@ function harness(style,list,options={}){
  const arrivalContextModule=options.arrivalContextFactory?.(react,state)??options.arrivalContextModule;
  const modules={react,
   '@/lib/lyrics-arrival-context':arrivalContextModule??{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit',useArrivalGeometry:()=>({}),useArrivalIdentity:()=>({handle:undefined,identity:{id:0},context:{},producers:{}})},
+  '@/lib/relaxed-rendering': { useRelaxedRendering: () => ({ glyphPicture: false, blurEnvelope: false, epsilon: false }) },
   '@/lib/fast-lyric-loading': { useFastLyricLoading: () => false },
   'expo-blur': { BlurTargetView: 'BlurTargetView' },
   './native-shared-blur': { NativeSharedBlur: 'NativeSharedBlur', NativeSharedBlurContext: { Provider: 'SharedBlurProvider' }, NativeBlurGeometryContext: { Provider: 'BlurGeometryProvider' }, SHARED_BLUR_PROFILES: {}, hasBlurGeometry: () => false },

@@ -1,3 +1,4 @@
+import { changedPresentation, glyphPresentation } from './relaxed-epsilon';
 import { blurLayerBounds } from './blur-layer-bounds';
 import { useArrivalPictureMeasurement } from '@/lib/lyrics-arrival-picture';
 import { arrivalPicture, type ArrivalHandle, type ArrivalUiTotals } from '@/lib/lyrics-arrival-trace';
@@ -401,9 +402,9 @@ function reportArrivalPicture(handle: ArrivalHandle, generation: number, duratio
 /** One native display list per voice, with no React glyph nodes or per-glyph alpha layers. */
 const pictureNativeMonotonicNow = typeof performance !== 'undefined' ? performance.now : null;
 const pictureTraceEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
-const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0 }: {
+const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, arrivalOwner, arrivalGeneration = 0, epsilon = false }: {
   arrivalOwner?: ArrivalHandle; arrivalGeneration?: number;
-  words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
+  epsilon?: boolean; words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
   const measurement = useArrivalPictureMeasurement(arrivalOwner, arrivalGeneration, words, width, height);
@@ -412,6 +413,7 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
   const picture = useSharedValue(empty);
   const paints = useSharedValue<ReusableGlyphPaints | null>(null);
   const traceFrames = useSharedValue(0);
+  const published = useSharedValue<number[]>([]);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
@@ -447,6 +449,17 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
+    if (epsilon) {
+      const signature = glyphPresentation(words, motions, time, spicy, background, lineMotion.value, floatClock);
+      const force = isActive !== previous.active || time < previous.time || Math.abs(time - previous.time) > 1000 ||
+        (spicy && next.every(w => w.state.settled) && !settled) || time === previous.time;
+      if (!changedPresentation(published.value, signature, force)) {
+        state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
+          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+        return;
+      }
+      published.value = signature;
+    }
     const cachedPaints = paints.value;
     const totals = pictureTraceEnabled && measurement && measurement.counts.value.active ? { ...measurement.counts.value } : undefined;
     if (totals && !cachedPaints) totals.paintConstructors += 2;
@@ -480,14 +493,14 @@ const NativeGlyphPictureDevelopment = function NativeGlyphPictureDevelopment({ w
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  }, [epsilon, published, measurement, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 };
 
 // Exact c2aaa20 component body: no arrival hooks, shared values or callback captures.
-const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion }: {
-  words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
+const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width, height, position, active, spicy, background, fontSize, lineEnd, lineMotion, epsilon = false }: {
+  epsilon?: boolean; words: ShapedGlyphWord[]; width: number; height: number; position: SharedValue<number>; active: SharedValue<boolean>;
   spicy: boolean; background: boolean; fontSize: number; lineEnd: number; lineMotion: SharedValue<ReferenceLineMotion>;
 }) {
   const bounds = useMemo(() => Skia.XYWHRect(-64, -64, width + 128, height + 128), [height, width]);
@@ -495,6 +508,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
   const picture = useSharedValue(empty);
   const paints = useSharedValue<ReusableGlyphPaints | null>(null);
   const traceFrames = useSharedValue(0);
+  const published = useSharedValue<number[]>([]);
   const state = useSharedValue({ words: words.map(w => initialWordSpringState(w.word)), motions: [] as WordMotion[], time: -1, active: false, dark: -1, bright: -1,
     floatClock: { active: false, releasePosition: -1, elapsed: 0 } as AmllFloatClock, cached: false });
   const frame = useFrameCallback(useCallback(info => {
@@ -530,6 +544,17 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     const next = spicy ? words.map((w, index) => advanceReferenceWordMotion(w.word, previous.cached
       ? { ...previous.words[index], previousPosition: previous.time } : previous.words[index], time, dt)) : [];
     const motions = spicy ? next.map(w => w.motion) : previous.motions.length ? previous.motions : words.map(() => ({ scale: 1, y: 0, glow: 0, gradient: 0, letters: [] }));
+    if (epsilon) {
+      const signature = glyphPresentation(words, motions, time, spicy, background, lineMotion.value, floatClock);
+      const force = isActive !== previous.active || time < previous.time || Math.abs(time - previous.time) > 1000 ||
+        (spicy && next.every(w => w.state.settled) && !settled) || time === previous.time;
+      if (!changedPresentation(published.value, signature, force)) {
+        state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
+          dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
+        return;
+      }
+      published.value = signature;
+    }
     const cachedPaints = paints.value;
     const reusablePaints = cachedPaints ?? { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
     picture.value = createPicture(canvas => drawVoice(canvas, words, motions, time, isActive, spicy, background, fontSize, lineEnd,
@@ -550,7 +575,7 @@ const NativeGlyphPictureProduction = function NativeGlyphPicture({ words, width,
     if (!cachedPaints) paints.value = reusablePaints;
     state.value = { words: spicy ? next.map(w => w.state) : previous.words, motions, time, active: isActive,
       dark: lineMotion.value.dark, bright: lineMotion.value.bright, floatClock, cached: false };
-  }, [active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
+  }, [epsilon, published, active, background, bounds, fontSize, lineEnd, lineMotion, paints, picture, position, spicy, state, traceFrames, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
   return <Picture picture={picture} />;
 };

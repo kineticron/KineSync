@@ -3,7 +3,7 @@
 require('./check-spicy-progressive-blur.cjs');
 const assert=require('node:assert/strict'),path=require('node:path'),vm=require('node:vm'),{execFileSync}=require('node:child_process'),{buildSync}=require('esbuild');
 const {bundle,createVoiceHarness,currentCode}=require('./check-native-translation-toggle.cjs');
-function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{if(name==='./native-progressive-blur'&&progModule)return progModule;assert(name in modules,name);return modules[name];}});return module.exports;}
+function load(file,modules,dev=true){const module={exports:{}};const code=buildSync({entryPoints:[path.join(__dirname,'..',file)],bundle:true,external:['*'],platform:'node',format:'cjs',write:false}).outputFiles[0].text;vm.runInNewContext(code,{__DEV__:dev,module,exports:module.exports,require:name=>{if(name==='./relaxed-blur-envelope')return {};if(name==='./native-progressive-blur'&&progModule)return progModule;assert(name in modules,name);return modules[name];}});return module.exports;}
 const progModule=load('components/lyrics/native/native-progressive-blur.ts',{
  react:{createContext:value=>({value}),useMemo:fn=>fn()},'react-native-reanimated':{useSharedValue:x=>({value:x}),useAnimatedReaction:()=>{},withTiming:x=>x},
  './native-shared-blur':{},
@@ -111,7 +111,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const {sharedBlurRegion}=load('components/lyrics/native/native-shared-blur.tsx',{
   react:{createContext:value=>({value})},'react-native':{StyleSheet:{},View:'View'},'expo-blur':{},
   '@react-native-masked-view/masked-view':{},'expo-linear-gradient':{},'react-native-reanimated':{},'react/jsx-runtime':{},
-  './native-progressive-blur':progModule,
+ './native-progressive-blur':progModule,
  });
  const rows=Array.from({length:12},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));
  const w={visualActiveLineStartIndex:3,visualActiveLineEndIndex:3,focusLineIndex:3};
@@ -137,7 +137,7 @@ replacement.presentationWindow.value={...window,visualActiveLineStartIndex:20,vi
  const modules={react:{createContext:value=>({value})},'react-native':{StyleSheet:{absoluteFill:{}},View:'View'},'expo-blur':{BlurView:'BlurView'},
  '@react-native-masked-view/masked-view':'MaskedView','expo-linear-gradient':{LinearGradient:'LinearGradient'},'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
  './native-progressive-blur':progModule,
- 'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return {timing:value};},useSharedValue:value=>{const v={current:value,animation:null,get value(){return this.current;},set value(next){if(next && typeof next==='object' && 'timing' in next)this.animation={from:this.current,to:next.timing};else {this.current=next;this.animation=null;}}};shared.push(v);return v;},useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{prepare=p;react=r;}}};
+ 'react-native-reanimated':{default:{View:'Animated.View'},__esModule:true,withTiming:(value,config)=>{assert(Number.isFinite(value));timings.push({value,config});return {timing:value};},useSharedValue:value=>{const v={current:value,animation:null,get value(){return this.current;},set value(next){if(next && typeof next==='object' && 'timing' in next)this.animation={from:this.current,to:next.timing};else {this.current=next;this.animation=null;}}};shared.push(v);return v;},useAnimatedStyle:fn=>{styles.push(fn);return {};},useAnimatedReaction:(p,r)=>{if(p()!==null){prepare=p;react=r;}}}};
  const api=load('components/lyrics/native/native-shared-blur.tsx',modules);
  let scans=0;
  const geometry=Array.from({length:1000},(_,i)=>({y:i*100,height:100,start:100000,end:101000}));

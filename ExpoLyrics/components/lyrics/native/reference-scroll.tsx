@@ -1,3 +1,4 @@
+import { changedScalar } from './relaxed-epsilon';
 import React, { createContext, forwardRef, useCallback, useContext, useEffect } from 'react';
 import { type ScrollView, type ScrollViewProps } from 'react-native';
 import Animated, { cancelAnimation, scrollTo, useAnimatedReaction, useAnimatedRef, useAnimatedStyle,
@@ -12,7 +13,7 @@ export const initialScrollCommand: ScrollCommand = { serial: 0, offset: 0, delta
   interval: 800, instant: true, interlude: false, snap: false };
 export type RowState = { p: number; v: number; renderedP: number; delay: number; prevResidual: number; stiffness: number; damping: number };
 export type RowMotionEntry = { row: number; cell: number; vLead?: number; rowVLead?: number; cellVLead?: number; settled: boolean; owner?: SharedValue<number> };
-export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>>; batch?: SharedValue<BatchedMotion>; batchRows?: SharedValue<Record<number, RowMotionEntry>>; simple?: SharedValue<SimpleScrollState> };
+export type ReferenceScroll = { command: SharedValue<ScrollCommand>; residual: SharedValue<number>; renderedResidual: SharedValue<number>; actualOffset: SharedValue<number>; spicy: boolean; motions?: SharedValue<Record<number, RowMotionEntry>>; batch?: SharedValue<BatchedMotion>; batchRows?: SharedValue<Record<number, RowMotionEntry>>; simple?: SharedValue<SimpleScrollState>; epsilon?: boolean };
 export const ReferenceScrollContext = createContext<ReferenceScroll | null>(null);
 
 function applyScrollCommand(host: ReferenceScroll, spring: SharedValue<{ p: number; v: number; stiffness: number; damping: number }>,
@@ -95,8 +96,11 @@ export const ReferenceScrollView = forwardRef<ScrollView, ScrollViewProps>(funct
       spring.value = { ...s, p: settled ? 0 : next.p, v: settled ? 0 : next.v };
       host.residual.value = spring.value.p;
     }
-    scrollTo(nativeRef, 0, Math.max(0, host.command.value.offset - host.residual.value), false);
-    host.renderedResidual.value = host.residual.value;
+    const nextResidual = host.residual.value;
+    if (changedScalar(host.renderedResidual.value, nextResidual, !!host.epsilon, nextResidual === 0, 0.05)) {
+      scrollTo(nativeRef, 0, Math.max(0, host.command.value.offset - nextResidual), false);
+      host.renderedResidual.value = nextResidual;
+    }
     if (host.batch) advanceBatchedMotion(host, info.timeSincePreviousFrame);
   }, [host, nativeRef, spring]));
   // withTiming can reach zero between callbacks; apply its final endpoint too.

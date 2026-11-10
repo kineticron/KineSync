@@ -277,7 +277,7 @@ export function advanceSimpleAmllMotion(
         value.awake = true;
       }
       const exact = host.command.value.snap ? rowP - rendered : 0;
-      if (exact === 0 || Math.abs(exact - slot.output.value) >= 1e-7) slot.output.value = exact;
+      if (exact === 0 || Math.abs(exact - slot.output.value) >= (host.epsilon ? 0.05 : 1e-7)) slot.output.value = exact;
       const hidden = Math.abs(exact - slot.output.value);
       const rowDev = boundAnalyticDisplacement(value.segments, T - slot.delay, 0.064);
       const viewportDev = boundAnalyticDisplacement(value.segments, T, 0.064);

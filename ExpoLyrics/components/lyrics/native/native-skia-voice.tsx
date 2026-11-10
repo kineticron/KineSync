@@ -1,3 +1,4 @@
+import { useRelaxedRendering } from '@/lib/relaxed-rendering';
 import { RelaxedGlyphSwitch } from './relaxed-glyph-switch';
 import { NativeSharedBlurContext } from './native-shared-blur';
 import { nativeGeometryCache } from './native-geometry-cache';
@@ -26,7 +27,8 @@ type WordProps = { shaped: ShapedWord; paragraph: SkParagraph; width: number; po
 
 const AnimatedWord = memo(function AnimatedWord({ shaped, paragraph, width, position, fontSize, spicy, background, enabled, last, words, lineMotion, lineActive, blur, lineEnd }: WordProps) {
   const { word, rects, letters } = shaped;
-  const motion = useReferenceWordMotion(word, position, enabled && spicy);
+  const relaxed = useRelaxedRendering();
+  const motion = useReferenceWordMotion(word, position, enabled && spicy, __DEV__ && relaxed.epsilon);
   const transform = useDerivedValue(() => spicy
     ? [{ translateY: motion.value.y * (background ? fontSize / 0.75 : fontSize) }, { scale: motion.value.scale }]
     : [{ translateY: amllFloat(position.value, word.start, word.end, background) * fontSize }, { scale: 1 }]);

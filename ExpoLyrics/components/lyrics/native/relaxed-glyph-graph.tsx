@@ -1,3 +1,4 @@
+import { changedScalar } from './relaxed-epsilon';
 import React, { memo, useCallback, useEffect, useMemo } from 'react';
 import { Blur, ColorMatrix, Fill, Glyphs, Group, LinearGradient, Paint, Path, Picture, Skia, type SkColor, type SkRect } from '@shopify/react-native-skia';
 import { makeMutable, useFrameCallback, type SharedValue } from 'react-native-reanimated';
@@ -15,7 +16,7 @@ type Cell = { emphasis: AmllEmphasis; matrix: SharedValue<number[]>; start: Shar
   colors: SharedValue<SkColor[]>; glow: SharedValue<number>; inkOpacity: SharedValue<number>; radius: SharedValue<number> };
 type WordCell = { rtl: boolean; matrix: SharedValue<number[]>; slices: Cell[]; spring: WordSpringState; motion: WordMotion };
 export type RelaxedGlyphState = { ready: SharedValue<number>; words: WordCell[]; clock: AmllFloatClock; time: number; active: boolean; cached: boolean; dark: number; bright: number };
-export type RelaxedGlyphOptions = { spicy: boolean; background: boolean; fontSize: number; lineEnd: number };
+export type RelaxedGlyphOptions = { spicy: boolean; background: boolean; fontSize: number; lineEnd: number; epsilon?: boolean };
 const identity = () => [1, 0, 0, 0, 1, 0, 0, 0, 1];
 export function createRelaxedGlyphState(words: ShapedGlyphWord[]): RelaxedGlyphState {
   return { ready: makeMutable(0), words: words.map(word => ({ rtl: spicyIsRtl(word.word.text), matrix: makeMutable(identity()), spring: initialWordSpringState(word.word),
@@ -25,12 +26,12 @@ export function createRelaxedGlyphState(words: ShapedGlyphWord[]): RelaxedGlyphS
     clock: { active: false, releasePosition: -1, elapsed: 0 }, time: -1, active: false, cached: false, dark: -1, bright: -1 };
 }
 function notify<T>(value: T): T { 'worklet'; return value; }
-function setMatrix(cell: SharedValue<number[]>, rect: SkRect, scale: number, x: number, y: number, origin = 0.5) {
+function setMatrix(cell: SharedValue<number[]>, rect: SkRect, scale: number, x: number, y: number, origin = 0.5, epsilon = false, force = false) {
   'worklet';
   const ox = rect.x + rect.width * origin, oy = rect.y + rect.height / 2;
   const matrix = cell.value;
   const tx = x + ox - scale * ox, ty = y + oy - scale * oy;
-  if (matrix[0] === scale && matrix[4] === scale && matrix[2] === tx && matrix[5] === ty) return;
+  if (!changedScalar(matrix[0], scale, epsilon, force) && !changedScalar(matrix[2], tx, epsilon, force, 0.05) && !changedScalar(matrix[5], ty, epsilon, force, 0.05)) return;
   matrix[0] = scale; matrix[4] = scale;
   matrix[2] = tx; matrix[5] = ty;
   cell.modify(notify);
@@ -41,7 +42,8 @@ export function updateRelaxedGlyphState(state: RelaxedGlyphState, words: ShapedG
   'worklet';
   if (!words.length) return;
   state.ready.value = 1;
-  const { spicy, background, fontSize, lineEnd } = options;
+  const { spicy, background, fontSize, lineEnd, epsilon = false } = options;
+  const force = active !== state.active || time < state.time || Math.abs(time - state.time) > 1000 || time === state.time;
   if (state.cached && active === state.active && line.dark === state.dark && line.bright === state.bright &&
     (time === state.time || !active && (time < lineEnd) === (state.time < lineEnd) &&
       (time < words[0].word.start || time > lineEnd + 1500))) { state.time = time; return; }
@@ -63,12 +65,14 @@ export function updateRelaxedGlyphState(state: RelaxedGlyphState, words: ShapedG
   if (!spicy) for (let i = 0; i < words.length; i++) advanced += clamp01((time - words[i].word.start) / Math.max(1, words[i].word.end - words[i].word.start)) *
     (words[i].width + (i === 0 ? fade * 1.5 : 0) + (i === words.length - 1 ? fade * 0.5 : 0));
   for (let i = 0; i < words.length; i++) {
-    const word = words[i], cell = state.words[i], motion = cell.motion, bounds = word.rects[0];
-    if (spicy) { if (state.cached) cell.spring.previousPosition = state.time; const next = advanceReferenceWordMotion(word.word, cell.spring, time, dt); cell.spring = next.state; cell.motion = next.motion; Object.assign(motion, next.motion); }
+    const word = words[i], cell = state.words[i], bounds = word.rects[0];
+    let motion = cell.motion;
+    if (spicy) { if (state.cached) cell.spring.previousPosition = state.time; const next = advanceReferenceWordMotion(word.word, cell.spring, time, dt); cell.spring = next.state; cell.motion = next.motion; motion = next.motion; }
     if (!bounds) continue;
+    const publishFinal = force || spicy && cell.spring.settled || !active && floatSettled;
     const unit = background ? fontSize / 0.75 : fontSize;
     setMatrix(cell.matrix, bounds, spicy ? motion.scale : 1, 0, spicy ? motion.y * unit :
-      amllFloat(amllWordFloatPosition(clock, time, word.word.start, word.word.end), word.word.start, word.word.end, background) * fontSize, word.word.origin ?? 0.5);
+      amllFloat(amllWordFloatPosition(clock, time, word.word.start, word.word.end), word.word.start, word.word.end, background) * fontSize, word.word.origin ?? 0.5, epsilon, force || spicy && cell.spring.settled);
     for (let letter = 0; letter < cell.slices.length; letter++) {
       const rect = (word.word.emphasized ? word.letters[letter] : word.rects)[0];
       if (!rect) continue;
@@ -76,23 +80,23 @@ export function updateRelaxedGlyphState(state: RelaxedGlyphState, words: ShapedG
       let glow = 0, radius = 0, gradient = motion.gradient;
       if (word.word.emphasized) {
         if (spicy) {
-          const m = motion.letters[letter] ?? motion; setMatrix(slice.matrix, rect, m.scale, 0, m.y * unit);
+          const m = motion.letters[letter] ?? motion; setMatrix(slice.matrix, rect, m.scale, 0, m.y * unit, 0.5, epsilon, force || cell.spring.settled);
           glow = clamp01(m.glow * 1.85) * 0.5; radius = (4 + 12 * m.glow) / 2; gradient = m.gradient;
         } else {
           const m = amllEmphasis(time, word.word.emphasis?.start ?? word.word.start, word.word.emphasis?.end ?? word.word.end,
             (word.word.emphasis?.index ?? 0) + letter, word.word.emphasis?.count ?? word.word.letters.length,
             word.word.emphasis?.last ?? i === words.length - 1, background);
-          setMatrix(slice.matrix, rect, m.scale, m.x * fontSize, m.y * fontSize); glow = m.glow; radius = m.radius * fontSize / 2;
+          setMatrix(slice.matrix, rect, m.scale, m.x * fontSize, m.y * fontSize, 0.5, epsilon, force || m.scale === 1); glow = m.glow; radius = m.radius * fontSize / 2;
         }
       } else if (spicy) { glow = clamp01(motion.glow * 0.35) * 0.5; radius = (4 + 2 * motion.glow) / 2; }
       const rtl = cell.rtl, extent = spicy ? word.revealRects[letter] : rect;
       const x = spicy ? rtl ? extent.x + extent.width * (1 - gradient) : extent.x + extent.width * gradient : amllRevealStart(rect, word.rects, advanced, word.before, fade);
       const length = spicy ? extent.width * 0.2 * (rtl ? -1 : 1) : fade;
       const start = slice.start.value, end = slice.end.value;
-      if (start.x !== x || start.y !== rect.y) {
+      if (changedScalar(start.x, x, epsilon, publishFinal, 0.05) || start.y !== rect.y) {
         start.x = x; start.y = rect.y; slice.start.modify(notify);
       }
-      if (end.x !== x + length || end.y !== rect.y) {
+      if (changedScalar(end.x, x + length, epsilon, publishFinal, 0.05) || end.y !== rect.y) {
         end.x = x + length; end.y = rect.y; slice.end.modify(notify);
       }
       const uniform = spicy && !active;
@@ -100,11 +104,15 @@ export function updateRelaxedGlyphState(state: RelaxedGlyphState, words: ShapedG
       const dark = spicy ? background ? 0.3 : 0.5 : line.dark;
       const colors = slice.colors.value;
       const firstAlpha = uniform ? 1 : bright, lastAlpha = uniform ? 1 : dark;
-      if (colors[0][3] !== firstAlpha || colors[1][3] !== lastAlpha) {
+      if (changedScalar(colors[0][3], firstAlpha, epsilon, publishFinal) || changedScalar(colors[1][3], lastAlpha, epsilon, publishFinal)) {
         colors[0][3] = firstAlpha; colors[1][3] = lastAlpha; slice.colors.modify(notify);
       }
-      slice.inkOpacity.value = uniform ? time > lineEnd ? bright : dark : 1;
-      slice.glow.value = active && glow > 0.001 ? glow : 0; slice.radius.value = Math.max(0.01, radius);
+      const opacity = uniform ? time > lineEnd ? bright : dark : 1;
+      const alpha = active && glow > 0.001 ? glow : 0;
+      const sigma = Math.max(0.01, radius);
+      if (changedScalar(slice.inkOpacity.value, opacity, epsilon, force || opacity === 1)) slice.inkOpacity.value = opacity;
+      if (changedScalar(slice.glow.value, alpha, epsilon, force || alpha === 0)) slice.glow.value = alpha;
+      if (changedScalar(slice.radius.value, sigma, epsilon, publishFinal, 0.05)) slice.radius.value = sigma;
     }
   }
   state.time = time; state.active = active; state.dark = line.dark; state.bright = line.bright; state.cached = false;
@@ -153,12 +161,12 @@ export function RelaxedGlyphGraph({ words, state, spicy, clipMode = 'group' }: {
   return <Group layer={<Paint opacity={state.ready} />}>{nodes}</Group>;
 }
 /** Static glyph ink plus live transforms, reveal and glow. No per-frame app picture recording. */
-export const RelaxedGlyphPicture = memo(function RelaxedGlyphPicture({ words, position, active, lineMotion, spicy, background, fontSize, lineEnd, clipMode = 'group' }: {
+export const RelaxedGlyphPicture = memo(function RelaxedGlyphPicture({ words, position, active, lineMotion, spicy, background, fontSize, lineEnd, epsilon = false, clipMode = 'group' }: {
   clipMode?: 'mask' | 'group'; words: ShapedGlyphWord[]; position: SharedValue<number>; active: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>;
 } & RelaxedGlyphOptions) {
   const buffers = useMemo(() => createRelaxedGlyphState(words), [words]);
   const state = useMemo(() => makeMutable(buffers), [buffers]);
-  const options = useMemo(() => ({ spicy, background, fontSize, lineEnd }), [spicy, background, fontSize, lineEnd]);
+  const options = useMemo(() => ({ spicy, background, fontSize, lineEnd, epsilon }), [spicy, background, fontSize, lineEnd, epsilon]);
   const frame = useFrameCallback(useCallback(info => {
     'worklet';
     updateRelaxedGlyphState(state.value, words, position.value, active.value,

@@ -92,7 +92,7 @@ function mount(code, fps, initial = {}) {
   const render = patch => {
     props = { ...props, ...patch };
     cursor = 0;
-    motion = moduleObject.exports.useReferenceLineMotion(props.activeLine, props.enabled, props.background, props.playing);
+    motion = moduleObject.exports.useReferenceLineMotion(props.activeLine, props.enabled, props.background, props.playing, props.epsilon ?? false);
     for (const item of slots) if (item.dirty && item.setup) {
       item.cleanup?.(); item.cleanup = item.setup(); item.dirty = false;
     }
@@ -311,3 +311,18 @@ for (const fps of [60, 120]) for (const background of [false, true]) for (const 
   hook.unmount();
 }
 console.log('Serialized voice transform: fixed background size through active/inactive transitions, foreground spring, Spicy/static and both alignments passed.');
+
+// Gating must preserve the solver and reach the same exact resting endpoints.
+for (const fps of [60, 120]) for (const background of [false, true]) {
+  const exact = mount(source, fps, { background }), gated = mount(source, fps, { background, epsilon: true });
+  for (const active of [true, false, true, false]) {
+    exact.setActive(active); gated.setActive(active);
+    for (let i = 0; i < fps * 6; i++) {
+      exact.tick(); gated.tick();
+      for (const field of ['scale', 'bright', 'dark']) assert(Math.abs(exact.motion[field] - gated.motion[field]) < 0.0011, `epsilon ${field} remains bounded`);
+    }
+    for (const field of ['scale', 'bright', 'dark']) assert.equal(exact.motion[field], gated.motion[field], `final ${field} converges exactly`);
+  }
+  exact.unmount(); gated.unmount();
+}
+console.log('Epsilon ON/OFF serialized line worklets: accumulated movement, exact rest, repeated cues, 60/120 Hz and cleanup PASS.');

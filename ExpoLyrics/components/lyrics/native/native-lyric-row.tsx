@@ -1,3 +1,4 @@
+import { useRelaxedRendering } from '@/lib/relaxed-rendering';
 import { NativeBlurGeometryContext } from './native-shared-blur';
 import { NativeDevelopmentVoice } from './native-fast-voice';
 import React, { memo, useContext, useEffect, useMemo } from 'react';
@@ -57,7 +58,8 @@ const NativeVoiceView = memo(function NativeVoiceView({ voice, position, fontSiz
   blur: number; playing: boolean; prepared: boolean; rowActive: SharedValue<boolean>; blurValue: SharedValue<number>;
 }) {
   const { getMappingKey } = useMappingHelper();
-  const lineMotion = useReferenceLineMotion(rowActive, !spicy && !staticLyrics, background, !spicy && playing);
+  const relaxed = useRelaxedRendering();
+  const lineMotion = useReferenceLineMotion(rowActive, !spicy && !staticLyrics, background, !spicy && playing, __DEV__ && relaxed.epsilon);
   const voiceStyle = useAnimatedStyle(() => ({ transform: [{ scale: spicy || staticLyrics || background ? 1 : lineMotion.value.scale }], transformOrigin: right ? 'right center' : 'left center' }));
   const textStyle = useMemo<TextStyle>(() => ({ color: '#fff', fontSize, lineHeight, fontFamily: background ? 'KineSync-SF-Regular' : 'KineSync-SF-Bold',
     fontWeight: background ? '500' : staticLyrics ? '600' : '800', includeFontPadding: false,

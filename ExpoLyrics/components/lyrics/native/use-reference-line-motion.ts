@@ -1,3 +1,4 @@
+import { changedScalar } from './relaxed-epsilon';
 import { useEffect } from 'react';
 import { useAnimatedReaction, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { scheduleOnUI } from 'react-native-worklets';
@@ -5,8 +6,9 @@ import { clamp01, stepAmllSpring } from './reference-motion';
 export type ReferenceLineMotion = { scale: number; velocity: number; bright: number; dark: number };
 
 /** AMLL line scale springs and asymmetric alpha attack/release, in reference units. */
-export function useReferenceLineMotion(activeLine: SharedValue<boolean>, enabled: boolean, background: boolean, playing: boolean) {
+export function useReferenceLineMotion(activeLine: SharedValue<boolean>, enabled: boolean, background: boolean, playing: boolean, epsilon = false) {
   const motion = useSharedValue<ReferenceLineMotion>({ scale: 1, velocity: 0, bright: 1, dark: 0.4 });
+  const integrated = useSharedValue(motion.value);
   const running = useSharedValue(false);
   const pending = useSharedValue(-1);
   const clock = useSharedValue({ timestamp: -1, delta: 0 });
@@ -32,7 +34,7 @@ export function useReferenceLineMotion(activeLine: SharedValue<boolean>, enabled
     function tick(timestamp: number) {
       'worklet';
       if (!running.value) return;
-      const current = motion.value;
+      const current = integrated.value;
       const active = activeLine.value;
       const target = active || !playing ? 1 : background ? 0.75 : 0.97;
       // Reuse one frame's delta on wake, never the full time spent asleep.
@@ -47,8 +49,11 @@ export function useReferenceLineMotion(activeLine: SharedValue<boolean>, enabled
         : current.bright + (brightTarget - current.bright) * (1 - Math.exp(-(brightTarget > current.bright ? 50 : 7) * (dt || 0.016)));
       const dark = Math.abs(darkTarget - current.dark) < 0.001 ? darkTarget
         : current.dark + (darkTarget - current.dark) * (1 - Math.exp(-(darkTarget > current.dark ? 50 : 7) * (dt || 0.016)));
-      if (scale !== current.scale || bright !== current.bright || dark !== current.dark)
-        motion.value = { scale, velocity: spring.v, bright, dark };
+      const nextMotion = { scale, velocity: spring.v, bright, dark };
+      integrated.value = nextMotion;
+      const shown = motion.value;
+      const final = scale === target && bright === brightTarget && dark === darkTarget;
+      if (changedScalar(shown.scale, scale, epsilon, final) || changedScalar(shown.bright, bright, epsilon, final) || changedScalar(shown.dark, dark, epsilon, final)) motion.value = nextMotion;
       pending.value = dt > 0 && scale === target && Math.abs(spring.v) < 0.0001 && bright === brightTarget && dark === darkTarget
         ? -1 : requestAnimationFrame(tick);
     }

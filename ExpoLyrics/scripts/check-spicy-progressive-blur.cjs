@@ -87,7 +87,7 @@ const sharedModules = {
       return v;
     },
     useAnimatedStyle: fn => { styles.push(fn); return {}; },
-    useAnimatedReaction: (p, r) => { sharedPrepare = p; sharedReact = r; },
+    useAnimatedReaction: (p, r) => { if (p() !== null) { sharedPrepare = p; sharedReact = r; } },
   },
 };
 

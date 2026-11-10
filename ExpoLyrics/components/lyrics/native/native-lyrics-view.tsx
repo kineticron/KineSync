@@ -205,7 +205,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const referenceScroll = useMemo(() => ({ command: scrollCommand, residual: scrollResidual, renderedResidual: renderedScrollResidual,
     actualOffset: actualScrollOffset, spicy: style === 'spicy', motions: motionRegistry,
     batch: simpleScroll ? motionBatch : undefined, batchRows,
-    simple: simpleScroll ? simpleState : undefined }), [actualScrollOffset, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, simpleScroll, simpleState, style]);
+    simple: simpleScroll ? simpleState : undefined, epsilon: __DEV__ && relaxed.epsilon }), [actualScrollOffset, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, simpleScroll, simpleState, style, relaxed.epsilon]);
   const following = useRef(autoFollowEnabled);
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');

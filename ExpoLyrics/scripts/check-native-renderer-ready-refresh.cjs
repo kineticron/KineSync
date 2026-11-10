@@ -109,6 +109,7 @@ const react = {
 };
 const modules = {
   react,
+  '@/lib/relaxed-rendering': { useRelaxedRendering: () => ({ glyphPicture: false, blurEnvelope: false, epsilon: false }) },
   '@/lib/fast-lyric-loading': { useFastLyricLoading: () => true },
   'expo-blur': { BlurTargetView: 'BlurTargetView' },
   './native-shared-blur': {

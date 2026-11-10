@@ -1,3 +1,4 @@
+import { changedPresentation } from './relaxed-epsilon';
 import { useCallback, useEffect } from 'react';
 import { useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import type { NativePaintWord } from './native-lyrics-model';
@@ -5,7 +6,7 @@ import { advanceReferenceWordMotion, initialWordSpringState, type WordMotion } f
 export type { WordMotion } from './reference-word-motion';
 
 /** Same frame integration, seek snapping, neighboring-letter falloff and sung settlement as Spicy. */
-export function useReferenceWordMotion(word: NativePaintWord, position: SharedValue<number>, enabled: boolean) {
+export function useReferenceWordMotion(word: NativePaintWord, position: SharedValue<number>, enabled: boolean, epsilon = false) {
   const identity = `${word.start}:${word.end}:${word.text}`;
   const springs = useSharedValue(initialWordSpringState(word));
   const motion = useSharedValue<WordMotion>({ scale: 0.95, y: 0.01, glow: 0, gradient: -0.2,
@@ -25,8 +26,10 @@ export function useReferenceWordMotion(word: NativePaintWord, position: SharedVa
     const dt = Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000));
     const next = advanceReferenceWordMotion(word, previous, time, dt);
     springs.value = next.state;
-    motion.value = next.motion;
-  }, [identity, motion, position, springs, word]), false);
+    const a = motion.value, b = next.motion;
+    const signature = (m: WordMotion) => [m.scale, m.y, m.glow, m.gradient, ...m.letters.flatMap(l => [l.scale, l.y, l.glow, l.gradient])];
+    if (!epsilon || changedPresentation(signature(a), signature(b), next.state.settled || time < previous.previousPosition || Math.abs(time - previous.previousPosition) > 1000)) motion.value = next.motion;
+  }, [epsilon, identity, motion, position, springs, word]), false);
   useEffect(() => { frame.setActive(enabled); return () => frame.setActive(false); }, [enabled, frame]);
   return motion;
 }

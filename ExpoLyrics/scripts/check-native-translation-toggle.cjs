@@ -87,6 +87,8 @@ function createVoiceHarness(code, spicy, layouts = {}) {
     './native-glyph-model': {},
     './reference-motion': layouts.motion ?? { amllEmphasis: () => ({ scale: 1, x: 0, y: 0, glow: 0, radius: 0 }), amllFloat: () => 0, clamp01: value => value },
     './use-reference-word-motion': layouts.wordMotion ?? { useReferenceWordMotion: () => ({ value: {} }) },
+    '@/lib/relaxed-rendering': { useRelaxedRendering: () => ({ glyphPicture: false, blurEnvelope: false, epsilon: false }) },
+    './relaxed-glyph-switch': { RelaxedGlyphSwitch: NativeGlyphPicture },
     './native-glyph-picture': { NativeGlyphPicture, shapeGlyphWords(_paragraph, words, useSpicy) {
       counters.glyphShapePasses++;
       if (useSpicy) counters.spicyGlyphPictures += words.reduce((sum, word) => sum + (word.word.emphasized ? word.letters.length : 1), 0);
