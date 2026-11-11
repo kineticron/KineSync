@@ -8,6 +8,7 @@ import { Image } from "expo-image";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
+  Alert,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -322,6 +323,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             scanFailTimer.current = null;
           }
           setScanError("");
+          const run = setupGeneration.current;
           void saveBridgeSettings({
             serverUrl: bridgeUrl,
             handshakeKey: bridgeKey,
@@ -329,6 +331,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             onboardingCompleted: true,
           })
             .then((saved) => {
+              if (run !== setupGeneration.current) return;
               setServerUrlStore(saved.serverUrl);
               setHandshakeKeyStore(saved.handshakeKey);
               setPlaybackModeStore("desktop");
@@ -337,6 +340,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               bridgeClient.reconnectNow();
             })
             .catch((error) => {
+              if (run !== setupGeneration.current) return;
               scanHandled.current = false;
               setScanError(
                 error instanceof Error
@@ -389,43 +393,49 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     [isLastStep, step],
   );
 
-  const persistBridgeSettings = useCallback(() => {
-    if (playbackMode === "phone") {
-      // Keep the empty-state login action visible until a session is verified.
-      setPlaybackModeStore("mobile");
-      bridgeClient.disconnect();
-      setServerUrlStore("");
-      setHandshakeKeyStore("");
-      void saveBridgeSettings({
-        serverUrl: "",
-        handshakeKey: "",
-        playbackMode: "mobile",
-        onboardingCompleted: true,
-      });
+  const setupGeneration = useRef(0);
+  const setupSaving = useRef(false);
+  useEffect(() => () => { setupGeneration.current++; }, []);
+  const selectPlaybackMode = useCallback((mode: "unset" | "desktop" | "phone") => {
+    setupGeneration.current++;
+    setupSaving.current = false;
+    scanHandled.current = true;
+    if (scanFailTimer.current) clearTimeout(scanFailTimer.current);
+    scanFailTimer.current = null;
+    setScannerOpen(false);
+    setLoginOpen(false);
+    setPlaybackMode(mode);
+  }, []);
 
-      return;
+  const persistBridgeSettings = useCallback(async () => {
+    if (setupSaving.current) return;
+    setupSaving.current = true;
+    const run = setupGeneration.current;
+    const phone = playbackMode === "phone";
+    try {
+      const saved = await saveBridgeSettings(phone ? {
+        serverUrl: "", handshakeKey: "", playbackMode: "mobile", onboardingCompleted: true,
+      } : {
+        serverUrl: usePlaybackStore.getState().serverUrl || inferDefaultBridgeUrl(),
+        playbackMode: "desktop", onboardingCompleted: true,
+      });
+      if (run !== setupGeneration.current) return;
+      setServerUrlStore(saved.serverUrl);
+      setHandshakeKeyStore(saved.handshakeKey);
+      setPlaybackModeStore(phone ? "mobile" : "desktop");
+      if (phone) bridgeClient.disconnect();
+      else bridgeClient.reconnectNow();
+      onDismiss();
+    } catch (error) {
+      if (run === setupGeneration.current) Alert.alert("Could not save setup", error instanceof Error ? error.message : "Please try again.");
+    } finally {
+      if (run === setupGeneration.current) setupSaving.current = false;
     }
-    setPlaybackModeStore("desktop");
-    const state = usePlaybackStore.getState();
-    if (!state.serverUrl) {
-      setServerUrlStore(inferDefaultBridgeUrl());
-    }
-    bridgeClient.reconnectNow();
-    void saveBridgeSettings({
-      playbackMode: "desktop",
-      onboardingCompleted: true,
-    });
-  }, [
-    playbackMode,
-    setHandshakeKeyStore,
-    setPlaybackModeStore,
-    setServerUrlStore,
-  ]);
+  }, [playbackMode, onDismiss, setHandshakeKeyStore, setPlaybackModeStore, setServerUrlStore]);
 
   const handleNext = useCallback(() => {
     if (isLastStep) {
-      persistBridgeSettings();
-      onDismiss();
+      void persistBridgeSettings();
       return;
     }
     const nextStep = Math.min(step + 1, ONBOARDING_STEPS.length - 1);
@@ -445,8 +455,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   ]);
 
   const handleSkip = useCallback(() => {
-    persistBridgeSettings();
-    onDismiss();
+    void persistBridgeSettings();
   }, [onDismiss, persistBridgeSettings]);
 
   const handleMomentumEnd = useCallback(
@@ -532,13 +541,13 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                     icon="desktop-outline"
                     label="Use a Desktop Bridge"
                     hint="Tightest sync. Needs the PC app running."
-                    onPress={() => setPlaybackMode("desktop")}
+                    onPress={() => selectPlaybackMode("desktop")}
                   />
                   <ChoiceRow
                     icon="phone-portrait-outline"
                     label="Use this phone only"
                     hint="Plays Spotify inside KineSync. No PC needed."
-                    onPress={() => setPlaybackMode("phone")}
+                    onPress={() => selectPlaybackMode("phone")}
                   />
                 </BlurView>
               ) : null}
@@ -588,7 +597,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   )}
                   <Pressable
                     hitSlop={8}
-                    onPress={() => setPlaybackMode("unset")}
+                    onPress={() => selectPlaybackMode("unset")}
                   >
                     <Text style={styles.inlinePanelHint}>
                       Use a Desktop Bridge instead
@@ -665,7 +674,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                   )}
                   <Pressable
                     hitSlop={8}
-                    onPress={() => setPlaybackMode("unset")}
+                    onPress={() => selectPlaybackMode("unset")}
                   >
                     <Text style={styles.inlinePanelHint}>
                       No PC? Use this phone instead

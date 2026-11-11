@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:lyrics && npm run test:vault && npm run test:tour && npm run test:artwork && npm run test:launch && npm run test:security && npm run test:spotify-browser && npm run test:spotify-detector && node scripts/check-android-frame-metrics.cjs",
     "test:artwork": "node ./scripts/artwork-packet-check.mjs && node ./scripts/check-artwork-search-performance.cjs && node ./scripts/check-kawarp-background.cjs",
-    "test:launch": "node ./scripts/check-launch-transition.cjs",
+    "test:launch": "node ./scripts/check-launch-transition.cjs && node ./scripts/check-onboarding-lifetime.cjs",
     "test:performance": "node ./scripts/check-app-js-work.cjs && node ./scripts/benchmark-performance.cjs --check && node ./scripts/check-energy-performance.cjs && node ./scripts/check-playback-performance.cjs && node ./scripts/check-artwork-search-performance.cjs && node ./scripts/check-android-frame-metrics.cjs",
     "benchmark:performance": "node ./scripts/benchmark-performance.cjs",
     "benchmark:emulator": "node ./scripts/benchmark-emulator.cjs",
