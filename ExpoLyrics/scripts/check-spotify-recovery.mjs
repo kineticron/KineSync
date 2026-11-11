@@ -63,6 +63,37 @@ async function check(name,fn){
  catch(error) { if(!baseline)throw error;baselineFailures++;console.log(`FAIL ${name}: ${error.message}`); }
 }
 async function allDisabled(h){const n=h.posts().length;for(const type of ['toggle','next','previous','seek'])await assert.rejects(h.d.control({type,positionMs:20}));assert.equal(h.posts().length,n);}
+for (const boundary of ['retryWait', 'renewingSession', 'sessionNeeded']) await check(`lifetime: ${boundary} callback can dispose without leaving timers`, async () => {
+ const h = setup();
+ try {
+  if (boundary === 'sessionNeeded') h.d.callbacks.sessionNeeded = () => h.d.clear();
+  else { let disposed = false; h.d.callbacks.health = health => { if (health.phase === boundary && !disposed) { disposed = true; h.d.clear(); } }; }
+  if (boundary === 'retryWait') { h.start(); h.sockets[0].onerror(); }
+  else h.d.setEnabled(true);
+  await flush();
+  assert.equal(h.d.health.phase, 'idle');
+  assert.equal(h.clock.timers.size, 0, 'disposed connection owns no retry/renewal timers');
+  await h.clock.advance(120000);
+  assert.equal(h.d.health.phase, 'idle');
+ } finally { h.d.clear(); }
+});
+for (const stage of ['sending', 'awaitingConfirmation']) await check(`lifetime: auth replacement during ${stage} never replays a command`, async () => {
+ const h = setup();
+ try {
+  h.start(); await h.identify(); const pending = deferred();
+  if (stage === 'sending') h.response = () => pending.promise;
+  const command = h.d.control({type:'next'});
+  const settled = stage === 'sending' ? assert.rejects(command, /unknown/) : command;
+  await flush();
+  if (stage === 'awaitingConfirmation') await command;
+  h.credentials('replacement');
+  pending.resolve({status:204}); await settled;
+  h.response = {status:200,body:state('replacement-phone')}; await h.identify();
+  await h.clock.advance(5001);
+  assert.equal(h.posts().length, 1); assert(h.d.health.controlsEnabled);
+  assert.equal(h.d.currentTarget, 'replacement-phone');
+ } finally { h.d.clear(); }
+});
 for(const type of ['next','previous','toggle','seek'])for(const advance of ['result','supersession'])await check(`review: ${type} Dealer ${advance} before HTTP response preserves healthy authority`,async()=>{
  const h=setup();try {
  h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;

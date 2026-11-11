@@ -516,13 +516,16 @@ export class SpotifyDetector {
     this.disconnect(); this.token = ''; this.expiresAt = 0;
     this.deliveryAuthEpoch++;
     if (!this.enabled || this.reachability === 'offline') return;
-    this.transition('renewingSession');
-    this.callbacks.status(message); this.callbacks.sessionNeeded();
+    const run = this.generation;
     this.renewalTimer = this.runtime.setTimeout(() => {
       this.renewalTimer = null;
       if (this.phase !== 'renewingSession') return;
       this.retryObservation();
     }, 45000);
+    this.transition('renewingSession');
+    if (!this.enabled || run !== this.generation) return;
+    this.callbacks.status(message);
+    if (this.enabled && run === this.generation) this.callbacks.sessionNeeded();
   }
   private resetOrdering() {
     this.fingerprint = ''; this.lastSourceTimestamp = 0;
@@ -687,7 +690,13 @@ export class SpotifyDetector {
     const wait = this.cooldownRemaining();
     if (wait > 0) { this.transition('rateLimited'); this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, Math.min(wait, 2147483647)); return; }
     if (!this.token) { this.needSession('Refreshing Spotify session…'); return; }
-    if (!this.route || !this.dealer) { this.transition('renewingSession', 'discoveringRoutes'); this.callbacks.sessionNeeded(); this.renewalTimer = this.runtime.setTimeout(() => this.retryObservation(), 45000); return; }
+    if (!this.route || !this.dealer) {
+      const run = this.generation;
+      this.renewalTimer = this.runtime.setTimeout(() => { this.renewalTimer = null; this.retryObservation(); }, 45000);
+      this.transition('renewingSession', 'discoveringRoutes');
+      if (this.enabled && run === this.generation) this.callbacks.sessionNeeded();
+      return;
+    }
     if (this.runtime.wall() >= this.expiresAt - 30_000) { this.needSession('Refreshing Spotify session…'); return; }
     const run = ++this.generation;
     const sourceClockScope = this.sourceClockScope;
@@ -757,9 +766,12 @@ export class SpotifyDetector {
     if (this.reachability === 'offline') { this.transition('offline'); return; }
     const attempt = this.reconnects++;
     const delay = attempt < 5 ? Math.min(30000, 2000 * 2 ** attempt * (0.8 + this.runtime.random() * 0.4)) : 60000;
-    this.nextRetry = this.runtime.wall() + delay; this.transition('retryWait');
-    this.callbacks.status('Spotify connection lost; retrying automatically.');
+    const run = this.generation;
+    this.nextRetry = this.runtime.wall() + delay;
+    // Own the deadline before publishing: a callback may synchronously dispose us.
     this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.transition('connecting'); this.connectIfReady(); }, delay);
+    this.transition('retryWait');
+    if (this.enabled && run === this.generation) this.callbacks.status('Spotify connection lost; retrying automatically.');
   }
   private rateLimited(response: Response) {
     const value = response.headers?.get('retry-after');
