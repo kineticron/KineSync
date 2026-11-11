@@ -42,6 +42,7 @@ class BridgeClient {
     timer: ReturnType<typeof setTimeout>;
   }>();
   private ws: WebSocket | null = null;
+  private delayedPackets = new Set<ReturnType<typeof setTimeout>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
   private trackChangeRefetchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -95,9 +96,12 @@ class BridgeClient {
     usePlaybackStore.getState().setConnectionStatus("connecting");
 
     this.authenticated = false;
-    this.ws = new WebSocket(safeServerUrl);
+    const ws = new WebSocket(safeServerUrl);
+    this.ws = ws;
+    const alive = () => this.ws === ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (!alive()) return;
       this.reconnectAttempt = 0;
       this.pendingLyricsRefetch = true;
       this.pendingArtworkRefetch = true;
@@ -106,6 +110,7 @@ class BridgeClient {
       this.ws?.send(JSON.stringify({ type: "hello", key: handshakeKey }));
       this.clearAuthTimer();
       this.authTimer = setTimeout(() => {
+        if (!alive()) return;
         this.authenticated = false;
         usePlaybackStore
           .getState()
@@ -114,7 +119,8 @@ class BridgeClient {
       }, AUTH_TIMEOUT_MS);
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (!alive()) return;
       try {
         const packet = validateInboundBridgePacket(event.data);
         if (!packet) return;
@@ -163,6 +169,7 @@ class BridgeClient {
           return;
         }
         const applyPacket = () => {
+          if (!alive() || !this.authenticated) return;
           const state = usePlaybackStore.getState();
           const result = state.ingestPacket(packet, "desktop");
           if (result.trackChanged) {
@@ -175,7 +182,11 @@ class BridgeClient {
           }
         };
         if (simulatedLatencyMs > 0) {
-          setTimeout(applyPacket, simulatedLatencyMs);
+          const timer = setTimeout(() => {
+            this.delayedPackets.delete(timer);
+            applyPacket();
+          }, simulatedLatencyMs);
+          this.delayedPackets.add(timer);
         } else {
           applyPacket();
         }
@@ -186,19 +197,17 @@ class BridgeClient {
       }
     };
 
-    this.ws.onclose = () => {
-      this.rejectVaultRequests();
-      this.clearAuthTimer();
-      this.authenticated = false;
+    ws.onclose = () => {
+      if (!alive()) return;
+      this.cleanupSocket();
       usePlaybackStore.getState().setConnectionStatus("disconnected");
       stopPlaybackClock();
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
-      this.rejectVaultRequests();
-      this.clearAuthTimer();
-      this.authenticated = false;
+    ws.onerror = () => {
+      if (!alive()) return;
+      this.cleanupSocket();
       usePlaybackStore.getState().setErrorMessage("Bridge connection failed.");
       usePlaybackStore.getState().setConnectionStatus("disconnected");
       stopPlaybackClock();
@@ -431,6 +440,8 @@ class BridgeClient {
   }
 
   private cleanupSocket() {
+    for (const timer of this.delayedPackets) clearTimeout(timer);
+    this.delayedPackets.clear();
     this.rejectVaultRequests();
     this.authenticated = false;
     this.clearAuthTimer();

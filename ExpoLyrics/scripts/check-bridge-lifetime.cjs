@@ -43,6 +43,21 @@ async function main(){
   assert.equal(h.sockets.length,2,'direct connect consumes scheduled reconnect');
   assert.equal(replacement.readyState,1);
   h.client.disconnect();assert.equal(h.timers.size,0);
+  for (const terminal of ['disconnect','replacement','close','error']) {
+    const delayed=harness(); delayed.state.simulatedLatencyMs=100;
+    delayed.client.connect(); const ws=delayed.authenticate();
+    const lateMessage=ws.onmessage;
+    ws.event({type:'playback',trackId:'old'});
+    if(terminal==='disconnect') delayed.client.disconnect();
+    if(terminal==='replacement') { delayed.client.connect(); delayed.authenticate(); }
+    if(terminal==='close') ws.onclose();
+    if(terminal==='error') ws.onerror();
+    delayed.advance(101);
+    assert.equal(delayed.ingested,0, `${terminal} retires simulated delivery`);
+    lateMessage({data:JSON.stringify({type:'playback',trackId:'old-callback'})}); delayed.advance(101);
+    assert.equal(delayed.ingested,0, `${terminal} rejects queued old socket callbacks`);
+    delayed.client.disconnect(); assert.equal(delayed.timers.size,0);
+  }
   console.log('Bridge lifetime PASS: direct connect consumes retry.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
