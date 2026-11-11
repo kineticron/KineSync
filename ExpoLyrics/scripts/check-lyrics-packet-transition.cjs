@@ -12,7 +12,8 @@ const code = buildSync({ entryPoints: [path.resolve(__dirname, '../components/ly
 function harness(reduced = false, active = true, options = {}) {
   let packet = { lyrics: [], lyricsSource: '', lyricsMetadata: {}, lyricsStatusMessage: '', currentTrack: { id: 'song' } };
   let cursor = 0, dirty = false, output;
-  const hooks = [], effects = new Map(), timers = new Map();
+  const hooks = [], effects = new Map(), timers = new Map(), deadlines = new Map();
+  let timerId = 0;
   const equal = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
   const memo = (fn, deps) => {
     const index = cursor++;
@@ -57,7 +58,7 @@ function harness(reduced = false, active = true, options = {}) {
     },
     'react-native-worklets': { scheduleOnRN: (fn, ...args) => fn(...args) },
     'zustand/react/shallow': { useShallow: fn => fn }, '@/store/playback-store': { usePlaybackStore: () => packet },
-  })[name], setTimeout: () => { throw new Error('Fades must finish on the UI runtime, not a JS timer'); } });
+  })[name], setTimeout: (fn, ms) => { deadlines.set(++timerId, {fn, ms}); return timerId; }, clearTimeout: id => deadlines.delete(id) });
   const Wrapped = module.exports.withLyricsPacketTransition('renderer', options);
   const Live = Wrapped({}).type;
   const render = () => {
@@ -75,7 +76,10 @@ function harness(reduced = false, active = true, options = {}) {
     effects.clear();
     return output.props.children.filter(Boolean);
   };
-  return { render, set: patch => { packet = { ...packet, ...patch }; return render(); }, timers,
+  return { render, deadlines,
+    expireReady: () => { for (const [id, task] of [...deadlines]) { deadlines.delete(id); task.fn(); } return render(); },
+    unmount: () => { for (const hook of hooks) hook?.cleanup?.(); },
+    set: patch => { packet = { ...packet, ...patch }; return render(); }, timers,
     activate: value => { active = value; return render(); },
     finish: () => { for (const { fn } of [...timers.values()]) fn(); return render(); },
     demo: lyrics => Wrapped({ demoLyrics: lyrics }) };
@@ -83,6 +87,19 @@ function harness(reduced = false, active = true, options = {}) {
 const opacity = layer => layer.props.style.at(-1).opacity;
 const context = layer => layer.props.children.props.value;
 if (require.main === module) {
+const missingReady = harness(); missingReady.render();
+let waiting = missingReady.set({lyrics:[{lineStartTime:0}],lyricsSource:'missingReady'});
+assert.equal(missingReady.deadlines.size, 1, 'an unready replacement has a bounded handoff');
+assert.equal([...missingReady.deadlines.values()][0].ms, 5000);
+const expired = [...missingReady.deadlines.values()][0].fn;
+waiting = missingReady.expireReady();
+assert.equal(missingReady.timers.size, 1, 'deadline releases the ready barrier through the existing UI fade');
+waiting = missingReady.finish(); assert.equal(waiting.length, 1);
+missingReady.set({lyrics:[{lineStartTime:1}],lyricsSource:'next'});
+expired();
+assert.deepEqual(missingReady.render().map(opacity), [1,0], 'old deadlines cannot ready a new generation');
+missingReady.unmount(); assert.equal(missingReady.deadlines.size, 0, 'unmount disposes ready deadline');
+
 const h = harness();
 let layers = h.render();
 assert.equal(layers.length, 1);
@@ -137,7 +154,7 @@ stalled.render();
 layers = stalled.set({ lyrics: a });
 assert.equal(layers.length, 2);
 assert.deepEqual(layers.map(opacity), [1, 0], 'replacement waiting for readiness');
-assert.equal(stalled.timers.size, 0, 'An unready renderer is never revealed by a timeout');
+assert.equal(stalled.timers.size, 0, 'An unready renderer waits for readiness or its explicit deadline');
 const stalledReady = context(layers[1]).onReady;
 const visibleKey = layers[0].key;
 layers = stalled.set({ lyrics: b });

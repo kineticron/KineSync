@@ -17,6 +17,7 @@ type Layer = { id: number; packet: Packet };
 const PacketContext = createContext<{ packet: Packet; onReady: () => void } | null>(null);
 export const useLyricsPacketTransition = () => useContext(PacketContext);
 const FADE_MS = 240;
+const READY_DEADLINE_MS = 5000;
 const NOOP = () => {};
 const easeOut = Easing.bezier(0.23, 1, 0.32, 1);
 
@@ -50,6 +51,13 @@ export function withLyricsPacketTransition<Props extends { demoLyrics?: LyricLin
     const onReady = useCallback(() => {
       setLayers(state => state.current.id !== current.id || state.ready ? state : { ...state, ready: true });
     }, [current.id]);
+    useEffect(() => {
+      if (!previous || ready) return;
+      // A missing layout/ready event must not retain stale, inert lyrics forever.
+      // The existing ID guard also rejects callbacks queued before replacement.
+      const timer = setTimeout(onReady, READY_DEADLINE_MS);
+      return () => clearTimeout(timer);
+    }, [current.id, onReady, previous, ready]);
     const finishFade = useCallback(() => {
       setLayers(state => state.current.id === current.id ? { current: state.current, ready: true } : state);
     }, [current.id]);
