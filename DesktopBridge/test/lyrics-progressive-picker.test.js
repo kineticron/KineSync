@@ -56,6 +56,53 @@ function load(mobile) {
 
 for (const mobile of [false, true]) {
   const label = mobile ? 'mobile' : 'desktop';
+  test(`${label}: immediate translation has one owner across timer and completion`, async () => {
+    const h = load(mobile), translation = deferred();
+    let calls = 0;
+    h.context.translate = async (_, lyrics) => { calls++; await translation.promise; return lyrics.map(line => ({...line, translatedText:'translated'})); };
+    vm.runInContext('enrichLyricsWithGeminiTranslations = translate', h.context);
+    h.fetchers['lrc-red'] = async () => packet('lrc-red-karaoke');
+    const service = h.service(), changes = [];
+    const result = service.fetchSyncedLyrics(baseTrack, {immediateTranslation:true,onSyncedLyrics:p=>changes.push(p)});
+    await flush(); assert.equal(calls, 1);
+    await h.time.advance(0);
+    assert.equal(calls, 1, 'the progressive timer must join the active base translation');
+    translation.resolve(); await result; await flush();
+    assert.equal(changes.at(-1).lyrics[0].translatedText, 'translated');
+    service.clearCache();
+  });
+
+  test(`${label}: translation finishing after track change cannot publish or retranslate`, async () => {
+    const h = load(mobile), translation = deferred(); let calls = 0;
+    h.context.translate = async (_, lyrics) => { calls++; await translation.promise; return lyrics.map(line => ({...line, translatedText:'old'})); };
+    vm.runInContext('enrichLyricsWithGeminiTranslations = translate', h.context);
+    h.fetchers['lrc-red'] = async () => packet('lrc-red-karaoke');
+    h.fetchers.lrclib = async () => packet('lrclib');
+    const service = h.service(), changes = [];
+    const stale = service.fetchSyncedLyrics(baseTrack, {immediateTranslation:true,onSyncedLyrics:p=>changes.push(p)});
+    await flush(); await h.time.advance(0);
+    await service.fetchSyncedLyrics({...baseTrack,trackId:'replacement'}, {preferredSource:'lrclib'});
+    const count = changes.length;
+    translation.resolve(); await stale; await h.time.advance(0);
+    assert.equal(changes.length, count); assert.equal(calls, 1);
+    service.clearCache();
+  });
+
+  test(`${label}: superseded selection cannot start translation after source completion`, async () => {
+    const h = load(mobile), source = deferred(); let calls = 0;
+    h.context.translate = async (_, lyrics) => { calls++; return lyrics; };
+    vm.runInContext('enrichLyricsWithGeminiTranslations = translate', h.context);
+    h.fetchers['lrc-red'] = () => source.promise;
+    h.fetchers.lrclib = async () => packet('lrclib');
+    const service = h.service();
+    const stale = service.fetchSyncedLyrics(baseTrack, {preferredSource:'lrc-red',immediateTranslation:true});
+    await flush();
+    await service.fetchSyncedLyrics({...baseTrack,trackId:'replacement'}, {preferredSource:'lrclib'});
+    source.resolve(packet('lrc-red-karaoke')); await stale; await h.time.advance(0);
+    assert.equal(calls, 0, 'stale work may fill its source cache but cannot spend translation quota');
+    service.clearCache();
+  });
+
   test(`${label}: exact buckets and original line/vault exceptions are preserved in both directions`, () => {
     const { context } = load(mobile);
     const buckets = { 'local-vault-karaoke':720, 'lrc-red-karaoke':700, 'spicy-lyrics-syllable':680, 'kugou-krc':620,

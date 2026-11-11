@@ -25,6 +25,12 @@ function createLyricsService({
   const AUTO_CACHE_TTL_MS = 5 * 60_000;
   const MAX_CACHED_TRACKS = 100;
   let selectionGeneration = 0;
+  const selectionDisposers = new Set();
+  const invalidateSelection = () => {
+    selectionGeneration += 1;
+    for (const dispose of selectionDisposers) dispose();
+    selectionDisposers.clear();
+  };
   let selectionKey = "";
   const AUTO_TRANSLATION_QUIET_MS = 5_000;
   let cacheExpiryTimer;
@@ -187,7 +193,7 @@ function createLyricsService({
   const setActiveTrack = (trackId) => {
     const cacheKey = String(trackId || "").trim();
     if (activeTrackSourceCache.trackId !== cacheKey) {
-      selectionGeneration += 1;
+      invalidateSelection();
       selectionKey = "";
     }
     activeTrackSourceCache.trackId = cacheKey;
@@ -441,7 +447,7 @@ function createLyricsService({
       }
       sourceRecord.identity = recordingIdentity;
       const requestKey = `${cacheKey}|${recordingIdentity}|${normalizedPreferredSource}|${translationLanguage}`;
-      if (force || selectionKey !== requestKey) { selectionKey = requestKey; selectionGeneration += 1; }
+      if (force || selectionKey !== requestKey) { selectionKey = requestKey; invalidateSelection(); }
       const requestGeneration = selectionGeneration;
       const isCurrentSelection = () => selectionGeneration === requestGeneration && selectionKey === requestKey;
       let matchTrack = { ...track };
@@ -579,15 +585,30 @@ function createLyricsService({
         return false;
       };
 
-      const getBasePacketSignature = (packet) => {
-        const first = packet?.lyrics?.[0];
-        const last = packet?.lyrics?.[packet?.lyrics?.length - 1];
-        return [
-          String(packet?.source || ""),
-          Number(packet?.lyrics?.length || 0),
-          Number(first?.lineStartTime || -1),
-          Number(last?.lineEndTime || -1),
-        ].join("|");
+      // A translation belongs to immutable content, not just its endpoint times.
+      const getBasePacketSignature = (packet) => JSON.stringify([
+        packet?.source || "", (packet?.lyrics || []).map(line => {
+          const { translatedText, backgroundTranslatedText, translationMeta, ...base } = line;
+          return base;
+        }),
+      ]);
+      /** @type {Map<string, Promise<object>>} */
+      const translations = new Map();
+      const translateBase = (packet) => {
+        const signature = getBasePacketSignature(packet);
+        if (!translations.has(signature)) {
+          const work = (async () => {
+            if (!isCurrentSelection()) return packet;
+            const enriched = await enrichLyricsWithGeminiTranslations(track, packet.lyrics, {
+              geminiApiKey: String(getGeminiApiKey() || "").trim(),
+              geminiCache: geminiTranslationCache,
+              targetLanguage: translationLanguage,
+            });
+            return mergeTtmlTranslationResult(packet, enriched, translationLanguage);
+          })();
+          translations.set(signature, work);
+        }
+        return translations.get(signature);
       };
 
       const countTranslatedLines = (lyrics) =>
@@ -643,11 +664,11 @@ function createLyricsService({
       };
 
       const runTranslationForLatestBasePacket = async () => {
-        if (sourceStableTranslationInFlight) {
+        if (!isCurrentSelection() || sourceStableTranslationInFlight) {
           return;
         }
         const latestBase = getLatestBasePacket();
-        if (!latestBase?.lyrics?.length) {
+        if (!isCurrentSelection() || !latestBase?.lyrics?.length) {
           return;
         }
 
@@ -664,16 +685,8 @@ function createLyricsService({
               },
             }),
           });
-          const enrichedLyrics = await enrichLyricsWithGeminiTranslations(
-            track,
-            latestBase.lyrics,
-            {
-              geminiApiKey: String(getGeminiApiKey() || "").trim(),
-              geminiCache: geminiTranslationCache,
-              targetLanguage: translationLanguage,
-            },
-          );
-          const translatedBase = mergeTtmlTranslationResult(latestBase, enrichedLyrics, translationLanguage);
+          const translatedBase = await translateBase(latestBase);
+          if (!isCurrentSelection()) return;
 
           const currentBest = getLatestBasePacket();
           if (
@@ -690,7 +703,7 @@ function createLyricsService({
 
       const scheduleStableSourceTranslation = ({ immediate = false } = {}) => {
         const latestBase = getLatestBasePacket();
-        if (!latestBase?.lyrics?.length) {
+        if (!isCurrentSelection() || !latestBase?.lyrics?.length) {
           return;
         }
         if (hasTranslatedLines(latestBase.lyrics)) {
@@ -712,7 +725,7 @@ function createLyricsService({
           () => {
             sourceStableTranslationTimer = null;
             const currentBase = getLatestBasePacket();
-            if (!currentBase?.lyrics?.length) {
+            if (!isCurrentSelection() || !currentBase?.lyrics?.length) {
               return;
             }
             const currentSignature = getBasePacketSignature(currentBase);
@@ -721,7 +734,7 @@ function createLyricsService({
               return;
             }
             attemptedTranslationSignatures.add(currentSignature);
-            void runTranslationForLatestBasePacket();
+            void runTranslationForLatestBasePacket().catch(() => {});
           },
           immediate ? 0 : AUTO_TRANSLATION_QUIET_MS,
         );
@@ -837,9 +850,15 @@ function createLyricsService({
         });
         if (normalizedPreferredSource !== "auto") currentFlight.initial.then(finishFlight, finishFlight);
       }
+      selectionDisposers.add(() => {
+        flight.listeners.delete(handleProgressPacket);
+        clearTimeout(sourceStableTranslationTimer);
+        sourceStableTranslationTimer = null;
+      });
       flight.listeners.add(handleProgressPacket);
       if (flight.latest) handleProgressPacket(flight.latest);
       const base = await flight.initial;
+      if (!isCurrentSelection()) return { trackId: cacheKey, lyrics: [], source: "stale-lyrics-request" };
 
       initialBaseCandidate = {
         ...base,
@@ -882,6 +901,7 @@ function createLyricsService({
 
       while (translationPass <= MAX_POST_QUIET_RETRANSLATES) {
         const inputPacket = translationBase || initialBase;
+        if (!isCurrentSelection()) break;
         if (!shouldTranslate()) {
           finalBase = {
             ...inputPacket,
@@ -905,17 +925,8 @@ function createLyricsService({
           }),
         });
 
-        const enrichedLyrics = await enrichLyricsWithGeminiTranslations(
-          track,
-          inputPacket.lyrics,
-          {
-            geminiApiKey: String(getGeminiApiKey() || "").trim(),
-            geminiCache: geminiTranslationCache,
-          targetLanguage: translationLanguage,
-          },
-        );
-
-        finalBase = mergeTtmlTranslationResult(inputPacket, enrichedLyrics, translationLanguage);
+        finalBase = await translateBase(inputPacket);
+        if (!isCurrentSelection()) break;
         emitTranslatedPacketIfCurrentBest(finalBase);
 
         if (!isAutoPreferredSource) {
@@ -990,7 +1001,7 @@ function createLyricsService({
       sourceCachesByTrack.clear();
       sourceFetchesInFlight.clear();
       selectionKey = "";
-      selectionGeneration += 1;
+      invalidateSelection();
       clearMusixmatchRuntimeState();
       geminiRuntimeState.cooldownUntil = 0;
       geminiRuntimeState.cooldownReason = "";
