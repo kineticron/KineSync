@@ -75,6 +75,10 @@ class BridgeClient {
   }
 
   connect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     const { serverUrl, handshakeKey } = usePlaybackStore.getState();
     const safeServerUrl = parseBridgeWebSocketUrl(serverUrl);
     if (!safeServerUrl) {
