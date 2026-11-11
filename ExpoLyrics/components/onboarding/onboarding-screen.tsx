@@ -45,7 +45,7 @@ import {
 } from "@/lib/network";
 import { useSpotifySessionStore } from "@/store/spotify-session-store";
 import { usePlaybackStore } from "@/store/playback-store";
-import { saveBridgeSettings } from "@/lib/bridge-settings";
+import { saveBridgeSettings, type BridgeSettings } from "@/lib/bridge-settings";
 import { saveMobileLyricsSettings } from "@/lib/mobile-lyrics-settings";
 import {
   isTrustedSpotifyWebViewMessageUrl,
@@ -314,10 +314,11 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   }, [scannerSession]);
   useEffect(() => () => scannerSession.close(), [scannerSession]);
 
+  const pendingQrSave = useRef<{ generation: number; promise: Promise<BridgeSettings> } | null>(null);
   const handleBarcodeScanned = useCallback(
     ({ data }: { data: string }) => {
       const scanRun = scannerSession.current();
-      if (!scannerSession.isCurrent(scanRun) || scanHandled.current) return;
+      if (!scannerSession.isCurrent(scanRun) || scanHandled.current || setupSaving.current) return;
       try {
         const parsed = JSON.parse(data);
         const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
@@ -327,12 +328,14 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           scannerSession.cancel("failure");
           setScanError("");
           const run = setupGeneration.current;
-          void saveBridgeSettings({
+          const promise = saveBridgeSettings({
             serverUrl: bridgeUrl,
             handshakeKey: bridgeKey,
             playbackMode: "desktop",
-            onboardingCompleted: true,
-          })
+            onboardingCompleted: false,
+          }, { isCurrent: () => run === setupGeneration.current });
+          pendingQrSave.current = { generation: run, promise };
+          void promise
             .then((saved) => {
               if (run !== setupGeneration.current || !scannerSession.isCurrent(scanRun)) return;
               setServerUrlStore(saved.serverUrl);
@@ -405,13 +408,20 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     setupSaving.current = true;
     const run = setupGeneration.current;
     const phone = playbackMode === "phone";
+    const pending = pendingQrSave.current;
+    // Completion owns scanner intent in both directions. An accepted QR write
+    // is awaited; late camera callbacks cannot start a competing write.
+    closeScanner();
     try {
+      const scanned = !phone && pending?.generation === run ? await pending.promise : null;
+      if (run !== setupGeneration.current) return;
       const saved = await saveBridgeSettings(phone ? {
         serverUrl: "", handshakeKey: "", playbackMode: "mobile", onboardingCompleted: true,
       } : {
-        serverUrl: usePlaybackStore.getState().serverUrl || inferDefaultBridgeUrl(),
+        ...(scanned ? { serverUrl: scanned.serverUrl, handshakeKey: scanned.handshakeKey }
+          : { serverUrl: usePlaybackStore.getState().serverUrl || inferDefaultBridgeUrl() }),
         playbackMode: "desktop", onboardingCompleted: true,
-      });
+      }, { isCurrent: () => run === setupGeneration.current });
       if (run !== setupGeneration.current) return;
       setServerUrlStore(saved.serverUrl);
       setHandshakeKeyStore(saved.handshakeKey);
@@ -424,7 +434,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
     } finally {
       if (run === setupGeneration.current) setupSaving.current = false;
     }
-  }, [playbackMode, onDismiss, setHandshakeKeyStore, setPlaybackModeStore, setServerUrlStore]);
+  }, [playbackMode, onDismiss, closeScanner, setHandshakeKeyStore, setPlaybackModeStore, setServerUrlStore]);
 
   const handleNext = useCallback(() => {
     if (isLastStep) {

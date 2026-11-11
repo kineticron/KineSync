@@ -66,9 +66,12 @@ export async function getBridgeSettings(): Promise<BridgeSettings> {
   }
 }
 
-export function saveBridgeSettings(settings: Partial<BridgeSettings>): Promise<BridgeSettings> {
+export function saveBridgeSettings(settings: Partial<BridgeSettings>, { isCurrent = () => true }: { isCurrent?: () => boolean } = {}): Promise<BridgeSettings> {
+  const requireCurrent = () => { if (!isCurrent()) throw new Error('Bridge setup was superseded.'); };
   const operation = bridgeSettingsWriteQueue.then(async () => {
+    requireCurrent();
     const current = await getBridgeSettings();
+    requireCurrent();
     const candidate = {
       ...current,
       ...settings,
@@ -93,6 +96,7 @@ export function saveBridgeSettings(settings: Partial<BridgeSettings>): Promise<B
         throw new Error('Could not remove the bridge key from secure storage.');
       }
     }
+    requireCurrent();
     const updated = { ...candidate, serverUrl: serverUrl || '', handshakeKey: secureSaved ? key : current.handshakeKey };
     // The handshake key is intentionally omitted from AsyncStorage on native.
     await AsyncStorage.setItem(BRIDGE_SETTINGS_KEY, JSON.stringify({

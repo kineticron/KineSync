@@ -20,7 +20,7 @@ async function main(){
  function visit(node){if(ts.isVariableDeclaration(node)&&node.initializer)callbacks.set(node.name.getText(ast),node.initializer.getText(ast));ts.forEachChild(node,visit);}visit(ast);
  let resolveSave,resolvePermission,reconnects=0,opened=0;
  const scope=vm.createContext({useCallback:fn=>fn,scannerSession:session,scanHandled:{current:false},scanFailTimer:{current:null},
-  setupGeneration:{current:0},setScanCompleted(){},setServerUrlStore(){},setHandshakeKeyStore(){},setPlaybackModeStore(){},cameraPermission:{granted:false},requestCameraPermission:()=>new Promise(done=>{resolvePermission=done;}),
+  setupSaving:{current:false},pendingQrSave:{current:null},setupGeneration:{current:0},setScanCompleted(){},setServerUrlStore(){},setHandshakeKeyStore(){},setPlaybackModeStore(){},cameraPermission:{granted:false},requestCameraPermission:()=>new Promise(done=>{resolvePermission=done;}),
   closeScanner:()=>session.close(),setScanError(){},setScannerOpen:value=>{if(value)opened++;},onClose(){},
   parseBridgeWebSocketUrl:x=>x,isValidBridgeKey:()=>true,
   saveBridgeSettings:()=>new Promise(done=>{resolveSave=done;}),
