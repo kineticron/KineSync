@@ -100,3 +100,15 @@ test('initial read failure is retried without overwriting unread settings or pen
  assert.equal(second.persistence,'durable');assert.equal(second.geminiApiKey,'pending');
  assert.equal(second.musixmatchAnonymousUserToken,oldToken,'retry retains fields from restored disk');
 });
+test('pending rejection hashes remain monotonic across consecutive read failures and recovered load',async()=>{
+ const disk=storage();disk.unblock();let fail=true;
+ disk.async.getItem=async()=>{if(fail)throw Error('read unavailable');return null;};
+ const app=load(disk), a='a'.repeat(64),b='b'.repeat(64);
+ await app.settings.saveMobileLyricsSettings({musixmatchAnonymousRejectedTokenHashes:[a]});
+ await app.settings.saveMobileLyricsSettings({musixmatchAnonymousRejectedTokenHashes:[b]});
+ assert.deepEqual(Array.from(app.settings.getCachedMobileLyricsSettings().musixmatchAnonymousRejectedTokenHashes),[a,b]);
+ fail=false;
+ const recovered=await app.settings.saveMobileLyricsSettings({spotifyWebToken:'recovered'});
+ assert.deepEqual(Array.from(recovered.musixmatchAnonymousRejectedTokenHashes),[a,b],'recovered read cannot drop an earlier pending rejection');
+ assert.deepEqual(disk.disk.musixmatchAnonymousRejectedTokenHashes,[a,b]);
+});

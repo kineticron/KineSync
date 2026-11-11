@@ -140,7 +140,12 @@ export async function saveMobileLyricsSettings(
   const write = settingsWrites.then(async () => {
     await getMobileLyricsSettings();
     const current = cachedSettings;
-    pendingSettings = { ...pendingSettings, ...settings };
+    pendingSettings = { ...pendingSettings, ...settings,
+      musixmatchAnonymousRejectedTokenHashes: [...new Set([
+        ...(pendingSettings.musixmatchAnonymousRejectedTokenHashes || []),
+        ...(settings.musixmatchAnonymousRejectedTokenHashes || []),
+      ])],
+    };
     cachedSettings = normalizeSettings({ ...current, ...settings,
       // Revocation knowledge is monotonic even if a settings form submits an old
       // full snapshot. Token values themselves are never retained in this list.
