@@ -377,9 +377,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       Math.abs(prev.playbackPosition - correctedPosition) < PLAYBACK_PACKET_METADATA_EPSILON_MS &&
       Math.abs(prev.anchorPositionMs - correctedPosition) < PLAYBACK_PACKET_METADATA_EPSILON_MS;
     if (stationaryDuplicate) {
-      if (prev.sourceAnchorProof || (packet.timing && typeof packet.timing === 'object')) {
-        set({ sourceAnchorProof: null, ...(packet.timing ? { bridgeTiming: packet.timing } : {}) });
-      }
+      // Duplicate presentation still carries fresh ordering evidence. Otherwise
+      // a delayed playing packet can undo a more recently observed pause.
+      set({ sourceAnchorProof: null, clockSkewBaselineMs: baseline,
+        lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
+        ...(packet.timing ? { bridgeTiming: packet.timing } : {}) });
       return { trackChanged: false, seekDetected: false };
     }
 

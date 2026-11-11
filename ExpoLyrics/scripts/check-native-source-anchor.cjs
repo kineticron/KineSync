@@ -99,6 +99,17 @@ async function main() {
     catch (error) { results.push({ case: name, pass: false, error: error.message }); }
   }
 
+  test('stationary-duplicate-advances-ordering-watermark-without-moving-anchor', () => {
+    const h = runtime();
+    h.ingest(h.packet({ playing: false }));
+    const anchor = h.store.getState().anchorMonotonicMs;
+    h.at(5000); h.ingest(h.packet({ playing: false }));
+    assert.equal(h.store.getState().lastSourceClockMs, h.wall);
+    assert.equal(h.store.getState().anchorMonotonicMs, anchor);
+    h.ingest({ ...h.packet({ playing: true }), capturedAtMs: epoch + 1000 });
+    assert.equal(h.store.getState().isPlaying, false, 'an old playing packet cannot undo the newer pause');
+  });
+
   test('packet-preserves-complete-source-identity', () => {
     const r = runtime(), s = r.sample(), p = r.packet();
     for (const key of ['positionTimestampMs', 'sourceServerTimestampMs', 'activeDeviceId', 'playbackSessionId', 'sourceClockScope'])
