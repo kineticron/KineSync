@@ -1,3 +1,4 @@
+import { ScannerSession } from "@/lib/scanner-session";
 import { RendererPreview } from "./renderer-preview";
 import { GradientWord } from './gradient-word';
 import { BEAUTIFUL_GRADIENT, LyricReveal, MODERN_GRADIENT, SetupBackground } from './setup-motion';
@@ -306,22 +307,24 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
 
   const isLastStep = step === ONBOARDING_STEPS.length - 1;
 
-  const scanFailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scanHandled = useRef(false);
+  const scannerSession = useMemo(() => new ScannerSession(), []);
+  const scanHandled = useRef(true);
+  const closeScanner = useCallback(() => {
+    scannerSession.close(); scanHandled.current = true; setScannerOpen(false); setScanError("");
+  }, [scannerSession]);
+  useEffect(() => () => scannerSession.close(), [scannerSession]);
 
   const handleBarcodeScanned = useCallback(
     ({ data }: { data: string }) => {
-      if (scanHandled.current) return;
+      const scanRun = scannerSession.current();
+      if (!scannerSession.isCurrent(scanRun) || scanHandled.current) return;
       try {
         const parsed = JSON.parse(data);
         const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
         const bridgeKey = String(parsed?.k || "").trim();
         if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
           scanHandled.current = true;
-          if (scanFailTimer.current) {
-            clearTimeout(scanFailTimer.current);
-            scanFailTimer.current = null;
-          }
+          scannerSession.cancel("failure");
           setScanError("");
           const run = setupGeneration.current;
           void saveBridgeSettings({
@@ -331,16 +334,16 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
             onboardingCompleted: true,
           })
             .then((saved) => {
-              if (run !== setupGeneration.current) return;
+              if (run !== setupGeneration.current || !scannerSession.isCurrent(scanRun)) return;
               setServerUrlStore(saved.serverUrl);
               setHandshakeKeyStore(saved.handshakeKey);
               setPlaybackModeStore("desktop");
               setScanCompleted(true);
-              setScannerOpen(false);
+              closeScanner();
               bridgeClient.reconnectNow();
             })
             .catch((error) => {
-              if (run !== setupGeneration.current) return;
+              if (run !== setupGeneration.current || !scannerSession.isCurrent(scanRun)) return;
               scanHandled.current = false;
               setScanError(
                 error instanceof Error
@@ -351,28 +354,21 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
           return;
         }
       } catch {}
-      if (!scanFailTimer.current) {
-        scanFailTimer.current = setTimeout(() => {
-          setScanError("No valid KineSync QR code found");
-          scanFailTimer.current = null;
-        }, 5000);
-      }
+      scannerSession.schedule(scanRun, "failure", () => setScanError("No valid KineSync QR code found"), 5000);
     },
-    [setServerUrlStore, setHandshakeKeyStore, setPlaybackModeStore],
+    [scannerSession, closeScanner, setServerUrlStore, setHandshakeKeyStore, setPlaybackModeStore],
   );
 
   const openScanner = async () => {
+    const run = scannerSession.begin();
     scanHandled.current = false;
-    if (cameraPermission?.granted === true) {
-      setScannerOpen(true);
-      return;
-    }
-    const { status } = await requestCameraPermission();
-    if (status === "granted") {
-      setScannerOpen(true);
-    } else {
+    setScanError("");
+    const granted = cameraPermission?.granted === true || (await requestCameraPermission()).status === "granted";
+    if (!scannerSession.isCurrent(run)) return;
+    if (granted) setScannerOpen(true);
+    else {
       setScanError("Camera permission required to scan QR codes");
-      setTimeout(() => setScanError(""), 3000);
+      scannerSession.schedule(run, "error", () => setScanError(""), 3000);
     }
   };
 
@@ -399,13 +395,10 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   const selectPlaybackMode = useCallback((mode: "unset" | "desktop" | "phone") => {
     setupGeneration.current++;
     setupSaving.current = false;
-    scanHandled.current = true;
-    if (scanFailTimer.current) clearTimeout(scanFailTimer.current);
-    scanFailTimer.current = null;
-    setScannerOpen(false);
+    closeScanner();
     setLoginOpen(false);
     setPlaybackMode(mode);
-  }, []);
+  }, [closeScanner]);
 
   const persistBridgeSettings = useCallback(async () => {
     if (setupSaving.current) return;
@@ -756,12 +749,12 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         <Modal
           animationType="slide"
           visible={scannerOpen}
-          onRequestClose={() => setScannerOpen(false)}
+          onRequestClose={closeScanner}
         >
           <GestureHandlerRootView style={styles.scannerModalRoot}>
             <Pressable
               style={StyleSheet.absoluteFill}
-              onPress={() => setScannerOpen(false)}
+              onPress={closeScanner}
             />
             <View style={styles.scannerModalContainer}>
               <CameraView
@@ -780,7 +773,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
                 </View>
               )}
               <Pressable
-                onPress={() => setScannerOpen(false)}
+                onPress={closeScanner}
                 style={styles.scannerCloseButton}
               >
                 <BlurView

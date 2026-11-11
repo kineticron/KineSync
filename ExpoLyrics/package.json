@@ -41,7 +41,7 @@
     "test:tour": "node ./scripts/check-app-js-work.cjs && node ./scripts/check-player-tour.cjs && node ./scripts/check-demo-renderers.cjs && node ./scripts/check-tour-tracker.cjs",
     "test:native-translation-incremental": "node ./scripts/check-native-translation-toggle.cjs && node ./scripts/check-native-translation-incremental.cjs && node ./scripts/check-native-translation-scroll.cjs",
     "test:spotify-recovery": "node scripts/check-spotify-recovery.mjs && node scripts/check-spotify-connection-ui.cjs && node scripts/check-spotify-reachability.cjs && node scripts/check-spotify-restrictions-binary.mjs && node scripts/check-spotify-restrictions-owner.mjs",
-    "test:lifetime": "node ./scripts/check-bridge-lifetime.cjs"
+    "test:lifetime": "node ./scripts/check-bridge-lifetime.cjs && node ./scripts/check-scanner-session.cjs && node ./scripts/check-scanner-session.cjs --onboarding"
   },
   "dependencies": {
     "@applemusic-like-lyrics/core": "^0.6.0",

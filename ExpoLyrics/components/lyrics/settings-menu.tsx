@@ -1,7 +1,8 @@
+import { ScannerSession } from "@/lib/scanner-session";
 import { router } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   ScrollView,
@@ -420,21 +421,24 @@ export const SettingsMenu = memo(function SettingsMenu({
   const [scanError, setScanError] = useState("");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
-  const scanFailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scanHandled = useRef(false);
+  const scannerSession = useMemo(() => new ScannerSession(), []);
+  const scanHandled = useRef(true);
+  const closeScanner = useCallback(() => {
+    scannerSession.close(); scanHandled.current = true; setScannerOpen(false); setScanError("");
+  }, [scannerSession]);
+  useEffect(() => () => scannerSession.close(), [scannerSession]);
+  useEffect(() => { if (open) closeScanner(); }, [open, closeScanner]);
 
   const handleBarcodeScanned = useCallback(({ data }: { data: string }) => {
-    if (scanHandled.current) return;
+    const run = scannerSession.current();
+    if (!scannerSession.isCurrent(run) || scanHandled.current) return;
     try {
       const parsed = JSON.parse(data);
       const bridgeUrl = parseBridgeWebSocketUrl(parsed?.u);
       const bridgeKey = String(parsed?.k || "").trim();
       if (bridgeUrl && isValidBridgeKey(bridgeKey)) {
         scanHandled.current = true;
-        if (scanFailTimer.current) {
-          clearTimeout(scanFailTimer.current);
-          scanFailTimer.current = null;
-        }
+        scannerSession.cancel("failure");
         setScanError("");
         void saveBridgeSettings({
           serverUrl: bridgeUrl,
@@ -442,12 +446,14 @@ export const SettingsMenu = memo(function SettingsMenu({
           playbackMode: "desktop",
         })
           .then((saved) => {
+            if (!scannerSession.isCurrent(run)) return;
             usePlaybackStore.getState().setServerUrl(saved.serverUrl);
             usePlaybackStore.getState().setHandshakeKey(saved.handshakeKey);
-            setScannerOpen(false);
+            closeScanner();
             bridgeClient.reconnectNow();
           })
           .catch((error) => {
+            if (!scannerSession.isCurrent(run)) return;
             scanHandled.current = false;
             setScanError(
               error instanceof Error
@@ -458,28 +464,21 @@ export const SettingsMenu = memo(function SettingsMenu({
         return;
       }
     } catch {}
-    if (!scanFailTimer.current) {
-      scanFailTimer.current = setTimeout(() => {
-        setScanError("No valid KineSync QR code found");
-        scanFailTimer.current = null;
-      }, 5000);
-    }
-  }, []);
+    scannerSession.schedule(run, "failure", () => setScanError("No valid KineSync QR code found"), 5000);
+  }, [scannerSession, closeScanner]);
 
   const openScanner = async () => {
+    const run = scannerSession.begin();
     scanHandled.current = false;
-    if (cameraPermission?.granted === true) {
+    setScanError("");
+    const granted = cameraPermission?.granted === true || (await requestCameraPermission()).status === "granted";
+    if (!scannerSession.isCurrent(run)) return;
+    if (granted) {
       onClose();
-      setTimeout(() => setScannerOpen(true), 350);
-      return;
-    }
-    const { status } = await requestCameraPermission();
-    if (status === "granted") {
-      onClose();
-      setTimeout(() => setScannerOpen(true), 350);
+      scannerSession.schedule(run, "open", () => setScannerOpen(true), 350);
     } else {
       setScanError("Camera permission required to scan QR codes");
-      setTimeout(() => setScanError(""), 3000);
+      scannerSession.schedule(run, "error", () => setScanError(""), 3000);
     }
   };
 
@@ -645,13 +644,13 @@ export const SettingsMenu = memo(function SettingsMenu({
       <Modal
         animationType="slide"
         visible={scannerOpen}
-        onRequestClose={() => setScannerOpen(false)}
+        onRequestClose={closeScanner}
         supportedOrientations={MODAL_SUPPORTED_ORIENTATIONS}
       >
         <GestureHandlerRootView style={styles.scannerModalRoot}>
           <Pressable
             style={StyleSheet.absoluteFill}
-            onPress={() => setScannerOpen(false)}
+            onPress={closeScanner}
           />
           <View style={styles.scannerModalContainer}>
             <CameraView
@@ -670,7 +669,7 @@ export const SettingsMenu = memo(function SettingsMenu({
               </View>
             )}
             <Pressable
-              onPress={() => setScannerOpen(false)}
+              onPress={closeScanner}
               style={styles.scannerCloseButton}
             >
               <BlurView
