@@ -60,6 +60,46 @@ async function main() {
     if(order==='qr-first-dispose')assert.equal(activated.length,0);
     if(order==='qr-first')assert.equal(activated.at(-1),'ws://scanned:3001');
   }
+  for (const action of ['handleNext','handleSkip']) for (const finishBeforeFailure of [false,true]) {
+    const saves=[], activated=[], errors=[], pendingQrSave={current:null};let dismissed=0, scanning=true;
+    const scannerSession={current:()=>scanning?1:null,isCurrent:run=>scanning&&run===1,cancel(){},schedule(){},close(){scanning=false;}};
+    const context=vm.createContext({useCallback:fn=>fn,playbackMode:'desktop',setupGeneration:{current:0},setupSaving:{current:false},pendingQrSave,
+      scannerSession,scanHandled:{current:false},setScanError:message=>errors.push(message),setScanCompleted(){},setScannerOpen(){},
+      closeScanner:()=>scannerSession.close(),parseBridgeWebSocketUrl:x=>x,isValidBridgeKey:()=>true,
+      saveBridgeSettings:settings=>new Promise((resolve,reject)=>saves.push({settings,resolve,reject})),
+      onDismiss:()=>dismissed++,Alert:{alert(){}},setPlaybackModeStore(){},setServerUrlStore:url=>activated.push(url),setHandshakeKeyStore(){},
+      bridgeClient:{disconnect(){},reconnectNow(){}},usePlaybackStore:{getState:()=>({serverUrl:'ws://retry:3001'})},inferDefaultBridgeUrl:()=>'',
+      isLastStep:true,itemWidth:360,reduceMotion:false,step:3,
+    });
+    for(const name of ['handleBarcodeScanned','persistBridgeSettings','handleNext','handleSkip'])vm.runInContext(ts.transpile(`const ${name}=${callbacks.get(name)};`,{target:ts.ScriptTarget.ES2022}),context);
+    vm.runInContext(`handleBarcodeScanned({data:JSON.stringify({u:'ws://scanned:3001',k:'scanned-key'})})`,context);
+    if(finishBeforeFailure) vm.runInContext(`${action}()`,context);
+    saves[0].reject(Error('QR storage unavailable'));await flush();
+    assert.equal(dismissed,0);assert.equal(activated.length,0,'failed QR cannot activate playback');
+    vm.runInContext(`${action}()`,context);await flush();
+    assert.equal(saves.length,2,'completion retries persistence after QR failure instead of awaiting its old rejection');
+    assert.equal(saves[1].settings.serverUrl,'ws://retry:3001');
+    saves[1].resolve({...saves[1].settings});await flush();
+    assert.equal(dismissed,1,'successful completion retry dismisses setup');
+    assert.equal(activated.at(-1),'ws://retry:3001');
+  }
+  {
+    const saves=[], pendingQrSave={current:null}, scanHandled={current:false};let scanRun=1;
+    const scannerSession={current:()=>scanRun,isCurrent:run=>run===scanRun,cancel(){},schedule(){}};
+    const context=vm.createContext({useCallback:fn=>fn,setupGeneration:{current:0},setupSaving:{current:false},pendingQrSave,
+      scannerSession,scanHandled,setScanError(){},setScanCompleted(){},closeScanner(){},
+      parseBridgeWebSocketUrl:x=>x,isValidBridgeKey:()=>true,
+      saveBridgeSettings:settings=>new Promise((resolve,reject)=>saves.push({settings,resolve,reject})),
+      setPlaybackModeStore(){},setServerUrlStore(){},setHandshakeKeyStore(){},bridgeClient:{reconnectNow(){}},
+    });
+    vm.runInContext(ts.transpile(`const handleBarcodeScanned=${callbacks.get('handleBarcodeScanned')};`,{target:ts.ScriptTarget.ES2022}),context);
+    const scan=()=>vm.runInContext(`handleBarcodeScanned({data:JSON.stringify({u:'ws://scanned:3001',k:'scanned-key'})})`,context);
+    scan();scanRun++;scanHandled.current=false;scan();
+    const replacement=pendingQrSave.current;
+    saves[0].reject(Error('old QR write failed'));await flush();
+    assert.equal(pendingQrSave.current,replacement,'old rejection cannot clear the newer QR owner');
+    saves[1].resolve({...saves[1].settings});await flush();
+  }
   // Execute the real serialized storage queue: superseded queued setup must
   // never overwrite the latest mode or mark onboarding complete.
   {
@@ -78,6 +118,6 @@ async function main() {
     release();await first;await rejected;
     assert.equal((await latest).playbackMode,'mobile');assert.equal(writes,2,'stale queued save never writes storage');
   }
-  console.log('Onboarding lifetime PASS: durable handoff, failure acknowledgement, supersession.');
+  console.log('Onboarding lifetime PASS: durable handoff, QR failure retries, replacement ownership, failure acknowledgement, supersession.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

@@ -346,6 +346,9 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               bridgeClient.reconnectNow();
             })
             .catch((error) => {
+              // A rejected QR write is no longer an accepted completion input,
+              // even if Finish closed the scanner while waiting for it.
+              if (pendingQrSave.current?.promise === promise) pendingQrSave.current = null;
               if (run !== setupGeneration.current || !scannerSession.isCurrent(scanRun)) return;
               scanHandled.current = false;
               setScanError(
