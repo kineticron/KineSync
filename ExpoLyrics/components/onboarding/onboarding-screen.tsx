@@ -451,7 +451,6 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
   }, [
     isLastStep,
     itemWidth,
-    onDismiss,
     persistBridgeSettings,
     reduceMotion,
     step,
@@ -459,7 +458,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
 
   const handleSkip = useCallback(() => {
     void persistBridgeSettings();
-  }, [onDismiss, persistBridgeSettings]);
+  }, [persistBridgeSettings]);
 
   const handleMomentumEnd = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {

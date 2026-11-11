@@ -41,7 +41,7 @@ function scenario({ initialPacket, development = false } = {}) {
   ui._getAnimationTimestamp = () => now + 420000;
   const rn = vm.createContext({ __DEV__: development, __RUNTIME_KIND: 1, performance: { now: nativeNow }, console,
     process: { env: { EXPO_PUBLIC_NATIVE_LYRICS: '1' } },
-    Date: { now: () => 1700000000000 + now }, setInterval: () => 1, clearInterval() {} });
+    Date: { now: () => 1700000000000 + now }, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {} });
   rn.global = rn;
 
   function onUI(value) {
@@ -209,6 +209,8 @@ function scenario({ initialPacket, development = false } = {}) {
       useRecyclingState: (...args) => react.useState(args[0]) },
     '@shopify/react-native-skia': skia, 'react-native-reanimated': reanimated, 'react-native-worklets': worklets,
     'react-native-gesture-handler': { Pressable: 'Pressable' }, '@react-native-masked-view/masked-view': 'MaskedView',
+    'expo-font': { isLoaded: () => true },
+    'expo-blur': { BlurView: 'BlurView', BlurTargetView: 'BlurTargetView' },
     'expo-linear-gradient': { LinearGradient: 'LinearGradient' }, 'expo-image': { Image: 'Image' },
     '@react-native-async-storage/async-storage': { getItem: async () => null, setItem: async () => {} },
   };

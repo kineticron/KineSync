@@ -28,11 +28,11 @@ test("Musixmatch sync updates only declared source functions and constants", () 
   assert.equal(output.slice(adapterStart, adapterStart + adapter.length), adapter, "mobile request adapter stays byte-for-byte unchanged");
 });
 
-test("non-Musixmatch code and mobile adapters preserve the approved picker bc57fe5 baseline", () => {
+test("non-Musixmatch code and mobile adapters preserve the approved lifecycle 22e8e9c baseline", () => {
   const mobile = fs.readFileSync(mobilePath, "utf8");
-  // Computed from git show bc57fe5:ExpoLyrics/lib/mobile-lyrics-service.js after masking
+  // Computed from git show 22e8e9c:ExpoLyrics/lib/mobile-lyrics-service.js after masking
   // only the scoped declarations, renewal call and exact deferred token setup snippets.
-  assert.equal(preservationFingerprint(mobile), "54951a8a517421944befc67e156bc72c9badb7715f7e96aca2231e00f5119051");
+  assert.equal(preservationFingerprint(mobile), "53f9d88733e2ef090c0e5cf91afb3ae318278ad92550a875debb58a2b54ece71");
   const changedUnrelatedBranch = mobile.replace('source !== "musixmatch"', 'source !== "unrelated-source"');
   assert.notEqual(preservationFingerprint(changedUnrelatedBranch), preservationFingerprint(mobile));
   for (const [before, after] of [

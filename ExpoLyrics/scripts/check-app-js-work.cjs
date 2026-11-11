@@ -202,6 +202,7 @@ function checkClosedMenu() {
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-blur': { BlurView: 'BlurView' },
     'react-native-gesture-handler': { GestureHandlerRootView: 'Root' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
+    '@/lib/scanner-session': load('lib/scanner-session.ts', {}, h.globals),
     '@/lib/lyrics-timing': { getLyricsTimingLabel: () => 'Line' }, '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/bridge-client': {},
     './fast-lyric-loading-switch': { FastLyricLoadingSwitch: 'FastLyricLoadingSwitch' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' },
