@@ -222,8 +222,6 @@ class BridgeClient {
     }
     this.reconnectAttempt = 0;
     this.cleanupSocket();
-    this.rejectAllGifRequests("Bridge disconnected during GIF generation.");
-    this.rejectPendingVaultSave("Bridge disconnected during vault save.");
     stopPlaybackClock();
     usePlaybackStore.getState().setConnectionStatus("disconnected");
   }
@@ -443,6 +441,8 @@ class BridgeClient {
     for (const timer of this.delayedPackets) clearTimeout(timer);
     this.delayedPackets.clear();
     this.rejectVaultRequests();
+    this.rejectAllGifRequests("Bridge disconnected during GIF generation.");
+    this.rejectPendingVaultSave("Bridge disconnected during vault save.");
     this.authenticated = false;
     this.clearAuthTimer();
     this.clearTrackChangeRefetchTimer();

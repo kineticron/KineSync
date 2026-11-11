@@ -58,6 +58,20 @@ async function main(){
     assert.equal(delayed.ingested,0, `${terminal} rejects queued old socket callbacks`);
     delayed.client.disconnect(); assert.equal(delayed.timers.size,0);
   }
+  for (const terminal of ['close','error','replacement']) {
+    const rpc=harness();rpc.client.connect();const ws=rpc.authenticate();
+    let gif=0,save=0;
+    const gifResult=rpc.client.requestShareGif({}).catch(()=>{gif++;});
+    const saveResult=rpc.client.saveCurrentTrackToVault().catch(()=>{save++;});
+    if(terminal==='close') ws.onclose();
+    if(terminal==='error') ws.onerror();
+    if(terminal==='replacement') rpc.client.connect();
+    for(let i=0;i<10;i++) await Promise.resolve();
+    assert.equal(gif,1, `${terminal} rejects GIF immediately`);
+    assert.equal(save,1, `${terminal} rejects save immediately`);
+    await Promise.all([gifResult,saveResult]);
+    rpc.client.disconnect();assert.equal(rpc.timers.size,0);
+  }
   console.log('Bridge lifetime PASS: direct connect consumes retry.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
