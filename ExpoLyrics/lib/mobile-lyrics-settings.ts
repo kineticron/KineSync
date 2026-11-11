@@ -43,7 +43,14 @@ const DEFAULT_SETTINGS: MobileLyricsSettings = {
 
 let cachedSettings: MobileLyricsSettings = { ...DEFAULT_SETTINGS };
 let loaded = false;
-let storageAvailable = true;
+let pendingSettings: Partial<MobileLyricsSettings> = {};
+export type MobileLyricsSaveResult = MobileLyricsSettings & {
+  persistence: "durable" | "memory";
+  persistenceError?: string;
+};
+const memoryResult = (): MobileLyricsSaveResult => ({ ...cachedSettings, persistence: "memory",
+  persistenceError: "Settings are available for this session but could not be saved on this device. Please try Save again.",
+});
 let initialLoad: Promise<MobileLyricsSettings> | null = null;
 let settingsWrites: Promise<void> = Promise.resolve();
 
@@ -90,14 +97,14 @@ async function loadMobileLyricsSettings(): Promise<MobileLyricsSettings> {
     const raw = await AsyncStorage.getItem(MOBILE_LYRICS_SETTINGS_KEY);
     let secureRaw = "";
     if (Platform.OS !== "web") {
-      try {
-        secureRaw = (await SecureStore.getItemAsync(MOBILE_LYRICS_SECURE_KEY)) || "";
-      } catch {
-        secureRaw = "";
-      }
+      secureRaw = (await SecureStore.getItemAsync(MOBILE_LYRICS_SECURE_KEY)) || "";
     }
     const legacy = raw ? JSON.parse(raw) : null;
-    cachedSettings = normalizeSettings(secureRaw ? JSON.parse(secureRaw) : legacy);
+    const stored = normalizeSettings(secureRaw ? JSON.parse(secureRaw) : legacy);
+    cachedSettings = normalizeSettings({ ...stored, ...pendingSettings,
+      musixmatchAnonymousRejectedTokenHashes: [...stored.musixmatchAnonymousRejectedTokenHashes,
+        ...(pendingSettings.musixmatchAnonymousRejectedTokenHashes || [])],
+    });
     // Migrate legacy plaintext settings only after the secure write succeeds.
     if (!secureRaw && legacy && Platform.OS !== "web") {
       try {
@@ -108,8 +115,9 @@ async function loadMobileLyricsSettings(): Promise<MobileLyricsSettings> {
       }
     }
   } catch {
-    storageAvailable = false;
-    cachedSettings = { ...DEFAULT_SETTINGS };
+    // Reads remain retryable. Preserve memory edits and never write a default
+    // snapshot over storage we could not read.
+    return cachedSettings;
   }
   loaded = true;
   return cachedSettings;
@@ -123,7 +131,7 @@ export function getMobileLyricsSettings(): Promise<MobileLyricsSettings> {
 
 export async function saveMobileLyricsSettings(
   settings: Partial<MobileLyricsSettings>,
-): Promise<MobileLyricsSettings> {
+): Promise<MobileLyricsSaveResult> {
   if (settings.spicyLyricsPublishableKey && !/^sl_pk_\S+$/.test(settings.spicyLyricsPublishableKey.trim())) {
     throw new Error("Use a Spicy Lyrics publishable key (sl_pk_). Secret keys are not accepted.");
   }
@@ -132,6 +140,7 @@ export async function saveMobileLyricsSettings(
   const write = settingsWrites.then(async () => {
     await getMobileLyricsSettings();
     const current = cachedSettings;
+    pendingSettings = { ...pendingSettings, ...settings };
     cachedSettings = normalizeSettings({ ...current, ...settings,
       // Revocation knowledge is monotonic even if a settings form submits an old
       // full snapshot. Token values themselves are never retained in this list.
@@ -140,18 +149,16 @@ export async function saveMobileLyricsSettings(
         ...(settings.musixmatchAnonymousRejectedTokenHashes || []),
       ])],
     });
-    loaded = true;
-    if (!storageAvailable) {
-      return cachedSettings;
-    }
+    if (!loaded) return memoryResult();
     if (Platform.OS !== "web") {
       try {
         await SecureStore.setItemAsync(MOBILE_LYRICS_SECURE_KEY, JSON.stringify(cachedSettings));
         await AsyncStorage.removeItem(MOBILE_LYRICS_SETTINGS_KEY);
-        return cachedSettings;
+        pendingSettings = {};
+        return { ...cachedSettings, persistence: "durable" as const };
       } catch {
         // Never write secrets back to plaintext storage when secure storage fails.
-        return cachedSettings;
+        return memoryResult();
       }
     }
     try {
@@ -160,9 +167,10 @@ export async function saveMobileLyricsSettings(
         JSON.stringify(cachedSettings),
       );
     } catch {
-      storageAvailable = false;
+      return memoryResult();
     }
-    return cachedSettings;
+    pendingSettings = {};
+    return { ...cachedSettings, persistence: "durable" as const };
   });
   settingsWrites = write.then(() => {}, () => {});
   return write;

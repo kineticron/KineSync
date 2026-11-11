@@ -15,7 +15,7 @@ function load(storage,now=()=>stamp){
   const module={exports:{}};
   const source=ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   const mocks={
-   '@react-native-async-storage/async-storage':storage.async,'expo-secure-store':storage.secure,'react-native':{Platform:{OS:'ios'}},
+   '@react-native-async-storage/async-storage':storage.async,'expo-secure-store':storage.secure,'react-native':{Platform:{OS:storage.platform || 'ios'}},
    'crypto-js':CryptoJS,
   };
   vm.runInNewContext(source,{module,exports:module.exports,AbortController,setTimeout,clearTimeout,
@@ -73,4 +73,30 @@ test('native settings queue continues after a secure write failure without plain
  await app.settings.saveMobileLyricsSettings({spotifyWebToken:'replacement'});
  assert.equal(disk.disk.musixmatchAnonymousRejectedTokenHashes.length,1);
  assert.equal(disk.plaintextWrites,0);
+});
+
+for (const platform of ['web','ios']) test(`${platform}: failed persistence is acknowledged and next save retries`, async()=>{
+ const disk=storage();disk.platform=platform;disk.unblock();
+ let fail=true;
+ if(platform==='web') disk.async.setItem=async()=>{if(fail)throw Error('disk unavailable');};
+ else disk.secure.setItemAsync=async()=>{if(fail)throw Error('secure unavailable');};
+ const app=load(disk);
+ const first=await app.settings.saveMobileLyricsSettings({geminiApiKey:'memory-key'});
+ assert.equal(first.persistence,'memory','volatile settings cannot claim durable success');
+ assert.equal(app.settings.getCachedMobileLyricsSettings().geminiApiKey,'memory-key');
+ fail=false;
+ const second=await app.settings.saveMobileLyricsSettings({spotifyWebToken:'restored'});
+ assert.equal(second.persistence,'durable');assert.equal(second.geminiApiKey,'memory-key');
+ assert.equal(disk.plaintextWrites,0);
+});
+test('initial read failure is retried without overwriting unread settings or pending memory edits',async()=>{
+ const disk=storage();disk.unblock();let fail=true;
+ disk.async.getItem=async()=>{if(fail)throw Error('initial read unavailable');return null;};
+ const app=load(disk);
+ const first=await app.settings.saveMobileLyricsSettings({geminiApiKey:'pending'});
+ assert.equal(first.persistence,'memory');assert.equal(disk.writes.length,0,'do not overwrite unread storage');
+ fail=false;
+ const second=await app.settings.saveMobileLyricsSettings({spotifyWebToken:'restored'});
+ assert.equal(second.persistence,'durable');assert.equal(second.geminiApiKey,'pending');
+ assert.equal(second.musixmatchAnonymousUserToken,oldToken,'retry retains fields from restored disk');
 });

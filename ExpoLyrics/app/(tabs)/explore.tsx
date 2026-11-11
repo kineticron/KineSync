@@ -306,6 +306,7 @@ export default function BridgeSettingsScreen() {
 
   const saveMobileLyricsApiSettings = useCallback(() => {
     setMobileLyricsError('');
+    setMobileLyricsSaved(false);
     void saveMobileLyricsSettings({
       spotifyWebToken: spotifyTokenInput,
       spotifyWebTokenExpiresAt: 0,
@@ -323,8 +324,12 @@ export default function BridgeSettingsScreen() {
             : 'Automatic token',
       );
       setGeminiKeyInput(settings.geminiApiKey);
-      setMobileLyricsSaved(true);
       clearMobileLyricsCache();
+      if (settings.persistence === 'memory') {
+        setMobileLyricsError(settings.persistenceError || 'Could not save API settings. Please try Save again.');
+        return;
+      }
+      setMobileLyricsSaved(true);
       setTimeout(() => setMobileLyricsSaved(false), 1800);
     }).catch((error) => setMobileLyricsError(error instanceof Error ? error.message : 'Could not save API settings.'));
   }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput]);
