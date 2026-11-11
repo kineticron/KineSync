@@ -99,6 +99,16 @@ async function main() {
     catch (error) { results.push({ case: name, pass: false, error: error.message }); }
   }
 
+  test('identical-paused-packet-retains-store-snapshot', () => {
+    const h = runtime();
+    const packet = { ...h.packet({ playing: false }), timing: undefined };
+    h.ingest(packet);
+    const before = h.store.getState();
+    // No new source evidence or metadata: do not wake every store subscriber.
+    h.ingest(packet);
+    assert.equal(h.store.getState(), before);
+  });
+
   test('stationary-duplicate-advances-ordering-watermark-without-moving-anchor', () => {
     const h = runtime();
     h.ingest(h.packet({ playing: false }));
