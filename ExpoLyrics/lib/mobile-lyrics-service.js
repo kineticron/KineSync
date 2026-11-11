@@ -14139,10 +14139,13 @@ function createLyricsService({
       }
       let flight = !force ? sourceFetchesInFlight.get(requestKey) : null;
       if (!flight || flight.record !== sourceRecord) {
-        flight = { record: sourceRecord, listeners: new Set(), latest: null, initial: null };
+        flight = { record: sourceRecord, listeners: new Set(), releases: new Set(), settled: false, latest: null, initial: null };
         sourceFetchesInFlight.set(requestKey, flight);
         const currentFlight = flight;
         const finishFlight = () => {
+          currentFlight.settled = true;
+          for (const release of currentFlight.releases) release();
+          currentFlight.releases.clear();
           if (sourceFetchesInFlight.get(requestKey) === currentFlight) sourceFetchesInFlight.delete(requestKey);
         };
         currentFlight.initial = fetchBestSyncedLyrics(matchTrack, {
@@ -14168,11 +14171,17 @@ function createLyricsService({
         });
         if (normalizedPreferredSource !== "auto") currentFlight.initial.then(finishFlight, finishFlight);
       }
-      selectionDisposers.add(() => {
+      const releaseSelection = () => selectionDisposers.delete(disposeSelection);
+      const disposeSelection = () => {
         flight.listeners.delete(handleProgressPacket);
         clearTimeout(sourceStableTranslationTimer);
         sourceStableTranslationTimer = null;
-      });
+        flight.releases.delete(releaseSelection);
+      };
+      if (!flight.settled) {
+        selectionDisposers.add(disposeSelection);
+        flight.releases.add(releaseSelection);
+      }
       flight.listeners.add(handleProgressPacket);
       if (flight.latest) handleProgressPacket(flight.latest);
       const base = await flight.initial;

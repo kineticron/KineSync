@@ -56,6 +56,17 @@ function load(mobile) {
 
 for (const mobile of [false, true]) {
   const label = mobile ? 'mobile' : 'desktop';
+  test(`${label}: settled repeated requests release selection disposal registrations`, async () => {
+    const h=load(mobile), sets=[];
+    // Observe disposal registrations without changing source/selection behavior.
+    h.context.Set=class extends Set { constructor(...args){super(...args);sets.push(this);} };
+    const service=h.service(), registrations=sets[0];
+    h.fetchers.lrclib=async()=>packet('lrclib');
+    for(let i=0;i<5;i++) await service.fetchSyncedLyrics(baseTrack,{preferredSource:'lrclib'});
+    assert.equal(registrations.size,0,'a completed flight must not retain its request in the selection owner');
+    service.clearCache();
+  });
+
   test(`${label}: immediate translation has one owner across timer and completion`, async () => {
     const h = load(mobile), translation = deferred();
     let calls = 0;
