@@ -1,0 +1,7 @@
+{
+  "protected_band_changed_pixels": 0,
+  "inactive_blur_changed_pixels": 11285,
+  "fill_progress_changed_pixels": 617,
+  "unrelated_lower_rows_changed_pixels": 0,
+  "note": "Actual PNG checks; no Skia pixel-diff gate."
+}
