@@ -1,0 +1,15 @@
+[package]
+name = "lyrics-renderer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+vello = "=0.12.0"
+wgpu = "=30.0.0"
+parley = "=0.12.0"
+pollster = "=0.4.0"
+png = "=0.18.1"
+roxmltree = "=0.21.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
