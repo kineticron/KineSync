@@ -34,7 +34,7 @@ impl TrackScene {
         let lines = lyrics_renderer::fixture()?;
         let mut fonts = FontContext::new();
         let mut layouts = LayoutContext::<()>::new();
-        let font_size = if width < height { 40.0 } else { 36.0 };
+        let font_size = 34.0;
         let lane = if width < height {
             width as f32 - 64.0
         } else {

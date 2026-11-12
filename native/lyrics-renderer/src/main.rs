@@ -32,7 +32,7 @@ fn main() -> Result<(), Error> {
     let mut gpu = pollster::block_on(gpu::Gpu::new(width, height))?;
     let mut frame = vello::Scene::new();
     let protection = track.frame(time, &mut frame);
-    gpu.render(&frame, protection)?;
+    gpu.render(&frame, protection, true)?;
     if let Some(parent) = Path::new(output).parent() {
         fs::create_dir_all(parent)?;
     }
