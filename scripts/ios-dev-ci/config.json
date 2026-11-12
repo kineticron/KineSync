@@ -1,0 +1,15 @@
+{
+  "schema": 3,
+  "configuration": "Debug",
+  "sdk": "iphoneos",
+  "arch": "arm64",
+  "rust": {
+    "enabled": false,
+    "toolchain": "1.97.0",
+    "target": "aarch64-apple-ios",
+    "profile": "dev",
+    "features": [],
+    "framework": "KineSyncLyrics.xcframework",
+    "rustflags": ""
+  }
+}
