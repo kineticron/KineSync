@@ -1,7 +1,5 @@
-mod gpu;
-mod scene;
-use gpu::{FrameStats, Gpu};
-use scene::TrackScene;
+use lyrics_renderer::gpu::{FrameStats, Gpu};
+use lyrics_renderer::scene::TrackScene;
 use serde::Serialize;
 use std::{fs, path::Path, time::Instant};
 

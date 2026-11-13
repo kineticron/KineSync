@@ -1,5 +1,5 @@
 //! Shape whole lines once. Frames reuse encoded white glyph scenes and byte-range clips.
-use lyrics_renderer::{Line, focus, progress};
+use crate::{Line, focus, progress};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontWeight, LayoutContext, LineHeight,
     PositionedLayoutItem, StyleProperty,
@@ -31,12 +31,29 @@ pub struct TrackScene {
 
 impl TrackScene {
     pub fn new(width: u32, height: u32) -> Result<Self, Error> {
-        let lines = lyrics_renderer::fixture()?;
+        Self::from_lines(crate::fixture()?, width, height, 1.0)
+    }
+
+    pub fn from_lines(
+        lines: Vec<Line>,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> Result<Self, Error> {
+        if lines.is_empty()
+            || width == 0
+            || height == 0
+            || !scale.is_finite()
+            || scale <= 0.0
+            || scale > 4.0
+        {
+            return Err("Invalid layout size, scale or empty lyrics".into());
+        }
         let mut fonts = FontContext::new();
         let mut layouts = LayoutContext::<()>::new();
-        let font_size = 34.0;
+        let font_size = 34.0 * scale;
         let lane = if width < height {
-            width as f32 - 64.0
+            (width as f32 - 64.0 * scale).max(font_size)
         } else {
             width as f32 * 0.67
         };
@@ -46,7 +63,12 @@ impl TrackScene {
         for line in &lines {
             let mut builder = layouts.ranged_builder(&mut fonts, &line.text, 1.0, true);
             builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
-                "Noto Sans CJK KR".into(),
+                if cfg!(target_vendor = "apple") {
+                    "sans-serif"
+                } else {
+                    "Noto Sans CJK KR"
+                }
+                .into(),
             )));
             builder.push_default(StyleProperty::FontSize(font_size));
             builder.push_default(StyleProperty::FontWeight(FontWeight::new(800.0)));
@@ -141,8 +163,9 @@ impl TrackScene {
     pub fn frame(&self, time: f64, scene: &mut Scene) -> (f32, f32) {
         scene.reset();
         let active = focus(&self.lines, time);
+        let scale = self.font_size / 34.0;
         let margin = if self.width < self.height {
-            32.0
+            32.0 * scale
         } else {
             self.width as f64 * 0.165
         };
@@ -163,7 +186,8 @@ impl TrackScene {
             }
             let transform = Affine::translate((margin, y));
             let bounds = Rect::new(-8.0, -8.0, self.width as f64, cached.height + 8.0);
-            let opacity = if i == active {
+            let singing = time >= self.lines[i].start && time < self.lines[i].end;
+            let opacity = if i == active || singing {
                 0.4
             } else if i == active + 1 {
                 0.5
@@ -179,7 +203,7 @@ impl TrackScene {
             );
             scene.append(&cached.white, Some(transform));
             scene.pop_layer();
-            if i == active {
+            if i == active || singing {
                 for (atom, fragments) in self.lines[i].atoms.iter().zip(&cached.atoms) {
                     let mut remaining = fragments.iter().map(|r| r.width()).sum::<f64>()
                         * progress(time, atom.start, atom.end);
@@ -197,10 +221,20 @@ impl TrackScene {
                 }
             }
         }
-        let next = (active + 1).min(self.lines.len() - 1);
+        let first = self
+            .lines
+            .iter()
+            .position(|line| time >= line.start && time < line.end)
+            .unwrap_or(active);
+        let last = self
+            .lines
+            .iter()
+            .rposition(|line| time >= line.start && time < line.end)
+            .unwrap_or(active);
+        let next = (last.max(active) + 1).min(self.lines.len() - 1);
         (
-            (anchor - 10.0) as f32,
-            (positions[next] + self.cached[next].height + 10.0) as f32,
+            (positions[first.min(active)] - 10.0 * scale) as f32,
+            (positions[next] + self.cached[next].height + 10.0 * scale) as f32,
         )
     }
 }

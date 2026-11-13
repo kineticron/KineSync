@@ -28,6 +28,7 @@ struct Filter {
 
 pub struct Gpu {
     device: Device,
+    adapter_handle: Adapter,
     queue: Queue,
     renderer: Renderer,
     sharp: Texture,
@@ -36,6 +37,7 @@ pub struct Gpu {
     timestamps: Option<Timestamps>,
     width: u32,
     height: u32,
+    scale: f32,
     pub adapter: String,
 }
 
@@ -99,7 +101,14 @@ fn read_buffer(device: &Device, buffer: &Buffer) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 impl Filter {
-    fn new(device: &Device, sharp: &Texture, target: &Texture, width: u32, height: u32) -> Self {
+    fn new(
+        device: &Device,
+        sharp: &Texture,
+        target: &Texture,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> Self {
         let pipeline = pipeline(
             device,
             "shared separable blur",
@@ -128,10 +137,10 @@ impl Filter {
         let sharp_view = sharp.create_view(&Default::default());
         let target_view = target.create_view(&Default::default());
         let specs = [
-            (&sharp_view, &views[0], [1.0, 0.0, 2.5, 0.0]),
-            (&views[0], &views[1], [0.0, 1.0, 2.5, 0.0]),
-            (&sharp_view, &views[2], [1.0, 0.0, 6.0, 0.0]),
-            (&views[2], &views[3], [0.0, 1.0, 6.0, 0.0]),
+            (&sharp_view, &views[0], [1.0, 0.0, 2.5 * scale, 0.0]),
+            (&views[0], &views[1], [0.0, 1.0, 2.5 * scale, 0.0]),
+            (&sharp_view, &views[2], [1.0, 0.0, 6.0 * scale, 0.0]),
+            (&views[2], &views[3], [0.0, 1.0, 6.0 * scale, 0.0]),
         ];
         let groups = specs
             .into_iter()
@@ -200,11 +209,20 @@ impl Gpu {
             backends: Backends::VULKAN,
             ..InstanceDescriptor::new_without_display_handle()
         });
+        Self::create(&instance, None, width, height, 1.0).await
+    }
+    async fn create(
+        instance: &Instance,
+        surface: Option<&Surface<'_>>,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> Result<Self, Error> {
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
                 power_preference: PowerPreference::LowPower,
                 force_fallback_adapter: false,
-                compatible_surface: None,
+                compatible_surface: surface,
                 ..Default::default()
             })
             .await?;
@@ -232,7 +250,7 @@ impl Gpu {
         )?;
         let sharp = texture(&device, width, height, "vello-sharp");
         let target = texture(&device, width, height, "final-composite");
-        let filter = Filter::new(&device, &sharp, &target, width, height);
+        let filter = Filter::new(&device, &sharp, &target, width, height, scale);
         let timestamps = timestamp_supported.then(|| Timestamps {
             queries: device.create_query_set(&QuerySetDescriptor {
                 label: Some("whole frame GPU interval"),
@@ -262,6 +280,7 @@ impl Gpu {
         );
         Ok(Self {
             device,
+            adapter_handle: adapter,
             queue,
             renderer,
             sharp,
@@ -270,6 +289,7 @@ impl Gpu {
             timestamps,
             width,
             height,
+            scale,
             adapter: adapter_name,
         })
     }
@@ -301,7 +321,7 @@ impl Gpu {
             protection.0,
             protection.1,
             if blur { 1.0 } else { 0.0 },
-            0.0,
+            self.scale,
         ]
         .into_iter()
         .flat_map(f32::to_le_bytes)
@@ -375,5 +395,99 @@ impl Gpu {
         encoder.set_depth(png::BitDepth::Eight);
         encoder.write_header()?.write_image_data(&pixels)?;
         Ok(())
+    }
+}
+
+/// A retained platform surface. Caller keeps its platform layer alive through Drop.
+pub struct SurfaceRenderer {
+    surface: Surface<'static>,
+    gpu: Gpu,
+    config: SurfaceConfiguration,
+    blitter: util::TextureBlitter,
+    _instance: Instance,
+}
+impl SurfaceRenderer {
+    pub async fn new(
+        instance: Instance,
+        surface: Surface<'static>,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> Result<Self, Error> {
+        let gpu = Gpu::create(&instance, Some(&surface), width, height, scale).await?;
+        let mut config = surface
+            .get_default_config(&gpu.adapter_handle, width, height)
+            .ok_or("No supported surface configuration")?;
+        config.present_mode = PresentMode::Fifo;
+        config.desired_maximum_frame_latency = 2;
+        surface.configure(&gpu.device, &config);
+        let blitter = util::TextureBlitter::new(&gpu.device, config.format);
+        Ok(Self {
+            surface,
+            gpu,
+            config,
+            blitter,
+            _instance: instance,
+        })
+    }
+    pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
+        self.gpu.device.poll(PollType::wait_indefinitely())?;
+        self.gpu.width = width;
+        self.gpu.height = height;
+        self.gpu.scale = scale;
+        self.gpu.sharp = texture(&self.gpu.device, width, height, "resized-sharp");
+        self.gpu.target = texture(&self.gpu.device, width, height, "resized-composite");
+        self.gpu.filter = Filter::new(
+            &self.gpu.device,
+            &self.gpu.sharp,
+            &self.gpu.target,
+            width,
+            height,
+            scale,
+        );
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.gpu.device, &self.config);
+        Ok(())
+    }
+    pub fn render(
+        &mut self,
+        scene: &Scene,
+        band: (f32, f32),
+    ) -> Result<Option<(FrameStats, f64)>, Error> {
+        let frame = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
+                frame
+            }
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(None),
+            CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.gpu.device, &self.config);
+                return Ok(None);
+            }
+            other => {
+                return Err(format!(
+                    "Surface unavailable: {other:?}; remount renderer to recreate device/surface"
+                )
+                .into());
+            }
+        };
+        let stats = self.gpu.render(scene, band, true)?;
+        let start = Instant::now();
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        self.blitter.copy(
+            &self.gpu.device,
+            &mut encoder,
+            &self.gpu.target.create_view(&Default::default()),
+            &frame.texture.create_view(&Default::default()),
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu.queue.present(frame);
+        self.gpu.device.poll(PollType::wait_indefinitely())?;
+        Ok(Some((stats, start.elapsed().as_secs_f64() * 1000.0)))
+    }
+}
+impl Drop for SurfaceRenderer {
+    fn drop(&mut self) {
+        let _ = self.gpu.device.poll(PollType::wait_indefinitely());
     }
 }

@@ -12,8 +12,8 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = vec2<i32>(gid.xy);
     let d = max(max(band.x - f32(gid.y), f32(gid.y) - band.y), 0.0);
     // Same protection/near/cross distances as native-shared-blur.tsx spicy profile.
-    let strength = clamp(d / 60.0, 0.0, 1.0) * band.z;
-    let far_weight = clamp((d - 160.0) / 60.0, 0.0, 1.0);
+    let strength = clamp(d / (60.0 * band.w), 0.0, 1.0) * band.z;
+    let far_weight = clamp((d - 160.0 * band.w) / (60.0 * band.w), 0.0, 1.0);
     let blurred = mix(textureLoad(near, p, 0), textureLoad(far, p, 0), far_weight);
     let color = mix(textureLoad(sharp, p, 0), blurred, strength);
     // A subtle viewport fade keeps clipped edge lines unobtrusive.

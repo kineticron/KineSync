@@ -1,16 +1,21 @@
 //! Offline fixture and timing model. Milliseconds, half-open active intervals.
 use std::ops::Range;
 
+pub mod ffi;
+pub mod gpu;
+pub mod live;
+pub mod scene;
+
 pub const FIXTURE: &str =
     include_str!("../../../DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml");
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Atom {
     pub bytes: Range<usize>,
     pub start: f64,
     pub end: f64,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Line {
     pub text: String,
     pub start: f64,
