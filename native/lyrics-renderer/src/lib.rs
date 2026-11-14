@@ -6,6 +6,7 @@ pub mod gpu;
 pub mod live;
 pub mod motion;
 pub mod scene;
+pub mod style_timing;
 pub mod typography;
 
 pub const FIXTURE: &str =

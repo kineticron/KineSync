@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "base_commit": "c08dfd2",
+  "scope": "Source-equivalent scalar timing and reusable state only; not integrated into live rendering; no visual-parity acceptance",
+  "production_sources": [
+    "ExpoLyrics/components/lyrics/native/reference-motion.ts",
+    "ExpoLyrics/components/lyrics/native/reference-word-motion.ts",
+    "ExpoLyrics/components/lyrics/native/amll-float-clock.ts",
+    "ExpoLyrics/node_modules/cubic-spline/index.js"
+  ],
+  "golden_file": "native/lyrics-renderer/test/style-timing.json",
+  "coverage": {
+    "spicy_word_frames": 80,
+    "amll_emphasis_float_samples": 168,
+    "amll_clock_samples": 7,
+    "amll_spring_samples": 16
+  },
+  "numeric_max_absolute_delta": {
+    "spicy": 4.440892098500626e-16,
+    "amll_emphasis_float_clock": 2.220446049250313e-16
+  },
+  "assertion_tolerances": {
+    "motion": 1e-09,
+    "amll_spring": 1e-12
+  },
+  "allocation_test": {
+    "frames": 120,
+    "emphasized_letters": 40,
+    "updater_thread_allocations": 0,
+    "scope": "alloc/realloc/alloc_zeroed on invoking thread; all state buffers allocated before probe"
+  },
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0"
+  },
+  "checks": [
+    {
+      "command": "cargo +1.97.0 test --locked --manifest-path native/lyrics-renderer/Cargo.toml --lib style_timing -- --nocapture",
+      "exit": 0,
+      "passed": 5
+    },
+    {
+      "command": "cargo +1.97.0 clippy --locked --manifest-path native/lyrics-renderer/Cargo.toml --all-targets -- -D warnings",
+      "exit": 0
+    },
+    {
+      "command": "cargo +1.97.0 clippy --locked --manifest-path native/lyrics-renderer/Cargo.toml --lib --target aarch64-apple-ios -- -D warnings",
+      "exit": 0
+    },
+    {
+      "command": "cargo +1.97.0 fmt --check --manifest-path native/lyrics-renderer/Cargo.toml",
+      "exit": 0
+    },
+    {
+      "command": "git diff --exit-code c08dfd2 -- native/lyrics-renderer/src/scene.rs native/lyrics-renderer/src/gpu.rs native/lyrics-renderer/src/ffi.rs native/lyrics-renderer/src/motion.rs 'ExpoLyrics/app/(tabs)/index.tsx'",
+      "exit": 0
+    }
+  ],
+  "comparison_scripts_changed": false,
+  "abi": 4,
+  "native_app_build_performed": false,
+  "phone_test_performed": false,
+  "budget": {
+    "latest_coordinator_live_read": "2026-11-14 02:40 PT",
+    "primary_used_percent": 0,
+    "secondary_used_percent": 76,
+    "remaining_percent": 24,
+    "own_live_tool_available": false,
+    "new_batch_halt_at_remaining_percent_less_or_equal": 15
+  }
+}
