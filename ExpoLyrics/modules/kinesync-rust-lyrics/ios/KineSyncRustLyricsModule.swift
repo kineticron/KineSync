@@ -30,7 +30,7 @@ private struct TrackIdentity: Decodable { let generation: UInt64 }
 // Only this serial queue touches a Rust handle. Layer remains strongly retained
 // until synchronous retirement has drained submissions and dropped the surface.
 private final class RustOwner: @unchecked Sendable {
-  private let queue = DispatchQueue(label: "dev.kineticron.rust-lyrics", qos: .userInteractive)
+  private let queue = DispatchQueue(label: "dev.kineticron.rust-lyrics", qos: .userInteractive, autoreleaseFrequency: .workItem)
   private let layer: CAMetalLayer
   private let report: ([String: Any]) -> Void
   private var handle: UInt64 = 0
@@ -57,7 +57,8 @@ private final class RustOwner: @unchecked Sendable {
   }
   private func failure() {
     var bytes = [CChar](repeating: 0, count: 2048)
-    kr_copy_error(&bytes, bytes.count)
+    let capacity = bytes.count
+    bytes.withUnsafeMutableBufferPointer { buffer in kr_copy_error(buffer.baseAddress, capacity) }
     failed = true
     emit(["state": "error", "message": String(cString: bytes)])
   }
@@ -91,8 +92,9 @@ private final class RustOwner: @unchecked Sendable {
       self.size = size
       self.scale = scale
       if !track.isEmpty && track != self.appliedTrack {
-        let result = track.utf8CString.withUnsafeBytes { buffer in
-          kr_set_track(self.handle, buffer.baseAddress!.assumingMemoryBound(to: UInt8.self), buffer.count - 1)
+        let data = Data(track.utf8)
+        let result = data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Int32 in
+          kr_set_track(self.handle, buffer.baseAddress!.assumingMemoryBound(to: UInt8.self), buffer.count)
         }
         if result < 0 { self.failure(); return }
         self.appliedTrack = track

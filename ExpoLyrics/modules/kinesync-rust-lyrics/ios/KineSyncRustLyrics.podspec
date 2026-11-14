@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.swift_version = '5.0'
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'Metal', 'QuartzCore', 'CoreText', 'CoreGraphics', 'Foundation', 'Security', 'SystemConfiguration'
+  s.frameworks = 'Metal', 'QuartzCore', 'CoreText', 'CoreGraphics', 'CoreFoundation', 'Foundation', 'Security', 'SystemConfiguration'
   s.libraries = 'c++', 'z', 'iconv'
   s.source_files = '*.swift'
   # Produced by the reviewed device-only CI step BEFORE prebuild/pod install.

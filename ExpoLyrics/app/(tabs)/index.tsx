@@ -1338,10 +1338,10 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
-      {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer"
+      {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer" disabled={tour.active}
         onPress={() => setRustRenderer(value => !value)}
         style={{ position: 'absolute', zIndex: 100, top: insets.top + 4, right: 12, padding: 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)' }}>
-        <Text style={{ color: '#fff', fontSize: 11 }}>{rustRenderer ? 'Rust · switch to Skia' : 'Try Rust renderer'}</Text>
+        <Text style={{ color: '#fff', fontSize: 11 }}>{tour.active ? 'Rust unavailable during tour' : rustRenderer ? 'Rust · switch to Skia' : 'Try Rust renderer'}</Text>
       </Pressable> : null}
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
@@ -1437,7 +1437,7 @@ export default function HomeScreen() {
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : __DEV__ && rustRenderer && !tour.active ? (
-                <RustLyricsView active={isScreenFocused} previewPositionMs={scrubPreviewPositionMs} />
+                <RustLyricsView active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)} previewPositionMs={scrubPreviewPositionMs} />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}
@@ -1670,7 +1670,7 @@ export default function HomeScreen() {
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : __DEV__ && rustRenderer && !tour.active ? (
-                <RustLyricsView active={isScreenFocused} previewPositionMs={scrubPreviewPositionMs} />
+                <RustLyricsView active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)} previewPositionMs={scrubPreviewPositionMs} />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}
