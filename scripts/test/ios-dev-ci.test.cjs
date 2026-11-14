@@ -23,7 +23,9 @@ function fixture(root) {
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins/native.js', 'ExpoLyrics/modules/example/ios/Shim.swift',
     'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/ios/Podfile.lock',
     'native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/src/lib.rs',
-    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) put(root, file);
+    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h',
+    'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/ci.cjs',
+    '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) put(root, file);
 }
 test('absolute normalized cache paths and build flags survive runner paths with spaces', t => {
   const root = temp(t);
@@ -49,7 +51,8 @@ test('Rust prebuilt is source-exact, and independent of JS or Swift shims', t =>
   put(root, 'native/lyrics-renderer/target/out', 'build output');
   put(root, 'native/lyrics-renderer/evidence/report.json', 'evidence');
   assert.equal(rustIdentity(root, identity), initial);
-  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) {
+  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh',
+    'scripts/ios-dev-ci/ci.cjs', '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) {
     put(root, file, 'changed'); assert.notEqual(rustIdentity(root, identity), initial, file); put(root, file);
   }
   for (const [field, value] of [['toolchain', '1.98.0'], ['target', 'other-target'], ['profile', 'release'], ['features', ['new-feature']]]) {
@@ -106,6 +109,11 @@ test('workflow restore/save paths and identities match exactly, all are resolved
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /Swatinem\/rust-cache@[a-f0-9]{40}/);
   assert.match(workflow, /compression-level: 0/);
+  const setup = find('Setup pinned device Rust toolchain and archive reader');
+  assert.match(setup, /if: steps.plan.outputs.rust-enabled == 'true'\n/);
+  assert.ok(!setup.includes('cache-hit'));
+  assert.match(setup, /--component llvm-tools-preview/);
+  assert.ok(workflow.indexOf(setup) < workflow.indexOf('ci.cjs rust-prepare'));
   assert.equal(config.rust.enabled, true);
   assert.ok(!/stamp.*version|publish-production/.test(workflow));
   assert.ok(workflow.indexOf('ci.cjs rust-prepare') < workflow.indexOf('expo prebuild'));
@@ -364,6 +372,7 @@ if (name === 'node') {
   check(args[0] === 'scripts/ios-dev-ci/rust-device.cjs' && args[1] === 'seal');
   check(fs.existsSync(path.join(process.env.RUST_PREBUILT_DIR,'KineSyncLyrics.xcframework')));
   fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR,'sealed'),'yes');
+  fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR,'rust-static-nm.txt'),'0000 T _kr_abi_version');
  }
 } else if (name === 'cargo') {
  const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/debug/liblyrics_renderer.a');
@@ -373,7 +382,7 @@ if (name === 'node') {
  else {
   check(fs.existsSync(args.at(-1)));
   if(args[0]==='lipo') console.log('arm64');
-  else { check(args[0]==='nm'); console.log('0000 T _kr_abi_version'); }
+  else { throw new Error('Apple nm must not read Rust archives'); }
  }
 } else {
  check(name==='xcodebuild' && args[0]==='-create-xcframework');
@@ -404,3 +413,66 @@ if (name === 'node') {
     }
   });
 }
+
+test('Cargo cache identity covers the toolchain and archive check scripts', t => {
+  const root = temp(t); fixture(root);
+  const initial = cacheKeys(root, identity, 'test', 'branch');
+  for (const file of ['scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/ci.cjs', '.github/workflows/ios-development-build.yml']) {
+    put(root, file, 'changed');
+    const updated = cacheKeys(root, identity, 'test', 'branch');
+    assert.notEqual(updated.rustShared, initial.rustShared, file);
+    assert.notEqual(updated.prebuilt, initial.prebuilt, file);
+    put(root, file);
+  }
+  const changed = structuredClone(config); changed.rust.toolchain = '1.98.0';
+  assert.notEqual(cacheKeys(root, identity, 'test', 'branch', changed).rustShared, initial.rustShared);
+});
+
+test('producer sealing and cache-hit validation use pinned llvm-nm and reject failed or incomplete inventories', t => {
+  const root = temp(t), bin = path.join(root, 'bin'), sysroot = path.join(root, 'pinned sysroot');
+  const { symbols } = require('../ios-dev-ci/rust-device.cjs');
+  const reader = path.join(sysroot, 'lib/rustlib/test-host/bin/llvm-nm');
+  fs.mkdirSync(bin); fs.mkdirSync(path.dirname(reader), { recursive: true });
+  const tool = `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const name = path.basename(process.argv[1]), args = process.argv.slice(2);
+if (name === 'rustc') {
+ assert.equal(args[0], '+${config.rust.toolchain}');
+ console.log(args.includes('sysroot') ? process.env.TEST_SYSROOT : 'host: test-host');
+} else if (name === 'plutil') process.stdout.write(fs.readFileSync(args.at(-1)));
+else if (name === 'xcrun') { assert.equal(args[0], 'lipo'); console.log('arm64'); }
+else {
+ assert.equal(name, 'llvm-nm');
+ assert.deepEqual(args.slice(0, 2), ['--extern-only', '--defined-only']);
+ assert.ok(fs.existsSync(args[2]));
+ process.stdout.write(process.env.TEST_NM);
+ if (process.env.TEST_NM_FAIL === 'true') { console.error('reader rejected archive'); process.exit(7); }
+}
+`;
+  for (const file of [...['rustc', 'plutil', 'xcrun'].map(name => path.join(bin, name)), reader]) fs.writeFileSync(file, tool, { mode: 0o755 });
+  const framework = path.join(root, config.rust.framework);
+  put(framework, 'ios-arm64/liblyrics_renderer.a');
+  put(framework, 'ios-arm64/Headers/KineSyncLyrics.h');
+  put(framework, 'ios-arm64/Headers/module.modulemap', 'module KineSyncLyrics { export * }');
+  put(framework, 'Info.plist', JSON.stringify({ AvailableLibraries: [{ LibraryIdentifier: 'ios-arm64', LibraryPath: 'liblyrics_renderer.a', HeadersPath: 'Headers', SupportedPlatform: 'ios', SupportedArchitectures: ['arm64'] }] }));
+  const evidence = path.join(root, 'evidence'); fs.mkdirSync(evidence);
+  const destination = path.join(root, 'workspace/ExpoLyrics/modules/kinesync-rust-lyrics/ios/Frameworks');
+  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TEST_SYSROOT: sysroot,
+    TEST_NM: symbols.map(symbol => `0000 T _${symbol}`).join('\n'),
+    CI_EVIDENCE_DIR: evidence, RUST_PREBUILT_DIR: root, RUST_DEVICE_KEY: 'key', GITHUB_WORKSPACE: path.join(root, 'workspace') };
+  const run = (command, overrides = {}) => spawnSync(process.execPath, [path.join(repo, 'scripts/ios-dev-ci/rust-device.cjs'), command], { env: { ...env, ...overrides }, encoding: 'utf8' });
+  for (const command of ['seal', 'validate']) {
+    const failed = run(command, { TEST_NM_FAIL: 'true' });
+    // validate needs a sealed manifest, created only after the seal rejection checks below.
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /reader rejected archive/);
+    const missing = run(command, { TEST_NM: '0000 T _kr_abi_version' });
+    assert.notEqual(missing.status, 0); assert.match(missing.stderr, /missing kr_create/);
+    assert.ok(!fs.existsSync(command === 'seal' ? path.join(root, 'manifest.json') : destination));
+    const valid = run(command); assert.equal(valid.status, 0, valid.stderr);
+    assert.equal(fs.readFileSync(path.join(evidence, 'rust-static-nm.txt'), 'utf8'), env.TEST_NM);
+  }
+  assert.ok(fs.existsSync(path.join(destination, config.rust.framework)));
+  fs.unlinkSync(reader);
+  const absent = run('validate'); assert.notEqual(absent.status, 0); assert.match(absent.stderr, /ENOENT/);
+});

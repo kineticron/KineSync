@@ -22,11 +22,23 @@ function inspect(framework) {
   if (!fs.readFileSync(modulemap, 'utf8').includes('module KineSyncLyrics')) throw new Error('Missing Swift Clang module map');
   return { slice, library, files: Object.fromEntries([library, header, modulemap, path.join(framework, 'Info.plist')].map(file => [path.relative(framework, file), hash(file)])) };
 }
+// Rust archives include bundled std bitcode; Apple's older LLVM reader may reject it.
+function inventory(library) {
+  const rustcArgs = [`+${config.rust.toolchain}`];
+  const sysroot = execFileSync('rustc', [...rustcArgs, '--print', 'sysroot'], { encoding: 'utf8' }).trim();
+  const version = execFileSync('rustc', [...rustcArgs, '-vV'], { encoding: 'utf8' });
+  const host = version.match(/^host: (\S+)$/m)?.[1];
+  if (!host || !path.isAbsolute(sysroot)) throw new Error('Invalid pinned Rust sysroot/host');
+  const reader = path.join(sysroot, 'lib/rustlib', host, 'bin/llvm-nm');
+  // execFileSync must succeed before any inventory can be accepted or written.
+  return execFileSync(reader, ['--extern-only', '--defined-only', library], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+}
 function seal() {
   const root = process.env.RUST_PREBUILT_DIR;
   const framework = path.join(root, config.rust.framework);
   const checked = inspect(framework);
-  const nm = fs.readFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'rust-static-nm.txt'), 'utf8');
+  const nm = inventory(checked.library);
+  fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'rust-static-nm.txt'), nm);
   for (const symbol of symbols) if (!new RegExp(`\\b_${symbol}\\s*$`, 'm').test(nm)) throw new Error(`Static library missing ${symbol}`);
   const manifest = { cache_key: process.env.RUST_DEVICE_KEY, rust: config.rust, files: checked.files,
     rustc: execFileSync('rustc', [`+${config.rust.toolchain}`, '-vV'], { encoding: 'utf8' }), symbols };
@@ -38,7 +50,8 @@ function validate() {
   if (manifest.cache_key !== process.env.RUST_DEVICE_KEY || JSON.stringify(manifest.rust) !== JSON.stringify(config.rust)) throw new Error('Cached Rust source/config identity mismatch');
   const checked = inspect(path.join(root, config.rust.framework));
   if (JSON.stringify(checked.files) !== JSON.stringify(manifest.files)) throw new Error('Rust XCFramework content/header integrity mismatch');
-  const nm = execFileSync('xcrun', ['nm', '-gU', checked.library], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+  const nm = inventory(checked.library);
+  fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'rust-static-nm.txt'), nm);
   for (const symbol of symbols) if (!new RegExp(`\\b_${symbol}\\s*$`, 'm').test(nm)) throw new Error(`Cached library missing ${symbol}`);
   const destination = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/Frameworks');
   fs.mkdirSync(destination, { recursive: true });
@@ -50,4 +63,4 @@ if (require.main === module) {
   else if (process.argv[2] === 'validate') validate();
   else throw new Error('Expected seal or validate');
 }
-module.exports = { symbols, inspect };
+module.exports = { symbols, inspect, inventory };

@@ -112,12 +112,12 @@ jobs:
           path: ${{ steps.plan.outputs.path-prebuilt }}
           key: ${{ steps.plan.outputs.key-prebuilt }}
 
-      - name: Setup pinned device Rust toolchain on a native cache miss
-        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
+      - name: Setup pinned device Rust toolchain and archive reader
+        if: steps.plan.outputs.rust-enabled == 'true'
         env:
           TOOLCHAIN: ${{ steps.plan.outputs.rust-toolchain }}
           DEVICE_TARGET: ${{ steps.plan.outputs.rust-target }}
-        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$DEVICE_TARGET"
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$DEVICE_TARGET" --component llvm-tools-preview
 
       - name: Cache Rust registry and device target work on a prebuilt miss
         id: rust

@@ -32,7 +32,7 @@ function rustIdentity(root, identity, buildConfig = config) {
   const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
     'native/lyrics-renderer/src', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
     'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
-    'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/rust-device.cjs',
+    'scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml',
     'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);
   return hash(JSON.stringify({ source, rust: buildConfig.rust, xcode: identity.xcode, sdk: identity.sdk, arch: buildConfig.arch, configuration: buildConfig.configuration }));
 }
@@ -67,7 +67,7 @@ function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
     ccache: podHash ? `${prefix}-ccache-${hash(native + podHash)}` : '',
     ccachePrefix: `${prefix}-ccache-`,
     prebuilt: `${prefix}-rust-device-${rust}`,
-    rustShared: `${prefix}-cargo-${buildConfig.rust.target}-${buildConfig.rust.profile}`,
+    rustShared: `${prefix}-cargo-${hash(JSON.stringify({ rust: buildConfig.rust, scripts: digestInputs(root, ['scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml']) }))}`,
     native, rust, podHash,
   };
 }

@@ -24,6 +24,5 @@ cp native/lyrics-renderer/include/KineSyncLyrics.h "$HEADERS/KineSyncLyrics.h"
 printf 'module KineSyncLyrics {\n  header "KineSyncLyrics.h"\n  export *\n}\n' > "$HEADERS/module.modulemap"
 xcodebuild -create-xcframework -library "$LIBRARY" -headers "$HEADERS" \
   -output "$RUST_PREBUILT_DIR/KineSyncLyrics.xcframework"
-# Keep the entire defined-symbol inventory available to the validator, not just .a existence.
-xcrun nm -gU "$LIBRARY" > "$CI_EVIDENCE_DIR/rust-static-nm.txt"
+# Seal inventories the archive with the pinned Rust LLVM reader.
 node scripts/ios-dev-ci/rust-device.cjs seal
