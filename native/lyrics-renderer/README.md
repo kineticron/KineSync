@@ -1,5 +1,9 @@
 # Linux Rust lyric renderer spike
 
+The branch also contains the phase-2 live iOS integration described in
+[INTEGRATION.md](INTEGRATION.md). The phase-1 benchmark/report below records the
+original host experiment, not measurements of the current iOS client.
+
 Phase 1 is a headless Linux experiment on branch `rust-renderer-spike`, based on
 `origin/development` at `ca05b01` (v1.2.8). Plain **wgpu + Vello + Parley**, no
 GPUI. It renders one existing real-song fixture with timed syllable fill, shared
@@ -84,7 +88,11 @@ modified, synthesized or duplicated. We render all 42 lead lines, preserving
 source atom timings and literal spaces; translations and duet-agent presentation
 are not yet implemented. Byte ranges refer to UTF-8 text built from the spans.
 
-### Simultaneous active-line timing limitation
+### Historical phase-1 simultaneous-line limitation
+
+Phase 2 now highlights/protects all overlapping lead intervals. The description
+below records the original phase-1 limitation. Background voices and duet layout
+remain outside this experimental renderer's fidelity scope.
 
 Only the latest started line receives timed highlighting and active blur
 protection; scroll focus is also that single line. **Simultaneously singing

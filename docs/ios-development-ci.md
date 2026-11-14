@@ -1,14 +1,15 @@
 # Device Debug CI checkpoint for the Rust renderer spike
 
-This change optimizes the existing `iOS development build` workflow on
-`rust-renderer-spike`. It does not implement an Expo module, build a Rust client,
-change the production renderer, bump a version, sign an app or touch release
-workflows. Stop here for coordinator independent review, branch transfer/push,
-and two controlled macOS runs. Resume module work only after the coordinator
-accepts this checkpoint.
+The phase-1 CI checkpoint at `37026fe` was reviewed before this phase-2 work.
+The current implementation enables the real shared Rust static library and
+Debug-only Expo Metal module, while keeping default production renderer
+selection, versions, signing and release workflows unchanged. Final independent
+review precedes the coordinator's **one integrated CI build**. The agent does
+not push, dispatch, or operate Metro.
 
-No macOS build, remote cache publication, cold/warm speedup or LiveContainer
-launch is validated by the Linux checks below. Real CI remains mandatory.
+No macOS compile/link, remote cache publication, cold/warm speedup, device launch
+or LiveContainer compatibility is validated by Linux checks. See the
+[live integration guide](../native/lyrics-renderer/INTEGRATION.md).
 
 ## What changed
 
@@ -77,38 +78,31 @@ as a successful controlled warm run. Required caches are saved after a successfu
 build/package. Controlled runs then do exact server lookups to detect failed
 publication, including the historical invalid-path failure mode.
 
-### Rust caching is provisioned, deliberately not enabled
+### Enabled source-exact Rust device caching
 
-`scripts/ios-dev-ci/config.json` fixes toolchain `1.97.0`, target
-`aarch64-apple-ios`, Cargo `dev` profile, explicit features/RUSTFLAGS and Debug
-configuration, with `rust.enabled=false`. There is no cargo build or
-XCFramework producer in this checkpoint. An explicit guard fails if the switch
-is enabled without replacing that guard in the next reviewed phase.
+`scripts/ios-dev-ci/config.json` now enables the producer. It fixes toolchain
+1.97.0, aarch64-apple-ios, Cargo dev profile, opt-level 1, debug-info 1, unwind
+panics, iOS deployment 16.4 and explicit features/RUSTFLAGS. The app is Debug.
+The producer builds the static library before prebuild/Pod installation, checks
+arm64, creates one device-only XCFramework and verifies ABI symbols and hashes.
 
-The prebuilt key covers Cargo.toml, Cargo.lock, the entire `src` directory
-including WGSL, build.rs, crate/root Cargo configuration and toolchain files,
-the existing included TTML fixture and the future producer path
-`scripts/ios-dev-ci/build-rust-device.sh`. Missing files have explicit markers,
-so adding one invalidates the key. Swift shims and JS are outside this hash.
-The future producer must output and validate exactly the device-only
-`KineSyncLyrics.xcframework` and its source/config manifest in the prebuilt
-directory before the configured save step can be enabled.
+The key covers Cargo.toml/lock, Rust/WGSL source, C headers, build.rs, root/crate
+Cargo and toolchain configuration, the included fixture and producer/validator
+scripts. Swift/JS changes do not invalidate the Rust prebuilt key. Generated
+module Frameworks are excluded from native-input hashing. Rust source/header
+changes invalidate the app's DerivedData identity.
 
-The workflow orders source-exact prebuilt lookup before toolchain setup and
-Swatinem/rust-cache. Thus a future verified prebuilt hit can skip Cargo entirely
-for JS/shim-only edits. A miss will use the pinned Rust toolchain and cache the
-registry and conventional crate `target/`. The action resolves that target to
-the same absolute `CARGO_TARGET_DIR` supplied by the plan. We inspected the
-pinned action source: its `workspace -> target` parser joins the target to the
-workspace, so an absolute right-hand side is deliberately avoided.
+An exact prebuilt hit must pass source/config manifest, file hash, platform,
+architecture, module-map and ABI-symbol validation before use. A miss installs
+the pinned toolchain and uses Swatinem/rust-cache for registry and target work.
+The action uses its supported standard target layout with absolute workspace
+and the matching CARGO_TARGET_DIR. No simulator/x86_64 slice is built.
 
-Rust action steps, restores and saves are skipped at this checkpoint. The cold
-lookup-only setting in the provisioned Rust action prevents downloading prior
-entries, but the enabled Rust path still needs separate validation when its
-producer exists. Current cold/warm evidence requirements cover the five active
-caches, not nonexistent Rust artifacts. No Rust client cache hit is claimed.
+Controlled warm mode now also requires an exact Rust prebuilt hit and server
+lookup. Current integration acceptance is one normal build, not an authorized
+new cold/warm pair. Existing pair controls remain for separately approved work.
 
-## Triggers and the coordinator's controlled pair
+## Triggers and coordinator commands
 
 The existing workflow path already has workflow_dispatch in the tracked
 `origin/main` revision. GitHub requires the workflow to exist on the default
@@ -122,14 +116,23 @@ requires explicit workflow_dispatch on `refs/heads/rust-renderer-spike` and a
 successful contract job. Concurrency cancellation is scoped to workflow plus
 ref. Wait for a run to finish before dispatching the next one.
 
-The agent has not pushed or dispatched. After independent review, the
+The agent has not pushed or dispatched. After final independent review, the
 coordinator transfers this branch by the approved git bundle route and pushes
 only `rust-renderer-spike` from DEFAULT `/home/kit/kinesync-dev`. The rescue
 proxy route is not used. Do not run these commands from the implementation
 agent or push any other branch.
 
-Coordinator commands after the approved push, with a new epoch shared by both
-runs and exactly the same source commit:
+Current authorized coordinator validation after review and the approved branch
+push is one integrated build, not both reference measurements below:
+
+```bash
+gh workflow run ios-development-build.yml \
+  --repo kineticron/KineSync --ref rust-renderer-spike \
+  -f cache_mode=normal -f cache_epoch=rust-phase2-integration
+```
+
+The following cold/warm commands are reference controls only and require separate
+authorization. Use a new epoch shared by the pair and identical source commits:
 
 ```bash
 gh workflow run ios-development-build.yml \
@@ -137,7 +140,7 @@ gh workflow run ios-development-build.yml \
   -f cache_mode=cold -f cache_epoch=rust-ci-pair-20261111
 ```
 
-Wait for completion and inspect the cold artifact and all five server lookups.
+Wait for completion and inspect the cold artifact and all active server lookups.
 Only then dispatch the second run:
 
 ```bash
@@ -156,7 +159,7 @@ runs require fresh owned directories before restore, without deleting existing
 runner data. Preexisting CocoaPods/global/OS caches are recorded, not erased.
 This is an Actions-managed cold/warm comparison, not a claim of cold hardware,
 cold OS caches or dedicated-host isolation. Warm requires exact restores of
-npm, lockfile, Pods, DerivedData and ccache. A miss, partial hit or failed server
+npm, lockfile, Pods, DerivedData, ccache and the enabled Rust prebuilt. A miss, partial hit or failed server
 lookup fails the evidence gate while preserving evidence. Stop and investigate
 instead of silently relabeling a miss as warm or dispatching extra builds.
 
@@ -171,6 +174,17 @@ when initialization succeeded. Files from stages not reached are absent. It cont
 - `stages.jsonl` for npm, prebuild, Pods, build, package and cache spans.
 - The resolved Podfile.lock, selected-app architecture report, ccache statistics
   and the IPA manifest with every entry's mode, type and content hash.
+
+Integrated builds additionally require the final host Mach-O `kr_*` symbol
+inventory, app link map with Rust archive/render symbol, generated Expo provider
+registration, compiled development JS bundle/source-map selection path and
+source-exact XCFramework manifest. These are uploaded as `rust-link-proof.json`
+and companion evidence files. A cached archive alone is not integration proof.
+The export/mock-server bundler path does not listen on a Metro port.
+
+Before packaging, Mach-O and CFBundleExecutable files are repaired to 0755.
+The independent validator rejects any non-executable or missing code in the
+source app and inner IPA, including equal-bad 0644 source/archive modes.
 
 A matching table is appended to the Actions step summary. `xcodebuild` timing is
 nested inside `build-and-validate`, so do not add those durations together.
@@ -208,8 +222,9 @@ JS/Swift edits, absolute cache destinations, restore/save contracts, lockfile
 mutation rejection, a fake-toolchain runner initialization, stage failure and
 warm-miss evidence, arm64 Debug build arguments, shell syntax, and a real ZIP
 round trip preserving 0755 framework binaries and symlinks. They do not compile
-an iOS app. No app runtime or Cargo source changed, so no Expo/npm/Cargo build is
-claimed locally. The real macOS pair remains the next acceptance step.
+an iOS app. The shared engine and app integration now also receive Rust and TypeScript
+checks, documented in the integration guide. Swift/macOS linking and the one
+real integrated CI build remain pending coordinator action.
 
 Actionlint 1.7.12 was downloaded from its official release with SHA-256
 `8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8`.
