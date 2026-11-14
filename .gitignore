@@ -67,6 +67,10 @@ ios/
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.swift
 !ExpoLyrics/modules/kinesync-live-activity/ios/types/*.podspec
+!ExpoLyrics/modules/kinesync-rust-lyrics/ios/
+!ExpoLyrics/modules/kinesync-rust-lyrics/ios/*.swift
+!ExpoLyrics/modules/kinesync-rust-lyrics/ios/*.podspec
+!ExpoLyrics/modules/kinesync-rust-lyrics/ios/.gitignore
 android/
 app-example/
 
