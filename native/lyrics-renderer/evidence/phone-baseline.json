@@ -1,0 +1,21 @@
+{
+  "baseline": "4bcfe6e29c200965013b6165546d69b8e1189a50",
+  "protocol": "position-only ticks send no anchors; playing advances; pause freezes",
+  "source": {
+    "playingLoopAlreadyContinuous": true,
+    "preferredRateMissing": true,
+    "targetTimestampMissing": true,
+    "workerAndPresentWaits": 5,
+    "mainSyncBarriers": 2,
+    "activeLinePositionSnaps": true,
+    "portraitViewportExtendsToBottom": true,
+    "timestampGateDoesNotGateBlur": true
+  },
+  "syntheticTrace": {
+    "callbacks": 120,
+    "submitted": 24,
+    "busy": 96,
+    "absentCallbacks": 0,
+    "note": "Synthetic 40ms worker, not measured hardware"
+  }
+}
