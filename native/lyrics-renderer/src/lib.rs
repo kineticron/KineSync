@@ -6,22 +6,24 @@ pub mod gpu;
 pub mod live;
 pub mod motion;
 pub mod scene;
+pub mod typography;
 
 pub const FIXTURE: &str =
     include_str!("../../../DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml");
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Atom {
     pub bytes: Range<usize>,
     pub start: f64,
     pub end: f64,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Line {
     pub text: String,
     pub start: f64,
     pub end: f64,
     pub atoms: Vec<Atom>,
+    pub paint: Option<typography::PaintVoice>,
 }
 
 pub fn milliseconds(value: &str) -> Result<f64, Box<dyn std::error::Error>> {
@@ -48,6 +50,7 @@ pub fn fixture() -> Result<Vec<Line>, Box<dyn std::error::Error>> {
             start: milliseconds(p.attribute("begin").ok_or("no begin")?)?,
             end: milliseconds(p.attribute("end").ok_or("no end")?)?,
             atoms: Vec::new(),
+            paint: None,
         };
         // Lead spans only. Background voice spans are a documented future extension.
         for child in p.children() {
@@ -136,3 +139,57 @@ mod tests {
         assert_eq!(clock(20.0, 200.0, 200.0, true, 1.0), 20.0);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod allocation_probe {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+    };
+    thread_local! {static STATE:Cell<(bool,usize)>=const {Cell::new((false,0))};}
+    struct Counted;
+    fn count() {
+        let _ = STATE.try_with(|state| {
+            let (enabled, count) = state.get();
+            if enabled {
+                state.set((true, count + 1));
+            }
+        });
+    }
+    // Test-only allocator delegates every pointer/layout unchanged to System.
+    unsafe impl GlobalAlloc for Counted {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            count();
+            unsafe { System.alloc_zeroed(layout) }
+        }
+        unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            count();
+            unsafe { System.realloc(p, layout, size) }
+        }
+        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(p, layout) }
+        }
+    }
+    #[global_allocator]
+    static ALLOCATOR: Counted = Counted;
+    pub fn measure(body: impl FnOnce()) -> usize {
+        STATE.with(|state| state.set((true, 0)));
+        body();
+        STATE.with(|state| {
+            let (_, count) = state.get();
+            state.set((false, 0));
+            count
+        })
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../test/baseline-scene.rs"]
+mod baseline_scene;
+#[cfg(test)]
+mod typography_budget;

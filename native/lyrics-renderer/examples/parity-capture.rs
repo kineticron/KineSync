@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let packet = TrackPacket::parse(&fs::read(&args[1])?)?;
     let start = Instant::now();
-    let track = TrackScene::from_lines(packet.into_lines(), width, height, scale)?;
+    let mut track = TrackScene::from_lines(packet.into_lines(), width, height, scale)?;
     let layout_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mut gpu = pollster::block_on(Gpu::new(width, height))?;
     let mut scene = vello::Scene::new();

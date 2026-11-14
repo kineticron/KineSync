@@ -1,5 +1,5 @@
 // Live-track transport only. No animation tick or network work belongs here.
-function buildRustTrack(trackId, generation, lines) {
+function buildRustTrack(trackId, generation, lines, prepared) {
   if (!trackId || !lines.length) throw new Error('Waiting for current-track timed lyrics');
   for (const line of lines) {
     if (!Number.isFinite(line.lineStartTime) || !Number.isFinite(line.lineEndTime) || line.lineEndTime <= line.lineStartTime || !line.syllables.length) throw new Error('Rust requires timed lyric lines');
@@ -7,12 +7,13 @@ function buildRustTrack(trackId, generation, lines) {
       if (!Number.isFinite(atom.startTime) || !Number.isFinite(atom.endTime) || atom.endTime < atom.startTime || !atom.text) throw new Error('Rust received invalid syllable timing');
     }
   }
-  const serialized = JSON.stringify({ generation, track_id: trackId, lines: lines.map(line => ({
+  const serialized = JSON.stringify({ schema: 4, ...(prepared ? { settings: prepared.settings } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => ({
     start: line.lineStartTime, end: line.lineEndTime,
+    ...(prepared ? { paint: prepared.paints[lineIndex] } : {}),
     atoms: line.syllables.map((atom, index) => {
       const next = line.syllables[index + 1];
       const gap = atom.isPartOfWord === false && next && !/\s$/u.test(atom.text) && !/^\s/u.test(next.text);
-      return { text: atom.text + (gap ? ' ' : ''), start: atom.startTime, end: atom.endTime };
+      return { text: atom.text + (!prepared && gap ? ' ' : ''), start: atom.startTime, end: atom.endTime };
     }),
   })) });
   let bytes = 0;

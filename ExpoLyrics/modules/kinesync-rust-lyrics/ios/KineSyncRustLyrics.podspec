@@ -14,6 +14,7 @@ Pod::Spec.new do |s|
   s.frameworks = 'Metal', 'QuartzCore', 'CoreText', 'CoreGraphics', 'CoreFoundation', 'Foundation', 'Security', 'SystemConfiguration'
   s.libraries = 'c++', 'z', 'iconv'
   s.source_files = '*.swift'
+  s.resource_bundles = { 'KineSyncLyricsFonts' => ['../../../assets/fonts/SF-Pro-Display-Regular.otf', '../../../assets/fonts/SF-Pro-Display-Bold.otf'] }
   # Produced by the reviewed device-only CI step BEFORE prebuild/pod install.
   s.vendored_frameworks = 'Frameworks/KineSyncLyrics.xcframework'
   s.pod_target_xcconfig = { 'OTHER_LDFLAGS' => '$(inherited) -Wl,-u,_kr_abi_version' }

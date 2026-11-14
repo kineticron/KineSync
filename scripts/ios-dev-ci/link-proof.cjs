@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { symbols } = require('./rust-device.cjs');
+const { symbols, inspectFonts } = require('./rust-device.cjs');
 const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function sourceMapSources(map) {
   function collect(node) {
@@ -55,7 +55,8 @@ function prove({ app, executable, linkMap, ios, evidence }) {
   const source = fs.readFileSync(bundle, 'utf8');
   const sources = sourceMapSources(JSON.parse(fs.readFileSync(sourcemap, 'utf8')));
   if (!source.includes('KineSyncRustLyrics') || !source.includes('Try Rust renderer') || !sources.some(name => name.includes('rust-lyrics-view.tsx')) || !sources.some(name => name.includes('app/(tabs)/index.tsx'))) throw new Error('Compiled development JS does not contain player selection/native view path');
-  const report = { app_image: path.join(app, executable), sha256: digest(path.join(app, executable)), symbols: matched,
+  const font_resources = inspectFonts(app);
+  const report = { font_resources, app_image: path.join(app, executable), sha256: digest(path.join(app, executable)), symbols: matched,
     link_map: { sha256: digest(linkMap), static_archive: 'liblyrics_renderer.a' }, registrations,
     compiled_js: { bundle_sha256: digest(bundle), sourcemap_sha256: digest(sourcemap), selected_path: 'app/(tabs)/index.tsx -> RustLyricsView -> KineSyncRustLyrics' },
     note: 'Link and compiled path evidence, not a claim of launch, live Metro delivery or LiveContainer compatibility.' };

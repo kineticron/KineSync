@@ -89,7 +89,7 @@ fn render(width: u32, height: u32, time: f64, path: &str, blur: bool) -> Result<
     if !time.is_finite() || time < 0.0 {
         return Err("time must be finite and nonnegative".into());
     }
-    let (track, mut gpu, _) = setup(width, height)?;
+    let (mut track, mut gpu, _) = setup(width, height)?;
     let mut scene = vello::Scene::new();
     let band = track.frame(time, &mut scene);
     let stats = gpu.render(&scene, band, blur)?;
@@ -101,7 +101,7 @@ fn render(width: u32, height: u32, time: f64, path: &str, blur: bool) -> Result<
 fn gallery(directory: &str) -> Result<(), Error> {
     fs::create_dir_all(directory)?;
     for (width, height, orientation) in [(390, 844, "portrait"), (844, 390, "landscape")] {
-        let (track, mut gpu, _) = setup(width, height)?;
+        let (mut track, mut gpu, _) = setup(width, height)?;
         let mut scene = vello::Scene::new();
         for time in [11077, 17300, 17500, 17700, 21200, 33400] {
             let band = track.frame(time as f64, &mut scene);
@@ -120,7 +120,7 @@ fn benchmark(path: &str, count: usize, warmup: usize, png_dir: &str) -> Result<(
     fs::create_dir_all(png_dir)?;
     let mut results = Vec::new();
     for (width, height, orientation) in [(390, 844, "portrait"), (844, 390, "landscape")] {
-        let (track, mut gpu, layout_ms) = setup(width, height)?;
+        let (mut track, mut gpu, layout_ms) = setup(width, height)?;
         let mut scene = vello::Scene::new();
         for frame in 0..warmup {
             let band = track.frame(16600.0 + frame as f64 * 1000.0 / 60.0, &mut scene);
@@ -244,7 +244,7 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
         return Err("proof scale must be 1..=4".into());
     }
     let (w, h) = (390 * scale, 640 * scale);
-    let track = TrackScene::from_lines(lyrics_renderer::fixture()?, w, h, scale as f32)?;
+    let mut track = TrackScene::from_lines(lyrics_renderer::fixture()?, w, h, scale as f32)?;
     let mut gpu = pollster::block_on(Gpu::new_scaled(w, h, scale as f32))?;
     let mut scene = Scene::new();
     let mut results = Vec::new();

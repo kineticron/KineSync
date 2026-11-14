@@ -347,6 +347,7 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   process.env.TEST_NM = '0000 T _unrelated';
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Final app Mach-O/);
   process.env.TEST_NM = symbols.map(symbol => `0000 T _${symbol}`).join('\n');
+  for (const name of ['SF-Pro-Display-Regular.otf', 'SF-Pro-Display-Bold.otf']) put(app, 'KineSyncLyricsFonts.bundle/' + name, fs.readFileSync(path.join(repo, 'ExpoLyrics/assets/fonts', name)));
   const report = prove({ app, executable: 'Final', linkMap: map, ios, evidence });
   assert.equal(Object.keys(report.symbols).length, symbols.length);
   const flat = sources => ({ version: 3, sources, names: [], mappings: '' });
@@ -647,25 +648,41 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 3 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 4 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 4]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 3 }), false);
+  for (const version of [0, 1, 2, 3, 5]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 4 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 3 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 4 else/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 3 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 4 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
 _Static_assert(offsetof(KRMetrics, target_native_ms) == 144, "clock offset");
 int32_t (*render_signature)(uint64_t, double, double) = kr_render;
+int32_t (*fonts_signature)(uint64_t, const uint8_t *, size_t, const uint8_t *, size_t) = kr_set_fonts;
+size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
 ` });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(!swift.includes('presentedFps'));
   assert.ok(!view.includes('presentedFps'));
+});
+
+
+test('font resources invalidate native caches and packaged bytes fail closed', t => {
+  const root=temp(t);fixture(root);const keys=()=>cacheKeys(root,identity,'fonts','refs/heads/rust-renderer-spike');
+  const before=keys();put(root,'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf','changed');
+  const after=keys();assert.notEqual(before.derived,after.derived);assert.notEqual(before.lock,after.lock);assert.equal(before.prebuilt,after.prebuilt);
+  const {inspectFonts}=require('../ios-dev-ci/rust-device.cjs');const app=path.join(root,'App.app');fs.mkdirSync(app);
+  assert.throws(()=>inspectFonts(app),/exactly one/);
+  for(const name of ['SF-Pro-Display-Regular.otf','SF-Pro-Display-Bold.otf'])put(app,'KineSyncLyricsFonts.bundle/'+name,fs.readFileSync(path.join(repo,'ExpoLyrics/assets/fonts',name)));
+  assert.equal(Object.keys(inspectFonts(app)).length,2);
+  put(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf','bad');assert.throws(()=>inspectFonts(app),/digest mismatch/);
+  fs.unlinkSync(path.join(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf'));assert.throws(()=>inspectFonts(app),/Missing packaged/);
+  fs.mkdirSync(path.join(app,'Duplicate/KineSyncLyricsFonts.bundle'),{recursive:true});assert.throws(()=>inspectFonts(app),/exactly one/);
 });

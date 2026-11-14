@@ -1,8 +1,11 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewProps } from 'react-native';
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore } from '@/store/playback-store';
-import { anchorChanged, buildRustTrack, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
+import { anchorChanged, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
+
+import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
+import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
 type NativeRef = { setAnchor(value: string): Promise<void> };
@@ -20,7 +23,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios') return { api: null, view: null, error: 'Rust native surface is available on iOS only' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 3) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 4) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -35,11 +38,15 @@ function generation() {
 export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs }: { active: boolean; previewPositionMs?: number | null }) {
   const lyrics = usePlaybackStore(state => state.lyrics);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
-  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId }), [lyrics, trackId]);
+  const style = usePlaybackStore(state => state.lyricsStyle);
+  const window = useWindowDimensions();
+  const landscape = window.width > window.height;
+  const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
+  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape }), [lyrics, trackId, style, fontScale, landscape]);
   const payload = useMemo(() => {
-    try { return { json: buildRustTrack(trackId, revision.generation, lyrics), error: '' }; }
+    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape), error: '' }; }
     catch (error) { return { json: '', error: String(error) }; }
-  }, [lyrics, trackId, revision.generation]);
+  }, [lyrics, trackId, revision.generation, style, fontScale, landscape]);
   const native = useRef<NativeRef | null>(null);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);

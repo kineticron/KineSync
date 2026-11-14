@@ -47,7 +47,7 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 3 carries explicit seek-snap intent, separate display-target/sample
+ABI version 4 retains explicit seek-snap intent, separate display-target/sample
 clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
 IPA; a Metro-only update cannot install the Rust/Swift changes.
 
@@ -276,3 +276,31 @@ API contracts were checked against the official
 ExpoModulesCore ViewDefinitionBuilder/ViewFactories sources, plus the pinned
 wgpu 30 registry source for CoreAnimationLayer, CurrentSurfaceTexture,
 Queue completion callbacks, transparent surface formats and Queue.present.
+
+
+## ABI4 static typography preparation
+
+Schema4 track packets carry distinct Spicy/AMLL settings and exact production
+paint-word/UTF16/grapheme metadata alongside original syllables. Existing bundled
+SF Pro Display Regular/Bold assets are packaged by the pod resource bundle and
+read once on the worker. Rust validates exact asset SHA256/role/weight and retains
+registered font bytes; missing assets fail visibly. Fonts are immutable per owner.
+`kr_set_fonts` precedes track setup. JS/native ABI guards reject ABI3 clients.
+No device-only slice/cache checks or phone compiler optimization settings change.
+
+Detailed timed fragments are prepared only for active/overlapping leads and next
+two rows. Visible inactive rows use cached plain paragraphs, without timed slice
+construction. Row preparation is on demand; measured heights persist after glyph
+eviction. A per-owner cache retains at most three inactive source/style/viewport
+variants, keyed by original text/timing, complete paint mappings, settings, DPR,
+extent and immutable font identity. Rotation/settings changes cannot reuse a
+mismatched key. Shared GPU blur, premultiplied output, two-frame ownership and
+clock/gating controls remain unchanged.
+
+`copyLayout()` is an explicit asynchronous diagnostic request, not per-frame JS
+telemetry. Call after rendering; unprepared rows are null. It returns actual face
+SHA256/collection index/names/variation coordinates and measured geometry. Native
+fallback equivalence and packaged font execution require final native proof.
+There are no intermediate phone-test/IPA dependencies; one final IPA delivery
+follows near-complete parity and host gates. Physical presentation remains
+unverified until the final user test.

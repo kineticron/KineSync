@@ -12,6 +12,9 @@ public final class KineSyncRustLyricsModule: Module {
       Events("onStatus", "onMetrics")
       Prop("trackJson") { (view: KineSyncRustLyricsView, value: String) in view.setTrack(value) }
       Prop("active") { (view: KineSyncRustLyricsView, value: Bool) in view.setActive(value) }
+      AsyncFunction("copyLayout") { (view: KineSyncRustLyricsView, promise: Promise) in
+        MainActor.assumeIsolated { view.copyLayout(promise) }
+      }
       AsyncFunction("setAnchor") { (view: KineSyncRustLyricsView, value: String) in
         // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
         MainActor.assumeIsolated { view.setAnchor(value) }
@@ -52,6 +55,35 @@ private final class RustOwner: @unchecked Sendable {
   private var size = CGSize.zero
   private var scale: CGFloat = 1
   private var lastMetrics = 0.0
+  // Bundle bytes are cached once, loaded on the worker, never resolved via Metro per frame.
+  private static let fontBytes: (Data, Data)? = {
+    let url = [Bundle.main, Bundle(for: KineSyncRustLyricsModule.self)].compactMap { $0.url(forResource: "KineSyncLyricsFonts", withExtension: "bundle") }.first
+    guard let url,
+          let bundle = Bundle(url: url),
+          let regular = bundle.url(forResource: "SF-Pro-Display-Regular", withExtension: "otf"),
+          let bold = bundle.url(forResource: "SF-Pro-Display-Bold", withExtension: "otf"),
+          let regularData = try? Data(contentsOf: regular), let boldData = try? Data(contentsOf: bold) else { return nil }
+    return (regularData, boldData)
+  }()
+  private func installFonts() -> Bool {
+    guard let (regular, bold) = Self.fontBytes else {
+      failed = true; emit(["state": "error", "message": "Bundled Rust lyric fonts unavailable; rebuild with KineSyncLyricsFonts.bundle"]); return false
+    }
+    let result = regular.withUnsafeBytes { r in bold.withUnsafeBytes { b in
+      kr_set_fonts(handle, r.baseAddress!.assumingMemoryBound(to: UInt8.self), r.count,
+                   b.baseAddress!.assumingMemoryBound(to: UInt8.self), b.count)
+    } }
+    if result < 0 { failure(); return false }
+    return true
+  }
+  private func layoutReceipt() -> String {
+    let capacity = kr_copy_layout_json(handle, nil, 0)
+    guard capacity > 0, capacity <= 8_000_000 else { return "" }
+    var bytes = [UInt8](repeating: 0, count: capacity)
+    let actual = bytes.withUnsafeMutableBufferPointer { kr_copy_layout_json(handle, $0.baseAddress, $0.count) }
+    guard actual == capacity else { return "" }
+    return String(decoding: bytes.dropLast(), as: UTF8.self)
+  }
   private struct SurfaceInput {
     let track: String
     let anchor: Anchor?
@@ -94,6 +126,12 @@ private final class RustOwner: @unchecked Sendable {
     enqueue(update: SurfaceInput(track: track, anchor: anchor, size: size, scale: scale))
   }
   func setAnchor(_ value: Anchor) { enqueue(anchor: value) }
+  func copyLayout(_ completion: @escaping @MainActor (String?) -> Void) {
+    queue.async {
+      let receipt = self.permitted() && self.handle != 0 ? self.layoutReceipt() : ""
+      DispatchQueue.main.async { completion(receipt.isEmpty ? nil : receipt) }
+    }
+  }
   private func enqueue(update: SurfaceInput? = nil, anchor: Anchor? = nil) {
     gate.lock()
     guard !retired else { gate.unlock(); return }
@@ -143,9 +181,10 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 3 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 4 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
+      if !self.installFonts() { return }
     } else if self.size != size || self.scale != scale {
       if kr_resize(self.handle, width, height, Float(scale)) < 0 { self.failure(); return }
     }
@@ -351,6 +390,13 @@ final class KineSyncRustLyricsView: ExpoView {
     failed = false; metal.isHidden = true
     track = value; markDirty()
     refresh(); lifecycle()
+  }
+  func copyLayout(_ promise: Promise) {
+    guard let owner else { promise.reject("ERR_RUST_LAYOUT", "Rust owner unavailable"); return }
+    owner.copyLayout { receipt in
+      if let receipt { promise.resolve(receipt) }
+      else { promise.reject("ERR_RUST_LAYOUT", "No prepared Rust layout receipt") }
+    }
   }
   func setAnchor(_ value: String) {
     guard let data = value.data(using: .utf8), let next = try? JSONDecoder().decode(Anchor.self, from: data) else {

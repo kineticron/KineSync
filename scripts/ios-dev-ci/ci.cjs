@@ -54,7 +54,7 @@ function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
   const env = hash(JSON.stringify({ identity, configuration: buildConfig.configuration, sdk: buildConfig.sdk, arch: buildConfig.arch })).slice(0, 24);
   const native = digestInputs(root, ['ExpoLyrics/package.json', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json',
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins', 'ExpoLyrics/modules', 'ExpoLyrics/ios/Podfile',
-    'ExpoLyrics/ios/Podfile.properties.json']);
+    'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf']);
   const rust = rustIdentity(root, identity, buildConfig);
   const lock = path.join(root, 'ExpoLyrics/ios/Podfile.lock');
   const podHash = fs.existsSync(lock) ? hash(fs.readFileSync(lock)) : null;

@@ -20,11 +20,14 @@ typedef struct {
 } KRMetrics;
 uint32_t kr_abi_version(void);
 uint64_t kr_create(void *retained_ca_metal_layer, uint32_t width, uint32_t height, float scale);
+/* ABI4: font bytes copied once before the first track; immutable owner font set. */
+int32_t kr_set_fonts(uint64_t handle, const uint8_t *regular, size_t regular_length, const uint8_t *bold, size_t bold_length);
+size_t kr_copy_layout_json(uint64_t handle, uint8_t *out, size_t capacity);
 int32_t kr_set_track(uint64_t handle, const uint8_t *bytes, size_t length);
 int32_t kr_set_anchor(uint64_t handle, uint64_t generation, uint64_t sequence, double position_ms,
                       double sampled_native_ms, double now_native_ms, bool playing, double rate, bool snap);
 int32_t kr_resize(uint64_t handle, uint32_t width, uint32_t height, float scale);
-/* ABI 3: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
+/* ABI 4: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
 int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);
 int32_t kr_destroy(uint64_t handle);

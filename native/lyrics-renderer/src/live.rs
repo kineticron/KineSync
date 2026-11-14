@@ -5,6 +5,9 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackPacket {
+    pub schema: u32,
+    #[serde(default)]
+    pub settings: Option<crate::typography::Settings>,
     pub generation: u64,
     pub track_id: String,
     pub lines: Vec<WireLine>,
@@ -12,6 +15,8 @@ pub struct TrackPacket {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireLine {
+    #[serde(default)]
+    pub paint: Option<crate::typography::PaintVoice>,
     pub start: f64,
     pub end: f64,
     pub atoms: Vec<WireAtom>,
@@ -29,7 +34,12 @@ impl TrackPacket {
             return Err("Track packet exceeds 2 MB".into());
         }
         let packet: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        if packet.generation == 0
+        if packet.schema != 4
+            || packet
+                .settings
+                .as_ref()
+                .is_some_and(|s| !s.font_scale.is_finite() || !(0.5..=2.0).contains(&s.font_scale))
+            || packet.generation == 0
             || packet.track_id.is_empty()
             || packet.track_id.len() > 1024
             || packet.lines.is_empty()
@@ -46,6 +56,9 @@ impl TrackPacket {
                 || line.atoms.is_empty()
             {
                 return Err("Invalid or unordered line timing".into());
+            }
+            if let Some(paint) = &line.paint {
+                paint.validate(line.start, line.end)?;
             }
             previous = line.start;
             for atom in &line.atoms {
@@ -83,6 +96,7 @@ impl TrackPacket {
                     })
                     .collect();
                 Line {
+                    paint: line.paint,
                     text,
                     start: line.start,
                     end: line.end,
@@ -210,7 +224,7 @@ mod tests {
     }
     #[test]
     fn live_korean_byte_ranges_and_invalid_payload() {
-        let packet = br#"{"generation":1,"track_id":"live","lines":[{"start":0,"end":100,"atoms":[{"text":"a ","start":0,"end":40},{"text":"b","start":40,"end":100}]}]}"#;
+        let packet = br#"{"schema":4,"generation":1,"track_id":"live","lines":[{"start":0,"end":100,"atoms":[{"text":"a ","start":0,"end":40},{"text":"b","start":40,"end":100}]}]}"#;
         let lines = TrackPacket::parse(packet).unwrap().into_lines();
         assert_eq!(lines[0].text, "a b");
         assert_eq!(lines[0].atoms[1].bytes, 2..3);

@@ -57,7 +57,12 @@ pub struct Metrics {
 struct Engine {
     timeline: Timeline,
     lines: Vec<Line>,
+    fonts: crate::typography::Fonts,
+    settings: Option<crate::typography::Settings>,
     layout: Option<TrackScene>,
+    layout_key: String,
+    track_id: String,
+    layout_cache: crate::scene::LayoutCache,
     surface: SurfaceRenderer,
     scene: vello::Scene,
     scale: f32,
@@ -106,7 +111,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    3
+    4
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -140,7 +145,12 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     scroll: Scroll::default(),
                     timeline: Timeline::default(),
                     lines: Vec::new(),
+                    fonts: crate::typography::Fonts::default(),
+                    settings: None,
                     layout: None,
+                    layout_key: String::new(),
+                    track_id: String::new(),
+                    layout_cache: crate::scene::LayoutCache::default(),
                     scene: vello::Scene::new(),
                     scale,
                     metrics: Metrics {
@@ -176,6 +186,68 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
     })
 }
 /// # Safety
+/// Both font buffers must remain readable for this call. Rust copies and owns them.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kr_set_fonts(
+    handle: u64,
+    regular: *const u8,
+    regular_len: usize,
+    bold: *const u8,
+    bold_len: usize,
+) -> i32 {
+    with(handle, |engine| {
+        if regular.is_null()
+            || bold.is_null()
+            || regular_len == 0
+            || bold_len == 0
+            || regular_len > 16_000_000
+            || bold_len > 16_000_000
+            || !engine.lines.is_empty()
+        {
+            return Err("Invalid font buffers or fonts changed after track preparation".into());
+        }
+        // SAFETY: caller provides live Data buffers, bounded above before reading.
+        let (regular, bold) = unsafe {
+            (
+                std::slice::from_raw_parts(regular, regular_len),
+                std::slice::from_raw_parts(bold, bold_len),
+            )
+        };
+        engine.fonts.register(regular, bold)?;
+        Ok(0)
+    })
+}
+/// Returns required UTF8 buffer capacity including NUL. No partial output is written.
+/// # Safety
+/// When non-null, out must be writable for capacity bytes; nil/0 queries the size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kr_copy_layout_json(handle: u64, out: *mut u8, capacity: usize) -> usize {
+    boundary(0, || {
+        let registry = engines().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = registry.get(&handle) else {
+            error("Unknown renderer handle");
+            return 0;
+        };
+        let Some(layout) = &engine.layout else {
+            error("No prepared layout");
+            return 0;
+        };
+        let Ok(json) = serde_json::to_vec(&layout.diagnostics) else {
+            error("Layout diagnostics serialization failed");
+            return 0;
+        };
+        let needed = json.len() + 1;
+        if !out.is_null() && capacity >= needed {
+            // SAFETY: caller's advertised capacity covers bytes plus terminator.
+            unsafe {
+                std::ptr::copy_nonoverlapping(json.as_ptr(), out, json.len());
+                *out.add(json.len()) = 0;
+            }
+        }
+        needed
+    })
+}
+/// # Safety
 /// `bytes` must reference `length` readable bytes for this call. No buffer is retained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usize) -> i32 {
@@ -189,17 +261,48 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             return Ok(1);
         }
         let generation = packet.generation;
+        let track_id = packet.track_id.clone();
+        let settings = packet
+            .settings
+            .clone()
+            .ok_or("ABI4 requires explicit style settings")?;
+        if packet.lines.iter().any(|line| line.paint.is_none()) {
+            return Err("ABI4 requires prepared voice metadata".into());
+        }
         let lines = packet.into_lines();
         let started = Instant::now();
-        let layout = TrackScene::from_lines(
-            lines.clone(),
+        let key = crate::scene::LayoutCache::key(
+            &track_id,
+            &lines,
+            &settings,
             engine.metrics.width,
             engine.metrics.height,
             engine.scale,
         )
         .map_err(|e| e.to_string())?;
+        let layout = if let Some(cached) = engine.layout_cache.take(&key) {
+            cached
+        } else {
+            TrackScene::with_fonts(
+                lines.clone(),
+                engine.metrics.width,
+                engine.metrics.height,
+                engine.scale,
+                Some(&settings),
+                &mut engine.fonts,
+            )
+            .map_err(|e| e.to_string())?
+        };
         engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
         engine.lines = lines;
+        engine.track_id = track_id;
+        engine.settings = Some(settings);
+        if let Some(old) = engine.layout.take() {
+            engine
+                .layout_cache
+                .insert(std::mem::take(&mut engine.layout_key), old);
+        }
+        engine.layout_key = key;
         engine.layout = Some(layout);
         engine.timeline.replace(generation);
         engine.scroll.reset();
@@ -249,12 +352,37 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             .layout
             .as_ref()
             .map(|layout| layout.scroll_target(position));
+        let key = engine
+            .settings
+            .as_ref()
+            .map(|settings| {
+                crate::scene::LayoutCache::key(
+                    &engine.track_id,
+                    &engine.lines,
+                    settings,
+                    width,
+                    height,
+                    scale,
+                )
+            })
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
         let layout = if engine.lines.is_empty() {
             None
+        } else if let Some(cached) = engine.layout_cache.take(&key) {
+            Some(cached)
         } else {
             Some(
-                TrackScene::from_lines(engine.lines.clone(), width, height, scale)
-                    .map_err(|e| e.to_string())?,
+                TrackScene::with_fonts(
+                    engine.lines.clone(),
+                    width,
+                    height,
+                    scale,
+                    engine.settings.as_ref(),
+                    &mut engine.fonts,
+                )
+                .map_err(|e| e.to_string())?,
             )
         };
         engine
@@ -268,6 +396,12 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
                 f64::from(scale / engine.scale),
             );
         }
+        if let Some(old) = engine.layout.take() {
+            engine
+                .layout_cache
+                .insert(std::mem::take(&mut engine.layout_key), old);
+        }
+        engine.layout_key = key;
         engine.layout = layout;
         engine.scale = scale;
         engine.metrics.width = width;
@@ -288,7 +422,7 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         {
             return Err("Invalid native frame clock".into());
         }
-        let Some(layout) = &engine.layout else {
+        let Some(layout) = &mut engine.layout else {
             return Ok(1);
         };
         if !engine.timeline.anchored {
@@ -315,10 +449,15 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
+        let old_target = layout.scroll_target(position);
+        layout.prepare(position).map_err(|e| e.to_string())?;
+        engine
+            .scroll
+            .remap(old_target, layout.scroll_target(position), 1.0);
         let scroll = engine
             .scroll
             .sample(layout.scroll_target(position), native_ms);
-        let band = layout.frame_at(position, scroll, &mut engine.scene);
+        let band = layout.frame_prepared(position, scroll, &mut engine.scene);
         engine.metrics.animating = u32::from(engine.scroll.animating());
         engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -387,8 +526,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v3_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 3);
+    fn abi_v4_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 4);
         assert_eq!(std::mem::size_of::<Metrics>(), 152);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);

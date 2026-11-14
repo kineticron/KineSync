@@ -88,3 +88,14 @@ say implemented/skipped/blocked and why. Do not silently call isolated voice pro
 full screen parity. Full fmt/test/strict host+iOS Clippy, Node/TS/lint/actionlint,
 alpha/premult/in-flight tests and before/after Linux proxy benchmark remain gates
 for runtime changes. A new IPA/font/style packaging proof is coordinator-owned.
+
+## Active run14 user overrides
+
+See `parity-performance-plan.md`: lazy near-active timed geometry, cheap cached
+plain inactive rows, exact invalidation across source/font/style/viewport,
+per-effect comparative host timing/allocation gates, and unchanged shared GPU
+blur/transparency/two-frame scheduler. Earlier intermediate phone checkpoints are
+superseded: one final IPA when close to complete, no per-effect phone tests or
+implementation dependency on them. Actual native Skia simulator evidence is still
+required for full-screen acceptance; physical phone performance remains unverified
+until the final user test.
