@@ -11,10 +11,11 @@ TARGET=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.target')
 PROFILE=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.profile')
 [[ "$TARGET" == aarch64-apple-ios && "$PROFILE" == dev ]]
 FEATURES=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.features.join(",")')
-FEATURE_ARGS=()
-if [[ -n "$FEATURES" ]]; then FEATURE_ARGS=(--features "$FEATURES"); fi
-cargo "+${TOOLCHAIN}" build --locked --lib --manifest-path native/lyrics-renderer/Cargo.toml \
-  --target "$TARGET" --profile "$PROFILE" "${FEATURE_ARGS[@]}"
+# Bash 3.2 treats an empty array expansion as unset under nounset.
+set -- "+${TOOLCHAIN}" build --locked --lib --manifest-path native/lyrics-renderer/Cargo.toml \
+  --target "$TARGET" --profile "$PROFILE"
+if [[ -n "$FEATURES" ]]; then set -- "$@" --features "$FEATURES"; fi
+cargo "$@"
 LIBRARY="${CARGO_TARGET_DIR}/${TARGET}/debug/liblyrics_renderer.a"
 [[ $(xcrun lipo -archs "$LIBRARY") == arm64 ]]
 HEADERS="${RUNNER_TEMP}/kinesync-rust-device-headers"

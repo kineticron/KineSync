@@ -338,3 +338,69 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
 });
+
+for (const shell of new Set([process.env.BASH32 || '/bin/bash', '/bin/bash'])) {
+  test(`real Rust producer preserves empty/nonempty feature arguments under ${shell}`, t => {
+    const version = execFileSync(shell, ['--version'], { encoding: 'utf8' }).split('\n')[0];
+    t.diagnostic(version);
+    if (shell === process.env.BASH32) assert.match(version, /version 3\.2\./, 'BASH32 must name a real Bash 3.2 interpreter');
+    for (const features of [[], ['metal-surface', 'metrics/trace']]) {
+      const root = temp(t), workspace = path.join(root, 'workspace with spaces'), bin = path.join(root, 'tools');
+      fs.mkdirSync(workspace); fs.mkdirSync(bin);
+      const buildConfig = structuredClone(config); buildConfig.rust.features = features;
+      put(workspace, 'scripts/ios-dev-ci/config.json', JSON.stringify(buildConfig));
+      put(workspace, 'native/lyrics-renderer/include/KineSyncLyrics.h', '/* fixture ABI header */');
+      const tool = `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const name = path.basename(process.argv[1]), args = process.argv.slice(2);
+fs.appendFileSync(process.env.TOOL_LOG, JSON.stringify({name,args,sdk:process.env.SDKROOT})+'\\n');
+const check = (value) => { if (!value) throw new Error('Unexpected '+name+' invocation: '+JSON.stringify(args)); };
+if (name === 'node') {
+ if (args[0] === '-p') {
+  const rust = JSON.parse(fs.readFileSync('scripts/ios-dev-ci/config.json')).rust;
+  const field = args[1].match(/\\.rust\\.(toolchain|target|profile|features)/)?.[1];
+  check(field); console.log(field === 'features' ? rust.features.join(',') : rust[field]);
+ } else {
+  check(args[0] === 'scripts/ios-dev-ci/rust-device.cjs' && args[1] === 'seal');
+  check(fs.existsSync(path.join(process.env.RUST_PREBUILT_DIR,'KineSyncLyrics.xcframework')));
+  fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR,'sealed'),'yes');
+ }
+} else if (name === 'cargo') {
+ const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/debug/liblyrics_renderer.a');
+ fs.mkdirSync(path.dirname(library),{recursive:true}); fs.writeFileSync(library,'fake arm64 archive');
+} else if (name === 'xcrun') {
+ if (args.join(' ') === '--sdk iphoneos --show-sdk-path') console.log('/fake iPhoneOS SDK');
+ else {
+  check(fs.existsSync(args.at(-1)));
+  if(args[0]==='lipo') console.log('arm64');
+  else { check(args[0]==='nm'); console.log('0000 T _kr_abi_version'); }
+ }
+} else {
+ check(name==='xcodebuild' && args[0]==='-create-xcframework');
+ check(fs.existsSync(args[args.indexOf('-library')+1]));
+ const headers=args[args.indexOf('-headers')+1];
+ check(fs.readFileSync(path.join(headers,'KineSyncLyrics.h'),'utf8')==='/* fixture ABI header */');
+ check(fs.readFileSync(path.join(headers,'module.modulemap'),'utf8').includes('module KineSyncLyrics'));
+ fs.mkdirSync(args[args.indexOf('-output')+1],{recursive:true});
+}
+`;
+      for (const name of ['cargo', 'node', 'xcrun', 'xcodebuild']) fs.writeFileSync(path.join(bin, name), tool, { mode: 0o755 });
+      const evidence = path.join(root, 'evidence'); fs.mkdirSync(evidence);
+      const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, GITHUB_WORKSPACE: workspace,
+        CI_EVIDENCE_DIR: evidence, RUST_PREBUILT_DIR: path.join(root, 'prebuilt with spaces'),
+        RUST_DEVICE_KEY: 'fixture-key', CARGO_TARGET_DIR: path.join(root, 'target with spaces'),
+        RUNNER_TEMP: path.join(root, 'runner temp'), TOOL_LOG: path.join(root, 'tools.jsonl') };
+      const result = spawnSync(shell, [path.join(repo, 'scripts/ios-dev-ci/build-rust-device.sh')], { env, encoding: 'utf8' });
+      assert.equal(result.status, 0, `${version}, features=${JSON.stringify(features)}\n${result.stderr}`);
+      const calls = fs.readFileSync(env.TOOL_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+      const cargo = calls.filter(call => call.name === 'cargo');
+      assert.equal(cargo.length, 1);
+      assert.deepEqual(cargo[0].args, [`+${buildConfig.rust.toolchain}`, 'build', '--locked', '--lib', '--manifest-path',
+        'native/lyrics-renderer/Cargo.toml', '--target', 'aarch64-apple-ios', '--profile', 'dev',
+        ...(features.length ? ['--features', features.join(',')] : [])]);
+      assert.equal(cargo[0].sdk, '/fake iPhoneOS SDK');
+      assert.equal(fs.readFileSync(path.join(evidence, 'sealed'), 'utf8'), 'yes');
+      assert.match(fs.readFileSync(path.join(evidence, 'rust-static-nm.txt'), 'utf8'), /_kr_abi_version/);
+    }
+  });
+}
