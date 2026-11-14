@@ -1,0 +1,40 @@
+{
+  "baseline": "cbb467f40e6473632b64efd04ecc483c64da9c01",
+  "phoneReported": {
+    "requestedHz": 120,
+    "callbackHz": 120,
+    "hudPresentCallsFps": 40,
+    "cpuEncodeMs": 2.47,
+    "workerPresentWaitMs": 11.44,
+    "callbacks": 1990,
+    "submitted": 620,
+    "busy": 1370
+  },
+  "synthetic14msCompletion": {
+    "one": {
+      "accepted": 600,
+      "blocked": 600,
+      "maxOutstanding": 1
+    },
+    "two": {
+      "accepted": 1200,
+      "blocked": 0,
+      "maxOutstanding": 2
+    },
+    "note": "Independent 14ms completion model, not a measured GPU or prediction"
+  },
+  "blurAtScale3": {
+    "fullResolutionPasses": 4,
+    "sigmas": [
+      7.5,
+      18
+    ],
+    "tapsPerPixel": 312,
+    "rgba8FullSizeTargets": 6
+  },
+  "defects": [
+    "worker occupied through explicit GPU wait",
+    "opaque Vello base and default opaque surface",
+    "present rate counts returned calls, not scanout"
+  ]
+}
