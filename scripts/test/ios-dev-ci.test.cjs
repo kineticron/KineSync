@@ -336,13 +336,34 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   const map = path.join(root, 'App-LinkMap.txt'); put(root, 'App-LinkMap.txt', 'liblyrics_renderer.a _kr_render');
   put(ios, 'Pods/Target Support Files/Pods-App/ExpoModulesProvider.swift', 'KineSyncRustLyricsModule.self');
   put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Try Rust renderer');
-  put(evidence, 'rust-js-path.map', JSON.stringify({ sources: ['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'] }));
+  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
   // The archive exists and its metadata passes, but the actual app lacks Rust.
   process.env.TEST_NM = '0000 T _unrelated';
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Final app Mach-O/);
   process.env.TEST_NM = symbols.map(symbol => `0000 T _${symbol}`).join('\n');
   const report = prove({ app, executable: 'Final', linkMap: map, ios, evidence });
   assert.equal(Object.keys(report.symbols).length, symbols.length);
+  const flat = sources => ({ version: 3, sources, names: [], mappings: '' });
+  const indexed = maps => ({ version: 3, sections: maps.map((map, line) => ({ offset: { line, column: 0 }, map })) });
+  // Metro's indexed output has no top-level sources and can contain empty sections.
+  for (const sourcemap of [
+    indexed([flat([]), flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])]),
+    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])])]),
+  ]) {
+    put(evidence, 'rust-js-path.map', JSON.stringify(sourcemap));
+    assert.equal(Object.keys(prove({ app, executable: 'Final', linkMap: map, ios, evidence }).symbols).length, symbols.length);
+  }
+  fs.unlinkSync(path.join(evidence, 'rust-link-proof.json'));
+  fs.unlinkSync(path.join(evidence, 'app-rust-LinkMap.txt'));
+  fs.unlinkSync(path.join(evidence, 'ExpoModulesProvider-0.swift'));
+  put(evidence, 'rust-js-path.map', JSON.stringify(indexed([flat(['app/(tabs)/index.tsx'])])));
+  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
+  assert.equal(fs.readFileSync(path.join(evidence, 'app-rust-LinkMap.txt'), 'utf8'), fs.readFileSync(map, 'utf8'));
+  assert.match(fs.readFileSync(path.join(evidence, 'ExpoModulesProvider-0.swift'), 'utf8'), /KineSyncRustLyricsModule/);
+  assert.ok(!fs.existsSync(path.join(evidence, 'rust-link-proof.json')));
+  put(evidence, 'rust-js-path.map', '{invalid JSON');
+  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), SyntaxError);
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
 });
@@ -475,4 +496,26 @@ else {
   assert.ok(fs.existsSync(path.join(destination, config.rust.framework)));
   fs.unlinkSync(reader);
   const absent = run('validate'); assert.notEqual(absent.status, 0); assert.match(absent.stderr, /ENOENT/);
+});
+
+test('SourceMap v3 source collection accepts flat and nested Metro sections and fails closed on malformed maps', () => {
+  const { sourceMapSources } = require('../ios-dev-ci/link-proof.cjs');
+  const flat = { version: 3, sources: ['app/(tabs)/index.tsx'], names: [], mappings: 'AAAA' };
+  const section = map => ({ offset: { line: 0, column: 0 }, map });
+  const indexed = { version: 3, sections: [section(flat)] };
+  assert.deepEqual(sourceMapSources(flat), flat.sources);
+  assert.deepEqual(sourceMapSources({ version: 3, sections: [section(indexed)] }), flat.sources);
+  for (const malformed of [null, [], {}, { ...flat, version: 2 }, { ...flat, sources: 'path' },
+    { ...flat, sources: [null] }, { ...flat, mappings: null }, { ...flat, names: null },
+    { version: 3, sections: {} }, { ...indexed, sources: [] },
+    { version: 3, sections: [null] }, { version: 3, sections: [{ offset: { line: 0, column: 0 }, url: 'remote.map' }] },
+    { version: 3, sections: [{ ...section(flat), offset: { line: -1, column: 0 } }] },
+    { version: 3, sections: [section({})] },
+    // A valid target section must not hide a malformed sibling.
+    { version: 3, sections: [section(flat), section({})] },
+  ]) assert.throws(() => sourceMapSources(malformed), /Malformed/);
+  for (const empty of [{ ...flat, sources: [] }, { ...flat, sources: [''] }, { version: 3, sections: [] },
+    { version: 3, sections: [section({ ...flat, sources: [] })] }]) {
+    assert.throws(() => sourceMapSources(empty), /no sources/);
+  }
 });
