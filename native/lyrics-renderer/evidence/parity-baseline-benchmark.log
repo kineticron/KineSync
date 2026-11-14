@@ -1,0 +1,11 @@
+Cached layout: 24.11 ms, 42 lines, 671 glyphs, 0 missing glyphs
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+portrait: {"cpu_scene_ms":{"p50":0.055689999999999996,"p95":0.09319,"p99":0.09870999999999999,"max":0.09870999999999999},"cpu_encode_ms":{"p50":28.916418,"p95":37.224278,"p99":39.456047,"max":39.456047},"wait_readback_ms":{"p50":0.11869,"p95":0.22687,"p99":0.22902999999999998,"max":0.22902999999999998},"gpu_interval_ms":{"p50":28.621908,"p95":36.883898,"p99":39.106407,"max":39.106407},"wall_frame_ms":{"p50":29.097978,"p95":37.447078000000005,"p99":39.637277,"max":39.637277}}
+Cached layout: 21.84 ms, 42 lines, 671 glyphs, 0 missing glyphs
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+landscape: {"cpu_scene_ms":{"p50":0.05268,"p95":0.08592000000000001,"p99":0.09106,"max":0.09106},"cpu_encode_ms":{"p50":26.483268000000002,"p95":29.935209,"p99":34.857538,"max":34.857538},"wait_readback_ms":{"p50":0.11205999999999999,"p95":0.20901,"p99":0.21420999999999998,"max":0.21420999999999998},"gpu_interval_ms":{"p50":26.205328,"p95":29.540589,"p99":34.332078,"max":34.332078},"wall_frame_ms":{"p50":26.667038,"p95":30.196549,"p99":35.159398,"max":35.159398}}
+Benchmark raw samples and percentiles: /tmp/rust-parity-verified/baseline-benchmark.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `native/lyrics-renderer/target/debug/lyrics-renderer bench /tmp/rust-parity-verified/baseline-benchmark.json 30 6 /tmp/rust-parity-verified/bench-png`
