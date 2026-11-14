@@ -672,6 +672,22 @@ impl TrackScene {
         self.frame_at(time, self.scroll_target(time), scene)
     }
 
+    /// Native Spicy FlashList viewOffset: portrait 0, landscape 32 logical pt.
+    /// Other providers retain their previous anchor until their full scroll port.
+    pub(crate) fn scroll_anchor(&self) -> f64 {
+        if crate::motion::SOURCE_SPICY_SCROLL_ENABLED
+            && self.style() == Some(crate::typography::Style::Spicy)
+        {
+            if self.settings.as_ref().is_some_and(|s| s.landscape) {
+                32.0 * f64::from(self.scale)
+            } else {
+                0.0
+            }
+        } else {
+            self.height as f64 * 0.37
+        }
+    }
+
     pub fn scroll_target(&self, time: f64) -> f64 {
         self.prefix[focus(&self.lines, time)]
     }
@@ -687,7 +703,7 @@ impl TrackScene {
         scene.reset();
         let active = focus(&self.lines, time);
         let scale = f64::from(self.scale);
-        let anchor = self.height as f64 * 0.37;
+        let anchor = self.scroll_anchor();
         let position = |index: usize| anchor + self.prefix[index] - scroll;
         for (i, cached) in self.cached.iter().enumerate() {
             let y = position(i);

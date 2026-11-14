@@ -82,3 +82,143 @@ mod tests {
         assert!(!s.animating());
     }
 }
+
+/// Draft only: enable after new source goldens, strict host/iOS and GPU/perf gates.
+pub(crate) const SOURCE_SPICY_SCROLL_ENABLED: bool = false;
+
+/// Source Spicy native viewport tween (reference-motion.ts / reference-scroll.tsx).
+/// Native time continues while playback is paused; explicit seeks reset the owner.
+#[derive(Default, Debug)]
+pub struct SourceScroll {
+    legacy: Scroll,
+    tween: SpicyScroll,
+}
+impl SourceScroll {
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+    pub fn remap(&mut self, old: f64, new: f64, ratio: f64) {
+        self.legacy.remap(old, new, ratio);
+        self.tween.remap(old, new, ratio);
+    }
+    pub fn sample(
+        &mut self,
+        layout: &crate::scene::TrackScene,
+        position: f64,
+        native_ms: f64,
+    ) -> f64 {
+        let target = layout.scroll_target(position);
+        if SOURCE_SPICY_SCROLL_ENABLED && layout.style() == Some(crate::typography::Style::Spicy) {
+            let index = crate::focus(&layout.lines, position);
+            let interval = if index == 0 {
+                800.0
+            } else {
+                layout.lines[index].start - layout.lines[index - 1].start
+            };
+            self.tween.sample(
+                target,
+                interval,
+                position > layout.lines[index].end,
+                native_ms,
+                f64::from(layout.scale),
+            )
+        } else {
+            self.legacy.sample(target, native_ms)
+        }
+    }
+    pub fn animating(&self) -> bool {
+        self.legacy.animating() || self.tween.animating()
+    }
+}
+
+#[derive(Default, Debug)]
+struct SpicyScroll {
+    value: f64,
+    from: f64,
+    target: f64,
+    start: Option<f64>,
+    duration: f64,
+}
+fn spicy_duration(interval: f64, interlude: bool, distance: f64) -> f64 {
+    if interlude {
+        return 440.0;
+    }
+    let ratio = (1.0 - (interval.clamp(100.0, 800.0) - 100.0) / 700.0).powf(0.2);
+    ((440.0 - ratio * 120.0) * (0.7 + 0.3 * (distance / 600.0).clamp(0.0, 1.0)))
+        .clamp(240.0, 440.0)
+        .round()
+}
+impl SpicyScroll {
+    fn remap(&mut self, old: f64, new: f64, ratio: f64) {
+        self.value = new + (self.value - old) * ratio;
+        self.from = new + (self.from - old) * ratio;
+        self.target = new + (self.target - old) * ratio;
+    }
+    fn sample(&mut self, target: f64, interval: f64, interlude: bool, now: f64, dpr: f64) -> f64 {
+        if let Some(start) = self.start {
+            let t = ((now - start) / self.duration).clamp(0.0, 1.0);
+            let eased = crate::style_timing::bezier(t, 0.22, 0.88, 0.34, 1.0);
+            self.value = self.from + (self.target - self.from) * eased;
+        } else {
+            self.value = target;
+        }
+        if self.start.is_none() || target != self.target {
+            self.from = self.value;
+            self.target = target;
+            self.start = Some(now);
+            self.duration = spicy_duration(interval, interlude, (target - self.value).abs() / dpr);
+        }
+        self.value
+    }
+    fn animating(&self) -> bool {
+        self.value != self.target
+    }
+}
+
+#[cfg(test)]
+mod source_scroll_tests {
+    use super::*;
+    #[test]
+    fn draft_is_not_live() {
+        // Runtime stays on approved ABI6 until independent source/perf validation.
+        assert!(!std::hint::black_box(SOURCE_SPICY_SCROLL_ENABLED));
+    }
+    #[test]
+    fn spicy_retargets_from_current_value_and_native_pause_settles() {
+        let mut s = SpicyScroll::default();
+        assert_eq!(s.sample(0.0, 800.0, false, 0.0, 1.0), 0.0);
+        assert_eq!(s.sample(100.0, 800.0, false, 0.0, 1.0), 0.0);
+        let moving = s.sample(100.0, 800.0, false, 100.0, 1.0);
+        assert!(moving > 0.0 && moving < 100.0);
+        assert_eq!(s.sample(200.0, 800.0, false, 100.0, 1.0), moving);
+        // Native time advances even with the same song target / paused clock.
+        assert_eq!(s.sample(200.0, 800.0, false, 1000.0, 1.0), 200.0);
+        assert!(!s.animating());
+        s = SpicyScroll::default(); // seek/track replacement snap
+        assert_eq!(s.sample(900.0, 800.0, false, 1000.0, 1.0), 900.0);
+    }
+    #[test]
+    fn spicy_logical_distance_and_remap_preserve_continuity() {
+        assert_eq!(spicy_duration(100.0, false, 0.0), 240.0);
+        assert_eq!(spicy_duration(800.0, false, 600.0), 440.0);
+        assert_eq!(spicy_duration(100.0, true, 600.0), 440.0);
+        let mut a = SpicyScroll::default();
+        let mut b = SpicyScroll::default();
+        for now in [0.0, 0.0, 17.0, 63.0, 130.0] {
+            let target = if now == 0.0 && a.start.is_none() {
+                0.0
+            } else {
+                100.0
+            };
+            assert!(
+                (a.sample(target, 430.0, false, now, 1.0) * 3.0
+                    - b.sample(target * 3.0, 430.0, false, now, 3.0))
+                .abs()
+                    < 1e-9
+            );
+        }
+        let old = a.value;
+        a.remap(100.0, 400.0, 2.0);
+        assert!((a.value - (400.0 + (old - 100.0) * 2.0)).abs() < 1e-9);
+    }
+}

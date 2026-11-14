@@ -1,0 +1,10 @@
+   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
+    Finished `test` profile [unoptimized] target(s) in 3.46s
+     Running unittests src/lib.rs (native/lyrics-renderer/target/debug/deps/lyrics_renderer-13335a4112ab25fb)
+
+running 2 tests
+test motion::tests::variable_dt_matches_analytic_curve_and_settles ... ok
+test motion::tests::resize_preserves_relative_offset_and_pause_can_settle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.00s
+

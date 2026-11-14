@@ -222,7 +222,7 @@ impl TrackScene {
         let active = crate::focus(&self.lines, time);
         let spicy = self.style() == Some(Style::Spicy);
         let scale = f64::from(self.scale);
-        let anchor = f64::from(self.height) * 0.37;
+        let anchor = self.scroll_anchor();
         for (index, cached) in self.cached.iter().enumerate() {
             let y = anchor + self.prefix[index] - scroll;
             if y + cached.height < -40.0

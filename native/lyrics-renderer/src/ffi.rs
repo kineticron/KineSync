@@ -4,7 +4,7 @@ use crate::{
     Line,
     gpu::SurfaceRenderer,
     live::{Timeline, TrackPacket, frame_clock},
-    motion::Scroll,
+    motion::SourceScroll,
     scene::TrackScene,
 };
 use std::{
@@ -67,7 +67,7 @@ struct Engine {
     scene: vello::Scene,
     scale: f32,
     metrics: Metrics,
-    scroll: Scroll,
+    scroll: SourceScroll,
     appearance: crate::appearance::AppearanceState,
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     instance, surface, width, height, scale,
                 ))?;
                 Ok(Engine {
-                    scroll: Scroll::default(),
+                    scroll: SourceScroll::default(),
                     appearance: crate::appearance::AppearanceState::default(),
                     timeline: Timeline::default(),
                     lines: Vec::new(),
@@ -463,9 +463,7 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         engine
             .scroll
             .remap(old_target, layout.scroll_target(position), 1.0);
-        let scroll = engine
-            .scroll
-            .sample(layout.scroll_target(position), native_ms);
+        let scroll = engine.scroll.sample(layout, position, native_ms);
         let effect = crate::appearance::LIVE_EFFECT;
         engine.appearance.prepare(layout, position, native_ms);
         engine
