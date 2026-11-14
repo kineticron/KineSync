@@ -1,6 +1,11 @@
 //! Vello rasterization, shared GPU blur/composition, optional timestamp brackets.
 use serde::Serialize;
-use std::{fs::File, io::BufWriter, sync::mpsc, time::Instant};
+use std::{
+    fs::File,
+    io::BufWriter,
+    sync::{Arc, Mutex, mpsc},
+    time::Instant,
+};
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene, peniko::Color};
 use wgpu::{util::DeviceExt, *};
 type Error = Box<dyn std::error::Error>;
@@ -38,6 +43,7 @@ pub struct Gpu {
     width: u32,
     height: u32,
     scale: f32,
+    error: Arc<Mutex<Option<String>>>,
     pub adapter: String,
 }
 
@@ -227,7 +233,7 @@ impl Gpu {
             })
             .await?;
         let adapter_name = format!("{:?}", adapter.get_info());
-        println!("Adapter: {adapter_name} (Linux host proxy only)");
+        println!("Adapter: {adapter_name}");
         let wanted = Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         let timestamp_supported = adapter.features().contains(wanted);
         let (device, queue) = adapter
@@ -241,6 +247,17 @@ impl Gpu {
                 ..Default::default()
             })
             .await?;
+        let error = Arc::new(Mutex::new(None));
+        let errors = error.clone();
+        device.on_uncaptured_error(Arc::new(move |message| {
+            *errors.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(format!("GPU error: {message}"));
+        }));
+        let errors = error.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            *errors.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(format!("GPU device lost: {reason:?}: {message}"));
+        });
         let renderer = Renderer::new(
             &device,
             RendererOptions {
@@ -290,6 +307,7 @@ impl Gpu {
             width,
             height,
             scale,
+            error,
             adapter: adapter_name,
         })
     }
@@ -299,6 +317,7 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
     ) -> Result<FrameStats, Error> {
+        self.check_error()?;
         let start = Instant::now();
         if let Some(ts) = &self.timestamps {
             let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -347,11 +366,23 @@ impl Gpu {
         } else {
             None
         };
+        self.check_error()?;
         Ok(FrameStats {
             cpu_encode_ms,
             wait_readback_ms: wait.elapsed().as_secs_f64() * 1000.0,
             gpu_interval_ms,
         })
+    }
+    fn check_error(&self) -> Result<(), Error> {
+        if let Some(message) = self
+            .error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return Err(message.clone().into());
+        }
+        Ok(())
     }
     pub fn save(&self, path: &str) -> Result<(), Error> {
         let stride = (self.width * 4).div_ceil(256) * 256;
@@ -483,6 +514,7 @@ impl SurfaceRenderer {
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(frame);
         self.gpu.device.poll(PollType::wait_indefinitely())?;
+        self.gpu.check_error()?;
         Ok(Some((stats, start.elapsed().as_secs_f64() * 1000.0)))
     }
 }

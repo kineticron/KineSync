@@ -238,3 +238,17 @@ impl TrackScene {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn overlapping_live_leads_keep_both_in_protected_band() {
+        let track = TrackScene::new(390, 844).unwrap();
+        let mut scene = Scene::new();
+        let overlapping = track.frame(88_200.0, &mut scene);
+        let after = track.frame(88_500.0, &mut scene);
+        assert!(overlapping.0 < 844.0 * 0.37 - 40.0);
+        assert!((after.0 - (844.0 * 0.37 - 10.0)).abs() < 0.1);
+    }
+}

@@ -40,7 +40,8 @@ impl TrackPacket {
         let mut previous = 0.0;
         let mut count = 0;
         for line in &packet.lines {
-            if !valid_interval(line.start, line.end)
+            if line.end <= line.start
+                || !valid_interval(line.start, line.end)
                 || line.start < previous
                 || line.atoms.is_empty()
             {

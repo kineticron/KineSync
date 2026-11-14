@@ -9,7 +9,7 @@ extern "C" {
 typedef struct {
   uint64_t frames, generation;
   double position_ms, cpu_scene_ms, cpu_encode_ms, gpu_interval_ms;
-  double wait_ms, present_cpu_ms, layout_ms;
+  double wait_ms, present_wait_ms, layout_ms;
   uint32_t width, height;
 } KRMetrics;
 uint32_t kr_abi_version(void);
@@ -18,6 +18,7 @@ int32_t kr_set_track(uint64_t handle, const uint8_t *bytes, size_t length);
 int32_t kr_set_anchor(uint64_t handle, uint64_t generation, uint64_t sequence, double position_ms,
                       double sampled_native_ms, double now_native_ms, bool playing, double rate);
 int32_t kr_resize(uint64_t handle, uint32_t width, uint32_t height, float scale);
+/* 0 presented, 1 waiting for input, 2 retryable no-frame, -1 error. */
 int32_t kr_render(uint64_t handle, double native_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);
 int32_t kr_destroy(uint64_t handle);

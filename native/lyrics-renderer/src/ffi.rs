@@ -38,7 +38,7 @@ pub struct Metrics {
     pub cpu_encode_ms: f64,
     pub gpu_interval_ms: f64,
     pub wait_ms: f64,
-    pub present_cpu_ms: f64,
+    pub present_wait_ms: f64,
     pub layout_ms: f64,
     pub width: u32,
     pub height: u32,
@@ -247,7 +247,7 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         Ok(0)
     })
 }
-/// Returns 0 for a presented frame, 1 if unanchored/occluded, -1 on explicit failure.
+/// Returns 0 if presented, 1 if awaiting track/anchor, 2 for retryable surface acquisition, -1 on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
     with(handle, |engine| {
@@ -269,14 +269,14 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
             .render(&engine.scene, band)
             .map_err(|e| e.to_string())?
         else {
-            return Ok(1);
+            return Ok(2);
         };
         engine.metrics.frames += 1;
         engine.metrics.position_ms = position;
         engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
         engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
         engine.metrics.wait_ms = stats.wait_readback_ms;
-        engine.metrics.present_cpu_ms = present;
+        engine.metrics.present_wait_ms = present;
         Ok(0)
     })
 }
