@@ -4,6 +4,7 @@ use crate::{
     Line,
     gpu::SurfaceRenderer,
     live::{Timeline, TrackPacket},
+    motion::Scroll,
     scene::TrackScene,
 };
 use std::{
@@ -42,6 +43,8 @@ pub struct Metrics {
     pub layout_ms: f64,
     pub width: u32,
     pub height: u32,
+    pub capabilities: u32,
+    pub animating: u32,
 }
 struct Engine {
     timeline: Timeline,
@@ -51,6 +54,7 @@ struct Engine {
     scene: vello::Scene,
     scale: f32,
     metrics: Metrics,
+    scroll: Scroll,
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
 #[cfg(target_os = "ios")]
@@ -94,7 +98,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    1
+    2
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -125,18 +129,20 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     instance, surface, width, height, scale,
                 ))?;
                 Ok(Engine {
+                    scroll: Scroll::default(),
                     timeline: Timeline::default(),
                     lines: Vec::new(),
                     layout: None,
-                    surface,
                     scene: vello::Scene::new(),
                     scale,
                     metrics: Metrics {
+                        capabilities: surface.capabilities(),
                         width,
                         height,
                         gpu_interval_ms: -1.0,
                         ..Metrics::default()
                     },
+                    surface,
                 })
             })();
             match result {
@@ -188,6 +194,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine.lines = lines;
         engine.layout = Some(layout);
         engine.timeline.replace(generation);
+        engine.scroll.reset();
         engine.metrics.generation = generation;
         Ok(0)
     })
@@ -203,20 +210,22 @@ pub extern "C" fn kr_set_anchor(
     now_native_ms: f64,
     playing: bool,
     rate: f64,
+    snap: bool,
 ) -> i32 {
     with(handle, |engine| {
-        engine
-            .timeline
-            .anchor(
-                generation,
-                sequence,
-                position_ms,
-                sampled_native_ms,
-                now_native_ms,
-                playing,
-                rate,
-            )
-            .map(|accepted| if accepted { 0 } else { 1 })
+        let accepted = engine.timeline.anchor(
+            generation,
+            sequence,
+            position_ms,
+            sampled_native_ms,
+            now_native_ms,
+            playing,
+            rate,
+        )?;
+        if accepted && snap {
+            engine.scroll.reset();
+        }
+        Ok(if accepted { 0 } else { 1 })
     })
 }
 #[unsafe(no_mangle)]
@@ -227,6 +236,11 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             return Ok(0);
         }
         let started = Instant::now();
+        let position = engine.metrics.position_ms;
+        let old_target = engine
+            .layout
+            .as_ref()
+            .map(|layout| layout.scroll_target(position));
         let layout = if engine.lines.is_empty() {
             None
         } else {
@@ -239,6 +253,13 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             .surface
             .resize(width, height, scale)
             .map_err(|e| e.to_string())?;
+        if let (Some(old_target), Some(layout)) = (old_target, &layout) {
+            engine.scroll.remap(
+                old_target,
+                layout.scroll_target(position),
+                f64::from(scale / engine.scale),
+            );
+        }
         engine.layout = layout;
         engine.scale = scale;
         engine.metrics.width = width;
@@ -262,7 +283,12 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
         }
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
-        let band = layout.frame(position, &mut engine.scene);
+        let scroll = engine
+            .scroll
+            .sample(layout.scroll_target(position), native_ms);
+        let band = layout.frame_at(position, scroll, &mut engine.scene);
+        engine.metrics.animating = u32::from(engine.scroll.animating());
+        engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
         let Some((stats, present)) = engine
             .surface
@@ -272,7 +298,6 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
             return Ok(2);
         };
         engine.metrics.frames += 1;
-        engine.metrics.position_ms = position;
         engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
         engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
         engine.metrics.wait_ms = stats.wait_readback_ms;
@@ -327,6 +352,13 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn abi_v2_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 2);
+        assert_eq!(std::mem::size_of::<Metrics>(), 88);
+        assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
+        assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
+    }
     #[test]
     fn panic_containment_and_invalid_handles() {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);

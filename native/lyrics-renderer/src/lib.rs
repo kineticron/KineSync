@@ -4,6 +4,7 @@ use std::ops::Range;
 pub mod ffi;
 pub mod gpu;
 pub mod live;
+pub mod motion;
 pub mod scene;
 
 pub const FIXTURE: &str =

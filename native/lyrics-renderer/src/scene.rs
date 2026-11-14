@@ -161,6 +161,17 @@ impl TrackScene {
 
     /// Returns protected band in output pixels, including the entire next line.
     pub fn frame(&self, time: f64, scene: &mut Scene) -> (f32, f32) {
+        self.frame_at(time, self.scroll_target(time), scene)
+    }
+
+    pub fn scroll_target(&self, time: f64) -> f64 {
+        self.cached[..focus(&self.lines, time)]
+            .iter()
+            .map(|line| line.height + self.font_size * 0.7)
+            .sum()
+    }
+
+    pub fn frame_at(&self, time: f64, scroll: f64, scene: &mut Scene) -> (f32, f32) {
         scene.reset();
         let active = focus(&self.lines, time);
         let scale = self.font_size / 34.0;
@@ -172,7 +183,7 @@ impl TrackScene {
         let anchor = self.height as f64 * 0.37;
         let gap = self.font_size * 0.7;
         let mut positions = vec![0.0; self.lines.len()];
-        positions[active] = anchor;
+        positions[active] = anchor + self.scroll_target(time) - scroll;
         for i in (0..active).rev() {
             positions[i] = positions[i + 1] - self.cached[i].height - gap;
         }
@@ -242,6 +253,25 @@ impl TrackScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn line_boundary_scroll_is_continuous_and_protection_follows_motion() {
+        let track = TrackScene::new(390, 600).unwrap();
+        let boundary = track.lines[1].start;
+        let old_target = track.scroll_target(boundary - 0.01);
+        let new_target = track.scroll_target(boundary);
+        assert!(new_target > old_target + track.font_size);
+        let mut scroll = crate::motion::Scroll::default();
+        scroll.sample(old_target, 1000.0);
+        let at_change = scroll.sample(new_target, 1000.0);
+        assert_eq!(at_change, old_target);
+        let mut scene = Scene::new();
+        let initial = track.frame_at(boundary, at_change, &mut scene);
+        let moving = scroll.sample(new_target, 1016.0);
+        assert!(moving > old_target && moving < new_target);
+        let advanced = track.frame_at(boundary, moving, &mut scene);
+        assert!((initial.0 - advanced.0 - (moving - old_target) as f32).abs() < 0.001);
+        assert!((initial.1 - advanced.1 - (moving - old_target) as f32).abs() < 0.001);
+    }
     #[test]
     fn overlapping_live_leads_keep_both_in_protected_band() {
         let track = TrackScene::new(390, 844).unwrap();

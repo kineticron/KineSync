@@ -32,3 +32,27 @@ function projectPosition(state, now) {
     state.anchorPositionMs + (state.isPlaying ? Math.max(0, now - state.anchorMonotonicMs) : 0)));
 }
 module.exports = { buildRustTrack, anchorChanged, projectPosition };
+
+// Preserve visual-rate time across rate changes, pause/resume and ordinary
+// resyncs. A scrub preview or >250ms source discontinuity explicitly snaps.
+function nextVisualAnchor(state, now, nativeMs, rate, previous, previewPositionMs) {
+  const sourcePosition = projectPosition(state, now);
+  const sameTrack = previous?.source.currentTrack?.id === state.currentTrack?.id;
+  const correction = sameTrack ? sourcePosition - projectPosition(previous.source, now) : 0;
+  const snap = previewPositionMs != null || !sameTrack || Math.abs(correction) > 250 || previous?.preview === true;
+  const elapsed = previous?.playing ? Math.max(0, nativeMs - previous.nativeMs) * previous.rate : 0;
+  const positionMs = previewPositionMs ?? (!snap && previous ? Math.max(0, previous.positionMs + elapsed + correction) : sourcePosition);
+  return { positionMs, nativeMs, playing: previewPositionMs == null && state.isPlaying, rate, snap,
+    source: { anchorPositionMs: state.anchorPositionMs, anchorMonotonicMs: state.anchorMonotonicMs,
+      isPlaying: state.isPlaying, currentTrack: state.currentTrack }, preview: previewPositionMs != null };
+}
+
+// All coordinates are actual layout coordinates in the player's root. Keep the
+// whole lyric surface above the dock, including scrubber and utility icons.
+function rustViewport(height, lyricsTop, controlsTop) {
+  const top = Math.max(0, Math.min(height, lyricsTop));
+  const bottomEdge = controlsTop == null ? top : Math.max(top, Math.min(height, controlsTop));
+  return { bottom: height - bottomEdge, height: bottomEdge - top };
+}
+module.exports.nextVisualAnchor = nextVisualAnchor;
+module.exports.rustViewport = rustViewport;

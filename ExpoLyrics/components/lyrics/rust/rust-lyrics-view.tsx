@@ -1,14 +1,16 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Platform, Pressable, StyleSheet, Text, View, type ViewProps } from 'react-native';
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore } from '@/store/playback-store';
-import { anchorChanged, buildRustTrack, projectPosition } from '@/lib/rust-lyrics-protocol';
+import { anchorChanged, buildRustTrack, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
 type NativeRef = { setAnchor(value: string): Promise<void> };
-type Metrics = { frames: number; generation: number; positionMs: number; sampleNativeMs: number; playing: boolean; rate: number;
+type Metrics = { frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; presentWaitMs: number;
-  uiTickMs: number; displayIntervalMs: number; skippedDisplayCallbacks: number };
+  uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
+  missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentedFps: number; windowSeconds: number;
+  gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number } }): void;
   onMetrics(event: { nativeEvent: Metrics }): void };
@@ -18,7 +20,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios') return { api: null, view: null, error: 'Rust native surface is available on iOS only' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 1) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 2) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -40,6 +42,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   }, [lyrics, trackId, revision.generation]);
   const native = useRef<NativeRef | null>(null);
   const sequence = useRef(0);
+  const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);
   const work = useRef({ renders: 0, anchors: 0, anchorMs: 0 });
   work.current.renders++;
   const [surfaceEpoch, setSurfaceEpoch] = useState(0);
@@ -56,9 +59,11 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     const state = usePlaybackStore.getState();
     if (state.currentTrack?.id !== trackId) return;
     const started = performance.now();
-    const position = previewPositionMs ?? projectPosition(state, started);
-    const command = { generation: revision.generation, sequence: ++sequence.current,
-      positionMs: position, nativeMs: api.monotonicMs(), playing: previewPositionMs == null && state.isPlaying, rate };
+    const previous = visual.current?.generation === revision.generation ? visual.current : null;
+    const next = nextVisualAnchor(state, started, api.monotonicMs(), rate, previous, previewPositionMs);
+    visual.current = { ...next, generation: revision.generation };
+    const { positionMs, nativeMs, playing, snap } = next;
+    const command = { generation: revision.generation, sequence: ++sequence.current, positionMs, nativeMs, playing, rate, snap };
     work.current.anchors++;
     void native.current.setAnchor(JSON.stringify(command)).catch(error => {
       if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
@@ -82,14 +87,13 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
     const now = performance.now();
     const deliveryMs = Math.max(0, api.monotonicMs() - value.sampleNativeMs);
-    const projected = value.positionMs + (value.playing ? deliveryMs * value.rate : 0);
+    const projected = value.positionMs + (value.playing ? (api.monotonicMs() - value.targetNativeMs) * value.rate : 0);
     latestMetrics.current = { native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs };
     if (showMetrics) setMetrics(latestMetrics.current);
   }, [revision.generation, showMetrics, surfaceEpoch]);
   const unavailable = moduleError || payload.error;
   return <View style={styles.root}>
-    {!unavailable && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} /> : null}
-    <View pointerEvents="box-none" style={styles.overlay}>
+    <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
       <Text style={styles.caption}>{unavailable || (failed ? `Rust error: ${status}` : status)}</Text>
       <View style={styles.actions}>
       {!unavailable ? <Pressable accessibilityRole="button" onPress={() => { setSurfaceEpoch(value => value + 1); setFailed(false); setMetrics(null); setStatus('Recreating Rust surface'); }}>
@@ -104,17 +108,24 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       </View>
       {showMetrics && metrics && metrics.native.generation === revision.generation && !failed && !unavailable ? <Text style={styles.metrics}>
         {`Rust frames ${metrics.native.frames} · scene ${metrics.native.cpuSceneMs.toFixed(2)} ms · encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms\n`}
-        {`GPU Vello+blur ${metrics.native.gpuIntervalMs < 0 ? 'unsupported' : metrics.native.gpuIntervalMs.toFixed(2) + ' ms'} · present+wait ${metrics.native.presentWaitMs.toFixed(2)} ms\n`}
-        {`UI tick ${metrics.native.uiTickMs.toFixed(2)} ms · skipped callbacks ${metrics.native.skippedDisplayCallbacks}\n`}
+        {`Metal GPU Vello ${metrics.native.gpuRendering ? 'active' : 'unavailable'} · compute blur ${metrics.native.computeBlur ? 'active' : 'unavailable'}\n`}
+        {`GPU timestamp profiler: ${metrics.native.profilerReason}\n`}
+        {`Adapter queries ${metrics.native.adapterTimestampQuery ? 'yes' : 'no'} / encoder ${metrics.native.adapterEncoderTimestamp ? 'yes' : 'no'} · bracket features ${metrics.native.enabledBracketFeatures ? 'enabled' : 'disabled'}\n`}
+        {`CPU encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms · worker present+wait ${metrics.native.presentWaitMs.toFixed(2)} ms\n`}
+        {`Requested ${metrics.native.requestedHz.toFixed(0)} Hz · callbacks ${metrics.native.deliveredCallbackHz.toFixed(1)} Hz · presented ${metrics.native.presentedFps.toFixed(1)} fps (${metrics.native.windowSeconds.toFixed(2)}s window)\n`}
+        {`Callbacks ${metrics.native.callbackTotal} · submitted ${metrics.native.submitted} · busy ${metrics.native.busy} · idle ${metrics.native.idle} · inactive ${metrics.native.inactive} · no drawable ${metrics.native.noDrawable}\n`}
+        {`Observed interval gaps (estimate) ${metrics.native.missedObservedIntervalsEstimate} · UI tick ${metrics.native.uiTickMs.toFixed(2)} ms\n`}
         {`JS anchors ${work.current.anchors} · renders ${work.current.renders} · anchor work ${work.current.anchorMs.toFixed(2)} ms\n`}
-        {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nExperimental metrics, no phone performance conclusion`}
+        {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresented = completed present calls, not measured scanout. Encode = CPU wall; present+wait includes GPU completion. No phone performance conclusion.`}
       </Text> : null}
-    </View>
+    </ScrollView>
+    {!unavailable && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} /> : null}
   </View>;
 });
 const styles = StyleSheet.create({
-  root: { flex: 1 }, canvas: { flex: 1 },
-  overlay: { position: 'absolute', top: 8, left: 28, right: 28 },
+  root: { flex: 1, minHeight: 0, overflow: 'hidden' }, canvas: { flex: 1, minHeight: 0 },
+  overlay: { flexGrow: 0, flexShrink: 1, maxHeight: '45%', backgroundColor: 'rgba(10,11,17,0.8)' },
+  diagnostics: { paddingTop: 8, paddingHorizontal: 28 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   caption: { color: 'rgba(255,255,255,0.68)', fontSize: 11, marginBottom: 4 },
   metrics: { color: 'rgba(255,255,255,0.48)', fontSize: 10, lineHeight: 14 },

@@ -145,7 +145,7 @@ test('IPA inner ZIP preserves framework executable modes, symlinks, and bytes', 
   const root = temp(t), app = path.join(root, 'App with spaces.app');
   put(app, 'Frameworks/Foo.framework/Foo', Buffer.concat([Buffer.from('cffaedfe', 'hex'), Buffer.from('framework bytes')]));
   put(app, 'AppExecutable', 'host executable');
-  put(app, 'Info.plist', '<plist version="1.0"><dict><key>CFBundleExecutable</key><string>AppExecutable</string></dict></plist>');
+  put(app, 'Info.plist', '<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/><key>CFBundleExecutable</key><string>AppExecutable</string></dict></plist>');
   fs.chmodSync(path.join(app, 'Frameworks/Foo.framework/Foo'), 0o755);
   fs.chmodSync(path.join(app, 'AppExecutable'), 0o755);
   fs.symlinkSync('Foo', path.join(app, 'Frameworks/Foo.framework/Current'));
@@ -167,6 +167,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 
 test('restored Podfile.lock cannot silently change between restore and save', t => {
   const root = temp(t); fixture(root);
+  put(root, 'ExpoLyrics/ios/App.xcodeproj/project.pbxproj');
+  put(root, 'ExpoLyrics/ios/App/Info.plist', '<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/></dict></plist>');
   const evidence = path.join(root, 'evidence'); fs.mkdirSync(evidence);
   fs.writeFileSync(path.join(evidence, 'state.json'), JSON.stringify({ identity, epoch: 'pair', ref: 'branch', paths: { evidence, lock: path.join(root, 'ExpoLyrics/ios/Podfile.lock') } }));
   const env = { ...process.env, GITHUB_WORKSPACE: root, CI_EVIDENCE_DIR: evidence, GITHUB_OUTPUT: path.join(root, 'outputs') };
@@ -220,7 +222,7 @@ test('independent executable validator rejects equal 0644 source and archive, re
   const root = temp(t), app = path.join(root, 'Bad.app');
   put(app, 'Bad', Buffer.from('cffaedfe00000000', 'hex'));
   put(app, 'Frameworks/Foo.framework/Foo', Buffer.from('cffaedfe00000000', 'hex'));
-  put(app, 'Info.plist', '<plist version="1.0"><dict><key>CFBundleExecutable</key><string>Bad</string></dict></plist>');
+  put(app, 'Info.plist', '<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/><key>CFBundleExecutable</key><string>Bad</string></dict></plist>');
   fs.chmodSync(path.join(app, 'Bad'), 0o644);
   fs.chmodSync(path.join(app, 'Frameworks/Foo.framework/Foo'), 0o644);
   put(app, 'resource.txt', 'not code');
@@ -288,7 +290,7 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
     assert.equal(state.dirty, true); assert.deepEqual(calls, ['dirty', 'refresh', 'lifecycle']);
   }
   const tick = body('tick'), retry = body('scheduleRetry'), mark = body('markDirty'), lifecycle = body('lifecycle');
-  assert.match(tick, /owner\.draw \{ \[weak self\] result, renderedGeneration/);
+  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000\) \{ \[weak self\] result, renderedGeneration, settling/);
   assert.match(tick, /self\.frameRevision == requestedRevision, renderedGeneration == self\.generation/);
   assert.match(tick, /if result == 2 \{\s*self\.scheduleRetry/);
   assert.match(tick, /else if result == 1[\s\S]*?self\.retryBlocked = true/);
@@ -518,4 +520,74 @@ test('SourceMap v3 source collection accepts flat and nested Metro sections and 
     { version: 3, sections: [section({ ...flat, sources: [] })] }]) {
     assert.throws(() => sourceMapSources(empty), /no sources/);
   }
+});
+
+test('native frame source contract uses display targets, one draw and asynchronous retirement', () => {
+  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
+  const predicate = swift.match(/guard (dirty \|\| animating \|\| .+?) else/)[1];
+  const needsFrame = new Function('dirty', 'animating', 'anchor', `return ${predicate}`);
+  assert.equal(needsFrame(false, false, { playing: true, rate: 1 }), true);
+  assert.equal(needsFrame(false, false, { playing: false, rate: 1 }), false);
+  assert.equal(needsFrame(false, true, { playing: false, rate: 1 }), true);
+  assert.equal(needsFrame(false, false, { playing: true, rate: 0 }), false);
+  assert.equal(needsFrame(true, false, null), true);
+  assert.ok(swift.indexOf('if busy { busyCallbacks') < swift.indexOf('owner.draw(targetMs:'));
+  assert.match(swift, /busy = true; dirty = false; submitted &\+= 1/);
+  assert.match(swift, /result = kr_render\(self.handle, targetMs\)/);
+  assert.match(swift, /let sampled = CACurrentMediaTime\(\) \* 1000/);
+  assert.match(swift, /preferredFrameRateRange = CAFrameRateRange/);
+  assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
+  assert.ok(!swift.includes('queue.sync'));
+  assert.match(swift, /private static let worker = DispatchQueue/);
+  assert.match(swift, /queue.async \{\s*if self.handle != 0 \{ _ = kr_destroy/);
+  // Execute the actual coalescing body with only Swift syntax/queue primitives
+  // translated. 10,000 input bursts must occupy one pending worker task.
+  const enqueue = swift.slice(swift.indexOf('    gate.lock()', swift.indexOf('private func enqueue(')), swift.indexOf('  private func drainInput()'))
+    .replace(/\n  \}\n$/, '')
+    .replaceAll('gate.lock()', '').replaceAll('gate.unlock()', '')
+    .replace('guard !retired else { ; return }', 'if (retired) { return }')
+    .replace('if let update {', 'if (update) {').replace('if let anchor {', 'if (anchor) {')
+    .replace('let schedule =', 'const schedule =')
+    .replace('guard schedule else { return }', 'if (!schedule) { return }')
+    .replace('queue.async { self.drainInput() }', 'tasks.push(() => self.drainInput())');
+  const pending = { retired: false, inputScheduled: false, pendingUpdate: null, pendingAnchor: null, pendingSnap: false, tasks: [], self: { drainInput() {} } };
+  const offer = new Function('state', 'update', 'anchor', `with (state) { ${enqueue} }`);
+  for (let i = 0; i < 10000; i++) offer(pending, { generation: i }, { sequence: i, snap: i === 1 });
+  assert.equal(pending.tasks.length, 1);
+  assert.equal(pending.pendingUpdate.generation, 9999); assert.equal(pending.pendingAnchor.sequence, 9999);
+  assert.equal(pending.pendingSnap, true); // coalescing must retain an explicit seek's snap intent
+  pending.retired = true; offer(pending, { generation: 10000 }, null);
+  assert.equal(pending.pendingUpdate.generation, 9999);
+  for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentedFps']) assert.ok(swift.includes(`metrics["${name}"]`), name);
+  const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
+  assert.match(gpu, /render_frame\(scene, band, true, false\)/);
+  assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
+  assert.match(gpu, /queue.present\(frame\);\s*self.gpu.device.poll/);
+});
+
+test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/discontinuities', () => {
+  const { nextVisualAnchor } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
+  const state = { currentTrack: { id: 'a', durationMs: 60000 }, anchorPositionMs: 1000, anchorMonotonicMs: 0, isPlaying: true };
+  let a = nextVisualAnchor(state, 0, 10000, 1, null);
+  assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
+  a = nextVisualAnchor(state, 1000, 11000, 0.5, a);
+  assert.equal(a.positionMs, 2000); assert.equal(a.snap, false);
+  a = nextVisualAnchor(state, 2000, 12000, 1.5, a);
+  assert.equal(a.positionMs, 2500); // changing rate must not jump to store's 3000
+  const paused = { ...state, isPlaying: false, anchorPositionMs: 4000, anchorMonotonicMs: 3000 };
+  a = nextVisualAnchor(paused, 3000, 13000, 1.5, a);
+  assert.equal(a.positionMs, 4000); assert.equal(a.playing, false); assert.equal(a.snap, false);
+  a = nextVisualAnchor(paused, 6000, 16000, 1.5, a);
+  assert.equal(a.positionMs, 4000);
+  const resumed = { ...paused, isPlaying: true, anchorMonotonicMs: 6000 };
+  a = nextVisualAnchor(resumed, 6000, 16000, 1.5, a);
+  assert.equal(a.positionMs, 4000); assert.equal(a.snap, false);
+  a = nextVisualAnchor(resumed, 6100, 16100, 1.5, a, 100);
+  assert.equal(a.positionMs, 100); assert.equal(a.snap, true); assert.equal(a.playing, false);
+  a = nextVisualAnchor(resumed, 6200, 16200, 1.5, a);
+  assert.equal(a.positionMs, 4200); assert.equal(a.snap, true);
+  a = nextVisualAnchor({ ...resumed, anchorPositionMs: 20000 }, 6300, 16300, 1.5, a);
+  assert.equal(a.positionMs, 20300); assert.equal(a.snap, true);
+  a = nextVisualAnchor({ ...state, currentTrack: { id: 'b', durationMs: 60000 } }, 0, 16400, 1, a);
+  assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
 });

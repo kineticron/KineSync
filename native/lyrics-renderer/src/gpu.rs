@@ -45,6 +45,7 @@ pub struct Gpu {
     scale: f32,
     error: Arc<Mutex<Option<String>>>,
     pub adapter: String,
+    pub capabilities: u32,
 }
 
 fn texture(device: &Device, width: u32, height: u32, label: &str) -> Texture {
@@ -236,6 +237,21 @@ impl Gpu {
         println!("Adapter: {adapter_name}");
         let wanted = Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         let timestamp_supported = adapter.features().contains(wanted);
+        // GPU Vello, compute blur, adapter timestamp, adapter encoder timestamp,
+        // enabled bracket features. Rendering never depends on timestamp queries.
+        let capabilities =
+            3 | if adapter.features().contains(Features::TIMESTAMP_QUERY) {
+                4
+            } else {
+                0
+            } | if adapter
+                .features()
+                .contains(Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+            {
+                8
+            } else {
+                0
+            } | if timestamp_supported { 16 } else { 0 };
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("lyrics-renderer"),
@@ -309,6 +325,7 @@ impl Gpu {
             scale,
             error,
             adapter: adapter_name,
+            capabilities,
         })
     }
     pub fn render(
@@ -317,9 +334,19 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
     ) -> Result<FrameStats, Error> {
+        self.render_frame(scene, protection, blur, true)
+    }
+    fn render_frame(
+        &mut self,
+        scene: &Scene,
+        protection: (f32, f32),
+        blur: bool,
+        profile: bool,
+    ) -> Result<FrameStats, Error> {
         self.check_error()?;
         let start = Instant::now();
-        if let Some(ts) = &self.timestamps {
+        let timestamps = self.timestamps.as_ref().filter(|_| profile);
+        if let Some(ts) = timestamps {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             encoder.write_timestamp(&ts.queries, 0);
             self.queue.submit([encoder.finish()]);
@@ -348,7 +375,7 @@ impl Gpu {
         self.queue.write_buffer(&self.filter.band, 0, &band);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.filter.encode(&mut encoder, self.width, self.height);
-        if let Some(ts) = &self.timestamps {
+        if let Some(ts) = timestamps {
             encoder.write_timestamp(&ts.queries, 1);
             encoder.resolve_query_set(&ts.queries, 0..2, &ts.resolve, 0);
             encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.readback, 0, 16);
@@ -356,8 +383,10 @@ impl Gpu {
         self.queue.submit([encoder.finish()]);
         let cpu_encode_ms = start.elapsed().as_secs_f64() * 1000.0;
         let wait = Instant::now();
-        self.device.poll(PollType::wait_indefinitely())?;
-        let gpu_interval_ms = if let Some(ts) = &self.timestamps {
+        if profile {
+            self.device.poll(PollType::wait_indefinitely())?;
+        }
+        let gpu_interval_ms = if let Some(ts) = timestamps {
             let data = read_buffer(&self.device, &ts.readback)?;
             let a = u64::from_le_bytes(data[..8].try_into()?);
             let b = u64::from_le_bytes(data[8..16].try_into()?);
@@ -438,6 +467,9 @@ pub struct SurfaceRenderer {
     _instance: Instance,
 }
 impl SurfaceRenderer {
+    pub fn capabilities(&self) -> u32 {
+        self.gpu.capabilities
+    }
     pub async fn new(
         instance: Instance,
         surface: Surface<'static>,
@@ -450,7 +482,9 @@ impl SurfaceRenderer {
             .get_default_config(&gpu.adapter_handle, width, height)
             .ok_or("No supported surface configuration")?;
         config.present_mode = PresentMode::Fifo;
-        config.desired_maximum_frame_latency = 2;
+        // wgpu-hal Metal maps latency 1 to two CAMetalLayer drawables. The
+        // application still submits only one frame and waits before accepting another.
+        config.desired_maximum_frame_latency = 1;
         surface.configure(&gpu.device, &config);
         let blitter = util::TextureBlitter::new(&gpu.device, config.format);
         Ok(Self {
@@ -502,7 +536,9 @@ impl SurfaceRenderer {
                 .into());
             }
         };
-        let stats = self.gpu.render(scene, band, true)?;
+        // No extra wait/readback between compute and blit on the live path.
+        // The final worker-side completion wait bounds GPU work to one frame.
+        let stats = self.gpu.render_frame(scene, band, true, false)?;
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(

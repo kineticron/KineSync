@@ -27,16 +27,21 @@ private struct Anchor: Decodable {
   let nativeMs: Double
   let playing: Bool
   let rate: Double
+  let snap: Bool
 }
 private struct TrackIdentity: Decodable { let generation: UInt64 }
 
-// Only this serial queue touches a Rust handle. Layer remains strongly retained
-// until synchronous retirement has drained submissions and dropped the surface.
+// Only the serial queue touches Rust. Retirement is asynchronous and retains the
+// layer until the last bounded frame and surface destruction have completed.
 private final class RustOwner: @unchecked Sendable {
-  private let queue = DispatchQueue(label: "dev.kineticron.rust-lyrics", qos: .userInteractive, autoreleaseFrequency: .workItem)
+  // Shared serialization also orders old-owner retirement before a rapid remount
+  // can create/configure another wgpu surface on the same retained layer.
+  private static let worker = DispatchQueue(label: "dev.kineticron.rust-lyrics", qos: .userInteractive, autoreleaseFrequency: .workItem)
+  private let queue = RustOwner.worker
   private let layer: CAMetalLayer
   private let report: @MainActor ([String: Any]) -> Void
   private var handle: UInt64 = 0
+  private let gate = NSLock()
   private var retired = false
   private var visible = false
   private var failed = false
@@ -47,10 +52,25 @@ private final class RustOwner: @unchecked Sendable {
   private var size = CGSize.zero
   private var scale: CGFloat = 1
   private var lastMetrics = 0.0
+  private struct SurfaceInput {
+    let track: String
+    let anchor: Anchor?
+    let size: CGSize
+    let scale: CGFloat
+  }
+  // Under gate: one pending latest snapshot and one scheduled drain at most.
+  private var pendingUpdate: SurfaceInput?
+  private var pendingAnchor: Anchor?
+  private var pendingSnap = false
+  private var inputScheduled = false
 
   init(layer: CAMetalLayer, report: @escaping @MainActor ([String: Any]) -> Void) {
     self.layer = layer
     self.report = report
+  }
+  private func permitted(rendering: Bool = false) -> Bool {
+    gate.lock(); defer { gate.unlock() }
+    return !retired && (!rendering || visible)
   }
   private func emit(_ event: [String: Any]) {
     var tagged = event
@@ -65,91 +85,134 @@ private final class RustOwner: @unchecked Sendable {
     failed = true
     emit(["state": "error", "message": String(cString: bytes)])
   }
-  private func applyAnchor() {
+  private func applyAnchor(forceSnap: Bool = false) {
     guard handle != 0, let anchor else { return }
     if kr_set_anchor(handle, anchor.generation, anchor.sequence, anchor.positionMs,
-                     anchor.nativeMs, CACurrentMediaTime() * 1000, anchor.playing, anchor.rate) < 0 { failure() }
+                     anchor.nativeMs, CACurrentMediaTime() * 1000, anchor.playing, anchor.rate, anchor.snap || forceSnap) < 0 { failure() }
   }
   func update(track: String, anchor: Anchor?, size: CGSize, scale: CGFloat) {
-    queue.async {
-      guard !self.retired else { return }
-      let identity = track.data(using: .utf8).flatMap { try? JSONDecoder().decode(TrackIdentity.self, from: $0) }
-      if self.failed {
-        guard let identity, identity.generation > self.currentGeneration else { return }
-        if self.handle != 0 { _ = kr_destroy(self.handle); self.handle = 0 }
-        self.failed = false; self.appliedTrack = ""
-      }
-      self.track = track
-      if let identity { self.currentGeneration = identity.generation }
-      if let anchor { self.anchor = anchor }
-      guard size.width > 0, size.height > 0 else { return }
-      let width = UInt32(min(8192, ceil(size.width * scale)))
-      let height = UInt32(min(8192, ceil(size.height * scale)))
-      if self.handle == 0 {
-        guard kr_abi_version() == 1 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
-        self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
-        if self.handle == 0 { self.failure(); return }
-      } else if self.size != size || self.scale != scale {
-        if kr_resize(self.handle, width, height, Float(scale)) < 0 { self.failure(); return }
-      }
-      self.size = size
-      self.scale = scale
-      if !track.isEmpty && track != self.appliedTrack {
-        let data = Data(track.utf8)
-        let result = data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Int32 in
-          kr_set_track(self.handle, buffer.baseAddress!.assumingMemoryBound(to: UInt8.self), buffer.count)
-        }
-        if result < 0 { self.failure(); return }
-        self.appliedTrack = track
-        self.emit(["state": "ready", "message": "Rust Metal surface and live track ready"])
-      }
-      self.applyAnchor()
+    enqueue(update: SurfaceInput(track: track, anchor: anchor, size: size, scale: scale))
+  }
+  func setAnchor(_ value: Anchor) { enqueue(anchor: value) }
+  private func enqueue(update: SurfaceInput? = nil, anchor: Anchor? = nil) {
+    gate.lock()
+    guard !retired else { gate.unlock(); return }
+    if let update { pendingUpdate = update }
+    if let anchor {
+      pendingAnchor = anchor
+      pendingSnap = pendingSnap || anchor.snap
+    }
+    let schedule = !inputScheduled
+    inputScheduled = true
+    gate.unlock()
+    guard schedule else { return }
+    queue.async { self.drainInput() }
+  }
+  private func drainInput() {
+    gate.lock()
+    let update = pendingUpdate
+    let anchor = pendingAnchor
+    let forceSnap = pendingSnap
+    pendingSnap = false
+    pendingUpdate = nil; pendingAnchor = nil; inputScheduled = false
+    gate.unlock()
+    guard permitted() else { return }
+    if let update { applyUpdate(track: update.track, anchor: update.anchor, size: update.size, scale: update.scale, forceSnap: forceSnap) }
+    if let anchor, !failed, anchor.generation == currentGeneration,
+       anchor.sequence > (self.anchor?.sequence ?? 0) {
+      self.anchor = anchor
+      applyAnchor(forceSnap: forceSnap)
     }
   }
-  func setAnchor(_ value: Anchor) {
-    queue.async {
-      guard !self.retired, !self.failed else { return }
-      self.anchor = value
-      self.applyAnchor()
+  private func applyUpdate(track: String, anchor: Anchor?, size: CGSize, scale: CGFloat, forceSnap: Bool) {
+    guard self.permitted() else { return }
+    let identity = track.data(using: .utf8).flatMap { try? JSONDecoder().decode(TrackIdentity.self, from: $0) }
+    if self.failed {
+      guard let identity, identity.generation > self.currentGeneration else { return }
+      if self.handle != 0 { _ = kr_destroy(self.handle); self.handle = 0 }
+      self.failed = false; self.appliedTrack = ""
     }
+    self.track = track
+    if let identity, identity.generation != self.currentGeneration {
+      self.currentGeneration = identity.generation
+      self.anchor = nil
+    }
+    if let anchor, anchor.generation == self.currentGeneration,
+       anchor.sequence >= (self.anchor?.sequence ?? 0) { self.anchor = anchor }
+    guard size.width > 0, size.height > 0 else { return }
+    let width = UInt32(min(8192, ceil(size.width * scale)))
+    let height = UInt32(min(8192, ceil(size.height * scale)))
+    if self.handle == 0 {
+      guard kr_abi_version() == 2 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
+      if self.handle == 0 { self.failure(); return }
+    } else if self.size != size || self.scale != scale {
+      if kr_resize(self.handle, width, height, Float(scale)) < 0 { self.failure(); return }
+    }
+    self.size = size
+    self.scale = scale
+    if !track.isEmpty && track != self.appliedTrack {
+      let data = Data(track.utf8)
+      let result = data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Int32 in
+        kr_set_track(self.handle, buffer.baseAddress!.assumingMemoryBound(to: UInt8.self), buffer.count)
+      }
+      if result < 0 { self.failure(); return }
+      self.appliedTrack = track
+      self.emit(["state": "ready", "message": "Rust Metal surface and live track ready"])
+    }
+    self.applyAnchor(forceSnap: forceSnap)
   }
   func setVisible(_ value: Bool) {
-    // Main-thread lifecycle barrier. Worker never waits for main-thread callbacks.
-    if value { queue.async { self.visible = true } }
-    else { queue.sync { self.visible = false } }
+    // Immediate gate only; lifecycle never waits for GPU/worker completion on main.
+    gate.lock(); visible = value; gate.unlock()
   }
-  func draw(completion: @escaping @MainActor (Int32, UInt64) -> Void) {
+  func draw(targetMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool) -> Void) {
     queue.async {
       var result: Int32 = 1
+      var animating = false
       defer {
         let status = result
         let generation = self.currentGeneration
-        DispatchQueue.main.async { completion(status, generation) }
+        let settling = animating
+        DispatchQueue.main.async { completion(status, generation, settling) }
       }
-      guard self.visible, !self.retired, !self.failed, self.handle != 0 else { return }
+      guard self.permitted(rendering: true), !self.failed, self.handle != 0 else { return }
       let sampled = CACurrentMediaTime() * 1000
-      result = kr_render(self.handle, sampled)
+      result = kr_render(self.handle, targetMs)
       if result < 0 { self.failure(); return }
+      var m = KRMetrics()
+      if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
+      animating = m.animating != 0
       let now = CACurrentMediaTime()
       if result == 0 && now - self.lastMetrics >= 1 {
         self.lastMetrics = now
-        var m = KRMetrics()
-        if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
         self.emit(["state": "metrics", "frames": m.frames, "generation": m.generation,
-                   "sampleNativeMs": sampled, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
+                   "sampleNativeMs": sampled, "targetNativeMs": targetMs, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
                    "positionMs": m.position_ms, "cpuSceneMs": m.cpu_scene_ms,
                    "cpuEncodeMs": m.cpu_encode_ms, "gpuIntervalMs": m.gpu_interval_ms,
                    "waitMs": m.wait_ms, "presentWaitMs": m.present_wait_ms,
+                   "gpuRendering": (m.capabilities & 1) != 0, "computeBlur": (m.capabilities & 2) != 0,
+                   "adapterTimestampQuery": (m.capabilities & 4) != 0,
+                   "adapterEncoderTimestamp": (m.capabilities & 8) != 0,
+                   "enabledBracketFeatures": (m.capabilities & 16) != 0,
+                   "profilerReason": (m.capabilities & 4) == 0 ? "adapter has no timestamp queries" :
+                     (m.capabilities & 8) == 0 ? "adapter has no encoder timestamp feature (required by whole-Vello bracket)" :
+                     "live timestamp readback disabled to avoid an extra worker/GPU wait",
                    "layoutMs": m.layout_ms, "width": m.width, "height": m.height,
-                   "note": "GPU interval includes submission gaps, excludes final blit. Last-frame samples, not phone performance conclusions."])
+                   "note": "Encode is CPU wall time; present+wait is worker submit/present/GPU-completion wall time, not scanout or pure GPU time."])
       }
     }
   }
   func dispose() {
-    queue.sync {
-      guard !self.retired else { return }
-      self.retired = true
-      self.visible = false
+    gate.lock()
+    let shouldRetire = !retired
+    retired = true; visible = false
+    pendingUpdate = nil; pendingAnchor = nil
+    pendingSnap = false
+    gate.unlock()
+    guard shouldRetire else { return }
+    // Closure owns self/layer until queued work drains. No sync wait on UIKit.
+    queue.async {
       if self.handle != 0 { _ = kr_destroy(self.handle); self.handle = 0 }
     }
   }
@@ -188,7 +251,20 @@ final class KineSyncRustLyricsView: ExpoView {
   private var displayedGeneration: UInt64 = 0
   private var surfaceWaiting = false
   private var failed = false
-  private var skipped: UInt64 = 0
+  private var animating = false
+  private var callbacks: UInt64 = 0
+  private var submitted: UInt64 = 0
+  private var idle: UInt64 = 0
+  private var busyCallbacks: UInt64 = 0
+  private var inactive: UInt64 = 0
+  private var noDrawable: UInt64 = 0
+  private var presented: UInt64 = 0
+  private var missedObservedEstimate: UInt64 = 0
+  private var requestedHz = 0.0
+  private var windowStart = 0.0
+  private var windowCallbacks: UInt64 = 0
+  private var windowPresented: UInt64 = 0
+  private var previousStep = 0.0
   private var tickMs = 0.0
   private var intervalMs = 0.0
   private var previousTick = 0.0
@@ -210,7 +286,7 @@ final class KineSyncRustLyricsView: ExpoView {
       link?.invalidate(); link = nil
       retryWork?.cancel(); retryWork = nil
       owner?.dispose(); owner = nil
-      session &+= 1; busy = false
+      session &+= 1; busy = false; animating = false
     } else if owner == nil {
       session &+= 1
       let epoch = session
@@ -222,7 +298,20 @@ final class KineSyncRustLyricsView: ExpoView {
           var metrics = event
           metrics["uiTickMs"] = self.tickMs
           metrics["displayIntervalMs"] = self.intervalMs
-          metrics["skippedDisplayCallbacks"] = self.skipped
+          let elapsed = CACurrentMediaTime() - self.windowStart
+          metrics["callbackTotal"] = self.callbacks
+          metrics["submitted"] = self.submitted
+          metrics["idle"] = self.idle
+          metrics["busy"] = self.busyCallbacks
+          metrics["inactive"] = self.inactive
+          metrics["noDrawable"] = self.noDrawable
+          metrics["missedObservedIntervalsEstimate"] = self.missedObservedEstimate
+          metrics["requestedHz"] = self.requestedHz
+          metrics["windowSeconds"] = elapsed
+          metrics["deliveredCallbackHz"] = elapsed > 0 ? Double(self.callbacks - self.windowCallbacks) / elapsed : 0
+          metrics["presentedFps"] = elapsed > 0 ? Double(self.presented - self.windowPresented) / elapsed : 0
+          self.windowStart = CACurrentMediaTime()
+          self.windowCallbacks = self.callbacks; self.windowPresented = self.presented
           self.onMetrics(metrics)
         } else {
           if event["state"] as? String == "error" {
@@ -247,7 +336,7 @@ final class KineSyncRustLyricsView: ExpoView {
   func setTrack(_ value: String) {
     guard value.utf8.count <= 2_000_000,
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
-    generation = identity.generation; sequence = 0; anchor = nil
+    generation = identity.generation; sequence = 0; anchor = nil; animating = false
     failed = false; metal.isHidden = true
     track = value; markDirty()
     refresh(); lifecycle()
@@ -279,31 +368,53 @@ final class KineSyncRustLyricsView: ExpoView {
     let visible = window != nil && foreground && enabled && !failed && bounds.width > 0 && bounds.height > 0
     owner?.setVisible(visible)
     if !visible { retryWork?.cancel(); retryWork = nil }
-    if visible && retryWork == nil && !retryBlocked && (dirty || (anchor?.playing == true && (anchor?.rate ?? 1) > 0)) {
+    if visible && retryWork == nil && !retryBlocked && (dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0)) {
       if link == nil {
         let next = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick(_:)))
+        let maximum = Float(min(120, window?.screen.maximumFramesPerSecond ?? 60))
+        requestedHz = Double(maximum)
+        next.preferredFrameRateRange = CAFrameRateRange(minimum: min(30, maximum), maximum: maximum, preferred: maximum)
+        windowStart = CACurrentMediaTime()
+        windowCallbacks = callbacks; windowPresented = presented
         next.add(to: .main, forMode: .common)
         link = next
       }
-    } else { link?.invalidate(); link = nil; previousTick = 0 }
+    } else { link?.invalidate(); link = nil; previousTick = 0; previousStep = 0 }
   }
   fileprivate func tick(_ display: CADisplayLink) {
-    guard window != nil, foreground, enabled, !failed, !retryBlocked, retryWork == nil else { lifecycle(); return }
     let start = CACurrentMediaTime()
-    if previousTick > 0 { intervalMs = (display.timestamp - previousTick) * 1000 }
+    defer { tickMs = (CACurrentMediaTime() - start) * 1000 }
+    callbacks &+= 1
+    guard window != nil, foreground, enabled, !failed, !retryBlocked, retryWork == nil else {
+      inactive &+= 1; lifecycle(); return
+    }
+    if previousTick > 0 {
+      let gap = display.timestamp - previousTick
+      intervalMs = gap * 1000
+      // An estimate only: system cadence changes can also lengthen this gap.
+      if previousStep > 0 {
+        missedObservedEstimate &+= UInt64(max(0, (gap / previousStep).rounded() - 1))
+      }
+    }
     previousTick = display.timestamp
-    if busy { skipped &+= 1; return }
-    guard dirty || (anchor?.playing == true && (anchor?.rate ?? 1) > 0) else { lifecycle(); return }
-    guard let owner else { return }
-    busy = true; dirty = false
+    previousStep = display.targetTimestamp - display.timestamp
+    if busy { busyCallbacks &+= 1; return }
+    guard dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0) else {
+      idle &+= 1; lifecycle(); return
+    }
+    guard let owner else { inactive &+= 1; return }
+    busy = true; dirty = false; submitted &+= 1
     let epoch = session
     let requestedRevision = frameRevision
-    owner.draw { [weak self] result, renderedGeneration in
+    owner.draw(targetMs: display.targetTimestamp * 1000) { [weak self] result, renderedGeneration, settling in
       guard let self, self.session == epoch else { return }
       self.busy = false
+      if result == 0 { self.presented &+= 1 }
+      if result == 2 { self.noDrawable &+= 1 }
       guard self.frameRevision == requestedRevision, renderedGeneration == self.generation else {
         self.lifecycle(); return
       }
+      self.animating = settling
       if result == 2 {
         self.scheduleRetry(revision: requestedRevision, epoch: epoch)
       } else if result == 1 {
@@ -320,7 +431,6 @@ final class KineSyncRustLyricsView: ExpoView {
       }
       self.lifecycle()
     }
-    tickMs = (CACurrentMediaTime() - start) * 1000
   }
   private func markDirty() {
     dirty = true

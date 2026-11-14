@@ -164,6 +164,19 @@ impl Timeline {
 mod tests {
     use super::*;
     #[test]
+    fn display_target_projects_independently_of_worker_sample_time() {
+        let mut t = Timeline::default();
+        t.replace(1);
+        t.anchor(1, 1, 2000.0, 10000.0, 10003.0, true, 0.5).unwrap();
+        assert_eq!(t.position(10008.0), 2004.0); // display target
+        assert_eq!(t.position(10003.0), 2001.5); // actual worker sample
+        t.anchor(1, 2, 2004.0, 10008.0, 10010.0, false, 0.5)
+            .unwrap();
+        assert_eq!(t.position(20000.0), 2004.0);
+        t.anchor(1, 3, 2004.0, 20000.0, 20000.0, true, 1.5).unwrap();
+        assert_eq!(t.position(20008.0), 2016.0);
+    }
+    #[test]
     fn stale_track_and_anchor_pause_seek_rate() {
         let mut t = Timeline::default();
         assert!(t.replace(2));
