@@ -1,4 +1,4 @@
-// Device-only dev-client CI. No release, dispatch, signing, or module implementation.
+// Device-only dev-client CI. No release, dispatch or signing operations.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -13,6 +13,7 @@ const run = (command, args, options = {}) => execFileSync(command, args, { encod
 function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evidence', '.git', 'node_modules'])) {
   const entries = [];
   function visit(relative) {
+    if (relative === path.join('ExpoLyrics', 'modules', 'kinesync-rust-lyrics', 'ios', 'Frameworks')) return;
     const file = path.join(root, relative);
     if (!fs.existsSync(file)) { entries.push([relative, 'missing']); return; }
     const stat = fs.lstatSync(file);
@@ -29,15 +30,15 @@ function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evid
 function rustIdentity(root, identity, buildConfig = config) {
   // Entire source directory includes WGSL, not only Rust modules. Include include_str! input.
   const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
-    'native/lyrics-renderer/src', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
+    'native/lyrics-renderer/src', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
     'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
-    'scripts/ios-dev-ci/build-rust-device.sh',
+    'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/rust-device.cjs',
     'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);
   return hash(JSON.stringify({ source, rust: buildConfig.rust, xcode: identity.xcode, sdk: identity.sdk, arch: buildConfig.arch, configuration: buildConfig.configuration }));
 }
 function resolvePaths(workspace, home, temp) {
   for (const input of [workspace, home, temp]) if (!path.isAbsolute(input)) throw new Error('runner paths must be absolute');
-  const root = path.resolve(workspace, '..', 'kinesync-ios-dev-cache-v3');
+  const root = path.resolve(workspace, '..', 'kinesync-ios-dev-cache-v4');
   return {
     root, npm: path.join(root, 'npm'), derived: path.join(root, 'DerivedData'), ccache: path.join(root, 'ccache'),
     rustTarget: path.resolve(workspace, 'native/lyrics-renderer/target'), prebuilt: path.join(root, 'rust-device'),
@@ -117,7 +118,9 @@ function initialize(env = process.env) {
     CI_EVIDENCE_DIR: paths.evidence, DERIVED_DATA_PATH: paths.derived, CCACHE_DIR: paths.ccache,
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
     npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
-    RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags, CARGO_BUILD_TARGET: config.rust.target, CARGO_TARGET_DIR: paths.rustTarget,
+    RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
+    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_DEV_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_DEV_DEBUG: String(config.rust.debugInfo),
+    RUST_PREBUILT_DIR: paths.prebuilt, RUST_DEVICE_KEY: keys.prebuilt, CARGO_BUILD_TARGET: config.rust.target, CARGO_TARGET_DIR: paths.rustTarget,
   };
   output(vars, env.GITHUB_ENV);
   output({ ...Object.fromEntries(Object.entries(paths).map(([key, value]) => [`path-${key}`, value])),
@@ -147,7 +150,8 @@ function buildArgs(ios, workspace, scheme, derived, wrapper) {
     'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=YES', 'SUPPORTED_PLATFORMS=iphoneos',
     'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=',
     'PROVISIONING_PROFILE_SPECIFIER=', 'PROVISIONING_PROFILE=', 'EXPANDED_CODE_SIGN_IDENTITY=',
-    'COMPILER_INDEX_STORE_ENABLE=NO', `CC=${path.join(wrapper, 'clang')}`, `CXX=${path.join(wrapper, 'clang++')}`];
+    'COMPILER_INDEX_STORE_ENABLE=NO', 'ENABLE_DEBUG_DYLIB=NO', 'STRIP_INSTALLED_PRODUCT=NO',
+    'LD_GENERATE_MAP_FILE=YES', `LD_MAP_FILE_PATH=${path.join(derived, 'LinkMaps', '$(TARGET_NAME)-$(CURRENT_ARCH).txt')}`, `CC=${path.join(wrapper, 'clang')}`, `CXX=${path.join(wrapper, 'clang++')}`];
 }
 function build() {
   const current = state();
@@ -166,6 +170,7 @@ function build() {
   const app = path.join(appSettings.TARGET_BUILD_DIR, appSettings.FULL_PRODUCT_NAME);
   if (!app.startsWith(current.paths.derived + path.sep) || !app.endsWith('.app')) throw new Error('App must be in owned DerivedData');
   run('ccache', ['--zero-stats']);
+  fs.mkdirSync(path.join(current.paths.derived, 'LinkMaps'), { recursive: true });
   stage('xcodebuild', 'xcodebuild', [...args, 'build']);
   // Always build. Never choose an arbitrary old .app or silently archive as a second build.
   if (!fs.existsSync(app)) throw new Error(`Expected built app missing: ${app}`);
@@ -190,6 +195,7 @@ function build() {
   }
   inspect(app);
   if (!architectures.length) throw new Error('No Mach-O binaries found');
+  if (config.rust.enabled) require('./link-proof.cjs').prove({ app, executable: appSettings.EXECUTABLE_NAME, linkMap: path.join(current.paths.derived, 'LinkMaps', `${scheme}-arm64.txt`), ios, evidence: current.paths.evidence });
   writeJson(path.join(current.paths.evidence, 'built-app.json'), { app, configuration: appSettings.CONFIGURATION, platform, architectures });
   fs.writeFileSync(path.join(current.paths.evidence, 'ccache-stats.txt'), run('ccache', ['--show-stats', '--verbose']) + '\n');
   fs.writeFileSync(path.join(current.paths.evidence, 'app-path.txt'), app + '\n');
@@ -200,13 +206,13 @@ function summary() {
   const stages = fs.existsSync(stagesFile) ? read(stagesFile).trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const cache = JSON.parse(process.env.CACHE_RESULTS || '{}');
   const required = ['npm', 'lock', 'pods', 'derived', 'ccache'];
-  const warmPass = current.mode !== 'warm' || required.every(name => cache[name]?.hit === 'true');
-  const coldPass = current.mode !== 'cold' || required.every(name => !cache[name]?.hit);
-  const verifyPass = current.mode === 'normal' || required.every(name => cache[name]?.verified === 'true');
+  const warmPass = current.mode !== 'warm' || (required.every(name => cache[name]?.hit === 'true') && (!config.rust.enabled || cache.rust?.prebuilt_hit === 'true'));
+  const coldPass = current.mode !== 'cold' || (required.every(name => !cache[name]?.hit) && (!config.rust.enabled || !cache.rust?.prebuilt_hit));
+  const verifyPass = current.mode === 'normal' || (required.every(name => cache[name]?.verified === 'true') && (!config.rust.enabled || cache.rust?.verified === 'true'));
   const result = { ...current, keys: fs.existsSync(path.join(current.paths.evidence, 'keys.json')) ? json(path.join(current.paths.evidence, 'keys.json')) : current.keys,
     stages, cache, job_status_before_summary: process.env.CI_JOB_STATUS, warm_exact_hits_pass: warmPass,
     cold_restores_skipped_pass: coldPass, controlled_cache_publication_pass: verifyPass,
-    rust: { enabled: config.rust.enabled, action: config.rust.enabled ? 'missing-reviewed-producer' : 'disabled-at-CI-checkpoint', source_config_hash: current.keys.rust },
+    rust: { enabled: config.rust.enabled, action: config.rust.enabled ? (fs.existsSync(path.join(current.paths.evidence, 'rust-device-manifest.json')) ? (cache.rust?.prebuilt_hit === 'true' ? 'verified-prebuilt' : 'built-and-validated') : 'not-completed') : 'disabled', source_config_hash: current.keys.rust },
     elapsed_before_artifact_upload_ms: Date.now() - Date.parse(current.started_at),
     note: 'No speedup claim without both completed controlled runs. Cold skips managed restores, not runner/OS/tool caches. IPA is unsigned and not LiveContainer launch-tested. Cache/action stage spans include orchestration gaps. Upload/post-job overhead excluded.' };
   writeJson(path.join(current.paths.evidence, 'evidence.json'), result);
@@ -214,8 +220,9 @@ function summary() {
     `Xcode: ${current.identity.xcode.replaceAll('\n', ', ')}, iPhoneOS ${current.identity.sdk}, arm64 only`,
     '', '| Cache | Exact restore | Server lookup |', '| --- | --- | --- |',
     ...required.map(name => `| ${name} | ${cache[name]?.hit || 'skipped/miss'} | ${cache[name]?.verified || 'not measured'} |`),
+    ...(config.rust.enabled ? [`| Rust prebuilt | ${cache.rust?.prebuilt_hit || 'skipped/miss'} | ${cache.rust?.verified || 'not measured'} |`] : []),
     '', '| Stage | Seconds | Exit |', '| --- | ---: | ---: |', ...stages.map(s => `| ${s.stage} | ${(s.elapsed_ms / 1000).toFixed(3)} | ${s.exit_code ?? s.signal} |`),
-    '', 'Rust build disabled at checkpoint. Unsigned IPA, not LiveContainer launch-tested.', 'See evidence.json for exact paths, identities, matched keys and timing boundaries.', ''];
+    '', 'Rust device build/cache path enabled. Unsigned IPA, not LiveContainer launch-tested.', 'See evidence.json for exact paths, identities, matched keys and timing boundaries.', ''];
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
   if (!warmPass || !coldPass || !verifyPass) throw new Error('Controlled cache evidence failed. Inspect evidence.json, do not report a warm-cache pass.');
 }
@@ -231,12 +238,16 @@ function main(args) {
       const start = Number(read(file));
       return fs.appendFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'stages.jsonl'), JSON.stringify({ stage: args[1], elapsed_ms: Date.now() - start, exit_code: process.env.CI_JOB_STATUS === 'failure' ? 1 : 0, note: 'Actions stage span includes orchestration overhead' }) + '\n');
     }
-    case 'assert-rust-disabled':
-      if (config.rust.enabled) throw new Error('Rust client build requires the next reviewed phase. No producer exists at this checkpoint.');
-      return console.log('Rust cache plan provisioned, build intentionally disabled until coordinator resumes phase 2.');
+    case 'rust-prepare':
+      if (!config.rust.enabled) throw new Error('Rust device integration must be enabled');
+      if (process.env.RUST_PREBUILT_HIT !== 'true') stage('cargo-device-and-xcframework', 'bash', [path.join(__dirname, 'build-rust-device.sh')]);
+      return stage('validate-rust-device-framework', 'node', [path.join(__dirname, 'rust-device.cjs'), 'validate']);
     case 'build': return build();
     case 'package': {
       const current = state();
+      const app = read(path.join(current.paths.evidence, 'app-path.txt')).trim();
+      stage('repair-executable-modes', 'python3', [path.join(__dirname, 'repair_modes.py'), app, path.join(current.paths.evidence, 'executable-mode-repairs.json')]);
+      stage('validate-source-executables', 'python3', [path.join(__dirname, 'validate_ipa.py'), '--app', app, path.join(current.paths.evidence, 'source-executables.json')]);
       return stage('package-and-verify-zip', 'python3', [path.join(__dirname, 'package.py'), read(path.join(current.paths.evidence, 'app-path.txt')).trim(), current.paths.ipa, path.join(current.paths.evidence, 'ipa-manifest.json')]);
     }
     case 'summary': return summary();

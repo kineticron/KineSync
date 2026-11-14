@@ -11,6 +11,7 @@ from pathlib import Path
 import stat
 import sys
 import zipfile
+from validate_ipa import validate_app, validate_zip
 
 
 def package(app, ipa, manifest):
@@ -19,6 +20,7 @@ def package(app, ipa, manifest):
         raise ValueError('Expected a real .app directory')
     if ipa.exists():
         raise ValueError('Refusing to overwrite an existing IPA on a non-fresh runner')
+    validate_app(app)
     entries = []
 
     def visit(file, name):
@@ -62,12 +64,13 @@ def package(app, ipa, manifest):
                 raise ValueError(f'Type loss: {entry["path"]}')
             if hashlib.sha256(archive.read(item)).hexdigest() != entry['sha256']:
                 raise ValueError(f'Content change: {entry["path"]}')
+    executable_validation = validate_zip(ipa)
     for entry in entries:
         del entry['data']
     result = {'ipa': str(ipa), 'sha256': hashlib.sha256(ipa.read_bytes()).hexdigest(),
               'bytes': ipa.stat().st_size, 'entries': entries,
               'verification': 'ZIP CRC + source content/type/mode equality',
-              'signing': 'unsigned', 'livecontainer_launch_tested': False}
+              'executable_validation': executable_validation, 'signing': 'unsigned', 'livecontainer_launch_tested': False}
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(result, indent=2) + '\n')
     print(f'Verified unsigned IPA: {ipa}, {len(entries)} entries, SHA-256 {result["sha256"]}')

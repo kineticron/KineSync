@@ -104,6 +104,42 @@ jobs:
       - name: Install JS dependencies
         run: node scripts/ios-dev-ci/ci.cjs time npm-ci npm --prefix ExpoLyrics ci
 
+      - name: Restore source-exact device-only Rust XCFramework
+        id: prebuilt
+        if: steps.plan.outputs.rust-enabled == 'true' && env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-prebuilt }}
+          key: ${{ steps.plan.outputs.key-prebuilt }}
+
+      - name: Setup pinned device Rust toolchain on a native cache miss
+        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
+        env:
+          TOOLCHAIN: ${{ steps.plan.outputs.rust-toolchain }}
+          DEVICE_TARGET: ${{ steps.plan.outputs.rust-target }}
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$DEVICE_TARGET"
+
+      - name: Cache Rust registry and device target work on a prebuilt miss
+        id: rust
+        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          prefix-key: ${{ steps.plan.outputs.rust-shared }}
+          workspaces: ${{ github.workspace }}/native/lyrics-renderer
+          # Standard target/ resolves to plan.path-rustTarget. The action joins
+          # arrow targets to the workspace, so never put an absolute RHS there.
+          cache-targets: true
+          cache-bin: false
+          cache-all-crates: true
+          lookup-only: ${{ env.CACHE_MODE == 'cold' }}
+          # Cold checks availability without downloading an old registry/target.
+
+      - name: Build or validate source-exact Rust device framework
+        env:
+          RUST_PREBUILT_HIT: ${{ steps.prebuilt.outputs.cache-hit }}
+        run: node scripts/ios-dev-ci/ci.cjs rust-prepare
+
+
       # No pod install before the lockfile/Pods restore. No simulator or Android generation.
       - name: Generate iOS project only
         working-directory: ExpoLyrics
@@ -187,41 +223,13 @@ jobs:
           CI_JOB_STATUS: ${{ job.status }}
         run: node scripts/ios-dev-ci/ci.cjs span compiler-cache-restore
 
-      # Provisioned now, disabled until coordinator accepts the CI checkpoint.
-      # The next phase must add a reviewed producer + XCFramework validation before
-      # enabling config.rust.enabled. This checkpoint does not compile any Rust client.
-      - name: Restore source-exact device-only Rust XCFramework
-        id: prebuilt
-        if: steps.plan.outputs.rust-enabled == 'true' && env.CACHE_MODE != 'cold'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ steps.plan.outputs.path-prebuilt }}
-          key: ${{ steps.plan.outputs.key-prebuilt }}
-
-      - name: Setup pinned device Rust toolchain on a native cache miss
-        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
-        env:
-          TOOLCHAIN: ${{ steps.plan.outputs.rust-toolchain }}
-          DEVICE_TARGET: ${{ steps.plan.outputs.rust-target }}
-        run: rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$DEVICE_TARGET"
-
-      - name: Cache Rust registry and device target work on a prebuilt miss
-        id: rust
-        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          prefix-key: ${{ steps.plan.outputs.rust-shared }}
-          workspaces: ${{ github.workspace }}/native/lyrics-renderer
-          # Standard target/ resolves to plan.path-rustTarget. The action joins
-          # arrow targets to the workspace, so never put an absolute RHS there.
-          cache-targets: true
-          cache-bin: false
-          cache-all-crates: true
-          lookup-only: ${{ env.CACHE_MODE == 'cold' }}
-          # Cold cannot restore old entries. Rust remains disabled at this checkpoint.
-
-      - name: Enforce Rust checkpoint gate
-        run: node scripts/ios-dev-ci/ci.cjs assert-rust-disabled
+      - name: Compile JS path proof without a listening Metro server
+        working-directory: ExpoLyrics
+        run: |
+          node ../scripts/ios-dev-ci/ci.cjs time js-offline-embed npx --no-install expo export:embed \
+            --entry-file node_modules/expo-router/entry.js --platform ios --dev true --minify false \
+            --bundle-output "$CI_EVIDENCE_DIR/rust-js-path.jsbundle" \
+            --sourcemap-output "$CI_EVIDENCE_DIR/rust-js-path.map" --max-workers 2
 
       - name: Build and validate Debug arm64 iPhoneOS client
         run: node scripts/ios-dev-ci/ci.cjs time build-and-validate node scripts/ios-dev-ci/ci.cjs build
@@ -328,6 +336,16 @@ jobs:
           lookup-only: true
           fail-on-cache-miss: true
 
+      - name: Verify exact Rust prebuilt publication
+        id: verify_prebuilt
+        if: success() && env.CACHE_MODE != 'normal' && steps.plan.outputs.rust-enabled == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-prebuilt }}
+          key: ${{ steps.plan.outputs.key-prebuilt }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
       - name: Finish cache publication timing
         if: always() && steps.plan.outcome == 'success'
         env:
@@ -356,7 +374,7 @@ jobs:
             "pods":{"outcome":"${{ steps.pods.outcome }}","hit":"${{ steps.pods.outputs.cache-hit }}","matched":"${{ steps.pods.outputs.cache-matched-key }}","verified":"${{ steps.verify_pods.outputs.cache-hit }}"},
             "derived":{"outcome":"${{ steps.derived.outcome }}","hit":"${{ steps.derived.outputs.cache-hit }}","matched":"${{ steps.derived.outputs.cache-matched-key }}","verified":"${{ steps.verify_derived.outputs.cache-hit }}"},
             "ccache":{"outcome":"${{ steps.ccache.outcome }}","hit":"${{ steps.ccache.outputs.cache-hit }}","matched":"${{ steps.ccache.outputs.cache-matched-key }}","verified":"${{ steps.verify_ccache.outputs.cache-hit }}"},
-            "rust":{"hit":"${{ steps.rust.outputs.cache-hit }}","prebuilt_hit":"${{ steps.prebuilt.outputs.cache-hit }}","enabled":"${{ steps.plan.outputs.rust-enabled }}"}}
+            "rust":{"verified":"${{ steps.verify_prebuilt.outputs.cache-hit }}","hit":"${{ steps.rust.outputs.cache-hit }}","prebuilt_hit":"${{ steps.prebuilt.outputs.cache-hit }}","enabled":"${{ steps.plan.outputs.rust-enabled }}"}}
         run: node scripts/ios-dev-ci/ci.cjs summary
 
       - name: Upload CI evidence including failed-stage timings
