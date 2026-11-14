@@ -406,6 +406,33 @@ impl Gpu {
             capabilities,
         })
     }
+    /// Shared worker-side resize path, also exercised by offscreen readback proof.
+    pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
+        if width == 0
+            || height == 0
+            || width > 8192
+            || height > 8192
+            || !scale.is_finite()
+            || !(0.5..=4.0).contains(&scale)
+        {
+            return Err("Invalid resize extent/scale".into());
+        }
+        self.device.poll(PollType::wait_indefinitely())?;
+        self.width = width;
+        self.height = height;
+        self.scale = scale;
+        self.sharp = texture(&self.device, width, height, "resized-sharp");
+        self.target = texture(&self.device, width, height, "resized-composite");
+        self.filter = Filter::new(
+            &self.device,
+            &self.sharp,
+            &self.target,
+            width,
+            height,
+            scale,
+        );
+        self.check_error()
+    }
     pub fn render(
         &mut self,
         scene: &Scene,
@@ -587,6 +614,20 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
+fn transparent_alpha(
+    backend: Backend,
+    modes: &[CompositeAlphaMode],
+) -> Result<CompositeAlphaMode, Error> {
+    if modes.contains(&CompositeAlphaMode::PreMultiplied) {
+        Ok(CompositeAlphaMode::PreMultiplied)
+    } else if backend == Backend::Metal && modes.contains(&CompositeAlphaMode::PostMultiplied) {
+        // Only the exact locked Metal backend has the documented metadata bug.
+        Ok(CompositeAlphaMode::PostMultiplied)
+    } else {
+        Err("Surface lacks supported premultiplied transparency".into())
+    }
+}
+
 /// A retained platform surface. Caller keeps its platform layer alive through Drop.
 pub struct SurfaceRenderer {
     surface: Surface<'static>,
@@ -613,22 +654,23 @@ impl SurfaceRenderer {
             .get_default_config(&gpu.adapter_handle, width, height)
             .ok_or("No supported surface configuration")?;
         config.present_mode = PresentMode::Fifo;
-        // Metal advertises PostMultiplied, not PreMultiplied. Match its contract
-        // at the surface boundary; all filter intermediates are premultiplied.
         let caps = surface.get_capabilities(&gpu.adapter_handle);
-        if !caps
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PostMultiplied)
-        {
-            return Err("Surface lacks supported transparent PostMultiplied alpha".into());
-        }
-        config.alpha_mode = CompositeAlphaMode::PostMultiplied;
+        // Locked wgpu-hal 30.0.1 mislabels Metal's actual premultiplied
+        // compositor as PostMultiplied. Upstream fix: gfx-rs/wgpu#9922.
+        // Select the advertised transparent mode without unsafe HAL access;
+        // write premultiplied output for Core Animation in either case.
+        config.alpha_mode =
+            transparent_alpha(gpu.adapter_handle.get_info().backend, &caps.alpha_modes)?;
         config.format = caps
             .formats
             .iter()
             .copied()
-            .find(|f| matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
+            .find(|f| {
+                matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm)
+                    && caps.color_spaces(*f).contains(SurfaceColorSpaces::SRGB)
+            })
             .ok_or("Surface lacks unorm sRGB-encoded transparent output format")?;
+        config.color_space = SurfaceColorSpace::Srgb;
         // Three OS drawables, at most two submitted application frames.
         config.desired_maximum_frame_latency = 2;
         surface.configure(&gpu.device, &config);
@@ -644,20 +686,7 @@ impl SurfaceRenderer {
         })
     }
     pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
-        self.gpu.device.poll(PollType::wait_indefinitely())?;
-        self.gpu.width = width;
-        self.gpu.height = height;
-        self.gpu.scale = scale;
-        self.gpu.sharp = texture(&self.gpu.device, width, height, "resized-sharp");
-        self.gpu.target = texture(&self.gpu.device, width, height, "resized-composite");
-        self.gpu.filter = Filter::new(
-            &self.gpu.device,
-            &self.gpu.sharp,
-            &self.gpu.target,
-            width,
-            height,
-            scale,
-        );
+        self.gpu.resize(width, height, scale)?;
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.gpu.device, &self.config);
@@ -777,7 +806,7 @@ struct SurfaceBlit {
 impl SurfaceBlit {
     fn new(device: &Device, format: TextureFormat) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("linear premultiplied to straight sRGB surface"),
+            label: Some("linear premultiplied to encoded premultiplied sRGB surface"),
             source: ShaderSource::Wgsl(include_str!("surface.wgsl").into()),
         });
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -821,7 +850,7 @@ impl SurfaceBlit {
             entries: &[view_entry(0, input)],
         });
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("straight sRGB copy, no blending"),
+            label: Some("premultiplied sRGB copy, no blending"),
             color_attachments: &[Some(RenderPassColorAttachment {
                 view: output,
                 resolve_target: None,
@@ -897,9 +926,27 @@ mod ownership_tests {
         let first = gpu.read_texture(&outputs[0]).unwrap();
         let second = gpu.read_texture(&outputs[1]).unwrap();
         let offset = (32 * 64 + 32) * 4;
-        assert_eq!(&first[offset..offset + 4], &[255, 0, 0, 128]);
-        assert_eq!(&second[offset..offset + 4], &[0, 255, 0, 192]);
+        assert_eq!(&first[offset..offset + 4], &[128, 0, 0, 128]);
+        assert_eq!(&second[offset..offset + 4], &[0, 192, 0, 192]);
         gpu.check_error().unwrap();
+    }
+    #[test]
+    fn alpha_selection_confines_locked_metal_workaround() {
+        use CompositeAlphaMode::{Opaque, PostMultiplied, PreMultiplied};
+        assert_eq!(
+            transparent_alpha(Backend::Metal, &[Opaque, PostMultiplied]).unwrap(),
+            PostMultiplied
+        );
+        assert_eq!(
+            transparent_alpha(Backend::Metal, &[Opaque, PreMultiplied]).unwrap(),
+            PreMultiplied
+        );
+        assert_eq!(
+            transparent_alpha(Backend::Vulkan, &[Opaque, PreMultiplied]).unwrap(),
+            PreMultiplied
+        );
+        assert!(transparent_alpha(Backend::Vulkan, &[Opaque, PostMultiplied]).is_err());
+        assert!(transparent_alpha(Backend::Metal, &[Opaque]).is_err());
     }
     #[test]
     fn burst_capacity_drops_opportunities_without_backlog() {

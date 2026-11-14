@@ -23,9 +23,12 @@ RGBA16Float box and separable compute filters produce near/far blur;
 a GPU compositor preserves the complete active and next-line band and applies
 progressive blur elsewhere. No CPU pixel blur or JS frame work is involved.
 Surface presentation converts once to the platform's advertised alpha/color
-contract. Locked Metal supports PostMultiplied, so its final copy writes straight
-sRGB to supported unorm surfaces without blending; all native view/layer backing
-is clear and nonopaque. Actual compositor behavior requires phone proof.
+contract. The final copy writes premultiplied encoded sRGB to supported unorm
+surfaces without blending. Locked Metal HAL mislabels its actual premultiplied
+compositor as PostMultiplied (upstream wgpu #9922); prefer PreMultiplied when
+advertised, otherwise use the advertised transparent option only on that Metal
+backend while supplying premultiplied content. All view/layer backing is clear
+and nonopaque. Actual compositor behavior requires phone proof.
 Rebuild physical-size textures on resize, but reuse device, pipelines and font
 resources. Keep a bounded visible row window for scene construction.
 

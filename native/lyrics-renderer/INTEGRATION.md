@@ -184,21 +184,28 @@ submission gaps and excludes the final surface blit.
 ### Transparent composition
 
 ExpoUIView, its child MetalHost and CAMetalLayer are clear/nonopaque. FIFO is
-retained. Locked Metal advertises only Opaque/PostMultiplied alpha, so the code
-requires supported PostMultiplied and a supported non-sRGB RGBA/BGRA unorm
-surface. It fails explicitly rather than requesting unsupported PreMultiplied.
+retained. The surface copy writes premultiplied encoded sRGB to a supported
+sRGB-color-space non-sRGB RGBA/BGRA unorm surface. Prefer advertised PreMultiplied.
+Locked Metal HAL 30.0.1 (also inspected 30.0.2 without changing the lock) incorrectly
+advertises PostMultiplied while Core Animation actually composites premultiplied
+content. Upstream confirmed/corrected this in
+[wgpu #9922](https://github.com/gfx-rs/wgpu/pull/9922/files). Only on Metal, select
+that advertised transparent option and supply the actual required premultiplied
+content. No unsupported mode, registry patch, dependency upgrade or unsafe HAL
+access is used. Other backends must advertise PreMultiplied or initialization fails.
+
 Vello clears alpha0 and writes straight sRGB RGBA8; box downsample converts to
 linear premultiplied RGBA16Float. Cached normalized Gaussian weights operate on
 that representation with transparent zero padding. Bilinear reconstruction
 mixes near/far only outside the full-resolution sharp protection band; viewport
-fade scales alpha and RGB together. The final copy converts linear premultiplied
-to straight sRGB exactly once for the advertised surface contract, with blending
-disabled and an alpha0 attachment clear. No final alpha1 override or second
-premultiplication occurs. Empty/initial and resized resource contents are fully
+fade scales alpha and RGB together. The final copy unpremultiplies only for
+linear-to-sRGB color conversion, then multiplies encoded RGB by alpha exactly
+once. Blending is disabled and the attachment clears alpha0. No final alpha1
+override or double premultiplication occurs. Empty/initial and resized resource contents are fully
 written before presenting. Backgrounding retains the last transparent frame.
 
-This follows wgpu's PostMultiplied contract; actual CAMetalLayer/RN compositor
-behavior and color matching still require phone proof. Half-resolution filtering,
+This accounts for the locked Metal backend's mislabeled alpha capability;
+actual CAMetalLayer/RN compositor behavior and color matching still need phone proof. Half-resolution filtering,
 3-sigma truncation, RGBA8 final quantization and linear-light blur differ from
 Skia's exact filter implementation. Off-viewport content is clipped before blur;
 zero padding does not invent offscreen glyph coverage. The viewport fade hides

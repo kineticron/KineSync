@@ -70,12 +70,10 @@ Precompute Gaussian weights once per resize. Transparent zero padding, including
 image edges. Preserve radii in physical pixels with scaled sigma. Actual GPU
 readback tests must inspect alpha/halo/compositing over changing checkerboards.
 
-Metal's advertised PostMultiplied contract requires straight surface RGB. Use
-premultiplied linear intermediate images, explicit conversion once at the final
-surface copy to straight sRGB, no blending/double premultiplication, clear alpha0.
-Fail if the required supported alpha/format combination is unavailable rather
-than request an unsupported PreMultiplied mode. This is an evidence-required
-exception to the requested premultiplied surface; phone compositor proof pending.
+Initial implementation followed the advertised PostMultiplied contract, but
+follow-up upstream research found a confirmed metadata bug: Core Animation
+actually expects premultiplied content. See the final correction below; the
+initial straight-surface decision was superseded before handoff.
 
 Inspect Debug Rust CPU cost before adding narrow dev package optimization;
 no full-release switch. Linux measurements are host proxies only. Native app
@@ -102,3 +100,26 @@ interval, whereas the 11.44ms serialized worker tail spans more than one. No new
 blanket release or dependency optimization override was added: existing phone
 profile is already opt1, and a targeted opt2/3 change needs measured CPU attribution
 on device first. Host default-dev benchmark is opt0 and is labeled accordingly.
+
+
+## Confirmed Metal alpha metadata bug: final correction
+
+Primary upstream research found https://github.com/gfx-rs/wgpu/issues/9896 and
+https://github.com/gfx-rs/wgpu/pull/9922/files . Maintainers confirmed Metal's
+PostMultiplied advertisement was wrong and changed both adapter capability and
+surface configure matching to PreMultiplied. Locked 30.0.1 still contains the old
+two lines. `cargo info wgpu-hal@30.0.2` and inspection of its metal adapter/surface
+showed the same old two lines; Cargo.lock was NOT changed. We do not request a
+mode that the locked backend rejects. We prefer advertised PreMultiplied, otherwise
+only for Metal select its advertised PostMultiplied transparency option and write
+**premultiplied encoded sRGB**, matching actual Core Animation and the confirmed
+upstream fix. This is a shader/selection compatibility workaround, not a HAL
+lifetime trick, raw API mutation, vendoring or dependency upgrade. Initialization
+fails for other backends without advertised PreMultiplied.
+
+Linear premultiplied intermediates are unpremultiplied for the nonlinear transfer
+function, then encoded RGB is multiplied by alpha once at surface output; blend
+is disabled. GPU readback asserts RGB<=alpha on both linear intermediates and
+encoded surface output, plus saturated chroma and alpha values across two real
+in-flight frames. Exported PNGs remove encoded premultiplication because PNG
+viewers expect straight RGBA. Physical iOS compositing/color proof remains pending.

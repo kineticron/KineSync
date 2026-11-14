@@ -8,7 +8,9 @@ fn srgb(c: vec3<f32>) -> vec3<f32> {
 }
 @fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
     let c = textureLoad(input, vec2<i32>(p.xy), 0);
-    // Locked Metal advertises PostMultiplied only. Unpremultiply once here.
+    // Core Animation composites premultiplied encoded sRGB. Locked Metal HAL
+    // mislabels this as PostMultiplied (upstream gfx-rs/wgpu#9922). Convert
+    // color in straight linear space, then premultiply encoded RGB once.
     if c.a <= 0.0 { return vec4<f32>(0.0); }
-    return vec4<f32>(srgb(c.rgb / c.a), c.a);
+    return vec4<f32>(srgb(c.rgb / c.a) * c.a, c.a);
 }
