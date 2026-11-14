@@ -8,6 +8,7 @@ fs.mkdirSync(out, { recursive: true });
 const cargo = ['+1.97.0'];
 const manifest = ['--manifest-path', 'native/lyrics-renderer/Cargo.toml'];
 const commands = [
+  ['integrity-tests', 'node', ['--test', 'native/lyrics-renderer/evidence/parity-integrity.test.cjs']],
   ['fmt', 'cargo', [...cargo, 'fmt', '--check', ...manifest]],
   ['rust-tests', 'cargo', [...cargo, 'test', '--locked', ...manifest, '--', '--include-ignored']],
   ['clippy-host', 'cargo', [...cargo, 'clippy', '--locked', ...manifest, '--all-targets', '--', '-D', 'warnings']],
@@ -40,6 +41,7 @@ for (const [name, command, args, cwd = root] of commands) {
 const first = JSON.parse(fs.readFileSync(path.join(out, 'captures/capture-manifest.json')));
 const second = JSON.parse(fs.readFileSync(path.join(out, 'repeat/capture-manifest.json')));
 const assert = require('node:assert/strict');
+require('./parity-integrity.cjs').validateInputs(first, second);
 assert.deepEqual(first.records.map(r => r.pngHashes), second.records.map(r => r.pngHashes), 'independent captures must reproduce identical actual renderer PNGs');
 assert.equal(first.records.length, 12);
 for (const record of first.records) {

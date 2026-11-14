@@ -7,13 +7,13 @@ const out = path.resolve(process.argv[2] || '/tmp/rust-parity-verified');
 const files = path.resolve(process.argv[3] || '/files');
 const hash = p => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const read = p => JSON.parse(fs.readFileSync(path.join(out, p)));
+const { validateInputs } = require('./parity-integrity.cjs');
 const capture = read('captures/capture-manifest.json');
 const repeat = read('repeat/capture-manifest.json');
 const verification = read('verification.json');
 assert.ok(verification.checks.every(c => c.exit === 0));
 assert.deepEqual(capture.records.map(r => r.pngHashes), repeat.records.map(r => r.pngHashes));
-assert.deepEqual(capture.sources, repeat.sources);
-for (const item of capture.sources) assert.equal(hash(item.path), item.sha256, `capture input changed: ${item.path}`);
+validateInputs(capture, repeat);
 fs.mkdirSync(files, { recursive: true });
 const published = new Map();
 for (const record of capture.records) for (const [renderer, source] of Object.entries(record.pngs)) {

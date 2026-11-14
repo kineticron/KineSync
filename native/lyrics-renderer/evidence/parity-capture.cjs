@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { createRequire } = require('node:module');
+const { hashFile, requireClosure } = require('./parity-integrity.cjs');
 const root = path.resolve(__dirname, '../../..');
 const app = path.join(root, 'ExpoLyrics');
 const appRequire = createRequire(path.join(app, 'package.json'));
@@ -119,6 +120,8 @@ async function main() {
   const fixturePath = path.join(root, 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml');
   const { lyrics } = appRequire('./lib/lyrics-ttml-import').parseTtmlToLyrics(fs.readFileSync(fixturePath, 'utf8'));
   const { buildRustTrack } = appRequire('./lib/rust-lyrics-protocol');
+  const rustBinary = { path: path.join(root, 'native/lyrics-renderer/target/debug/examples/parity-capture') };
+  rustBinary.sha256 = hashFile(rustBinary.path);
   const records = [];
   sourceFiles.add(appRequire.resolve('./lib/lyrics-ttml-import'));
   sourceFiles.add(appRequire.resolve('./lib/rust-lyrics-protocol'));
@@ -172,7 +175,7 @@ async function main() {
         const skiaPng = path.join(out, `${key}-${style}-skia.png`);
         fs.writeFileSync(skiaPng, image.encodeToBytes()); image.dispose(); surface.dispose();
         records.push({ id: `${key}-${style}`, style, viewport: { width: vw, height: vh, dpr }, fixtureLine: item.index,
-          time_ms: time, inputPacket: packetFile, inputPacketSha256: hash(packet),
+          time_ms: time, inputPacket: packetFile, inputPacketSha256: hashFile(packetFile),
           originalSyllables: line.syllables, skiaVoice: JSON.parse(JSON.stringify(voice)),
           skiaGeometry: { laneWidth: width, textWidth: spicy ? width : width - fontSize * 0.4, fontSize, lineHeight,
             paragraphHeight: captured.height, x: 28, y: vh * 0.37, effectiveFamilies: [...fallbackFamilies] },
@@ -187,6 +190,8 @@ async function main() {
   for (const file of ['JsiSkia', 'JsiSkParagraph', 'JsiSkFont', 'JsiSkCanvas', 'JsiSkParagraphBuilder', 'JsiSkParagraphBuilderFactory']) {
     const p = path.join(web, file + '.js'); if (fs.existsSync(p)) sourceFiles.add(p);
   }
+  for (const file of requireClosure(appRequire.resolve('./lib/lyrics-ttml-import'))) sourceFiles.add(file);
+  sourceFiles.add(require.resolve('./parity-integrity.cjs'));
   sourceFiles.add(__filename);
   sourceFiles.add(path.join(root, 'native/lyrics-renderer/examples/parity-capture.rs'));
   sourceFiles.add(fixturePath);
@@ -197,7 +202,8 @@ async function main() {
   for (const file of fs.readdirSync(path.join(root, 'native/lyrics-renderer/src'))) sourceFiles.add(path.join(root, 'native/lyrics-renderer/src', file));
   for (const file of ['Cargo.toml', 'Cargo.lock']) sourceFiles.add(path.join(root, 'native/lyrics-renderer', file));
   for (const pkg of ['@shopify/react-native-skia', 'canvaskit-wasm', 'esbuild', 'unicode-segmenter']) sourceFiles.add(appRequire.resolve(pkg + '/package.json'));
-  const manifest = { schema: 1, baseline: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
+  assert.equal(hashFile(rustBinary.path), rustBinary.sha256, 'Rust binary changed during capture');
+  const manifest = { schema: 2, rustBinary, baseline: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     scope: 'Actual current Skia NativeSkiaVoice preparation + drawVoice via CanvasKit vs unchanged Rust isolated voice. NOT full native screen parity.',
     limitations: ['React hooks/state/clock sampled in Node; no Yoga/UI thread/UIKit material blur',
       'Skia paragraph adapter appends explicit Parity Linux CJK family (TTC first face); not iOS cascade',

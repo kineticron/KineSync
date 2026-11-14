@@ -1,0 +1,21 @@
+{
+  "schema": 2,
+  "tests": 18,
+  "actualCaptureRecords": 12,
+  "independentInputsAndPixelsIdentical": true,
+  "transitiveParserDependencies": [
+    {
+      "path": "/home/kit/rust-renderer-spike/DesktopBridge/src/lyricsLineSegmentation.js",
+      "sha256": "e282232fa86370e72ea52dabb50e7d430f31a57278a1204220d39ceaef64a685"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/DesktopBridge/src/lyricsTtmlTranslations.js",
+      "sha256": "0540d689d308b7ad627b0e6e93c2ede81ab8f9dc9ab16954a19bc832f6921ad4"
+    }
+  ],
+  "binary": {
+    "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/target/debug/examples/parity-capture",
+    "sha256": "4cbeedae8522a6ebb64b0c3b099ef71af5676b659264cf96556a8775f00e5243"
+  },
+  "packetFileDigestsVerified": true
+}
