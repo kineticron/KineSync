@@ -12,7 +12,10 @@ public final class KineSyncRustLyricsModule: Module {
       Events("onStatus", "onMetrics")
       Prop("trackJson") { (view: KineSyncRustLyricsView, value: String) in view.setTrack(value) }
       Prop("active") { (view: KineSyncRustLyricsView, value: Bool) in view.setActive(value) }
-      AsyncFunction("setAnchor") { (view: KineSyncRustLyricsView, value: String) in view.setAnchor(value) }
+      AsyncFunction("setAnchor") { (view: KineSyncRustLyricsView, value: String) in
+        // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
+        MainActor.assumeIsolated { view.setAnchor(value) }
+      }
     }
   }
 }
@@ -32,7 +35,7 @@ private struct TrackIdentity: Decodable { let generation: UInt64 }
 private final class RustOwner: @unchecked Sendable {
   private let queue = DispatchQueue(label: "dev.kineticron.rust-lyrics", qos: .userInteractive, autoreleaseFrequency: .workItem)
   private let layer: CAMetalLayer
-  private let report: ([String: Any]) -> Void
+  private let report: @MainActor ([String: Any]) -> Void
   private var handle: UInt64 = 0
   private var retired = false
   private var visible = false
@@ -45,7 +48,7 @@ private final class RustOwner: @unchecked Sendable {
   private var scale: CGFloat = 1
   private var lastMetrics = 0.0
 
-  init(layer: CAMetalLayer, report: @escaping ([String: Any]) -> Void) {
+  init(layer: CAMetalLayer, report: @escaping @MainActor ([String: Any]) -> Void) {
     self.layer = layer
     self.report = report
   }
@@ -115,7 +118,7 @@ private final class RustOwner: @unchecked Sendable {
     if value { queue.async { self.visible = true } }
     else { queue.sync { self.visible = false } }
   }
-  func draw(completion: @escaping (Int32, UInt64) -> Void) {
+  func draw(completion: @escaping @MainActor (Int32, UInt64) -> Void) {
     queue.async {
       var result: Int32 = 1
       defer {
