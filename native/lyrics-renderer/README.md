@@ -1,5 +1,13 @@
 # Linux Rust lyric renderer spike
 
+Current phone retest implementation: ABI **3**, bounded asynchronous GPU frames,
+transparent premultiplied composition and half-resolution blur with full-size
+sharp text. See [phone-present handoff](evidence/phone-present-handoff.md) for
+reproduction, source diagnosis, PNG proofs, checksums and pending device checks.
+From the repository root, run `node native/lyrics-renderer/evidence/phone-present-verify.cjs`.
+This performs local Rust checks/captures only, without an app build or Metro.
+
+
 The branch also contains the phase-2 live iOS integration described in
 [INTEGRATION.md](INTEGRATION.md). The phase-1 benchmark/report below records the
 original host experiment, not measurements of the current iOS client.
@@ -14,7 +22,7 @@ See [DESIGN.md](DESIGN.md) for the proposed iOS/Android view boundary and Expo
 custom-development-client build/lifecycle plan. See [REPORT.md](REPORT.md) for
 measurements, visual evidence and limitations.
 
-## Reproduce on this host
+## Historical phase-1 reproduction on this host
 
 The working directory for every command below is
 `/home/kit/rust-renderer-spike/native/lyrics-renderer`. There is no workspace-level
@@ -42,7 +50,8 @@ target/release/lyrics-renderer 390 844 17500 /files/rust_spike_sharp_control.png
 # 120 samples/orientation after 12 warmup; PNG encoding excluded from timings.
 target/release/lyrics-renderer bench evidence/benchmark.json 120 12 /files
 
-# Optional verification/chart scripts use the host's Pillow and matplotlib:
+# Historical opaque-capture verification/chart scripts (the current alpha-proof
+# command supersedes verify_images.py for transparent output):
 python3 scripts/verify_images.py /files
 python3 scripts/plot_benchmark.py evidence/benchmark.json /files/rust_spike_benchmark_chart.png
 ```

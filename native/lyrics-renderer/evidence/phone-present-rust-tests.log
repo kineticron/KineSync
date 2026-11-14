@@ -1,0 +1,37 @@
+
+running 17 tests
+test ffi::tests::abi_v3_metrics_layout_matches_header ... ok
+test gpu::ownership_tests::alpha_selection_confines_locked_metal_workaround ... ok
+test gpu::ownership_tests::bounded_completion_ownership_and_retirement ... ok
+test ffi::tests::panic_containment_and_invalid_handles ... ok
+test live::tests::display_target_projects_independently_of_worker_sample_time ... ok
+test gpu::ownership_tests::burst_capacity_drops_opportunities_without_backlog ... ok
+test live::tests::live_korean_byte_ranges_and_invalid_payload ... ok
+test live::tests::stale_track_and_anchor_pause_seek_rate ... ok
+test live::tests::stalled_acquisition_uses_fresh_clock_and_pause_seek_resume ... ok
+test motion::tests::variable_dt_matches_analytic_curve_and_settles ... ok
+test motion::tests::resize_preserves_relative_offset_and_pause_can_settle ... ok
+test scene::tests::line_boundary_scroll_is_continuous_and_protection_follows_motion ... ok
+test tests::boundaries_and_zero_duration ... ok
+test tests::formats_pause_seek_rate ... ok
+test tests::real_fixture_ranges_and_focus ... ok
+test scene::tests::overlapping_live_leads_keep_both_in_protected_band ... ok
+test gpu::ownership_tests::real_gpu_two_frames_keep_texture_and_buffer_ownership_ordered ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+     Running unittests src/lib.rs (native/lyrics-renderer/target/debug/deps/lyrics_renderer-7d96e7e209b0824a)
+     Running unittests src/main.rs (native/lyrics-renderer/target/debug/deps/lyrics_renderer-8ced91e5751b82a7)
+   Doc-tests lyrics_renderer

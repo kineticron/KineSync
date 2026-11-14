@@ -1,5 +1,10 @@
 # Phase 1 report
 
+This is the archived phase-1 report. Current transparent rendering, bounded GPU
+ownership and device acceptance limits are recorded in
+[evidence/phone-present-handoff.md](evidence/phone-present-handoff.md). The old
+opaque images and performance numbers below are not current-client evidence.
+
 ## Result and scope
 
 The Linux headless spike renders **seesaw (Feat. IU), Crush** from the existing

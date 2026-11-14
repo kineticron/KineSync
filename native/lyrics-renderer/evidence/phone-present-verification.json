@@ -1,0 +1,235 @@
+{
+  "artifacts": "/tmp/phone-present-final",
+  "note": "Linux llvmpipe proxy. Rust test/check compilation only; no app build or device performance acceptance.",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "fmt",
+        "--check",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "rust-tests",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "--include-ignored"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "clippy-host",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "clippy-ios",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--lib",
+        "--target",
+        "aarch64-apple-ios",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "typescript",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "ExpoLyrics",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "eslint",
+      "command": "./node_modules/.bin/eslint",
+      "args": [
+        "components/lyrics/rust/rust-lyrics-view.tsx"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "node-tests",
+      "command": "node",
+      "args": [
+        "--test",
+        "scripts/test/ios-dev-ci.test.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "actionlint",
+      "command": "/tmp/rust-spike-actionlint/actionlint",
+      "args": [
+        ".github/workflows/ios-development-build.yml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "repository",
+      "command": "node",
+      "args": [
+        "scripts/check-repository.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "baseline",
+      "command": "node",
+      "args": [
+        "native/lyrics-renderer/evidence/phone-present-baseline.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "alpha1",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "alpha-proof",
+        "/tmp/phone-present-final/alpha1",
+        "1"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "alpha3",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "alpha-proof",
+        "/tmp/phone-present-final/alpha3",
+        "3"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "benchmark",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "bench",
+        "/tmp/phone-present-final/benchmark.json",
+        "30",
+        "6",
+        "/tmp/phone-present-final/bench-png"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "diff",
+      "command": "git",
+      "args": [
+        "diff",
+        "--check"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "lock",
+      "command": "git",
+      "args": [
+        "diff",
+        "--exit-code",
+        "cbb467f",
+        "--",
+        "native/lyrics-renderer/Cargo.lock"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "clipping-scroll",
+      "command": "git",
+      "args": [
+        "diff",
+        "--exit-code",
+        "cbb467f",
+        "--",
+        "ExpoLyrics/app/(tabs)/index.tsx",
+        "native/lyrics-renderer/src/scene.rs",
+        "native/lyrics-renderer/src/motion.rs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    }
+  ]
+}

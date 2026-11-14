@@ -1,0 +1,180 @@
+[
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "impl Filter",
+    "lines": [
+      126
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "pub fn resize",
+    "lines": [
+      410,
+      688
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "fn transparent_alpha",
+    "lines": [
+      617
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "impl SurfaceRenderer",
+    "lines": [
+      641
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "pub fn ready",
+    "lines": [
+      697
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "pub fn acquire",
+    "lines": [
+      712
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "struct Flight",
+    "lines": [
+      778
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "struct SurfaceBlit",
+    "lines": [
+      802
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/gpu.rs",
+    "marker": "fn real_gpu_two_frames",
+    "lines": [
+      875
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "pub struct Metrics",
+    "lines": [
+      34
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "fn kr_abi_version",
+    "lines": [
+      108
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "fn kr_render",
+    "lines": [
+      281
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "let ready =",
+    "lines": [
+      297
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "let Some(frame)",
+    "lines": [
+      305
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/ffi.rs",
+    "marker": "let native_ms = frame_clock",
+    "lines": [
+      310
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "func draw",
+    "lines": [
+      169
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "let frameTarget",
+    "lines": [
+      182
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "backgroundColor = .clear",
+    "lines": [
+      280,
+      282
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "metrics[\"presentCallRate\"]",
+    "lines": [
+      323
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "if busy",
+    "lines": [
+      412
+    ]
+  },
+  {
+    "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+    "marker": "if result == 3",
+    "lines": [
+      425,
+      430
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/main.rs",
+    "marker": "fn alpha_proof",
+    "lines": [
+      236
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/main.rs",
+    "marker": "surface encoded premultiplied constraint",
+    "lines": [
+      300
+    ]
+  },
+  {
+    "path": "native/lyrics-renderer/src/main.rs",
+    "marker": "gpu.resize(257",
+    "lines": [
+      382
+    ]
+  },
+  {
+    "path": "scripts/test/ios-dev-ci.test.cjs",
+    "marker": "test('ABI 3",
+    "lines": [
+      650
+    ]
+  }
+]

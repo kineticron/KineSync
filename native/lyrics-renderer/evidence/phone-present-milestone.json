@@ -1,0 +1,20 @@
+{
+  "milestone": "phone_present_premultiplied_surface_proof",
+  "png_paths": [
+    "/files/rust_spike_phone_present_1x_checkerboard_0.png",
+    "/files/rust_spike_phone_present_1x_checkerboard_1.png",
+    "/files/rust_spike_phone_present_1x_checkerboard_2.png",
+    "/files/rust_spike_phone_present_1x_transparent_0.png",
+    "/files/rust_spike_phone_present_1x_transparent_1.png",
+    "/files/rust_spike_phone_present_1x_transparent_2.png",
+    "/files/rust_spike_phone_present_3x_checkerboard_0.png",
+    "/files/rust_spike_phone_present_3x_checkerboard_1.png",
+    "/files/rust_spike_phone_present_3x_checkerboard_2.png",
+    "/files/rust_spike_phone_present_3x_transparent_0.png",
+    "/files/rust_spike_phone_present_3x_transparent_1.png",
+    "/files/rust_spike_phone_present_3x_transparent_2.png",
+    "/files/rust_spike_phone_present_benchmark_landscape.png",
+    "/files/rust_spike_phone_present_benchmark_portrait.png"
+  ],
+  "note": "Supersedes earlier host alpha proof: production surface shader now writes encoded premultiplied sRGB for actual Core Animation behavior (confirmed upstream wgpu #9922; locked Metal mislabels its alpha capability). Actual GPU API readback on Linux llvmpipe validates both premult constraints, multi-frame alpha/checkerboard, hue, sharp band, empty/shared-resize clear at 1x/3x. 17 Rust tests include two real in-flight frames; host proxy only. iOS compositor/120fps presentation remain unverified."
+}

@@ -1,0 +1,6 @@
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+alpha proof passed: /tmp/phone-present-final/alpha1
+   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.52s
+     Running `native/lyrics-renderer/target/debug/lyrics-renderer alpha-proof /tmp/phone-present-final/alpha1 1`
