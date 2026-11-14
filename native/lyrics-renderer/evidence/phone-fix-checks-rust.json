@@ -1,0 +1,68 @@
+[
+  {
+    "check": "fmt",
+    "argv": [
+      "cargo",
+      "+1.97.0",
+      "fmt",
+      "--check",
+      "--manifest-path",
+      "native/lyrics-renderer/Cargo.toml"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-fmt.log"
+  },
+  {
+    "check": "rust-tests",
+    "argv": [
+      "cargo",
+      "+1.97.0",
+      "test",
+      "--locked",
+      "--manifest-path",
+      "native/lyrics-renderer/Cargo.toml"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-rust-tests.log"
+  },
+  {
+    "check": "clippy-host",
+    "argv": [
+      "cargo",
+      "+1.97.0",
+      "clippy",
+      "--locked",
+      "--manifest-path",
+      "native/lyrics-renderer/Cargo.toml",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-clippy-host.log"
+  },
+  {
+    "check": "clippy-ios",
+    "argv": [
+      "cargo",
+      "+1.97.0",
+      "clippy",
+      "--locked",
+      "--manifest-path",
+      "native/lyrics-renderer/Cargo.toml",
+      "--lib",
+      "--target",
+      "aarch64-apple-ios",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-clippy-ios.log"
+  }
+]

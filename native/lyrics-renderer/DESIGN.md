@@ -1,9 +1,11 @@
 # Native lyric renderer: phase 1 spike and proposed mobile boundary
 
-This crate is an exploratory Linux offscreen renderer, not an Expo native module
-or a working phone integration. It uses plain wgpu, Vello and Parley. Mobile
-integration below is a design to validate on devices; none of its performance is
-established by a Linux software Vulkan adapter.
+This design began with the Linux offscreen spike using plain wgpu, Vello and
+Parley. The branch now includes an experimental Expo iOS Metal module; see
+[INTEGRATION.md](INTEGRATION.md) for the implemented boundary and phone-fix
+semantics. The coordinator reports baseline phone rendering. Updated native
+behavior still needs macOS compilation and device validation; Linux software
+Vulkan measurements establish no phone performance. Android remains proposed.
 
 ## Shared Rust core
 
@@ -38,7 +40,12 @@ seeking replaces the anchor; changing rate first captures the current position
 then installs the new rate. Reject non-finite inputs and unsupported negative
 rates. Never use wall time for playback. A reconnect/newer sequence supersedes
 old anchors. A CADisplayLink/Choreographer callback schedules rendering using
-native time; JS does not deliver animation frames. Stop requesting frames when
+native time; JS does not deliver animation frames. On iOS, use display
+`targetTimestamp`, retaining actual sample time separately, and request the
+hardware-supported range up to 120Hz without assuming delivery. Guard the actual
+generated and packaged `CADisableMinimumFrameDurationOnPhone` Boolean key. Use
+native dt for continuous scroll; preserve position/velocity across ordinary
+reanchors and pause/resume, and intentionally snap explicit seeks. Stop requesting frames when
 paused and visually settled, detached or backgrounded; redraw once on seek or
 resize. Production needs display/audio latency calibration and correction tests.
 
@@ -49,7 +56,12 @@ main thread configure layer size, contentsScale, drawableSize and visibility.
 Create a wgpu Metal surface from a retained layer/view handle with a lifetime
 that outlives the Rust surface. A serial render queue owns GPU operations and
 acquires a drawable only while attached. The main thread forwards lifecycle and
-size changes; it does not mutate Rust scene resources concurrently. Render into
+size changes; it does not mutate Rust scene resources concurrently. Coalesce
+input snapshots and bound outstanding draws to one. Gate visibility immediately,
+then retire the worker/surface asynchronously while retaining the layer; do not
+block UIKit with queue.sync waiting on GPU completion. Order rapid remounts after
+retirement. Derive the lyric viewport from measured player/control geometry and
+reserve diagnostic space in layout instead of painting it over glyphs. Render into
 the common RGBA storage texture, then blit to the surface's configured format
 and present. This is a thin persistent Swift/Objective-C layer, not a separate
 Swift text/animation implementation. Validate the raw-window-handle and wgpu

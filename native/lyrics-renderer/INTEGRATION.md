@@ -2,8 +2,10 @@
 
 The branch now implements the Rust renderer in the actual development player's
 current-track path. This is more than a generic development-client build. It is
-still an experimental integration pending macOS CI, re-signing and device tests.
-No iPhone, LiveContainer, phone performance or runtime leak-free claim is made.
+still experimental. The coordinator reports that the baseline linked and rendered
+on a phone, with choppy motion and controls overlap. The phone-fix changes below
+still require independent review, macOS compilation, re-signing and device tests.
+No phone performance or runtime leak-free claim is made.
 No push, dispatch or Metro server operation was performed by the implementing
 agent. Coordinator independent review precedes the authorized one CI build.
 
@@ -22,7 +24,8 @@ and stable timing anchors. It does not load a fixture or fetch another song.
 Existing pause/resume and scrub/seek controls update anchors. The view includes
 a labeled **visual rate** control for 0.5/1/1.5x renderer-clock testing, which does
 not change audio speed. **Recreate Rust surface** explicitly disposes/recreates
-the native view after an error. **Show metrics** opts into the diagnostic overlay.
+the native view after an error. **Show metrics** opts into the diagnostic panel above the canvas. The panel scrolls within at most 45% of
+the measured lyric viewport; it does not cover glyphs.
 
 Track replacement sends a generation, UTF-8 atom text and source timing once.
 Native code reconstructs byte ranges after decoding, shapes whole lines, caches
@@ -31,7 +34,7 @@ preserved and explicit word-end flags add missing gaps. Invalid/untimed tracks,
 oversized packets and missing glyphs produce explicit errors. Lead-line overlaps
 are now highlighted/protected together, including the phase-1 88.2-second case.
 This is not a complete port of translations, background voices, duet alignment,
-word glow/spring motion, drag scrolling, lyric press/credits or accessibility
+word glow/syllable spring motion, drag scrolling, lyric press/credits or accessibility
 semantics. Existing player seek controls still work. System Apple fonts replace
 the Linux Noto stack. Phone font and visual acceptance are pending.
 
@@ -44,6 +47,43 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
+ABI version 2 carries explicit seek-snap intent and 88-byte capability/motion
+metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
+IPA; a Metro-only update cannot install the Rust/Swift changes.
+
+The display link requests preferredFrameRateRange with a hardware-capped maximum
+and preference up to 120Hz (minimum up to 30Hz). This is a best-effort hint, never
+a 120fps guarantee. Hardware, thermal state, Low Power Mode, accessibility frame
+rate limits and system policy determine delivered cadence. Generated app plist,
+built app plist, source app and packaged IPA must all contain Boolean true for
+CADisableMinimumFrameDurationOnPhone; existing app.json already supplied it.
+
+Each callback passes targetTimestamp in the CACurrentMediaTime clock domain to
+Rust. Actual worker sample time remains separately reported. The JS comparison
+projects the native position from the target time, and reports sample delivery
+age from the actual sample. No display-frame calls cross JS. Visual rate changes
+capture accumulated visual time; ordinary pause/resume/reanchors preserve it.
+Scrub previews, release from preview, track replacement and source discontinuities
+over 250ms intentionally snap scroll. Small source corrections stay continuous.
+
+Rust integrates a critically damped scroll using the closed-form solution and
+actual native dt. Focus changes retarget without resetting position or velocity;
+active/syllable fill and the protected blur band follow the moving text each
+frame. Pause freezes lyric time while residual scroll settles, then stops the
+display link. Resize remaps the relative scroll offset into the new layout. Track
+replacement resets motion; explicit seek anchors snap rather than traversing the
+intervening song. Tests cover regular/irregular dt, long gaps, pause settling,
+resize, target-time projection and protected-band continuity.
+
+Portrait clipping derives from the player's actual root height and dock top
+(onLayout of the entire SafeAreaView containing scrubber, transport and utility
+icons), using the existing lyric top. Initial/stale-orientation measurements
+collapse the surface until valid. Hidden controls conservatively retain their
+reserve. Landscape already puts controls in the left pane and lyrics in the
+right safe pane. The diagnostic header consumes normal layout space; the actual
+remaining native view size drives Rust layout. The portrait dock-sized gradient
+is omitted for Rust because its viewport already ends above the dock and the
+GPU compositor supplies its own edge fade.
 
 Track generations and anchor sequences reject stale updates in Swift and Rust.
 JS also rejects callbacks/promises from an older track or recreated surface.
@@ -54,7 +94,10 @@ rejected and destroy is idempotent.
 
 The Expo view contains a CAMetalLayer-backed UIView. A serial native owner keeps
 that layer strongly alive while Rust owns a wgpu Metal surface. Create, track,
-anchor, resize, frame and disposal operations are serialized. Per-work-item
+anchor, resize, frame and disposal operations are serialized on one shared worker
+queue, which also orders retirement before a rapid remount's creation. Latest
+track/size and anchor inputs coalesce into one pending drain; seek intent survives
+coalescing. One draw may be outstanding, with no frame backlog. Per-work-item
 autorelease pools bound temporary Objective-C objects. No per-frame image pixels
 cross Swift/JS. Vello writes an offscreen GPU texture, shared compute passes blur
 it, a GPU blit writes the acquired surface texture and wgpu presents it.
@@ -62,9 +105,12 @@ it, a GPU blit writes the acquired surface texture and wgpu presents it.
 Layout/visibility changes occur on main. Zero-size, background and inactive
 views stop rendering. Reactivation marks dirty and flushes the latest stored
 track, size and anchor before resuming, including initial attachment while
-inactive. Background/detach use a serial barrier so old GPU work is drained
-before disposal releases the surface/layer. Display-link targets are weak and
-notification registrations are removed on deinit. A session/revision guard
+inactive. Background immediately closes a short-lock visibility gate without
+waiting on the worker. Detach retires asynchronously: queued inputs are rejected,
+the worker drains the bounded frame, destroys Rust and then releases its retained
+layer. A frame already executing can finish; backgrounding does not synchronously
+cancel submitted GPU commands. Display-link targets are weak and notification
+registrations are removed on deinit. A session/revision guard
 rejects stale completions and retry work.
 
 The ABI returns 0 for presentation, 1 while waiting for track/anchor, 2 for
@@ -79,24 +125,46 @@ Ordinary Rust panics are caught before crossing C, panicking handles are retired
 and wgpu uncaptured/device-loss errors are recorded and surfaced. The ABI trusts
 Swift's buffer/layer lifetime contract. Invalid foreign pointers, OOM aborts,
 Objective-C exceptions and fatal driver failures are not made recoverable by
-`catch_unwind`. Surface loss requires explicit recreation. Main-thread disposal
-barriers can wait for a frame/GPU completion. Device loss, long stalls and actual
-app lifecycle responsiveness require device validation.
+`catch_unwind`. Surface loss requires explicit recreation. There are no main-thread queue.sync GPU/lifecycle barriers. Device loss, long
+worker stalls and actual app lifecycle responsiveness still require device
+validation; an indefinitely stalled driver can retain retired resources.
 
 ## Metrics and interpretation
 
-Native metrics are emitted at most once per second of rendering. With the
-metrics overlay hidden they are retained in a JS ref without metric React state
-updates. The overlay shows native frames, scene/encode wall spans, GPU timestamp
-interval or explicit unsupported, presentation plus completion-wait time, UI
-scheduling callback time, display interval and skipped busy display callbacks.
+Native metrics are emitted at most once per second of successful rendering, and
+cadence windows must span at least one real second after start/resume before they
+are exposed. Hidden diagnostics retain them in a JS ref without metric React
+state updates. Counters are per view: callback total, submitted, idle, busy,
+inactive and retryable no-drawable outcomes. No-drawable is a submission outcome,
+not an additional callback category. Busy rejects a delivered callback while one
+frame is outstanding; it is not a missed display interval. Observed interval
+misses are explicitly an estimate from callback timestamp gaps divided by the
+previous reported interval; system refresh-rate changes can also affect it.
+Requested Hz is a hint. Delivered callback Hz and presented fps use count deltas
+and real elapsed window seconds. Presented fps counts acknowledged completed
+present calls, not measured screen scanout. No nominal-120 extrapolation or tiny
+first-frame window is used. Idle/background pauses reset the next cadence window.
 
-GPU timestamps bracket Vello and blur/composition across submissions. They can
-include queue gaps and exclude the final surface blit. `presentWaitMs` includes
-submit/present/completion wall time, not pure CPU work. `uiTickMs` measures main
-callback scheduling work, not compositing or presented-frame latency. Skipped
-callbacks are not a measured dropped-frame count. These last-frame diagnostic
-samples are not percentile benchmarks or a whole-frame GPU profile.
+GPU Metal Vello and compute blur activity are reported independently of timestamp
+profiling. Successful rendering runs Vello compute, four shared blur passes and
+composition even when queries are unsupported. Adapter TIMESTAMP_QUERY and
+TIMESTAMP_QUERY_INSIDE_ENCODERS flags and enabled bracket features are separate.
+Locked wgpu-types 30.0.1 documents encoder timestamps as unavailable on Apple GPUs;
+wgpu-hal Metal checks stage and blit boundary counters separately. No unsupported
+features are forced. Sampled RGBA8 input / write-only RGBA8 storage blur needs no
+adapter-specific storage read/write feature. The UI reports the exact missing
+profiler feature, or that live timestamp readback is disabled.
+
+The live path skips the extra completion/readback wait between compute and the
+surface blit. One final worker completion wait bounds GPU submissions to the
+single frame. desired_maximum_frame_latency=1 maps to two Metal layer drawables
+in locked wgpu-hal; this does not promise only one OS/display drawable. Scene and
+encode timings are CPU wall spans, not GPU timings. presentWaitMs includes final
+submit/present and remaining GPU completion wall time (including prior compute
+still executing), not pure presentation, scanout latency or pure GPU time.
+Drawable acquisition can also block the worker and is outside that final span.
+UI tick measures main scheduling work. The headless profiler retains timestamp
+brackets/readback; those include submission gaps and exclude the final blit.
 
 JS comparison includes anchor calls, React renders, anchor-construction/JSI work
 and a delivery-age-adjusted native-minus-store clock delta. Visual rate previews
@@ -145,7 +213,10 @@ LiveContainer launch-tested. Re-signing/rebuilding a custom client is required.
 
 ## Feasible local validation and next acceptance
 
-Local checks cover Cargo fmt/test/strict Clippy, iOS-target Rust type checking,
+See [phone-fix-diagnosis.md](evidence/phone-fix-diagnosis.md) for frozen pre-fix
+source evidence and [phone-fix-verification.md](evidence/phone-fix-verification.md)
+for this change's commands, results and remaining acceptance. Local checks cover
+Cargo fmt/test/strict Clippy, iOS-target Rust type checking,
 headless shared-engine GPU rendering, TypeScript, touched-file ESLint,
 Expo Apple autolinking discovery, Node CI/protocol/negative-proof tests, shell
 syntax and actionlint. The lifecycle test is explicitly a source-level harness,

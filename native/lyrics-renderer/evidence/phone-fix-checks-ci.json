@@ -1,0 +1,72 @@
+[
+  {
+    "check": "node-tests",
+    "argv": [
+      "env",
+      "BASH32=/tmp/rust-bash32-src/bash-3.2.57/bash",
+      "node",
+      "--test",
+      "scripts/test/ios-dev-ci.test.cjs"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-node-tests.log"
+  },
+  {
+    "check": "baseline",
+    "argv": [
+      "node",
+      "native/lyrics-renderer/evidence/phone-baseline.cjs"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-baseline.log"
+  },
+  {
+    "check": "actionlint",
+    "argv": [
+      "/tmp/rust-spike-actionlint/actionlint",
+      ".github/workflows/ios-development-build.yml"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-actionlint.log"
+  },
+  {
+    "check": "repository",
+    "argv": [
+      "node",
+      "scripts/check-repository.cjs"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-repository.log"
+  },
+  {
+    "check": "diff",
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-diff.log"
+  },
+  {
+    "check": "C header ABI",
+    "argv": [
+      "cc",
+      "-x",
+      "c",
+      "-std=c11",
+      "-fsyntax-only",
+      "-I",
+      "native/lyrics-renderer/include",
+      "-"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike",
+    "exit_code": 0,
+    "log": "phone-fix-header.log"
+  }
+]
