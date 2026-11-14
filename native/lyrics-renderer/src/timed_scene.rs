@@ -184,7 +184,7 @@ pub(crate) fn geometry(
         })
         .collect()
 }
-fn srgb(v: f64) -> f32 {
+pub(crate) fn srgb(v: f64) -> f32 {
     let v = v.clamp(0.0, 1.0);
     if v <= 0.0031308 {
         (v * 12.92) as f32
@@ -280,6 +280,24 @@ impl TrackScene {
                 );
                 scene.append(&cached.plain, Some(transform));
                 scene.pop_layer();
+                if let Some(t) = &cached.translation {
+                    t.draw(
+                        scene,
+                        transform,
+                        row.map_or(
+                            if spicy {
+                                if time > self.lines[index].end {
+                                    0.497
+                                } else {
+                                    0.51
+                                }
+                            } else {
+                                1.0
+                            },
+                            |r| r.outer,
+                        ),
+                    );
+                }
                 continue;
             }
             let row = row.expect("detailed row");
@@ -437,6 +455,9 @@ impl TrackScene {
                         scene.pop_layer();
                     }
                 }
+            }
+            if let Some(t) = &cached.translation {
+                t.draw(scene, base * line_transform, row.outer);
             }
         }
         let first = self

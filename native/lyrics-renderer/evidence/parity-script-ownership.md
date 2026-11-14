@@ -62,3 +62,14 @@ Source row geometry is not actual Yoga/native execution. Existing CanvasKit
 boundary uses explicit Noto CJK JP fallback; Rust phone fallback equivalence is
 unverified. Keep unsupported regions native blur/auxiliary/touch explicit. No
 intermediate phone test or IPA dependency; one final delivery when near complete.
+
+## ABI6 API follow-up (2026-11-14)
+
+Current runtime schema is6. The actual preparation API now accepts final optional
+`showTranslation` (defaulttrue); the app passes its store setting explicitly.
+`PaintVoice.translation` is optional exact source-selected text; visible subtitle
+geometry contributes to row height and sparse diagnostics. New `test/auxiliary-track.json`
+contains runtime semantic/performance inputs, not comparison-tool fixtures.
+Comparison scripts/entrypoints remain unchanged. Parent adapter must explicitly
+match subtitle visibility/settings and use the registered-font style path; no
+legacy example is accepted as a new two-style/full-viewport reference.

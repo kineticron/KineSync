@@ -23,7 +23,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios') return { api: null, view: null, error: 'Rust native surface is available on iOS only' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 5) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 6) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -39,14 +39,15 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const lyrics = usePlaybackStore(state => state.lyrics);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => state.lyricsStyle);
+  const showTranslation = usePlaybackStore(state => state.showTranslatedText);
   const window = useWindowDimensions();
   const landscape = window.width > window.height;
   const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
-  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape }), [lyrics, trackId, style, fontScale, landscape]);
+  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation }), [lyrics, trackId, style, fontScale, landscape, showTranslation]);
   const payload = useMemo(() => {
-    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape), error: '' }; }
+    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation), error: '' }; }
     catch (error) { return { json: '', error: String(error) }; }
-  }, [lyrics, trackId, revision.generation, style, fontScale, landscape]);
+  }, [lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation]);
   const native = useRef<NativeRef | null>(null);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);

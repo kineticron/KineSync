@@ -112,7 +112,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    5
+    6
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -267,13 +267,13 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         let settings = packet
             .settings
             .clone()
-            .ok_or("ABI5 requires explicit style settings")?;
+            .ok_or("ABI6 requires explicit style settings")?;
         if packet.lines.iter().any(|line| {
             line.paint
                 .as_ref()
                 .is_none_or(|p| p.words.iter().any(|w| w.appearance.is_none()))
         }) {
-            return Err("ABI5 requires prepared voice metadata".into());
+            return Err("ABI6 requires prepared voice metadata".into());
         }
         let lines = packet.into_lines();
         let started = Instant::now();
@@ -552,8 +552,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v5_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 5);
+    fn abi_v6_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 6);
         assert_eq!(std::mem::size_of::<Metrics>(), 152);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);

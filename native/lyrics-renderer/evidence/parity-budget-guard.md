@@ -34,3 +34,10 @@ unreviewed comparison-script merge. This supersedes the earlier paragraphs above
 Latest worker read of coordinator LIVE file: weekly used81 / remaining19%;
 primary used32 / remaining68%. Budget source: /home/kit/rust-budget-latest.json.
 Final physical phone performance is unverified until the user tests that IPA.
+
+ABI6 compact auxiliary batch: coordinator supplied LIVE weekly18% remaining /
+primary58%; worker read the same values from rust-budget-latest.json at batch
+boundaries. No account API is exposed here and no newer percentage is invented.
+The approximately10% feature-wrap / approximately5% coordinator-build override
+above remains active. No extra Codex, reset credit, provider fallback or build
+operation was used. Current handoff: parity-auxiliary-handoff.md.

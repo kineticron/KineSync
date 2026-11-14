@@ -124,3 +124,19 @@ independent review, and supersedes the near-complete-only delivery rule. No
 intermediate per-effect phone checkpoints. Physical phone performance remains
 unverified for ABI5. Start wrap-up around10% weekly remaining and target review /
 coordinator IPA preparation by about5%; no15% stop or reset-credit redemption.
+
+## ABI6 auxiliary checkpoint (2026-11-14)
+
+Foreground translation visibility, exact source-selected text, cached paragraph
+geometry, distinct Spicy/AMLL subtitle policy and row reflow are now live. The
+existing sharp attribution overlay is reachable for all Rust providers and
+credit-only metadata, with actual provider/maker/uploader HTTPS callbacks.
+`parity-auxiliary-handoff.md` records source trace, per-feature host gate and actual
+Rust glyph/premultiplied readbacks. These are not actual Skia parity scores.
+
+BGV/group ownership and full duet/overlap layout remain incomplete. Independent
+romanization selection/concurrent rows, finite interludes, source-style scrolling,
+full native footer/timestamp touch, exact complex/color glyph handling and native
+capture/font/performance acceptance remain pending. Existing upstream text already
+selected into `translatedText` is preserved; this is not a new romanization
+channel. Glow remains disabled. No comparison scripts were edited or merged.

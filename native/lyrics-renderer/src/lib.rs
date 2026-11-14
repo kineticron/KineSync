@@ -2,6 +2,7 @@
 use std::ops::Range;
 
 pub mod appearance;
+mod auxiliary;
 pub mod ffi;
 pub mod gpu;
 pub mod live;

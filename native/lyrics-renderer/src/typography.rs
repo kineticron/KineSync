@@ -59,6 +59,8 @@ pub struct PaintWord {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PaintVoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translation: Option<String>,
     pub text: String,
     pub words: Vec<PaintWord>,
     /// UTF16 offsets from actual app Intl.Segmenter + isCJK helper. No custom segmenter.
@@ -86,7 +88,11 @@ pub fn byte_index(text: &str, utf16: usize) -> Result<usize, String> {
 }
 impl PaintVoice {
     pub fn validate(&self, start: f64, end: f64) -> Result<(), String> {
-        if self.text.len() > 100_000 || self.words.is_empty() || self.words.len() > 5000 {
+        if self.text.len() > 100_000
+            || self.words.is_empty()
+            || self.words.len() > 5000
+            || self.translation.as_ref().is_some_and(|t| t.len() > 20_000)
+        {
             return Err("Invalid prepared voice size".into());
         }
         let mut previous = 0;
@@ -506,6 +512,7 @@ mod tests {
     use super::*;
     fn voice(text: &str) -> PaintVoice {
         PaintVoice {
+            translation: None,
             text: text.into(),
             words: vec![PaintWord {
                 appearance: None,

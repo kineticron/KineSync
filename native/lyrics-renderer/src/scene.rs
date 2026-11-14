@@ -15,6 +15,7 @@ type Error = Box<dyn std::error::Error>;
 pub(crate) struct CachedLine {
     pub(crate) white: Scene,
     pub(crate) plain: Scene,
+    pub(crate) translation: Option<crate::auxiliary::Translation>,
     pub(crate) height: f64,
     /// One or more visual fragments for each timed atom, including wrapped syllables.
     atoms: Vec<Vec<Rect>>,
@@ -52,7 +53,7 @@ pub struct TrackScene {
     clippy::too_many_arguments,
     reason = "Static shaping parameters are explicit"
 )]
-fn shape(
+pub(crate) fn shape(
     text: &str,
     fonts: &mut parley::FontContext,
     layouts: &mut LayoutContext<()>,
@@ -202,6 +203,7 @@ impl TrackScene {
             cached.push(CachedLine {
                 white: Scene::new(),
                 plain: Scene::new(),
+                translation: None,
                 height: height.into(),
                 atoms: Vec::new(),
                 words: Vec::new(),
@@ -337,6 +339,7 @@ impl TrackScene {
                 self.cached[i].layout = None;
                 self.cached[i].white = Scene::new();
                 self.cached[i].plain = Scene::new();
+                self.cached[i].translation = None;
                 self.cached[i].atoms = Vec::new();
                 self.cached[i].words = Vec::new();
                 self.cached[i].detailed = false;
@@ -546,7 +549,31 @@ impl TrackScene {
             if detailed {
                 atoms = fragments(&layout, &words);
             }
-            let content_height = layout.height() as f64;
+            let mut content_height = layout.height() as f64;
+            let translation = if let (Some(settings), Some(geometry), Some(text)) = (
+                settings,
+                geometry.as_ref(),
+                line.paint
+                    .as_ref()
+                    .and_then(|v| v.translation.as_deref())
+                    .filter(|t| !t.is_empty()),
+            ) {
+                let t = crate::auxiliary::Translation::prepare(
+                    text,
+                    settings,
+                    geometry,
+                    scale,
+                    content_height,
+                    fonts,
+                    &mut layouts,
+                );
+                content_height += t.extra_height;
+                glyph_count += t.glyph_count;
+                missing_glyphs += t.missing_glyphs;
+                Some(t)
+            } else {
+                None
+            };
             let (height, top, x, gap) = if let Some(g) = &geometry {
                 let settings = settings.expect("geometry has settings");
                 let min = if settings.style == crate::typography::Style::Spicy {
@@ -577,7 +604,7 @@ impl TrackScene {
             prefix.push(offset);
             offset += height + gap;
             diagnostics.push(serde_json::json!({"geometry":geometry,"text":text,"height":height,"content_top":top,
-                "content_height":content_height,"faces":faces,"line_count":layout.len(),
+                "content_height":content_height,"faces":faces,"translation":translation.as_ref().map(|t| &t.diagnostics),"line_count":layout.len(),
                 "word_ranges":words.iter().map(|w|vec![w.bytes.start,w.bytes.end]).collect::<Vec<_>>() }));
             let timed = if detailed {
                 line.paint
@@ -589,6 +616,7 @@ impl TrackScene {
             cached.push(CachedLine {
                 white,
                 plain,
+                translation,
                 height,
                 atoms,
                 words,
@@ -825,6 +853,7 @@ mod lazy_tests {
                         end: start + 1000.0,
                     }],
                     paint: Some(PaintVoice {
+                        translation: None,
                         text: text.clone(),
                         words: vec![PaintWord {
                             appearance: None,

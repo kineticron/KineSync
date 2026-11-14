@@ -7,7 +7,7 @@ function buildRustTrack(trackId, generation, lines, prepared) {
       if (!Number.isFinite(atom.startTime) || !Number.isFinite(atom.endTime) || atom.endTime < atom.startTime || !atom.text) throw new Error('Rust received invalid syllable timing');
     }
   }
-  const serialized = JSON.stringify({ schema: 5, ...(prepared ? { settings: prepared.settings } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => ({
+  const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => ({
     start: line.lineStartTime, end: line.lineEndTime,
     ...(prepared ? { paint: prepared.paints[lineIndex] } : {}),
     atoms: line.syllables.map((atom, index) => {

@@ -79,7 +79,7 @@ fn host_typography_effect_budget() {
                                 }
                     })
                     .unwrap();
-                let packet = serde_json::json!({"schema":5,"generation":1,"track_id":"budget","lines":[prepared["original_line"]]});
+                let packet = serde_json::json!({"schema":6,"generation":1,"track_id":"budget","lines":[prepared["original_line"]]});
                 let mut line =
                     crate::live::TrackPacket::parse(&serde_json::to_vec(&packet).unwrap())
                         .unwrap()

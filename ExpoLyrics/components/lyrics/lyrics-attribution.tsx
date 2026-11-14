@@ -8,6 +8,7 @@ import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
 type Props = {
   metadata: LyricsMetadata;
+  allCredits?: boolean;
   trackId?: string;
   controlsProgress: SharedValue<number>;
   controlsTarget: SharedValue<number>;
@@ -46,14 +47,16 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 }
 
 // Mounted outside both lyric renderers, so attribution never scrolls away.
-export const LyricsAttribution = memo(function LyricsAttribution({ metadata, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
+export const LyricsAttribution = memo(function LyricsAttribution({ metadata, allCredits = false, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const badgeRef = useAnimatedRef<View>();
-  const attribution = metadata.attribution;
+  const attribution = metadata.attribution ?? (allCredits && metadata.credits?.songwriters?.length ? { source: '', provider: '' } : undefined);
   const community = attribution?.provider === 'Spicy Lyrics';
+  const providerUrl = allCredits ? attribution?.url?.trim() : undefined;
+  const providerLinked = Boolean(providerUrl && /^https:\/\//i.test(providerUrl));
   useEffect(() => { setExpanded(false); }, [trackId, attribution?.source, attribution?.provider]);
   const controlsOffset = Math.max(0, controlsHeight - 12);
   const translateX = useSharedValue(0);
@@ -112,11 +115,11 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, tra
           <Animated.View pointerEvents="none" style={[styles.glass, glassStyle]}>
             <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
           </Animated.View>
-          {community && (attribution.uploader || attribution.maker) ? <>
+          {(community || allCredits) && (attribution.uploader || attribution.maker) ? <>
             <Animated.Text style={[styles.provider, glassStyle]}>{attribution.provider}</Animated.Text>
             <Profile label="U:" profile={attribution.uploader} avatarStyle={glassStyle} />
             <Profile label="M:" profile={attribution.maker} avatarStyle={glassStyle} />
-          </> : <Text style={styles.credit}>{attribution.provider || 'Unknown'}</Text>}
+          </> : <Text style={styles.credit}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>}
         </Pressable>
       </Animated.View>
     </View>
@@ -132,8 +135,9 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, tra
             <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
             <ScrollView style={styles.detailsScroll} contentContainerStyle={styles.details}>
               <Text accessibilityRole="header" style={styles.title}>Lyrics attribution</Text>
-              <Text style={styles.detailProvider}>{attribution.provider || 'Unknown'}</Text>
-              {community ? <>
+              <Text style={[styles.detailProvider, providerLinked && styles.link]} accessibilityRole={providerLinked ? 'link' : undefined}
+                onPress={providerLinked ? event => { event.stopPropagation(); void Linking.openURL(providerUrl!).catch(() => {}); } : undefined}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>
+              {community || allCredits ? <>
                 <Profile label="Uploader:" profile={attribution.uploader} link />
                 <Profile label="Maker:" profile={attribution.maker} link />
               </> : null}

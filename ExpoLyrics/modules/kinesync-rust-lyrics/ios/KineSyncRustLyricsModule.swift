@@ -181,7 +181,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 5 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 6 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }

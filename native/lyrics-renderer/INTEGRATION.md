@@ -47,7 +47,7 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 5 retains explicit seek-snap intent, separate display-target/sample
+ABI version 6 retains explicit seek-snap intent, separate display-target/sample
 clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
 IPA; a Metro-only update cannot install the Rust/Swift changes.
 
@@ -325,3 +325,24 @@ One coordinator-built parity-so-far IPA is now user-authorized after independent
 review; this supersedes the earlier near-complete-only delivery rule. This
 worker performs no push, CI dispatch, Metro operation or IPA build. Physical
 phone HUD/performance and native font packaging remain unverified for ABI5.
+
+## ABI6 auxiliary subtitle visibility and sharp attribution
+
+Schema6 adds an optional foreground `paint.translation` string. It is the exact
+upstream `LyricLine.translatedText`, selected by `showTranslatedText` using the
+actual production `buildNativeVoice` preparation helper. Visibility changes send
+a new track generation; translation bytes participate in retained geometry keys.
+A subtitle is shaped once with its visible row, contributes to row height,
+scrolling and the shared protected envelope, and inherits source outer opacity /
+AMLL voice scale rather than timed word brightness. Spicy and AMLL preserve their
+different source subtitle size/leading/inset/weight policies. Actual faces are
+reported in sparse `translation` layout diagnostics. No per-frame JS, shape or
+readback was added. C/JS/Swift all require6; KRMetrics remains152 bytes.
+
+The existing sharp attribution overlay now accepts all available providers and
+credit-only metadata while Rust is selected. Its existing modal and HTTPS profile
+callbacks are reused, with a matching HTTPS provider link. It lives outside the
+GPU blur/viewport and preserves player chrome rules. This is not the unimplemented
+native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
+for actual source inputs, performance gates, pixel receipts and remaining BGV /
+interlude / romanization / native capture limitations. Glow remains OFF.

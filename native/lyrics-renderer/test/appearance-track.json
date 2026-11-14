@@ -63,11 +63,11 @@
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
-      "sha256": "049fbce070e1f1d9c0133789a17cac45e8ea4a5dca573014af4a4606fb284458"
+      "sha256": "04461c63a18c6289d28c7961618257a89f2c048b85b2f858afa839668860434e"
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
-      "sha256": "8be3196fe3f7be785f1effef56e3bfe2a020a2798248a0b719f48cfe15c42b21"
+      "sha256": "26c661902165e07df6875c8abc5e65beaff7731425c1889d631ff1502d3249de"
     },
     {
       "path": "DesktopBridge/src/lyricsLineSegmentation.js",
@@ -92,7 +92,7 @@
       "style": "spicy",
       "landscape": false,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "spicy",
           "font_scale": 1,
@@ -269,7 +269,7 @@
       "style": "spicy",
       "landscape": true,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "spicy",
           "font_scale": 0.9,
@@ -446,7 +446,7 @@
       "style": "amll",
       "landscape": false,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "amll",
           "font_scale": 1,
@@ -657,7 +657,7 @@
       "style": "amll",
       "landscape": true,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "amll",
           "font_scale": 0.9,
@@ -868,7 +868,7 @@
       "style": "spicy",
       "landscape": false,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "spicy",
           "font_scale": 1,
@@ -1002,7 +1002,7 @@
       "style": "spicy",
       "landscape": true,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "spicy",
           "font_scale": 0.9,
@@ -1136,7 +1136,7 @@
       "style": "amll",
       "landscape": false,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "amll",
           "font_scale": 1,
@@ -1294,7 +1294,7 @@
       "style": "amll",
       "landscape": true,
       "packet": {
-        "schema": 5,
+        "schema": 6,
         "settings": {
           "style": "amll",
           "font_scale": 0.9,

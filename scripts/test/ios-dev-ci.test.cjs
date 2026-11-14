@@ -648,18 +648,18 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 5 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 6 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 4, 6]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 5 }), false);
+  for (const version of [0, 1, 2, 3, 4, 5, 7]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 6 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 5 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 6 else/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 5 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 6 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
