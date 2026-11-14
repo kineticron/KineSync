@@ -24,11 +24,11 @@ present calls ~40/s, CPU encode 2.47ms, worker present+wait 11.44ms,
   a separate present command buffer and commits it. With presentsWithTransaction
   false it schedules presentDrawable asynchronously; true waitsUntilScheduled.
   Queue completion of the blit is not drawable presentation or scanout.
-- gpu.rs:349 sets an opaque dark Vello base. Surface default alpha stays opaque;
+- gpu.rs:360 sets an opaque dark Vello base. Surface default alpha stays opaque;
   hal surface.rs:269–273 resets CAMetalLayer.opaque true for that mode, overriding
   Swift's earlier false. Swift :275–278 clears only the child UIView/layer;
   ExpoUIView itself is not explicitly clear/nonopaque.
-- Locked vello_shaders 0.9.0 shader/fine.wgsl:1397–1404 writes **straight** RGB
+- Locked vello_shaders 0.12.0 shader/fine.wgsl:1397–1404 writes **straight** RGB
   (divides by alpha), despite premultiplied internal rendering. Existing blur
   averages that output as if opaque. blur.wgsl:14–23 runs exp for every sample
   at full resolution: at scale 3 near sigma7.5/radius23, far18/radius54,
@@ -81,3 +81,24 @@ Inspect Debug Rust CPU cost before adding narrow dev package optimization;
 no full-release switch. Linux measurements are host proxies only. Native app
 build, Swift compilation, physical presentation/transparency, Instruments GPU
 profiling and independent coordinator review remain coordinator/device actions.
+
+
+## Refinements while implementing
+
+Vello shader package is **0.12.0** (the earlier draft version label was corrected).
+The actual filters use RGBA16Float half-size intermediates to preserve low-alpha
+color instead of repeatedly quantizing blur to RGBA8. The final composite is
+RGBA8. After nextDrawable, the render clock is max(display target, separately
+sampled native clock + elapsed monotonic acquisition/poll time), so a blocked
+acquisition cannot replay an old lyric position. GPU-capacity denial occurs
+before acquiring a drawable or changing scroll state.
+
+Debug optimization evidence: scripts/ios-dev-ci/config.json already specifies
+rust.optLevel=1/debugInfo=1. ci.cjs:121–122 exports CARGO_PROFILE_DEV_OPT_LEVEL
+and CARGO_PROFILE_DEV_DEBUG; rustIdentity includes that config, Cargo.toml,
+Cargo.lock, all Rust/WGSL/header sources and producer scripts, so changes invalidate
+the prebuilt device artifact. The 2.47ms reported encode span is below one 120Hz
+interval, whereas the 11.44ms serialized worker tail spans more than one. No new
+blanket release or dependency optimization override was added: existing phone
+profile is already opt1, and a targeted opt2/3 change needs measured CPU attribution
+on device first. Host default-dev benchmark is opt0 and is labeled accordingly.

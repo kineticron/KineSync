@@ -3,7 +3,7 @@
 use crate::{
     Line,
     gpu::SurfaceRenderer,
-    live::{Timeline, TrackPacket},
+    live::{Timeline, TrackPacket, frame_clock},
     motion::Scroll,
     scene::TrackScene,
 };
@@ -39,12 +39,20 @@ pub struct Metrics {
     pub cpu_encode_ms: f64,
     pub gpu_interval_ms: f64,
     pub wait_ms: f64,
-    pub present_wait_ms: f64,
+    pub cpu_blit_ms: f64,
     pub layout_ms: f64,
     pub width: u32,
     pub height: u32,
     pub capabilities: u32,
     pub animating: u32,
+    pub acquire_ms: f64,
+    pub blit_submit_ms: f64,
+    pub poll_ms: f64,
+    pub present_call_ms: f64,
+    pub completed: u64,
+    pub outstanding: u64,
+    pub gpu_busy: u64,
+    pub target_native_ms: f64,
 }
 struct Engine {
     timeline: Timeline,
@@ -98,7 +106,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    2
+    3
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -268,11 +276,16 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         Ok(0)
     })
 }
-/// Returns 0 if presented, 1 if awaiting track/anchor, 2 for retryable surface acquisition, -1 on failure.
+/// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
+pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64) -> i32 {
     with(handle, |engine| {
-        if !native_ms.is_finite() || native_ms < 0.0 {
+        let frame_started = Instant::now();
+        if !native_ms.is_finite()
+            || native_ms < 0.0
+            || !sampled_native_ms.is_finite()
+            || sampled_native_ms < 0.0
+        {
             return Err("Invalid native frame clock".into());
         }
         let Some(layout) = &engine.layout else {
@@ -281,6 +294,25 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
         if !engine.timeline.anchored {
             return Ok(1);
         }
+        let ready = engine.surface.ready().map_err(|e| e.to_string())?;
+        engine.metrics.poll_ms = engine.surface.timing.poll_ms;
+        engine.metrics.completed = engine.surface.completed();
+        engine.metrics.outstanding = engine.surface.outstanding();
+        if !ready {
+            engine.metrics.gpu_busy += 1;
+            return Ok(3);
+        }
+        let Some(frame) = engine.surface.acquire().map_err(|e| e.to_string())? else {
+            return Ok(2);
+        };
+        // nextDrawable may have waited. Retain the display target when still
+        // future, otherwise use a refreshed sample in the same native clock.
+        let native_ms = frame_clock(
+            native_ms,
+            sampled_native_ms,
+            frame_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
         let scroll = engine
@@ -290,18 +322,20 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64) -> i32 {
         engine.metrics.animating = u32::from(engine.scroll.animating());
         engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let Some((stats, present)) = engine
+        let (stats, present) = engine
             .surface
-            .render(&engine.scene, band)
-            .map_err(|e| e.to_string())?
-        else {
-            return Ok(2);
-        };
+            .render(&engine.scene, band, frame)
+            .map_err(|e| e.to_string())?;
         engine.metrics.frames += 1;
         engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
         engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
         engine.metrics.wait_ms = stats.wait_readback_ms;
-        engine.metrics.present_wait_ms = present;
+        engine.metrics.cpu_blit_ms = present;
+        engine.metrics.acquire_ms = engine.surface.timing.acquire_ms;
+        engine.metrics.blit_submit_ms = engine.surface.timing.submit_ms;
+        engine.metrics.present_call_ms = engine.surface.timing.present_call_ms;
+        engine.metrics.completed = engine.surface.completed();
+        engine.metrics.outstanding = engine.surface.outstanding();
         Ok(0)
     })
 }
@@ -353,16 +387,18 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v2_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 2);
-        assert_eq!(std::mem::size_of::<Metrics>(), 88);
+    fn abi_v3_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 3);
+        assert_eq!(std::mem::size_of::<Metrics>(), 152);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
+        assert_eq!(std::mem::offset_of!(Metrics, acquire_ms), 88);
+        assert_eq!(std::mem::offset_of!(Metrics, completed), 120);
     }
     #[test]
     fn panic_containment_and_invalid_handles() {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);
-        assert_eq!(kr_render(u64::MAX, 0.0), -1);
+        assert_eq!(kr_render(u64::MAX, 0.0, 0.0), -1);
         assert_eq!(kr_destroy(u64::MAX), 0);
         let mut message = [0i8; 256];
         // SAFETY: stack output buffer has the advertised capacity.

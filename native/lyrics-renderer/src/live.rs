@@ -160,9 +160,26 @@ impl Timeline {
         )
     }
 }
+/// Keep a future display target, refresh after worker/acquisition stalls.
+pub fn frame_clock(target_ms: f64, sampled_ms: f64, elapsed_ms: f64) -> f64 {
+    target_ms.max(sampled_ms + elapsed_ms)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stalled_acquisition_uses_fresh_clock_and_pause_seek_resume() {
+        assert_eq!(frame_clock(1008.0, 1000.0, 2.0), 1008.0);
+        assert_eq!(frame_clock(1008.0, 1000.0, 40.0), 1040.0);
+        let mut t = Timeline::default();
+        t.replace(1);
+        t.anchor(1, 1, 500.0, 1000.0, 1000.0, true, 1.0).unwrap();
+        assert_eq!(t.position(frame_clock(1008.0, 1000.0, 40.0)), 540.0);
+        t.anchor(1, 2, 540.0, 1040.0, 1040.0, false, 1.0).unwrap();
+        assert_eq!(t.position(frame_clock(1048.0, 1040.0, 100.0)), 540.0);
+        t.anchor(1, 3, 20.0, 1140.0, 1140.0, true, 2.0).unwrap();
+        assert_eq!(t.position(frame_clock(1148.0, 1140.0, 40.0)), 100.0);
+    }
     #[test]
     fn display_target_projects_independently_of_worker_sample_time() {
         let mut t = Timeline::default();

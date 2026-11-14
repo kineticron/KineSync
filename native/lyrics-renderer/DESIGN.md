@@ -18,10 +18,14 @@ shared engine. This fixture exercises Korean and Latin; arbitrary bidi and
 cross-atom ligatures need additional fidelity work before production.
 
 The headless path uses the same intended pipeline as a view: Vello produces a
-sharp RGBA texture; shared separable compute filters produce near/far blur;
+sharp straight-sRGB RGBA8 texture; a half-resolution linear-premultiplied
+RGBA16Float box and separable compute filters produce near/far blur;
 a GPU compositor preserves the complete active and next-line band and applies
 progressive blur elsewhere. No CPU pixel blur or JS frame work is involved.
-Surface presentation adds a final blit to the platform's supported format.
+Surface presentation converts once to the platform's advertised alpha/color
+contract. Locked Metal supports PostMultiplied, so its final copy writes straight
+sRGB to supported unorm surfaces without blending; all native view/layer backing
+is clear and nonopaque. Actual compositor behavior requires phone proof.
 Rebuild physical-size textures on resize, but reuse device, pipelines and font
 resources. Keep a bounded visible row window for scene construction.
 
@@ -57,7 +61,10 @@ Create a wgpu Metal surface from a retained layer/view handle with a lifetime
 that outlives the Rust surface. A serial render queue owns GPU operations and
 acquires a drawable only while attached. The main thread forwards lifecycle and
 size changes; it does not mutate Rust scene resources concurrently. Coalesce
-input snapshots and bound outstanding draws to one. Gate visibility immediately,
+input snapshots, bound CPU draw requests to one and GPU application frames to
+two. FIFO latency hint 2 selects three OS drawables. Poll safe Queue completion
+callbacks without waiting; drop full-capacity opportunities and sample a fresh
+native clock after potentially blocking drawable acquisition. Gate visibility immediately,
 then retire the worker/surface asynchronously while retaining the layer; do not
 block UIKit with queue.sync waiting on GPU completion. Order rapid remounts after
 retirement. Derive the lyric viewport from measured player/control geometry and

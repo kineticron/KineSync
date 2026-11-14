@@ -143,7 +143,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 2 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 3 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
     } else if self.size != size || self.scale != scale {
@@ -178,7 +178,9 @@ private final class RustOwner: @unchecked Sendable {
       }
       guard self.permitted(rendering: true), !self.failed, self.handle != 0 else { return }
       let sampled = CACurrentMediaTime() * 1000
-      result = kr_render(self.handle, targetMs)
+      // Never replay a target which became stale while input/resize work ran.
+      let frameTarget = max(targetMs, sampled)
+      result = kr_render(self.handle, frameTarget, sampled)
       if result < 0 { self.failure(); return }
       var m = KRMetrics()
       if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
@@ -187,10 +189,13 @@ private final class RustOwner: @unchecked Sendable {
       if result == 0 && now - self.lastMetrics >= 1 {
         self.lastMetrics = now
         self.emit(["state": "metrics", "frames": m.frames, "generation": m.generation,
-                   "sampleNativeMs": sampled, "targetNativeMs": targetMs, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
+                   "sampleNativeMs": sampled, "targetNativeMs": m.target_native_ms, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
                    "positionMs": m.position_ms, "cpuSceneMs": m.cpu_scene_ms,
                    "cpuEncodeMs": m.cpu_encode_ms, "gpuIntervalMs": m.gpu_interval_ms,
-                   "waitMs": m.wait_ms, "presentWaitMs": m.present_wait_ms,
+                   "waitMs": m.wait_ms, "cpuBlitMs": m.cpu_blit_ms,
+                   "acquireMs": m.acquire_ms, "blitSubmitMs": m.blit_submit_ms,
+                   "pollMs": m.poll_ms, "presentCallMs": m.present_call_ms,
+                   "gpuCompleted": m.completed, "gpuOutstanding": m.outstanding, "gpuBusy": m.gpu_busy,
                    "gpuRendering": (m.capabilities & 1) != 0, "computeBlur": (m.capabilities & 2) != 0,
                    "adapterTimestampQuery": (m.capabilities & 4) != 0,
                    "adapterEncoderTimestamp": (m.capabilities & 8) != 0,
@@ -199,7 +204,7 @@ private final class RustOwner: @unchecked Sendable {
                      (m.capabilities & 8) == 0 ? "adapter has no encoder timestamp feature (required by whole-Vello bracket)" :
                      "live timestamp readback disabled to avoid an extra worker/GPU wait",
                    "layoutMs": m.layout_ms, "width": m.width, "height": m.height,
-                   "note": "Encode is CPU wall time; present+wait is worker submit/present/GPU-completion wall time, not scanout or pure GPU time."])
+                   "note": "CPU wall costs only. GPU completed counts blit work callbacks; present-call rate is not scanout. Submit cost is final blit submit only; Vello internal submits remain in encode."])
       }
     }
   }
@@ -258,12 +263,12 @@ final class KineSyncRustLyricsView: ExpoView {
   private var busyCallbacks: UInt64 = 0
   private var inactive: UInt64 = 0
   private var noDrawable: UInt64 = 0
-  private var presented: UInt64 = 0
+  private var presentCalls: UInt64 = 0
   private var missedObservedEstimate: UInt64 = 0
   private var requestedHz = 0.0
   private var windowStart = 0.0
   private var windowCallbacks: UInt64 = 0
-  private var windowPresented: UInt64 = 0
+  private var windowPresentCalls: UInt64 = 0
   private var previousStep = 0.0
   private var tickMs = 0.0
   private var intervalMs = 0.0
@@ -272,9 +277,13 @@ final class KineSyncRustLyricsView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
+    backgroundColor = .clear
+    isOpaque = false
     metal.backgroundColor = .clear
     metal.isOpaque = false
     (metal.layer as? CAMetalLayer)?.isOpaque = false
+    (metal.layer as? CAMetalLayer)?.backgroundColor = UIColor.clear.cgColor
+    (metal.layer as? CAMetalLayer)?.presentsWithTransaction = false
     addSubview(metal)
     target.view = self
     NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
@@ -311,9 +320,9 @@ final class KineSyncRustLyricsView: ExpoView {
           metrics["requestedHz"] = self.requestedHz
           metrics["windowSeconds"] = elapsed
           metrics["deliveredCallbackHz"] = elapsed > 0 ? Double(self.callbacks - self.windowCallbacks) / elapsed : 0
-          metrics["presentedFps"] = elapsed > 0 ? Double(self.presented - self.windowPresented) / elapsed : 0
+          metrics["presentCallRate"] = elapsed > 0 ? Double(self.presentCalls - self.windowPresentCalls) / elapsed : 0
           self.windowStart = CACurrentMediaTime()
-          self.windowCallbacks = self.callbacks; self.windowPresented = self.presented
+          self.windowCallbacks = self.callbacks; self.windowPresentCalls = self.presentCalls
           self.onMetrics(metrics)
         } else {
           if event["state"] as? String == "error" {
@@ -377,7 +386,7 @@ final class KineSyncRustLyricsView: ExpoView {
         requestedHz = Double(maximum)
         next.preferredFrameRateRange = CAFrameRateRange(minimum: min(30, maximum), maximum: maximum, preferred: maximum)
         windowStart = CACurrentMediaTime()
-        windowCallbacks = callbacks; windowPresented = presented
+        windowCallbacks = callbacks; windowPresentCalls = presentCalls
         next.add(to: .main, forMode: .common)
         link = next
       }
@@ -411,13 +420,16 @@ final class KineSyncRustLyricsView: ExpoView {
     owner.draw(targetMs: display.targetTimestamp * 1000) { [weak self] result, renderedGeneration, settling in
       guard let self, self.session == epoch else { return }
       self.busy = false
-      if result == 0 { self.presented &+= 1 }
+      if result == 0 { self.presentCalls &+= 1 }
       if result == 2 { self.noDrawable &+= 1 }
+      if result == 3 { self.dirty = true } // capacity retry at next fresh vsync
       guard self.frameRevision == requestedRevision, renderedGeneration == self.generation else {
         self.lifecycle(); return
       }
       self.animating = settling
-      if result == 2 {
+      if result == 3 {
+        // No backoff and no stored target; completion polling continues at vsync.
+      } else if result == 2 {
         self.scheduleRetry(revision: requestedRevision, epoch: epoch)
       } else if result == 1 {
         // No anchor/track yet. A new input/ready handshake will rearm, not a frame loop.
@@ -428,7 +440,7 @@ final class KineSyncRustLyricsView: ExpoView {
         if self.surfaceWaiting || self.displayedGeneration != renderedGeneration {
           self.surfaceWaiting = false
           self.displayedGeneration = renderedGeneration
-          self.onStatus(["state": "presented", "generation": renderedGeneration, "message": "Rust is presenting the current track"])
+          self.onStatus(["state": "presented", "generation": renderedGeneration, "message": "Rust submitted a present call for the current track"])
         }
       }
       self.lifecycle()

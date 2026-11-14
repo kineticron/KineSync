@@ -7,9 +7,9 @@ import { anchorChanged, buildRustTrack, nextVisualAnchor, projectPosition, type 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
 type NativeRef = { setAnchor(value: string): Promise<void> };
 type Metrics = { frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
-  cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; presentWaitMs: number;
+  cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
-  missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentedFps: number; windowSeconds: number;
+  missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentCallRate: number; windowSeconds: number;
   gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number } }): void;
@@ -20,7 +20,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios') return { api: null, view: null, error: 'Rust native surface is available on iOS only' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 2) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 3) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -107,16 +107,18 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       </Pressable> : null}
       </View>
       {showMetrics && metrics && metrics.native.generation === revision.generation && !failed && !unavailable ? <Text style={styles.metrics}>
-        {`Rust frames ${metrics.native.frames} · scene ${metrics.native.cpuSceneMs.toFixed(2)} ms · encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms\n`}
+        {`Rust present calls ${metrics.native.frames} · scene ${metrics.native.cpuSceneMs.toFixed(2)} ms · encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms\n`}
         {`Metal GPU Vello ${metrics.native.gpuRendering ? 'active' : 'unavailable'} · compute blur ${metrics.native.computeBlur ? 'active' : 'unavailable'}\n`}
         {`GPU timestamp profiler: ${metrics.native.profilerReason}\n`}
         {`Adapter queries ${metrics.native.adapterTimestampQuery ? 'yes' : 'no'} / encoder ${metrics.native.adapterEncoderTimestamp ? 'yes' : 'no'} · bracket features ${metrics.native.enabledBracketFeatures ? 'enabled' : 'disabled'}\n`}
-        {`CPU encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms · worker present+wait ${metrics.native.presentWaitMs.toFixed(2)} ms\n`}
-        {`Requested ${metrics.native.requestedHz.toFixed(0)} Hz · callbacks ${metrics.native.deliveredCallbackHz.toFixed(1)} Hz · presented ${metrics.native.presentedFps.toFixed(1)} fps (${metrics.native.windowSeconds.toFixed(2)}s window)\n`}
-        {`Callbacks ${metrics.native.callbackTotal} · submitted ${metrics.native.submitted} · busy ${metrics.native.busy} · idle ${metrics.native.idle} · inactive ${metrics.native.inactive} · no drawable ${metrics.native.noDrawable}\n`}
+        {`CPU encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms · CPU blit ${metrics.native.cpuBlitMs.toFixed(2)} ms\n`}
+        {`Requested ${metrics.native.requestedHz.toFixed(0)} Hz · callbacks ${metrics.native.deliveredCallbackHz.toFixed(1)} Hz · present calls ${metrics.native.presentCallRate.toFixed(1)}/s (${metrics.native.windowSeconds.toFixed(2)}s window)\n`}
+        {`Acquire ${metrics.native.acquireMs.toFixed(2)} ms · blit submit ${metrics.native.blitSubmitMs.toFixed(2)} ms · present call ${metrics.native.presentCallMs.toFixed(2)} ms · poll ${metrics.native.pollMs.toFixed(2)} ms\n`}
+        {`Observed GPU blit completions ${metrics.native.gpuCompleted} · outstanding ${metrics.native.gpuOutstanding}/2 · capacity retries ${metrics.native.gpuBusy}\n`}
+        {`Callbacks ${metrics.native.callbackTotal} · worker requests ${metrics.native.submitted} · busy ${metrics.native.busy} · idle ${metrics.native.idle} · inactive ${metrics.native.inactive} · no drawable ${metrics.native.noDrawable}\n`}
         {`Observed interval gaps (estimate) ${metrics.native.missedObservedIntervalsEstimate} · UI tick ${metrics.native.uiTickMs.toFixed(2)} ms\n`}
         {`JS anchors ${work.current.anchors} · renders ${work.current.renders} · anchor work ${work.current.anchorMs.toFixed(2)} ms\n`}
-        {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresented = completed present calls, not measured scanout. Encode = CPU wall; present+wait includes GPU completion. No phone performance conclusion.`}
+        {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
     </ScrollView>
     {!unavailable && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} /> : null}

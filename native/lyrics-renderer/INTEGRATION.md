@@ -47,8 +47,8 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 2 carries explicit seek-snap intent and 88-byte capability/motion
-metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
+ABI version 3 carries explicit seek-snap intent, separate display-target/sample
+clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
 IPA; a Metro-only update cannot install the Rust/Swift changes.
 
 The display link requests preferredFrameRateRange with a hardware-capped maximum
@@ -97,7 +97,8 @@ that layer strongly alive while Rust owns a wgpu Metal surface. Create, track,
 anchor, resize, frame and disposal operations are serialized on one shared worker
 queue, which also orders retirement before a rapid remount's creation. Latest
 track/size and anchor inputs coalesce into one pending drain; seek intent survives
-coalescing. One draw may be outstanding, with no frame backlog. Per-work-item
+coalescing. One CPU draw request may be outstanding, with no target backlog;
+two GPU application frames may be in flight. Per-work-item
 autorelease pools bound temporary Objective-C objects. No per-frame image pixels
 cross Swift/JS. Vello writes an offscreen GPU texture, shared compute passes blur
 it, a GPU blit writes the acquired surface texture and wgpu presents it.
@@ -113,8 +114,10 @@ cancel submitted GPU commands. Display-link targets are weak and notification
 registrations are removed on deinit. A session/revision guard
 rejects stale completions and retry work.
 
-The ABI returns 0 for presentation, 1 while waiting for track/anchor, 2 for
-retryable acquisition failure, and -1 for failure. Paused first frames, seeks
+The ABI returns 0 after a present call (not scanout), 1 while waiting for
+track/anchor, 2 for retryable acquisition failure, 3 for full GPU capacity, and -1
+for failure. Capacity retry leaves dirty work armed for the next fresh vsync;
+it does not use surface-error backoff or retain an old display target. Paused first frames, seeks
 and resizes retain/re-arm dirty work on Timeout/Occluded/Outdated. At most four
 retries run after 100/200/400/800 ms with no active display link during backoff.
 Exhaustion hides the stale surface and reports waiting until a new anchor,
@@ -140,38 +143,66 @@ not an additional callback category. Busy rejects a delivered callback while one
 frame is outstanding; it is not a missed display interval. Observed interval
 misses are explicitly an estimate from callback timestamp gaps divided by the
 previous reported interval; system refresh-rate changes can also affect it.
-Requested Hz is a hint. Delivered callback Hz and presented fps use count deltas
-and real elapsed window seconds. Presented fps counts acknowledged completed
-present calls, not measured screen scanout. No nominal-120 extrapolation or tiny
+Requested Hz is a hint. Delivered callback Hz and `presentCallRate` use count
+deltas and real elapsed window seconds. Present calls are CPU returns from
+Queue.present, not drawable presentation or measured screen scanout. `submitted`
+counts worker requests, including capacity retries; `frames` counts present calls. No nominal-120 extrapolation or tiny
 first-frame window is used. Idle/background pauses reset the next cadence window.
 
 GPU Metal Vello and compute blur activity are reported independently of timestamp
-profiling. Successful rendering runs Vello compute, four shared blur passes and
-composition even when queries are unsupported. Adapter TIMESTAMP_QUERY and
+profiling. Successful rendering runs Vello compute, a half-resolution downsample,
+four shared blur passes and full-resolution composition even without queries. Adapter TIMESTAMP_QUERY and
 TIMESTAMP_QUERY_INSIDE_ENCODERS flags and enabled bracket features are separate.
 Locked wgpu-types 30.0.1 documents encoder timestamps as unavailable on Apple GPUs;
 wgpu-hal Metal checks stage and blit boundary counters separately. No unsupported
-features are forced. Sampled RGBA8 input / write-only RGBA8 storage blur needs no
-adapter-specific storage read/write feature. The UI reports the exact missing
+features are forced. The sampled RGBA8 Vello output feeds write-only RGBA16Float
+half-resolution storage filters, then RGBA8 full-resolution composition. These
+formats need no adapter-specific storage read/write feature. The UI reports the exact missing
 profiler feature, or that live timestamp readback is disabled.
 
-The live path skips the extra completion/readback wait between compute and the
-surface blit. One final worker completion wait bounds GPU submissions to the
-single frame. desired_maximum_frame_latency=1 maps to two Metal layer drawables
-in locked wgpu-hal; this does not promise only one OS/display drawable. Scene and
-encode timings are CPU wall spans, not GPU timings. presentWaitMs includes final
-submit/present and remaining GPU completion wall time (including prior compute
-still executing), not pure presentation, scanout latency or pure GPU time.
-Drawable acquisition can also block the worker and is outside that final span.
-UI tick measures main scheduling work. The headless profiler retains timestamp
-brackets/readback; those include submission gaps and exclude the final blit.
+The live path has no explicit GPU completion wait or timestamp readback. It polls
+with PollType::Poll and admits at most two application frames. Safe Queue
+completion callbacks record final blit GPU completion; they neither prove
+presentation nor include Metal's separately committed present command buffer.
+Three OS drawables (latency hint 2) separately bound display resources. When full,
+no animation state is advanced and no display target is stored. Acquisition can
+still block in nextDrawable; after acquisition Rust refreshes its native clock
+from the separately retained sample plus elapsed monotonic time, keeping a
+future display target when applicable. Resize/destruction wait on the worker;
+UIKit never waits for that worker. Completion counts are observations from the
+last poll/submit and can lag while idle.
 
-JS comparison includes anchor calls, React renders, anchor-construction/JSI work
-and a delivery-age-adjusted native-minus-store clock delta. Visual rate previews
-intentionally diverge from audio/store speed. These diagnostics are not an audio
-sync measurement, an instrumentation-free Skia benchmark or evidence of phone
-performance gains. Switching renderers provides an in-app comparison path, but
-a proper matched device capture/profiling protocol remains necessary.
+`cpuSceneMs`, `cpuEncodeMs`, `cpuBlitMs`, `acquireMs`, `blitSubmitMs`,
+`presentCallMs`, `pollMs` are CPU wall spans. `cpuBlitMs` includes final encoder,
+submit, callback registration and present-call cost. `blitSubmitMs` covers only
+the final explicit blit submit; Vello's internal submits and filter submit remain
+in `cpuEncodeMs`. Driver submit/acquisition can stall; none of these are GPU
+execution time. There is no per-frame explicit wait in the live path (`waitMs`
+remains zero). Headless profiling retains timestamp brackets/readback, includes
+submission gaps and excludes the final surface blit.
+
+### Transparent composition
+
+ExpoUIView, its child MetalHost and CAMetalLayer are clear/nonopaque. FIFO is
+retained. Locked Metal advertises only Opaque/PostMultiplied alpha, so the code
+requires supported PostMultiplied and a supported non-sRGB RGBA/BGRA unorm
+surface. It fails explicitly rather than requesting unsupported PreMultiplied.
+Vello clears alpha0 and writes straight sRGB RGBA8; box downsample converts to
+linear premultiplied RGBA16Float. Cached normalized Gaussian weights operate on
+that representation with transparent zero padding. Bilinear reconstruction
+mixes near/far only outside the full-resolution sharp protection band; viewport
+fade scales alpha and RGB together. The final copy converts linear premultiplied
+to straight sRGB exactly once for the advertised surface contract, with blending
+disabled and an alpha0 attachment clear. No final alpha1 override or second
+premultiplication occurs. Empty/initial and resized resource contents are fully
+written before presenting. Backgrounding retains the last transparent frame.
+
+This follows wgpu's PostMultiplied contract; actual CAMetalLayer/RN compositor
+behavior and color matching still require phone proof. Half-resolution filtering,
+3-sigma truncation, RGBA8 final quantization and linear-light blur differ from
+Skia's exact filter implementation. Off-viewport content is clipped before blur;
+zero padding does not invent offscreen glyph coverage. The viewport fade hides
+that boundary; no clamp-to-edge color smear is introduced.
 
 ## Device build and proof
 
@@ -237,4 +268,4 @@ API contracts were checked against the official
 [Expo module API](https://docs.expo.dev/modules/module-api/) and installed
 ExpoModulesCore ViewDefinitionBuilder/ViewFactories sources, plus the pinned
 wgpu 30 registry source for CoreAnimationLayer, CurrentSurfaceTexture,
-TextureBlitter and Queue.present.
+Queue completion callbacks, transparent surface formats and Queue.present.

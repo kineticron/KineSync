@@ -311,7 +311,7 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
   const attempts = [0, ...delays.reduce((times, delay) => [...times, (times.at(-1) || 0) + delay], [])];
   assert.equal(attempts.length, 5); assert.ok(attempts.at(-1) >= 1.5);
   const rust = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/ffi.rs'), 'utf8');
-  assert.match(rust, /surface\s*\.render[\s\S]*?else \{\s*return Ok\(2\);/);
+  assert.match(rust, /surface\.acquire\(\)[\s\S]*?else \{\s*return Ok\(2\);/);
 });
 test('Rust cache verifier rejects simulator slices and final proof rejects archive-only integration', t => {
   const root = temp(t), bin = path.join(root, 'bin'); fs.mkdirSync(bin);
@@ -537,7 +537,7 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(needsFrame(true, false, null), true);
   assert.ok(swift.indexOf('if busy { busyCallbacks') < swift.indexOf('owner.draw(targetMs:'));
   assert.match(swift, /busy = true; dirty = false; submitted &\+= 1/);
-  assert.match(swift, /result = kr_render\(self.handle, targetMs\)/);
+  assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled\)/);
   assert.match(swift, /let sampled = CACurrentMediaTime\(\) \* 1000/);
   assert.match(swift, /preferredFrameRateRange = CAFrameRateRange/);
   assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
@@ -563,11 +563,14 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(pending.pendingSnap, true); // coalescing must retain an explicit seek's snap intent
   pending.retired = true; offer(pending, { generation: 10000 }, null);
   assert.equal(pending.pendingUpdate.generation, 9999);
-  for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentedFps']) assert.ok(swift.includes(`metrics["${name}"]`), name);
+  for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentCallRate']) assert.ok(swift.includes(`metrics["${name}"]`), name);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
   assert.match(gpu, /render_frame\(scene, band, true, false\)/);
   assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
-  assert.match(gpu, /queue.present\(frame\);\s*self.gpu.device.poll/);
+  assert.match(gpu, /device.poll\(PollType::Poll\)/);
+  assert.match(gpu, /on_submitted_work_done/);
+  assert.match(swift, /frameTarget = max\(targetMs, sampled\)/);
+  assert.match(swift, /if result == 3 \{ self.dirty = true/);
 });
 
 test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/discontinuities', () => {
@@ -642,4 +645,27 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(ci, /'--plist', generatedPlist/); assert.match(ci, /'--plist', plist/);
   const header = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/include/KineSyncLyrics.h'), 'utf8');
   assert.match(header, /uint32_t capabilities, animating/);
+});
+
+test('ABI 3 C layout and both native-client guards reject incompatible clients', () => {
+  const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
+  const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
+  const rejects = new Function('api', `return ${condition}`);
+  assert.equal(rejects(null), true);
+  for (const version of [0, 1, 2, 4]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 3 }), false);
+  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
+  assert.match(swift, /guard kr_abi_version\(\) == 3 else/);
+  const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
+    encoding: 'utf8', input: `#include "KineSyncLyrics.h"
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 3 metrics size");
+_Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
+_Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
+_Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
+_Static_assert(offsetof(KRMetrics, target_native_ms) == 144, "clock offset");
+int32_t (*render_signature)(uint64_t, double, double) = kr_render;
+` });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!swift.includes('presentedFps'));
+  assert.ok(!view.includes('presentedFps'));
 });
