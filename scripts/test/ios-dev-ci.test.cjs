@@ -174,6 +174,10 @@ test('restored Podfile.lock cannot silently change between restore and save', t 
   const env = { ...process.env, GITHUB_WORKSPACE: root, CI_EVIDENCE_DIR: evidence, GITHUB_OUTPUT: path.join(root, 'outputs') };
   let result = spawnSync(process.execPath, [cli, 'keys'], { env });
   assert.equal(result.status, 0, result.stderr.toString());
+  put(root, 'ExpoLyrics/ios/App/Info.plist', '<plist version="1.0"><dict/></plist>');
+  result = spawnSync(process.execPath, [cli, 'keys'], { env });
+  assert.equal(result.status, 1); assert.match(result.stderr.toString(), /CADisableMinimumFrameDurationOnPhone/);
+  put(root, 'ExpoLyrics/ios/App/Info.plist', '<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/></dict></plist>');
   put(root, 'ExpoLyrics/ios/Podfile.lock', 'unexpected mutation');
   result = spawnSync(process.execPath, [cli, 'keys'], { env });
   assert.equal(result.status, 1);
@@ -539,6 +543,7 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
   assert.ok(!swift.includes('queue.sync'));
   assert.match(swift, /private static let worker = DispatchQueue/);
+  assert.match(swift, /guard elapsed >= 1 else \{ return \}/);
   assert.match(swift, /queue.async \{\s*if self.handle != 0 \{ _ = kr_destroy/);
   // Execute the actual coalescing body with only Swift syntax/queue primitives
   // translated. 10,000 input bursts must occupy one pending worker task.
@@ -590,4 +595,51 @@ test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/disc
   assert.equal(a.positionMs, 20300); assert.equal(a.snap, true);
   a = nextVisualAnchor({ ...state, currentTrack: { id: 'b', durationMs: 60000 } }, 0, 16400, 1, a);
   assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
+});
+
+test('measured player viewport clips before the complete dock and diagnostics reserve canvas space', () => {
+  const { rustViewport } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
+  // Includes small/large portrait, landscape fallback geometry, and unknown initial measurement.
+  for (const [height, top, dock] of [[844, 120, 590], [667, 90, 410], [1024, 135, 800], [390, 24, 310], [844, 120, null], [390, 300, 100]]) {
+    const viewport = rustViewport(height, top, dock);
+    const bottomEdge = height - viewport.bottom;
+    assert.ok(viewport.height >= 0);
+    assert.equal(top + viewport.height, bottomEdge);
+    if (dock != null && dock >= top) assert.ok(bottomEdge <= dock);
+    else assert.equal(viewport.height, 0);
+  }
+  const player = fs.readFileSync(path.join(repo, 'ExpoLyrics/app/(tabs)/index.tsx'), 'utf8');
+  assert.match(player, /const top = event.nativeEvent.layout.y;\s*setRustDockBounds/);
+  assert.match(player, /maxHeight: __DEV__ && rustRenderer && !tour.active \? rustLyricsViewport.height/);
+  assert.match(player, /rustDockBounds.key === viewportKey && rustPlayerBounds.key === viewportKey/);
+  const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
+  assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));
+  assert.match(view, /root: \{ flex: 1, minHeight: 0, overflow: 'hidden' \}/);
+  assert.ok(!view.includes("position: 'absolute'"));
+  assert.ok(!view.includes('GPU Vello+blur'));
+});
+
+test('generated, built and packaged app ProMotion key must be Boolean true', t => {
+  const root = temp(t), plist = path.join(root, 'Info.plist');
+  const validator = path.join(repo, 'scripts/ios-dev-ci/validate_ipa.py');
+  for (const [value, status] of [['<true/>', 0], ['<false/>', 1], ['<string>true</string>', 1], ['<integer>1</integer>', 1]]) {
+    put(root, 'Info.plist', `<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key>${value}</dict></plist>`);
+    assert.equal(spawnSync('python3', [validator, '--plist', plist]).status, status);
+  }
+  put(root, 'Info.plist', '<plist version="1.0"><dict/></plist>');
+  assert.equal(spawnSync('python3', [validator, '--plist', plist]).status, 1);
+  const ipa = path.join(root, 'bad-promotion.ipa');
+  execFileSync('python3', ['-c', `import zipfile,sys
+with zipfile.ZipFile(sys.argv[1],'w') as z:
+ z.writestr('Payload/App.app/Info.plist', '<plist version="1.0"><dict><key>CADisableMinimumFrameDurationOnPhone</key><false/></dict></plist>')`, ipa]);
+  const bad = spawnSync('python3', [validator, '--ipa', ipa], { encoding: 'utf8' });
+  assert.equal(bad.status, 1); assert.match(bad.stderr, /CADisableMinimumFrameDurationOnPhone/);
+  const app = path.join(root, 'Bad.app');
+  put(app, 'Info.plist', '<plist version="1.0"><dict/></plist>');
+  const badApp = spawnSync('python3', [validator, '--app', app], { encoding: 'utf8' });
+  assert.equal(badApp.status, 1); assert.match(badApp.stderr, /CADisableMinimumFrameDurationOnPhone/);
+  const ci = fs.readFileSync(path.join(repo, 'scripts/ios-dev-ci/ci.cjs'), 'utf8');
+  assert.match(ci, /'--plist', generatedPlist/); assert.match(ci, /'--plist', plist/);
+  const header = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/include/KineSyncLyrics.h'), 'utf8');
+  assert.match(header, /uint32_t capabilities, animating/);
 });

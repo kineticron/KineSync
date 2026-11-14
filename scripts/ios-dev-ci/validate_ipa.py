@@ -15,6 +15,13 @@ import zipfile
 
 MAGIC = {bytes.fromhex(value) for value in ['cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca']}
 
+def validate_promotion(info):
+    # Boolean true only: a string or integer does not enable Apple's plist policy.
+    if info.get('CADisableMinimumFrameDurationOnPhone') is not True:
+        raise ValueError('CADisableMinimumFrameDurationOnPhone must be Boolean true')
+    return {'CADisableMinimumFrameDurationOnPhone': True}
+
+
 def executable_name(value):
     if not isinstance(value, str) or not value or '/' in value or value in {'.', '..'}:
         raise ValueError('Invalid CFBundleExecutable name')
@@ -22,6 +29,7 @@ def executable_name(value):
 
 def validate_app(app):
     app = Path(app).resolve()
+    validate_promotion(plistlib.loads((app / 'Info.plist').read_bytes()))
     required = set()
     for directory, _, files in os.walk(app):
         for name in files:
@@ -48,6 +56,11 @@ def validate_zip(ipa):
         entries = {entry.filename.rstrip('/'): entry for entry in archive.infolist()}
         if len(entries) != len(archive.infolist()):
             raise ValueError('Duplicate ZIP entries')
+        app_plists = [name for name in entries if name.startswith('Payload/') and
+                      name.count('/') == 2 and name.endswith('.app/Info.plist')]
+        if len(app_plists) != 1:
+            raise ValueError('Expected one main app Info.plist in IPA')
+        validate_promotion(plistlib.loads(archive.read(app_plists[0])))
         required = set()
         def resolve(name):
             for _ in range(64):
@@ -89,9 +102,9 @@ def validate_zip(ipa):
 
 if __name__ == '__main__':
     mode, source = sys.argv[1:3]
-    result = validate_app(source) if mode == '--app' else validate_zip(source) if mode == '--ipa' else None
+    result = validate_app(source) if mode == '--app' else validate_zip(source) if mode == '--ipa' else validate_promotion(plistlib.loads(Path(source).read_bytes())) if mode == '--plist' else None
     if result is None:
-        raise ValueError('Expected --app or --ipa')
+        raise ValueError('Expected --app, --ipa or --plist')
     if len(sys.argv) > 3:
         Path(sys.argv[3]).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))

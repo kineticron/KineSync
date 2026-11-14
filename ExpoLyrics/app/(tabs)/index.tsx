@@ -1,3 +1,4 @@
+import { rustViewport } from "@/lib/rust-lyrics-protocol";
 import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
@@ -406,6 +407,9 @@ export default function HomeScreen() {
   const spotifyBrowserRef = useRef<SpotifyBrowserFallbackHandle>(null);
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
+  const viewportKey = `${windowDimensions.width}x${windowDimensions.height}`;
+  const [rustPlayerBounds, setRustPlayerBounds] = useState({ height: 0, key: '' });
+  const [rustDockBounds, setRustDockBounds] = useState({ top: 0, key: '' });
   const tour = usePlayerTour(isScreenFocused);
   const liveTrack = usePlaybackStore((s) => s.currentTrack);
   const currentTrack = tour.active ? TOUR_TRACK : liveTrack;
@@ -1284,16 +1288,20 @@ export default function HomeScreen() {
     topBarTrackPress,
   ]);
 
+  const rustLyricsViewport = rustViewport(rustPlayerBounds.height, insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP,
+    rustDockBounds.key === viewportKey && rustPlayerBounds.key === viewportKey ? rustDockBounds.top : null);
   const lyricsViewportStyle = useMemo(
     () => ({
       position: "absolute" as const,
       left: 0,
       right: 0,
       top: insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP,
-      bottom: 0,
+      bottom: __DEV__ && rustRenderer && !tour.active
+        ? rustLyricsViewport.bottom : 0,
+      maxHeight: __DEV__ && rustRenderer && !tour.active ? rustLyricsViewport.height : undefined,
       overflow: "hidden" as const,
     }),
-    [insets.top],
+    [insets.top, rustRenderer, tour.active, rustLyricsViewport.bottom, rustLyricsViewport.height],
   );
 
   const lyricsChromeOpacityStyle = useAnimatedStyle(() => {
@@ -1337,7 +1345,10 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <View style={styles.screen}>
+    <View style={styles.screen} onLayout={event => {
+      const height = event.nativeEvent.layout.height;
+      setRustPlayerBounds(previous => previous.height === height && previous.key === viewportKey ? previous : { height, key: viewportKey });
+    }}>
       {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer" disabled={tour.active}
         onPress={() => setRustRenderer(value => !value)}
         style={{ position: 'absolute', zIndex: 100, top: insets.top + 4, right: 12, padding: 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)' }}>
@@ -1717,7 +1728,7 @@ export default function HomeScreen() {
             </Reanimated.View>
           </Reanimated.View>
           {/* ponytail: LinearGradient replaces BlurView — same fade, no GPU blur cost */}
-          <Reanimated.View
+          {!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View
             pointerEvents="none"
             style={[
               styles.lyricsBottomBlurWrap,
@@ -1730,7 +1741,7 @@ export default function HomeScreen() {
               colors={_stableColors7}
               style={styles.lyricsBottomBlur}
             />
-          </Reanimated.View>
+          </Reanimated.View>}
         </Reanimated.View>
       )}
 
@@ -1745,6 +1756,10 @@ export default function HomeScreen() {
       <SafeAreaView
         edges={_stableEdges8}
         style={styles.bottomArea}
+        onLayout={event => {
+          const top = event.nativeEvent.layout.y;
+          setRustDockBounds(previous => previous.top === top && previous.key === viewportKey ? previous : { top, key: viewportKey });
+        }}
         pointerEvents={
           controlsVisible || fullscreenAlbumMode ? "box-none" : "none"
         }

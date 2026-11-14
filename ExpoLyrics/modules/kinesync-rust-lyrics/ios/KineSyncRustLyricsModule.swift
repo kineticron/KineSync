@@ -299,6 +299,8 @@ final class KineSyncRustLyricsView: ExpoView {
           metrics["uiTickMs"] = self.tickMs
           metrics["displayIntervalMs"] = self.intervalMs
           let elapsed = CACurrentMediaTime() - self.windowStart
+          // Never extrapolate a first/resume callback's tiny window into "fps".
+          guard elapsed >= 1 else { return }
           metrics["callbackTotal"] = self.callbacks
           metrics["submitted"] = self.submitted
           metrics["idle"] = self.idle

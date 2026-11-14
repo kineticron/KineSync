@@ -136,6 +136,12 @@ function initialize(env = process.env) {
 }
 function keysAfterPrebuild() {
   const current = state();
+  const ios = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/ios');
+  const projects = fs.readdirSync(ios).filter(name => name.endsWith('.xcodeproj'));
+  if (projects.length !== 1) throw new Error('Expected one generated app project');
+  const generatedPlist = path.join(ios, path.basename(projects[0], '.xcodeproj'), 'Info.plist');
+  run('python3', [path.join(__dirname, 'validate_ipa.py'), '--plist', generatedPlist,
+    path.join(current.paths.evidence, 'generated-promotion.json')]);
   const keys = cacheKeys(process.env.GITHUB_WORKSPACE, current.identity, current.epoch, current.ref);
   const file = path.join(current.paths.evidence, 'keys.json');
   const previous = fs.existsSync(file) ? json(file) : null;
@@ -177,6 +183,8 @@ function build() {
   const plist = path.join(app, 'Info.plist');
   const platform = run('/usr/libexec/PlistBuddy', ['-c', 'Print :DTPlatformName', plist]);
   if (platform !== 'iphoneos') throw new Error(`Not an iPhoneOS app: ${platform}`);
+  run('python3', [path.join(__dirname, 'validate_ipa.py'), '--plist', plist,
+    path.join(current.paths.evidence, 'built-promotion.json')]);
   const architectures = [];
   function inspect(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
