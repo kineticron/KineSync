@@ -566,7 +566,7 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(pending.pendingUpdate.generation, 9999);
   for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentCallRate']) assert.ok(swift.includes(`metrics["${name}"]`), name);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
-  assert.match(gpu, /render_frame\(scene, band, true, false\)/);
+  assert.match(gpu, /render_frame\(scene, band, true, false, appearance, glow\)/);
   assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
   assert.match(gpu, /device.poll\(PollType::Poll\)/);
   assert.match(gpu, /on_submitted_work_done/);
@@ -648,18 +648,18 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 4 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 5 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 5]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 4 }), false);
+  for (const version of [0, 1, 2, 3, 4, 6]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 5 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 4 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 5 else/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 4 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 5 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");

@@ -1,0 +1,4609 @@
+{
+  "native_present_calls_per_second": null,
+  "reports": [
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Fill",
+      "before": "Baseline",
+      "encode_p95_ms": [
+        24.044868,
+        23.962588999999998
+      ],
+      "fixture_line": 11,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 18.858769000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02149,
+          "wall_ms": 18.892299
+        },
+        {
+          "encode_ms": 21.032308999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.0131,
+          "wall_ms": 21.069049
+        },
+        {
+          "encode_ms": 21.330968,
+          "scene_allocations": 0,
+          "scene_ms": 0.013900000000000001,
+          "wall_ms": 21.357358
+        },
+        {
+          "encode_ms": 20.851949,
+          "scene_allocations": 0,
+          "scene_ms": 0.01224,
+          "wall_ms": 20.885139
+        },
+        {
+          "encode_ms": 20.453699,
+          "scene_allocations": 0,
+          "scene_ms": 0.01947,
+          "wall_ms": 20.491929
+        },
+        {
+          "encode_ms": 21.414178,
+          "scene_allocations": 0,
+          "scene_ms": 0.01223,
+          "wall_ms": 21.477808
+        },
+        {
+          "encode_ms": 22.020438,
+          "scene_allocations": 0,
+          "scene_ms": 0.02043,
+          "wall_ms": 22.068238
+        },
+        {
+          "encode_ms": 23.962588999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01618,
+          "wall_ms": 24.024259
+        },
+        {
+          "encode_ms": 4.70136,
+          "scene_allocations": 0,
+          "scene_ms": 0.01618,
+          "wall_ms": 23.397769
+        },
+        {
+          "encode_ms": 22.214268,
+          "scene_allocations": 0,
+          "scene_ms": 0.01106,
+          "wall_ms": 22.281918
+        },
+        {
+          "encode_ms": 20.478778,
+          "scene_allocations": 0,
+          "scene_ms": 0.01544,
+          "wall_ms": 20.509878
+        },
+        {
+          "encode_ms": 20.279759000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01044,
+          "wall_ms": 20.344479
+        },
+        {
+          "encode_ms": 22.060627999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.016900000000000002,
+          "wall_ms": 22.094868
+        },
+        {
+          "encode_ms": 21.184359,
+          "scene_allocations": 0,
+          "scene_ms": 0.00994,
+          "wall_ms": 21.231899
+        },
+        {
+          "encode_ms": 19.695229,
+          "scene_allocations": 0,
+          "scene_ms": 0.016399999999999998,
+          "wall_ms": 19.726249000000003
+        },
+        {
+          "encode_ms": 20.923779,
+          "scene_allocations": 0,
+          "scene_ms": 0.00965,
+          "wall_ms": 20.955569
+        },
+        {
+          "encode_ms": 21.302228,
+          "scene_allocations": 0,
+          "scene_ms": 0.01362,
+          "wall_ms": 21.340858
+        },
+        {
+          "encode_ms": 21.438899,
+          "scene_allocations": 0,
+          "scene_ms": 0.01056,
+          "wall_ms": 21.468449
+        },
+        {
+          "encode_ms": 19.236969,
+          "scene_allocations": 0,
+          "scene_ms": 0.01785,
+          "wall_ms": 19.276038999999997
+        },
+        {
+          "encode_ms": 19.796198,
+          "scene_allocations": 0,
+          "scene_ms": 0.01099,
+          "wall_ms": 19.832438
+        },
+        {
+          "encode_ms": 23.120429,
+          "scene_allocations": 0,
+          "scene_ms": 0.01619,
+          "wall_ms": 23.199799
+        },
+        {
+          "encode_ms": 20.099879,
+          "scene_allocations": 0,
+          "scene_ms": 0.02404,
+          "wall_ms": 20.178289
+        },
+        {
+          "encode_ms": 21.226948999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.023969999999999998,
+          "wall_ms": 21.292268999999997
+        },
+        {
+          "encode_ms": 21.554548,
+          "scene_allocations": 0,
+          "scene_ms": 0.01986,
+          "wall_ms": 21.598498
+        },
+        {
+          "encode_ms": 19.407539,
+          "scene_allocations": 0,
+          "scene_ms": 0.016059999999999998,
+          "wall_ms": 19.442889
+        },
+        {
+          "encode_ms": 21.743728,
+          "scene_allocations": 0,
+          "scene_ms": 0.01048,
+          "wall_ms": 21.776328
+        },
+        {
+          "encode_ms": 21.055359,
+          "scene_allocations": 0,
+          "scene_ms": 0.01929,
+          "wall_ms": 21.093418999999997
+        },
+        {
+          "encode_ms": 20.959328,
+          "scene_allocations": 0,
+          "scene_ms": 0.0109,
+          "wall_ms": 20.992928000000003
+        },
+        {
+          "encode_ms": 26.644907999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.0196,
+          "wall_ms": 26.680948
+        },
+        {
+          "encode_ms": 20.873369,
+          "scene_allocations": 0,
+          "scene_ms": 0.01081,
+          "wall_ms": 20.907389
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 21.140518,
+          "scene_allocations": 0,
+          "scene_ms": 0.01723,
+          "wall_ms": 21.209618
+        },
+        {
+          "encode_ms": 18.425699,
+          "scene_allocations": 0,
+          "scene_ms": 0.00756,
+          "wall_ms": 18.460229
+        },
+        {
+          "encode_ms": 21.338229000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00413,
+          "wall_ms": 21.367469
+        },
+        {
+          "encode_ms": 18.551259,
+          "scene_allocations": 0,
+          "scene_ms": 0.00538,
+          "wall_ms": 18.596609
+        },
+        {
+          "encode_ms": 21.552059,
+          "scene_allocations": 0,
+          "scene_ms": 0.008280000000000001,
+          "wall_ms": 21.616729
+        },
+        {
+          "encode_ms": 23.694369,
+          "scene_allocations": 0,
+          "scene_ms": 0.00741,
+          "wall_ms": 23.730729
+        },
+        {
+          "encode_ms": 21.720349,
+          "scene_allocations": 0,
+          "scene_ms": 0.00464,
+          "wall_ms": 21.774418999999998
+        },
+        {
+          "encode_ms": 25.464388,
+          "scene_allocations": 0,
+          "scene_ms": 0.00757,
+          "wall_ms": 25.520128
+        },
+        {
+          "encode_ms": 22.690248999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.00865,
+          "wall_ms": 22.722009
+        },
+        {
+          "encode_ms": 21.440579,
+          "scene_allocations": 0,
+          "scene_ms": 0.00817,
+          "wall_ms": 21.483408999999998
+        },
+        {
+          "encode_ms": 21.417379,
+          "scene_allocations": 0,
+          "scene_ms": 0.007,
+          "wall_ms": 21.457539
+        },
+        {
+          "encode_ms": 22.583979,
+          "scene_allocations": 0,
+          "scene_ms": 0.00898,
+          "wall_ms": 22.629249
+        },
+        {
+          "encode_ms": 22.590399,
+          "scene_allocations": 0,
+          "scene_ms": 0.004189999999999999,
+          "wall_ms": 22.628549
+        },
+        {
+          "encode_ms": 21.407939000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00824,
+          "wall_ms": 21.438639
+        },
+        {
+          "encode_ms": 23.268358,
+          "scene_allocations": 0,
+          "scene_ms": 0.00352,
+          "wall_ms": 23.304408
+        },
+        {
+          "encode_ms": 18.913238999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.0050799999999999994,
+          "wall_ms": 18.943429000000002
+        },
+        {
+          "encode_ms": 19.726049,
+          "scene_allocations": 0,
+          "scene_ms": 0.0036,
+          "wall_ms": 19.755599
+        },
+        {
+          "encode_ms": 20.794479000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.00527,
+          "wall_ms": 20.869909
+        },
+        {
+          "encode_ms": 16.411459,
+          "scene_allocations": 0,
+          "scene_ms": 0.009850000000000001,
+          "wall_ms": 16.462039
+        },
+        {
+          "encode_ms": 17.812959,
+          "scene_allocations": 0,
+          "scene_ms": 0.00777,
+          "wall_ms": 17.848769
+        },
+        {
+          "encode_ms": 19.624959,
+          "scene_allocations": 0,
+          "scene_ms": 0.003909999999999999,
+          "wall_ms": 19.655699
+        },
+        {
+          "encode_ms": 24.044868,
+          "scene_allocations": 0,
+          "scene_ms": 0.00948,
+          "wall_ms": 24.077347999999997
+        },
+        {
+          "encode_ms": 21.946409,
+          "scene_allocations": 0,
+          "scene_ms": 0.00701,
+          "wall_ms": 22.024789
+        },
+        {
+          "encode_ms": 22.120689,
+          "scene_allocations": 0,
+          "scene_ms": 0.006520000000000001,
+          "wall_ms": 22.152049
+        },
+        {
+          "encode_ms": 19.548829,
+          "scene_allocations": 0,
+          "scene_ms": 0.004220000000000001,
+          "wall_ms": 19.589769
+        },
+        {
+          "encode_ms": 18.907619,
+          "scene_allocations": 0,
+          "scene_ms": 0.00466,
+          "wall_ms": 18.936219
+        },
+        {
+          "encode_ms": 22.367699,
+          "scene_allocations": 0,
+          "scene_ms": 0.00388,
+          "wall_ms": 22.420249
+        },
+        {
+          "encode_ms": 23.270889,
+          "scene_allocations": 0,
+          "scene_ms": 0.00531,
+          "wall_ms": 23.337789
+        },
+        {
+          "encode_ms": 23.349609,
+          "scene_allocations": 0,
+          "scene_ms": 0.00801,
+          "wall_ms": 23.394229
+        },
+        {
+          "encode_ms": 17.368939,
+          "scene_allocations": 0,
+          "scene_ms": 0.0053,
+          "wall_ms": 17.424999
+        }
+      ],
+      "scene_p50_ms": [
+        0.006520000000000001,
+        0.01544
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 390
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Motion",
+      "before": "Fill",
+      "encode_p95_ms": [
+        32.412778,
+        34.296488
+      ],
+      "fixture_line": 11,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 22.419439,
+          "scene_allocations": 0,
+          "scene_ms": 0.01329,
+          "wall_ms": 22.453459
+        },
+        {
+          "encode_ms": 21.024379,
+          "scene_allocations": 0,
+          "scene_ms": 0.010740000000000001,
+          "wall_ms": 21.056009
+        },
+        {
+          "encode_ms": 22.238839,
+          "scene_allocations": 0,
+          "scene_ms": 0.011980000000000001,
+          "wall_ms": 22.300939
+        },
+        {
+          "encode_ms": 21.419799,
+          "scene_allocations": 0,
+          "scene_ms": 0.022189999999999998,
+          "wall_ms": 21.457679
+        },
+        {
+          "encode_ms": 20.564469,
+          "scene_allocations": 0,
+          "scene_ms": 0.012700000000000001,
+          "wall_ms": 20.609199
+        },
+        {
+          "encode_ms": 20.660979,
+          "scene_allocations": 0,
+          "scene_ms": 0.0281,
+          "wall_ms": 20.691729
+        },
+        {
+          "encode_ms": 3.77971,
+          "scene_allocations": 0,
+          "scene_ms": 0.02326,
+          "wall_ms": 18.948968999999998
+        },
+        {
+          "encode_ms": 14.103569,
+          "scene_allocations": 0,
+          "scene_ms": 0.012629999999999999,
+          "wall_ms": 14.132239
+        },
+        {
+          "encode_ms": 16.070089,
+          "scene_allocations": 0,
+          "scene_ms": 0.0107,
+          "wall_ms": 16.137689
+        },
+        {
+          "encode_ms": 14.966728999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.02142,
+          "wall_ms": 15.019229000000001
+        },
+        {
+          "encode_ms": 22.819649000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01863,
+          "wall_ms": 22.890809
+        },
+        {
+          "encode_ms": 3.646929,
+          "scene_allocations": 0,
+          "scene_ms": 0.02256,
+          "wall_ms": 22.247808
+        },
+        {
+          "encode_ms": 20.417848,
+          "scene_allocations": 0,
+          "scene_ms": 0.016419999999999997,
+          "wall_ms": 20.445307999999997
+        },
+        {
+          "encode_ms": 19.215349,
+          "scene_allocations": 0,
+          "scene_ms": 0.0126,
+          "wall_ms": 19.246909
+        },
+        {
+          "encode_ms": 33.932518,
+          "scene_allocations": 0,
+          "scene_ms": 0.02157,
+          "wall_ms": 34.001708
+        },
+        {
+          "encode_ms": 32.159418,
+          "scene_allocations": 0,
+          "scene_ms": 0.02457,
+          "wall_ms": 32.224758
+        },
+        {
+          "encode_ms": 32.302868,
+          "scene_allocations": 0,
+          "scene_ms": 0.01319,
+          "wall_ms": 32.341938
+        },
+        {
+          "encode_ms": 4.75052,
+          "scene_allocations": 0,
+          "scene_ms": 0.016249999999999997,
+          "wall_ms": 30.702098
+        },
+        {
+          "encode_ms": 30.938909,
+          "scene_allocations": 0,
+          "scene_ms": 0.02001,
+          "wall_ms": 30.986429
+        },
+        {
+          "encode_ms": 38.517847,
+          "scene_allocations": 0,
+          "scene_ms": 0.02043,
+          "wall_ms": 38.585387
+        },
+        {
+          "encode_ms": 33.360958000000004,
+          "scene_allocations": 0,
+          "scene_ms": 0.023620000000000002,
+          "wall_ms": 33.420308000000006
+        },
+        {
+          "encode_ms": 32.979608,
+          "scene_allocations": 0,
+          "scene_ms": 0.02241,
+          "wall_ms": 33.026137999999996
+        },
+        {
+          "encode_ms": 4.49485,
+          "scene_allocations": 0,
+          "scene_ms": 0.02242,
+          "wall_ms": 29.418878
+        },
+        {
+          "encode_ms": 28.440939,
+          "scene_allocations": 0,
+          "scene_ms": 0.02319,
+          "wall_ms": 28.506329
+        },
+        {
+          "encode_ms": 34.296488,
+          "scene_allocations": 0,
+          "scene_ms": 0.01385,
+          "wall_ms": 34.356198
+        },
+        {
+          "encode_ms": 32.135128,
+          "scene_allocations": 0,
+          "scene_ms": 0.021849999999999998,
+          "wall_ms": 32.169308
+        },
+        {
+          "encode_ms": 4.125850000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.017249999999999998,
+          "wall_ms": 27.699859
+        },
+        {
+          "encode_ms": 29.249068,
+          "scene_allocations": 0,
+          "scene_ms": 0.018539999999999997,
+          "wall_ms": 29.301018000000003
+        },
+        {
+          "encode_ms": 20.405149,
+          "scene_allocations": 0,
+          "scene_ms": 0.01366,
+          "wall_ms": 20.442269
+        },
+        {
+          "encode_ms": 2.62109,
+          "scene_allocations": 0,
+          "scene_ms": 0.01129,
+          "wall_ms": 20.358518999999998
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 23.422588,
+          "scene_allocations": 0,
+          "scene_ms": 0.01171,
+          "wall_ms": 23.459357999999998
+        },
+        {
+          "encode_ms": 20.692958,
+          "scene_allocations": 0,
+          "scene_ms": 0.01148,
+          "wall_ms": 20.726608
+        },
+        {
+          "encode_ms": 20.015159,
+          "scene_allocations": 0,
+          "scene_ms": 0.01131,
+          "wall_ms": 20.045109
+        },
+        {
+          "encode_ms": 20.822758,
+          "scene_allocations": 0,
+          "scene_ms": 0.01392,
+          "wall_ms": 20.871258
+        },
+        {
+          "encode_ms": 19.716939,
+          "scene_allocations": 0,
+          "scene_ms": 0.018070000000000003,
+          "wall_ms": 19.748489
+        },
+        {
+          "encode_ms": 19.781019,
+          "scene_allocations": 0,
+          "scene_ms": 0.011600000000000001,
+          "wall_ms": 19.809229000000002
+        },
+        {
+          "encode_ms": 18.742388,
+          "scene_allocations": 0,
+          "scene_ms": 0.01131,
+          "wall_ms": 18.799458
+        },
+        {
+          "encode_ms": 14.112039999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01042,
+          "wall_ms": 14.14099
+        },
+        {
+          "encode_ms": 13.141269000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.00883,
+          "wall_ms": 13.171109
+        },
+        {
+          "encode_ms": 23.379918999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.02828,
+          "wall_ms": 23.453799
+        },
+        {
+          "encode_ms": 4.998079,
+          "scene_allocations": 0,
+          "scene_ms": 0.02418,
+          "wall_ms": 25.652258
+        },
+        {
+          "encode_ms": 2.94618,
+          "scene_allocations": 0,
+          "scene_ms": 0.019700000000000002,
+          "wall_ms": 21.408169
+        },
+        {
+          "encode_ms": 22.799679,
+          "scene_allocations": 0,
+          "scene_ms": 0.014280000000000001,
+          "wall_ms": 22.830719
+        },
+        {
+          "encode_ms": 19.108459,
+          "scene_allocations": 0,
+          "scene_ms": 0.01007,
+          "wall_ms": 19.133699
+        },
+        {
+          "encode_ms": 22.579949,
+          "scene_allocations": 0,
+          "scene_ms": 0.00983,
+          "wall_ms": 22.637479
+        },
+        {
+          "encode_ms": 32.051978,
+          "scene_allocations": 0,
+          "scene_ms": 0.020489999999999998,
+          "wall_ms": 32.102548
+        },
+        {
+          "encode_ms": 3.95168,
+          "scene_allocations": 0,
+          "scene_ms": 0.01647,
+          "wall_ms": 31.679348000000005
+        },
+        {
+          "encode_ms": 32.412778,
+          "scene_allocations": 0,
+          "scene_ms": 0.01726,
+          "wall_ms": 32.458858
+        },
+        {
+          "encode_ms": 31.681378000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01056,
+          "wall_ms": 31.742597999999997
+        },
+        {
+          "encode_ms": 4.47447,
+          "scene_allocations": 0,
+          "scene_ms": 0.02031,
+          "wall_ms": 33.011468
+        },
+        {
+          "encode_ms": 32.869108000000004,
+          "scene_allocations": 0,
+          "scene_ms": 0.019,
+          "wall_ms": 32.928528
+        },
+        {
+          "encode_ms": 30.222659,
+          "scene_allocations": 0,
+          "scene_ms": 0.01928,
+          "wall_ms": 30.278799
+        },
+        {
+          "encode_ms": 26.665927999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01862,
+          "wall_ms": 26.715088
+        },
+        {
+          "encode_ms": 4.517449,
+          "scene_allocations": 0,
+          "scene_ms": 0.01795,
+          "wall_ms": 33.964918
+        },
+        {
+          "encode_ms": 31.834258,
+          "scene_allocations": 0,
+          "scene_ms": 0.01501,
+          "wall_ms": 31.868008000000003
+        },
+        {
+          "encode_ms": 31.448898000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01315,
+          "wall_ms": 31.478278
+        },
+        {
+          "encode_ms": 27.117237999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01006,
+          "wall_ms": 27.149398
+        },
+        {
+          "encode_ms": 26.300238,
+          "scene_allocations": 0,
+          "scene_ms": 0.01632,
+          "wall_ms": 26.361998
+        },
+        {
+          "encode_ms": 2.85091,
+          "scene_allocations": 0,
+          "scene_ms": 0.02037,
+          "wall_ms": 20.737209
+        },
+        {
+          "encode_ms": 19.821697999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01104,
+          "wall_ms": 19.849088000000002
+        }
+      ],
+      "scene_p50_ms": [
+        0.014280000000000001,
+        0.018539999999999997
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 390
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Glow",
+      "before": "Motion",
+      "encode_p95_ms": [
+        24.446779,
+        27.202478
+      ],
+      "fixture_line": 11,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 21.875499,
+          "scene_allocations": 0,
+          "scene_ms": 0.02173,
+          "wall_ms": 21.918028999999997
+        },
+        {
+          "encode_ms": 21.244589,
+          "scene_allocations": 0,
+          "scene_ms": 0.01962,
+          "wall_ms": 21.279359
+        },
+        {
+          "encode_ms": 22.328409,
+          "scene_allocations": 0,
+          "scene_ms": 0.01322,
+          "wall_ms": 22.400008999999997
+        },
+        {
+          "encode_ms": 22.959418,
+          "scene_allocations": 0,
+          "scene_ms": 0.02288,
+          "wall_ms": 22.995838000000003
+        },
+        {
+          "encode_ms": 22.781629000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.014039999999999999,
+          "wall_ms": 22.817519
+        },
+        {
+          "encode_ms": 22.103998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01176,
+          "wall_ms": 22.140018
+        },
+        {
+          "encode_ms": 19.996129,
+          "scene_allocations": 0,
+          "scene_ms": 0.01134,
+          "wall_ms": 20.030709
+        },
+        {
+          "encode_ms": 19.555359000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01151,
+          "wall_ms": 19.588669
+        },
+        {
+          "encode_ms": 23.208468999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.0111,
+          "wall_ms": 23.248729
+        },
+        {
+          "encode_ms": 21.622168000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01168,
+          "wall_ms": 21.670908
+        },
+        {
+          "encode_ms": 18.004519,
+          "scene_allocations": 0,
+          "scene_ms": 0.014780000000000001,
+          "wall_ms": 18.037929000000002
+        },
+        {
+          "encode_ms": 21.427789,
+          "scene_allocations": 0,
+          "scene_ms": 0.00996,
+          "wall_ms": 21.493029
+        },
+        {
+          "encode_ms": 23.329239,
+          "scene_allocations": 0,
+          "scene_ms": 0.02223,
+          "wall_ms": 23.369659000000002
+        },
+        {
+          "encode_ms": 23.243639,
+          "scene_allocations": 0,
+          "scene_ms": 0.02146,
+          "wall_ms": 23.280549
+        },
+        {
+          "encode_ms": 18.392578999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.0133,
+          "wall_ms": 18.423348999999998
+        },
+        {
+          "encode_ms": 21.951949,
+          "scene_allocations": 0,
+          "scene_ms": 0.01242,
+          "wall_ms": 22.011129
+        },
+        {
+          "encode_ms": 20.904579,
+          "scene_allocations": 0,
+          "scene_ms": 0.0135,
+          "wall_ms": 20.969729
+        },
+        {
+          "encode_ms": 21.742299,
+          "scene_allocations": 0,
+          "scene_ms": 0.02081,
+          "wall_ms": 21.791709
+        },
+        {
+          "encode_ms": 22.955519,
+          "scene_allocations": 0,
+          "scene_ms": 0.021359999999999997,
+          "wall_ms": 22.989749
+        },
+        {
+          "encode_ms": 22.583098,
+          "scene_allocations": 0,
+          "scene_ms": 0.01507,
+          "wall_ms": 22.611857999999998
+        },
+        {
+          "encode_ms": 27.354568,
+          "scene_allocations": 0,
+          "scene_ms": 0.01329,
+          "wall_ms": 27.397438
+        },
+        {
+          "encode_ms": 24.193209,
+          "scene_allocations": 0,
+          "scene_ms": 0.01661,
+          "wall_ms": 24.257479
+        },
+        {
+          "encode_ms": 23.994539,
+          "scene_allocations": 0,
+          "scene_ms": 0.01498,
+          "wall_ms": 24.041719
+        },
+        {
+          "encode_ms": 21.629348999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02065,
+          "wall_ms": 21.701369000000003
+        },
+        {
+          "encode_ms": 20.668779,
+          "scene_allocations": 0,
+          "scene_ms": 0.022609999999999998,
+          "wall_ms": 20.727189
+        },
+        {
+          "encode_ms": 27.202478,
+          "scene_allocations": 0,
+          "scene_ms": 0.02212,
+          "wall_ms": 27.258528000000002
+        },
+        {
+          "encode_ms": 23.842359000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.023289999999999998,
+          "wall_ms": 23.900188999999997
+        },
+        {
+          "encode_ms": 18.772209,
+          "scene_allocations": 0,
+          "scene_ms": 0.01906,
+          "wall_ms": 18.806918999999997
+        },
+        {
+          "encode_ms": 23.625709,
+          "scene_allocations": 0,
+          "scene_ms": 0.02264,
+          "wall_ms": 23.665799
+        },
+        {
+          "encode_ms": 23.526138,
+          "scene_allocations": 0,
+          "scene_ms": 0.012320000000000001,
+          "wall_ms": 23.561058
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 20.705609,
+          "scene_allocations": 0,
+          "scene_ms": 0.020069999999999998,
+          "wall_ms": 20.768929
+        },
+        {
+          "encode_ms": 19.220569,
+          "scene_allocations": 0,
+          "scene_ms": 0.014450000000000001,
+          "wall_ms": 19.250588999999998
+        },
+        {
+          "encode_ms": 22.107808,
+          "scene_allocations": 0,
+          "scene_ms": 0.00996,
+          "wall_ms": 22.144058
+        },
+        {
+          "encode_ms": 22.778169000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01607,
+          "wall_ms": 22.814409
+        },
+        {
+          "encode_ms": 19.260699,
+          "scene_allocations": 0,
+          "scene_ms": 0.02121,
+          "wall_ms": 19.309409
+        },
+        {
+          "encode_ms": 20.963149,
+          "scene_allocations": 0,
+          "scene_ms": 0.01451,
+          "wall_ms": 20.999668999999997
+        },
+        {
+          "encode_ms": 17.564898999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.010329999999999999,
+          "wall_ms": 17.599269
+        },
+        {
+          "encode_ms": 20.857378,
+          "scene_allocations": 0,
+          "scene_ms": 0.013550000000000001,
+          "wall_ms": 20.916328
+        },
+        {
+          "encode_ms": 22.912109,
+          "scene_allocations": 0,
+          "scene_ms": 0.022160000000000003,
+          "wall_ms": 22.950699
+        },
+        {
+          "encode_ms": 24.446779,
+          "scene_allocations": 0,
+          "scene_ms": 0.01531,
+          "wall_ms": 24.491449
+        },
+        {
+          "encode_ms": 23.108438,
+          "scene_allocations": 0,
+          "scene_ms": 0.02224,
+          "wall_ms": 23.148388
+        },
+        {
+          "encode_ms": 20.863569,
+          "scene_allocations": 0,
+          "scene_ms": 0.02255,
+          "wall_ms": 20.905879
+        },
+        {
+          "encode_ms": 23.116668999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02087,
+          "wall_ms": 23.195368000000002
+        },
+        {
+          "encode_ms": 20.873048,
+          "scene_allocations": 0,
+          "scene_ms": 0.01492,
+          "wall_ms": 20.905758
+        },
+        {
+          "encode_ms": 20.793519,
+          "scene_allocations": 0,
+          "scene_ms": 0.011470000000000001,
+          "wall_ms": 20.826309000000002
+        },
+        {
+          "encode_ms": 22.468868,
+          "scene_allocations": 0,
+          "scene_ms": 0.022779999999999998,
+          "wall_ms": 22.509958
+        },
+        {
+          "encode_ms": 21.477919,
+          "scene_allocations": 0,
+          "scene_ms": 0.01133,
+          "wall_ms": 21.517768999999998
+        },
+        {
+          "encode_ms": 20.978977999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.013819999999999999,
+          "wall_ms": 21.017727999999998
+        },
+        {
+          "encode_ms": 21.019738999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.009510000000000001,
+          "wall_ms": 21.058209
+        },
+        {
+          "encode_ms": 18.395369000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.012119999999999999,
+          "wall_ms": 18.425009
+        },
+        {
+          "encode_ms": 22.091409,
+          "scene_allocations": 0,
+          "scene_ms": 0.00868,
+          "wall_ms": 22.118009
+        },
+        {
+          "encode_ms": 19.358149,
+          "scene_allocations": 0,
+          "scene_ms": 0.0209,
+          "wall_ms": 19.395289
+        },
+        {
+          "encode_ms": 22.223527999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01519,
+          "wall_ms": 22.257708
+        },
+        {
+          "encode_ms": 19.390549,
+          "scene_allocations": 0,
+          "scene_ms": 0.02407,
+          "wall_ms": 19.441089
+        },
+        {
+          "encode_ms": 22.096688,
+          "scene_allocations": 0,
+          "scene_ms": 0.01994,
+          "wall_ms": 22.157888
+        },
+        {
+          "encode_ms": 23.300799,
+          "scene_allocations": 0,
+          "scene_ms": 0.02256,
+          "wall_ms": 23.352399
+        },
+        {
+          "encode_ms": 25.610038000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.02161,
+          "wall_ms": 25.687178000000003
+        },
+        {
+          "encode_ms": 21.408679,
+          "scene_allocations": 0,
+          "scene_ms": 0.01989,
+          "wall_ms": 21.451029
+        },
+        {
+          "encode_ms": 21.913108,
+          "scene_allocations": 0,
+          "scene_ms": 0.01509,
+          "wall_ms": 21.964258
+        },
+        {
+          "encode_ms": 20.584589,
+          "scene_allocations": 0,
+          "scene_ms": 0.01302,
+          "wall_ms": 20.627769
+        }
+      ],
+      "scene_p50_ms": [
+        0.01519,
+        0.01498
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 390
+    },
+    {
+      "accepted": false,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Fill",
+      "before": "Baseline",
+      "encode_p95_ms": [
+        26.488698000000003,
+        22.779978
+      ],
+      "fixture_line": 1,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 20.807539,
+          "scene_allocations": 0,
+          "scene_ms": 0.01822,
+          "wall_ms": 20.882309000000003
+        },
+        {
+          "encode_ms": 19.990379,
+          "scene_allocations": 0,
+          "scene_ms": 0.025279999999999997,
+          "wall_ms": 20.039239000000002
+        },
+        {
+          "encode_ms": 21.458569,
+          "scene_allocations": 0,
+          "scene_ms": 0.020489999999999998,
+          "wall_ms": 21.508019
+        },
+        {
+          "encode_ms": 22.412829,
+          "scene_allocations": 0,
+          "scene_ms": 0.021820000000000003,
+          "wall_ms": 22.452918999999998
+        },
+        {
+          "encode_ms": 22.782439,
+          "scene_allocations": 0,
+          "scene_ms": 0.01967,
+          "wall_ms": 22.841289
+        },
+        {
+          "encode_ms": 21.304098,
+          "scene_allocations": 0,
+          "scene_ms": 0.02487,
+          "wall_ms": 21.350278
+        },
+        {
+          "encode_ms": 20.921789,
+          "scene_allocations": 0,
+          "scene_ms": 0.02045,
+          "wall_ms": 20.955039000000003
+        },
+        {
+          "encode_ms": 21.764197999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.014929999999999999,
+          "wall_ms": 21.817398
+        },
+        {
+          "encode_ms": 18.054279,
+          "scene_allocations": 0,
+          "scene_ms": 0.02197,
+          "wall_ms": 18.108059
+        },
+        {
+          "encode_ms": 21.471439,
+          "scene_allocations": 0,
+          "scene_ms": 0.03217,
+          "wall_ms": 21.509819
+        },
+        {
+          "encode_ms": 21.799168,
+          "scene_allocations": 0,
+          "scene_ms": 0.027399999999999997,
+          "wall_ms": 21.834798
+        },
+        {
+          "encode_ms": 19.997589,
+          "scene_allocations": 0,
+          "scene_ms": 0.018099999999999998,
+          "wall_ms": 20.064959
+        },
+        {
+          "encode_ms": 19.234209,
+          "scene_allocations": 0,
+          "scene_ms": 0.02334,
+          "wall_ms": 19.272279
+        },
+        {
+          "encode_ms": 21.167189,
+          "scene_allocations": 0,
+          "scene_ms": 0.016929999999999997,
+          "wall_ms": 21.201629
+        },
+        {
+          "encode_ms": 21.916099000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.024300000000000002,
+          "wall_ms": 21.961439
+        },
+        {
+          "encode_ms": 22.779978,
+          "scene_allocations": 0,
+          "scene_ms": 0.0246,
+          "wall_ms": 22.812338
+        },
+        {
+          "encode_ms": 20.972259,
+          "scene_allocations": 0,
+          "scene_ms": 0.019360000000000002,
+          "wall_ms": 21.013189
+        },
+        {
+          "encode_ms": 21.107638,
+          "scene_allocations": 0,
+          "scene_ms": 0.017580000000000002,
+          "wall_ms": 21.139878
+        },
+        {
+          "encode_ms": 20.440799,
+          "scene_allocations": 0,
+          "scene_ms": 0.019049999999999997,
+          "wall_ms": 20.472259
+        },
+        {
+          "encode_ms": 18.322729,
+          "scene_allocations": 0,
+          "scene_ms": 0.01378,
+          "wall_ms": 18.364489000000003
+        },
+        {
+          "encode_ms": 19.649359,
+          "scene_allocations": 0,
+          "scene_ms": 0.01907,
+          "wall_ms": 19.678969000000002
+        },
+        {
+          "encode_ms": 20.245019,
+          "scene_allocations": 0,
+          "scene_ms": 0.01511,
+          "wall_ms": 20.272249
+        },
+        {
+          "encode_ms": 19.147168999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.034820000000000004,
+          "wall_ms": 19.205879
+        },
+        {
+          "encode_ms": 20.222009,
+          "scene_allocations": 0,
+          "scene_ms": 0.02753,
+          "wall_ms": 20.257849
+        },
+        {
+          "encode_ms": 21.073919,
+          "scene_allocations": 0,
+          "scene_ms": 0.02394,
+          "wall_ms": 21.110398999999997
+        },
+        {
+          "encode_ms": 20.120959,
+          "scene_allocations": 0,
+          "scene_ms": 0.01866,
+          "wall_ms": 20.151678999999998
+        },
+        {
+          "encode_ms": 18.889269,
+          "scene_allocations": 0,
+          "scene_ms": 0.0201,
+          "wall_ms": 18.923619
+        },
+        {
+          "encode_ms": 22.264029,
+          "scene_allocations": 0,
+          "scene_ms": 0.01893,
+          "wall_ms": 22.295589
+        },
+        {
+          "encode_ms": 19.394909,
+          "scene_allocations": 0,
+          "scene_ms": 0.01748,
+          "wall_ms": 19.423689
+        },
+        {
+          "encode_ms": 20.405599,
+          "scene_allocations": 0,
+          "scene_ms": 0.01514,
+          "wall_ms": 20.448609
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 22.397848,
+          "scene_allocations": 0,
+          "scene_ms": 0.0069299999999999995,
+          "wall_ms": 22.427288
+        },
+        {
+          "encode_ms": 21.403569,
+          "scene_allocations": 0,
+          "scene_ms": 0.01137,
+          "wall_ms": 21.440429
+        },
+        {
+          "encode_ms": 21.552618,
+          "scene_allocations": 0,
+          "scene_ms": 0.00524,
+          "wall_ms": 21.586738
+        },
+        {
+          "encode_ms": 21.356248,
+          "scene_allocations": 0,
+          "scene_ms": 0.00866,
+          "wall_ms": 21.388448
+        },
+        {
+          "encode_ms": 22.424829,
+          "scene_allocations": 0,
+          "scene_ms": 0.0059900000000000005,
+          "wall_ms": 22.461599
+        },
+        {
+          "encode_ms": 21.401199,
+          "scene_allocations": 0,
+          "scene_ms": 0.01225,
+          "wall_ms": 21.441219
+        },
+        {
+          "encode_ms": 20.390589000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00545,
+          "wall_ms": 20.423239
+        },
+        {
+          "encode_ms": 19.830139,
+          "scene_allocations": 0,
+          "scene_ms": 0.01396,
+          "wall_ms": 19.878569
+        },
+        {
+          "encode_ms": 21.967639000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00809,
+          "wall_ms": 22.010559
+        },
+        {
+          "encode_ms": 26.290318,
+          "scene_allocations": 0,
+          "scene_ms": 0.0086,
+          "wall_ms": 26.346618
+        },
+        {
+          "encode_ms": 23.326369,
+          "scene_allocations": 0,
+          "scene_ms": 0.00915,
+          "wall_ms": 23.369049
+        },
+        {
+          "encode_ms": 21.856809000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01271,
+          "wall_ms": 21.898479
+        },
+        {
+          "encode_ms": 21.627228,
+          "scene_allocations": 0,
+          "scene_ms": 0.0049099999999999994,
+          "wall_ms": 21.682458
+        },
+        {
+          "encode_ms": 25.281929,
+          "scene_allocations": 0,
+          "scene_ms": 0.00715,
+          "wall_ms": 25.348429
+        },
+        {
+          "encode_ms": 26.488698000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01095,
+          "wall_ms": 26.539417999999998
+        },
+        {
+          "encode_ms": 19.007639,
+          "scene_allocations": 0,
+          "scene_ms": 0.008110000000000001,
+          "wall_ms": 19.036669
+        },
+        {
+          "encode_ms": 21.702368999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.00584,
+          "wall_ms": 21.732359
+        },
+        {
+          "encode_ms": 18.597199,
+          "scene_allocations": 0,
+          "scene_ms": 0.0077800000000000005,
+          "wall_ms": 18.624919
+        },
+        {
+          "encode_ms": 19.596659,
+          "scene_allocations": 0,
+          "scene_ms": 0.00585,
+          "wall_ms": 19.622619
+        },
+        {
+          "encode_ms": 21.794118,
+          "scene_allocations": 0,
+          "scene_ms": 0.0088,
+          "wall_ms": 21.833848
+        },
+        {
+          "encode_ms": 18.224159,
+          "scene_allocations": 0,
+          "scene_ms": 0.0074399999999999996,
+          "wall_ms": 18.251759
+        },
+        {
+          "encode_ms": 29.799447999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.0062,
+          "wall_ms": 29.845978
+        },
+        {
+          "encode_ms": 19.777729,
+          "scene_allocations": 0,
+          "scene_ms": 0.008539999999999999,
+          "wall_ms": 19.834108999999998
+        },
+        {
+          "encode_ms": 18.877269,
+          "scene_allocations": 0,
+          "scene_ms": 0.00801,
+          "wall_ms": 18.906488999999997
+        },
+        {
+          "encode_ms": 19.674138,
+          "scene_allocations": 0,
+          "scene_ms": 0.00584,
+          "wall_ms": 19.728058
+        },
+        {
+          "encode_ms": 20.625869,
+          "scene_allocations": 0,
+          "scene_ms": 0.00725,
+          "wall_ms": 20.657349
+        },
+        {
+          "encode_ms": 20.979468,
+          "scene_allocations": 0,
+          "scene_ms": 0.00629,
+          "wall_ms": 21.007967999999998
+        },
+        {
+          "encode_ms": 21.799329,
+          "scene_allocations": 0,
+          "scene_ms": 0.0072699999999999996,
+          "wall_ms": 21.833689
+        },
+        {
+          "encode_ms": 19.977438,
+          "scene_allocations": 0,
+          "scene_ms": 0.00627,
+          "wall_ms": 20.002868
+        },
+        {
+          "encode_ms": 20.696509,
+          "scene_allocations": 0,
+          "scene_ms": 0.00976,
+          "wall_ms": 20.733399
+        }
+      ],
+      "scene_p50_ms": [
+        0.0074399999999999996,
+        0.01967
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 390
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Motion",
+      "before": "Fill",
+      "encode_p95_ms": [
+        23.634509,
+        24.092268
+      ],
+      "fixture_line": 1,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 19.906799,
+          "scene_allocations": 0,
+          "scene_ms": 0.01584,
+          "wall_ms": 19.943239000000002
+        },
+        {
+          "encode_ms": 17.578219,
+          "scene_allocations": 0,
+          "scene_ms": 0.013649999999999999,
+          "wall_ms": 17.606749
+        },
+        {
+          "encode_ms": 19.662488999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.02377,
+          "wall_ms": 19.700669
+        },
+        {
+          "encode_ms": 18.112848,
+          "scene_allocations": 0,
+          "scene_ms": 0.01577,
+          "wall_ms": 18.145927999999998
+        },
+        {
+          "encode_ms": 20.253459000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01866,
+          "wall_ms": 20.323889
+        },
+        {
+          "encode_ms": 20.548068,
+          "scene_allocations": 0,
+          "scene_ms": 0.02417,
+          "wall_ms": 20.587228
+        },
+        {
+          "encode_ms": 22.420279,
+          "scene_allocations": 0,
+          "scene_ms": 0.01699,
+          "wall_ms": 22.458909
+        },
+        {
+          "encode_ms": 23.458607999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01322,
+          "wall_ms": 23.541058
+        },
+        {
+          "encode_ms": 18.253639,
+          "scene_allocations": 0,
+          "scene_ms": 0.02443,
+          "wall_ms": 18.317479000000002
+        },
+        {
+          "encode_ms": 19.139939000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01849,
+          "wall_ms": 19.202639
+        },
+        {
+          "encode_ms": 20.362558999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.022180000000000002,
+          "wall_ms": 20.424498999999997
+        },
+        {
+          "encode_ms": 21.218198,
+          "scene_allocations": 0,
+          "scene_ms": 0.02381,
+          "wall_ms": 21.260597999999998
+        },
+        {
+          "encode_ms": 19.988049,
+          "scene_allocations": 0,
+          "scene_ms": 0.01706,
+          "wall_ms": 20.019749
+        },
+        {
+          "encode_ms": 24.458607999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.012469999999999998,
+          "wall_ms": 24.494628000000002
+        },
+        {
+          "encode_ms": 15.705958999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01583,
+          "wall_ms": 15.731719000000002
+        },
+        {
+          "encode_ms": 17.558389000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01141,
+          "wall_ms": 17.588419000000002
+        },
+        {
+          "encode_ms": 19.042269,
+          "scene_allocations": 0,
+          "scene_ms": 0.01563,
+          "wall_ms": 19.077829
+        },
+        {
+          "encode_ms": 19.399449,
+          "scene_allocations": 0,
+          "scene_ms": 0.01224,
+          "wall_ms": 19.436649
+        },
+        {
+          "encode_ms": 17.267269,
+          "scene_allocations": 0,
+          "scene_ms": 0.01329,
+          "wall_ms": 17.309808999999998
+        },
+        {
+          "encode_ms": 20.406999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01433,
+          "wall_ms": 20.445569
+        },
+        {
+          "encode_ms": 15.910969,
+          "scene_allocations": 0,
+          "scene_ms": 0.01424,
+          "wall_ms": 15.943689000000001
+        },
+        {
+          "encode_ms": 20.960389,
+          "scene_allocations": 0,
+          "scene_ms": 0.01506,
+          "wall_ms": 21.002989
+        },
+        {
+          "encode_ms": 19.106538999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01527,
+          "wall_ms": 19.145758999999998
+        },
+        {
+          "encode_ms": 23.851259,
+          "scene_allocations": 0,
+          "scene_ms": 0.01456,
+          "wall_ms": 23.891839
+        },
+        {
+          "encode_ms": 16.861989,
+          "scene_allocations": 0,
+          "scene_ms": 0.015379999999999998,
+          "wall_ms": 16.897199
+        },
+        {
+          "encode_ms": 20.884589,
+          "scene_allocations": 0,
+          "scene_ms": 0.01465,
+          "wall_ms": 20.920009
+        },
+        {
+          "encode_ms": 24.092268,
+          "scene_allocations": 0,
+          "scene_ms": 0.01523,
+          "wall_ms": 24.210868
+        },
+        {
+          "encode_ms": 23.603209,
+          "scene_allocations": 0,
+          "scene_ms": 0.02811,
+          "wall_ms": 23.647979
+        },
+        {
+          "encode_ms": 19.817629,
+          "scene_allocations": 0,
+          "scene_ms": 0.016290000000000002,
+          "wall_ms": 19.858009
+        },
+        {
+          "encode_ms": 21.114319,
+          "scene_allocations": 0,
+          "scene_ms": 0.0135,
+          "wall_ms": 21.159299
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 19.183899,
+          "scene_allocations": 0,
+          "scene_ms": 0.02241,
+          "wall_ms": 19.216839
+        },
+        {
+          "encode_ms": 18.982739,
+          "scene_allocations": 0,
+          "scene_ms": 0.02367,
+          "wall_ms": 19.025409
+        },
+        {
+          "encode_ms": 17.859169,
+          "scene_allocations": 0,
+          "scene_ms": 0.01562,
+          "wall_ms": 17.916529
+        },
+        {
+          "encode_ms": 20.047718999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01526,
+          "wall_ms": 20.089919000000002
+        },
+        {
+          "encode_ms": 23.826399000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01699,
+          "wall_ms": 23.864439
+        },
+        {
+          "encode_ms": 19.641289,
+          "scene_allocations": 0,
+          "scene_ms": 0.0194,
+          "wall_ms": 19.678209
+        },
+        {
+          "encode_ms": 20.596039,
+          "scene_allocations": 0,
+          "scene_ms": 0.01325,
+          "wall_ms": 20.636689
+        },
+        {
+          "encode_ms": 23.634509,
+          "scene_allocations": 0,
+          "scene_ms": 0.02423,
+          "wall_ms": 23.715669000000002
+        },
+        {
+          "encode_ms": 22.946288,
+          "scene_allocations": 0,
+          "scene_ms": 0.0242,
+          "wall_ms": 23.005788
+        },
+        {
+          "encode_ms": 21.934899,
+          "scene_allocations": 0,
+          "scene_ms": 0.026279999999999998,
+          "wall_ms": 21.991829
+        },
+        {
+          "encode_ms": 15.501279,
+          "scene_allocations": 0,
+          "scene_ms": 0.0253,
+          "wall_ms": 15.551189
+        },
+        {
+          "encode_ms": 19.697468999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02079,
+          "wall_ms": 19.736919
+        },
+        {
+          "encode_ms": 20.766479,
+          "scene_allocations": 0,
+          "scene_ms": 0.01777,
+          "wall_ms": 20.798079
+        },
+        {
+          "encode_ms": 20.977019,
+          "scene_allocations": 0,
+          "scene_ms": 0.016460000000000002,
+          "wall_ms": 21.011599
+        },
+        {
+          "encode_ms": 18.556409,
+          "scene_allocations": 0,
+          "scene_ms": 0.02443,
+          "wall_ms": 18.589018999999997
+        },
+        {
+          "encode_ms": 15.657429,
+          "scene_allocations": 0,
+          "scene_ms": 0.01346,
+          "wall_ms": 15.691509
+        },
+        {
+          "encode_ms": 20.791279,
+          "scene_allocations": 0,
+          "scene_ms": 0.01315,
+          "wall_ms": 20.826608999999998
+        },
+        {
+          "encode_ms": 16.992149,
+          "scene_allocations": 0,
+          "scene_ms": 0.01415,
+          "wall_ms": 17.025779
+        },
+        {
+          "encode_ms": 19.550918,
+          "scene_allocations": 0,
+          "scene_ms": 0.01299,
+          "wall_ms": 19.582967999999997
+        },
+        {
+          "encode_ms": 19.922459,
+          "scene_allocations": 0,
+          "scene_ms": 0.01286,
+          "wall_ms": 19.957619
+        },
+        {
+          "encode_ms": 19.235899,
+          "scene_allocations": 0,
+          "scene_ms": 0.012119999999999999,
+          "wall_ms": 19.266359
+        },
+        {
+          "encode_ms": 19.273168000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01439,
+          "wall_ms": 19.317068
+        },
+        {
+          "encode_ms": 20.461599,
+          "scene_allocations": 0,
+          "scene_ms": 0.0122,
+          "wall_ms": 20.498879000000002
+        },
+        {
+          "encode_ms": 21.523628,
+          "scene_allocations": 0,
+          "scene_ms": 0.01466,
+          "wall_ms": 21.559818
+        },
+        {
+          "encode_ms": 20.826929,
+          "scene_allocations": 0,
+          "scene_ms": 0.01162,
+          "wall_ms": 20.860069
+        },
+        {
+          "encode_ms": 19.121609000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.0141,
+          "wall_ms": 19.155638999999997
+        },
+        {
+          "encode_ms": 19.669229,
+          "scene_allocations": 0,
+          "scene_ms": 0.01262,
+          "wall_ms": 19.706929000000002
+        },
+        {
+          "encode_ms": 17.994479000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.022690000000000002,
+          "wall_ms": 18.033708999999998
+        },
+        {
+          "encode_ms": 20.414458,
+          "scene_allocations": 0,
+          "scene_ms": 0.01316,
+          "wall_ms": 20.456798000000003
+        },
+        {
+          "encode_ms": 21.260979,
+          "scene_allocations": 0,
+          "scene_ms": 0.01567,
+          "wall_ms": 21.329679000000002
+        }
+      ],
+      "scene_p50_ms": [
+        0.01526,
+        0.015379999999999998
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 390
+    },
+    {
+      "accepted": false,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Glow",
+      "before": "Motion",
+      "encode_p95_ms": [
+        23.086629000000002,
+        32.169328
+      ],
+      "fixture_line": 1,
+      "height": 640,
+      "new_samples": [
+        {
+          "encode_ms": 20.337498999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01772,
+          "wall_ms": 20.373179
+        },
+        {
+          "encode_ms": 25.839108,
+          "scene_allocations": 0,
+          "scene_ms": 0.015390000000000001,
+          "wall_ms": 25.875678
+        },
+        {
+          "encode_ms": 34.106788,
+          "scene_allocations": 0,
+          "scene_ms": 0.02504,
+          "wall_ms": 34.163937999999995
+        },
+        {
+          "encode_ms": 27.451618,
+          "scene_allocations": 0,
+          "scene_ms": 0.025089999999999998,
+          "wall_ms": 27.529208
+        },
+        {
+          "encode_ms": 27.375048,
+          "scene_allocations": 0,
+          "scene_ms": 0.0204,
+          "wall_ms": 27.417088
+        },
+        {
+          "encode_ms": 29.344688,
+          "scene_allocations": 0,
+          "scene_ms": 0.02082,
+          "wall_ms": 29.412638
+        },
+        {
+          "encode_ms": 32.169328,
+          "scene_allocations": 0,
+          "scene_ms": 0.02098,
+          "wall_ms": 32.228308
+        },
+        {
+          "encode_ms": 27.330908,
+          "scene_allocations": 0,
+          "scene_ms": 0.02449,
+          "wall_ms": 27.375798
+        },
+        {
+          "encode_ms": 29.588779,
+          "scene_allocations": 0,
+          "scene_ms": 0.025490000000000002,
+          "wall_ms": 29.630019
+        },
+        {
+          "encode_ms": 27.485228,
+          "scene_allocations": 0,
+          "scene_ms": 0.01856,
+          "wall_ms": 27.523828
+        },
+        {
+          "encode_ms": 26.923899000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02074,
+          "wall_ms": 26.968889
+        },
+        {
+          "encode_ms": 23.400498,
+          "scene_allocations": 0,
+          "scene_ms": 0.02179,
+          "wall_ms": 23.429347999999997
+        },
+        {
+          "encode_ms": 23.434877999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02395,
+          "wall_ms": 23.491358
+        },
+        {
+          "encode_ms": 20.442868999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02343,
+          "wall_ms": 20.476879
+        },
+        {
+          "encode_ms": 23.446998999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02023,
+          "wall_ms": 23.483919
+        },
+        {
+          "encode_ms": 18.889529,
+          "scene_allocations": 0,
+          "scene_ms": 0.01397,
+          "wall_ms": 18.931528999999998
+        },
+        {
+          "encode_ms": 12.723079,
+          "scene_allocations": 0,
+          "scene_ms": 0.013430000000000001,
+          "wall_ms": 12.760799
+        },
+        {
+          "encode_ms": 12.710399,
+          "scene_allocations": 0,
+          "scene_ms": 0.01095,
+          "wall_ms": 12.751049
+        },
+        {
+          "encode_ms": 12.706828999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.0126,
+          "wall_ms": 12.736999
+        },
+        {
+          "encode_ms": 13.441669,
+          "scene_allocations": 0,
+          "scene_ms": 0.013040000000000001,
+          "wall_ms": 13.477129
+        },
+        {
+          "encode_ms": 18.280989,
+          "scene_allocations": 0,
+          "scene_ms": 0.02982,
+          "wall_ms": 18.354948999999998
+        },
+        {
+          "encode_ms": 17.470739,
+          "scene_allocations": 0,
+          "scene_ms": 0.02622,
+          "wall_ms": 17.511129
+        },
+        {
+          "encode_ms": 13.006739,
+          "scene_allocations": 0,
+          "scene_ms": 0.014709999999999999,
+          "wall_ms": 13.040169
+        },
+        {
+          "encode_ms": 12.729439000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.01192,
+          "wall_ms": 12.759969
+        },
+        {
+          "encode_ms": 12.608769,
+          "scene_allocations": 0,
+          "scene_ms": 0.01237,
+          "wall_ms": 12.638289
+        },
+        {
+          "encode_ms": 12.936579,
+          "scene_allocations": 0,
+          "scene_ms": 0.01357,
+          "wall_ms": 12.971359
+        },
+        {
+          "encode_ms": 12.807399,
+          "scene_allocations": 0,
+          "scene_ms": 0.01274,
+          "wall_ms": 12.837249
+        },
+        {
+          "encode_ms": 13.035619,
+          "scene_allocations": 0,
+          "scene_ms": 0.01064,
+          "wall_ms": 13.064539
+        },
+        {
+          "encode_ms": 12.711679,
+          "scene_allocations": 0,
+          "scene_ms": 0.0147,
+          "wall_ms": 12.741888999999999
+        },
+        {
+          "encode_ms": 12.889739,
+          "scene_allocations": 0,
+          "scene_ms": 0.01102,
+          "wall_ms": 12.918049
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 19.744659000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.022840000000000003,
+          "wall_ms": 19.780679
+        },
+        {
+          "encode_ms": 19.805449,
+          "scene_allocations": 0,
+          "scene_ms": 0.019979999999999998,
+          "wall_ms": 19.833999000000002
+        },
+        {
+          "encode_ms": 22.044219000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01736,
+          "wall_ms": 22.104219
+        },
+        {
+          "encode_ms": 22.320339,
+          "scene_allocations": 0,
+          "scene_ms": 0.031279999999999995,
+          "wall_ms": 22.376289
+        },
+        {
+          "encode_ms": 21.829569,
+          "scene_allocations": 0,
+          "scene_ms": 0.02308,
+          "wall_ms": 21.879769
+        },
+        {
+          "encode_ms": 21.322059,
+          "scene_allocations": 0,
+          "scene_ms": 0.0252,
+          "wall_ms": 21.369189
+        },
+        {
+          "encode_ms": 21.433829000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01798,
+          "wall_ms": 21.481959
+        },
+        {
+          "encode_ms": 21.662659,
+          "scene_allocations": 0,
+          "scene_ms": 0.01946,
+          "wall_ms": 21.701869
+        },
+        {
+          "encode_ms": 21.732598,
+          "scene_allocations": 0,
+          "scene_ms": 0.01619,
+          "wall_ms": 21.779508
+        },
+        {
+          "encode_ms": 23.086629000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.020890000000000002,
+          "wall_ms": 23.124948999999997
+        },
+        {
+          "encode_ms": 20.049398,
+          "scene_allocations": 0,
+          "scene_ms": 0.017750000000000002,
+          "wall_ms": 20.084367999999998
+        },
+        {
+          "encode_ms": 25.154238999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01661,
+          "wall_ms": 25.242418999999998
+        },
+        {
+          "encode_ms": 21.886079,
+          "scene_allocations": 0,
+          "scene_ms": 0.02598,
+          "wall_ms": 21.958969
+        },
+        {
+          "encode_ms": 22.373969,
+          "scene_allocations": 0,
+          "scene_ms": 0.018269999999999998,
+          "wall_ms": 22.432759
+        },
+        {
+          "encode_ms": 22.257278,
+          "scene_allocations": 0,
+          "scene_ms": 0.02288,
+          "wall_ms": 22.291168
+        },
+        {
+          "encode_ms": 16.888119,
+          "scene_allocations": 0,
+          "scene_ms": 0.01923,
+          "wall_ms": 16.924899
+        },
+        {
+          "encode_ms": 12.848589,
+          "scene_allocations": 0,
+          "scene_ms": 0.016880000000000003,
+          "wall_ms": 12.881569
+        },
+        {
+          "encode_ms": 12.88969,
+          "scene_allocations": 0,
+          "scene_ms": 0.01216,
+          "wall_ms": 12.92032
+        },
+        {
+          "encode_ms": 12.796069000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.01328,
+          "wall_ms": 12.824749
+        },
+        {
+          "encode_ms": 14.989018999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01533,
+          "wall_ms": 15.048929000000001
+        },
+        {
+          "encode_ms": 16.562179,
+          "scene_allocations": 0,
+          "scene_ms": 0.02107,
+          "wall_ms": 16.639839
+        },
+        {
+          "encode_ms": 13.21693,
+          "scene_allocations": 0,
+          "scene_ms": 0.01744,
+          "wall_ms": 13.254059999999999
+        },
+        {
+          "encode_ms": 12.931089,
+          "scene_allocations": 0,
+          "scene_ms": 0.01597,
+          "wall_ms": 12.966448999999999
+        },
+        {
+          "encode_ms": 13.240409,
+          "scene_allocations": 0,
+          "scene_ms": 0.01197,
+          "wall_ms": 13.280299000000001
+        },
+        {
+          "encode_ms": 13.32665,
+          "scene_allocations": 0,
+          "scene_ms": 0.01628,
+          "wall_ms": 13.35947
+        },
+        {
+          "encode_ms": 12.867869,
+          "scene_allocations": 0,
+          "scene_ms": 0.0123,
+          "wall_ms": 12.899979
+        },
+        {
+          "encode_ms": 12.78846,
+          "scene_allocations": 0,
+          "scene_ms": 0.01115,
+          "wall_ms": 12.820780000000001
+        },
+        {
+          "encode_ms": 12.703229,
+          "scene_allocations": 0,
+          "scene_ms": 0.012310000000000001,
+          "wall_ms": 12.735059
+        },
+        {
+          "encode_ms": 12.675419999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.011090000000000001,
+          "wall_ms": 12.708860000000001
+        },
+        {
+          "encode_ms": 12.677509,
+          "scene_allocations": 0,
+          "scene_ms": 0.01096,
+          "wall_ms": 12.708469000000001
+        }
+      ],
+      "scene_p50_ms": [
+        0.01736,
+        0.01772
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 390
+    },
+    {
+      "accepted": false,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Fill",
+      "before": "Baseline",
+      "encode_p95_ms": [
+        30.897338,
+        26.094198
+      ],
+      "fixture_line": 11,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 25.973988,
+          "scene_allocations": 0,
+          "scene_ms": 0.01486,
+          "wall_ms": 26.039748000000003
+        },
+        {
+          "encode_ms": 23.746589,
+          "scene_allocations": 0,
+          "scene_ms": 0.02115,
+          "wall_ms": 23.784349
+        },
+        {
+          "encode_ms": 22.819419,
+          "scene_allocations": 0,
+          "scene_ms": 0.02039,
+          "wall_ms": 22.854379
+        },
+        {
+          "encode_ms": 22.478458,
+          "scene_allocations": 0,
+          "scene_ms": 0.01005,
+          "wall_ms": 22.505437999999998
+        },
+        {
+          "encode_ms": 21.680559,
+          "scene_allocations": 0,
+          "scene_ms": 0.01645,
+          "wall_ms": 21.756779
+        },
+        {
+          "encode_ms": 23.982129,
+          "scene_allocations": 0,
+          "scene_ms": 0.022770000000000002,
+          "wall_ms": 24.014699
+        },
+        {
+          "encode_ms": 23.674838,
+          "scene_allocations": 0,
+          "scene_ms": 0.01661,
+          "wall_ms": 23.715078000000002
+        },
+        {
+          "encode_ms": 24.262598999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01931,
+          "wall_ms": 24.298739
+        },
+        {
+          "encode_ms": 22.973309,
+          "scene_allocations": 0,
+          "scene_ms": 0.01808,
+          "wall_ms": 23.009038999999998
+        },
+        {
+          "encode_ms": 23.937538,
+          "scene_allocations": 0,
+          "scene_ms": 0.011590000000000001,
+          "wall_ms": 23.972228
+        },
+        {
+          "encode_ms": 23.851639000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01309,
+          "wall_ms": 23.904739000000003
+        },
+        {
+          "encode_ms": 21.952058,
+          "scene_allocations": 0,
+          "scene_ms": 0.02109,
+          "wall_ms": 21.982108
+        },
+        {
+          "encode_ms": 22.343298,
+          "scene_allocations": 0,
+          "scene_ms": 0.01678,
+          "wall_ms": 22.380988000000002
+        },
+        {
+          "encode_ms": 21.632389,
+          "scene_allocations": 0,
+          "scene_ms": 0.01027,
+          "wall_ms": 21.664649
+        },
+        {
+          "encode_ms": 26.094198,
+          "scene_allocations": 0,
+          "scene_ms": 0.0219,
+          "wall_ms": 26.140948
+        },
+        {
+          "encode_ms": 25.172109000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01955,
+          "wall_ms": 25.204919
+        },
+        {
+          "encode_ms": 23.764398999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01376,
+          "wall_ms": 23.815389
+        },
+        {
+          "encode_ms": 22.201777999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.019850000000000003,
+          "wall_ms": 22.244547999999998
+        },
+        {
+          "encode_ms": 31.153829,
+          "scene_allocations": 0,
+          "scene_ms": 0.01954,
+          "wall_ms": 31.209759000000002
+        },
+        {
+          "encode_ms": 22.657968,
+          "scene_allocations": 0,
+          "scene_ms": 0.01763,
+          "wall_ms": 22.725648
+        },
+        {
+          "encode_ms": 25.940399,
+          "scene_allocations": 0,
+          "scene_ms": 0.02035,
+          "wall_ms": 25.972399
+        },
+        {
+          "encode_ms": 21.407608000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01128,
+          "wall_ms": 21.438057999999998
+        },
+        {
+          "encode_ms": 4.23564,
+          "scene_allocations": 0,
+          "scene_ms": 0.0208,
+          "wall_ms": 22.275959
+        },
+        {
+          "encode_ms": 23.932999,
+          "scene_allocations": 0,
+          "scene_ms": 0.02084,
+          "wall_ms": 23.969469
+        },
+        {
+          "encode_ms": 22.860528000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02037,
+          "wall_ms": 22.902538
+        },
+        {
+          "encode_ms": 25.029559,
+          "scene_allocations": 0,
+          "scene_ms": 0.01499,
+          "wall_ms": 25.092759
+        },
+        {
+          "encode_ms": 22.951879,
+          "scene_allocations": 0,
+          "scene_ms": 0.01993,
+          "wall_ms": 22.989729
+        },
+        {
+          "encode_ms": 24.736758000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0141,
+          "wall_ms": 24.769038000000002
+        },
+        {
+          "encode_ms": 22.783679,
+          "scene_allocations": 0,
+          "scene_ms": 0.02152,
+          "wall_ms": 22.825059000000003
+        },
+        {
+          "encode_ms": 23.370368,
+          "scene_allocations": 0,
+          "scene_ms": 0.011300000000000001,
+          "wall_ms": 23.409848
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 27.555647999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.00807,
+          "wall_ms": 27.593068
+        },
+        {
+          "encode_ms": 27.613688,
+          "scene_allocations": 0,
+          "scene_ms": 0.0054399999999999995,
+          "wall_ms": 27.694748
+        },
+        {
+          "encode_ms": 22.842199,
+          "scene_allocations": 0,
+          "scene_ms": 0.00988,
+          "wall_ms": 22.901479
+        },
+        {
+          "encode_ms": 25.103429,
+          "scene_allocations": 0,
+          "scene_ms": 0.0054600000000000004,
+          "wall_ms": 25.130939
+        },
+        {
+          "encode_ms": 24.623348,
+          "scene_allocations": 0,
+          "scene_ms": 0.00449,
+          "wall_ms": 24.654808
+        },
+        {
+          "encode_ms": 22.842978,
+          "scene_allocations": 0,
+          "scene_ms": 0.0074800000000000005,
+          "wall_ms": 22.905828
+        },
+        {
+          "encode_ms": 28.099049,
+          "scene_allocations": 0,
+          "scene_ms": 0.00665,
+          "wall_ms": 28.151469
+        },
+        {
+          "encode_ms": 22.840027999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.00545,
+          "wall_ms": 22.891708
+        },
+        {
+          "encode_ms": 23.077609,
+          "scene_allocations": 0,
+          "scene_ms": 0.00772,
+          "wall_ms": 23.111349
+        },
+        {
+          "encode_ms": 25.484229,
+          "scene_allocations": 0,
+          "scene_ms": 0.0059499999999999996,
+          "wall_ms": 25.520839
+        },
+        {
+          "encode_ms": 22.879868000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00407,
+          "wall_ms": 22.911728
+        },
+        {
+          "encode_ms": 20.360539,
+          "scene_allocations": 0,
+          "scene_ms": 0.00643,
+          "wall_ms": 20.422059
+        },
+        {
+          "encode_ms": 24.963919,
+          "scene_allocations": 0,
+          "scene_ms": 0.00863,
+          "wall_ms": 24.997909
+        },
+        {
+          "encode_ms": 21.957998999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.00609,
+          "wall_ms": 21.984849
+        },
+        {
+          "encode_ms": 31.338478000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00363,
+          "wall_ms": 31.414198
+        },
+        {
+          "encode_ms": 23.893968,
+          "scene_allocations": 0,
+          "scene_ms": 0.00532,
+          "wall_ms": 23.927798
+        },
+        {
+          "encode_ms": 21.063669,
+          "scene_allocations": 0,
+          "scene_ms": 0.004390000000000001,
+          "wall_ms": 21.091879000000002
+        },
+        {
+          "encode_ms": 25.899839,
+          "scene_allocations": 0,
+          "scene_ms": 0.0067800000000000004,
+          "wall_ms": 25.946729
+        },
+        {
+          "encode_ms": 25.928798,
+          "scene_allocations": 0,
+          "scene_ms": 0.00779,
+          "wall_ms": 25.989608
+        },
+        {
+          "encode_ms": 22.739659,
+          "scene_allocations": 0,
+          "scene_ms": 0.00763,
+          "wall_ms": 22.803929
+        },
+        {
+          "encode_ms": 26.720398,
+          "scene_allocations": 0,
+          "scene_ms": 0.00949,
+          "wall_ms": 26.766828
+        },
+        {
+          "encode_ms": 26.793299,
+          "scene_allocations": 0,
+          "scene_ms": 0.00478,
+          "wall_ms": 26.829629
+        },
+        {
+          "encode_ms": 22.750428,
+          "scene_allocations": 0,
+          "scene_ms": 0.0055,
+          "wall_ms": 22.810698000000002
+        },
+        {
+          "encode_ms": 25.427038,
+          "scene_allocations": 0,
+          "scene_ms": 0.00618,
+          "wall_ms": 25.487098
+        },
+        {
+          "encode_ms": 21.490039,
+          "scene_allocations": 0,
+          "scene_ms": 0.008230000000000001,
+          "wall_ms": 21.559869
+        },
+        {
+          "encode_ms": 27.276008,
+          "scene_allocations": 0,
+          "scene_ms": 0.00874,
+          "wall_ms": 27.335448
+        },
+        {
+          "encode_ms": 22.595259,
+          "scene_allocations": 0,
+          "scene_ms": 0.00741,
+          "wall_ms": 22.632759
+        },
+        {
+          "encode_ms": 30.897338,
+          "scene_allocations": 0,
+          "scene_ms": 0.00515,
+          "wall_ms": 30.934397999999998
+        },
+        {
+          "encode_ms": 23.260489,
+          "scene_allocations": 0,
+          "scene_ms": 0.00468,
+          "wall_ms": 23.318699
+        },
+        {
+          "encode_ms": 25.737749,
+          "scene_allocations": 0,
+          "scene_ms": 0.00615,
+          "wall_ms": 25.818918999999998
+        }
+      ],
+      "scene_p50_ms": [
+        0.00615,
+        0.01808
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 844
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Motion",
+      "before": "Fill",
+      "encode_p95_ms": [
+        30.442528,
+        31.120098
+      ],
+      "fixture_line": 11,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 24.722048,
+          "scene_allocations": 0,
+          "scene_ms": 0.02569,
+          "wall_ms": 24.788908
+        },
+        {
+          "encode_ms": 23.013389,
+          "scene_allocations": 0,
+          "scene_ms": 0.022439999999999998,
+          "wall_ms": 23.060489
+        },
+        {
+          "encode_ms": 24.445169,
+          "scene_allocations": 0,
+          "scene_ms": 0.013859999999999999,
+          "wall_ms": 24.485999
+        },
+        {
+          "encode_ms": 23.972718,
+          "scene_allocations": 0,
+          "scene_ms": 0.011399999999999999,
+          "wall_ms": 24.003498
+        },
+        {
+          "encode_ms": 23.411768,
+          "scene_allocations": 0,
+          "scene_ms": 0.01206,
+          "wall_ms": 23.463788
+        },
+        {
+          "encode_ms": 20.836219,
+          "scene_allocations": 0,
+          "scene_ms": 0.02265,
+          "wall_ms": 20.878829000000003
+        },
+        {
+          "encode_ms": 27.051278,
+          "scene_allocations": 0,
+          "scene_ms": 0.012079999999999999,
+          "wall_ms": 27.091728
+        },
+        {
+          "encode_ms": 33.063018,
+          "scene_allocations": 0,
+          "scene_ms": 0.011909999999999999,
+          "wall_ms": 33.112928
+        },
+        {
+          "encode_ms": 21.211109,
+          "scene_allocations": 0,
+          "scene_ms": 0.01701,
+          "wall_ms": 21.244118999999998
+        },
+        {
+          "encode_ms": 24.444719,
+          "scene_allocations": 0,
+          "scene_ms": 0.0148,
+          "wall_ms": 24.475939
+        },
+        {
+          "encode_ms": 24.466728,
+          "scene_allocations": 0,
+          "scene_ms": 0.01457,
+          "wall_ms": 24.499168
+        },
+        {
+          "encode_ms": 27.256328,
+          "scene_allocations": 0,
+          "scene_ms": 0.011770000000000001,
+          "wall_ms": 27.310778
+        },
+        {
+          "encode_ms": 27.228068,
+          "scene_allocations": 0,
+          "scene_ms": 0.0133,
+          "wall_ms": 27.272617999999998
+        },
+        {
+          "encode_ms": 31.120098,
+          "scene_allocations": 0,
+          "scene_ms": 0.01137,
+          "wall_ms": 31.157818
+        },
+        {
+          "encode_ms": 24.283808,
+          "scene_allocations": 0,
+          "scene_ms": 0.01361,
+          "wall_ms": 24.353248
+        },
+        {
+          "encode_ms": 25.506969,
+          "scene_allocations": 0,
+          "scene_ms": 0.02275,
+          "wall_ms": 25.572498999999997
+        },
+        {
+          "encode_ms": 25.773708,
+          "scene_allocations": 0,
+          "scene_ms": 0.02174,
+          "wall_ms": 25.829577999999998
+        },
+        {
+          "encode_ms": 24.434579000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01975,
+          "wall_ms": 24.501739
+        },
+        {
+          "encode_ms": 25.831988,
+          "scene_allocations": 0,
+          "scene_ms": 0.0168,
+          "wall_ms": 25.873928
+        },
+        {
+          "encode_ms": 29.767189,
+          "scene_allocations": 0,
+          "scene_ms": 0.01275,
+          "wall_ms": 29.837408999999997
+        },
+        {
+          "encode_ms": 24.278239,
+          "scene_allocations": 0,
+          "scene_ms": 0.02224,
+          "wall_ms": 24.329099
+        },
+        {
+          "encode_ms": 23.729798,
+          "scene_allocations": 0,
+          "scene_ms": 0.020020000000000003,
+          "wall_ms": 23.762577999999998
+        },
+        {
+          "encode_ms": 22.301558999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01183,
+          "wall_ms": 22.342149
+        },
+        {
+          "encode_ms": 24.644568,
+          "scene_allocations": 0,
+          "scene_ms": 0.01217,
+          "wall_ms": 24.679758
+        },
+        {
+          "encode_ms": 21.011548,
+          "scene_allocations": 0,
+          "scene_ms": 0.01645,
+          "wall_ms": 21.044138
+        },
+        {
+          "encode_ms": 24.010499,
+          "scene_allocations": 0,
+          "scene_ms": 0.0108,
+          "wall_ms": 24.041829
+        },
+        {
+          "encode_ms": 25.797318999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01254,
+          "wall_ms": 25.881028999999998
+        },
+        {
+          "encode_ms": 23.810637999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.023540000000000002,
+          "wall_ms": 23.867428
+        },
+        {
+          "encode_ms": 27.372718,
+          "scene_allocations": 0,
+          "scene_ms": 0.01717,
+          "wall_ms": 27.433728000000002
+        },
+        {
+          "encode_ms": 22.462969,
+          "scene_allocations": 0,
+          "scene_ms": 0.0211,
+          "wall_ms": 22.504879
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 24.665589,
+          "scene_allocations": 0,
+          "scene_ms": 0.01357,
+          "wall_ms": 24.747208999999998
+        },
+        {
+          "encode_ms": 22.560999000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0177,
+          "wall_ms": 22.598659
+        },
+        {
+          "encode_ms": 24.144257999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01323,
+          "wall_ms": 24.181628
+        },
+        {
+          "encode_ms": 21.925719,
+          "scene_allocations": 0,
+          "scene_ms": 0.011,
+          "wall_ms": 21.973459000000002
+        },
+        {
+          "encode_ms": 22.403799,
+          "scene_allocations": 0,
+          "scene_ms": 0.012459999999999999,
+          "wall_ms": 22.433809
+        },
+        {
+          "encode_ms": 27.014538,
+          "scene_allocations": 0,
+          "scene_ms": 0.01307,
+          "wall_ms": 27.050818
+        },
+        {
+          "encode_ms": 24.897089,
+          "scene_allocations": 0,
+          "scene_ms": 0.018439999999999998,
+          "wall_ms": 24.930119
+        },
+        {
+          "encode_ms": 28.021159,
+          "scene_allocations": 0,
+          "scene_ms": 0.018609999999999998,
+          "wall_ms": 28.086099
+        },
+        {
+          "encode_ms": 23.542678000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02006,
+          "wall_ms": 23.585458
+        },
+        {
+          "encode_ms": 26.896198,
+          "scene_allocations": 0,
+          "scene_ms": 0.01119,
+          "wall_ms": 26.939618
+        },
+        {
+          "encode_ms": 23.398169,
+          "scene_allocations": 0,
+          "scene_ms": 0.01506,
+          "wall_ms": 23.439279
+        },
+        {
+          "encode_ms": 24.102968999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01582,
+          "wall_ms": 24.140379
+        },
+        {
+          "encode_ms": 24.723959,
+          "scene_allocations": 0,
+          "scene_ms": 0.01303,
+          "wall_ms": 24.762829
+        },
+        {
+          "encode_ms": 30.795938,
+          "scene_allocations": 0,
+          "scene_ms": 0.014270000000000001,
+          "wall_ms": 30.836708
+        },
+        {
+          "encode_ms": 25.929979,
+          "scene_allocations": 0,
+          "scene_ms": 0.01163,
+          "wall_ms": 25.968939
+        },
+        {
+          "encode_ms": 23.084778,
+          "scene_allocations": 0,
+          "scene_ms": 0.02803,
+          "wall_ms": 23.124057999999998
+        },
+        {
+          "encode_ms": 27.404779,
+          "scene_allocations": 0,
+          "scene_ms": 0.009340000000000001,
+          "wall_ms": 27.446719
+        },
+        {
+          "encode_ms": 24.306767999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01847,
+          "wall_ms": 24.376318
+        },
+        {
+          "encode_ms": 22.515269,
+          "scene_allocations": 0,
+          "scene_ms": 0.018770000000000002,
+          "wall_ms": 22.570269
+        },
+        {
+          "encode_ms": 25.339128,
+          "scene_allocations": 0,
+          "scene_ms": 0.02029,
+          "wall_ms": 25.410768
+        },
+        {
+          "encode_ms": 27.998368,
+          "scene_allocations": 0,
+          "scene_ms": 0.02159,
+          "wall_ms": 28.053788
+        },
+        {
+          "encode_ms": 23.741069,
+          "scene_allocations": 0,
+          "scene_ms": 0.01384,
+          "wall_ms": 23.772229
+        },
+        {
+          "encode_ms": 30.442528,
+          "scene_allocations": 0,
+          "scene_ms": 0.01255,
+          "wall_ms": 30.482878000000003
+        },
+        {
+          "encode_ms": 24.271379,
+          "scene_allocations": 0,
+          "scene_ms": 0.01408,
+          "wall_ms": 24.325539
+        },
+        {
+          "encode_ms": 22.966789000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.019809999999999998,
+          "wall_ms": 23.020499
+        },
+        {
+          "encode_ms": 23.856089,
+          "scene_allocations": 0,
+          "scene_ms": 0.01431,
+          "wall_ms": 23.888779
+        },
+        {
+          "encode_ms": 20.755328,
+          "scene_allocations": 0,
+          "scene_ms": 0.00962,
+          "wall_ms": 20.782438
+        },
+        {
+          "encode_ms": 23.830219,
+          "scene_allocations": 0,
+          "scene_ms": 0.018029999999999997,
+          "wall_ms": 23.868949
+        },
+        {
+          "encode_ms": 20.398559,
+          "scene_allocations": 0,
+          "scene_ms": 0.010329999999999999,
+          "wall_ms": 20.450339000000003
+        },
+        {
+          "encode_ms": 20.922618,
+          "scene_allocations": 0,
+          "scene_ms": 0.01103,
+          "wall_ms": 20.957538
+        }
+      ],
+      "scene_p50_ms": [
+        0.01408,
+        0.01457
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 844
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Glow",
+      "before": "Motion",
+      "encode_p95_ms": [
+        27.082008000000002,
+        29.616878
+      ],
+      "fixture_line": 11,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 24.976369,
+          "scene_allocations": 0,
+          "scene_ms": 0.01166,
+          "wall_ms": 25.043799
+        },
+        {
+          "encode_ms": 24.199798,
+          "scene_allocations": 0,
+          "scene_ms": 0.02203,
+          "wall_ms": 24.252348
+        },
+        {
+          "encode_ms": 32.280179,
+          "scene_allocations": 0,
+          "scene_ms": 0.023139999999999997,
+          "wall_ms": 32.362119
+        },
+        {
+          "encode_ms": 29.616878,
+          "scene_allocations": 0,
+          "scene_ms": 0.02705,
+          "wall_ms": 29.661417999999998
+        },
+        {
+          "encode_ms": 24.960938,
+          "scene_allocations": 0,
+          "scene_ms": 0.01777,
+          "wall_ms": 24.996888
+        },
+        {
+          "encode_ms": 24.473309,
+          "scene_allocations": 0,
+          "scene_ms": 0.010509999999999999,
+          "wall_ms": 24.502368999999998
+        },
+        {
+          "encode_ms": 25.669948,
+          "scene_allocations": 0,
+          "scene_ms": 0.0125,
+          "wall_ms": 25.709418000000003
+        },
+        {
+          "encode_ms": 26.968799,
+          "scene_allocations": 0,
+          "scene_ms": 0.013040000000000001,
+          "wall_ms": 27.003019
+        },
+        {
+          "encode_ms": 22.144049,
+          "scene_allocations": 0,
+          "scene_ms": 0.01102,
+          "wall_ms": 22.178669000000003
+        },
+        {
+          "encode_ms": 21.590289,
+          "scene_allocations": 0,
+          "scene_ms": 0.01189,
+          "wall_ms": 21.624289
+        },
+        {
+          "encode_ms": 22.128618,
+          "scene_allocations": 0,
+          "scene_ms": 0.02308,
+          "wall_ms": 22.198777999999997
+        },
+        {
+          "encode_ms": 24.686329,
+          "scene_allocations": 0,
+          "scene_ms": 0.02423,
+          "wall_ms": 24.723169
+        },
+        {
+          "encode_ms": 18.808179000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.023180000000000003,
+          "wall_ms": 18.844679
+        },
+        {
+          "encode_ms": 17.823498999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.021330000000000002,
+          "wall_ms": 17.865479
+        },
+        {
+          "encode_ms": 18.607519,
+          "scene_allocations": 0,
+          "scene_ms": 0.01988,
+          "wall_ms": 18.661799
+        },
+        {
+          "encode_ms": 18.747118999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01959,
+          "wall_ms": 18.784149
+        },
+        {
+          "encode_ms": 17.993109,
+          "scene_allocations": 0,
+          "scene_ms": 0.01041,
+          "wall_ms": 18.043059
+        },
+        {
+          "encode_ms": 17.710169,
+          "scene_allocations": 0,
+          "scene_ms": 0.01737,
+          "wall_ms": 17.768829
+        },
+        {
+          "encode_ms": 17.837899,
+          "scene_allocations": 0,
+          "scene_ms": 0.01615,
+          "wall_ms": 17.872219
+        },
+        {
+          "encode_ms": 17.196728,
+          "scene_allocations": 0,
+          "scene_ms": 0.01197,
+          "wall_ms": 17.230788
+        },
+        {
+          "encode_ms": 17.678669,
+          "scene_allocations": 0,
+          "scene_ms": 0.01754,
+          "wall_ms": 17.733328999999998
+        },
+        {
+          "encode_ms": 18.740888,
+          "scene_allocations": 0,
+          "scene_ms": 0.02009,
+          "wall_ms": 18.783248
+        },
+        {
+          "encode_ms": 17.999579,
+          "scene_allocations": 0,
+          "scene_ms": 0.01192,
+          "wall_ms": 18.034329000000003
+        },
+        {
+          "encode_ms": 16.740899,
+          "scene_allocations": 0,
+          "scene_ms": 0.01322,
+          "wall_ms": 16.794608999999998
+        },
+        {
+          "encode_ms": 4.25457,
+          "scene_allocations": 0,
+          "scene_ms": 0.02372,
+          "wall_ms": 18.955129
+        },
+        {
+          "encode_ms": 17.788029,
+          "scene_allocations": 0,
+          "scene_ms": 0.01302,
+          "wall_ms": 17.840139
+        },
+        {
+          "encode_ms": 22.346579,
+          "scene_allocations": 0,
+          "scene_ms": 0.01106,
+          "wall_ms": 22.416498999999998
+        },
+        {
+          "encode_ms": 25.957918,
+          "scene_allocations": 0,
+          "scene_ms": 0.02584,
+          "wall_ms": 26.069737999999997
+        },
+        {
+          "encode_ms": 17.062799,
+          "scene_allocations": 0,
+          "scene_ms": 0.01909,
+          "wall_ms": 17.097998999999998
+        },
+        {
+          "encode_ms": 16.696299,
+          "scene_allocations": 0,
+          "scene_ms": 0.01163,
+          "wall_ms": 16.728258999999998
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 20.535738000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0112,
+          "wall_ms": 20.569827999999998
+        },
+        {
+          "encode_ms": 24.988059,
+          "scene_allocations": 0,
+          "scene_ms": 0.018349999999999998,
+          "wall_ms": 25.041978999999998
+        },
+        {
+          "encode_ms": 24.590878,
+          "scene_allocations": 0,
+          "scene_ms": 0.010920000000000001,
+          "wall_ms": 24.662588
+        },
+        {
+          "encode_ms": 27.082008000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01672,
+          "wall_ms": 27.153828
+        },
+        {
+          "encode_ms": 20.521559000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.023209999999999998,
+          "wall_ms": 20.555349
+        },
+        {
+          "encode_ms": 24.698238,
+          "scene_allocations": 0,
+          "scene_ms": 0.013560000000000001,
+          "wall_ms": 24.732067999999998
+        },
+        {
+          "encode_ms": 27.164209000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01505,
+          "wall_ms": 27.210689
+        },
+        {
+          "encode_ms": 20.794258,
+          "scene_allocations": 0,
+          "scene_ms": 0.01545,
+          "wall_ms": 20.826678
+        },
+        {
+          "encode_ms": 22.838749,
+          "scene_allocations": 0,
+          "scene_ms": 0.011559999999999999,
+          "wall_ms": 22.869969
+        },
+        {
+          "encode_ms": 23.123438,
+          "scene_allocations": 0,
+          "scene_ms": 0.014830000000000001,
+          "wall_ms": 23.161648
+        },
+        {
+          "encode_ms": 25.092028999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01374,
+          "wall_ms": 25.160289
+        },
+        {
+          "encode_ms": 26.555718,
+          "scene_allocations": 0,
+          "scene_ms": 0.02035,
+          "wall_ms": 26.586168
+        },
+        {
+          "encode_ms": 21.814159,
+          "scene_allocations": 0,
+          "scene_ms": 0.010740000000000001,
+          "wall_ms": 21.886218999999997
+        },
+        {
+          "encode_ms": 15.410478999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01509,
+          "wall_ms": 15.469979
+        },
+        {
+          "encode_ms": 16.236998999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.02323,
+          "wall_ms": 16.290609
+        },
+        {
+          "encode_ms": 15.898138999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.017830000000000002,
+          "wall_ms": 15.931859
+        },
+        {
+          "encode_ms": 15.907048999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01089,
+          "wall_ms": 15.938909
+        },
+        {
+          "encode_ms": 17.232439,
+          "scene_allocations": 0,
+          "scene_ms": 0.02063,
+          "wall_ms": 17.286319000000002
+        },
+        {
+          "encode_ms": 15.848349,
+          "scene_allocations": 0,
+          "scene_ms": 0.0214,
+          "wall_ms": 15.891098999999999
+        },
+        {
+          "encode_ms": 15.74774,
+          "scene_allocations": 0,
+          "scene_ms": 0.01366,
+          "wall_ms": 15.7779
+        },
+        {
+          "encode_ms": 15.702759,
+          "scene_allocations": 0,
+          "scene_ms": 0.00981,
+          "wall_ms": 15.751619000000002
+        },
+        {
+          "encode_ms": 16.215289000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01698,
+          "wall_ms": 16.249329
+        },
+        {
+          "encode_ms": 16.306659,
+          "scene_allocations": 0,
+          "scene_ms": 0.01349,
+          "wall_ms": 16.344689
+        },
+        {
+          "encode_ms": 16.412339000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01855,
+          "wall_ms": 16.447419
+        },
+        {
+          "encode_ms": 18.432919,
+          "scene_allocations": 0,
+          "scene_ms": 0.01077,
+          "wall_ms": 18.491298999999998
+        },
+        {
+          "encode_ms": 3.24214,
+          "scene_allocations": 0,
+          "scene_ms": 0.014780000000000001,
+          "wall_ms": 16.802069
+        },
+        {
+          "encode_ms": 16.882149,
+          "scene_allocations": 0,
+          "scene_ms": 0.01102,
+          "wall_ms": 16.929819
+        },
+        {
+          "encode_ms": 19.483998999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.027129999999999998,
+          "wall_ms": 19.556068999999997
+        },
+        {
+          "encode_ms": 15.381319,
+          "scene_allocations": 0,
+          "scene_ms": 0.02369,
+          "wall_ms": 15.414318999999999
+        },
+        {
+          "encode_ms": 14.990809,
+          "scene_allocations": 0,
+          "scene_ms": 0.014199999999999999,
+          "wall_ms": 15.022229
+        }
+      ],
+      "scene_p50_ms": [
+        0.014830000000000001,
+        0.01737
+      ],
+      "style": "spicy",
+      "time_ms": 64202.55,
+      "width": 844
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Fill",
+      "before": "Baseline",
+      "encode_p95_ms": [
+        31.016498,
+        29.643598
+      ],
+      "fixture_line": 1,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 23.273289,
+          "scene_allocations": 0,
+          "scene_ms": 0.020169999999999997,
+          "wall_ms": 23.308789
+        },
+        {
+          "encode_ms": 19.579079,
+          "scene_allocations": 0,
+          "scene_ms": 0.01525,
+          "wall_ms": 19.610578999999998
+        },
+        {
+          "encode_ms": 21.911349,
+          "scene_allocations": 0,
+          "scene_ms": 0.01975,
+          "wall_ms": 21.944658999999998
+        },
+        {
+          "encode_ms": 22.650928,
+          "scene_allocations": 0,
+          "scene_ms": 0.01431,
+          "wall_ms": 22.684888
+        },
+        {
+          "encode_ms": 27.327979,
+          "scene_allocations": 0,
+          "scene_ms": 0.02127,
+          "wall_ms": 27.402109
+        },
+        {
+          "encode_ms": 20.496409,
+          "scene_allocations": 0,
+          "scene_ms": 0.02634,
+          "wall_ms": 20.537349
+        },
+        {
+          "encode_ms": 27.049869,
+          "scene_allocations": 0,
+          "scene_ms": 0.023309999999999997,
+          "wall_ms": 27.088438999999997
+        },
+        {
+          "encode_ms": 26.125348,
+          "scene_allocations": 0,
+          "scene_ms": 0.01697,
+          "wall_ms": 26.192968
+        },
+        {
+          "encode_ms": 28.189689,
+          "scene_allocations": 0,
+          "scene_ms": 0.024130000000000002,
+          "wall_ms": 28.228809000000002
+        },
+        {
+          "encode_ms": 28.064618,
+          "scene_allocations": 0,
+          "scene_ms": 0.0219,
+          "wall_ms": 28.133088
+        },
+        {
+          "encode_ms": 29.643598,
+          "scene_allocations": 0,
+          "scene_ms": 0.026889999999999997,
+          "wall_ms": 29.686548
+        },
+        {
+          "encode_ms": 30.396249,
+          "scene_allocations": 0,
+          "scene_ms": 0.02175,
+          "wall_ms": 30.431599
+        },
+        {
+          "encode_ms": 25.589358999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02283,
+          "wall_ms": 25.631069
+        },
+        {
+          "encode_ms": 23.102968,
+          "scene_allocations": 0,
+          "scene_ms": 0.01791,
+          "wall_ms": 23.134648000000002
+        },
+        {
+          "encode_ms": 23.992639,
+          "scene_allocations": 0,
+          "scene_ms": 0.02342,
+          "wall_ms": 24.027069
+        },
+        {
+          "encode_ms": 21.964339,
+          "scene_allocations": 0,
+          "scene_ms": 0.01422,
+          "wall_ms": 21.994218999999998
+        },
+        {
+          "encode_ms": 24.042227999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01935,
+          "wall_ms": 24.074048
+        },
+        {
+          "encode_ms": 22.992419,
+          "scene_allocations": 0,
+          "scene_ms": 0.01346,
+          "wall_ms": 23.028909
+        },
+        {
+          "encode_ms": 22.870299,
+          "scene_allocations": 0,
+          "scene_ms": 0.02431,
+          "wall_ms": 22.906459
+        },
+        {
+          "encode_ms": 21.840058,
+          "scene_allocations": 0,
+          "scene_ms": 0.014939999999999998,
+          "wall_ms": 21.883148000000002
+        },
+        {
+          "encode_ms": 23.281559,
+          "scene_allocations": 0,
+          "scene_ms": 0.02118,
+          "wall_ms": 23.314649
+        },
+        {
+          "encode_ms": 22.717768,
+          "scene_allocations": 0,
+          "scene_ms": 0.01624,
+          "wall_ms": 22.752128
+        },
+        {
+          "encode_ms": 22.717768999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.020020000000000003,
+          "wall_ms": 22.747898999999997
+        },
+        {
+          "encode_ms": 24.374698,
+          "scene_allocations": 0,
+          "scene_ms": 0.01501,
+          "wall_ms": 24.411828
+        },
+        {
+          "encode_ms": 17.881569,
+          "scene_allocations": 0,
+          "scene_ms": 0.019049999999999997,
+          "wall_ms": 17.910839000000003
+        },
+        {
+          "encode_ms": 18.713029,
+          "scene_allocations": 0,
+          "scene_ms": 0.015400000000000002,
+          "wall_ms": 18.740448999999998
+        },
+        {
+          "encode_ms": 19.397438,
+          "scene_allocations": 0,
+          "scene_ms": 0.01719,
+          "wall_ms": 19.422628
+        },
+        {
+          "encode_ms": 16.474859000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01188,
+          "wall_ms": 16.504329000000002
+        },
+        {
+          "encode_ms": 16.496559,
+          "scene_allocations": 0,
+          "scene_ms": 0.01627,
+          "wall_ms": 16.519789
+        },
+        {
+          "encode_ms": 16.126309,
+          "scene_allocations": 0,
+          "scene_ms": 0.01381,
+          "wall_ms": 16.151359
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 24.760968000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01072,
+          "wall_ms": 24.790828
+        },
+        {
+          "encode_ms": 21.209668,
+          "scene_allocations": 0,
+          "scene_ms": 0.008,
+          "wall_ms": 21.241098
+        },
+        {
+          "encode_ms": 24.542449,
+          "scene_allocations": 0,
+          "scene_ms": 0.00463,
+          "wall_ms": 24.573609
+        },
+        {
+          "encode_ms": 23.539899,
+          "scene_allocations": 0,
+          "scene_ms": 0.006690000000000001,
+          "wall_ms": 23.580108999999997
+        },
+        {
+          "encode_ms": 23.370468,
+          "scene_allocations": 0,
+          "scene_ms": 0.005339999999999999,
+          "wall_ms": 23.407668
+        },
+        {
+          "encode_ms": 25.268148,
+          "scene_allocations": 0,
+          "scene_ms": 0.00972,
+          "wall_ms": 25.342488
+        },
+        {
+          "encode_ms": 29.678258,
+          "scene_allocations": 0,
+          "scene_ms": 0.014589999999999999,
+          "wall_ms": 29.733328
+        },
+        {
+          "encode_ms": 23.493879,
+          "scene_allocations": 0,
+          "scene_ms": 0.01176,
+          "wall_ms": 23.538829
+        },
+        {
+          "encode_ms": 23.333948,
+          "scene_allocations": 0,
+          "scene_ms": 0.01201,
+          "wall_ms": 23.381818
+        },
+        {
+          "encode_ms": 30.731907999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01137,
+          "wall_ms": 30.813058
+        },
+        {
+          "encode_ms": 31.259358000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.012639999999999998,
+          "wall_ms": 31.321848
+        },
+        {
+          "encode_ms": 31.016498,
+          "scene_allocations": 0,
+          "scene_ms": 0.0097,
+          "wall_ms": 31.085778
+        },
+        {
+          "encode_ms": 25.074948,
+          "scene_allocations": 0,
+          "scene_ms": 0.01158,
+          "wall_ms": 25.120518
+        },
+        {
+          "encode_ms": 21.170989000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0069500000000000004,
+          "wall_ms": 21.240078999999998
+        },
+        {
+          "encode_ms": 27.064878,
+          "scene_allocations": 0,
+          "scene_ms": 0.01195,
+          "wall_ms": 27.110177999999998
+        },
+        {
+          "encode_ms": 22.115788000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.00666,
+          "wall_ms": 22.147038000000002
+        },
+        {
+          "encode_ms": 27.373399,
+          "scene_allocations": 0,
+          "scene_ms": 0.0044,
+          "wall_ms": 27.417088999999997
+        },
+        {
+          "encode_ms": 26.133078,
+          "scene_allocations": 0,
+          "scene_ms": 0.00613,
+          "wall_ms": 26.202337999999997
+        },
+        {
+          "encode_ms": 23.428299,
+          "scene_allocations": 0,
+          "scene_ms": 0.01406,
+          "wall_ms": 23.484349
+        },
+        {
+          "encode_ms": 27.364559,
+          "scene_allocations": 0,
+          "scene_ms": 0.006319999999999999,
+          "wall_ms": 27.407779
+        },
+        {
+          "encode_ms": 30.064698,
+          "scene_allocations": 0,
+          "scene_ms": 0.01128,
+          "wall_ms": 30.104068
+        },
+        {
+          "encode_ms": 23.699359,
+          "scene_allocations": 0,
+          "scene_ms": 0.00746,
+          "wall_ms": 23.731078999999998
+        },
+        {
+          "encode_ms": 24.414278,
+          "scene_allocations": 0,
+          "scene_ms": 0.0055,
+          "wall_ms": 24.445168
+        },
+        {
+          "encode_ms": 21.489579000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.00726,
+          "wall_ms": 21.523619
+        },
+        {
+          "encode_ms": 23.869759000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.005699999999999999,
+          "wall_ms": 23.906609
+        },
+        {
+          "encode_ms": 16.740828999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.00584,
+          "wall_ms": 16.765089
+        },
+        {
+          "encode_ms": 17.146239,
+          "scene_allocations": 0,
+          "scene_ms": 0.00425,
+          "wall_ms": 17.170828999999998
+        },
+        {
+          "encode_ms": 18.003159,
+          "scene_allocations": 0,
+          "scene_ms": 0.00759,
+          "wall_ms": 18.030489
+        },
+        {
+          "encode_ms": 17.150349,
+          "scene_allocations": 0,
+          "scene_ms": 0.0044599999999999996,
+          "wall_ms": 17.174379
+        },
+        {
+          "encode_ms": 19.221219,
+          "scene_allocations": 0,
+          "scene_ms": 0.00486,
+          "wall_ms": 19.267319
+        }
+      ],
+      "scene_p50_ms": [
+        0.00726,
+        0.019049999999999997
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 844
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Motion",
+      "before": "Fill",
+      "encode_p95_ms": [
+        22.380428000000002,
+        18.722718999999998
+      ],
+      "fixture_line": 1,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 16.161839,
+          "scene_allocations": 0,
+          "scene_ms": 0.01071,
+          "wall_ms": 16.183769
+        },
+        {
+          "encode_ms": 16.068769,
+          "scene_allocations": 0,
+          "scene_ms": 0.01305,
+          "wall_ms": 16.090729000000003
+        },
+        {
+          "encode_ms": 15.772019000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01253,
+          "wall_ms": 15.793458999999999
+        },
+        {
+          "encode_ms": 15.749049000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.0108,
+          "wall_ms": 15.779529
+        },
+        {
+          "encode_ms": 16.639719,
+          "scene_allocations": 0,
+          "scene_ms": 0.01449,
+          "wall_ms": 16.664299
+        },
+        {
+          "encode_ms": 15.990929000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.01221,
+          "wall_ms": 16.013729
+        },
+        {
+          "encode_ms": 16.385119,
+          "scene_allocations": 0,
+          "scene_ms": 0.01359,
+          "wall_ms": 16.413989
+        },
+        {
+          "encode_ms": 16.222139,
+          "scene_allocations": 0,
+          "scene_ms": 0.01467,
+          "wall_ms": 16.253389
+        },
+        {
+          "encode_ms": 14.996039,
+          "scene_allocations": 0,
+          "scene_ms": 0.01131,
+          "wall_ms": 15.025569
+        },
+        {
+          "encode_ms": 15.565919,
+          "scene_allocations": 0,
+          "scene_ms": 0.013349999999999999,
+          "wall_ms": 15.597159
+        },
+        {
+          "encode_ms": 18.722718999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01926,
+          "wall_ms": 18.758659
+        },
+        {
+          "encode_ms": 15.432779,
+          "scene_allocations": 0,
+          "scene_ms": 0.01412,
+          "wall_ms": 15.466409
+        },
+        {
+          "encode_ms": 15.354448999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01245,
+          "wall_ms": 15.388389
+        },
+        {
+          "encode_ms": 15.090289,
+          "scene_allocations": 0,
+          "scene_ms": 0.01165,
+          "wall_ms": 15.121819
+        },
+        {
+          "encode_ms": 15.201509,
+          "scene_allocations": 0,
+          "scene_ms": 0.01274,
+          "wall_ms": 15.235119000000001
+        },
+        {
+          "encode_ms": 14.957069,
+          "scene_allocations": 0,
+          "scene_ms": 0.013479999999999999,
+          "wall_ms": 14.990179
+        },
+        {
+          "encode_ms": 15.178269,
+          "scene_allocations": 0,
+          "scene_ms": 0.01121,
+          "wall_ms": 15.206339
+        },
+        {
+          "encode_ms": 3.52141,
+          "scene_allocations": 0,
+          "scene_ms": 0.01257,
+          "wall_ms": 16.699529000000002
+        },
+        {
+          "encode_ms": 3.0684,
+          "scene_allocations": 0,
+          "scene_ms": 0.01179,
+          "wall_ms": 15.857099
+        },
+        {
+          "encode_ms": 3.33956,
+          "scene_allocations": 0,
+          "scene_ms": 0.01077,
+          "wall_ms": 16.364279
+        },
+        {
+          "encode_ms": 3.1775100000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.01238,
+          "wall_ms": 15.813668999999999
+        },
+        {
+          "encode_ms": 3.61357,
+          "scene_allocations": 0,
+          "scene_ms": 0.01235,
+          "wall_ms": 21.724149
+        },
+        {
+          "encode_ms": 3.3446000000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0146,
+          "wall_ms": 16.163559
+        },
+        {
+          "encode_ms": 2.70914,
+          "scene_allocations": 0,
+          "scene_ms": 0.01196,
+          "wall_ms": 15.396299
+        },
+        {
+          "encode_ms": 2.65152,
+          "scene_allocations": 0,
+          "scene_ms": 0.01236,
+          "wall_ms": 15.305499000000001
+        },
+        {
+          "encode_ms": 3.33724,
+          "scene_allocations": 0,
+          "scene_ms": 0.01168,
+          "wall_ms": 15.58832
+        },
+        {
+          "encode_ms": 17.194619000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.0144,
+          "wall_ms": 17.221329
+        },
+        {
+          "encode_ms": 23.654299,
+          "scene_allocations": 0,
+          "scene_ms": 0.01349,
+          "wall_ms": 23.685009
+        },
+        {
+          "encode_ms": 15.086499,
+          "scene_allocations": 0,
+          "scene_ms": 0.01119,
+          "wall_ms": 15.117509
+        },
+        {
+          "encode_ms": 14.92607,
+          "scene_allocations": 0,
+          "scene_ms": 0.01358,
+          "wall_ms": 14.956439999999999
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 16.068039,
+          "scene_allocations": 0,
+          "scene_ms": 0.01179,
+          "wall_ms": 16.091739
+        },
+        {
+          "encode_ms": 16.008399,
+          "scene_allocations": 0,
+          "scene_ms": 0.012119999999999999,
+          "wall_ms": 16.034539
+        },
+        {
+          "encode_ms": 16.127359000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.015290000000000002,
+          "wall_ms": 16.151539
+        },
+        {
+          "encode_ms": 15.622959,
+          "scene_allocations": 0,
+          "scene_ms": 0.01201,
+          "wall_ms": 15.645959000000001
+        },
+        {
+          "encode_ms": 16.087319,
+          "scene_allocations": 0,
+          "scene_ms": 0.01375,
+          "wall_ms": 16.109368999999997
+        },
+        {
+          "encode_ms": 19.655379,
+          "scene_allocations": 0,
+          "scene_ms": 0.01253,
+          "wall_ms": 19.682848999999997
+        },
+        {
+          "encode_ms": 16.527319,
+          "scene_allocations": 0,
+          "scene_ms": 0.01194,
+          "wall_ms": 16.560078999999998
+        },
+        {
+          "encode_ms": 15.321988999999999,
+          "scene_allocations": 0,
+          "scene_ms": 0.01303,
+          "wall_ms": 15.353549
+        },
+        {
+          "encode_ms": 15.122489,
+          "scene_allocations": 0,
+          "scene_ms": 0.01148,
+          "wall_ms": 15.162939
+        },
+        {
+          "encode_ms": 18.547128999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01275,
+          "wall_ms": 18.607819000000003
+        },
+        {
+          "encode_ms": 17.765818999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.02508,
+          "wall_ms": 17.811359
+        },
+        {
+          "encode_ms": 15.026139,
+          "scene_allocations": 0,
+          "scene_ms": 0.015420000000000001,
+          "wall_ms": 15.057019
+        },
+        {
+          "encode_ms": 15.916409,
+          "scene_allocations": 0,
+          "scene_ms": 0.01399,
+          "wall_ms": 15.948319
+        },
+        {
+          "encode_ms": 14.968499,
+          "scene_allocations": 0,
+          "scene_ms": 0.01235,
+          "wall_ms": 14.998879
+        },
+        {
+          "encode_ms": 15.71793,
+          "scene_allocations": 0,
+          "scene_ms": 0.01464,
+          "wall_ms": 15.745970000000002
+        },
+        {
+          "encode_ms": 14.998389000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.01275,
+          "wall_ms": 15.035129
+        },
+        {
+          "encode_ms": 14.936559,
+          "scene_allocations": 0,
+          "scene_ms": 0.01095,
+          "wall_ms": 14.977609
+        },
+        {
+          "encode_ms": 3.41592,
+          "scene_allocations": 0,
+          "scene_ms": 0.013940000000000001,
+          "wall_ms": 16.581819
+        },
+        {
+          "encode_ms": 3.07519,
+          "scene_allocations": 0,
+          "scene_ms": 0.0129,
+          "wall_ms": 15.925339000000001
+        },
+        {
+          "encode_ms": 3.36049,
+          "scene_allocations": 0,
+          "scene_ms": 0.013699999999999999,
+          "wall_ms": 16.277359
+        },
+        {
+          "encode_ms": 3.30532,
+          "scene_allocations": 0,
+          "scene_ms": 0.01218,
+          "wall_ms": 16.148289
+        },
+        {
+          "encode_ms": 3.44823,
+          "scene_allocations": 0,
+          "scene_ms": 0.02366,
+          "wall_ms": 15.851969
+        },
+        {
+          "encode_ms": 2.74158,
+          "scene_allocations": 0,
+          "scene_ms": 0.01426,
+          "wall_ms": 15.086469
+        },
+        {
+          "encode_ms": 2.63051,
+          "scene_allocations": 0,
+          "scene_ms": 0.012150000000000001,
+          "wall_ms": 15.242019
+        },
+        {
+          "encode_ms": 3.4054900000000004,
+          "scene_allocations": 0,
+          "scene_ms": 0.01058,
+          "wall_ms": 15.802679
+        },
+        {
+          "encode_ms": 3.423099,
+          "scene_allocations": 0,
+          "scene_ms": 0.014110000000000001,
+          "wall_ms": 16.245239
+        },
+        {
+          "encode_ms": 25.505928,
+          "scene_allocations": 0,
+          "scene_ms": 0.01107,
+          "wall_ms": 25.538448
+        },
+        {
+          "encode_ms": 22.380428000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01702,
+          "wall_ms": 22.415058000000002
+        },
+        {
+          "encode_ms": 15.790609,
+          "scene_allocations": 0,
+          "scene_ms": 0.013430000000000001,
+          "wall_ms": 15.824099
+        },
+        {
+          "encode_ms": 15.008649,
+          "scene_allocations": 0,
+          "scene_ms": 0.01201,
+          "wall_ms": 15.041819
+        }
+      ],
+      "scene_p50_ms": [
+        0.01275,
+        0.01245
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 844
+    },
+    {
+      "accepted": true,
+      "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+      "after": "Glow",
+      "before": "Motion",
+      "encode_p95_ms": [
+        18.213399000000003,
+        23.244519
+      ],
+      "fixture_line": 1,
+      "height": 390,
+      "new_samples": [
+        {
+          "encode_ms": 17.969248,
+          "scene_allocations": 0,
+          "scene_ms": 0.02358,
+          "wall_ms": 18.022448
+        },
+        {
+          "encode_ms": 18.986629,
+          "scene_allocations": 0,
+          "scene_ms": 0.02137,
+          "wall_ms": 19.063619
+        },
+        {
+          "encode_ms": 18.572699,
+          "scene_allocations": 0,
+          "scene_ms": 0.01253,
+          "wall_ms": 18.606789
+        },
+        {
+          "encode_ms": 23.244519,
+          "scene_allocations": 0,
+          "scene_ms": 0.01176,
+          "wall_ms": 23.278879
+        },
+        {
+          "encode_ms": 18.236428999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02006,
+          "wall_ms": 18.270849
+        },
+        {
+          "encode_ms": 18.659408999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01211,
+          "wall_ms": 18.712778999999998
+        },
+        {
+          "encode_ms": 17.755318,
+          "scene_allocations": 0,
+          "scene_ms": 0.02508,
+          "wall_ms": 17.801448
+        },
+        {
+          "encode_ms": 19.978859,
+          "scene_allocations": 0,
+          "scene_ms": 0.01887,
+          "wall_ms": 20.039949
+        },
+        {
+          "encode_ms": 18.798649,
+          "scene_allocations": 0,
+          "scene_ms": 0.01611,
+          "wall_ms": 18.880759
+        },
+        {
+          "encode_ms": 18.756999,
+          "scene_allocations": 0,
+          "scene_ms": 0.02795,
+          "wall_ms": 18.811159
+        },
+        {
+          "encode_ms": 21.620269,
+          "scene_allocations": 0,
+          "scene_ms": 0.015359999999999999,
+          "wall_ms": 21.665559000000002
+        },
+        {
+          "encode_ms": 17.499369,
+          "scene_allocations": 0,
+          "scene_ms": 0.01611,
+          "wall_ms": 17.546359000000002
+        },
+        {
+          "encode_ms": 17.439109000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.020999999999999998,
+          "wall_ms": 17.481249000000002
+        },
+        {
+          "encode_ms": 16.843799,
+          "scene_allocations": 0,
+          "scene_ms": 0.013349999999999999,
+          "wall_ms": 16.921179000000002
+        },
+        {
+          "encode_ms": 16.617649,
+          "scene_allocations": 0,
+          "scene_ms": 0.02259,
+          "wall_ms": 16.695849
+        },
+        {
+          "encode_ms": 17.712189,
+          "scene_allocations": 0,
+          "scene_ms": 0.02288,
+          "wall_ms": 17.784399
+        },
+        {
+          "encode_ms": 16.515949,
+          "scene_allocations": 0,
+          "scene_ms": 0.01469,
+          "wall_ms": 16.561049
+        },
+        {
+          "encode_ms": 16.684889000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.0121,
+          "wall_ms": 16.714929
+        },
+        {
+          "encode_ms": 19.776348,
+          "scene_allocations": 0,
+          "scene_ms": 0.02127,
+          "wall_ms": 19.819588
+        },
+        {
+          "encode_ms": 24.141919,
+          "scene_allocations": 0,
+          "scene_ms": 0.015420000000000001,
+          "wall_ms": 24.187099
+        },
+        {
+          "encode_ms": 17.400279,
+          "scene_allocations": 0,
+          "scene_ms": 0.01615,
+          "wall_ms": 17.428559
+        },
+        {
+          "encode_ms": 18.033148999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.012799999999999999,
+          "wall_ms": 18.065099
+        },
+        {
+          "encode_ms": 17.949649,
+          "scene_allocations": 0,
+          "scene_ms": 0.01492,
+          "wall_ms": 17.991179
+        },
+        {
+          "encode_ms": 17.919819,
+          "scene_allocations": 0,
+          "scene_ms": 0.01519,
+          "wall_ms": 17.951399
+        },
+        {
+          "encode_ms": 17.147979,
+          "scene_allocations": 0,
+          "scene_ms": 0.01097,
+          "wall_ms": 17.177449
+        },
+        {
+          "encode_ms": 18.787949,
+          "scene_allocations": 0,
+          "scene_ms": 0.01782,
+          "wall_ms": 18.820709
+        },
+        {
+          "encode_ms": 16.857668999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.01182,
+          "wall_ms": 16.887109000000002
+        },
+        {
+          "encode_ms": 17.139079000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01077,
+          "wall_ms": 17.170399
+        },
+        {
+          "encode_ms": 17.365759,
+          "scene_allocations": 0,
+          "scene_ms": 0.01334,
+          "wall_ms": 17.392849
+        },
+        {
+          "encode_ms": 17.915559000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01167,
+          "wall_ms": 17.949269
+        }
+      ],
+      "old_samples": [
+        {
+          "encode_ms": 20.682289,
+          "scene_allocations": 0,
+          "scene_ms": 0.01432,
+          "wall_ms": 20.744439
+        },
+        {
+          "encode_ms": 17.342548999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.029580000000000002,
+          "wall_ms": 17.377129
+        },
+        {
+          "encode_ms": 16.835789000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.01592,
+          "wall_ms": 16.868639
+        },
+        {
+          "encode_ms": 17.753959,
+          "scene_allocations": 0,
+          "scene_ms": 0.01601,
+          "wall_ms": 17.810329
+        },
+        {
+          "encode_ms": 15.709329,
+          "scene_allocations": 0,
+          "scene_ms": 0.03223,
+          "wall_ms": 15.746579
+        },
+        {
+          "encode_ms": 17.980619,
+          "scene_allocations": 0,
+          "scene_ms": 0.022,
+          "wall_ms": 18.061109
+        },
+        {
+          "encode_ms": 16.679509,
+          "scene_allocations": 0,
+          "scene_ms": 0.03154,
+          "wall_ms": 16.735899
+        },
+        {
+          "encode_ms": 15.700328999999998,
+          "scene_allocations": 0,
+          "scene_ms": 0.02886,
+          "wall_ms": 15.749448999999998
+        },
+        {
+          "encode_ms": 15.776199000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.023180000000000003,
+          "wall_ms": 15.811499
+        },
+        {
+          "encode_ms": 16.832769000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.02224,
+          "wall_ms": 16.870988999999998
+        },
+        {
+          "encode_ms": 16.447799,
+          "scene_allocations": 0,
+          "scene_ms": 0.02026,
+          "wall_ms": 16.482319
+        },
+        {
+          "encode_ms": 16.658479,
+          "scene_allocations": 0,
+          "scene_ms": 0.01429,
+          "wall_ms": 16.697609
+        },
+        {
+          "encode_ms": 17.379009,
+          "scene_allocations": 0,
+          "scene_ms": 0.011569999999999999,
+          "wall_ms": 17.444699
+        },
+        {
+          "encode_ms": 18.213399000000003,
+          "scene_allocations": 0,
+          "scene_ms": 0.02419,
+          "wall_ms": 18.322478999999998
+        },
+        {
+          "encode_ms": 15.902049000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02965,
+          "wall_ms": 15.973899
+        },
+        {
+          "encode_ms": 15.626109,
+          "scene_allocations": 0,
+          "scene_ms": 0.029589999999999998,
+          "wall_ms": 15.674869000000001
+        },
+        {
+          "encode_ms": 16.681309,
+          "scene_allocations": 0,
+          "scene_ms": 0.018260000000000002,
+          "wall_ms": 16.721829
+        },
+        {
+          "encode_ms": 17.263989,
+          "scene_allocations": 0,
+          "scene_ms": 0.013699999999999999,
+          "wall_ms": 17.305649
+        },
+        {
+          "encode_ms": 18.106869,
+          "scene_allocations": 0,
+          "scene_ms": 0.01669,
+          "wall_ms": 18.163849
+        },
+        {
+          "encode_ms": 17.167699000000002,
+          "scene_allocations": 0,
+          "scene_ms": 0.02383,
+          "wall_ms": 17.205229
+        },
+        {
+          "encode_ms": 15.383339,
+          "scene_allocations": 0,
+          "scene_ms": 0.01541,
+          "wall_ms": 15.409729
+        },
+        {
+          "encode_ms": 16.134428999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.01309,
+          "wall_ms": 16.163259
+        },
+        {
+          "encode_ms": 16.321368999999997,
+          "scene_allocations": 0,
+          "scene_ms": 0.011559999999999999,
+          "wall_ms": 16.357229
+        },
+        {
+          "encode_ms": 15.436319000000001,
+          "scene_allocations": 0,
+          "scene_ms": 0.0202,
+          "wall_ms": 15.464819
+        },
+        {
+          "encode_ms": 16.059579,
+          "scene_allocations": 0,
+          "scene_ms": 0.01095,
+          "wall_ms": 16.086858999999997
+        },
+        {
+          "encode_ms": 15.575139,
+          "scene_allocations": 0,
+          "scene_ms": 0.01523,
+          "wall_ms": 15.604909
+        },
+        {
+          "encode_ms": 16.176399,
+          "scene_allocations": 0,
+          "scene_ms": 0.011219999999999999,
+          "wall_ms": 16.204439
+        },
+        {
+          "encode_ms": 16.340259,
+          "scene_allocations": 0,
+          "scene_ms": 0.01328,
+          "wall_ms": 16.368999
+        },
+        {
+          "encode_ms": 16.139479,
+          "scene_allocations": 0,
+          "scene_ms": 0.014070000000000001,
+          "wall_ms": 16.175649
+        },
+        {
+          "encode_ms": 16.369679,
+          "scene_allocations": 0,
+          "scene_ms": 0.01341,
+          "wall_ms": 16.398879
+        }
+      ],
+      "scene_p50_ms": [
+        0.01601,
+        0.015359999999999999
+      ],
+      "style": "amll",
+      "time_ms": 15399.2,
+      "width": 844
+    }
+  ],
+  "samples": 30,
+  "scope": "Linux host same adapter/release opt3; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence",
+  "thresholds": {
+    "encode_p95": "before*1.25+0.5ms",
+    "scene_p50": "before*1.25+0.01ms",
+    "steady_scene_allocations": 0
+  },
+  "warmup": 8
+}

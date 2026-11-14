@@ -2,6 +2,7 @@
 import { Segmenter } from '@formatjs/intl-segmenter';
 import type { LyricLine } from '@/types/bridge';
 import { buildNativeVoice, type NativeLyricsStyle } from '@/components/lyrics/native/native-lyrics-model';
+import { spicyIsRtl } from '@/components/lyrics/native/spicy-text-policy';
 import { isCJK } from '@/components/lyrics/native/amll-reference-is-cjk';
 import { buildRustTrack } from './rust-lyrics-protocol';
 
@@ -16,10 +17,11 @@ export function prepareRustTrack(trackId: string, generation: number, lines: Lyr
       if (offset > 0 && part.isWordLike && Array.from(part.segment).some(isCJK)) cjkBreaks.push(offset);
       offset += part.segment.length;
     }
-    return { text: voice.paintText, words: voice.paintWords.map(word => ({
+    return { text: voice.paintText, words: voice.paintWords.map((word, index) => ({
       text: word.text, offset: word.offset, start: word.start, end: word.end,
       joined: word.joined, gap_after: !!word.gapAfter, group: word.group ?? null,
       graphemes: word.letters,
+      appearance: { emphasized: word.emphasized, origin: word.origin ?? 0.5, rtl: spicyIsRtl(word.text), last: index === voice.paintWords.length - 1, emphasis: word.emphasis ?? null },
     })), cjk_breaks: cjkBreaks, opposite: !!line.oppositeAligned,
       duet: lines.some(row => landscape ? !row.oppositeAligned : !!row.oppositeAligned) };
   });

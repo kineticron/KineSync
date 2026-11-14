@@ -47,7 +47,7 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 4 retains explicit seek-snap intent, separate display-target/sample
+ABI version 5 retains explicit seek-snap intent, separate display-target/sample
 clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
 IPA; a Metro-only update cannot install the Rust/Swift changes.
 
@@ -304,3 +304,24 @@ fallback equivalence and packaged font execution require final native proof.
 There are no intermediate phone-test/IPA dependencies; one final IPA delivery
 follows near-complete parity and host gates. Physical presentation remains
 unverified until the final user test.
+
+## ABI5 timed appearance checkpoint
+
+Schema5 requires validated per-word emphasis, pivot, direction and AMLL group
+metadata from the actual production JS preparation helpers. C/Swift/JS guards
+all require5; KRMetrics remains152 bytes. Existing SF resource ownership and
+cache keys remain; metadata changes invalidate immutable geometry.
+
+Mutable source timing belongs to the native owner, separately from retained
+geometry. Track/seek/resize reset timing; pause preserves source release motion.
+Active/overlapping and next-two geometry is prepared on demand; plain inactive
+rows remain cached. The live per-effect policy and measured/rejected stages are
+recorded in `evidence/parity-live-appearance-handoff.md`. A rendered prototype is
+not automatically enabled. Glow uses a two-radius shared approximation and is
+not accepted Skia parity. No per-line GPU filter, full-resolution blur, active
+animated-picture cache, new wait or deeper queue was introduced.
+
+One coordinator-built parity-so-far IPA is now user-authorized after independent
+review; this supersedes the earlier near-complete-only delivery rule. This
+worker performs no push, CI dispatch, Metro operation or IPA build. Physical
+phone HUD/performance and native font packaging remain unverified for ABI5.

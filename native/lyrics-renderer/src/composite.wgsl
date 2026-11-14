@@ -21,7 +21,8 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(sharp);
     if any(gid.xy >= size) { return; }
     let d = max(max(band.x - f32(gid.y), f32(gid.y) - band.y), 0.0);
-    let strength = clamp(d / (60.0 * band.w), 0.0, 1.0) * band.z;
+    let flags=u32(band.z);
+    let strength = clamp(d / (60.0 * band.w), 0.0, 1.0) * f32(flags & 1u);
     let far_weight = clamp((d - 160.0 * band.w) / (60.0 * band.w), 0.0, 1.0);
     let c = textureLoad(sharp, gid.xy, 0);
     var color = vec4<f32>(linear(c.rgb) * c.a, c.a);
@@ -29,6 +30,16 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
         var blurred = reconstructed(near, gid.xy);
         if far_weight > 0.0 { blurred = mix(blurred, reconstructed(far, gid.xy), far_weight); }
         color = mix(color, blurred, strength);
+    }
+    if (flags & 2u) != 0u {
+        var alpha=color.r;
+        // Actual glyph emission in the existing near/far Gaussian bases. The
+        // 24px padded shared protected envelope exceeds the far kernel's 3 sigma.
+        if (flags & 4u) != 0u && d <= 24.0 * band.w {
+            let glow=clamp(reconstructed(near,gid.xy).g+reconstructed(far,gid.xy).b,0.0,1.0);
+            alpha=alpha+glow*(1.0-alpha);
+        }
+        color=vec4<f32>(alpha);
     }
     let edge = min(f32(gid.y), f32(size.y - 1u - gid.y));
     // Fade alpha AND RGB together: no arbitrary left-edge background sample.

@@ -22,3 +22,15 @@ batch. Keep host incremental/debug outputs off and do not change phone profiles.
 
 Comparison scripts remain parent/Gemini owned. No unreviewed integration,
 self-merge, push, CI/Metro operation or intermediate phone/IPA checkpoint.
+
+## Active override, 2026-11-14
+
+User explicitly superseded **all 15% stops** and near-complete-only IPA rules.
+Use the weekly allowance; at about10% remaining stop adding features and wrap up
+with a passing checkpoint, independent review, and coordinator preparation of
+**one parity-so-far IPA by about5%**. Coordinator remains sole push/build/CI owner.
+No reset credits, high/Ultra, extra Codex workers, intermediate repeated IPAs or
+unreviewed comparison-script merge. This supersedes the earlier paragraphs above.
+Latest worker read of coordinator LIVE file: weekly used81 / remaining19%;
+primary used32 / remaining68%. Budget source: /home/kit/rust-budget-latest.json.
+Final physical phone performance is unverified until the user tests that IPA.

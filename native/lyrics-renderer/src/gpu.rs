@@ -439,7 +439,18 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
     ) -> Result<FrameStats, Error> {
-        self.render_frame(scene, protection, blur, true)
+        self.render_frame(scene, protection, blur, true, false, false)
+    }
+    /// RGB channels carry sharp alpha and two glyph-emission bases; output remains
+    /// ordinary transparent linear premultiplied RGBA. Reuses the same filter passes.
+    pub fn render_appearance(
+        &mut self,
+        scene: &Scene,
+        protection: (f32, f32),
+        blur: bool,
+        glow: bool,
+    ) -> Result<FrameStats, Error> {
+        self.render_frame(scene, protection, blur, true, true, glow)
     }
     fn render_frame(
         &mut self,
@@ -447,6 +458,8 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
         profile: bool,
+        appearance: bool,
+        glow: bool,
     ) -> Result<FrameStats, Error> {
         self.check_error()?;
         let start = Instant::now();
@@ -468,15 +481,15 @@ impl Gpu {
                 antialiasing_method: AaConfig::Area,
             },
         )?;
-        let band: Vec<u8> = [
+        let values = [
             protection.0,
             protection.1,
-            if blur { 1.0 } else { 0.0 },
+            if blur { 1.0 } else { 0.0 }
+                + if appearance { 2.0 } else { 0.0 }
+                + if glow { 4.0 } else { 0.0 },
             self.scale,
-        ]
-        .into_iter()
-        .flat_map(f32::to_le_bytes)
-        .collect();
+        ];
+        let band: [u8; 16] = std::array::from_fn(|i| values[i / 4].to_le_bytes()[i % 4]);
         self.queue.write_buffer(&self.filter.band, 0, &band);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.filter.encode(&mut encoder, self.width, self.height);
@@ -741,9 +754,30 @@ impl SurfaceRenderer {
         band: (f32, f32),
         frame: SurfaceTexture,
     ) -> Result<(FrameStats, f64), Error> {
+        self.render_surface(scene, band, frame, false, false)
+    }
+    pub fn render_appearance(
+        &mut self,
+        scene: &Scene,
+        band: (f32, f32),
+        frame: SurfaceTexture,
+        glow: bool,
+    ) -> Result<(FrameStats, f64), Error> {
+        self.render_surface(scene, band, frame, true, glow)
+    }
+    fn render_surface(
+        &mut self,
+        scene: &Scene,
+        band: (f32, f32),
+        frame: SurfaceTexture,
+        appearance: bool,
+        glow: bool,
+    ) -> Result<(FrameStats, f64), Error> {
         // All shared texture accesses and Vello pool reuse are ordered on one
         // queue. wgpu retains submitted resources. No GPU wait in live render.
-        let stats = self.gpu.render_frame(scene, band, true, false)?;
+        let stats = self
+            .gpu
+            .render_frame(scene, band, true, false, appearance, glow)?;
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
@@ -893,7 +927,8 @@ mod ownership_tests {
                 None,
                 &Rect::new(8.0, 8.0, 56.0, 56.0),
             );
-            gpu.render_frame(&scene, (0.0, 64.0), true, false).unwrap();
+            gpu.render_frame(&scene, (0.0, 64.0), true, false, false, false)
+                .unwrap();
             // Preserve each frame with the exact production copy shader before
             // the following Vello render reuses shared textures/buffer pools.
             let output = gpu.device.create_texture(&TextureDescriptor {

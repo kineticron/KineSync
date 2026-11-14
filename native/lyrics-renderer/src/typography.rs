@@ -26,7 +26,27 @@ pub struct Settings {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct EmphasisGroup {
+    pub start: f64,
+    pub end: f64,
+    pub index: usize,
+    pub count: usize,
+    pub last: bool,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WordAppearance {
+    pub emphasized: bool,
+    pub origin: f64,
+    pub rtl: bool,
+    pub last: bool,
+    pub emphasis: Option<EmphasisGroup>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PaintWord {
+    #[serde(default)]
+    pub appearance: Option<WordAppearance>,
     pub text: String,
     pub offset: usize,
     pub start: f64,
@@ -105,6 +125,24 @@ impl PaintVoice {
                     != Some(" ")
             {
                 return Err("Prepared gap is missing from source paint text".into());
+            }
+            if let Some(a) = &word.appearance {
+                if !a.origin.is_finite() || !(0.0..=1.0).contains(&a.origin) {
+                    return Err("Invalid word origin".into());
+                }
+                if let Some(g) = &a.emphasis
+                    && (!g.start.is_finite()
+                        || !g.end.is_finite()
+                        || g.start < start
+                        || g.end > end + 1.0
+                        || g.end < g.start
+                        || g.count == 0
+                        || g.count > 50000
+                        || g.index > 50000
+                        || g.index + word.graphemes.len() > 50000)
+                {
+                    return Err("Invalid emphasis group mapping".into());
+                }
             }
             previous = byte + word.text.len();
         }
@@ -470,6 +508,7 @@ mod tests {
         PaintVoice {
             text: text.into(),
             words: vec![PaintWord {
+                appearance: None,
                 text: text.into(),
                 offset: 0,
                 start: 0.0,

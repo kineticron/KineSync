@@ -1,5 +1,5 @@
 //! Source-equivalent Spicy/AMLL timing math (AGPL-3.0-only source helpers).
-//! Not wired into live rendering until its independent visual/performance gate.
+//! Live integration is controlled by the separately measured appearance policy.
 const SPICY_SCALE: Curve = Curve {
     xs: &[0.0, 0.7, 1.0],
     ys: &[0.95, 1.0505, 1.0],
@@ -184,6 +184,41 @@ impl WordState {
             motion: visual,
             letter_motion: vec![visual; if spec.emphasized { spec.letters } else { 0 }],
             settled: false,
+        }
+    }
+    pub fn spec(&self) -> WordSpec {
+        self.spec
+    }
+    /// Reveal-only stage uses the same source progress without evaluating springs
+    /// or allocating motion buffers in the frame loop.
+    pub fn advance_fill(&mut self, time: f64) {
+        let word = self.spec;
+        let end = if word.emphasized {
+            word.end - 250.0
+        } else {
+            word.end
+        };
+        let p = ((time - word.start) / (end - word.start).max(1.0)).clamp(0.0, 1.0);
+        self.motion.gradient = -0.2 + 1.2 * p;
+        let duration = (end - word.start) / word.letters.max(1) as f64;
+        let active = if time >= word.start && time < end && word.letters > 0 {
+            Some((((time - word.start) / duration).floor() as usize).min(word.letters - 1))
+        } else {
+            None
+        };
+        for (i, m) in self.letter_motion.iter_mut().enumerate() {
+            let start = word.start + i as f64 * duration;
+            m.gradient = if time < start {
+                -0.2
+            } else if time >= start + duration {
+                1.0
+            } else if active == Some(i) {
+                -0.2 + 1.2
+                    * (((time - start) / duration).clamp(0.0, 1.0) * std::f64::consts::PI / 2.0)
+                        .sin()
+            } else {
+                -0.2
+            };
         }
     }
     pub fn advance(&mut self, time: f64, dt: f64) {
@@ -427,6 +462,34 @@ mod tests {
                 }
             }
             _ => assert_eq!(actual, expected),
+        }
+    }
+    #[test]
+    fn reveal_only_stage_matches_the_same_source_goldens() {
+        for case in data()["cases"].as_array().unwrap() {
+            let w = &case["word"];
+            let mut state = WordState::new(WordSpec {
+                start: w["start"].as_f64().unwrap(),
+                end: w["end"].as_f64().unwrap(),
+                emphasized: w["emphasized"].as_bool().unwrap(),
+                letters: w["letters"].as_array().unwrap().len(),
+            });
+            for f in case["frames"].as_array().unwrap() {
+                state.advance_fill(f["time"].as_f64().unwrap());
+                assert!(
+                    (state.motion.gradient - f["motion"]["gradient"].as_f64().unwrap()).abs()
+                        < 1e-9
+                );
+                for (actual, expected) in state
+                    .letter_motion
+                    .iter()
+                    .zip(f["motion"]["letters"].as_array().unwrap())
+                {
+                    assert!(
+                        (actual.gradient - expected["gradient"].as_f64().unwrap()).abs() < 1e-9
+                    );
+                }
+            }
         }
     }
     #[test]

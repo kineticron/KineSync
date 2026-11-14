@@ -99,3 +99,28 @@ superseded: one final IPA when close to complete, no per-effect phone tests or
 implementation dependency on them. Actual native Skia simulator evidence is still
 required for full-screen acceptance; physical phone performance remains unverified
 until the final user test.
+
+## ABI5 live appearance checkpoint (2026-11-14)
+
+Typography remains c08dfd2 plus validated emphasis/group transport. Source timing
+65593ff now has a bounded native renderer integration with immutable glyph IDs /
+positions and separately resettable owner timing. Per-effect CPU/encode/alloc
+results and the enabled policy are in `parity-live-appearance-handoff.md`.
+Actual GPU pixel checks prove changing fill/motion, transparent premultiplied
+coverage and emission outside real glyphs; they do **not** prove Skia parity.
+Glow is only a shared two-Gaussian approximation, not exact variable-radius
+source filtering. Parent comparison scripts remain untouched and unmerged.
+
+Still incomplete: source-exact glyph-ink/overlap union handling and colored glyphs;
+actual Skia numeric acceptance (including font/fallback/wrap differences); native
+full-viewport deterministic capture; BGV transport/layout, full duet/auxiliary
+rows, translations/romanization, style scroll, finite interludes, attribution
+links/touch/accessibility. Existing simultaneous foreground highlighting and
+protected envelope remain; those alone are not BGV parity. No mocked reference
+or duplicated baseline is accepted as a distinct style.
+
+Latest user override permits ONE coordinator-built **parity-so-far** IPA after
+independent review, and supersedes the near-complete-only delivery rule. No
+intermediate per-effect phone checkpoints. Physical phone performance remains
+unverified for ABI5. Start wrap-up around10% weekly remaining and target review /
+coordinator IPA preparation by about5%; no15% stop or reset-credit redemption.

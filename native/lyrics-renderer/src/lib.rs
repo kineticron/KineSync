@@ -1,12 +1,14 @@
 //! Offline fixture and timing model. Milliseconds, half-open active intervals.
 use std::ops::Range;
 
+pub mod appearance;
 pub mod ffi;
 pub mod gpu;
 pub mod live;
 pub mod motion;
 pub mod scene;
 pub mod style_timing;
+mod timed_scene;
 pub mod typography;
 
 pub const FIXTURE: &str =
@@ -194,3 +196,6 @@ pub(crate) mod allocation_probe {
 mod baseline_scene;
 #[cfg(test)]
 mod typography_budget;
+
+#[cfg(test)]
+mod appearance_tests;

@@ -68,6 +68,7 @@ struct Engine {
     scale: f32,
     metrics: Metrics,
     scroll: Scroll,
+    appearance: crate::appearance::AppearanceState,
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
 #[cfg(target_os = "ios")]
@@ -111,7 +112,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    4
+    5
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -143,6 +144,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                 ))?;
                 Ok(Engine {
                     scroll: Scroll::default(),
+                    appearance: crate::appearance::AppearanceState::default(),
                     timeline: Timeline::default(),
                     lines: Vec::new(),
                     fonts: crate::typography::Fonts::default(),
@@ -265,9 +267,13 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         let settings = packet
             .settings
             .clone()
-            .ok_or("ABI4 requires explicit style settings")?;
-        if packet.lines.iter().any(|line| line.paint.is_none()) {
-            return Err("ABI4 requires prepared voice metadata".into());
+            .ok_or("ABI5 requires explicit style settings")?;
+        if packet.lines.iter().any(|line| {
+            line.paint
+                .as_ref()
+                .is_none_or(|p| p.words.iter().any(|w| w.appearance.is_none()))
+        }) {
+            return Err("ABI5 requires prepared voice metadata".into());
         }
         let lines = packet.into_lines();
         let started = Instant::now();
@@ -306,6 +312,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine.layout = Some(layout);
         engine.timeline.replace(generation);
         engine.scroll.reset();
+        engine.appearance.reset();
         engine.metrics.generation = generation;
         Ok(0)
     })
@@ -335,6 +342,7 @@ pub extern "C" fn kr_set_anchor(
         )?;
         if accepted && snap {
             engine.scroll.reset();
+            engine.appearance.reset();
         }
         Ok(if accepted { 0 } else { 1 })
     })
@@ -403,6 +411,7 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         }
         engine.layout_key = key;
         engine.layout = layout;
+        engine.appearance.reset();
         engine.scale = scale;
         engine.metrics.width = width;
         engine.metrics.height = height;
@@ -457,13 +466,30 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         let scroll = engine
             .scroll
             .sample(layout.scroll_target(position), native_ms);
-        let band = layout.frame_prepared(position, scroll, &mut engine.scene);
-        engine.metrics.animating = u32::from(engine.scroll.animating());
+        let effect = crate::appearance::LIVE_EFFECT;
+        engine.appearance.prepare(layout, position, native_ms);
+        engine
+            .appearance
+            .advance(layout, position, native_ms, engine.timeline.playing, effect);
+        let band = layout.frame_appearance(
+            position,
+            scroll,
+            &engine.appearance,
+            &mut engine.scene,
+            effect,
+        );
+        engine.metrics.animating =
+            u32::from(engine.scroll.animating() || engine.appearance.animating());
         engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
         let (stats, present) = engine
             .surface
-            .render(&engine.scene, band, frame)
+            .render_appearance(
+                &engine.scene,
+                band,
+                frame,
+                crate::appearance::LIVE_EFFECT.glow(),
+            )
             .map_err(|e| e.to_string())?;
         engine.metrics.frames += 1;
         engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
@@ -526,8 +552,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v4_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 4);
+    fn abi_v5_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 5);
         assert_eq!(std::mem::size_of::<Metrics>(), 152);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);

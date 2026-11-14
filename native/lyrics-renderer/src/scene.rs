@@ -12,31 +12,37 @@ use vello::{
 
 type Error = Box<dyn std::error::Error>;
 
-struct CachedLine {
-    white: Scene,
-    height: f64,
+pub(crate) struct CachedLine {
+    pub(crate) white: Scene,
+    pub(crate) plain: Scene,
+    pub(crate) height: f64,
     /// One or more visual fragments for each timed atom, including wrapped syllables.
     atoms: Vec<Vec<Rect>>,
-    words: Vec<crate::typography::WordRange>,
-    top: f64,
-    x: f64,
-    layout: Option<parley::Layout<()>>,
-    detailed: bool,
+    pub(crate) words: Vec<crate::typography::WordRange>,
+    pub(crate) top: f64,
+    pub(crate) x: f64,
+    pub(crate) layout: Option<parley::Layout<()>>,
+    pub(crate) detailed: bool,
+    pub(crate) timed: Option<Vec<crate::timed_scene::TimedWord>>,
+    pub(crate) size: f64,
+    pub(crate) lane: f64,
+    pub(crate) right: bool,
+    pub(crate) content_height: f64,
 }
 
 pub struct TrackScene {
     pub lines: Vec<Line>,
-    cached: Vec<CachedLine>,
+    pub(crate) cached: Vec<CachedLine>,
     pub width: u32,
     pub height: u32,
     pub font_size: f64,
     pub glyph_count: usize,
     pub missing_glyphs: usize,
-    prefix: Vec<f64>,
+    pub(crate) prefix: Vec<f64>,
     pub diagnostics: Vec<serde_json::Value>,
     fonts: Option<crate::typography::Fonts>,
     settings: Option<crate::typography::Settings>,
-    scale: f32,
+    pub(crate) scale: f32,
     pub plain_preparations: usize,
     pub detailed_preparations: usize,
     prepared_signature: Option<(usize, usize, usize)>,
@@ -93,7 +99,7 @@ fn measure(clusters: &[(std::ops::Range<usize>, f64)], range: std::ops::Range<us
         .sum()
 }
 
-fn fragments(
+pub(crate) fn fragments(
     layout: &parley::Layout<()>,
     words: &[crate::typography::WordRange],
 ) -> Vec<Vec<Rect>> {
@@ -195,6 +201,7 @@ impl TrackScene {
             offset += f64::from(height);
             cached.push(CachedLine {
                 white: Scene::new(),
+                plain: Scene::new(),
                 height: height.into(),
                 atoms: Vec::new(),
                 words: Vec::new(),
@@ -202,6 +209,11 @@ impl TrackScene {
                 x: g.x.into(),
                 layout: None,
                 detailed: false,
+                timed: None,
+                size: f64::from(g.font_size),
+                lane: f64::from(g.text_width),
+                right: g.right,
+                content_height: 0.0,
             });
         }
         let count = lines.len();
@@ -298,6 +310,15 @@ impl TrackScene {
                     );
                     self.detailed_preparations += 1;
                 }
+                if cached.timed.is_none() {
+                    cached.timed = self.lines[i].paint.as_ref().map(|voice| {
+                        crate::timed_scene::geometry(
+                            cached.layout.as_ref().expect("prepared"),
+                            &cached.words,
+                            voice,
+                        )
+                    });
+                }
                 cached.detailed = true;
             }
             if !detailed && self.cached[i].detailed {
@@ -315,9 +336,11 @@ impl TrackScene {
             {
                 self.cached[i].layout = None;
                 self.cached[i].white = Scene::new();
+                self.cached[i].plain = Scene::new();
                 self.cached[i].atoms = Vec::new();
                 self.cached[i].words = Vec::new();
                 self.cached[i].detailed = false;
+                self.cached[i].timed = None;
                 self.diagnostics[i] = serde_json::Value::Null;
             }
         }
@@ -470,6 +493,7 @@ impl TrackScene {
                 AlignmentOptions::default(),
             );
             let mut white = Scene::new();
+            let mut plain = Scene::new();
             let mut atoms = Vec::new();
             let mut faces = Vec::new();
             for row in layout.lines() {
@@ -492,6 +516,19 @@ impl TrackScene {
                                 }
                             })
                             .collect();
+                        if settings.is_some() {
+                            plain
+                                .draw_glyphs(run.font())
+                                .font_size(run.font_size())
+                                .normalized_coords(
+                                    &run.normalized_coords()
+                                        .iter()
+                                        .map(|c| c.to_bits())
+                                        .collect::<Vec<_>>(),
+                                )
+                                .brush(Color::new([1.0, 0.0, 0.0, 1.0]))
+                                .draw(Fill::NonZero, glyphs.iter().copied());
+                        }
                         white
                             .draw_glyphs(run.font())
                             .font_size(run.font_size())
@@ -542,8 +579,16 @@ impl TrackScene {
             diagnostics.push(serde_json::json!({"geometry":geometry,"text":text,"height":height,"content_top":top,
                 "content_height":content_height,"faces":faces,"line_count":layout.len(),
                 "word_ranges":words.iter().map(|w|vec![w.bytes.start,w.bytes.end]).collect::<Vec<_>>() }));
+            let timed = if detailed {
+                line.paint
+                    .as_ref()
+                    .map(|voice| crate::timed_scene::geometry(&layout, &words, voice))
+            } else {
+                None
+            };
             cached.push(CachedLine {
                 white,
+                plain,
                 height,
                 atoms,
                 words,
@@ -551,6 +596,11 @@ impl TrackScene {
                 x,
                 layout: Some(layout),
                 detailed,
+                timed,
+                size: f64::from(size),
+                lane: f64::from(lane),
+                right: geometry.as_ref().is_some_and(|g| g.right),
+                content_height,
             });
         }
         if missing_glyphs > 0 {
@@ -575,6 +625,18 @@ impl TrackScene {
             detailed_preparations: 0,
             prepared_signature: None,
         })
+    }
+
+    pub fn style(&self) -> Option<crate::typography::Style> {
+        self.settings.as_ref().map(|s| s.style)
+    }
+    pub fn timed_ready(&self, index: usize) -> bool {
+        self.cached
+            .get(index)
+            .is_some_and(|c| c.detailed && c.timed.is_some())
+    }
+    pub fn geometry_ready(&self, index: usize) -> bool {
+        self.cached.get(index).is_some_and(|c| c.layout.is_some())
     }
 
     /// Returns protected band in output pixels, including the entire next line.
@@ -765,6 +827,7 @@ mod lazy_tests {
                     paint: Some(PaintVoice {
                         text: text.clone(),
                         words: vec![PaintWord {
+                            appearance: None,
                             text,
                             offset: 0,
                             start,

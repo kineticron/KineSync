@@ -1,0 +1,208 @@
+[
+  {
+    "halo_pixels": 944,
+    "identical_history_repeat": true,
+    "live_motion_png": "/files/rust_parity_live_motion_Spicy.png",
+    "motion_changed_pixels": 484,
+    "premultiplied": true,
+    "prototype_glow_png": "/files/rust_parity_live_appearance_Spicy.png",
+    "scope": "actual production glyphs + shared two-radius glow, no native Skia comparison acceptance",
+    "selected_faces": [
+      {
+        "content_height": 44.099998474121094,
+        "content_top": 19.950000762939453,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              0,
+              11
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 33.599998474121094,
+          "lane_width": 293.9200134277344,
+          "line_height": 44.099998474121094,
+          "right": false,
+          "row_padding": 12.0,
+          "text_width": 293.9200134277344,
+          "weight": 700.0,
+          "x": 28.0
+        },
+        "height": 84.0,
+        "line_count": 1,
+        "text": "Du-ru-du-du",
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            9,
+            11
+          ]
+        ]
+      }
+    ],
+    "style": "spicy",
+    "time_changed_pixels": 220,
+    "time_ms": 64202.55
+  },
+  {
+    "halo_pixels": 438,
+    "identical_history_repeat": true,
+    "live_motion_png": "/files/rust_parity_live_motion_Amll.png",
+    "motion_changed_pixels": 2680,
+    "premultiplied": true,
+    "prototype_glow_png": "/files/rust_parity_live_appearance_Amll.png",
+    "scope": "actual production glyphs + shared two-radius glow, no native Skia comparison acceptance",
+    "selected_faces": [
+      {
+        "content_height": 43.20000076293945,
+        "content_top": 14.40000057220459,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              0,
+              6
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              6,
+              7
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              7,
+              13
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              13,
+              14
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              14,
+              20
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 36.0,
+          "lane_width": 306.0,
+          "line_height": 43.20000076293945,
+          "right": false,
+          "row_padding": 14.40000057220459,
+          "text_width": 291.6000061035156,
+          "weight": 800.0,
+          "x": 42.0
+        },
+        "height": 72.00000190734863,
+        "line_count": 1,
+        "text": "깍지 놓친 손은",
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            10,
+            13
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            17,
+            20
+          ]
+        ]
+      }
+    ],
+    "style": "amll",
+    "time_changed_pixels": 1275,
+    "time_ms": 15399.2
+  }
+]
