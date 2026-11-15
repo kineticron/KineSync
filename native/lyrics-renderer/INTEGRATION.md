@@ -47,7 +47,7 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 6 retains explicit seek-snap intent, separate display-target/sample
+ABI version 7 retains explicit seek-snap intent, separate display-target/sample
 clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
 IPA; a Metro-only update cannot install the Rust/Swift changes.
 
@@ -346,3 +346,33 @@ GPU blur/viewport and preserves player chrome rules. This is not the unimplement
 native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
 for actual source inputs, performance gates, pixel receipts and remaining BGV /
 interlude / romanization / native capture limitations. Glow remains OFF.
+
+## ABI7 Skia follow ownership and overlapping line timing
+
+Schema6 gains an optional `background_end` per line (the JS producer sends
+`getBackgroundEndTime`, covering `backgroundSyllables` and `spicyBackgrounds`).
+A line stays in the active presentation package until that end, so background
+vocal tails no longer collapse the highlight or scroll at the lead end. Line
+starts may overlap or be out of source order: the parser still rejects inverted
+line/atom intervals but no longer rejects unordered starts, and the playback
+window scans source order so a duet line that starts a few milliseconds before
+the line above it stays active together with it. Display order is unchanged.
+
+The native playback window, auto-scroll target range and follow index are ported
+from `lib/lyrics-layout.ts` (`getPlaybackWindowState`,
+`getAutoScrollTargetRange`, `interludeIndex`) including 3000 ms long pauses,
+500 ms dot early exit, 24 pt bottom padding and per-style anchors (AMLL 8% + 8 pt,
+landscape Spicy 32 pt, portrait 0). Spicy uses the same 240-440 ms tween and
+cubic-bezier(0.22, 0.88, 0.34, 1); AMLL uses the same stiffness/damping, 0.9 mass
+and per-row cascade residual. Interlude dots are not drawn yet: the viewport
+targets the upcoming row during a long pause, as Skia does, but the animated dot
+row itself remains a Skia-only visual.
+
+`kr_set_following(bool)`, `kr_scroll_by(double)` and
+`kr_hit_test(double) -> int32` add Skia's explicit ownership contract. A touch
+freezes the current offset (turning follow off), drag deltas are applied in touch
+order, and a line tap restores follow before seeking; the Swift view exposes
+`setFollowing`, `scrollBy` and `hitTest`, and the JS PanResponder implements the
+540 ms long press, tap-to-seek and drag threshold from the Skia row Pressables.
+The Rust surface now fills the whole area below the top bar with the controls
+dock's gradient over it instead of being clipped above the dock.
