@@ -317,10 +317,12 @@ Mutable source timing belongs to the native owner, separately from retained
 geometry. Track/seek/resize reset timing; pause preserves source release motion.
 Active/overlapping and next-two geometry is prepared on demand; plain inactive
 rows remain cached. The live per-effect policy and measured/rejected stages are
-recorded in `evidence/parity-live-appearance-handoff.md`. A rendered prototype is
-not automatically enabled. Glow uses a two-radius shared approximation and is
-not accepted Skia parity. No per-line GPU filter, full-resolution blur, active
-animated-picture cache, new wait or deeper queue was introduced.
+recorded in `evidence/parity-live-appearance-handoff.md`, which is the historical
+record of the stages measured before ABI8. Glow uses a two-radius shared
+approximation; its intensity, radius and activation now follow the Skia sources
+and it is the live effect (see the ABI8 section below), so that handoff's
+glow-off policy is superseded. No per-line GPU filter, full-resolution blur,
+active animated-picture cache, new wait or deeper queue was introduced.
 
 One coordinator-built parity-so-far IPA is now user-authorized after independent
 review; this supersedes the earlier near-complete-only delivery rule. This
