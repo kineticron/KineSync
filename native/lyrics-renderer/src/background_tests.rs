@@ -197,7 +197,11 @@ fn background_voice_typography_follows_each_skia_source() {
             close(first.size, lead.size * 0.7, name);
             close(first.padding, first.size * 0.2, name);
             close(first.alpha, 0.4, name);
-            close(first.lane, lead.lane, name);
+            close(
+                first.lane,
+                expected["background_text_width"].as_f64().unwrap(),
+                name,
+            );
             assert!((first.offset - (lead.box_height() + lead.size * 0.3)).abs() < 0.02);
         }
         if let Some(lead_text) = expected["lead_text_width"].as_f64() {
@@ -295,7 +299,11 @@ fn duet_alignment_and_source_order_survive_overlapping_starts() {
         }
     }
     let (landscape, _, _) = tracks("spicy-duet-landscape");
-    assert!(landscape.cached[0].right, "landscape flips the duet side");
+    assert_eq!(
+        landscape.cached[0].right,
+        !landscape.lines[0].paint.as_ref().unwrap().opposite,
+        "landscape flips the source duet side"
+    );
     assert_eq!(
         landscape.cached[0].voices[1].right,
         landscape.cached[0].right
