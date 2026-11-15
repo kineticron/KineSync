@@ -1830,10 +1830,10 @@ export default function HomeScreen() {
       </>
       ) : null}
 
-      {!tour.active && lyrics.length > 0 && !showEmptyState && (isSpicyLyricsResponse({ source: lyricsSource, metadata: lyricsMetadata }) || rustRenderer && Boolean(lyricsMetadata.attribution || lyricsMetadata.credits?.songwriters?.length)) ? (
+      {!tour.active && lyrics.length > 0 && !showEmptyState && isSpicyLyricsResponse({ source: lyricsSource, metadata: lyricsMetadata }) ? (
         <Reanimated.View pointerEvents={fullscreenAlbumMode && !albumArtworkMorphing ? 'none' : 'box-none'}
           style={[styles.lyricsAttributionLayer, !isLandscape && lyricsChromeOpacityStyle]}>
-          <LyricsAttribution metadata={lyricsMetadata} allCredits={rustRenderer} trackId={currentTrack?.id}
+          <LyricsAttribution metadata={lyricsMetadata} trackId={currentTrack?.id}
             controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
             controlsHeight={isLandscape ? 0 : controlsDockHeight}
             bottomInset={insets.bottom} onInteraction={handleControlsInteraction} />
