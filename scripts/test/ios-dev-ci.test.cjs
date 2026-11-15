@@ -674,6 +674,51 @@ size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
 });
 
 
+test('local pod font resources match CocoaPods descendant inventory and resolve tracked assets', t => {
+  const relativePod = 'ExpoLyrics/modules/kinesync-rust-lyrics/ios';
+  const pod = path.join(repo, relativePod);
+  const spec = fs.readFileSync(path.join(pod, 'KineSyncRustLyrics.podspec'), 'utf8');
+  const declaration = spec.match(/s\.resource_bundles\s*=\s*\{\s*'KineSyncLyricsFonts'\s*=>\s*\[([^\]]+)\]/);
+  assert.ok(declaration, 'expected an explicit font resource bundle');
+  const resources = [...declaration[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+  const names = ['SF-Pro-Display-Regular.otf', 'SF-Pro-Display-Bold.otf'];
+  assert.deepEqual(resources, names.map(name => 'Fonts/' + name));
+  // CocoaPods 1.16.2 Sandbox::PathList enumerates descendants first, then
+  // matches patterns against that inventory (not unrestricted Dir.glob).
+  // File symlinks are entries; symlink directories need not be traversed.
+  const inventory = new Set();
+  function walk(dir, prefix = '') {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'Frameworks') continue;
+      const relative = prefix + entry.name;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), relative + '/');
+      else inventory.add(relative);
+    }
+  }
+  walk(pod);
+  // Run from an unrelated checkout path with spaces as well: links must be
+  // relative to the local pod, not the process cwd or the rescue host path.
+  const checkout = path.join(temp(t), 'checkout with spaces');
+  for (const [i, resource] of resources.entries()) {
+    const name = names[i];
+    assert.ok(inventory.has(resource), `CocoaPods cannot select ${resource}`);
+    const original = '../../../assets/fonts/' + name;
+    assert.ok(fs.existsSync(path.resolve(pod, original)), 'original asset exists');
+    assert.ok(!inventory.has(original), 'original escaping pattern matches nothing');
+    const link = path.join(pod, resource);
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'reuse assets without copying binaries');
+    const target = fs.readlinkSync(link);
+    assert.ok(!path.isAbsolute(target));
+    const asset = path.join(repo, 'ExpoLyrics/assets/fonts', name);
+    assert.equal(fs.realpathSync(link), fs.realpathSync(asset));
+    put(checkout, 'ExpoLyrics/assets/fonts/' + name, fs.readFileSync(asset));
+    const relocated = path.join(checkout, relativePod, resource);
+    fs.mkdirSync(path.dirname(relocated), { recursive: true });
+    fs.symlinkSync(target, relocated);
+    assert.deepEqual(fs.readFileSync(relocated), fs.readFileSync(asset));
+  }
+});
+
 test('font resources invalidate native caches and packaged bytes fail closed', t => {
   const root=temp(t);fixture(root);const keys=()=>cacheKeys(root,identity,'fonts','refs/heads/rust-renderer-spike');
   const before=keys();put(root,'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf','changed');
