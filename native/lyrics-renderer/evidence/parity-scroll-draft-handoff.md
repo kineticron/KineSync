@@ -1,5 +1,62 @@
 # Run18 Spicy scroll draft — disabled, not an accepted feature
 
+## Resumed compact checkpoint, 2026-11-14
+
+User authorized lean checks after coordinator-only cleanup. The gate remains
+**false** and ABI6 approved runtime behavior remains selected. Corrected one
+disabled-candidate mismatch: interrupted snapped-command duration now uses
+the distance between command targets, as `applyScrollCommand` does, while
+position continuity still samples the interrupted tween. This does not port
+manual drag, geometry-command springs, command serials or target ownership.
+
+`test/scroll-timing.json` records 24 duration and 7 easing samples obtained by
+transpiling and calling the actual bundled `reference-motion.ts` exports with
+the installed TypeScript compiler (CommonJS, esModuleInterop). The source SHA256
+is embedded and checked by the Rust test. Inputs cover interval100/430/800ms,
+interlude true/false, logical distances0/100/600/900 and easing endpoints plus
+60/120Hz and irregular progress samples. These are helper samples, **not**
+60/120Hz trajectory, Reanimated runtime or actual-Skia goldens. A regression
+test distinguishes command distance from the remaining animated distance.
+
+Fresh release library tests: **39 passed, 6 ignored**, including all5 draft
+scroll tests. The ignored tests are opt-in GPU/performance gates. Strict host
+release all-target Clippy, cargo fmt and23 Node ABI/client contract tests pass.
+Strict `aarch64-apple-ios --lib` Clippy also passes (cross-check only; no iOS
+link, package or device run). Final free space:8.3GB. No builds remain running.
+Fresh logs use `parity-scroll-checkpoint-*.log`. Historical disk-stop results
+below remain the record of Run18; this section supersedes their final-source
+compilation status only. No render, GPU/performance or physical-phone result
+is carried forward as validation of this draft.
+
+Checks select `RUSTUP_TOOLCHAIN=1.97.0`, `CARGO_INCREMENTAL=0`,
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_BUILD_JOBS=2`.
+Cargo uses `--locked --offline` and the existing target directory. Release
+tests reuse release dependencies; host Clippy checks release targets. No new
+dependency, duplicate target directory, cleanup or deletion was introduced.
+
+Reproduction from repository root with the environment above:
+
+```sh
+cargo test --manifest-path native/lyrics-renderer/Cargo.toml --locked --offline --release --lib
+cargo clippy --manifest-path native/lyrics-renderer/Cargo.toml --locked --offline --release --all-targets -- -D warnings
+cargo clippy --manifest-path native/lyrics-renderer/Cargo.toml --locked --offline --target aarch64-apple-ios --lib -- -D warnings
+cargo fmt --manifest-path native/lyrics-renderer/Cargo.toml -- --check
+node --test scripts/test/ios-dev-ci.test.cjs
+git diff --check
+```
+
+Coordinator comparison script at `4386429` remains **unfinished/unmerged**:
+replay CLI, manifest provenance and build preflight still require fixes and
+independent kitten PASS before coordinator merge. Cached numeric diagnostics
+are not proof. Latest user steering resumes LOW for those fixes; this MEDIUM
+checkpoint made no comparison-script edits or LOW turns.
+
+Fresh live helper at this batch boundary: weekly14% remaining / primary98%
+remaining; final fresh read: weekly13% / primary94% remaining.
+Wrap at approximately10%; one IPA at approximately5% remains solely
+coordinator-owned. No push, merge, CI, Metro, IPA, extra agent or reset credit.
+All remaining enablement requirements below still apply.
+
 Parent approved runtime checkpoint: `5fcb29b` (ABI6). Coordinator reports its
 independent ABI6 review approved with no blockers. This new source checkpoint
 is a **draft**, with `SOURCE_SPICY_SCROLL_ENABLED = false`. It retains the old

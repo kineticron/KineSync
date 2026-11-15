@@ -1,0 +1,32 @@
+✔ absolute normalized cache paths and build flags survive runner paths with spaces (4.08917ms)
+✔ Rust prebuilt is source-exact, and independent of JS or Swift shims (11.597739ms)
+✔ Podfile.lock and native/SDK identities invalidate native caches without JS-only churn (17.410309ms)
+✔ workflow restore/save paths and identities match exactly, all are resolved once (1.50592ms)
+✔ stage failure and warm-cache failure still produce machine-readable evidence (153.793901ms)
+✔ IPA inner ZIP preserves framework executable modes, symlinks, and bytes (78.774115ms)
+✔ restored Podfile.lock cannot silently change between restore and save (287.162283ms)
+✔ runner initialization emits actual paths, pinned Cargo target and no Rust build (339.85533ms)
+✔ workflow shell commands pass bash syntax checks (109.062023ms)
+✔ independent executable validator rejects equal 0644 source and archive, repair fixes only code (339.91625ms)
+✔ live Rust track protocol preserves source atoms and sends anchors only for actual anchor changes (1.04127ms)
+✔ native lifecycle source harness flushes inactive updates and bounds paused surface retries (0.94337ms)
+✔ Rust cache verifier rejects simulator slices and final proof rejects archive-only integration (361.938598ms)
+✔ real Rust producer preserves empty/nonempty feature arguments under /bin/bash (671.72278ms)
+ℹ GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+✔ Cargo cache identity covers the toolchain and archive check scripts (6.34971ms)
+✔ producer sealing and cache-hit validation use pinned llvm-nm and reject failed or incomplete inventories (1522.098379ms)
+✔ SourceMap v3 source collection accepts flat and nested Metro sections and fails closed on malformed maps (1.2192ms)
+✔ native frame source contract uses display targets, one draw and asynchronous retirement (20.182629ms)
+✔ visual anchor clock preserves rate/pause/resume and snaps scrub/track/discontinuities (0.70634ms)
+✔ measured player viewport clips before the complete dock and diagnostics reserve canvas space (1.408119ms)
+✔ generated, built and packaged app ProMotion key must be Boolean true (345.86288ms)
+✔ ABI 6 C layout and both native-client guards reject incompatible clients (14.585209ms)
+✔ font resources invalidate native caches and packaged bytes fail closed (8.623339ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4370.57805

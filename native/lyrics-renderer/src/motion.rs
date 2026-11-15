@@ -163,10 +163,14 @@ impl SpicyScroll {
             self.value = target;
         }
         if self.start.is_none() || target != self.target {
+            // reference-scroll.tsx passes the command delta to duration, even
+            // when the previous residual has not settled. Keep that separate
+            // from the current animated position used for continuity.
+            let distance = (target - self.target).abs() / dpr;
             self.from = self.value;
             self.target = target;
             self.start = Some(now);
-            self.duration = spicy_duration(interval, interlude, (target - self.value).abs() / dpr);
+            self.duration = spicy_duration(interval, interlude, distance);
         }
         self.value
     }
@@ -178,6 +182,58 @@ impl SpicyScroll {
 #[cfg(test)]
 mod source_scroll_tests {
     use super::*;
+    #[test]
+    fn duration_and_easing_match_pinned_production_helper() {
+        use sha2::Digest;
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../test/scroll-timing.json")).unwrap();
+        let source = &data["source"];
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(source["path"].as_str().unwrap());
+        assert_eq!(
+            format!("{:x}", sha2::Sha256::digest(std::fs::read(path).unwrap())),
+            source["sha256"].as_str().unwrap()
+        );
+        let durations = data["durations"].as_array().unwrap();
+        assert_eq!(durations.len(), 24);
+        for case in durations {
+            assert_eq!(
+                spicy_duration(
+                    case["interval"].as_f64().unwrap(),
+                    case["interlude"].as_bool().unwrap(),
+                    case["distance"].as_f64().unwrap(),
+                ),
+                case["expected"].as_f64().unwrap()
+            );
+        }
+        let easing = data["easing"].as_array().unwrap();
+        assert_eq!(easing.len(), 7);
+        for case in easing {
+            assert!(
+                (crate::style_timing::bezier(
+                    case["progress"].as_f64().unwrap(),
+                    0.22,
+                    0.88,
+                    0.34,
+                    1.0
+                ) - case["expected"].as_f64().unwrap())
+                .abs()
+                    < 1e-12
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_tween_duration_uses_command_delta() {
+        let mut s = SpicyScroll::default();
+        s.sample(0.0, 800.0, false, 0.0, 1.0);
+        s.sample(600.0, 800.0, false, 0.0, 1.0);
+        let position = s.sample(600.0, 800.0, false, 17.0, 1.0);
+        assert_eq!(s.sample(700.0, 800.0, false, 17.0, 1.0), position);
+        assert_eq!(s.duration, spicy_duration(800.0, false, 100.0));
+        assert_ne!(s.duration, spicy_duration(800.0, false, 700.0 - position));
+    }
     #[test]
     fn draft_is_not_live() {
         // Runtime stays on approved ABI6 until independent source/perf validation.
