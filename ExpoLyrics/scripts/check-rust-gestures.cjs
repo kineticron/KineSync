@@ -113,6 +113,38 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     assert.deepEqual(calls.follow, [false]);
   }
 
+  // A slow released tap must not steal ownership back from a newer drag.
+  {
+    let resolveHit;
+    const hit = new Promise(resolve => { resolveHit = resolve; });
+    const { gesture, calls } = fixture({ hitTest: () => hit });
+    gesture.grant(0);
+    gesture.release();
+    gesture.grant(0);
+    gesture.move(-40);
+    resolveHit(2);
+    await flush();
+    assert.deepEqual(calls.press, []);
+    assert.deepEqual(calls.follow, [false, false]);
+    gesture.terminate();
+  }
+
+  // Unmount also cancels deferred taps and long presses after release.
+  for (const longPress of [false, true]) {
+    let resolveHit;
+    const hit = new Promise(resolve => { resolveHit = resolve; });
+    const { gesture, calls, timer } = fixture({ hitTest: () => hit });
+    gesture.grant(0);
+    if (longPress) timer().fn();
+    gesture.release();
+    gesture.terminate();
+    resolveHit(2);
+    await flush();
+    assert.deepEqual(calls.press, []);
+    assert.deepEqual(calls.long, []);
+    assert.deepEqual(calls.follow, [false]);
+  }
+
   // Missing/out-of-range hit rows cannot seek.
   {
     const { gesture, calls } = fixture({ hitTest: () => -1 });

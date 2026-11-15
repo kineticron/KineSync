@@ -44,6 +44,7 @@ function createRustLyricsGesture({
   };
   return {
     grant(y) {
+      cancel(active);
       token += 1;
       const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, timer: null, hit: null };
       active = current;
@@ -59,7 +60,7 @@ function createRustLyricsGesture({
           onLineLongPress(current.index);
         } else {
           // A slow first hit test must still select, not silently drop the hold.
-          void current.hit.then((index) => { if (current.longPressed && index >= 0) onLineLongPress(index); });
+          void current.hit.then((index) => { if (current.token === token && current.longPressed && index >= 0) onLineLongPress(index); });
         }
       };
       current.timer = setTimer(() => {
@@ -90,7 +91,7 @@ function createRustLyricsGesture({
       // press when it lands instead of dropping the seek. A tap outside every
       // row never restores follow (Skia only presses actual rows).
       const press = (index) => {
-        if (index < 0) return;
+        if (current.token !== token || index < 0) return;
         setFollowing(true);
         onAutoFollowChange(true);
         onUserInteraction();
@@ -100,6 +101,7 @@ function createRustLyricsGesture({
       else void current.hit.then(press);
     },
     terminate() {
+      token += 1;
       if (!active) return;
       cancel(active);
       active = null;
