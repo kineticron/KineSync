@@ -7,7 +7,7 @@ use crate::{
 };
 use vello::{
     Scene,
-    kurbo::{Affine, BezPath, Rect, Shape},
+    kurbo::{Affine, BezPath, Circle, Rect, Shape},
     peniko::{BlendMode, Color, Fill, Gradient, color::ColorSpaceTag},
 };
 pub(crate) struct Slice {
@@ -225,9 +225,18 @@ impl TrackScene {
         let spicy = self.style() == Some(Style::Spicy);
         let scale = f64::from(self.scale);
         let anchor = self.scroll_anchor();
+        // The interlude slot is inserted above its row; this row and every later
+        // row are translated by the expanded height without changing prefix.
+        let (interlude_row, extra) = self.interlude_shift(time);
+        let shift =
+            |index: usize| interlude_row.map_or(0.0, |row| if index >= row { extra } else { 0.0 });
+        // Skia paints the interlude group before the lead voice, so the
+        // collapsing row text stays above the fading dots.
+        self.draw_interlude_dots(time, scroll, adjust, state, scene);
         for (index, cached) in self.cached.iter().enumerate() {
-            let y =
-                anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0);
+            let y = anchor + self.prefix[index] - scroll
+                + adjust.get(index).copied().unwrap_or(0.0)
+                + shift(index);
             if y + cached.height < -40.0
                 || y > f64::from(self.height) + 40.0
                 || cached.layout.is_none()
@@ -468,11 +477,133 @@ impl TrackScene {
         let next = (last.max(first) + 1).min(self.lines.len() - 1);
         let adjust_at = |index: usize| adjust.get(index).copied().unwrap_or(0.0);
         (
-            (anchor + self.prefix[first] - scroll + adjust_at(first) - 10.0 * scale) as f32,
+            (anchor + self.prefix[first] - scroll + adjust_at(first) + shift(first) - 10.0 * scale)
+                as f32,
             (anchor + self.prefix[next] - scroll
                 + adjust_at(next)
+                + shift(next)
                 + self.cached[next].height
                 + 10.0 * scale) as f32,
         )
+    }
+
+    /// Spicy bullet dots / AMLL breathing dots for the active interlude. Drawn
+    /// after the rows at the slot origin so no row layer clips them.
+    fn draw_interlude_dots(
+        &self,
+        time: f64,
+        scroll: f64,
+        adjust: &[f64],
+        state: &AppearanceState,
+        scene: &mut Scene,
+    ) {
+        let Some((row, slot)) = self.interlude_at(time) else {
+            return;
+        };
+        let cached = &self.cached[row];
+        let font = cached.size;
+        if font <= 0.0 || cached.lane <= 0.0 {
+            return;
+        }
+        let spicy = self.style() == Some(Style::Spicy);
+        let top = self.scroll_anchor() + self.prefix[row] - scroll
+            + adjust.get(row).copied().unwrap_or(0.0);
+        let slot_height =
+            crate::interlude::slot_height(&slot, spicy, font, f64::from(self.width), time);
+        if top + slot_height < -40.0 || top > f64::from(self.height) + 40.0 {
+            return;
+        }
+        let dpr = f64::from(self.scale);
+        let draw = |scene: &mut Scene, cx: f64, cy: f64, radius: f64, alpha: f64, glow: f64| {
+            if radius <= 0.0 || alpha <= 0.001 {
+                return;
+            }
+            // Cheap two-radius glow; the live policy rejects per-glyph blur.
+            if glow > 0.01 {
+                let halo = (alpha * glow).clamp(0.0, 1.0) as f32;
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::new([1.0, 1.0, 1.0, halo * 0.12]),
+                    None,
+                    &Circle::new((cx, cy), radius + 6.0 * dpr * glow),
+                );
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    Color::new([1.0, 1.0, 1.0, halo * 0.2]),
+                    None,
+                    &Circle::new((cx, cy), radius + 2.5 * dpr * glow),
+                );
+            }
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::new([1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0) as f32]),
+                None,
+                &Circle::new((cx, cy), radius),
+            );
+        };
+        if spicy {
+            if state.interlude.row() != Some(row) {
+                return;
+            }
+            let (group_scale, group_opacity) =
+                crate::interlude::spicy_group(slot.start, slot.end, time);
+            if group_opacity <= 0.001 || group_scale <= 0.001 {
+                return;
+            }
+            let dot_font = font * 1.3;
+            let cell = dot_font * 0.35;
+            let gap = 2.88 * dpr;
+            let width = cell * 3.0 + gap * 2.0;
+            let x0 = if cached.right {
+                cached.x + cached.lane - width
+            } else {
+                cached.x
+            };
+            let box_height = dot_font * 0.65;
+            let origin_x = x0 + width * 0.5;
+            let origin_y = top + box_height * 0.5;
+            for index in 0..3 {
+                let (dot_scale, dot_y, glow, opacity) = state.interlude.dot(index);
+                let cx = x0 + cell * 0.5 + index as f64 * (cell + gap);
+                let cy = origin_y + dot_y * font;
+                let px = origin_x + (cx - origin_x) * group_scale;
+                let py = origin_y + (cy - origin_y) * group_scale;
+                draw(
+                    scene,
+                    px,
+                    py,
+                    cell * 0.45 * dot_scale * group_scale,
+                    0.85 * group_opacity * opacity,
+                    glow * group_opacity * opacity,
+                );
+            }
+        } else {
+            let size = font * 0.5;
+            let gap = font * 0.25 + 4.0 * dpr;
+            let width = size * 3.0 + gap * 2.0;
+            let x0 = if cached.right {
+                cached.x + cached.lane - width
+            } else {
+                cached.x
+            };
+            let (group_scale, dots) = crate::interlude::amll_snapshot(
+                time,
+                slot.start,
+                slot.end - crate::interlude::AMLL_SNAPSHOT_BEFORE_END,
+            );
+            if group_scale <= 0.001 {
+                return;
+            }
+            let origin_x = if cached.right { x0 + width } else { x0 };
+            let origin_y = top + font * 0.4 + size * 0.5;
+            for (index, alpha) in dots.iter().enumerate() {
+                let cx = x0 + size * 0.5 + index as f64 * (size + gap);
+                let px = origin_x + (cx - origin_x) * group_scale;
+                draw(scene, px, origin_y, size * 0.5 * group_scale, *alpha, 0.0);
+            }
+        }
     }
 }

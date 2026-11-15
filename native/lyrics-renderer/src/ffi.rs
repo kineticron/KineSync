@@ -475,6 +475,7 @@ pub extern "C" fn kr_hit_test(handle: u64, y: f64) -> i32 {
                 y * f64::from(engine.scale),
                 engine.scroll.position(),
                 engine.scroll.row_adjustments(),
+                engine.metrics.position_ms,
             )
             .map_or(-1, |index| index as i32))
     })
@@ -536,8 +537,11 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
             &mut engine.scene,
             effect,
         );
-        engine.metrics.animating =
-            u32::from(engine.scroll.animating() || engine.appearance.animating());
+        engine.metrics.animating = u32::from(
+            engine.scroll.animating()
+                || engine.appearance.animating()
+                || engine.appearance.interlude_animating(),
+        );
         engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
         let (stats, present) = engine

@@ -40,6 +40,7 @@ pub struct TrackScene {
     pub glyph_count: usize,
     pub missing_glyphs: usize,
     pub(crate) prefix: Vec<f64>,
+    pub(crate) interludes: Vec<Option<crate::interlude::Interlude>>,
     pub diagnostics: Vec<serde_json::Value>,
     fonts: Option<crate::typography::Fonts>,
     settings: Option<crate::typography::Settings>,
@@ -219,6 +220,7 @@ impl TrackScene {
             });
         }
         let count = lines.len();
+        let interludes = crate::interlude::slots(&lines);
         let primary_size = settings
             .geometry(
                 width,
@@ -235,6 +237,7 @@ impl TrackScene {
             glyph_count: 0,
             missing_glyphs: 0,
             prefix,
+            interludes,
             diagnostics: vec![serde_json::Value::Null; count],
             fonts: Some(fonts.clone()),
             settings: Some(settings.clone()),
@@ -629,6 +632,7 @@ impl TrackScene {
                 format!("{missing_glyphs} missing glyphs (tofu); install Noto Sans CJK").into(),
             );
         }
+        let interludes = crate::interlude::slots(&lines);
         Ok(Self {
             lines,
             cached,
@@ -638,6 +642,7 @@ impl TrackScene {
             glyph_count,
             missing_glyphs,
             prefix,
+            interludes,
             diagnostics,
             fonts: None,
             settings: None,
@@ -697,10 +702,46 @@ impl TrackScene {
         let last = self.lines.len() - 1;
         let start = crate::follow_index(&self.lines, start.min(last), time);
         let end = end.min(last).max(start);
+        // The interlude slot is inside the upcoming row: its top stays put while
+        // its content and every later row move down by the expanded height.
+        let (interlude_row, extra) = self.interlude_shift(time);
+        let shifted = |index: usize, own_slot: bool| {
+            interlude_row.map_or(0.0, |row| {
+                if index > row || (own_slot && index == row) {
+                    extra
+                } else {
+                    0.0
+                }
+            })
+        };
         Some(self.fit_scroll(
-            self.prefix[start],
-            self.prefix[end] + self.cached[end].height,
+            self.prefix[start] + shifted(start, false),
+            self.prefix[end] + self.cached[end].height + shifted(end, true),
         ))
+    }
+
+    /// Interlude whose break contains `time`, with the expanded slot height.
+    pub(crate) fn interlude_at(&self, time: f64) -> Option<(usize, crate::interlude::Interlude)> {
+        self.settings.as_ref()?;
+        self.interludes.iter().enumerate().find_map(|(row, slot)| {
+            slot.as_ref()
+                .filter(|slot| time >= slot.start && time < slot.end)
+                .map(|slot| (row, *slot))
+        })
+    }
+
+    pub(crate) fn interlude_shift(&self, time: f64) -> (Option<usize>, f64) {
+        let Some((row, slot)) = self.interlude_at(time) else {
+            return (None, 0.0);
+        };
+        let extra = crate::interlude::slot_height(
+            &slot,
+            self.style() == Some(crate::typography::Style::Spicy),
+            self.cached[row].size,
+            f64::from(self.width),
+            time,
+        );
+        (Some(row), extra)
     }
 
     pub fn scroll_target(&self, time: f64) -> f64 {
@@ -769,13 +810,18 @@ impl TrackScene {
         }
     }
 
-    /// Line row under a logical surface point. Skia rows are full-width targets.
-    pub fn hit_test(&self, y: f64, scroll: f64, adjust: &[f64]) -> Option<usize> {
+    /// Line row under a logical surface point. Skia rows are full-width targets
+    /// and the expanded interlude slot belongs to its row's press target.
+    pub fn hit_test(&self, y: f64, scroll: f64, adjust: &[f64], time: f64) -> Option<usize> {
         let anchor = self.scroll_anchor();
+        let (interlude_row, extra) = self.interlude_shift(time);
         for (index, cached) in self.cached.iter().enumerate() {
-            let top =
-                anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0);
-            if y >= top && y < top + cached.height {
+            let top = anchor + self.prefix[index] - scroll
+                + adjust.get(index).copied().unwrap_or(0.0)
+                + interlude_row.map_or(0.0, |row| if index > row { extra } else { 0.0 });
+            let height = cached.height
+                + interlude_row.map_or(0.0, |row| if index == row { extra } else { 0.0 });
+            if y >= top && y < top + height {
                 return Some(index);
             }
         }
@@ -808,8 +854,11 @@ impl TrackScene {
         let active_end = active.map_or(window.focus.max(0) as usize, |(_, end)| end);
         let scale = f64::from(self.scale);
         let anchor = self.scroll_anchor();
+        let (interlude_row, extra) = self.interlude_shift(time);
         let position = |index: usize| {
-            anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0)
+            anchor + self.prefix[index] - scroll
+                + adjust.get(index).copied().unwrap_or(0.0)
+                + interlude_row.map_or(0.0, |row| if index >= row { extra } else { 0.0 })
         };
         for (i, cached) in self.cached.iter().enumerate() {
             let y = position(i);
@@ -1113,5 +1162,127 @@ mod lazy_tests {
         restored.prepare(500.0).unwrap();
         assert_eq!(count, restored.plain_preparations);
         assert!(cache.take(&key).is_none());
+    }
+    fn long_gap_lines() -> Vec<Line> {
+        let mut lines = source(4);
+        for (index, line) in lines.iter_mut().enumerate() {
+            let start = [0.0, 1000.0, 6000.0, 7000.0][index];
+            let end = start + 1000.0;
+            line.start = start;
+            line.end = end;
+            line.background_end = end;
+            for atom in &mut line.atoms {
+                atom.start = start;
+                atom.end = end;
+            }
+            if let Some(voice) = line.paint.as_mut() {
+                for word in &mut voice.words {
+                    word.start = start;
+                    word.end = end;
+                }
+            }
+        }
+        lines
+    }
+    #[test]
+    fn interlude_slot_shifts_rows_and_owns_the_expanded_press_target() {
+        use crate::appearance::{AppearanceState, Effect};
+        let lines = long_gap_lines();
+        let mut fonts = fonts();
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+        track.prepare(2600.0).unwrap();
+        let (row, slot) = track.interlude_at(2600.0).unwrap();
+        assert_eq!((row, slot.start, slot.end), (2, 2000.0, 6000.0));
+        assert_eq!(track.interlude_shift(1999.0), (None, 0.0));
+        let full = track.cached[2].size * 1.3 * 0.65;
+        assert!((track.interlude_shift(2500.0).1 - full).abs() < 1e-9);
+        assert!(track.interlude_shift(2050.0).1 < full);
+        assert_eq!(track.interlude_shift(6000.0), (None, 0.0));
+        let target = track.scroll_target(2600.0);
+        assert!((target - track.prefix[2]).abs() < 1e-9);
+        let anchor = track.scroll_anchor();
+        let top = anchor + track.prefix[2] - target;
+        // The expanded slot belongs to row 2; the row text starts one slot lower.
+        assert_eq!(track.hit_test(top + 1.0, target, &[], 2600.0), Some(2));
+        assert_eq!(
+            track.hit_test(
+                top + track.interlude_shift(2600.0).1 + track.cached[2].height + 2.0,
+                target,
+                &[],
+                2600.0,
+            ),
+            Some(3)
+        );
+        let mut state = AppearanceState::default();
+        state.prepare(&track, 2600.0, 1000.0);
+        state.advance(&track, 2600.0, 1000.0, false, Effect::Motion);
+        state.advance(&track, 2616.0, 1016.0, false, Effect::Motion);
+        assert_eq!(state.interlude.row(), Some(2));
+        assert!(state.interlude.dot(0).0 >= 0.75);
+        let mut scene = Scene::new();
+        let band = track.frame_appearance(2600.0, target, &[], &state, &mut scene, Effect::Motion);
+        assert!(band.1 > band.0);
+        let allocations = crate::allocation_probe::measure(|| {
+            for i in 0..120 {
+                let time = 2600.0 + i as f64;
+                let scroll = track.scroll_target(time);
+                state.advance(
+                    &track,
+                    time,
+                    2000.0 + i as f64 * 8.333,
+                    false,
+                    Effect::Motion,
+                );
+                track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Motion);
+            }
+        });
+        assert_eq!(allocations, 0, "interlude dots must reuse scene buffers");
+    }
+    #[test]
+    fn amll_interlude_slot_uses_full_width_and_keeps_breathing_dots_in_budget() {
+        use crate::appearance::{AppearanceState, Effect};
+        let lines = long_gap_lines();
+        let mut fonts = fonts();
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+        track.prepare(2600.0).unwrap();
+        let (row, _slot) = track.interlude_at(2600.0).unwrap();
+        assert_eq!(row, 2);
+        let full = track.cached[2].size * 1.3 + 390.0 * 0.05;
+        assert!((track.interlude_shift(2500.0).1 - full).abs() < 1e-9);
+        assert_eq!(track.interlude_shift(6500.0), (None, 0.0));
+        let mut state = AppearanceState::default();
+        state.prepare(&track, 2600.0, 1000.0);
+        state.advance(&track, 2600.0, 1000.0, false, Effect::Motion);
+        let mut scene = Scene::new();
+        let target = track.scroll_target(2600.0);
+        assert!((target - track.prefix[2]).abs() < 1e-9);
+        let band = track.frame_appearance(2600.0, target, &[], &state, &mut scene, Effect::Motion);
+        assert!(band.1 > band.0);
+        let allocations = crate::allocation_probe::measure(|| {
+            for i in 0..120 {
+                let time = 2600.0 + i as f64;
+                state.advance(
+                    &track,
+                    time,
+                    2000.0 + i as f64 * 8.333,
+                    false,
+                    Effect::Motion,
+                );
+                track.frame_appearance(time, target, &[], &state, &mut scene, Effect::Motion);
+            }
+        });
+        assert_eq!(allocations, 0, "amll interlude must reuse scene buffers");
     }
 }

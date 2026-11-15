@@ -5,6 +5,7 @@ pub mod appearance;
 mod auxiliary;
 pub mod ffi;
 pub mod gpu;
+mod interlude;
 pub mod live;
 pub mod motion;
 pub mod scene;

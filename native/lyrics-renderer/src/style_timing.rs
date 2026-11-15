@@ -43,12 +43,12 @@ const SPICY_GLOW: Curve = Curve {
     ],
 };
 use serde::{Deserialize, Serialize};
-struct Curve {
-    xs: &'static [f64],
-    ys: &'static [f64],
-    ks: &'static [f64],
+pub(crate) struct Curve {
+    pub(crate) xs: &'static [f64],
+    pub(crate) ys: &'static [f64],
+    pub(crate) ks: &'static [f64],
 }
-fn spline(c: &Curve, x: f64) -> f64 {
+pub(crate) fn spline(c: &Curve, x: f64) -> f64 {
     let mut i = 1;
     while i < c.xs.len() - 1 && c.xs[i] < x {
         i += 1;

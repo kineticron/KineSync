@@ -38,13 +38,18 @@ pub struct RowState {
 #[derive(Default)]
 pub struct AppearanceState {
     pub(crate) rows: Vec<Option<RowState>>,
+    pub(crate) interlude: crate::interlude::InterludeState,
     last_ms: Option<f64>,
     playing: bool,
 }
 impl AppearanceState {
     pub fn reset(&mut self) {
         self.rows.clear();
+        self.interlude.reset();
         self.last_ms = None;
+    }
+    pub fn interlude_animating(&self) -> bool {
+        self.interlude.animating()
     }
     /// Invoked with static near-active geometry preparation; allocations only on window changes.
     pub fn prepare(&mut self, track: &TrackScene, time: f64, native_ms: f64) {
@@ -119,6 +124,13 @@ impl AppearanceState {
         self.last_ms = Some(native_ms);
         self.playing = playing;
         let spicy = track.style() == Some(Style::Spicy);
+        if effect.motion() && spicy {
+            if let Some((row, slot)) = track.interlude_at(time) {
+                self.interlude.advance(row, slot, time, dt);
+            } else {
+                self.interlude.clear();
+            }
+        }
         for (i, slot) in self.rows.iter_mut().enumerate() {
             let Some(row) = slot else {
                 continue;

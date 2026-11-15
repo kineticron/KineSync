@@ -364,9 +364,17 @@ from `lib/lyrics-layout.ts` (`getPlaybackWindowState`,
 500 ms dot early exit, 24 pt bottom padding and per-style anchors (AMLL 8% + 8 pt,
 landscape Spicy 32 pt, portrait 0). Spicy uses the same 240-440 ms tween and
 cubic-bezier(0.22, 0.88, 0.34, 1); AMLL uses the same stiffness/damping, 0.9 mass
-and per-row cascade residual. Interlude dots are not drawn yet: the viewport
-targets the upcoming row during a long pause, as Skia does, but the animated dot
-row itself remains a Skia-only visual.
+and per-row cascade residual. Interlude dots are native: the break slot expands
+above the upcoming row (Spicy 400 ms, AMLL 375 ms, cubic-bezier(0.25,0.1,0.25,1))
+and shifts that row and every later row without changing stored row heights.
+Spicy draws three spring-animated bullet dots (`spline` goals, 0.7/0.6,
+1.25/0.4 and 1/0.5 frequencies/damping), a 300 ms group entrance and the CSS
+`linear()` exit group; AMLL draws the three breathing circles from the source
+snapshot. A two-radius translucent halo approximates the Spicy glyph shadow
+without per-glyph blur; seek resets the springs and the color/layout policy is
+unchanged. The Spicy intro seed (`spicyLyricsStartTime`) is not on the wire yet,
+so the first break starts at 0 like AMLL. Group/slot transitions are evaluated
+from playback time, so they freeze with pause and follow the visual debug rate.
 
 `kr_set_following(bool)`, `kr_scroll_by(double)` and
 `kr_hit_test(double) -> int32` add Skia's explicit ownership contract. A touch
