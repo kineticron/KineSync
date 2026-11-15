@@ -4,7 +4,7 @@ use crate::{
     Line,
     gpu::SurfaceRenderer,
     live::{Timeline, TrackPacket, frame_clock},
-    motion::SourceScroll,
+    motion::FollowScroll,
     scene::TrackScene,
 };
 use std::{
@@ -67,8 +67,10 @@ struct Engine {
     scene: vello::Scene,
     scale: f32,
     metrics: Metrics,
-    scroll: SourceScroll,
+    scroll: FollowScroll,
     appearance: crate::appearance::AppearanceState,
+    /// Skia `following`: manual touch owns the viewport until explicitly resumed.
+    following: bool,
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
 #[cfg(target_os = "ios")]
@@ -112,7 +114,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    6
+    7
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -143,8 +145,9 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     instance, surface, width, height, scale,
                 ))?;
                 Ok(Engine {
-                    scroll: SourceScroll::default(),
+                    scroll: FollowScroll::default(),
                     appearance: crate::appearance::AppearanceState::default(),
+                    following: true,
                     timeline: Timeline::default(),
                     lines: Vec::new(),
                     fonts: crate::typography::Fonts::default(),
@@ -311,6 +314,13 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine.layout_key = key;
         engine.layout = Some(layout);
         engine.timeline.replace(generation);
+        let style = engine
+            .settings
+            .as_ref()
+            .map_or(crate::typography::Style::Spicy, |settings| settings.style);
+        engine
+            .scroll
+            .configure(style, f64::from(engine.scale), engine.lines.len());
         engine.scroll.reset();
         engine.appearance.reset();
         engine.metrics.generation = generation;
@@ -341,7 +351,9 @@ pub extern "C" fn kr_set_anchor(
             rate,
         )?;
         if accepted && snap {
-            engine.scroll.reset();
+            // Explicit seeks/track discontinuities teleport instead of
+            // traversing every intervening line.
+            engine.scroll.snap_next();
             engine.appearance.reset();
         }
         Ok(if accepted { 0 } else { 1 })
@@ -403,6 +415,11 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
                 layout.scroll_target(position),
                 f64::from(scale / engine.scale),
             );
+            engine.scroll.configure(
+                layout.style().unwrap_or(crate::typography::Style::Spicy),
+                f64::from(scale),
+                layout.lines.len(),
+            );
         }
         if let Some(old) = engine.layout.take() {
             engine
@@ -417,6 +434,49 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         engine.metrics.height = height;
         engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
         Ok(0)
+    })
+}
+/// Skia auto-follow ownership. Disabling freezes the viewport at its current
+/// visual offset; enabling lets the next frame ease toward the authoritative one.
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_set_following(handle: u64, following: bool) -> i32 {
+    with(handle, |engine| {
+        engine.following = following;
+        Ok(0)
+    })
+}
+/// Manual drag delta in logical points. Also takes follow ownership like Skia's
+/// `onTouchStart`/`onScrollBeginDrag` path.
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
+    with(handle, |engine| {
+        if !dy.is_finite() {
+            return Err("Invalid scroll delta".into());
+        }
+        let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
+        engine.scroll.drag(dy, max_offset);
+        engine.following = false;
+        Ok(0)
+    })
+}
+/// Logical surface point to source line index, or -1 outside every row.
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_hit_test(handle: u64, y: f64) -> i32 {
+    if !y.is_finite() {
+        error("Invalid hit-test point");
+        return -1;
+    }
+    with(handle, |engine| {
+        let Some(layout) = engine.layout.as_ref() else {
+            return Ok(-1);
+        };
+        Ok(layout
+            .hit_test(
+                y * f64::from(engine.scale),
+                engine.scroll.position(),
+                engine.scroll.row_adjustments(),
+            )
+            .map_or(-1, |index| index as i32))
     })
 }
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
@@ -458,12 +518,11 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
-        let old_target = layout.scroll_target(position);
         layout.prepare(position).map_err(|e| e.to_string())?;
-        engine
-            .scroll
-            .remap(old_target, layout.scroll_target(position), 1.0);
-        let scroll = engine.scroll.sample(layout, position, native_ms);
+        // Geometry changes reach the tween through `command.offset`; remapping
+        // here would clear the spring history every frame.
+        let command = layout.scroll_command(position, engine.scroll.position());
+        let scroll = engine.scroll.sample(&command, native_ms, engine.following);
         let effect = crate::appearance::LIVE_EFFECT;
         engine.appearance.prepare(layout, position, native_ms);
         engine
@@ -472,6 +531,7 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         let band = layout.frame_appearance(
             position,
             scroll,
+            engine.scroll.row_adjustments(),
             &engine.appearance,
             &mut engine.scene,
             effect,
@@ -550,8 +610,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v6_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 6);
+    fn abi_v7_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 7);
         assert_eq!(std::mem::size_of::<Metrics>(), 152);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
@@ -563,6 +623,9 @@ mod tests {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);
         assert_eq!(kr_render(u64::MAX, 0.0, 0.0), -1);
         assert_eq!(kr_destroy(u64::MAX), 0);
+        assert_eq!(kr_set_following(u64::MAX, false), -1);
+        assert_eq!(kr_scroll_by(u64::MAX, 10.0), -1);
+        assert_eq!(kr_hit_test(u64::MAX, 10.0), -1);
         let mut message = [0i8; 256];
         // SAFETY: stack output buffer has the advertised capacity.
         unsafe {

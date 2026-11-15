@@ -260,10 +260,14 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
 });
 test('live Rust track protocol preserves source atoms and sends anchors only for actual anchor changes', () => {
   const { buildRustTrack, anchorChanged, projectPosition } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
-  const lyrics = [{ lineStartTime: 10, lineEndTime: 30, syllables: [{ text: '뒤', startTime: 10, endTime: 20, isPartOfWord: true }, { text: '죽', startTime: 20, endTime: 30 }] }];
+  const lyrics = [{ lineStartTime: 10, lineEndTime: 30, backgroundSyllables: [{ text: 'x', startTime: 20, endTime: 45 }], syllables: [{ text: '뒤', startTime: 10, endTime: 20, isPartOfWord: true }, { text: '죽', startTime: 20, endTime: 30 }] },
+    { lineStartTime: 50, lineEndTime: 70, syllables: [{ text: 'a', startTime: 50, endTime: 70 }] }];
   const packet = JSON.parse(buildRustTrack('current-song', 7, lyrics));
   assert.equal(packet.generation, 7); assert.equal(packet.track_id, 'current-song');
   assert.equal(packet.lines[0].atoms.map(a => a.text).join(''), '뒤죽');
+  // Background voice tails keep the row active past the lead end (Skia getBackgroundEndTime).
+  assert.equal(packet.lines[0].background_end, 45);
+  assert.equal('background_end' in packet.lines[1], false);
   const previous = { anchorPositionMs: 50, anchorMonotonicMs: 100, isPlaying: true, currentTrack: { id: 'current-song', durationMs: 1000 }, positionMs: 70 };
   assert.equal(anchorChanged({ ...previous, positionMs: 80 }, previous), false);
   assert.equal(anchorChanged({ ...previous, anchorMonotonicMs: 120 }, previous), true);
@@ -601,21 +605,16 @@ test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/disc
   assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
 });
 
-test('measured player viewport clips before the complete dock and diagnostics reserve canvas space', () => {
-  const { rustViewport } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
-  // Includes small/large portrait, landscape fallback geometry, and unknown initial measurement.
-  for (const [height, top, dock] of [[844, 120, 590], [667, 90, 410], [1024, 135, 800], [390, 24, 310], [844, 120, null], [390, 300, 100]]) {
-    const viewport = rustViewport(height, top, dock);
-    const bottomEdge = height - viewport.bottom;
-    assert.ok(viewport.height >= 0);
-    assert.equal(top + viewport.height, bottomEdge);
-    if (dock != null && dock >= top) assert.ok(bottomEdge <= dock);
-    else assert.equal(viewport.height, 0);
-  }
+test('Rust lyric surface extends under the complete dock and keeps the dock gradient', () => {
   const player = fs.readFileSync(path.join(repo, 'ExpoLyrics/app/(tabs)/index.tsx'), 'utf8');
-  assert.match(player, /const top = event.nativeEvent.layout.y;\s*setRustDockBounds/);
-  assert.match(player, /maxHeight: __DEV__ && rustRenderer && !tour.active \? rustLyricsViewport.height/);
-  assert.match(player, /rustDockBounds.key === viewportKey && rustPlayerBounds.key === viewportKey/);
+  // Skia parity: the surface is no longer measured against the controls dock.
+  assert.match(player, /top: insets\.top \+ TOP_BAR_CONTENT_HEIGHT \+ LYRICS_WRAP_MARGIN_TOP,\s*bottom: 0,\s*overflow: "hidden" as const,/);
+  assert.ok(!player.includes('rustLyricsViewport'));
+  assert.ok(!player.includes('setRustDockBounds'));
+  assert.ok(!player.includes('rustDockBounds'));
+  // The bottom gradient is a renderer-agnostic dock fade, not a Skia-only branch.
+  assert.match(player, /\{\/\* ponytail: LinearGradient replaces BlurView[\s\S]*?<Reanimated\.View\s+pointerEvents="none"/);
+  assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));
   assert.match(view, /root: \{ flex: 1, minHeight: 0, overflow: 'hidden' \}/);
@@ -648,18 +647,22 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 6 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 7 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 4, 5, 7]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 6 }), false);
+  for (const version of [0, 1, 2, 3, 4, 5, 6]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 7 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 6 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 7 else/);
+  assert.match(swift, /AsyncFunction\("scrollBy"\)/);
+  assert.match(swift, /AsyncFunction\("hitTest"\)/);
+  assert.match(swift, /kr_scroll_by\(self\.handle, dy\)/);
+  assert.match(swift, /kr_hit_test\(self\.handle, y\)/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 6 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 7 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
@@ -667,6 +670,9 @@ _Static_assert(offsetof(KRMetrics, target_native_ms) == 144, "clock offset");
 int32_t (*render_signature)(uint64_t, double, double) = kr_render;
 int32_t (*fonts_signature)(uint64_t, const uint8_t *, size_t, const uint8_t *, size_t) = kr_set_fonts;
 size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
+int32_t (*follow_signature)(uint64_t, bool) = kr_set_following;
+int32_t (*scroll_signature)(uint64_t, double) = kr_scroll_by;
+int32_t (*hit_signature)(uint64_t, double) = kr_hit_test;
 ` });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(!swift.includes('presentedFps'));

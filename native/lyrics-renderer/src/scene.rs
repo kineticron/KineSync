@@ -251,19 +251,12 @@ impl TrackScene {
         if self.settings.is_none() {
             return Ok(());
         }
-        let active = focus(&self.lines, time);
-        let first = self
-            .lines
-            .iter()
-            .position(|l| time >= l.start && time < l.end)
-            .unwrap_or(active)
-            .min(active);
-        let last = self
-            .lines
-            .iter()
-            .rposition(|l| time >= l.start && time < l.end)
-            .unwrap_or(active)
-            .max(active);
+        // Overlap-safe window; long pauses prepare the previous package and the
+        // upcoming lyric, which is where Skia's interlude row and dots live.
+        let window = crate::window(&self.lines, time);
+        let active = window.focus.max(0) as usize;
+        let first = window.active().map_or(active, |(start, _)| start);
+        let last = window.active().map_or(first, |(_, end)| end);
         let detail_end = (last + 2).min(self.lines.len() - 1);
         let signature = (active, first, detail_end);
         if self.prepared_signature == Some(signature) {
@@ -672,24 +665,121 @@ impl TrackScene {
         self.frame_at(time, self.scroll_target(time), scene)
     }
 
-    /// Native Spicy FlashList viewOffset: portrait 0, landscape 32 logical pt.
-    /// Other providers retain their previous anchor until their full scroll port.
+    /// Skia native `scrollTo` anchor: AMLL lands at 8% of the list plus 8 pt,
+    /// landscape Spicy at 32 pt, portrait Spicy directly below the top bar.
+    /// The pre-ABI7 fixture path keeps its historical center anchor.
     pub(crate) fn scroll_anchor(&self) -> f64 {
-        if crate::motion::SOURCE_SPICY_SCROLL_ENABLED
-            && self.style() == Some(crate::typography::Style::Spicy)
-        {
-            if self.settings.as_ref().is_some_and(|s| s.landscape) {
-                32.0 * f64::from(self.scale)
-            } else {
-                0.0
+        let scale = f64::from(self.scale);
+        match self.settings.as_ref() {
+            None => self.height as f64 * 0.37,
+            Some(settings) if settings.style == crate::typography::Style::Amll => {
+                self.height as f64 * 0.08 + 8.0 * scale
             }
-        } else {
-            self.height as f64 * 0.37
+            Some(settings) if settings.landscape => 32.0 * scale,
+            Some(_) => 0.0,
         }
     }
 
+    fn fit_scroll(&self, top: f64, bottom: f64) -> f64 {
+        // `prefix` starts at zero and rendering adds `scroll_anchor`, so the
+        // target for a row at the anchor is the row prefix itself.
+        let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
+        let height = f64::from(self.height);
+        if bottom - top <= height - self.scroll_anchor() - padding {
+            top.max(0.0)
+        } else {
+            (bottom - height + padding).max(0.0)
+        }
+    }
+
+    fn target_at(&self, window: &crate::Window, time: f64) -> Option<f64> {
+        let (start, end) = crate::auto_scroll_range(window)?;
+        let last = self.lines.len() - 1;
+        let start = crate::follow_index(&self.lines, start.min(last), time);
+        let end = end.min(last).max(start);
+        Some(self.fit_scroll(
+            self.prefix[start],
+            self.prefix[end] + self.cached[end].height,
+        ))
+    }
+
     pub fn scroll_target(&self, time: f64) -> f64 {
-        self.prefix[focus(&self.lines, time)]
+        if self.settings.is_none() {
+            return self.prefix[focus(&self.lines, time)];
+        }
+        let window = crate::window(&self.lines, time);
+        self.target_at(&window, time)
+            .unwrap_or(self.prefix[window.focus.max(0) as usize])
+    }
+
+    /// Highest scroll offset Skia allows: the last row can reach the top anchor.
+    pub fn max_scroll(&self) -> f64 {
+        let last = self.lines.len().saturating_sub(1);
+        self.prefix[last].max(0.0)
+    }
+
+    /// First row intersecting `scroll` (Skia `getFirstVisibleIndex`).
+    fn first_visible(&self, scroll: f64) -> usize {
+        self.prefix
+            .partition_point(|top| *top <= scroll)
+            .saturating_sub(1)
+            .min(self.lines.len() - 1)
+    }
+
+    /// Rows that can be drawn near `scroll`, including the interlude overscan.
+    pub fn visible_rows(&self, scroll: f64) -> std::ops::Range<usize> {
+        let height = f64::from(self.height);
+        let first = self
+            .prefix
+            .partition_point(|top| *top + 200.0 < scroll - height);
+        let last = self
+            .prefix
+            .partition_point(|top| *top < scroll + height * 2.0)
+            .max(first + 1)
+            .min(self.lines.len());
+        first.min(self.lines.len() - 1)..last
+    }
+
+    /// Per-frame follow command. `position` is the current visual offset, used
+    /// for Skia's first-visible row, duration interval and interlude flag.
+    pub fn scroll_command(&self, time: f64, position: f64) -> crate::motion::Command {
+        let window = crate::window(&self.lines, time);
+        let target = self
+            .target_at(&window, time)
+            .unwrap_or(self.prefix[window.focus.max(0) as usize]);
+        let index = crate::auto_scroll_range(&window)
+            .map(|(start, _)| start)
+            .unwrap_or_else(|| window.focus.max(0) as usize)
+            .min(self.lines.len() - 1);
+        let index = crate::follow_index(&self.lines, index, time);
+        let interval = if index > 0 {
+            self.lines[index].start - self.lines[index - 1].start
+        } else {
+            800.0
+        };
+        crate::motion::Command {
+            offset: target,
+            interval,
+            interlude: time > self.lines[index].end,
+            first_visible: self.first_visible(position),
+            index,
+            visible: self.visible_rows(position),
+            scale: f64::from(self.scale),
+            style: self.style().unwrap_or(crate::typography::Style::Spicy),
+        }
+    }
+
+    /// Line row under a logical surface point. Skia rows are full-width targets.
+    pub fn hit_test(&self, y: f64, scroll: f64, adjust: &[f64]) -> Option<usize> {
+        let anchor = self.scroll_anchor();
+        for (index, cached) in self.cached.iter().enumerate() {
+            let top =
+                anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0);
+            if y >= top && y < top + cached.height {
+                return Some(index);
+            }
+        }
+        None
     }
 
     pub fn frame_at(&mut self, time: f64, scroll: f64, scene: &mut Scene) -> (f32, f32) {
@@ -700,11 +790,27 @@ impl TrackScene {
     }
 
     pub(crate) fn frame_prepared(&self, time: f64, scroll: f64, scene: &mut Scene) -> (f32, f32) {
+        self.frame_prepared_adjusted(time, scroll, &[], scene)
+    }
+
+    /// `adjust` carries AMLL's per-row cascade residual; Skia translates each
+    /// row relative to the shared viewport, so the row offset is additive.
+    pub(crate) fn frame_prepared_adjusted(
+        &self,
+        time: f64,
+        scroll: f64,
+        adjust: &[f64],
+        scene: &mut Scene,
+    ) -> (f32, f32) {
         scene.reset();
-        let active = focus(&self.lines, time);
+        let window = crate::window(&self.lines, time);
+        let active = window.active();
+        let active_end = active.map_or(window.focus.max(0) as usize, |(_, end)| end);
         let scale = f64::from(self.scale);
         let anchor = self.scroll_anchor();
-        let position = |index: usize| anchor + self.prefix[index] - scroll;
+        let position = |index: usize| {
+            anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0)
+        };
         for (i, cached) in self.cached.iter().enumerate() {
             let y = position(i);
             if y + cached.height < -40.0 || y > self.height as f64 + 40.0 {
@@ -713,9 +819,10 @@ impl TrackScene {
             let transform = Affine::translate((cached.x, y + cached.top));
             let bounds = Rect::new(-8.0, -8.0, self.width as f64, cached.height + 8.0);
             let singing = time >= self.lines[i].start && time < self.lines[i].end;
-            let opacity = if i == active || singing {
+            let active_row = active.is_some_and(|(start, end)| i >= start && i <= end);
+            let opacity = if active_row || singing {
                 0.4
-            } else if i == active + 1 {
+            } else if i == active_end + 1 {
                 0.5
             } else {
                 0.38
@@ -729,7 +836,7 @@ impl TrackScene {
             );
             scene.append(&cached.white, Some(transform));
             scene.pop_layer();
-            if i == active || singing {
+            if active_row || singing {
                 for (atom, fragments) in cached.words.iter().zip(&cached.atoms) {
                     let mut remaining = fragments.iter().map(|r| r.width()).sum::<f64>()
                         * progress(time, atom.start, atom.end);
@@ -747,19 +854,11 @@ impl TrackScene {
                 }
             }
         }
-        let first = self
-            .lines
-            .iter()
-            .position(|line| time >= line.start && time < line.end)
-            .unwrap_or(active);
-        let last = self
-            .lines
-            .iter()
-            .rposition(|line| time >= line.start && time < line.end)
-            .unwrap_or(active);
-        let next = (last.max(active) + 1).min(self.lines.len() - 1);
+        let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
+        let last = active.map_or(first, |(_, end)| end);
+        let next = (last.max(first) + 1).min(self.lines.len() - 1);
         (
-            (position(first.min(active)) - 10.0 * scale) as f32,
+            (position(first) - 10.0 * scale) as f32,
             (position(next) + self.cached[next].height + 10.0 * scale) as f32,
         )
     }
@@ -863,6 +962,7 @@ mod lazy_tests {
                     text: text.clone(),
                     start,
                     end: start + 1000.0,
+                    background_end: start + 1000.0,
                     atoms: vec![crate::Atom {
                         bytes: 0..text.len(),
                         start,

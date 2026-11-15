@@ -27,7 +27,11 @@ int32_t kr_set_track(uint64_t handle, const uint8_t *bytes, size_t length);
 int32_t kr_set_anchor(uint64_t handle, uint64_t generation, uint64_t sequence, double position_ms,
                       double sampled_native_ms, double now_native_ms, bool playing, double rate, bool snap);
 int32_t kr_resize(uint64_t handle, uint32_t width, uint32_t height, float scale);
-/* ABI 6: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
+/* ABI 7: Skia-parity follow ownership, manual drag and row hit-testing. */
+int32_t kr_set_following(uint64_t handle, bool following);
+int32_t kr_scroll_by(uint64_t handle, double dy_logical_points);
+int32_t kr_hit_test(uint64_t handle, double y_logical_points);
+/* ABI 7: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
 int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);
 int32_t kr_destroy(uint64_t handle);

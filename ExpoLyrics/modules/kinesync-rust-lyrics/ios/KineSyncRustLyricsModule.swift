@@ -19,6 +19,15 @@ public final class KineSyncRustLyricsModule: Module {
         // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
         MainActor.assumeIsolated { view.setAnchor(value) }
       }
+      AsyncFunction("setFollowing") { (view: KineSyncRustLyricsView, value: Bool) in
+        MainActor.assumeIsolated { view.setFollowing(value) }
+      }
+      AsyncFunction("scrollBy") { (view: KineSyncRustLyricsView, dy: Double) in
+        MainActor.assumeIsolated { view.scrollBy(dy) }
+      }
+      AsyncFunction("hitTest") { (view: KineSyncRustLyricsView, y: Double, promise: Promise) in
+        MainActor.assumeIsolated { view.hitTest(y, promise) }
+      }
     }
   }
 }
@@ -126,6 +135,29 @@ private final class RustOwner: @unchecked Sendable {
     enqueue(update: SurfaceInput(track: track, anchor: anchor, size: size, scale: scale))
   }
   func setAnchor(_ value: Anchor) { enqueue(anchor: value) }
+  // Gestures bypass the latest-wins anchor coalescer: every drag delta and the
+  // follow handoff must arrive in touch order. The shared serial queue still
+  // orders them against frames, anchors, resize and track replacement.
+  func setFollowing(_ value: Bool) {
+    queue.async {
+      guard self.permitted(), self.handle != 0, !self.failed else { return }
+      if kr_set_following(self.handle, value) < 0 { self.failure() }
+    }
+  }
+  func scrollBy(_ dy: Double) {
+    guard dy.isFinite else { return }
+    queue.async {
+      guard self.permitted(), self.handle != 0, !self.failed else { return }
+      if kr_scroll_by(self.handle, dy) < 0 { self.failure() }
+    }
+  }
+  func hitTest(_ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
+    queue.async {
+      var index: Int32 = -1
+      if self.permitted(), self.handle != 0, !self.failed { index = kr_hit_test(self.handle, y) }
+      DispatchQueue.main.async { completion(index) }
+    }
+  }
   func copyLayout(_ completion: @escaping @MainActor (String?) -> Void) {
     queue.async {
       let receipt = self.permitted() && self.handle != 0 ? self.layoutReceipt() : ""
@@ -181,7 +213,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 6 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 7 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }
@@ -414,6 +446,23 @@ final class KineSyncRustLyricsView: ExpoView {
     enabled = value
     if value { markDirty(); refresh() }
     lifecycle()
+  }
+  func setFollowing(_ value: Bool) {
+    owner?.setFollowing(value)
+    // A paused/settled surface still needs frames while the spring settles.
+    markDirty()
+    lifecycle()
+  }
+  func scrollBy(_ dy: Double) {
+    guard dy.isFinite, dy != 0 else { return }
+    owner?.scrollBy(dy)
+    markDirty()
+    lifecycle()
+  }
+  func hitTest(_ y: Double, _ promise: Promise) {
+    guard y.isFinite else { promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point"); return }
+    guard let owner else { promise.resolve(Int32(-1)); return }
+    owner.hitTest(y) { index in promise.resolve(index) }
   }
   private func refresh() {
     guard window != nil, foreground, enabled, !failed else { return }

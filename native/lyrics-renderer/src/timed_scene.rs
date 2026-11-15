@@ -211,20 +211,23 @@ impl TrackScene {
         &self,
         time: f64,
         scroll: f64,
+        adjust: &[f64],
         state: &AppearanceState,
         scene: &mut Scene,
         effect: Effect,
     ) -> (f32, f32) {
         if effect == Effect::Baseline {
-            return self.frame_prepared(time, scroll, scene);
+            return self.frame_prepared_adjusted(time, scroll, adjust, scene);
         }
         scene.reset();
-        let active = crate::focus(&self.lines, time);
+        let window = crate::window(&self.lines, time);
+        let active = window.active();
         let spicy = self.style() == Some(Style::Spicy);
         let scale = f64::from(self.scale);
         let anchor = self.scroll_anchor();
         for (index, cached) in self.cached.iter().enumerate() {
-            let y = anchor + self.prefix[index] - scroll;
+            let y =
+                anchor + self.prefix[index] - scroll + adjust.get(index).copied().unwrap_or(0.0);
             if y + cached.height < -40.0
                 || y > f64::from(self.height) + 40.0
                 || cached.layout.is_none()
@@ -460,22 +463,16 @@ impl TrackScene {
                 t.draw(scene, base * line_transform, row.outer);
             }
         }
-        let first = self
-            .lines
-            .iter()
-            .position(|l| time >= l.start && time < l.end)
-            .unwrap_or(active)
-            .min(active);
-        let last = self
-            .lines
-            .iter()
-            .rposition(|l| time >= l.start && time < l.end)
-            .unwrap_or(active)
-            .max(active);
-        let next = (last + 1).min(self.lines.len() - 1);
+        let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
+        let last = active.map_or(first, |(_, end)| end);
+        let next = (last.max(first) + 1).min(self.lines.len() - 1);
+        let adjust_at = |index: usize| adjust.get(index).copied().unwrap_or(0.0);
         (
-            (anchor + self.prefix[first] - scroll - 10.0 * scale) as f32,
-            (anchor + self.prefix[next] - scroll + self.cached[next].height + 10.0 * scale) as f32,
+            (anchor + self.prefix[first] - scroll + adjust_at(first) - 10.0 * scale) as f32,
+            (anchor + self.prefix[next] - scroll
+                + adjust_at(next)
+                + self.cached[next].height
+                + 10.0 * scale) as f32,
         )
     }
 }

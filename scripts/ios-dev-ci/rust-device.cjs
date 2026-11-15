@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const config = require('./config.json');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const symbols = ['kr_abi_version', 'kr_create', 'kr_set_fonts', 'kr_copy_layout_json', 'kr_set_track', 'kr_set_anchor', 'kr_resize', 'kr_render', 'kr_metrics', 'kr_destroy', 'kr_copy_error'];
+const symbols = ['kr_abi_version', 'kr_create', 'kr_set_fonts', 'kr_copy_layout_json', 'kr_set_track', 'kr_set_anchor', 'kr_resize', 'kr_set_following', 'kr_scroll_by', 'kr_hit_test', 'kr_render', 'kr_metrics', 'kr_destroy', 'kr_copy_error'];
 function inspect(framework) {
   const info = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(framework, 'Info.plist')], { encoding: 'utf8' }));
   if (info.AvailableLibraries?.length !== 1) throw new Error('Expected one device-only XCFramework slice');

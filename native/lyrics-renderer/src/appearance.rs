@@ -60,12 +60,14 @@ impl AppearanceState {
                 let Some(voice) = &line.paint else {
                     continue;
                 };
-                let active = time >= line.start && time < line.end;
+                // Background tails keep the package highlighted, matching Skia's
+                // `endTimeByIndex` (getBackgroundEndTime) presentation window.
+                let active = time >= line.start && time < line.background_end;
                 let spicy = track.style() == Some(Style::Spicy);
                 let outer = if spicy {
                     if active {
                         1.0
-                    } else if time > line.end {
+                    } else if time > line.background_end {
                         0.497
                     } else {
                         0.51
@@ -126,13 +128,13 @@ impl AppearanceState {
                 continue;
             }
             let line = &track.lines[i];
-            let active = time >= line.start && time < line.end;
+            let active = time >= line.start && time < line.background_end;
             row.clock.advance(active, time, dt * 1000.0);
             row.active = active;
             let target = if spicy {
                 if active {
                     1.0
-                } else if time > line.end {
+                } else if time > line.background_end {
                     0.497
                 } else {
                     0.51

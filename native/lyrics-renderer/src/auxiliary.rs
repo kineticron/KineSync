@@ -205,6 +205,7 @@ mod tests {
         track.frame_appearance(
             time,
             track.scroll_target(time),
+            &[],
             state,
             scene,
             Effect::Motion,

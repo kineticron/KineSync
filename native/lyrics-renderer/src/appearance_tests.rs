@@ -79,7 +79,7 @@ fn frame(
     }
     state.prepare(track, time, wall);
     state.advance(track, time, wall, true, effect);
-    track.frame_appearance(time, track.scroll_target(time), state, scene, effect)
+    track.frame_appearance(time, track.scroll_target(time), &[], state, scene, effect)
 }
 fn render(
     gpu: &mut Gpu,
@@ -192,6 +192,7 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         let filled_band = track.frame_appearance(
             time,
             track.scroll_target(time),
+            &[],
             &state,
             &mut scene,
             Effect::Fill,
@@ -202,6 +203,7 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         track.frame_appearance(
             time,
             track.scroll_target(time),
+            &[],
             &state,
             &mut scene,
             Effect::Motion,
@@ -220,6 +222,7 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         track.frame_appearance(
             time,
             track.scroll_target(time),
+            &[],
             &state,
             &mut scene,
             Effect::Glow,

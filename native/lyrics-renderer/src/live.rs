@@ -19,6 +19,9 @@ pub struct WireLine {
     pub paint: Option<crate::typography::PaintVoice>,
     pub start: f64,
     pub end: f64,
+    /// Package end including background voices. Optional for older packets.
+    #[serde(default)]
+    pub background_end: Option<f64>,
     pub atoms: Vec<WireAtom>,
 }
 #[derive(Deserialize)]
@@ -47,20 +50,25 @@ impl TrackPacket {
         {
             return Err("Invalid track identity or line count".into());
         }
-        let mut previous = 0.0;
         let mut count = 0;
         for line in &packet.lines {
+            // Starts may overlap or even be out of source order (duet lines can
+            // begin a few milliseconds before the line above them). Display order
+            // stays the packet order; active-line lookup is overlap-safe instead.
             if line.end <= line.start
                 || !valid_interval(line.start, line.end)
-                || line.start < previous
                 || line.atoms.is_empty()
             {
-                return Err("Invalid or unordered line timing".into());
+                return Err("Invalid line timing".into());
             }
             if let Some(paint) = &line.paint {
                 paint.validate(line.start, line.end)?;
             }
-            previous = line.start;
+            if let Some(background_end) = line.background_end
+                && (!valid_interval(line.start, background_end) || background_end < line.end)
+            {
+                return Err("Invalid background voice end".into());
+            }
             for atom in &line.atoms {
                 count += 1;
                 if !valid_interval(atom.start, atom.end)
@@ -100,6 +108,7 @@ impl TrackPacket {
                     text,
                     start: line.start,
                     end: line.end,
+                    background_end: line.background_end.unwrap_or(line.end).max(line.end),
                     atoms,
                 }
             })
@@ -235,5 +244,21 @@ mod tests {
             .replace("a ", "뒤 ");
         let lines = TrackPacket::parse(unicode.as_bytes()).unwrap().into_lines();
         assert_eq!(lines[0].atoms[1].bytes, 4..5);
+    }
+    #[test]
+    fn overlapping_duet_starts_and_background_tails_parse_in_source_order() {
+        // `promise` by slayr: the second duet line starts 2 ms before the first.
+        let packet = br#"{"schema":6,"generation":1,"track_id":"duet","lines":[
+            {"start":1000,"end":4000,"atoms":[{"text":"a","start":1000,"end":4000}]},
+            {"start":998,"end":4200,"atoms":[{"text":"b","start":998,"end":4200}]},
+            {"start":5000,"end":6000,"background_end":9000,"atoms":[{"text":"c","start":5000,"end":6000}]}]}"#;
+        let lines = TrackPacket::parse(packet).unwrap().into_lines();
+        assert_eq!((lines[0].start, lines[1].start), (1000.0, 998.0));
+        assert_eq!(lines[2].background_end, 9000.0);
+        assert_eq!(lines[0].text, "a");
+        let invalid = String::from_utf8(packet.to_vec())
+            .unwrap()
+            .replace("\"background_end\":9000", "\"background_end\":5000");
+        assert!(TrackPacket::parse(invalid.as_bytes()).is_err());
     }
 }
