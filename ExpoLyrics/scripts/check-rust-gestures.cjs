@@ -86,6 +86,20 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     assert.deepEqual(calls.press, []);
   }
 
+  // A release can beat the native hit test; the pending press still seeks.
+  {
+    let resolveHit = () => {};
+    const hit = new Promise(resolve => { resolveHit = resolve; });
+    const { gesture, calls } = fixture({ hitTest: () => hit });
+    gesture.grant(0);
+    gesture.release();
+    assert.deepEqual(calls.press, [], 'no seek before the row is known');
+    resolveHit(2);
+    await flush();
+    assert.deepEqual(calls.follow, [false, true]);
+    assert.deepEqual(calls.press, [2]);
+  }
+
   // Cancellation (scroll view takeover/unmount) never resolves as a tap.
   {
     const { gesture, calls, timer } = fixture();

@@ -45,21 +45,30 @@ function createRustLyricsGesture({
   return {
     grant(y) {
       token += 1;
-      const current = { token, index: -1, moved: false, longPressed: false, lastDy: 0, timer: null };
+      const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, timer: null, hit: null };
       active = current;
       takeOwnership();
+      current.hit = Promise.resolve(hitTest(y))
+        .then((index) => {
+          if (Number.isInteger(index)) current.index = index;
+          return current.index;
+        })
+        .catch(() => -1);
+      const press = () => {
+        if (current.index >= 0) {
+          onLineLongPress(current.index);
+        } else {
+          // A slow first hit test must still select, not silently drop the hold.
+          void current.hit.then((index) => { if (current.longPressed && index >= 0) onLineLongPress(index); });
+        }
+      };
       current.timer = setTimer(() => {
         if (active !== current || current.moved || current.longPressed) return;
         current.longPressed = true;
         current.timer = null;
         onUserInteraction();
-        if (current.index >= 0) onLineLongPress(current.index);
+        press();
       }, LONG_PRESS_MS);
-      Promise.resolve(hitTest(y))
-        .then((index) => {
-          if (active === current) current.index = Number.isInteger(index) ? index : -1;
-        })
-        .catch(() => {});
     },
     move(dy) {
       if (!active) return;
@@ -74,14 +83,21 @@ function createRustLyricsGesture({
       if (!active) return;
       const current = active;
       active = null;
+      current.released = true;
       cancel(current);
-      if (current.moved || current.longPressed || current.index < 0) return;
-      // Skia `press`: seek only when tap-to-seek is enabled, and restore follow
-      // before the seek so the new anchor takes ownership of the viewport.
-      setFollowing(true);
-      onAutoFollowChange(true);
-      onUserInteraction();
-      if (tapEnabled()) onLinePress(current.index);
+      if (current.moved || current.longPressed) return;
+      // A fast tap can release before the native hit test resolves; finish the
+      // press when it lands instead of dropping the seek. A tap outside every
+      // row never restores follow (Skia only presses actual rows).
+      const press = (index) => {
+        if (index < 0) return;
+        setFollowing(true);
+        onAutoFollowChange(true);
+        onUserInteraction();
+        if (tapEnabled()) onLinePress(index);
+      };
+      if (current.index >= 0) press(current.index);
+      else void current.hit.then(press);
     },
     terminate() {
       if (!active) return;
