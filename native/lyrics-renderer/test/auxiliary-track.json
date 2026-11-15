@@ -63,7 +63,7 @@
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
-      "sha256": "04461c63a18c6289d28c7961618257a89f2c048b85b2f858afa839668860434e"
+      "sha256": "abade0ff066aa0d61da04a35acb0db322c4ad666d1ebd33722f155a61705f45e"
     },
     {
       "path": "ExpoLyrics/node_modules/@formatjs/fast-memoize/index.js",
