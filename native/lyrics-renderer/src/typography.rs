@@ -61,12 +61,37 @@ pub struct PaintWord {
 pub struct PaintVoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translation: Option<String>,
+    /// Voice interval from the source helper (Skia `voice.start` / `voice.end`).
+    /// Background voices keep their own interval; older packets default to zero.
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: f64,
     pub text: String,
     pub words: Vec<PaintWord>,
     /// UTF16 offsets from actual app Intl.Segmenter + isCJK helper. No custom segmenter.
     pub cjk_breaks: Vec<usize>,
     pub opposite: bool,
     pub duet: bool,
+}
+impl PaintVoice {
+    /// Explicit source interval, or the spanned word interval for older packets.
+    pub fn interval(&self) -> (f64, f64) {
+        if self.end > self.start && self.start.is_finite() && self.end.is_finite() {
+            return (self.start, self.end);
+        }
+        let mut first = f64::INFINITY;
+        let mut last = f64::NEG_INFINITY;
+        for word in &self.words {
+            first = first.min(word.start);
+            last = last.max(word.end);
+        }
+        if first.is_finite() && last.is_finite() {
+            (first, last.max(first))
+        } else {
+            (0.0, 0.0)
+        }
+    }
 }
 /// UTF16 is the shared JS protocol index, UTF8 is Parley's index. Reject surrogate interiors.
 pub fn byte_index(text: &str, utf16: usize) -> Result<usize, String> {
@@ -257,6 +282,22 @@ pub struct Geometry {
     pub row_padding: f32,
     pub right: bool,
 }
+/// One Skia row voice: the shaped paragraph box plus its source presentation
+/// policy. Background voices reuse the parent row's lane and alignment.
+#[derive(Clone, Debug)]
+pub struct VoiceBox {
+    pub geometry: Geometry,
+    /// Skia `marginTop` before this voice inside its row.
+    pub margin_top: f32,
+    /// Inner padding around the shaped paragraph (Skia AMLL background padding).
+    pub padding: f32,
+    /// Voice alpha multiplier (Skia AMLL background container opacity).
+    pub alpha: f32,
+    /// Spicy word/letter vertical motion uses the parent row's type size
+    /// (`fontSize / 0.75` for a 0.75x background voice).
+    pub unit: f32,
+    pub background: bool,
+}
 impl Settings {
     pub fn geometry(&self, width: u32, dpr: f32, voice: &PaintVoice) -> Geometry {
         let w = width as f32 / dpr;
@@ -306,6 +347,65 @@ impl Settings {
             x: x * dpr,
             row_padding: if spicy { 12.0 * dpr } else { font * 0.4 * dpr },
             right,
+        }
+    }
+    /// Lead row voice: no extra margin, padding or voice alpha.
+    pub fn row_voice(&self, width: u32, dpr: f32, voice: &PaintVoice) -> VoiceBox {
+        let geometry = self.geometry(width, dpr, voice);
+        VoiceBox {
+            unit: geometry.font_size,
+            margin_top: 0.0,
+            padding: 0.0,
+            alpha: 1.0,
+            background: false,
+            geometry,
+        }
+    }
+    /// Background voice box from `native-lyric-row.tsx:112-129` and
+    /// `native-skia-voice.tsx:143-152`: Spicy is 0.75x the parent type with
+    /// 0.62x leading, weight 500 and a 3pt top margin; AMLL is 0.7x type with
+    /// 0.7x leading, the parent weight, 0.3em top margin, 0.2em inner padding
+    /// and a 0.4 container opacity. Both keep the parent row's duet alignment.
+    pub fn background_voice(&self, voice: &PaintVoice, lead: &Geometry, dpr: f32) -> VoiceBox {
+        let spicy = self.style == Style::Spicy;
+        let font_size = lead.font_size * if spicy { 0.75 } else { 0.7 };
+        let line_height = lead.line_height * if spicy { 0.62 } else { 0.7 };
+        let text_width = if spicy {
+            lead.text_width
+        } else {
+            let inset = if voice.duet {
+                lead.lane_width * 0.85 - font_size * 0.2
+            } else {
+                lead.lane_width - font_size * 0.4
+            };
+            inset.max(1.0)
+        };
+        let x = if lead.right {
+            lead.x + lead.text_width - text_width
+        } else {
+            lead.x
+        };
+        VoiceBox {
+            // Spicy scales background word/letter motion by the parent type size.
+            unit: if spicy { lead.font_size } else { font_size },
+            margin_top: if spicy {
+                3.0 * dpr
+            } else {
+                lead.font_size * 0.3
+            },
+            padding: if spicy { 0.0 } else { font_size * 0.2 },
+            alpha: if spicy { 1.0 } else { 0.4 },
+            background: true,
+            geometry: Geometry {
+                font_size,
+                line_height,
+                weight: if spicy { 500.0 } else { lead.weight },
+                lane_width: lead.lane_width,
+                text_width,
+                x,
+                row_padding: lead.row_padding,
+                right: lead.right,
+            },
         }
     }
 }
@@ -513,6 +613,8 @@ mod tests {
     fn voice(text: &str) -> PaintVoice {
         PaintVoice {
             translation: None,
+            start: 0.0,
+            end: 100.0,
             text: text.into(),
             words: vec![PaintWord {
                 appearance: None,

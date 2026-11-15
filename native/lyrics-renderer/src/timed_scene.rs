@@ -192,7 +192,36 @@ pub(crate) fn srgb(v: f64) -> f32 {
         (1.055 * v.powf(1.0 / 2.4) - 0.055) as f32
     }
 }
-fn encoded(alpha: f64, glow: f64, sigma: f64, scale: f64) -> Color {
+/// Skia Spicy glow intensity and blur sigma (`native-glyph-picture.tsx`
+/// `drawVoice`): emphasized letters use `clamp01(glow * 1.85) * 0.5` with
+/// `(4 + 12 * glow) / 2` sigma, other syllables `clamp01(glow * 0.35) * 0.5`
+/// with `(4 + 2 * glow) / 2`. The caller scales the sigma by DPR.
+pub(crate) fn spicy_glow(letter: bool, glow: f64) -> (f64, f64) {
+    if letter {
+        (
+            (glow * 1.85).clamp(0.0, 1.0) * 0.5,
+            (4.0 + 12.0 * glow) / 2.0,
+        )
+    } else {
+        (
+            (glow * 0.35).clamp(0.0, 1.0) * 0.5,
+            (4.0 + 2.0 * glow) / 2.0,
+        )
+    }
+}
+/// Skia Spicy voice alpha for a settled voice (`native-glyph-picture.tsx`
+/// `drawVoice`): background voices are dimmer than their parent lead.
+fn spicy_voice_alpha(background: bool, sung: bool) -> f64 {
+    match (sung, background) {
+        (true, true) => 0.6,
+        (true, false) => 0.85,
+        (false, true) => 0.3,
+        (false, false) => 0.5,
+    }
+}
+/// Packs sharp alpha and the near/far glow split into the existing shared
+/// half-resolution Gaussian bases; no additional blur pass or texture is used.
+pub(crate) fn encoded(alpha: f64, glow: f64, sigma: f64, scale: f64) -> Color {
     let far = ((sigma / scale - 2.5) / 3.5).clamp(0.0, 1.0);
     Color::new([srgb(alpha), srgb(glow * (1.0 - far)), srgb(glow * far), 1.0])
 }
@@ -239,13 +268,18 @@ impl TrackScene {
                 + shift(index);
             if y + cached.height < -40.0
                 || y > f64::from(self.height) + 40.0
-                || cached.layout.is_none()
+                || !cached.layout_ready()
             {
                 continue;
             }
             let row = state.row(index);
-            let singing = time >= self.lines[index].start && time < self.lines[index].end;
-            let base = Affine::translate((cached.x, y + cached.top));
+            let line = &self.lines[index];
+            let singing = time >= line.start && time < line.end;
+            // Skia's `active` is the whole presentation package, so a line whose
+            // lead has ended keeps its reveal and glow while a background voice
+            // is still singing.
+            let active_row = time >= line.start && time < line.background_end;
+            let row_top = y + cached.top;
             let full_bounds = Rect::new(
                 -64.0,
                 -64.0,
@@ -253,69 +287,61 @@ impl TrackScene {
                 cached.height + 64.0,
             );
             let detailed = (singing || row.is_some_and(|r| r.releasing))
-                && cached.timed.is_some()
+                && cached.timed_ready()
                 && row.is_some();
             if !detailed {
-                let alpha = if spicy {
-                    (if time > self.lines[index].end {
-                        0.85
-                    } else {
-                        0.5
-                    }) * row.map_or(
-                        if time > self.lines[index].end {
-                            0.497
+                let lead_scale = if !spicy && effect.motion() {
+                    row.map_or(if state.playing() { 0.97 } else { 1.0 }, |r| r.scale.p)
+                } else {
+                    1.0
+                };
+                for (voice_index, voice) in cached.voices.iter().enumerate() {
+                    let voice_end = line.voice(voice_index).map_or(line.end, |v| v.interval().1);
+                    let sung = time > voice_end;
+                    let outer = row.map_or(
+                        if spicy {
+                            if sung { 0.497 } else { 0.51 }
                         } else {
-                            0.51
+                            1.0
                         },
                         |r| r.outer,
-                    )
-                } else {
-                    row.map_or(0.2, |r| r.dark * r.outer)
-                };
-                let transform = if !spicy && effect.motion() {
-                    base * pivot(
-                        Rect::new(0.0, 0.0, cached.lane, cached.content_height),
-                        if cached.right { 1.0 } else { 0.0 },
-                        row.map_or(if state.playing() { 0.97 } else { 1.0 }, |r| r.scale.p),
-                        0.0,
-                        0.0,
-                    )
-                } else {
-                    base
-                };
-                scene.push_layer(
-                    Fill::NonZero,
-                    BlendMode::default(),
-                    alpha as f32,
-                    transform,
-                    &full_bounds,
-                );
-                scene.append(&cached.plain, Some(transform));
-                scene.pop_layer();
-                if let Some(t) = &cached.translation {
-                    t.draw(
-                        scene,
-                        transform,
-                        row.map_or(
-                            if spicy {
-                                if time > self.lines[index].end {
-                                    0.497
-                                } else {
-                                    0.51
-                                }
-                            } else {
-                                1.0
-                            },
-                            |r| r.outer,
-                        ),
                     );
+                    let alpha = if spicy {
+                        spicy_voice_alpha(voice.background, sung) * outer
+                    } else {
+                        row.map_or(0.2, |r| r.dark * r.outer) * voice.alpha
+                    };
+                    let base = Affine::translate((voice.x, row_top + voice.offset + voice.padding));
+                    // AMLL ducks its line scale on background voices.
+                    let transform = if !spicy && effect.motion() && !voice.background {
+                        base * pivot(
+                            Rect::new(0.0, 0.0, cached.lane, cached.content_height),
+                            if cached.right { 1.0 } else { 0.0 },
+                            lead_scale,
+                            0.0,
+                            0.0,
+                        )
+                    } else {
+                        base
+                    };
+                    scene.push_layer(
+                        Fill::NonZero,
+                        BlendMode::default(),
+                        alpha as f32,
+                        transform,
+                        &full_bounds,
+                    );
+                    scene.append(&voice.plain, Some(transform));
+                    scene.pop_layer();
+                    if let Some(t) = &voice.translation {
+                        t.draw(scene, transform, outer * voice.alpha);
+                    }
                 }
                 continue;
             }
             let row = row.expect("detailed row");
-            let voice = self.lines[index].paint.as_ref().expect("prepared voice");
-            let timed = cached.timed.as_ref().expect("timed geometry");
-            let line_transform = if !spicy && effect.motion() {
+            // AMLL ducking scales the lead voice only.
+            let lead_transform = if !spicy && effect.motion() {
                 pivot(
                     Rect::new(0.0, 0.0, cached.lane, cached.content_height),
                     if cached.right { 1.0 } else { 0.0 },
@@ -326,150 +352,176 @@ impl TrackScene {
             } else {
                 Affine::IDENTITY
             };
-            let size = cached.size;
-            let fade = timed.first().map_or(size, |w| w.bounds.height()) * 0.56;
-            let advanced = if spicy {
-                0.0
-            } else {
-                timed
-                    .iter()
-                    .zip(&voice.words)
-                    .enumerate()
-                    .map(|(i, (g, w))| {
-                        crate::progress(time, w.start, w.end)
-                            * (g.width
-                                + if i == 0 { fade * 1.5 } else { 0.0 }
-                                + if i + 1 == timed.len() {
-                                    fade * 0.5
-                                } else {
-                                    0.0
-                                })
-                    })
-                    .sum()
-            };
-            for ((geometry, word), motion) in timed.iter().zip(&voice.words).zip(&row.words) {
-                let meta = word.appearance.as_ref().expect("ABI5 appearance metadata");
-                let word_y = if spicy {
-                    motion.motion.y * size
-                } else {
-                    crate::style_timing::amll_float(
-                        row.clock.word_position(time, word.start, word.end),
-                        word.start,
-                        word.end,
-                        false,
-                    ) * size
+            for (voice_index, voice) in cached.voices.iter().enumerate() {
+                let Some(paint) = line.voice(voice_index) else {
+                    continue;
                 };
-                let word_transform = if effect.motion() {
-                    pivot(
-                        geometry.bounds,
-                        meta.origin,
-                        if spicy { motion.motion.scale } else { 1.0 },
-                        0.0,
-                        word_y,
-                    )
-                } else {
+                let (Some(timed), Some(row_words)) =
+                    (voice.timed.as_ref(), row.voices.get(voice_index))
+                else {
+                    continue;
+                };
+                let voice_end = paint.interval().1;
+                let sung = time > voice_end;
+                let background = voice.background;
+                let outer = row.outer * voice.alpha;
+                let size = voice.size;
+                // Spicy scales background word/letter motion by the parent type size.
+                let unit = voice.unit;
+                let base = Affine::translate((voice.x, row_top + voice.offset + voice.padding));
+                let line_transform = if background {
                     Affine::IDENTITY
+                } else {
+                    lead_transform
                 };
-                for slice in &geometry.slices {
-                    let letter = slice.letter;
-                    let mut gradient = motion.motion.gradient;
-                    let mut glow = 0.0;
-                    let mut sigma = 0.0;
-                    let mut letter_transform = Affine::IDENTITY;
-                    if meta.emphasized {
-                        if spicy {
-                            if let Some(m) = motion.letter_motion.get(letter) {
-                                gradient = m.gradient;
-                                glow = (m.glow * 1.85).clamp(0.0, 1.0) * 0.5;
-                                sigma = (4.0 + 12.0 * m.glow) / 2.0 * scale;
-                                if effect.motion() {
-                                    letter_transform =
-                                        pivot(slice.rect, 0.5, m.scale, 0.0, m.y * size);
-                                }
-                            }
-                        } else {
-                            let (start, end, index, count, last) = meta.emphasis.as_ref().map_or(
-                                (
-                                    word.start,
-                                    word.end,
-                                    letter,
-                                    word.graphemes.len(),
-                                    meta.last,
-                                ),
-                                |g| (g.start, g.end, g.index + letter, g.count, g.last),
-                            );
-                            let m = crate::style_timing::amll_emphasis(
-                                time, start, end, index, count, last, false,
-                            );
-                            glow = m.glow;
-                            sigma = m.radius * size / 2.0;
-                            if effect.motion() {
-                                letter_transform =
-                                    pivot(slice.rect, 0.5, m.scale, m.x * size, m.y * size);
-                            }
-                        }
-                    } else if spicy {
-                        glow = (motion.motion.glow * 0.35).clamp(0.0, 1.0) * 0.5;
-                        sigma = (4.0 + 2.0 * motion.motion.glow) / 2.0 * scale;
-                    }
-                    if !effect.glow() || !singing {
-                        glow = 0.0;
-                    }
-                    let (x, length) = if spicy {
-                        (
-                            if meta.rtl {
-                                slice.extent.x1 - slice.extent.width() * gradient
-                            } else {
-                                slice.extent.x0 + slice.extent.width() * gradient
-                            },
-                            slice.extent.width() * 0.2 * if meta.rtl { -1.0 } else { 1.0 },
+                let fade = timed.first().map_or(size, |w| w.bounds.height()) * 0.56;
+                let advanced = if spicy {
+                    0.0
+                } else {
+                    timed
+                        .iter()
+                        .zip(&paint.words)
+                        .enumerate()
+                        .map(|(i, (g, w))| {
+                            crate::progress(time, w.start, w.end)
+                                * (g.width
+                                    + if i == 0 { fade * 1.5 } else { 0.0 }
+                                    + if i + 1 == timed.len() {
+                                        fade * 0.5
+                                    } else {
+                                        0.0
+                                    })
+                        })
+                        .sum()
+                };
+                for ((geometry, word), motion) in
+                    timed.iter().zip(&paint.words).zip(row_words.words.iter())
+                {
+                    let meta = word.appearance.as_ref().expect("ABI5 appearance metadata");
+                    let word_y = if spicy {
+                        motion.motion.y * unit
+                    } else {
+                        crate::style_timing::amll_float(
+                            row.clock.word_position(time, word.start, word.end),
+                            word.start,
+                            word.end,
+                            background,
+                        ) * size
+                    };
+                    let word_transform = if effect.motion() {
+                        pivot(
+                            geometry.bounds,
+                            meta.origin,
+                            if spicy { motion.motion.scale } else { 1.0 },
+                            0.0,
+                            word_y,
                         )
                     } else {
-                        // Shared linear word advance; continuation rows consume prior fragment width.
-                        let x = slice.amll_x + advanced - geometry.before - fade * 2.0;
-                        (x, fade)
+                        Affine::IDENTITY
                     };
-                    let (bright, dark) = if spicy && !singing {
-                        let alpha = if time > self.lines[index].end {
-                            0.85
+                    for slice in &geometry.slices {
+                        let letter = slice.letter;
+                        let mut gradient = motion.motion.gradient;
+                        let mut glow = 0.0;
+                        let mut sigma = 0.0;
+                        let mut letter_transform = Affine::IDENTITY;
+                        if meta.emphasized {
+                            if spicy {
+                                if let Some(m) = motion.letter_motion.get(letter) {
+                                    gradient = m.gradient;
+                                    let (alpha, radius) = spicy_glow(true, m.glow);
+                                    glow = alpha;
+                                    sigma = radius * scale;
+                                    if effect.motion() {
+                                        letter_transform =
+                                            pivot(slice.rect, 0.5, m.scale, 0.0, m.y * unit);
+                                    }
+                                }
+                            } else {
+                                let (start, end, index, count, last) =
+                                    meta.emphasis.as_ref().map_or(
+                                        (
+                                            word.start,
+                                            word.end,
+                                            letter,
+                                            word.graphemes.len(),
+                                            meta.last,
+                                        ),
+                                        |g| (g.start, g.end, g.index + letter, g.count, g.last),
+                                    );
+                                let m = crate::style_timing::amll_emphasis(
+                                    time, start, end, index, count, last, background,
+                                );
+                                glow = m.glow;
+                                sigma = m.radius * size / 2.0;
+                                if effect.motion() {
+                                    letter_transform =
+                                        pivot(slice.rect, 0.5, m.scale, m.x * size, m.y * size);
+                                }
+                            }
+                        } else if spicy {
+                            let (alpha, radius) = spicy_glow(false, motion.motion.glow);
+                            glow = alpha;
+                            sigma = radius * scale;
+                        }
+                        // Skia keeps glow while the row is in the active package.
+                        if !effect.glow() || !active_row {
+                            glow = 0.0;
+                        }
+                        let (x, length) = if spicy {
+                            (
+                                if meta.rtl {
+                                    slice.extent.x1 - slice.extent.width() * gradient
+                                } else {
+                                    slice.extent.x0 + slice.extent.width() * gradient
+                                },
+                                slice.extent.width() * 0.2 * if meta.rtl { -1.0 } else { 1.0 },
+                            )
                         } else {
-                            0.5
+                            // Shared linear word advance; continuation rows consume prior fragment width.
+                            let x = slice.amll_x + advanced - geometry.before - fade * 2.0;
+                            (x, fade)
                         };
-                        (alpha, alpha)
-                    } else if spicy {
-                        (0.85, 0.5)
-                    } else {
-                        (row.bright, row.dark)
-                    };
-                    let glow_bright = if spicy { glow } else { glow * bright };
-                    let glow_dark = if spicy { glow } else { glow * dark };
-                    let mut brush =
-                        Gradient::new_linear((x, slice.rect.y0), (x + length, slice.rect.y0))
-                            .with_stops([
-                                encoded(bright * row.outer, glow_bright * row.outer, sigma, scale),
-                                encoded(dark * row.outer, glow_dark * row.outer, sigma, scale),
-                            ]);
-                    brush.interpolation_cs = ColorSpaceTag::LinearSrgb;
-                    let transform = base * line_transform * word_transform * letter_transform;
-                    if slice.clip {
-                        scene.push_clip_layer(Fill::NonZero, transform, &slice.path);
-                    }
-                    for run in &slice.runs {
-                        scene
-                            .draw_glyphs(&run.font)
-                            .font_size(run.size)
-                            .normalized_coords(&run.coords)
-                            .transform(transform)
-                            .brush(&brush)
-                            .draw(Fill::NonZero, run.glyphs.iter().copied());
-                    }
-                    if slice.clip {
-                        scene.pop_layer();
+                        let (bright, dark) = if spicy && !active_row {
+                            // A settled/dimmed Spicy voice paints its own sung or
+                            // unsung alpha instead of the reveal shader.
+                            let alpha = spicy_voice_alpha(background, sung);
+                            (alpha, alpha)
+                        } else if spicy {
+                            if background { (0.6, 0.3) } else { (0.85, 0.5) }
+                        } else {
+                            (row.bright, row.dark)
+                        };
+                        let glow_bright = if spicy { glow } else { glow * bright };
+                        let glow_dark = if spicy { glow } else { glow * dark };
+                        let mut brush =
+                            Gradient::new_linear((x, slice.rect.y0), (x + length, slice.rect.y0))
+                                .with_stops([
+                                    encoded(bright * outer, glow_bright * outer, sigma, scale),
+                                    encoded(dark * outer, glow_dark * outer, sigma, scale),
+                                ]);
+                        brush.interpolation_cs = ColorSpaceTag::LinearSrgb;
+                        let transform = base * line_transform * word_transform * letter_transform;
+                        if slice.clip {
+                            scene.push_clip_layer(Fill::NonZero, transform, &slice.path);
+                        }
+                        for run in &slice.runs {
+                            scene
+                                .draw_glyphs(&run.font)
+                                .font_size(run.size)
+                                .normalized_coords(&run.coords)
+                                .transform(transform)
+                                .brush(&brush)
+                                .draw(Fill::NonZero, run.glyphs.iter().copied());
+                        }
+                        if slice.clip {
+                            scene.pop_layer();
+                        }
                     }
                 }
-            }
-            if let Some(t) = &cached.translation {
-                t.draw(scene, base * line_transform, row.outer);
+                if let Some(t) = &voice.translation {
+                    t.draw(scene, base * line_transform, outer);
+                }
             }
         }
         let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);

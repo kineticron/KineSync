@@ -17,6 +17,9 @@ pub struct TrackPacket {
 pub struct WireLine {
     #[serde(default)]
     pub paint: Option<crate::typography::PaintVoice>,
+    /// Background vocal voices in source display order (Skia `backgrounds`).
+    #[serde(default)]
+    pub backgrounds: Vec<crate::typography::PaintVoice>,
     pub start: f64,
     pub end: f64,
     /// Package end including background voices. Optional for older packets.
@@ -37,6 +40,9 @@ impl TrackPacket {
             return Err("Track packet exceeds 2 MB".into());
         }
         let packet: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        // Schema6 payloads gain optional background voices: an additive field
+        // that older binaries reject, so ABI8 (not the schema number) is the
+        // client-compatibility gate. Old packets parse with no backgrounds.
         if packet.schema != 6
             || packet
                 .settings
@@ -63,6 +69,24 @@ impl TrackPacket {
             }
             if let Some(paint) = &line.paint {
                 paint.validate(line.start, line.end)?;
+            }
+            if line.backgrounds.len() > MAX_BACKGROUND_VOICES {
+                return Err("Too many background voices".into());
+            }
+            for background in &line.backgrounds {
+                // A background voice owns its own syllable interval, which may
+                // extend past the lead end. It stays inside the line's package
+                // end apart from the tolerated 1 ms word-end rounding, and it
+                // inherits the row's duet alignment instead of overriding it.
+                let (first, last) = background.interval();
+                background.validate(first, last)?;
+                if last > line.background_end.unwrap_or(line.end) + 1.0
+                    || line.paint.as_ref().is_some_and(|lead| {
+                        lead.duet != background.duet || lead.opposite != background.opposite
+                    })
+                {
+                    return Err("Background voice disagrees with its parent row".into());
+                }
             }
             if let Some(background_end) = line.background_end
                 && (!valid_interval(line.start, background_end) || background_end < line.end)
@@ -105,6 +129,7 @@ impl TrackPacket {
                     .collect();
                 Line {
                     paint: line.paint,
+                    backgrounds: line.backgrounds,
                     text,
                     start: line.start,
                     end: line.end,
@@ -115,6 +140,8 @@ impl TrackPacket {
             .collect()
     }
 }
+/// Skia rows may carry several background voices; bound the retained count.
+pub const MAX_BACKGROUND_VOICES: usize = 16;
 fn valid_interval(start: f64, end: f64) -> bool {
     start.is_finite() && end.is_finite() && start >= 0.0 && end >= start && end <= 86_400_000.0
 }

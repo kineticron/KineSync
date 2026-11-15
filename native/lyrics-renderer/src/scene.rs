@@ -12,23 +12,98 @@ use vello::{
 
 type Error = Box<dyn std::error::Error>;
 
-pub(crate) struct CachedLine {
+/// One shaped row voice: the lead, then any background voices, in source order.
+pub(crate) struct CachedVoice {
     pub(crate) white: Scene,
     pub(crate) plain: Scene,
     pub(crate) translation: Option<crate::auxiliary::Translation>,
+    /// Shaped paragraph height, excluding this voice's padding and translation.
     pub(crate) height: f64,
     /// One or more visual fragments for each timed atom, including wrapped syllables.
     atoms: Vec<Vec<Rect>>,
     pub(crate) words: Vec<crate::typography::WordRange>,
-    pub(crate) top: f64,
-    pub(crate) x: f64,
     pub(crate) layout: Option<parley::Layout<()>>,
     pub(crate) detailed: bool,
     pub(crate) timed: Option<Vec<crate::timed_scene::TimedWord>>,
     pub(crate) size: f64,
     pub(crate) lane: f64,
     pub(crate) right: bool,
+    /// Absolute surface x of the shaped paragraph.
+    pub(crate) x: f64,
+    /// Offset from the row content top to this voice's padding box.
+    pub(crate) offset: f64,
+    /// Inner padding above and below the paragraph (Skia AMLL background).
+    pub(crate) padding: f64,
+    /// Voice alpha multiplier (Skia AMLL background container opacity).
+    pub(crate) alpha: f64,
+    /// Spicy vertical motion unit: the parent row type size for backgrounds.
+    pub(crate) unit: f64,
+    pub(crate) background: bool,
+}
+impl CachedVoice {
+    /// Everything this voice adds to its row, including padding and translation.
+    pub(crate) fn box_height(&self) -> f64 {
+        self.padding * 2.0 + self.height + self.translation.as_ref().map_or(0.0, |t| t.extra_height)
+    }
+    fn placeholder(voice: &crate::typography::VoiceBox) -> Self {
+        Self {
+            white: Scene::new(),
+            plain: Scene::new(),
+            translation: None,
+            height: 0.0,
+            atoms: Vec::new(),
+            words: Vec::new(),
+            layout: None,
+            detailed: false,
+            timed: None,
+            size: f64::from(voice.geometry.font_size),
+            lane: f64::from(voice.geometry.text_width),
+            right: voice.geometry.right,
+            x: f64::from(voice.geometry.x),
+            offset: 0.0,
+            padding: f64::from(voice.padding),
+            alpha: f64::from(voice.alpha),
+            unit: f64::from(voice.unit),
+            background: voice.background,
+        }
+    }
+    fn clear_geometry(&mut self) {
+        self.layout = None;
+        self.white = Scene::new();
+        self.plain = Scene::new();
+        self.translation = None;
+        self.atoms = Vec::new();
+        self.words = Vec::new();
+        self.detailed = false;
+        self.timed = None;
+    }
+}
+
+pub(crate) struct CachedLine {
+    pub(crate) voices: Vec<CachedVoice>,
+    pub(crate) height: f64,
+    pub(crate) top: f64,
+    /// Total measured height of every voice box in this row, background voices
+    /// included. Drives row measurement and the AMLL lead scale pivot.
     pub(crate) content_height: f64,
+    /// Lead voice mirrors used by the interlude dot styling.
+    pub(crate) size: f64,
+    pub(crate) lane: f64,
+    pub(crate) x: f64,
+    pub(crate) right: bool,
+}
+impl CachedLine {
+    pub(crate) fn lead(&self) -> &CachedVoice {
+        &self.voices[0]
+    }
+    pub(crate) fn layout_ready(&self) -> bool {
+        self.voices.iter().all(|voice| voice.layout.is_some())
+    }
+    pub(crate) fn timed_ready(&self) -> bool {
+        self.voices
+            .iter()
+            .all(|voice| voice.detailed && voice.timed.is_some())
+    }
 }
 
 pub struct TrackScene {
@@ -137,6 +212,61 @@ pub(crate) fn fragments(
     atoms
 }
 
+/// Skia row voice boxes: the lead first, then its background voices in source
+/// order. The legacy fixture path keeps its single anonymous voice.
+/// Source: `native-lyric-row.tsx:112-129`, `native-skia-voice.tsx:143-152`.
+fn row_voice_boxes(
+    line: &Line,
+    width: u32,
+    height: u32,
+    scale: f32,
+    settings: Option<&crate::typography::Settings>,
+    font_size: f32,
+) -> Vec<crate::typography::VoiceBox> {
+    let Some(settings) = settings else {
+        let text_width = if width < height {
+            (width as f32 - 64.0 * scale).max(font_size)
+        } else {
+            width as f32 * 0.67
+        };
+        return vec![crate::typography::VoiceBox {
+            unit: font_size,
+            margin_top: 0.0,
+            padding: 0.0,
+            alpha: 1.0,
+            background: false,
+            geometry: crate::typography::Geometry {
+                font_size,
+                line_height: font_size * 1.35,
+                weight: 800.0,
+                lane_width: text_width,
+                text_width,
+                x: if width < height {
+                    32.0 * scale
+                } else {
+                    width as f32 * 0.165
+                },
+                row_padding: 0.0,
+                right: false,
+            },
+        }];
+    };
+    let Some(lead_voice) = line.paint.as_ref() else {
+        return Vec::new();
+    };
+    let lead = settings.row_voice(width, scale, lead_voice);
+    line.voices()
+        .enumerate()
+        .map(|(index, source)| {
+            if index == 0 {
+                lead.clone()
+            } else {
+                settings.background_voice(source, &lead.geometry, scale)
+            }
+        })
+        .collect()
+}
+
 impl TrackScene {
     pub fn new(width: u32, height: u32) -> Result<Self, Error> {
         Self::from_lines(crate::fixture()?, width, height, 1.0)
@@ -192,7 +322,20 @@ impl TrackScene {
                 .as_ref()
                 .ok_or("Prepared style voice is missing")?;
             voice.validate(line.start, line.end)?;
-            let g = settings.geometry(width, scale, voice);
+            for background in &line.backgrounds {
+                let (start, end) = background.interval();
+                background.validate(start, end)?;
+            }
+            let lead = settings.row_voice(width, scale, voice);
+            let mut voices = Vec::with_capacity(line.voice_count());
+            for (index, source) in line.voices().enumerate() {
+                let voice_box = if index == 0 {
+                    lead.clone()
+                } else {
+                    settings.background_voice(source, &lead.geometry, scale)
+                };
+                voices.push(CachedVoice::placeholder(&voice_box));
+            }
             let height = if settings.style == crate::typography::Style::Spicy {
                 84.0
             } else {
@@ -201,23 +344,18 @@ impl TrackScene {
                 * scale;
             prefix.push(offset);
             offset += f64::from(height);
-            cached.push(CachedLine {
-                white: Scene::new(),
-                plain: Scene::new(),
-                translation: None,
+            let mut cached_line = CachedLine {
+                voices,
                 height: height.into(),
-                atoms: Vec::new(),
-                words: Vec::new(),
                 top: 0.0,
-                x: g.x.into(),
-                layout: None,
-                detailed: false,
-                timed: None,
-                size: f64::from(g.font_size),
-                lane: f64::from(g.text_width),
-                right: g.right,
                 content_height: 0.0,
-            });
+                size: f64::from(lead.geometry.font_size),
+                lane: f64::from(lead.geometry.text_width),
+                x: f64::from(lead.geometry.x),
+                right: lead.geometry.right,
+            };
+            cached_line.voices.shrink_to_fit();
+            cached.push(cached_line);
         }
         let count = lines.len();
         let interludes = crate::interlude::slots(&lines);
@@ -282,7 +420,7 @@ impl TrackScene {
         let mut changed = false;
         for i in start..=end {
             let detailed = i >= first && i <= detail_end;
-            if self.cached[i].layout.is_none() {
+            if !self.cached[i].layout_ready() {
                 let mut prepared = Self::with_fonts_eager(
                     vec![self.lines[i].clone()],
                     self.width,
@@ -299,47 +437,47 @@ impl TrackScene {
                 self.plain_preparations += 1;
                 self.detailed_preparations += usize::from(detailed);
                 changed = true;
-            } else if detailed && !self.cached[i].detailed {
-                let cached = &mut self.cached[i];
-                if cached.atoms.is_empty() {
-                    cached.atoms = fragments(
-                        cached.layout.as_ref().expect("prepared layout"),
-                        &cached.words,
-                    );
-                    self.detailed_preparations += 1;
+            } else if detailed && !self.cached[i].lead().detailed {
+                self.detailed_preparations += 1;
+                let line = &self.lines[i];
+                for (index, voice) in self.cached[i].voices.iter_mut().enumerate() {
+                    if voice.atoms.is_empty() {
+                        voice.atoms = fragments(
+                            voice.layout.as_ref().expect("prepared layout"),
+                            &voice.words,
+                        );
+                    }
+                    if voice.timed.is_none() {
+                        voice.timed = line.voice(index).map(|source| {
+                            crate::timed_scene::geometry(
+                                voice.layout.as_ref().expect("prepared"),
+                                &voice.words,
+                                source,
+                            )
+                        });
+                    }
+                    voice.detailed = true;
                 }
-                if cached.timed.is_none() {
-                    cached.timed = self.lines[i].paint.as_ref().map(|voice| {
-                        crate::timed_scene::geometry(
-                            cached.layout.as_ref().expect("prepared"),
-                            &cached.words,
-                            voice,
-                        )
-                    });
-                }
-                cached.detailed = true;
             }
-            if !detailed && self.cached[i].detailed {
+            if !detailed {
                 // Retain immutable paragraph geometry but no per-word slice processing.
-                self.cached[i].detailed = false;
+                for voice in &mut self.cached[i].voices {
+                    voice.detailed = false;
+                }
             }
         }
         // Bound glyph/paragraph ownership while preserving measured row heights.
         // Cached track variants are bounded separately by the native owner.
         for i in 0..self.cached.len() {
             if !(first..=detail_end).contains(&i) {
-                self.cached[i].detailed = false;
+                for voice in &mut self.cached[i].voices {
+                    voice.detailed = false;
+                }
             }
-            if i.abs_diff(active) > 32 && (i < start || i > end) && self.cached[i].layout.is_some()
-            {
-                self.cached[i].layout = None;
-                self.cached[i].white = Scene::new();
-                self.cached[i].plain = Scene::new();
-                self.cached[i].translation = None;
-                self.cached[i].atoms = Vec::new();
-                self.cached[i].words = Vec::new();
-                self.cached[i].detailed = false;
-                self.cached[i].timed = None;
+            if i.abs_diff(active) > 32 && (i < start || i > end) && self.cached[i].layout_ready() {
+                for voice in &mut self.cached[i].voices {
+                    voice.clear_geometry();
+                }
                 self.diagnostics[i] = serde_json::Value::Null;
             }
         }
@@ -383,140 +521,151 @@ impl TrackScene {
         let mut offset = 0.0;
         let mut diagnostics = Vec::new();
         for line in &lines {
-            let geometry = settings
-                .zip(line.paint.as_ref())
-                .map(|(settings, voice)| settings.geometry(width, scale, voice));
-            if settings.is_some() && geometry.is_none() {
+            if settings.is_some() && line.paint.is_none() {
                 return Err("Style packet requires prepared voice metadata".into());
             }
-            let size = geometry.as_ref().map_or(font_size, |g| g.font_size);
-            let lane = geometry.as_ref().map_or_else(
-                || {
-                    if width < height {
-                        (width as f32 - 64.0 * scale).max(size)
-                    } else {
-                        width as f32 * 0.67
-                    }
-                },
-                |g| g.text_width,
-            );
-            let line_height = geometry.as_ref().map_or(size * 1.35, |g| g.line_height);
-            let weight = geometry.as_ref().map_or(800.0, |g| g.weight);
-            let family = if settings.is_some() {
-                "'SF Pro Display', sans-serif"
-            } else if cfg!(target_vendor = "apple") {
-                "sans-serif"
-            } else {
-                "Noto Sans CJK KR"
-            };
-            let mut spacing = 0.0;
-            let (text, words) = if let (Some(settings), Some(voice)) =
-                (settings, line.paint.as_ref())
-            {
-                let probe = shape(
-                    "0 ",
-                    &mut fonts.context,
-                    &mut layouts,
-                    size,
-                    line_height,
-                    weight,
-                    family,
-                    &[],
-                    0.0,
-                );
-                let advances = cluster_widths(&probe);
-                let ch = measure(&advances, 0..1);
-                let space = measure(&advances, 1..2);
-                spacing = ch as f32 * 0.32 - space as f32;
-                let raw_words: Vec<_> = voice
-                    .words
-                    .iter()
-                    .map(|w| {
-                        let start = crate::typography::byte_index(&voice.text, w.offset)
-                            .expect("validated voice");
-                        crate::typography::WordRange {
-                            bytes: start..start + w.text.len(),
-                            start: w.start,
-                            end: w.end,
-                            gap: w.gap_after,
-                        }
-                    })
-                    .collect();
-                let unwrapped = shape(
-                    &voice.text,
-                    &mut fonts.context,
-                    &mut layouts,
-                    size,
-                    line_height,
-                    weight,
-                    family,
-                    &raw_words,
-                    spacing,
-                );
-                let advances = cluster_widths(&unwrapped);
-                crate::typography::wrap(voice, settings.style, f64::from(lane / scale), |range| {
-                    measure(&advances, range) / f64::from(scale)
-                })
-            } else {
-                (
-                    line.text.clone(),
-                    line.atoms
-                        .iter()
-                        .map(|a| crate::typography::WordRange {
-                            bytes: a.bytes.clone(),
-                            start: a.start,
-                            end: a.end,
-                            gap: false,
-                        })
-                        .collect(),
-                )
-            };
-            let mut layout = shape(
-                &text,
-                &mut fonts.context,
-                &mut layouts,
-                size,
-                line_height,
-                weight,
-                family,
-                &words,
-                spacing,
-            );
-            layout.break_all_lines(Some(lane));
-            layout.align(
-                if geometry.as_ref().is_some_and(|g| g.right) {
-                    Alignment::End
+            let boxes = row_voice_boxes(line, width, height, scale, settings, font_size);
+            let mut voices = Vec::with_capacity(boxes.len());
+            let mut voice_diagnostics = Vec::with_capacity(boxes.len());
+            // Row content grows by each voice's own margin and padding box, so a
+            // background voice is part of the measured line height used by
+            // scrolling, the blur ramp and the protected band.
+            let mut cursor = 0.0;
+            for (index, voice_box) in boxes.iter().enumerate() {
+                let geometry = Some(voice_box.geometry.clone());
+                let size = voice_box.geometry.font_size;
+                let lane = voice_box.geometry.text_width;
+                let line_height = voice_box.geometry.line_height;
+                let weight = voice_box.geometry.weight;
+                let family = if settings.is_some() {
+                    "'SF Pro Display', sans-serif"
+                } else if cfg!(target_vendor = "apple") {
+                    "sans-serif"
                 } else {
-                    Alignment::Start
-                },
-                AlignmentOptions::default(),
-            );
-            let mut white = Scene::new();
-            let mut plain = Scene::new();
-            let mut atoms = Vec::new();
-            let mut faces = Vec::new();
-            for row in layout.lines() {
-                for item in row.items() {
-                    if let PositionedLayoutItem::GlyphRun(gr) = item {
-                        let run = gr.run();
-                        let face = fonts.describe(run.font());
-                        faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],
-                            "requested_attributes":format!("{:?}",run.font_attrs()), "size":run.font_size(),
-                            "normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
-                        let glyphs: Vec<Glyph> = gr
-                            .positioned_glyphs()
-                            .map(|g| {
-                                glyph_count += 1;
-                                missing_glyphs += usize::from(g.id == 0);
-                                Glyph {
-                                    id: g.id,
-                                    x: g.x,
-                                    y: g.y,
+                    "Noto Sans CJK KR"
+                };
+                let mut spacing = 0.0;
+                let (text, words) =
+                    if let (Some(settings), Some(voice)) = (settings, line.voice(index)) {
+                        let probe = shape(
+                            "0 ",
+                            &mut fonts.context,
+                            &mut layouts,
+                            size,
+                            line_height,
+                            weight,
+                            family,
+                            &[],
+                            0.0,
+                        );
+                        let advances = cluster_widths(&probe);
+                        let ch = measure(&advances, 0..1);
+                        let space = measure(&advances, 1..2);
+                        spacing = ch as f32 * 0.32 - space as f32;
+                        let raw_words: Vec<_> = voice
+                            .words
+                            .iter()
+                            .map(|w| {
+                                let start = crate::typography::byte_index(&voice.text, w.offset)
+                                    .expect("validated voice");
+                                crate::typography::WordRange {
+                                    bytes: start..start + w.text.len(),
+                                    start: w.start,
+                                    end: w.end,
+                                    gap: w.gap_after,
                                 }
                             })
                             .collect();
-                        if settings.is_some() {
-                            plain
+                        let unwrapped = shape(
+                            &voice.text,
+                            &mut fonts.context,
+                            &mut layouts,
+                            size,
+                            line_height,
+                            weight,
+                            family,
+                            &raw_words,
+                            spacing,
+                        );
+                        let advances = cluster_widths(&unwrapped);
+                        crate::typography::wrap(
+                            voice,
+                            settings.style,
+                            f64::from(lane / scale),
+                            |range| measure(&advances, range) / f64::from(scale),
+                        )
+                    } else {
+                        (
+                            line.text.clone(),
+                            line.atoms
+                                .iter()
+                                .map(|a| crate::typography::WordRange {
+                                    bytes: a.bytes.clone(),
+                                    start: a.start,
+                                    end: a.end,
+                                    gap: false,
+                                })
+                                .collect(),
+                        )
+                    };
+                let mut layout = shape(
+                    &text,
+                    &mut fonts.context,
+                    &mut layouts,
+                    size,
+                    line_height,
+                    weight,
+                    family,
+                    &words,
+                    spacing,
+                );
+                layout.break_all_lines(Some(lane));
+                layout.align(
+                    if geometry.as_ref().is_some_and(|g| g.right) {
+                        Alignment::End
+                    } else {
+                        Alignment::Start
+                    },
+                    AlignmentOptions::default(),
+                );
+                let mut white = Scene::new();
+                let mut plain = Scene::new();
+                let mut atoms = Vec::new();
+                let mut faces = Vec::new();
+                for row in layout.lines() {
+                    for item in row.items() {
+                        if let PositionedLayoutItem::GlyphRun(gr) = item {
+                            let run = gr.run();
+                            let face = fonts.describe(run.font());
+                            faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],
+                            "requested_attributes":format!("{:?}",run.font_attrs()), "size":run.font_size(),
+                            "normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
+                            let glyphs: Vec<Glyph> = gr
+                                .positioned_glyphs()
+                                .map(|g| {
+                                    glyph_count += 1;
+                                    missing_glyphs += usize::from(g.id == 0);
+                                    Glyph {
+                                        id: g.id,
+                                        x: g.x,
+                                        y: g.y,
+                                    }
+                                })
+                                .collect();
+                            if settings.is_some() {
+                                plain
+                                    .draw_glyphs(run.font())
+                                    .font_size(run.font_size())
+                                    .normalized_coords(
+                                        &run.normalized_coords()
+                                            .iter()
+                                            .map(|c| c.to_bits())
+                                            .collect::<Vec<_>>(),
+                                    )
+                                    .brush(Color::new([1.0, 0.0, 0.0, 1.0]))
+                                    .draw(Fill::NonZero, glyphs.iter().copied());
+                            }
+                            white
                                 .draw_glyphs(run.font())
                                 .font_size(run.font_size())
                                 .normalized_coords(
@@ -525,106 +674,120 @@ impl TrackScene {
                                         .map(|c| c.to_bits())
                                         .collect::<Vec<_>>(),
                                 )
-                                .brush(Color::new([1.0, 0.0, 0.0, 1.0]))
-                                .draw(Fill::NonZero, glyphs.iter().copied());
+                                .brush(Color::WHITE)
+                                .draw(Fill::NonZero, glyphs.into_iter());
                         }
-                        white
-                            .draw_glyphs(run.font())
-                            .font_size(run.font_size())
-                            .normalized_coords(
-                                &run.normalized_coords()
-                                    .iter()
-                                    .map(|c| c.to_bits())
-                                    .collect::<Vec<_>>(),
-                            )
-                            .brush(Color::WHITE)
-                            .draw(Fill::NonZero, glyphs.into_iter());
                     }
                 }
-            }
-            if detailed {
-                atoms = fragments(&layout, &words);
-            }
-            let mut content_height = layout.height() as f64;
-            let translation = if let (Some(settings), Some(geometry), Some(text)) = (
-                settings,
-                geometry.as_ref(),
-                line.paint
-                    .as_ref()
-                    .and_then(|v| v.translation.as_deref())
-                    .filter(|t| !t.is_empty()),
-            ) {
-                let t = crate::auxiliary::Translation::prepare(
-                    text,
+                if detailed {
+                    atoms = fragments(&layout, &words);
+                }
+                let content_height = layout.height() as f64;
+                let translation = if let (Some(settings), Some(geometry), Some(text)) = (
                     settings,
-                    geometry,
-                    scale,
-                    content_height,
-                    fonts,
-                    &mut layouts,
-                );
-                content_height += t.extra_height;
-                glyph_count += t.glyph_count;
-                missing_glyphs += t.missing_glyphs;
-                Some(t)
-            } else {
-                None
-            };
-            let (height, top, x, gap) = if let Some(g) = &geometry {
-                let settings = settings.expect("geometry has settings");
+                    geometry.as_ref(),
+                    line.voice(index)
+                        .and_then(|v| v.translation.as_deref())
+                        .filter(|t| !t.is_empty()),
+                ) {
+                    let policy = crate::auxiliary::Policy::voice(
+                        settings,
+                        geometry,
+                        scale,
+                        voice_box.background,
+                        voice_box.geometry.font_size,
+                        voice_box.geometry.text_width,
+                    );
+                    let t = crate::auxiliary::Translation::prepare(
+                        text,
+                        &policy,
+                        voice_box.geometry.right,
+                        f64::from(voice_box.padding) + content_height,
+                        fonts,
+                        &mut layouts,
+                    );
+                    glyph_count += t.glyph_count;
+                    missing_glyphs += t.missing_glyphs;
+                    Some(t)
+                } else {
+                    None
+                };
+                let timed = if detailed {
+                    line.voice(index)
+                        .map(|source| crate::timed_scene::geometry(&layout, &words, source))
+                } else {
+                    None
+                };
+                let voice = CachedVoice {
+                    white,
+                    plain,
+                    translation,
+                    height: layout.height() as f64,
+                    atoms,
+                    words,
+                    layout: Some(layout),
+                    detailed,
+                    timed,
+                    size: f64::from(size),
+                    lane: f64::from(lane),
+                    right: geometry.as_ref().is_some_and(|g| g.right),
+                    x: f64::from(voice_box.geometry.x),
+                    offset: cursor + f64::from(voice_box.margin_top),
+                    padding: f64::from(voice_box.padding),
+                    alpha: f64::from(voice_box.alpha),
+                    unit: f64::from(voice_box.unit),
+                    background: voice_box.background,
+                };
+                cursor = voice.offset + voice.box_height();
+                voice_diagnostics.push(serde_json::json!({"geometry":voice_box.geometry,"text":text,
+                "voice_height":voice.height,"background":voice_box.background,"offset":voice.offset,
+                "faces":faces,"line_count":voice.layout.as_ref().map_or(0usize, |l| l.len()),
+                "translation":voice.translation.as_ref().map(|t| &t.diagnostics),
+                "word_ranges":voice.words.iter().map(|w|vec![w.bytes.start,w.bytes.end]).collect::<Vec<_>>() }));
+                voices.push(voice);
+            }
+            let lead_size = voices[0].size;
+            let lead_lane = voices[0].lane;
+            let lead_x = voices[0].x;
+            let lead_right = voices[0].right;
+            let (height, top, gap) = if settings.is_some() {
+                let settings = settings.expect("styles have settings");
+                let row_padding = f64::from(boxes[0].geometry.row_padding);
                 let min = if settings.style == crate::typography::Style::Spicy {
                     84.0
                 } else {
                     72.0
                 } * settings.font_scale
                     * scale;
-                let height = (content_height + 2.0 * g.row_padding as f64).max(min as f64);
+                let height = (cursor + 2.0 * row_padding).max(f64::from(min));
                 let top = if settings.style == crate::typography::Style::Spicy {
-                    (height - content_height) / 2.0
+                    (height - cursor) / 2.0
                 } else {
-                    g.row_padding as f64
+                    row_padding
                 };
-                (height, top, g.x as f64, 0.0)
+                (height, top, 0.0)
             } else {
-                (
-                    content_height,
-                    0.0,
-                    if width < height {
-                        32.0 * scale as f64
-                    } else {
-                        width as f64 * 0.165
-                    },
-                    font_size as f64 * 0.7,
-                )
+                (cursor, 0.0, f64::from(font_size) * 0.7)
             };
             prefix.push(offset);
             offset += height + gap;
-            diagnostics.push(serde_json::json!({"geometry":geometry,"text":text,"height":height,"content_top":top,
-                "content_height":content_height,"faces":faces,"translation":translation.as_ref().map(|t| &t.diagnostics),"line_count":layout.len(),
-                "word_ranges":words.iter().map(|w|vec![w.bytes.start,w.bytes.end]).collect::<Vec<_>>() }));
-            let timed = if detailed {
-                line.paint
-                    .as_ref()
-                    .map(|voice| crate::timed_scene::geometry(&layout, &words, voice))
-            } else {
-                None
-            };
+            let mut row = voice_diagnostics[0].clone();
+            if let Some(fields) = row.as_object_mut() {
+                fields.insert("height".into(), serde_json::json!(height));
+                fields.insert("content_top".into(), serde_json::json!(top));
+                fields.insert("content_height".into(), serde_json::json!(cursor));
+                fields.insert("voices".into(), serde_json::Value::Array(voice_diagnostics));
+            }
+            diagnostics.push(row);
             cached.push(CachedLine {
-                white,
-                plain,
-                translation,
+                voices,
                 height,
-                atoms,
-                words,
                 top,
-                x,
-                layout: Some(layout),
-                detailed,
-                timed,
-                size: f64::from(size),
-                lane: f64::from(lane),
-                right: geometry.as_ref().is_some_and(|g| g.right),
-                content_height,
+                content_height: cursor,
+                size: lead_size,
+                lane: lead_lane,
+                x: lead_x,
+                right: lead_right,
             });
         }
         if missing_glyphs > 0 {
@@ -657,12 +820,10 @@ impl TrackScene {
         self.settings.as_ref().map(|s| s.style)
     }
     pub fn timed_ready(&self, index: usize) -> bool {
-        self.cached
-            .get(index)
-            .is_some_and(|c| c.detailed && c.timed.is_some())
+        self.cached.get(index).is_some_and(CachedLine::timed_ready)
     }
     pub fn geometry_ready(&self, index: usize) -> bool {
-        self.cached.get(index).is_some_and(|c| c.layout.is_some())
+        self.cached.get(index).is_some_and(CachedLine::layout_ready)
     }
 
     /// Returns protected band in output pixels, including the entire next line.
@@ -865,7 +1026,6 @@ impl TrackScene {
             if y + cached.height < -40.0 || y > self.height as f64 + 40.0 {
                 continue;
             }
-            let transform = Affine::translate((cached.x, y + cached.top));
             let bounds = Rect::new(-8.0, -8.0, self.width as f64, cached.height + 8.0);
             let singing = time >= self.lines[i].start && time < self.lines[i].end;
             let active_row = active.is_some_and(|(start, end)| i >= start && i <= end);
@@ -876,29 +1036,33 @@ impl TrackScene {
             } else {
                 0.38
             };
-            scene.push_layer(
-                Fill::NonZero,
-                BlendMode::default(),
-                opacity,
-                transform,
-                &bounds,
-            );
-            scene.append(&cached.white, Some(transform));
-            scene.pop_layer();
-            if active_row || singing {
-                for (atom, fragments) in cached.words.iter().zip(&cached.atoms) {
-                    let mut remaining = fragments.iter().map(|r| r.width()).sum::<f64>()
-                        * progress(time, atom.start, atom.end);
-                    for rect in fragments {
-                        let fill = remaining.clamp(0.0, rect.width());
-                        remaining -= rect.width();
-                        if fill <= 0.0 {
-                            continue;
+            for voice in &cached.voices {
+                let transform =
+                    Affine::translate((voice.x, y + cached.top + voice.offset + voice.padding));
+                scene.push_layer(
+                    Fill::NonZero,
+                    BlendMode::default(),
+                    (opacity * voice.alpha) as f32,
+                    transform,
+                    &bounds,
+                );
+                scene.append(&voice.white, Some(transform));
+                scene.pop_layer();
+                if active_row || singing {
+                    for (atom, fragments) in voice.words.iter().zip(&voice.atoms) {
+                        let mut remaining = fragments.iter().map(|r| r.width()).sum::<f64>()
+                            * progress(time, atom.start, atom.end);
+                        for rect in fragments {
+                            let fill = remaining.clamp(0.0, rect.width());
+                            remaining -= rect.width();
+                            if fill <= 0.0 {
+                                continue;
+                            }
+                            let clip = Rect::new(rect.x0, rect.y0, rect.x0 + fill, rect.y1);
+                            scene.push_clip_layer(Fill::NonZero, transform, &clip);
+                            scene.append(&voice.white, Some(transform));
+                            scene.pop_layer();
                         }
-                        let clip = Rect::new(rect.x0, rect.y0, rect.x0 + fill, rect.y1);
-                        scene.push_clip_layer(Fill::NonZero, transform, &clip);
-                        scene.append(&cached.white, Some(transform));
-                        scene.pop_layer();
                     }
                 }
             }
@@ -1019,6 +1183,8 @@ mod lazy_tests {
                     }],
                     paint: Some(PaintVoice {
                         translation: None,
+                        start,
+                        end: start + 1000.0,
                         text: text.clone(),
                         words: vec![PaintWord {
                             appearance: None,
@@ -1035,6 +1201,7 @@ mod lazy_tests {
                         opposite: false,
                         duet: false,
                     }),
+                    backgrounds: Vec::new(),
                 }
             })
             .collect()
@@ -1073,8 +1240,8 @@ mod lazy_tests {
         track.prepare(500.0).unwrap();
         assert!(track.plain_preparations < 25);
         assert_eq!(track.detailed_preparations, 3);
-        assert!(track.cached[0].detailed && track.cached[2].detailed);
-        assert!(!track.cached[3].detailed && track.cached[3].atoms.is_empty());
+        assert!(track.cached[0].lead().detailed && track.cached[2].lead().detailed);
+        assert!(!track.cached[3].lead().detailed && track.cached[3].lead().atoms.is_empty());
         assert!(
             track.diagnostics[0]["faces"]
                 .as_array()
@@ -1101,10 +1268,17 @@ mod lazy_tests {
             (track.plain_preparations, track.detailed_preparations)
         );
         track.prepare(50_500.0).unwrap();
-        assert!(track.cached[0].layout.is_none());
-        assert!(!track.cached[0].detailed);
-        assert!(track.cached[50].detailed);
-        assert!(track.cached.iter().filter(|r| r.detailed).count() <= 3);
+        assert!(track.cached[0].lead().layout.is_none());
+        assert!(!track.cached[0].lead().detailed);
+        assert!(track.cached[50].lead().detailed);
+        assert!(
+            track
+                .cached
+                .iter()
+                .filter(|row| row.voices.iter().any(|voice| voice.detailed))
+                .count()
+                <= 3
+        );
     }
     #[test]
     fn source_style_font_scale_extent_dpr_and_alignment_invalidate_and_rotation_reuses() {

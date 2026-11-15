@@ -33,6 +33,26 @@ pub struct Line {
     pub background_end: f64,
     pub atoms: Vec<Atom>,
     pub paint: Option<typography::PaintVoice>,
+    /// Background vocal voices for this row, in source display order. They are
+    /// laid out under the lead inside the same row, exactly like the Skia rows.
+    pub backgrounds: Vec<typography::PaintVoice>,
+}
+impl Line {
+    /// Lead voice first, then background voices in source order.
+    pub fn voice(&self, index: usize) -> Option<&typography::PaintVoice> {
+        if index == 0 {
+            self.paint.as_ref()
+        } else {
+            self.backgrounds.get(index - 1)
+        }
+    }
+    pub fn voice_count(&self) -> usize {
+        usize::from(self.paint.is_some()) + self.backgrounds.len()
+    }
+    /// Every voice of the row in display order, lead first.
+    pub fn voices(&self) -> impl Iterator<Item = &typography::PaintVoice> {
+        self.paint.iter().chain(self.backgrounds.iter())
+    }
 }
 
 pub fn milliseconds(value: &str) -> Result<f64, Box<dyn std::error::Error>> {
@@ -63,8 +83,9 @@ pub fn fixture() -> Result<Vec<Line>, Box<dyn std::error::Error>> {
             background_end: end,
             atoms: Vec::new(),
             paint: None,
+            backgrounds: Vec::new(),
         };
-        // Lead spans only. Background voice spans are a documented future extension.
+        // Lead spans only; this fixture has no background voice spans.
         for child in p.children() {
             if child.is_text() {
                 line.text.push_str(child.text().unwrap_or(""));
@@ -350,6 +371,7 @@ mod tests {
                     end,
                 }],
                 paint: None,
+                backgrounds: Vec::new(),
             })
             .collect()
     }
@@ -509,3 +531,5 @@ mod typography_budget;
 
 #[cfg(test)]
 mod appearance_tests;
+#[cfg(test)]
+mod background_tests;

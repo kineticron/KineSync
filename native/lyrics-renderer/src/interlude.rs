@@ -320,6 +320,7 @@ mod tests {
             end,
             background_end,
             atoms: Vec::new(),
+            backgrounds: Vec::new(),
         }
     }
 

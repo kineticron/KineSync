@@ -21,8 +21,12 @@ impl Effect {
 }
 // Glow remains measured but rejected by the Spicy portrait encode gate.
 pub const LIVE_EFFECT: Effect = Effect::Motion;
-pub struct RowState {
+/// One row voice's mutable word springs, in source word order.
+pub struct RowVoice {
     pub words: Vec<WordState>,
+}
+pub struct RowState {
+    pub voices: Vec<RowVoice>,
     pub clock: FloatClock,
     pub scale: Spring,
     pub bright: f64,
@@ -62,9 +66,9 @@ impl AppearanceState {
                 continue;
             }
             if self.rows[i].is_none() {
-                let Some(voice) = &line.paint else {
+                if line.paint.is_none() {
                     continue;
-                };
+                }
                 // Background tails keep the package highlighted, matching Skia's
                 // `endTimeByIndex` (getBackgroundEndTime) presentation window.
                 let active = time >= line.start && time < line.background_end;
@@ -83,16 +87,24 @@ impl AppearanceState {
                     1.0
                 };
                 self.rows[i] = Some(RowState {
-                    words: voice
-                        .words
-                        .iter()
-                        .map(|w| {
-                            WordState::new(WordSpec {
-                                start: w.start,
-                                end: w.end,
-                                emphasized: w.appearance.as_ref().is_some_and(|a| a.emphasized),
-                                letters: w.graphemes.len(),
-                            })
+                    voices: line
+                        .voices()
+                        .map(|voice| RowVoice {
+                            words: voice
+                                .words
+                                .iter()
+                                .map(|w| {
+                                    WordState::new(WordSpec {
+                                        start: w.start,
+                                        end: w.end,
+                                        emphasized: w
+                                            .appearance
+                                            .as_ref()
+                                            .is_some_and(|a| a.emphasized),
+                                        letters: w.graphemes.len(),
+                                    })
+                                })
+                                .collect(),
                         })
                         .collect(),
                     clock: FloatClock::default(),
@@ -171,11 +183,13 @@ impl AppearanceState {
             row.outer = row.from_outer + (target - row.from_outer) * eased;
             let mut line_animating = false;
             if spicy {
-                for word in &mut row.words {
-                    if effect.motion() {
-                        word.advance(time, dt);
-                    } else {
-                        word.advance_fill(time);
+                for voice in &mut row.voices {
+                    for word in &mut voice.words {
+                        if effect.motion() {
+                            word.advance(time, dt);
+                        } else {
+                            word.advance_fill(time);
+                        }
                     }
                 }
             } else {
@@ -213,16 +227,23 @@ impl AppearanceState {
             }
             row.releasing = !active
                 && if spicy {
-                    row.words.iter().any(|w| !w.settled)
+                    row.voices
+                        .iter()
+                        .any(|voice| voice.words.iter().any(|w| !w.settled))
                 } else {
-                    row.words.iter().any(|w| {
-                        row.clock.word_position(time, w.spec().start, w.spec().end) > w.spec().start
+                    row.voices.iter().any(|voice| {
+                        voice.words.iter().any(|w| {
+                            row.clock.word_position(time, w.spec().start, w.spec().end)
+                                > w.spec().start
+                        })
                     })
                 };
             row.animating = effect.motion()
                 && ((row.from_outer != target && fraction < 1.0)
                     || if spicy {
-                        row.words.iter().any(|w| !w.settled)
+                        row.voices
+                            .iter()
+                            .any(|voice| voice.words.iter().any(|w| !w.settled))
                     } else {
                         row.releasing || row.scale.v != 0.0 || line_animating
                     });

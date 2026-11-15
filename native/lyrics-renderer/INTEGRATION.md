@@ -33,9 +33,10 @@ Vello glyph scenes and independently fills timed atoms. Literal spaces are
 preserved and explicit word-end flags add missing gaps. Invalid/untimed tracks,
 oversized packets and missing glyphs produce explicit errors. Lead-line overlaps
 are now highlighted/protected together, including the phase-1 88.2-second case.
-This is not a complete port of translations, background voices, duet alignment,
-word glow/syllable spring motion, drag scrolling, lyric press/credits or accessibility
-semantics. Existing player seek controls still work. System Apple fonts replace
+This is not a complete port of romanization, native scrolling footer/timestamp
+seek or accessibility semantics. ABI8 renders translations, background voices,
+duet alignment and word glow/syllable spring motion per source. Existing player seek
+controls still work. System Apple fonts replace
 the Linux Noto stack. Phone font and visual acceptance are pending.
 
 ## Clock, stale updates and ownership
@@ -344,8 +345,11 @@ credit-only metadata while Rust is selected. Its existing modal and HTTPS profil
 callbacks are reused, with a matching HTTPS provider link. It lives outside the
 GPU blur/viewport and preserves player chrome rules. This is not the unimplemented
 native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
-for actual source inputs, performance gates, pixel receipts and remaining BGV /
-interlude / romanization / native capture limitations. Glow remains OFF.
+for actual source inputs, performance gates, pixel receipts and remaining
+romanization / native capture limitations. Rows with background voices are drawn
+per voice since ABI8 (see below). The live effect policy is unchanged: glow math
+and gating now follow the Skia sources, but `LIVE_EFFECT` remains `Motion`, so the
+shared glow bases are still encoded and not composited.
 
 ## ABI7 Skia follow ownership and overlapping line timing
 
@@ -384,3 +388,49 @@ order, and a line tap restores follow before seeking; the Swift view exposes
 540 ms long press, tap-to-seek and drag threshold from the Skia row Pressables.
 The Rust surface now fills the whole area below the top bar with the controls
 dock's gradient over it instead of being clipped above the dock.
+
+## ABI8 background voices, duet rows and glow parity
+
+Schema6 gains an optional additive per-line `backgrounds` array plus an explicit
+per-voice `start`/`end`. It is produced by the real `spicyBackgrounds` /
+`backgroundSyllables` source blocks through the actual `buildNativeVoice` helper
+(the same blocks and helper the Skia rows consume), so no rule is re-invented in
+JS. ABI8, not the schema number, is the client gate: older binaries reject the
+additive field, and C/JS/Swift all require 8 now. The JS producer refuses a voice
+whose own word timing is unusable; the Rust parser additionally bounds the voice
+count (16), keeps every voice inside its row's package end (1 ms rounding
+tolerance), and requires the background `duet`/`opposite` flags to equal the
+row's, so a background voice can never flip a duet side.
+
+Each voice is shaped, wrapped and timed on its own, from the pinned Skia
+renderers: Spicy uses 0.75x parent type, 0.62x leading, weight 500, a 3 pt top
+margin and the parent's text width, while AMLL uses 0.7x type, 0.7x leading, the
+parent weight, a 0.3em top margin, 0.2em inner padding, 0.4 container alpha and
+the duet-inset text width. Background voices stack under the lead in source
+order, keep the row's alignment origin (AMLL right-aligned voices align on the
+shared right edge), fill from their own syllable timings inside the parent
+reveal, and reuse the parent type size for Spicy word/letter motion. A voice's
+own `translation` contributes its own subtitle policy and height.
+
+Voice boxes participate in the row measurement, so `content_height`, the row
+height, `prefix`, the auto-scroll target, the protected blur band and the
+interlude shift all include background vocals; that is what keeps the active line
+in the right place while a background tail is still singing. The presentation
+window already used `background_end` for activation.
+
+Glow parity is source-derived and stays inside the existing shared half-resolution
+pass: Spicy uses `clamp01(glow * 1.85) * 0.5` with `(4 + 12 * glow) / 2` for
+emphasized letters and `clamp01(glow * 0.35) * 0.5` with `(4 + 2 * glow) / 2` for
+other syllables; AMLL keeps `style_timing::amll_emphasis` scaled by the voice's
+own type size and filters its white glow through the bright/dark reveal channels.
+Glow now follows the whole active package (it no longer drops at the lead end
+while a background voice is singing), settled/dimmed Spicy voices use their sung
+or unsung alpha instead of the reveal alpha, and background voices glow at their
+own size and alpha. Intensity is packed into the existing near/far Gaussian bases,
+so there is no new pass, texture, allocation or full-resolution blur; the far base
+stops mixing past 6 logical px, which is the documented radius residual versus
+Skia's variable-radius glyph blur.
+
+Measured host gates, fresh pixel receipts, phone performance and the decision to
+switch `LIVE_EFFECT` from `Motion` to `Glow` remain open: the live policy is
+unchanged here, so the glow is encoded but not composited.

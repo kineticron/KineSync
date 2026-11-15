@@ -19,8 +19,11 @@ typedef struct {
   double target_native_ms;
 } KRMetrics;
 uint32_t kr_abi_version(void);
+/* ABI 8: schema6 packets may carry source background vocal voices per row, so the
+   ABI (not the schema number) is the client-compatibility gate for that additive
+   field. */
 uint64_t kr_create(void *retained_ca_metal_layer, uint32_t width, uint32_t height, float scale);
-/* ABI6: font bytes copied once before the first track; immutable owner font set. */
+/* ABI8: font bytes copied once before the first track; immutable owner font set. */
 int32_t kr_set_fonts(uint64_t handle, const uint8_t *regular, size_t regular_length, const uint8_t *bold, size_t bold_length);
 size_t kr_copy_layout_json(uint64_t handle, uint8_t *out, size_t capacity);
 int32_t kr_set_track(uint64_t handle, const uint8_t *bytes, size_t length);

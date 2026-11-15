@@ -8,7 +8,7 @@ use vello::{
     peniko::{BlendMode, Color, Fill},
 };
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct Policy {
     pub size: f32,
     pub leading: f32,
@@ -18,24 +18,36 @@ pub(crate) struct Policy {
     pub x: f32,
 }
 impl Policy {
-    pub fn source(settings: &Settings, geometry: &Geometry, dpr: f32) -> Self {
+    /// Subtitle policy for one row voice. A background voice keeps its own type
+    /// size and text width, and Skia's smaller Spicy background leading/inset
+    /// (`native-skia-voice.tsx:207-214`).
+    pub fn voice(
+        settings: &Settings,
+        geometry: &Geometry,
+        dpr: f32,
+        background: bool,
+        font_size: f32,
+        text_width: f32,
+    ) -> Self {
         let spicy = settings.style == Style::Spicy;
-        let size = if spicy {
-            geometry.font_size * (14.0 / 33.6)
-        } else {
-            (10.0 * dpr).max(geometry.font_size * 0.5)
-        };
+        if spicy {
+            return Self {
+                size: geometry.font_size * (if background { 12.0 } else { 14.0 } / 33.6),
+                leading: geometry.font_size * (if background { 16.0 } else { 18.0 } / 33.6),
+                weight: 500.0,
+                width: (text_width - 4.0 * dpr).max(dpr),
+                margin: if background { 2.0 * dpr } else { 4.0 * dpr },
+                x: 2.0 * dpr,
+            };
+        }
+        let size = (10.0 * dpr).max(font_size * 0.5);
         Self {
             size,
-            leading: if spicy {
-                geometry.font_size * (18.0 / 33.6)
-            } else {
-                size * 1.5
-            },
-            weight: if spicy { 500.0 } else { 700.0 },
-            width: (geometry.text_width - if spicy { 4.0 * dpr } else { 0.0 }).max(dpr),
-            margin: if spicy { 4.0 * dpr } else { 0.0 },
-            x: if spicy { 2.0 * dpr } else { 0.0 },
+            leading: size * 1.5,
+            weight: 700.0,
+            width: text_width.max(dpr),
+            margin: 0.0,
+            x: 0.0,
         }
     }
 }
@@ -50,14 +62,13 @@ pub(crate) struct Translation {
 impl Translation {
     pub fn prepare(
         text: &str,
-        settings: &Settings,
-        geometry: &Geometry,
-        dpr: f32,
+        policy: &Policy,
+        right: bool,
         main_height: f64,
         fonts: &mut Fonts,
         layouts: &mut LayoutContext<()>,
     ) -> Self {
-        let p = Policy::source(settings, geometry, dpr);
+        let p = policy.clone();
         let mut layout = crate::scene::shape(
             text,
             &mut fonts.context,
@@ -71,7 +82,7 @@ impl Translation {
         );
         layout.break_all_lines(Some(p.width));
         layout.align(
-            if geometry.right {
+            if right {
                 Alignment::End
             } else {
                 Alignment::Start
@@ -234,8 +245,8 @@ mod tests {
             );
             hidden.prepare(time).unwrap();
             shown.prepare(time).unwrap();
-            assert!(hidden.cached[0].translation.is_none());
-            let t = shown.cached[0].translation.as_ref().unwrap();
+            assert!(hidden.cached[0].lead().translation.is_none());
+            let t = shown.cached[0].lead().translation.as_ref().unwrap();
             assert_eq!(t.diagnostics["text"], item["original_translation"]);
             assert_eq!(t.missing_glyphs, 0);
             assert!(t.glyph_count > 0);
@@ -315,7 +326,7 @@ mod tests {
             }
             assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
             let cached = &shown.cached[0];
-            let t = cached.translation.as_ref().unwrap();
+            let t = cached.lead().translation.as_ref().unwrap();
             let y = (f64::from(shown.height) * 0.37
                 + cached.top
                 + t.diagnostics["y"].as_f64().unwrap())
