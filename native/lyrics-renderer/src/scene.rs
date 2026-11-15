@@ -750,8 +750,7 @@ impl TrackScene {
             let lead_lane = voices[0].lane;
             let lead_x = voices[0].x;
             let lead_right = voices[0].right;
-            let (height, top, gap) = if settings.is_some() {
-                let settings = settings.expect("styles have settings");
+            let (height, top, gap) = if let Some(settings) = settings {
                 let row_padding = f64::from(boxes[0].geometry.row_padding);
                 let min = if settings.style == crate::typography::Style::Spicy {
                     84.0
