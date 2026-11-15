@@ -273,6 +273,20 @@ test('live Rust track protocol preserves source atoms and sends anchors only for
   assert.equal(anchorChanged({ ...previous, anchorMonotonicMs: 120 }, previous), true);
   assert.equal(projectPosition(previous, 150), 100);
   assert.equal(projectPosition({ ...previous, isPlaying: false }, 150), 50);
+  // Prepared tracks carry source background voices under their parent line, and
+  // the producer refuses a voice whose own timing is unusable.
+  const voice = (start, end, text) => ({ start, end, text, words: [{ text, offset: 0, start, end }], cjk_breaks: [], opposite: false, duet: true });
+  const prepared = { settings: { style: 'spicy', font_scale: 1, landscape: false },
+    paints: lyrics.map(line => voice(line.lineStartTime, line.lineEndTime, 'x')),
+    backgrounds: [[voice(20, 45, 'bg')], []] };
+  const withBackgrounds = JSON.parse(buildRustTrack('current-song', 8, lyrics, prepared));
+  assert.equal(withBackgrounds.lines[0].backgrounds.length, 1);
+  assert.equal(withBackgrounds.lines[0].backgrounds[0].end, 45);
+  assert.equal(withBackgrounds.lines[0].paint.start, 10);
+  assert.equal('backgrounds' in withBackgrounds.lines[1], false);
+  assert.equal(withBackgrounds.lines[0].background_end, 45);
+  assert.throws(() => buildRustTrack('current-song', 9, lyrics, { ...prepared,
+    backgrounds: [[{ start: 20, end: 10, text: 'bg', words: [] }], []] }), /background vocal timing/);
 });
 test('native lifecycle source harness flushes inactive updates and bounds paused surface retries', () => {
   // Explicit source-level harness: executes the simple Swift activation body after
@@ -647,22 +661,22 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 7 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 8 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 4, 5, 6]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 7 }), false);
+  for (const version of [0, 1, 2, 3, 4, 5, 6, 7]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 8 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 7 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 8 else/);
   assert.match(swift, /AsyncFunction\("scrollBy"\)/);
   assert.match(swift, /AsyncFunction\("hitTest"\)/);
   assert.match(swift, /kr_scroll_by\(self\.handle, dy\)/);
   assert.match(swift, /kr_hit_test\(self\.handle, y\)/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 7 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 8 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");

@@ -39,11 +39,11 @@
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
-      "sha256": "abade0ff066aa0d61da04a35acb0db322c4ad666d1ebd33722f155a61705f45e"
+      "sha256": "dae6911eac914ea0e3581007dbd78504e72bf96364dd2fdc682000e029b43721"
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
-      "sha256": "26c661902165e07df6875c8abc5e65beaff7731425c1889d631ff1502d3249de"
+      "sha256": "b18446d1016adbea19c65184c267c05d586c37539c50b8d133e0527e4a5c1527"
     },
     {
       "path": "ExpoLyrics/components/lyrics/native/spicy-native-layout.ts",

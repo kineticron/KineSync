@@ -8,6 +8,13 @@ function getBackgroundEnd(line) {
   }
   return end;
 }
+function invalidVoiceTiming(voice) {
+  if (!voice || !Array.isArray(voice.words) || !voice.words.length) return true;
+  for (const word of voice.words) {
+    if (!Number.isFinite(word.start) || !Number.isFinite(word.end) || word.end < word.start || !word.text) return true;
+  }
+  return false;
+}
 function buildRustTrack(trackId, generation, lines, prepared) {
   if (!trackId || !lines.length) throw new Error('Waiting for current-track timed lyrics');
   for (const line of lines) {
@@ -18,10 +25,13 @@ function buildRustTrack(trackId, generation, lines, prepared) {
   }
   const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => {
     const backgroundEnd = getBackgroundEnd(line);
+    const backgrounds = prepared?.backgrounds?.[lineIndex] ?? [];
+    if (backgrounds.some(invalidVoiceTiming)) throw new Error('Rust received invalid background vocal timing');
     return {
       start: line.lineStartTime, end: line.lineEndTime,
       ...(backgroundEnd > line.lineEndTime ? { background_end: backgroundEnd } : {}),
       ...(prepared ? { paint: prepared.paints[lineIndex] } : {}),
+      ...(backgrounds.length ? { backgrounds } : {}),
       atoms: line.syllables.map((atom, index) => {
         const next = line.syllables[index + 1];
         const gap = atom.isPartOfWord === false && next && !/\s$/u.test(atom.text) && !/^\s/u.test(next.text);
