@@ -150,6 +150,8 @@ type PlaybackState = {
   packetDropRate: number;
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
+  showRustDebugOverlay: boolean;
+  setShowRustDebugOverlay: (value: boolean) => void;
   setShowSpotifyStatusBar: (value: boolean) => void;
   showTranslatedText: boolean;
   translationLanguage: TranslationLanguage;
@@ -188,6 +190,7 @@ type PlaybackState = {
 let rendererChanged = false;
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
+let rustDebugOverlaySettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
   void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
@@ -273,6 +276,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
+  showRustDebugOverlay: true,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -476,6 +480,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
+  setShowRustDebugOverlay: (value) => {
+    rustDebugOverlaySettingChanged = true;
+    const showRustDebugOverlay = Boolean(value);
+    set({ showRustDebugOverlay });
+    void AsyncStorage.setItem('kinesync_rust_debug_overlay', String(showRustDebugOverlay)).catch(error => console.error('Could not save Rust debug overlay setting', error));
+  },
   setShowTranslatedText: (value) => {
     const showTranslatedText = Boolean(value);
     set({ showTranslatedText });
@@ -528,6 +538,11 @@ void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   if (value === null || spotifyStatusBarSettingChanged) return;
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
+  if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;
+  usePlaybackStore.setState({ showRustDebugOverlay: value === 'true' });
+}).catch(error => console.error('Could not load Rust debug overlay setting', error));
 
 void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
   if (!raw || translationSettingsChanged) return;

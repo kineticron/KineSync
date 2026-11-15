@@ -37,6 +37,7 @@ function generation() {
 /** Development-only selection in the actual player, using its current track/store anchors. */
 export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs }: { active: boolean; previewPositionMs?: number | null }) {
   const lyrics = usePlaybackStore(state => state.lyrics);
+  const showRustDebugOverlay = usePlaybackStore(state => state.showRustDebugOverlay);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => state.lyricsStyle);
   const showTranslation = usePlaybackStore(state => state.showTranslatedText);
@@ -97,11 +98,14 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     const deliveryMs = Math.max(0, api.monotonicMs() - value.sampleNativeMs);
     const projected = value.positionMs + (value.playing ? (api.monotonicMs() - value.targetNativeMs) * value.rate : 0);
     latestMetrics.current = { native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs };
-    if (showMetrics) setMetrics(latestMetrics.current);
-  }, [revision.generation, showMetrics, surfaceEpoch]);
+    if (showRustDebugOverlay && showMetrics) setMetrics(latestMetrics.current);
+  }, [revision.generation, showRustDebugOverlay, showMetrics, surfaceEpoch]);
   const unavailable = moduleError || payload.error;
+  useEffect(() => {
+    if (unavailable || failed) console.error('Rust lyrics renderer:', unavailable || status);
+  }, [unavailable, failed, status]);
   return <View style={styles.root}>
-    <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
+    {showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
       <Text style={styles.caption}>{unavailable || (failed ? `Rust error: ${status}` : status)}</Text>
       <View style={styles.actions}>
       {!unavailable ? <Pressable accessibilityRole="button" onPress={() => { setSurfaceEpoch(value => value + 1); setFailed(false); setMetrics(null); setStatus('Recreating Rust surface'); }}>
@@ -128,7 +132,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`JS anchors ${work.current.anchors} · renders ${work.current.renders} · anchor work ${work.current.anchorMs.toFixed(2)} ms\n`}
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
-    </ScrollView>
+    </ScrollView> : null}
     {!unavailable && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} /> : null}
   </View>;
 });
