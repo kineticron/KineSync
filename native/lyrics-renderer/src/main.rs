@@ -259,8 +259,10 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
         let mut protected = 0;
         let mut protected_max_delta = 0;
         for (j, (a, b)) in linear
-            .chunks_exact(4)
-            .zip(sharp.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(sharp.as_chunks::<4>().0)
             .enumerate()
         {
             let y = (j / w as usize) as f32;
@@ -277,9 +279,16 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
         }
         assert!(protected > 1000);
         assert_ne!(linear, sharp, "inactive blur must actually affect pixels");
-        let zero = linear.chunks_exact(4).filter(|p| p[3] == 0).count();
+        let zero = linear
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] == 0)
+            .count();
         let translucent = linear
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] > 0 && p[3] < 255)
             .count();
         assert!(
@@ -287,13 +296,18 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
             "outside glyphs must be transparent"
         );
         assert!(translucent > 500, "must exercise alpha edges/blur");
-        for p in linear.chunks_exact(4) {
+        for p in linear.as_chunks::<4>().0 {
             assert!(
                 p[..3].iter().all(|c| *c <= p[3]),
                 "linear premultiplied constraint"
             );
         }
-        for (a, b) in linear.chunks_exact(4).zip(surface.chunks_exact(4)) {
+        for (a, b) in linear
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(surface.as_chunks::<4>().0)
+        {
             assert_eq!(a[3], b[3]);
             assert!(
                 b[..3].iter().all(|c| *c <= b[3]),
@@ -310,7 +324,7 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
         // PNG viewers expect straight RGB; test raw premultiplied surface bytes
         // above, then remove premultiplication only for the exported PNG.
         let mut png_pixels = surface.clone();
-        for p in png_pixels.chunks_exact_mut(4) {
+        for p in png_pixels.as_chunks_mut::<4>().0 {
             let alpha = u32::from(p[3]);
             for c in &mut p[..3] {
                 *c = (u32::from(*c) * 255 + alpha / 2)
@@ -326,7 +340,7 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
             &png_pixels,
         )?;
         let mut checker = Vec::with_capacity(linear.len());
-        for (j, p) in linear.chunks_exact(4).enumerate() {
+        for (j, p) in linear.as_chunks::<4>().0.iter().enumerate() {
             let x = j % w as usize;
             let y = j / w as usize;
             // Background changes color AND phase each frame, in linear light.
@@ -367,7 +381,7 @@ fn alpha_proof(directory: &str, scale: u32) -> Result<(), Error> {
     gpu.render(&scene, (-1000.0, -900.0), true)?;
     let pixels = gpu.read_pixels()?;
     let mut halo = 0;
-    for p in pixels.chunks_exact(4).filter(|p| p[3] > 0) {
+    for p in pixels.as_chunks::<4>().0.iter().filter(|p| p[3] > 0) {
         assert_eq!(p[0], p[3], "red premultiplied blur must preserve chroma");
         assert_eq!(p[1], 0);
         assert_eq!(p[2], 0);

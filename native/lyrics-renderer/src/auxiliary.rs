@@ -321,7 +321,7 @@ mod tests {
             let band = frame(&mut shown, &mut state, &mut scene, time, 10000.0);
             gpu.render_appearance(&scene, band, true, false).unwrap();
             let pixels = gpu.read_pixels().unwrap();
-            for p in pixels.chunks_exact(4) {
+            for p in pixels.as_chunks::<4>().0 {
                 assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]);
             }
             assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
@@ -334,7 +334,9 @@ mod tests {
             let y_end = (y + (t.diagnostics["height"].as_f64().unwrap().ceil() as usize))
                 .min(shown.height as usize);
             let visible = pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .enumerate()
                 .filter(|(i, p)| {
                     i / (shown.width as usize) >= y

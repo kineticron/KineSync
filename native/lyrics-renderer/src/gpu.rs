@@ -599,7 +599,7 @@ impl Gpu {
     pub fn save(&self, path: &str) -> Result<(), Error> {
         // PNG expects straight sRGB. Internal readback remains linear premultiplied.
         let mut pixels = self.read_pixels()?;
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             let alpha = f32::from(p[3]) / 255.0;
             for c in &mut p[..3] {
                 *c = (linear_to_srgb(if alpha > 0.0 {

@@ -211,8 +211,8 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, false).unwrap();
         let sharp = gpu.read_pixels().unwrap();
         let motion_changed = fill
-            .chunks_exact(4)
-            .zip(sharp.chunks_exact(4))
+            .as_chunks::<4>().0.iter()
+            .zip(sharp.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
         assert!(
@@ -230,15 +230,15 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, true).unwrap();
         let glow = gpu.read_pixels().unwrap();
         let halo = sharp
-            .chunks_exact(4)
-            .zip(glow.chunks_exact(4))
+            .as_chunks::<4>().0.iter()
+            .zip(glow.as_chunks::<4>().0)
             .filter(|(a, b)| a[3] == 0 && b[3] > 0)
             .count();
         assert!(
             halo > 0,
             "actual glyph glow must extend outside sharp coverage"
         );
-        for p in glow.chunks_exact(4) {
+        for p in glow.as_chunks::<4>().0 {
             assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]);
         }
         assert_eq!(&glow[..4], &[0, 0, 0, 0]);
@@ -256,12 +256,12 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, false).unwrap();
         let next = gpu.read_pixels().unwrap();
         let time_changed = sharp
-            .chunks_exact(4)
-            .zip(next.chunks_exact(4))
+            .as_chunks::<4>().0.iter()
+            .zip(next.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
         assert!(time_changed > 0);
-        for p in next.chunks_exact(4) {
+        for p in next.as_chunks::<4>().0 {
             assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]);
         }
         assert_eq!(&next[..4], &[0, 0, 0, 0]);
