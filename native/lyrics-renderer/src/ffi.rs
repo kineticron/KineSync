@@ -522,6 +522,11 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
         layout.prepare(position).map_err(|e| e.to_string())?;
+        if !engine.following {
+            layout
+                .prepare_viewport(engine.scroll.position())
+                .map_err(|e| e.to_string())?;
+        }
         // Geometry changes reach the tween through `command.offset`; remapping
         // here would clear the spring history every frame.
         let command = layout.scroll_command(position, engine.scroll.position());

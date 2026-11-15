@@ -492,6 +492,55 @@ impl TrackScene {
         Ok(())
     }
 
+    /// Manual scrolling can leave the playback overscan entirely. Prepare only
+    /// the visible destination rows, not every row between it and playback.
+    pub(crate) fn prepare_viewport(&mut self, scroll: f64) -> Result<(), Error> {
+        if self.settings.is_none() {
+            return Ok(());
+        }
+        let visible = self.visible_rows(scroll);
+        let mut changed = false;
+        for i in visible.clone() {
+            if !self.cached[i].layout_ready() {
+                let mut prepared = Self::with_fonts_eager(
+                    vec![self.lines[i].clone()],
+                    self.width,
+                    self.height,
+                    self.scale,
+                    self.settings.as_ref(),
+                    self.fonts.as_mut().expect("lazy fonts"),
+                    false,
+                )?;
+                self.glyph_count += prepared.glyph_count;
+                self.missing_glyphs += prepared.missing_glyphs;
+                self.cached[i] = prepared.cached.remove(0);
+                self.diagnostics[i] = prepared.diagnostics.remove(0);
+                self.plain_preparations += 1;
+                changed = true;
+            }
+        }
+        // Bound retained manual-scroll geometry while keeping playback's cache.
+        let focus = self.prepared_signature.map_or(0, |s| s.0);
+        for i in 0..self.cached.len() {
+            if !visible.contains(&i) && i.abs_diff(focus) > 32 && self.cached[i].layout_ready() {
+                for voice in &mut self.cached[i].voices {
+                    voice.clear_geometry();
+                }
+                self.diagnostics[i] = serde_json::Value::Null;
+            }
+        }
+        if changed {
+            let mut offset = 0.0;
+            for (i, cached) in self.cached.iter().enumerate() {
+                self.prefix[i] = offset;
+                offset += cached.height;
+            }
+            // Newly measured rows may change playback's overscan boundaries.
+            self.prepared_signature = None;
+        }
+        Ok(())
+    }
+
     fn with_fonts_eager(
         lines: Vec<Line>,
         width: u32,
@@ -1336,6 +1385,29 @@ mod lazy_tests {
         assert_eq!(count, restored.plain_preparations);
         assert!(cache.take(&key).is_none());
     }
+    #[test]
+    fn manual_scroll_prepares_distant_rows_and_reuses_them() {
+        let mut fonts = fonts();
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(source(200), 390, 640, 1.0, Some(&settings), &mut fonts)
+                .unwrap();
+        track.prepare(500.0).unwrap();
+        assert!(!track.geometry_ready(150));
+        let scroll = track.prefix[150];
+        track.prepare_viewport(scroll).unwrap();
+        assert!(track.geometry_ready(150));
+        track.prepare_viewport(track.prefix[150]).unwrap();
+        let count = track.plain_preparations;
+        track.prepare_viewport(track.prefix[150]).unwrap();
+        assert_eq!(track.plain_preparations, count);
+        assert!(track.cached.iter().filter(|row| row.layout_ready()).count() < 60);
+    }
+
     fn long_gap_lines() -> Vec<Line> {
         let mut lines = source(4);
         for (index, line) in lines.iter_mut().enumerate() {
