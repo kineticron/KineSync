@@ -216,8 +216,14 @@
       "landscape": true,
       "expected": {
         "lead_font_size": 33.6,
+        "lead_line_height": 44.1,
+        "lead_weight": 700,
+        "lead_row_padding": 12,
         "background_font_size": 25.2,
+        "background_line_height": 27.342,
+        "background_weight": 500,
         "background_margin_top": 3,
+        "background_padding": 0,
         "background_alpha": 1.0,
         "background_lane": 734.4,
         "background_text_width": 734.4
