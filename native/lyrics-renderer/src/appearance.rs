@@ -19,8 +19,10 @@ impl Effect {
         self == Self::Glow
     }
 }
-// Glow remains measured but rejected by the Spicy portrait encode gate.
-pub const LIVE_EFFECT: Effect = Effect::Motion;
+/// Live effect. `Glow` composites the Skia-derived glyph emission inside the
+/// existing shared half-resolution filter pass (band flag bit 4), so the frame
+/// cost stays in the same two blur bases and the same two frames in flight.
+pub const LIVE_EFFECT: Effect = Effect::Glow;
 /// One row voice's mutable word springs, in source word order.
 pub struct RowVoice {
     pub words: Vec<WordState>,

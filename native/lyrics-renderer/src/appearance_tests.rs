@@ -211,7 +211,9 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, false).unwrap();
         let sharp = gpu.read_pixels().unwrap();
         let motion_changed = fill
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(sharp.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
@@ -230,7 +232,9 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, true).unwrap();
         let glow = gpu.read_pixels().unwrap();
         let halo = sharp
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(glow.as_chunks::<4>().0)
             .filter(|(a, b)| a[3] == 0 && b[3] > 0)
             .count();
@@ -256,7 +260,9 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
         gpu.render_appearance(&scene, band, false, false).unwrap();
         let next = gpu.read_pixels().unwrap();
         let time_changed = sharp
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(next.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
@@ -305,6 +311,36 @@ fn quantile(samples: &[Sample], f: impl Fn(&Sample) -> f64, p: f64) -> f64 {
     let mut values: Vec<_> = samples.iter().map(f).collect();
     values.sort_by(f64::total_cmp);
     values[((p * values.len() as f64).ceil() as usize).saturating_sub(1)]
+}
+#[test]
+fn live_policy_composites_glow_in_the_shared_half_resolution_pass() {
+    use crate::appearance::{Effect, LIVE_EFFECT};
+    // The enabled policy keeps motion and turns glyph emission compositing on.
+    assert_eq!(LIVE_EFFECT, Effect::Glow);
+    assert!(LIVE_EFFECT.motion());
+    assert!(LIVE_EFFECT.glow());
+    assert!(!Effect::Motion.glow() && !Effect::Fill.glow() && !Effect::Baseline.glow());
+    // The engine sets band flag bit 4 from the live policy...
+    assert!(include_str!("ffi.rs").contains("crate::appearance::LIVE_EFFECT.glow()"));
+    assert!(include_str!("gpu.rs").contains("if glow { 4.0 } else { 0.0 }"));
+    // ...and the composite reads the two existing half-resolution bases that the
+    // blur ramp already owns, only inside the shared protected envelope.
+    let composite = include_str!("composite.wgsl");
+    assert!(composite.contains("(flags & 4u) != 0u"));
+    assert!(composite.contains("reconstructed(near,gid.xy).g+reconstructed(far,gid.xy).b"));
+    assert!(composite.contains("d <= 24.0 * band.w"));
+    // No glow-specific pass, texture or bind group was introduced.
+    assert_eq!(
+        include_str!("composite.wgsl").matches("var near:").count(),
+        1
+    );
+    assert_eq!(
+        include_str!("downsample.wgsl")
+            .matches("fn downsample")
+            .count(),
+        1
+    );
+    assert_eq!(include_str!("blur.wgsl").matches("fn blur").count(), 1);
 }
 #[test]
 #[ignore = "interleaved per-effect host gate; software GPU proxy only"]
@@ -386,13 +422,15 @@ fn live_effect_interleaved_budget() {
             }
         }
     }
-    // A rejected effect must not become the default just because it renders.
-    let enabled_pass = reports
-        .iter()
-        .filter(|r| r["after"] != "Glow")
-        .all(|r| r["accepted"] == true);
-    assert_eq!(crate::appearance::LIVE_EFFECT, Effect::Motion);
-    let report = serde_json::json!({"scope":"Linux host same adapter/release opt3; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence","samples":90,"warmup":8,"thresholds":{"scene_p50":"before*1.25+0.01ms","encode_p95":"before*1.25+0.5ms","steady_scene_allocations":0},"native_present_calls_per_second":null,"live_effect":crate::appearance::LIVE_EFFECT,"glow_live_enabled":false,"reports":reports});
+    // Glow is the live effect: its intensity, radius and activation now follow
+    // the Skia sources, and it composites inside the shared half-resolution pass.
+    // The Motion->Glow gates above stay recorded and must be re-run on a host with
+    // the real adapter before any phone claim. Because glow is enabled, its own
+    // comparison is part of the accepted set instead of being excluded.
+    let enabled_pass = reports.iter().all(|r| r["accepted"] == true);
+    assert_eq!(crate::appearance::LIVE_EFFECT, Effect::Glow);
+    assert!(crate::appearance::LIVE_EFFECT.motion());
+    let report = serde_json::json!({"scope":"Linux host same adapter/release opt3; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence","samples":90,"warmup":8,"thresholds":{"scene_p50":"before*1.25+0.01ms","encode_p95":"before*1.25+0.5ms","steady_scene_allocations":0},"native_present_calls_per_second":null,"live_effect":crate::appearance::LIVE_EFFECT,"glow_live_enabled":crate::appearance::LIVE_EFFECT.glow(),"reports":reports});
     std::fs::write(
         "/tmp/rust-parity-appearance-budget.json",
         serde_json::to_string_pretty(&report).unwrap(),

@@ -347,9 +347,10 @@ GPU blur/viewport and preserves player chrome rules. This is not the unimplement
 native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
 for actual source inputs, performance gates, pixel receipts and remaining
 romanization / native capture limitations. Rows with background voices are drawn
-per voice since ABI8 (see below). The live effect policy is unchanged: glow math
-and gating now follow the Skia sources, but `LIVE_EFFECT` remains `Motion`, so the
-shared glow bases are still encoded and not composited.
+per voice since ABI8 (see below). The live effect is now `Glow`: intensity,
+radius and activation follow the Skia sources and the glow is composited inside
+the existing shared half-resolution filter pass, so there is no additional pass,
+texture or full-resolution blur.
 
 ## ABI7 Skia follow ownership and overlapping line timing
 
@@ -431,6 +432,8 @@ so there is no new pass, texture, allocation or full-resolution blur; the far ba
 stops mixing past 6 logical px, which is the documented radius residual versus
 Skia's variable-radius glyph blur.
 
-Measured host gates, fresh pixel receipts, phone performance and the decision to
-switch `LIVE_EFFECT` from `Motion` to `Glow` remain open: the live policy is
-unchanged here, so the glow is encoded but not composited.
+Measured host gates, fresh pixel receipts and phone performance with glow
+composited remain open, and the recorded Motion->Glow encode comparison must be
+re-run on the real adapter before any phone claim. Nothing in the enabled path
+adds a pass, texture, allocation or deeper queue: the glow rides the two existing
+half-resolution Gaussian bases that the inactive blur ramp already owns.
