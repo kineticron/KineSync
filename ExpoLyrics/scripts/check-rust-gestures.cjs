@@ -2,6 +2,7 @@
  * Mirrors native Skia row Pressables (540 ms long press, tap-to-seek) and the
  * list takeover that disables auto-follow until the next tap or resume. */
 const assert = require('node:assert/strict');
+require('./check-rust-scheduling.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {

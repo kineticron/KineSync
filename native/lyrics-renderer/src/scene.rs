@@ -114,6 +114,7 @@ pub struct TrackScene {
     pub(crate) cached: Vec<CachedLine>,
     resident: std::collections::BTreeSet<usize>,
     max_row_height: f64,
+    cues: crate::scheduling::VisualCues,
     pub width: u32,
     pub height: u32,
     pub font_size: f64,
@@ -327,6 +328,7 @@ impl TrackScene {
             let mut track =
                 Self::with_fonts_eager(lines, width, height, scale, None, fonts, true, false)?;
             track.fonts = Some(fonts.clone());
+            track.cues = crate::scheduling::VisualCues::new(&track.lines);
             return Ok(track);
         };
         if lines.is_empty()
@@ -385,6 +387,7 @@ impl TrackScene {
             cached.push(cached_line);
         }
         let count = lines.len();
+        let cues = crate::scheduling::VisualCues::new(&lines);
         let interludes = crate::interlude::slots(&lines);
         let footer = credits.and_then(|credits| {
             crate::credits::build(credits, settings, width, scale, offset, fonts)
@@ -403,6 +406,7 @@ impl TrackScene {
             cached,
             resident: std::collections::BTreeSet::new(),
             max_row_height: 0.0,
+            cues,
             width,
             height,
             font_size: f64::from(primary_size),
@@ -945,6 +949,7 @@ impl TrackScene {
             cached,
             resident,
             max_row_height,
+            cues: crate::scheduling::VisualCues::default(),
             width,
             height,
             font_size: font_size as f64,
@@ -1184,6 +1189,60 @@ impl TrackScene {
         let first = self.prefix.partition_point(|top| *top < lower);
         let last = self.prefix.partition_point(|top| *top <= upper).max(first);
         self.resident.range(first..last).copied()
+    }
+
+    pub(crate) fn frame_schedule(
+        &self,
+        time: f64,
+        scroll: f64,
+        adjust: &[f64],
+        state: &crate::appearance::AppearanceState,
+        scroll_animating: bool,
+        advancing: bool,
+    ) -> crate::scheduling::FrameSchedule {
+        let (interlude_row, extra) = self.interlude_shift(time);
+        let mut visible_changes = scroll_animating;
+        for i in self.drawing_rows(time, scroll, adjust) {
+            let row = &self.cached[i];
+            let y = self.scroll_anchor() + self.prefix[i] - scroll
+                + adjust.get(i).copied().unwrap_or(0.0)
+                + interlude_row.map_or(0.0, |r| if i >= r { extra } else { 0.0 });
+            if y + row.height < -40.0 || y > f64::from(self.height) + 40.0 {
+                continue;
+            }
+            visible_changes |= state.row(i).is_some_and(|r| r.animating)
+                || (advancing
+                    && time >= self.lines[i].start
+                    && time <= self.lines[i].background_end);
+        }
+        let interlude = self.interlude_at(time);
+        if let Some((i, _)) = interlude {
+            let top = self.scroll_anchor() + self.prefix[i] + self.cached[i].top - scroll
+                + adjust.get(i).copied().unwrap_or(0.0);
+            visible_changes |= (advancing || state.interlude_animating())
+                && top + extra >= -40.0
+                && top <= f64::from(self.height) + 40.0;
+        }
+        // Do not freeze hidden owners whose history affects their return or
+        // outgoing release. Sleeping is safe only after those owners settle.
+        let retained_changes = state.animating()
+            || state.interlude_animating()
+            || (advancing
+                && (interlude.is_some()
+                    || self.resident_rows().any(|i| {
+                        state.row(i).is_some()
+                            && time >= self.lines[i].start
+                            && time <= self.lines[i].background_end
+                    })));
+        crate::scheduling::FrameSchedule {
+            visible_changes,
+            continuous: visible_changes || retained_changes,
+            next_cue: if advancing {
+                self.cues.next(time)
+            } else {
+                None
+            },
+        }
     }
 
     /// Per-frame follow command. `position` is the current visual offset, used
@@ -1492,6 +1551,235 @@ mod lazy_tests {
             .unwrap();
         fonts
     }
+    fn scheduling_lines(emphasized: bool) -> Vec<Line> {
+        let mut lines = source(3);
+        for line in &mut lines {
+            line.start += 1500.0;
+            line.end += 1500.0;
+            line.background_end += 1500.0;
+            for atom in &mut line.atoms {
+                atom.start += 1500.0;
+                atom.end += 1500.0;
+            }
+            for voice in line.paint.iter_mut() {
+                voice.start += 1500.0;
+                voice.end += 1500.0;
+                for word in &mut voice.words {
+                    word.start += 1500.0;
+                    word.end += 1500.0;
+                    word.appearance = Some(crate::typography::WordAppearance {
+                        emphasized,
+                        origin: 0.5,
+                        rtl: false,
+                        last: true,
+                        emphasis: emphasized.then_some(crate::typography::EmphasisGroup {
+                            start: word.start,
+                            end: word.end,
+                            index: 0,
+                            count: word.graphemes.len(),
+                            last: true,
+                        }),
+                    });
+                }
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn idle_scheduling_preserves_continuous_animation_history() {
+        schedule_replay(false);
+    }
+
+    #[test]
+    #[ignore = "GPU pixel comparison for continuous and idle-scheduled histories"]
+    fn idle_scheduling_preserves_continuous_pixels() {
+        schedule_replay(true);
+    }
+
+    fn schedule_replay(pixels: bool) {
+        use crate::{
+            appearance::{AppearanceState, Effect},
+            gpu::Gpu,
+            motion::FollowScroll,
+        };
+        for (style, emphasized) in [Style::Spicy, Style::Amll]
+            .into_iter()
+            .flat_map(|style| [false, true].map(|emphasized| (style, emphasized)))
+        {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut full = TrackScene::with_fonts(
+                scheduling_lines(emphasized),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+            )
+            .unwrap();
+            let mut scheduled = TrackScene::with_fonts(
+                scheduling_lines(emphasized),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+            )
+            .unwrap();
+            let (mut full_state, mut state) =
+                (AppearanceState::default(), AppearanceState::default());
+            let (mut full_scroll, mut scroll) = (FollowScroll::default(), FollowScroll::default());
+            full_scroll.configure(style, 1.0, 3);
+            scroll.configure(style, 1.0, 3);
+            let (mut full_scene, mut scene) = (Scene::new(), Scene::new());
+            let mut continuous = true;
+            let mut next = None;
+            let mut count = 0;
+            for tick in 0..701 {
+                let time = f64::from(tick) * 10.0;
+                let native = time + 10_000.0;
+                full.prepare(time).unwrap();
+                let offset = full_scroll.sample(
+                    &full.scroll_command(time, full_scroll.position()),
+                    native,
+                    true,
+                );
+                full_state.prepare(&full, time, native);
+                full_state.advance(&full, time, native, true, Effect::Glow);
+                let full_band = full.frame_appearance(
+                    time,
+                    offset,
+                    full_scroll.row_adjustments(),
+                    &full_state,
+                    &mut full_scene,
+                    Effect::Glow,
+                );
+                if tick > 0 && !continuous && next.is_none_or(|cue| time < cue) {
+                    continue;
+                }
+                scheduled.prepare(time).unwrap();
+                if !continuous {
+                    state.resume(native, 10.0);
+                    scroll.resume(native, 10.0);
+                }
+                let offset = scroll.sample(
+                    &scheduled.scroll_command(time, scroll.position()),
+                    native,
+                    true,
+                );
+                state.prepare(&scheduled, time, native);
+                state.advance(&scheduled, time, native, true, Effect::Glow);
+                let band = scheduled.frame_appearance(
+                    time,
+                    offset,
+                    scroll.row_adjustments(),
+                    &state,
+                    &mut scene,
+                    Effect::Glow,
+                );
+                for (a, b) in [(band.0, full_band.0), (band.1, full_band.1)] {
+                    assert!((a - b).abs() < 0.0001, "{style:?} time={time}");
+                }
+                assert_eq!(
+                    scene.encoding().path_data,
+                    full_scene.encoding().path_data,
+                    "{style:?} time={time}"
+                );
+                assert_eq!(
+                    scene.encoding().draw_data,
+                    full_scene.encoding().draw_data,
+                    "{style:?} time={time}"
+                );
+                assert_eq!(
+                    scene.encoding().resources.color_stops,
+                    full_scene.encoding().resources.color_stops,
+                    "{style:?} time={time}"
+                );
+                if pixels && [150, 251, 450, 600].contains(&tick) {
+                    let mut a = pollster::block_on(Gpu::new(390, 640)).unwrap();
+                    let mut b = pollster::block_on(Gpu::new(390, 640)).unwrap();
+                    a.render_appearance(&full_scene, full_band, true, true)
+                        .unwrap();
+                    b.render_appearance(&scene, band, true, true).unwrap();
+                    let (a, b) = (a.read_pixels().unwrap(), b.read_pixels().unwrap());
+                    assert!(
+                        a == b,
+                        "{style:?} time={time} pixel differences={}",
+                        a.iter().zip(&b).filter(|(a, b)| a != b).count()
+                    );
+                }
+                let schedule = scheduled.frame_schedule(
+                    time,
+                    offset,
+                    scroll.row_adjustments(),
+                    &state,
+                    scroll.animating(),
+                    true,
+                );
+                continuous = schedule.continuous;
+                next = schedule.next_cue;
+                count += 1;
+                if (1500.0..2500.0).contains(&time) {
+                    assert!(
+                        schedule.visible_changes && continuous,
+                        "fills must stay live"
+                    );
+                }
+            }
+            assert!(count < 600, "settled playback must actually suspend frames");
+            assert!(
+                !continuous && next.is_none(),
+                "settled final frame must sleep indefinitely"
+            );
+        }
+    }
+
+    #[test]
+    fn stateless_dots_and_hidden_animation_history_keep_their_required_cadence() {
+        use crate::appearance::{AppearanceState, Effect};
+        for style in [Style::Spicy, Style::Amll] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track = TrackScene::with_fonts(
+                long_gap_lines(),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+            )
+            .unwrap();
+            track.prepare(2600.0).unwrap();
+            let mut state = AppearanceState::default();
+            state.prepare(&track, 2600.0, 10_000.0);
+            state.advance(&track, 2600.0, 10_000.0, true, Effect::Glow);
+            let schedule = track.frame_schedule(
+                2600.0,
+                track.scroll_target(2600.0),
+                &[],
+                &state,
+                false,
+                true,
+            );
+            assert!(
+                schedule.continuous && schedule.visible_changes,
+                "dot breathing is not a spring velocity test"
+            );
+            let hidden = track.frame_schedule(2600.0, 1_000_000.0, &[], &state, false, true);
+            assert!(
+                !hidden.visible_changes && hidden.continuous,
+                "retain hidden dot history"
+            );
+        }
+    }
+
     #[test]
     fn conservative_drawing_range_matches_full_scan_with_offsets_and_interludes() {
         for style in [Style::Spicy, Style::Amll] {

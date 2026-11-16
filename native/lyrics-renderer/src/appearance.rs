@@ -56,6 +56,13 @@ impl AppearanceState {
         self.interlude.reset();
         self.last_ms = None;
     }
+    /// After an idle interval, a newly changing target gets one display step,
+    /// rather than treating the entire sleep as an animation integration step.
+    pub(crate) fn resume(&mut self, native_ms: f64, step_ms: f64) {
+        if self.last_ms.is_some() {
+            self.last_ms = Some((native_ms - step_ms).max(0.0));
+        }
+    }
     pub fn interlude_animating(&self) -> bool {
         self.interlude.animating()
     }

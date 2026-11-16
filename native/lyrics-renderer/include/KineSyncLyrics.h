@@ -17,11 +17,14 @@ typedef struct {
   double acquire_ms, blit_submit_ms, poll_ms, present_call_ms;
   uint64_t completed, outstanding, gpu_busy;
   double target_native_ms;
+  /* ABI9: absolute monotonic wakeup in ms, -1 when none.
+     animating requests continuous frames, including retained animation history. */
+  double next_cue_native_ms;
+  uint32_t visible_changes;
 } KRMetrics;
 uint32_t kr_abi_version(void);
-/* ABI 8: schema6 packets may carry source background vocal voices per row, so the
-   ABI (not the schema number) is the client-compatibility gate for that additive
-   field. */
+/* ABI 9 adds idle-frame scheduling metrics and a resume display step.
+   Schema6 includes background voices. The ABI is the client compatibility gate. */
 uint64_t kr_create(void *retained_ca_metal_layer, uint32_t width, uint32_t height, float scale);
 /* ABI8: font bytes copied once before the first track; immutable owner font set. */
 int32_t kr_set_fonts(uint64_t handle, const uint8_t *regular, size_t regular_length, const uint8_t *bold, size_t bold_length);
@@ -37,7 +40,8 @@ int32_t kr_scroll_by(uint64_t handle, double dy_logical_points);
 int32_t kr_fling(uint64_t handle, double velocity_logical_points_per_ms);
 int32_t kr_hit_test(uint64_t handle, double y_logical_points);
 /* ABI 7: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
-int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms);
+/* ABI9: resume_step_ms is one display interval on waking, zero otherwise. */
+int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms, double resume_step_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);
 int32_t kr_destroy(uint64_t handle);
 void kr_copy_error(char *out, size_t capacity);

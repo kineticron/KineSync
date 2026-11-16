@@ -10,6 +10,7 @@ mod interlude;
 pub mod live;
 pub mod motion;
 pub mod scene;
+mod scheduling;
 pub mod style_timing;
 mod timed_scene;
 pub mod typography;

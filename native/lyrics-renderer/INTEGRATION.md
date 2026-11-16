@@ -48,9 +48,10 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 7 retains explicit seek-snap intent, separate display-target/sample
-clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
-IPA; a Metro-only update cannot install the Rust/Swift changes.
+ABI version 9 retains explicit seek-snap intent and separate display-target/sample
+clocks. Its 168-byte metrics include visible changes and the next native cue.
+Both JS and Swift reject an older native ABI. This requires a rebuilt IPA.
+A Metro-only update cannot install the Rust/Swift changes.
 
 The display link requests preferredFrameRateRange with a hardware-capped maximum
 and preference up to 120Hz (minimum up to 30Hz). This is a best-effort hint, never

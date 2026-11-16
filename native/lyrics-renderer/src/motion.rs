@@ -200,6 +200,17 @@ impl FollowScroll {
         self.animating
     }
 
+    /// Age the analytic settled trajectory through sleep, preserving its
+    /// history for the next retarget, then integrate one fresh display step.
+    pub(crate) fn resume(&mut self, native_ms: f64, step_ms: f64) {
+        if let Some(last) = self.last_ms {
+            self.timeline += ((native_ms - last - step_ms) / 1000.0).max(0.0);
+            self.last_ms = Some((native_ms - step_ms).max(0.0));
+        }
+        if self.fling_last_ms.is_some() {
+            self.fling_last_ms = Some((native_ms - step_ms).max(0.0));
+        }
+    }
     pub fn row_adjustments(&self) -> &[f64] {
         &self.adjust
     }

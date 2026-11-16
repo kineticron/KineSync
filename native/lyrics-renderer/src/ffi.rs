@@ -53,6 +53,8 @@ pub struct Metrics {
     pub outstanding: u64,
     pub gpu_busy: u64,
     pub target_native_ms: f64,
+    pub next_cue_native_ms: f64,
+    pub visible_changes: u32,
 }
 struct Engine {
     timeline: Timeline,
@@ -115,7 +117,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    8
+    9
 }
 /// # Safety
 /// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
@@ -567,13 +569,20 @@ fn prepare_drawable<T>(
 
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64) -> i32 {
+pub extern "C" fn kr_render(
+    handle: u64,
+    native_ms: f64,
+    sampled_native_ms: f64,
+    resume_step_ms: f64,
+) -> i32 {
     with(handle, |engine| {
         let frame_started = Instant::now();
         if !native_ms.is_finite()
             || native_ms < 0.0
             || !sampled_native_ms.is_finite()
             || sampled_native_ms < 0.0
+            || !resume_step_ms.is_finite()
+            || !(0.0..=1000.0).contains(&resume_step_ms)
         {
             return Err("Invalid native frame clock".into());
         }
@@ -612,6 +621,10 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
+        if resume_step_ms > 0.0 {
+            engine.appearance.resume(native_ms, resume_step_ms);
+            engine.scroll.resume(native_ms, resume_step_ms);
+        }
         // Geometry changes reach the tween through `command.offset`; remapping
         // here would clear the spring history every frame.
         let command = layout.scroll_command(position, engine.scroll.position());
@@ -629,10 +642,21 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
             &mut engine.scene,
             effect,
         );
-        engine.metrics.animating = u32::from(
-            engine.scroll.animating()
-                || engine.appearance.animating()
-                || engine.appearance.interlude_animating(),
+        let schedule = layout.frame_schedule(
+            position,
+            scroll,
+            engine.scroll.row_adjustments(),
+            &engine.appearance,
+            engine.scroll.animating(),
+            engine.timeline.playing && engine.timeline.rate > 0.0,
+        );
+        engine.metrics.animating = u32::from(schedule.continuous);
+        engine.metrics.visible_changes = u32::from(schedule.visible_changes);
+        engine.metrics.next_cue_native_ms = crate::scheduling::native_cue(
+            position,
+            native_ms,
+            engine.timeline.rate,
+            schedule.next_cue,
         );
         engine.metrics.position_ms = position;
         engine.metrics.cpu_scene_ms =
@@ -707,13 +731,15 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v8_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 8);
-        assert_eq!(std::mem::size_of::<Metrics>(), 152);
+    fn abi_v9_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 9);
+        assert_eq!(std::mem::size_of::<Metrics>(), 168);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
         assert_eq!(std::mem::offset_of!(Metrics, acquire_ms), 88);
         assert_eq!(std::mem::offset_of!(Metrics, completed), 120);
+        assert_eq!(std::mem::offset_of!(Metrics, next_cue_native_ms), 152);
+        assert_eq!(std::mem::offset_of!(Metrics, visible_changes), 160);
     }
     fn preparation_track() -> TrackScene {
         let data: serde_json::Value =
@@ -861,7 +887,7 @@ mod tests {
     #[test]
     fn panic_containment_and_invalid_handles() {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);
-        assert_eq!(kr_render(u64::MAX, 0.0, 0.0), -1);
+        assert_eq!(kr_render(u64::MAX, 0.0, 0.0, 0.0), -1);
         assert_eq!(kr_destroy(u64::MAX), 0);
         assert_eq!(kr_set_following(u64::MAX, false), -1);
         assert_eq!(kr_scroll_by(u64::MAX, 10.0), -1);

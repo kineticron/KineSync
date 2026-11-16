@@ -223,7 +223,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 8 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 9 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }
@@ -247,31 +247,35 @@ private final class RustOwner: @unchecked Sendable {
     // Immediate gate only; lifecycle never waits for GPU/worker completion on main.
     gate.lock(); visible = value; gate.unlock()
   }
-  func draw(targetMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool) -> Void) {
+  func draw(targetMs: Double, resumeStepMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
     queue.async {
       var result: Int32 = 1
       var animating = false
+      var nextCue = -1.0
       defer {
         let status = result
         let generation = self.currentGeneration
         let settling = animating
-        DispatchQueue.main.async { completion(status, generation, settling) }
+        let wakeup = nextCue
+        DispatchQueue.main.async { completion(status, generation, settling, wakeup) }
       }
       guard self.permitted(rendering: true), !self.failed, self.handle != 0 else { return }
       let sampled = CACurrentMediaTime() * 1000
       // Never replay a target which became stale while input/resize work ran.
       let frameTarget = max(targetMs, sampled)
-      result = kr_render(self.handle, frameTarget, sampled)
+      result = kr_render(self.handle, frameTarget, sampled, resumeStepMs)
       if result < 0 { self.failure(); return }
       var m = KRMetrics()
       if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
       animating = m.animating != 0
+      nextCue = m.next_cue_native_ms
       let now = CACurrentMediaTime()
       if result == 0 && now - self.lastMetrics >= 1 {
         self.lastMetrics = now
         self.emit(["state": "metrics", "frames": m.frames, "generation": m.generation,
                    "sampleNativeMs": sampled, "targetNativeMs": m.target_native_ms, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
                    "positionMs": m.position_ms, "cpuSceneMs": m.cpu_scene_ms,
+                   "visibleChanges": m.visible_changes != 0, "nextCueNativeMs": m.next_cue_native_ms,
                    "cpuEncodeMs": m.cpu_encode_ms, "gpuIntervalMs": m.gpu_interval_ms,
                    "waitMs": m.wait_ms, "cpuBlitMs": m.cpu_blit_ms,
                    "acquireMs": m.acquire_ms, "blitSubmitMs": m.blit_submit_ms,
@@ -338,6 +342,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var surfaceWaiting = false
   private var failed = false
   private var animating = false
+  private var resumePending = false
+  private var nextCueNativeMs = -1.0
+  private var cueWork: DispatchWorkItem?
+  private var cueDeadline = -1.0
   private var callbacks: UInt64 = 0
   private var submitted: UInt64 = 0
   private var idle: UInt64 = 0
@@ -400,6 +408,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     if window == nil {
       link?.invalidate(); link = nil
       retryWork?.cancel(); retryWork = nil
+      cancelCue()
       owner?.dispose(); owner = nil
       session &+= 1; busy = false; animating = false
     } else if owner == nil {
@@ -514,8 +523,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private func lifecycle() {
     let visible = window != nil && foreground && enabled && !failed && bounds.width > 0 && bounds.height > 0
     owner?.setVisible(visible)
-    if !visible { retryWork?.cancel(); retryWork = nil }
-    if visible && retryWork == nil && !retryBlocked && (dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0)) {
+    if !visible { retryWork?.cancel(); retryWork = nil; cancelCue(); resumePending = false }
+    if visible && retryWork == nil && !retryBlocked && (dirty || animating) {
+      cancelCue()
       if link == nil {
         let next = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick(_:)))
         let maximum = Float(min(120, window?.screen.maximumFramesPerSecond ?? 60))
@@ -526,7 +536,42 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         next.add(to: .main, forMode: .common)
         link = next
       }
-    } else { link?.invalidate(); link = nil; previousTick = 0; previousStep = 0 }
+    } else {
+      link?.invalidate(); link = nil; previousTick = 0; previousStep = 0
+      if visible && !busy && retryWork == nil && !retryBlocked {
+        resumePending = anchor?.playing == true && (anchor?.rate ?? 0) > 0
+        scheduleCue()
+      }
+    }
+  }
+  private func cancelCue() {
+    cueWork?.cancel(); cueWork = nil; cueDeadline = -1
+  }
+  private func scheduleCue() {
+    guard nextCueNativeMs.isFinite, nextCueNativeMs >= 0,
+          anchor?.playing == true, (anchor?.rate ?? 0) > 0 else { cancelCue(); return }
+    if cueWork != nil && cueDeadline == nextCueNativeMs { return }
+    cancelCue()
+    let deadline = nextCueNativeMs
+    let revision = frameRevision
+    let epoch = session
+    // Rearm one display interval early. The next vsync still supplies the
+    // actual target, and a late timer never replays its stored cue time.
+    let hz = Double(min(120, window?.screen.maximumFramesPerSecond ?? 60))
+    let delay = max(0, (deadline - CACurrentMediaTime() * 1000) / 1000 - 1 / hz)
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, self.session == epoch, self.frameRevision == revision,
+            self.nextCueNativeMs == deadline, self.cueDeadline == deadline, self.cueWork != nil,
+            self.window != nil, self.foreground,
+            self.enabled, !self.failed, self.anchor?.playing == true,
+            (self.anchor?.rate ?? 0) > 0 else { return }
+      self.cancelCue()
+      self.markDirty()
+      self.lifecycle()
+    }
+    cueDeadline = deadline
+    cueWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
   fileprivate func tick(_ display: CADisplayLink) {
     let start = CACurrentMediaTime()
@@ -546,14 +591,16 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     previousTick = display.timestamp
     previousStep = display.targetTimestamp - display.timestamp
     if busy { busyCallbacks &+= 1; return }
-    guard dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0) else {
+    guard dirty || animating else {
       idle &+= 1; lifecycle(); return
     }
     guard let owner else { inactive &+= 1; return }
     busy = true; dirty = false; submitted &+= 1
     let epoch = session
     let requestedRevision = frameRevision
-    owner.draw(targetMs: display.targetTimestamp * 1000) { [weak self] result, renderedGeneration, settling in
+    let resumeStepMs = resumePending ? max(0, display.targetTimestamp - display.timestamp) * 1000 : 0
+    resumePending = false
+    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs) { [weak self] result, renderedGeneration, settling, nextCue in
       guard let self, self.session == epoch else { return }
       self.busy = false
       if result == 0 { self.presentCalls &+= 1 }
@@ -563,6 +610,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         self.lifecycle(); return
       }
       self.animating = settling
+      if result != 0 && resumeStepMs > 0 { self.resumePending = true }
       if result == 3 {
         // No backoff and no stored target; completion polling continues at vsync.
       } else if result == 2 {
@@ -571,6 +619,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         // No anchor/track yet. A new input/ready handshake will rearm, not a frame loop.
         self.retryBlocked = true
       } else if result == 0 {
+        self.nextCueNativeMs = nextCue
         self.retryCount = 0
         self.metal.isHidden = false
         if self.surfaceWaiting || self.displayedGeneration != renderedGeneration {
@@ -583,6 +632,8 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     }
   }
   private func markDirty() {
+    cancelCue()
+    nextCueNativeMs = -1
     dirty = true
     frameRevision &+= 1
     retryCount = 0
@@ -611,6 +662,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
   deinit {
+    cueWork?.cancel()
     retryWork?.cancel()
     link?.invalidate()
     NotificationCenter.default.removeObserver(self)
