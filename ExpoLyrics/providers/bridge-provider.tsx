@@ -158,6 +158,13 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       return;
     }
 
+    // Emulator smoke builds skip first-run onboarding (test-only, set at Metro start).
+    if (process.env.EXPO_PUBLIC_SMOKE_SKIP_ONBOARDING === '1') {
+      setShowOnboarding(false);
+      setOnboardingChecked(true);
+      return;
+    }
+
     // Check if onboarding was completed before, then connect only when desktop mode is configured.
     (async () => {
       try {

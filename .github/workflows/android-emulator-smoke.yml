@@ -82,7 +82,7 @@ jobs:
       - name: Start Metro
         working-directory: ExpoLyrics
         run: |
-          nohup npx expo start --dev-client --port 8081 > "$RUNNER_TEMP/metro.log" 2>&1 &
+          EXPO_PUBLIC_SMOKE_SKIP_ONBOARDING=1 nohup npx expo start --dev-client --port 8081 > "$RUNNER_TEMP/metro.log" 2>&1 &
           for i in $(seq 1 30); do curl -sf localhost:8081/status && break; sleep 2; done
 
       - name: Run emulator smoke
