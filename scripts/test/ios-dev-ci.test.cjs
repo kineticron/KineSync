@@ -312,7 +312,7 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
     assert.equal(state.dirty, true); assert.deepEqual(calls, ['dirty', 'refresh', 'lifecycle']);
   }
   const tick = body('tick'), retry = body('scheduleRetry'), mark = body('markDirty'), lifecycle = body('lifecycle');
-  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000\) \{ \[weak self\] result, renderedGeneration, settling/);
+  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
   assert.match(tick, /self\.frameRevision == requestedRevision, renderedGeneration == self\.generation/);
   assert.match(tick, /if result == 2 \{\s*self\.scheduleRetry/);
   assert.match(tick, /else if result == 1[\s\S]*?self\.retryBlocked = true/);
@@ -547,16 +547,16 @@ test('SourceMap v3 source collection accepts flat and nested Metro sections and 
 
 test('native frame source contract uses display targets, one draw and asynchronous retirement', () => {
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  const predicate = swift.match(/guard (dirty \|\| animating \|\| .+?) else/)[1];
-  const needsFrame = new Function('dirty', 'animating', 'anchor', `return ${predicate}`);
-  assert.equal(needsFrame(false, false, { playing: true, rate: 1 }), true);
-  assert.equal(needsFrame(false, false, { playing: false, rate: 1 }), false);
-  assert.equal(needsFrame(false, true, { playing: false, rate: 1 }), true);
-  assert.equal(needsFrame(false, false, { playing: true, rate: 0 }), false);
-  assert.equal(needsFrame(true, false, null), true);
+  const predicate = swift.match(/guard (dirty \|\| animating) else/)[1];
+  const needsFrame = new Function('dirty', 'animating', `return ${predicate}`);
+  // ABI 9: playback alone no longer arms continuous drawing. Settled playback
+  // arms one cancellable cue wakeup, so only input or reported motion draws.
+  assert.equal(needsFrame(false, false), false);
+  assert.equal(needsFrame(false, true), true);
+  assert.equal(needsFrame(true, false), true);
   assert.ok(swift.indexOf('if busy { busyCallbacks') < swift.indexOf('owner.draw(targetMs:'));
   assert.match(swift, /busy = true; dirty = false; submitted &\+= 1/);
-  assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled\)/);
+  assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled, resumeStepMs\)/);
   assert.match(swift, /let sampled = CACurrentMediaTime\(\) \* 1000/);
   assert.match(swift, /preferredFrameRateRange = CAFrameRateRange/);
   assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
@@ -661,15 +661,15 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 8 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 9 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 4, 5, 6, 7]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 8 }), false);
+  for (const version of [0, 1, 2, 3, 4, 5, 6, 7, 8]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 9 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 8 else/);
+  assert.match(swift, /guard kr_abi_version\(\) == 9 else/);
   assert.match(swift, /AsyncFunction\("scrollBy"\)/);
   assert.match(swift, /AsyncFunction\("hitTest"\)/);
   assert.match(swift, /kr_scroll_by\(self\.handle, dy\)/);
@@ -679,12 +679,14 @@ test('ABI 8 C layout and both native-client guards reject incompatible clients',
   assert.match(swift, /kr_hit_test\(self\.handle, y\)/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 152, "ABI 8 metrics size");
+_Static_assert(sizeof(KRMetrics) == 168, "ABI 9 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
 _Static_assert(offsetof(KRMetrics, target_native_ms) == 144, "clock offset");
-int32_t (*render_signature)(uint64_t, double, double) = kr_render;
+_Static_assert(offsetof(KRMetrics, next_cue_native_ms) == 152, "cue offset");
+_Static_assert(offsetof(KRMetrics, visible_changes) == 160, "visible change offset");
+int32_t (*render_signature)(uint64_t, double, double, double) = kr_render;
 int32_t (*fonts_signature)(uint64_t, const uint8_t *, size_t, const uint8_t *, size_t) = kr_set_fonts;
 size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
 int32_t (*follow_signature)(uint64_t, bool) = kr_set_following;
