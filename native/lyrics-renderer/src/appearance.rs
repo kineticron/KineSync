@@ -110,7 +110,15 @@ impl AppearanceState {
                         })
                         .collect(),
                     clock: FloatClock::default(),
-                    scale: Spring { p: 1.0, v: 0.0 },
+                    // Match the cold paragraph transform before the first advance.
+                    scale: Spring {
+                        p: if spicy || active || (self.last_ms.is_some() && !self.playing) {
+                            1.0
+                        } else {
+                            0.97
+                        },
+                        v: 0.0,
+                    },
                     // Skia's line springs have already settled a future row to
                     // bright=dark=0.2 long before it is promoted to exact glyphs.
                     // The raw placeholder paints the same inactive alpha, so the

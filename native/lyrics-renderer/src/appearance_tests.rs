@@ -441,3 +441,36 @@ fn live_effect_interleaved_budget() {
         "an enabled effect was rejected; inspect /tmp/rust-parity-appearance-budget.json"
     );
 }
+
+#[test]
+#[ignore = "GPU pixel handoff regression; requires a GPU adapter"]
+fn cold_and_first_prepared_frames_are_pixel_identical() {
+    for style in [Style::Amll, Style::Spicy] {
+        let (mut track, _) = track(if style == Style::Amll { 1 } else { 11 }, style, false);
+        let time = track.lines[0].start - 2000.0;
+        track.prepare(time).unwrap();
+        let mut state = AppearanceState::default();
+        // Set playback without creating the exact row owner: this is the raw
+        // paragraph's final frame immediately before detailed preparation.
+        state.advance(&track, time, 1000.0, true, Effect::Glow);
+        let mut scene = vello::Scene::new();
+        let mut gpu = pollster::block_on(Gpu::new(track.width, track.height)).unwrap();
+        let band = track.frame_appearance(time, 0.0, &[], &state, &mut scene, Effect::Glow);
+        render(&mut gpu, &scene, band, Effect::Glow);
+        let cold = gpu.read_pixels().unwrap();
+        assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
+        state.prepare(&track, time, 1000.0);
+        for frame in 0..4 {
+            state.advance(
+                &track,
+                time,
+                1000.0 + frame as f64 * 16.0,
+                true,
+                Effect::Glow,
+            );
+            let band = track.frame_appearance(time, 0.0, &[], &state, &mut scene, Effect::Glow);
+            render(&mut gpu, &scene, band, Effect::Glow);
+            assert_eq!(cold, gpu.read_pixels().unwrap(), "{style:?} frame {frame}");
+        }
+    }
+}
