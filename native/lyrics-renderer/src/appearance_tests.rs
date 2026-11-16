@@ -290,6 +290,7 @@ fn actual_glyph_fill_motion_glow_alpha_proof() {
             glow,
             "identical timing history must replay exact pixels"
         );
+        track.layout_json().unwrap();
         reports.push(serde_json::json!({"style":style,"time_ms":time,"halo_pixels":halo,"motion_changed_pixels":motion_changed,"time_changed_pixels":time_changed,"selected_faces":track.diagnostics,"prototype_glow_png":png,"live_motion_png":live_png,"premultiplied":true,"identical_history_repeat":true,"scope":"actual production glyphs + shared two-radius glow, no native Skia comparison acceptance"}));
     }
     std::fs::write(

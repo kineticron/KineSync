@@ -173,6 +173,7 @@ fn host_typography_effect_budget() {
                 let accepted = b.scene_allocations_max == 0
                     && b.scene_p50 <= a.scene_p50 * 1.25 + 0.01
                     && b.encode_p95 <= a.encode_p95 * 1.25 + 0.5;
+                variant.layout_json().unwrap();
                 records.push(serde_json::json!({"effect":"explicit fonts + style typography/layout; no new glow/blur/scroll effect",
                 "style":style,"fixture_line":index,"width":width,"height":height,"dpr":1,"time_ms":base_time,
                 "baseline_source":"a9b6398 native/lyrics-renderer/src/scene.rs, exact checked test copy", "adapter":gpu.adapter,

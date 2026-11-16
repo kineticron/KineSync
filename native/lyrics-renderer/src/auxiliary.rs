@@ -67,6 +67,7 @@ impl Translation {
         main_height: f64,
         fonts: &mut Fonts,
         layouts: &mut LayoutContext<()>,
+        collect_diagnostics: bool,
     ) -> Self {
         let p = policy.clone();
         let mut layout = crate::scene::shape(
@@ -98,8 +99,10 @@ impl Translation {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = item {
                     let run = gr.run();
-                    let face = fonts.describe(run.font());
-                    faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],"requested_attributes":format!("{:?}",run.font_attrs()),"normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
+                    if collect_diagnostics {
+                        let face = fonts.describe(run.font());
+                        faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],"requested_attributes":format!("{:?}",run.font_attrs()),"normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
+                    }
                     scene
                         .draw_glyphs(run.font())
                         .font_size(run.font_size())
@@ -139,7 +142,11 @@ impl Translation {
             extra_height: f64::from(p.margin) + height,
             glyph_count,
             missing_glyphs,
-            diagnostics: serde_json::json!({"text":text,"policy":p,"height":height,"y":y,"line_count":layout.len(),"faces":faces}),
+            diagnostics: if collect_diagnostics {
+                serde_json::json!({"text":text,"policy":p,"height":height,"y":y,"line_count":layout.len(),"faces":faces})
+            } else {
+                serde_json::Value::Null
+            },
         }
     }
     pub fn draw(&self, scene: &mut Scene, transform: Affine, outer: f64) {
@@ -245,6 +252,7 @@ mod tests {
             );
             hidden.prepare(time).unwrap();
             shown.prepare(time).unwrap();
+            shown.layout_json().unwrap();
             assert!(hidden.cached[0].lead().translation.is_none());
             let t = shown.cached[0].lead().translation.as_ref().unwrap();
             assert_eq!(t.diagnostics["text"], item["original_translation"]);
@@ -325,6 +333,7 @@ mod tests {
                 assert!(p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]);
             }
             assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
+            shown.layout_json().unwrap();
             let cached = &shown.cached[0];
             let t = cached.lead().translation.as_ref().unwrap();
             let y = (shown.scroll_anchor() + shown.prefix[0] - shown.scroll_target(time)

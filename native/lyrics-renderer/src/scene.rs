@@ -120,7 +120,9 @@ pub struct TrackScene {
     pub(crate) prefix: Vec<f64>,
     pub(crate) interludes: Vec<Option<crate::interlude::Interlude>>,
     pub(crate) dot_glyph: Option<crate::interlude::DotGlyph>,
+    /// Last explicitly requested receipts. Unprepared or evicted rows are null.
     pub diagnostics: Vec<serde_json::Value>,
+    diagnostics_json: Option<Vec<u8>>,
     fonts: Option<crate::typography::Fonts>,
     settings: Option<crate::typography::Settings>,
     pub(crate) scale: f32,
@@ -320,7 +322,10 @@ impl TrackScene {
         fonts: &mut crate::typography::Fonts,
     ) -> Result<Self, Error> {
         let Some(settings) = settings else {
-            return Self::with_fonts_eager(lines, width, height, scale, None, fonts, true);
+            let mut track =
+                Self::with_fonts_eager(lines, width, height, scale, None, fonts, true, false)?;
+            track.fonts = Some(fonts.clone());
+            return Ok(track);
         };
         if lines.is_empty()
             || width == 0
@@ -403,6 +408,7 @@ impl TrackScene {
             interludes,
             dot_glyph,
             diagnostics: vec![serde_json::Value::Null; count],
+            diagnostics_json: None,
             fonts: Some(fonts.clone()),
             settings: Some(settings.clone()),
             scale,
@@ -468,11 +474,13 @@ impl TrackScene {
                     self.settings.as_ref(),
                     self.fonts.as_mut().expect("lazy fonts"),
                     detailed,
+                    false,
                 )?;
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
                 self.cached[i] = prepared.cached.remove(0);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
+                self.diagnostics_json = None;
                 self.plain_preparations += 1;
                 self.detailed_preparations += usize::from(detailed);
                 changed = true;
@@ -518,6 +526,7 @@ impl TrackScene {
                     voice.clear_geometry();
                 }
                 self.diagnostics[i] = serde_json::Value::Null;
+                self.diagnostics_json = None;
             }
         }
         if changed {
@@ -549,11 +558,13 @@ impl TrackScene {
                     self.settings.as_ref(),
                     self.fonts.as_mut().expect("lazy fonts"),
                     false,
+                    false,
                 )?;
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
                 self.cached[i] = prepared.cached.remove(0);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
+                self.diagnostics_json = None;
                 self.plain_preparations += 1;
                 changed = true;
             }
@@ -566,6 +577,7 @@ impl TrackScene {
                     voice.clear_geometry();
                 }
                 self.diagnostics[i] = serde_json::Value::Null;
+                self.diagnostics_json = None;
             }
         }
         if changed {
@@ -580,6 +592,10 @@ impl TrackScene {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Explicit row preparation and receipt collection modes"
+    )]
     fn with_fonts_eager(
         lines: Vec<Line>,
         width: u32,
@@ -588,6 +604,7 @@ impl TrackScene {
         settings: Option<&crate::typography::Settings>,
         fonts: &mut crate::typography::Fonts,
         detailed: bool,
+        collect_diagnostics: bool,
     ) -> Result<Self, Error> {
         if lines.is_empty()
             || width == 0
@@ -614,7 +631,7 @@ impl TrackScene {
             }
             let boxes = row_voice_boxes(line, width, height, scale, settings, font_size);
             let mut voices = Vec::with_capacity(boxes.len());
-            let mut voice_diagnostics = Vec::with_capacity(boxes.len());
+            let mut voice_diagnostics = Vec::new();
             // Row content grows by each voice's own margin and padding box, so a
             // background voice is part of the measured line height used by
             // scrolling, the blur ramp and the protected band.
@@ -724,10 +741,12 @@ impl TrackScene {
                     for item in row.items() {
                         if let PositionedLayoutItem::GlyphRun(gr) = item {
                             let run = gr.run();
-                            let face = fonts.describe(run.font());
-                            faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],
+                            if collect_diagnostics {
+                                let face = fonts.describe(run.font());
+                                faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],
                             "requested_attributes":format!("{:?}",run.font_attrs()), "size":run.font_size(),
                             "normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
+                            }
                             let glyphs: Vec<Glyph> = gr
                                 .positioned_glyphs()
                                 .map(|g| {
@@ -793,6 +812,7 @@ impl TrackScene {
                         f64::from(voice_box.padding) + content_height,
                         fonts,
                         &mut layouts,
+                        collect_diagnostics,
                     );
                     glyph_count += t.glyph_count;
                     missing_glyphs += t.missing_glyphs;
@@ -840,11 +860,13 @@ impl TrackScene {
                     background: voice_box.background,
                 };
                 cursor = voice.offset + voice.box_height();
-                voice_diagnostics.push(serde_json::json!({"geometry":voice_box.geometry,"text":text,
+                if collect_diagnostics {
+                    voice_diagnostics.push(serde_json::json!({"geometry":voice_box.geometry,"text":text,
                 "voice_height":voice.height,"background":voice_box.background,"offset":voice.offset,
                 "faces":faces,"line_count":voice.layout.as_ref().map_or(0usize, |l| l.len()),
                 "translation":voice.translation.as_ref().map(|t| &t.diagnostics),
                 "word_ranges":voice.words.iter().map(|w|vec![w.bytes.start,w.bytes.end]).collect::<Vec<_>>() }));
+                }
                 voices.push(voice);
             }
             let lead_size = voices[0].size;
@@ -871,7 +893,10 @@ impl TrackScene {
             };
             prefix.push(offset);
             offset += height + gap;
-            let mut row = voice_diagnostics[0].clone();
+            let mut row = voice_diagnostics
+                .first()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             if let Some(fields) = row.as_object_mut() {
                 fields.insert("height".into(), serde_json::json!(height));
                 fields.insert("content_top".into(), serde_json::json!(top));
@@ -909,6 +934,7 @@ impl TrackScene {
             // Scratch row preparation does not own the interlude renderer.
             dot_glyph: None,
             diagnostics,
+            diagnostics_json: None,
             fonts: None,
             settings: None,
             scale,
@@ -917,6 +943,43 @@ impl TrackScene {
             footer: None,
             prepared_signature: None,
         })
+    }
+
+    /// Materialize layout receipts only on request. The owned byte snapshot is
+    /// reused by the C ABI's size query and copy until row residency changes.
+    pub fn layout_json(&mut self) -> Result<&[u8], Error> {
+        if self.diagnostics_json.is_none() {
+            let mut fonts = None;
+            for i in 0..self.cached.len() {
+                if !self.cached[i].layout_ready() || !self.diagnostics[i].is_null() {
+                    continue;
+                }
+                let fonts =
+                    fonts.get_or_insert_with(|| self.fonts.as_ref().expect("track fonts").clone());
+                let mut receipt = Self::with_fonts_eager(
+                    vec![self.lines[i].clone()],
+                    self.width,
+                    self.height,
+                    self.scale,
+                    self.settings.as_ref(),
+                    fonts,
+                    false,
+                    true,
+                )?;
+                self.diagnostics[i] = receipt.diagnostics.remove(0);
+                for (index, voice) in self.cached[i].voices.iter_mut().enumerate() {
+                    if let Some(translation) = &mut voice.translation {
+                        translation.diagnostics =
+                            self.diagnostics[i]["voices"][index]["translation"].clone();
+                    }
+                }
+            }
+            self.diagnostics_json = Some(serde_json::to_vec(&self.diagnostics)?);
+        }
+        Ok(self
+            .diagnostics_json
+            .as_deref()
+            .expect("materialized receipt"))
     }
 
     pub fn style(&self) -> Option<crate::typography::Style> {
@@ -1379,6 +1442,202 @@ mod lazy_tests {
         fonts
     }
     #[test]
+    fn diagnostics_snapshot_matches_pre_deferral_receipts() {
+        use sha2::{Digest, Sha256};
+        let mut hashes = Vec::new();
+        for style in [Style::Spicy, Style::Amll] {
+            let mut lines = source(100);
+            for line in &mut lines {
+                line.paint.as_mut().unwrap().translation = Some("Translation office".into());
+                line.backgrounds.push(line.paint.clone().unwrap());
+            }
+            let mut fonts = fonts();
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track =
+                TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+            assert!(track.diagnostics.iter().all(serde_json::Value::is_null));
+            assert!(track.diagnostics_json.is_none());
+            for stage in 0..6 {
+                match stage {
+                    0 => {}
+                    1 => {
+                        track.prepare(500.0).unwrap();
+                        assert!(track.diagnostics.iter().all(serde_json::Value::is_null));
+                        assert!(
+                            track
+                                .cached
+                                .iter()
+                                .flat_map(|r| &r.voices)
+                                .filter_map(|v| v.translation.as_ref())
+                                .all(|t| t.diagnostics.is_null())
+                        );
+                    }
+                    2 => track.prepare(1500.0).unwrap(),
+                    3 => track.prepare(50_500.0).unwrap(),
+                    4 => track.prepare_viewport(track.prefix[80]).unwrap(),
+                    _ => track.prepare(500.0).unwrap(),
+                }
+                hashes.push(format!(
+                    "{:x}",
+                    Sha256::digest(track.layout_json().unwrap())
+                ));
+                let address = track.layout_json().unwrap().as_ptr();
+                let allocations = crate::allocation_probe::measure(|| {
+                    assert_eq!(track.layout_json().unwrap().as_ptr(), address);
+                });
+                assert_eq!(
+                    allocations, 0,
+                    "repeat receipt requests must reuse the snapshot"
+                );
+            }
+        }
+        // Captured at d6c1b2a before deferring receipts. Covers both styles,
+        // lead/background/subtitles, promotion, distant viewport and eviction.
+        let expected = [
+            "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945",
+            "39bbf26afe6a3b5ce514dd7cfaff0eba363c7df274ad15a801abf74d3a20643c",
+            "39bbf26afe6a3b5ce514dd7cfaff0eba363c7df274ad15a801abf74d3a20643c",
+            "73c6549488c894b42d2d96586d33ae943540e39b4fa93ed9260fc3c019a111c5",
+            "a8f985950e626f73384b8306749e8665e316addda8122a039116dc0988b5da4b",
+            "9b20e90c76d7c0acc60d878a5db2d6fbd8182bd7a4b02efefffb853e03196c95",
+            "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945",
+            "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
+            "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
+            "24da06445c39d3eb1a765707e59a0a238cd934391289d66400ab1581202f9253",
+            "b2e189e13e03d8e4fe0520c923a0cc21314c13aa6ea6009c1045b49fa9edbd83",
+            "b4d4f697bdcfd0ff0ae535fb6b980c9822506699cd50b6af3f16d9b27524f317",
+        ];
+        assert_eq!(hashes, expected);
+    }
+    #[test]
+    #[ignore = "GPU pixel equivalence across explicit diagnostics request; requires Vulkan"]
+    fn diagnostics_request_preserves_pixels_and_render_geometry() {
+        use crate::{
+            appearance::{AppearanceState, Effect},
+            gpu::Gpu,
+        };
+        for (style, width, height, landscape) in [
+            (Style::Spicy, 390, 640, false),
+            (Style::Amll, 390, 640, false),
+            (Style::Spicy, 844, 390, true),
+            (Style::Amll, 844, 390, true),
+        ] {
+            let data: serde_json::Value =
+                serde_json::from_str(include_str!("../test/appearance-track.json")).unwrap();
+            let item = data["packets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| {
+                    p["fixture_line"] == 11
+                        && p["style"]
+                            == if style == Style::Spicy {
+                                "spicy"
+                            } else {
+                                "amll"
+                            }
+                        && p["landscape"] == landscape
+                })
+                .unwrap();
+            let packet =
+                crate::live::TrackPacket::parse(&serde_json::to_vec(&item["packet"]).unwrap())
+                    .unwrap();
+            let settings = packet.settings.clone().unwrap();
+            let mut lines = packet.into_lines();
+            let time = (lines[0].start + lines[0].end) * 0.5;
+            for line in &mut lines {
+                line.paint.as_mut().unwrap().translation = Some("Translation office".into());
+                line.backgrounds.push(line.paint.clone().unwrap());
+            }
+            let mut track =
+                TrackScene::with_fonts(lines, width, height, 1.0, Some(&settings), &mut fonts())
+                    .unwrap();
+            track.prepare(time).unwrap();
+            let mut state = AppearanceState::default();
+            state.prepare(&track, time, 1000.0);
+            state.advance(&track, time, 1000.0, true, Effect::Glow);
+            let mut scene = Scene::new();
+            let scroll = track.scroll_target(time);
+            let band = track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+            let mut gpu = pollster::block_on(Gpu::new(width, height)).unwrap();
+            gpu.render_appearance(&scene, band, true, true).unwrap();
+            let before = gpu.read_pixels().unwrap();
+            assert!(before.iter().any(|b| *b != 0));
+            let before_scene = scene.clone();
+            let prefix = track.prefix.clone();
+            let preparations = (
+                track.plain_preparations,
+                track.detailed_preparations,
+                track.glyph_count,
+            );
+            let layouts: Vec<_> = track
+                .cached
+                .iter()
+                .flat_map(|r| &r.voices)
+                .map(|v| v.layout.as_ref().unwrap() as *const _)
+                .collect();
+            track.layout_json().unwrap();
+            assert_eq!(track.prefix, prefix);
+            assert_eq!(
+                (
+                    track.plain_preparations,
+                    track.detailed_preparations,
+                    track.glyph_count
+                ),
+                preparations
+            );
+            assert_eq!(
+                track
+                    .cached
+                    .iter()
+                    .flat_map(|r| &r.voices)
+                    .map(|v| v.layout.as_ref().unwrap() as *const _)
+                    .collect::<Vec<_>>(),
+                layouts
+            );
+            let after_band =
+                track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+            assert_eq!(band, after_band);
+            let left = before_scene.encoding();
+            let right = scene.encoding();
+            assert!(left.path_tags == right.path_tags);
+            assert_eq!(left.path_data, right.path_data);
+            assert!(left.draw_tags == right.draw_tags);
+            assert_eq!(left.draw_data, right.draw_data);
+            assert_eq!(left.transforms, right.transforms);
+            assert_eq!(left.styles, right.styles);
+            assert_eq!(left.resources.color_stops, right.resources.color_stops);
+            assert_eq!(
+                left.resources.normalized_coords,
+                right.resources.normalized_coords
+            );
+            assert_eq!(
+                format!("{:?}", left.resources.glyphs),
+                format!("{:?}", right.resources.glyphs)
+            );
+            // Match renderer cache history for an exact pixel comparison.
+            let mut gpu = pollster::block_on(Gpu::new(width, height)).unwrap();
+            gpu.render_appearance(&scene, after_band, true, true)
+                .unwrap();
+            let after = gpu.read_pixels().unwrap();
+            assert!(
+                before == after,
+                "{style:?} landscape={landscape} different={} max={}",
+                before.iter().zip(&after).filter(|(a, b)| a != b).count(),
+                before
+                    .iter()
+                    .zip(&after)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap()
+            );
+        }
+    }
+    #[test]
     fn lazy_plain_rows_near_active_slices_and_zero_steady_scene_allocations() {
         let mut fonts = fonts();
         let settings = Settings {
@@ -1396,6 +1655,7 @@ mod lazy_tests {
         assert_eq!(track.detailed_preparations, 3);
         assert!(track.cached[0].lead().detailed && track.cached[2].lead().detailed);
         assert!(!track.cached[3].lead().detailed && track.cached[3].lead().atoms.is_empty());
+        track.layout_json().unwrap();
         assert!(
             track.diagnostics[0]["faces"]
                 .as_array()

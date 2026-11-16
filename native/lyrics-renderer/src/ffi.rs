@@ -230,29 +230,43 @@ pub unsafe extern "C" fn kr_set_fonts(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kr_copy_layout_json(handle: u64, out: *mut u8, capacity: usize) -> usize {
     boundary(0, || {
-        let registry = engines().lock().unwrap_or_else(|e| e.into_inner());
-        let Some(engine) = registry.get(&handle) else {
+        let mut registry = engines().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = registry.get_mut(&handle) else {
             error("Unknown renderer handle");
             return 0;
         };
-        let Some(layout) = &engine.layout else {
+        let Some(layout) = &mut engine.layout else {
             error("No prepared layout");
             return 0;
         };
-        let Ok(json) = serde_json::to_vec(&layout.diagnostics) else {
-            error("Layout diagnostics serialization failed");
-            return 0;
-        };
-        let needed = json.len() + 1;
-        if !out.is_null() && capacity >= needed {
-            // SAFETY: caller's advertised capacity covers bytes plus terminator.
-            unsafe {
-                std::ptr::copy_nonoverlapping(json.as_ptr(), out, json.len());
-                *out.add(json.len()) = 0;
+        // SAFETY: the caller supplies the output buffer described by this ABI.
+        match unsafe { copy_layout_receipt(layout, out, capacity) } {
+            Ok(needed) => needed,
+            Err(message) => {
+                error(message);
+                0
             }
         }
-        needed
     })
+}
+// SAFETY: a non-null output must be writable for capacity bytes.
+unsafe fn copy_layout_receipt(
+    layout: &mut TrackScene,
+    out: *mut u8,
+    capacity: usize,
+) -> Result<usize, String> {
+    let json = layout
+        .layout_json()
+        .map_err(|e| format!("Layout diagnostics failed: {e}"))?;
+    let needed = json.len() + 1;
+    if !out.is_null() && capacity >= needed {
+        // SAFETY: the advertised capacity covers the bytes and NUL terminator.
+        unsafe {
+            std::ptr::copy_nonoverlapping(json.as_ptr(), out, json.len());
+            *out.add(json.len()) = 0;
+        }
+    }
+    Ok(needed)
 }
 /// # Safety
 /// `bytes` must reference `length` readable bytes for this call. No buffer is retained.
@@ -654,6 +668,43 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
         assert_eq!(std::mem::offset_of!(Metrics, acquire_ms), 88);
         assert_eq!(std::mem::offset_of!(Metrics, completed), 120);
+    }
+    #[test]
+    fn layout_copy_size_query_short_buffer_and_cached_copy() {
+        let mut lines = crate::fixture().unwrap();
+        lines.truncate(1);
+        let mut layout = TrackScene::from_lines(lines, 390, 640, 1.0).unwrap();
+        assert!(layout.diagnostics.iter().all(serde_json::Value::is_null));
+        // SAFETY: null output is a size query with no buffer access.
+        let capacity =
+            unsafe { copy_layout_receipt(&mut layout, std::ptr::null_mut(), 0) }.unwrap();
+        let mut short = vec![0xa5; capacity - 1];
+        // SAFETY: the short buffer has the advertised capacity.
+        assert_eq!(
+            unsafe { copy_layout_receipt(&mut layout, short.as_mut_ptr(), short.len()) }.unwrap(),
+            capacity
+        );
+        assert!(
+            short.iter().all(|b| *b == 0xa5),
+            "short copy must not write partial JSON"
+        );
+        let mut bytes = vec![0xa5; capacity + 2];
+        let allocations = crate::allocation_probe::measure(|| {
+            // SAFETY: the output buffer exceeds the advertised capacity.
+            assert_eq!(
+                unsafe { copy_layout_receipt(&mut layout, bytes.as_mut_ptr(), capacity) }.unwrap(),
+                capacity
+            );
+        });
+        assert_eq!(
+            allocations, 0,
+            "size query and copy must reuse the serialized snapshot"
+        );
+        assert_eq!(bytes[capacity - 1], 0);
+        assert_eq!(&bytes[capacity..], &[0xa5, 0xa5]);
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes[..capacity - 1]).unwrap();
+        assert_eq!(receipt.as_array().unwrap().len(), 1);
+        assert_eq!(receipt[0]["text"], layout.lines[0].text);
     }
     #[test]
     fn panic_containment_and_invalid_handles() {

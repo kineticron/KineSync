@@ -100,6 +100,7 @@ fn background_voice_typography_follows_each_skia_source() {
         let background_voices = track.lines[0].backgrounds.len();
         assert!(background_voices > 0, "{name}: fixture lost its BGV");
         track.prepare(track.lines[0].start + 10.0).unwrap();
+        track.layout_json().unwrap();
         let row = &track.cached[0];
         assert_eq!(row.voices.len(), background_voices + 1, "{name}");
         for voice in row.voices.iter().skip(1) {
