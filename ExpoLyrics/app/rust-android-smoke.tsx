@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View } from 'react-native';
+import { Text, View } from 'react-native';
 import { Redirect, Stack } from 'expo-router';
 import { usePlaybackStore } from '@/store/playback-store';
 import { DEMO_LYRICS } from '@/lib/onboarding-demo-lyrics';
@@ -25,6 +25,7 @@ function Smoke() {
   const { RustLyricsView } = require('@/components/lyrics/rust/rust-lyrics-view') as typeof import('@/components/lyrics/rust/rust-lyrics-view');
   return <View style={{ flex: 1, backgroundColor: '#191326', paddingTop: 30 }}>
     <Stack.Screen options={{ headerShown: false }} />
+    <Text style={{ color: '#0f0', fontSize: 12, position: 'absolute', top: 4, left: 8, zIndex: 9 }}>SMOKE ROUTE MOUNTED</Text>
     {ready ? <RustLyricsView active tapToSeekEnabled={false} /> : null}
   </View>;
 }

@@ -34,6 +34,7 @@ adb shell screencap -p /sdcard/menu2.png && adb pull /sdcard/menu2.png "${out}/a
 sleep 10
 adb shell screencap -p /sdcard/smoke.png && adb pull /sdcard/smoke.png "${out}/smoke.png"
 sleep 5
+adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml "${out}/ui.xml" || true
 adb shell screencap -p /sdcard/smoke2.png && adb pull /sdcard/smoke2.png "${out}/smoke2.png"
 adb shell dumpsys SurfaceFlinger --latency-clear >/dev/null 2>&1 || true
 grep -iE "KineSyncRust|lyrics_renderer|wgpu|vulkan|AndroidRuntime|FATAL|Rust lyrics" "${out}/logcat.txt" | cut -c1-300 > "${out}/rust-log.txt" || true
