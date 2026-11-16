@@ -465,7 +465,7 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
         let scale = f64::from(engine.scale.max(0.001));
-        let viewport = f64::from(engine.metrics.height) / scale;
+        let viewport = f64::from(engine.metrics.height);
         engine.scroll.drag(dy * scale, max_offset, viewport);
         engine.following = false;
         Ok(0)
@@ -481,7 +481,7 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
         let scale = f64::from(engine.scale.max(0.001));
-        let viewport = f64::from(engine.metrics.height) / scale;
+        let viewport = f64::from(engine.metrics.height);
         engine.scroll.fling(velocity * scale, max_offset, viewport);
         engine.following = false;
         Ok(0)
