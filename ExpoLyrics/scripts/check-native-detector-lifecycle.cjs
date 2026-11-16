@@ -198,8 +198,12 @@ assert.equal(packets.length, acceptedPackets, 'pending tour suppresses queued na
 tour.pending = false;
 AppState.currentState = 'background'; listeners.forEach(fn => fn('background'));
 assert.equal(instance.enabled, false);
-AppState.currentState = 'active'; listeners.forEach(fn => fn('active'));
-assert.equal(instance.enabled, true, 'foreground resumes native observation');
+// Consume the event value, even if the host's cached currentState lags it.
+listeners.forEach(fn => fn('active'));
+assert.equal(instance.enabled, true, 'foreground event resumes observation with a stale background snapshot');
+AppState.currentState = 'active';
+listeners.forEach(fn => fn('active'));
+assert.equal(instance.enabled, true, 'duplicate active remains enabled');
 // Cached transport mocked; real Detector.setEnabled replay is tested by check-spotify-timing.
 const replay = { ...firstSample, receivedAt: Date.now() + 1000 };
 instance.callbacks.sample(replay);

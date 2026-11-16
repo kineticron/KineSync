@@ -221,9 +221,9 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   useEffect(() => registerNativeRendererReadyResync({ canResync: canIngest, resyncPlayback }), [canIngest, resyncPlayback]);
   useEffect(() => {
     if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }
-    const update = () => {
-      const enabled = mobile && !loggedOut && AppState.currentState !== 'background';
-      logDevelopmentLifecycle('observation-policy', { next: AppState.currentState, enabled, mobile, loggedOut });
+    const update = (activity = AppState.currentState) => {
+      const enabled = mobile && !loggedOut && activity !== 'background';
+      logDevelopmentLifecycle('observation-policy', { next: activity, enabled, mobile, loggedOut });
       detector.setEnabled(enabled);
     };
     detector.setActivity(AppState.currentState === 'active' ? 'active' : AppState.currentState === 'background' ? 'background' : 'inactive');
@@ -235,7 +235,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       previous = next;
       detector.setActivity(next === 'active' ? 'active' : next === 'background' ? 'background' : 'inactive');
       if (next === 'background') detector.setEnabled(false);
-      else if (next === 'active') update();
+      else if (next === 'active') update(next);
     });
     return () => { sub.remove(); unsubscribeNetwork(); detector.setEnabled(false); };
   }, [detector, mobile, loggedOut]);

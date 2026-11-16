@@ -153,6 +153,24 @@ await check('background detaches silent socket; old callbacks and cached replay 
  h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.sockets.length,2);await allDisabled(h);
  late({data:JSON.stringify({payloads:[state()]})});assert.equal(h.d.health.observerConfirmed,false);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
 });
+for (const elapsed of [0, 1000, 30000]) await check(`review: inactive-only resume replaces OPEN pong-only socket immediately (${elapsed}ms)`,async()=>{
+ const h=setup();try {
+  h.start();const ws=await h.identify();const late=ws.onmessage;
+  h.d.setActivity('inactive');h.clock.wall+=elapsed;h.clock.mono+=elapsed;
+  // A queued pong can make lastContact look fresh even if playback is stuck.
+  ws.event({type:'pong'});h.d.setActivity('active');
+  assert.equal(ws.readyState,3);assert.equal(ws.onmessage,null);
+  assert.equal(h.sockets.length,2);assert.equal(h.d.health.phase,'connecting');
+  assert.equal(h.d.health.attempt,0);await allDisabled(h);
+  late({data:JSON.stringify({payloads:[state('obsolete')]})});
+  assert.equal(h.d.health.observerConfirmed,false);
+  const next='spotify:track:0000000000000000000001';
+  h.response={status:200,body:state('resumed',next,h.clock.wall)};
+  await h.identify();assert.equal(h.samples.at(-1).uri,next);assert(h.d.health.controlsEnabled);
+  h.d.setActivity('active');assert.equal(h.sockets.length,2,'duplicate active is a no-op');
+  assert.equal(h.posts().length,0);
+ }finally{h.d.clear();}
+});
 await check('expiry across suspended timers renews once; repeated fresh-token 401 stops at sign-in',async()=>{
  const h=setup();h.start();await h.identify();h.d.setEnabled(false);h.clock.wall+=4000000;h.clock.mono+=4000000;h.d.setEnabled(true);
  assert.equal(h.d.health.phase,'renewingSession');const needed=h.needed;h.d.setEnabled(true);assert.equal(h.needed,needed);await allDisabled(h);
@@ -222,7 +240,7 @@ await check('late old command finally cannot clear or recover newer command gate
  const h=setup();h.start();await h.identify();const old=deferred();h.response=()=>old.promise;const first=h.d.control({type:'next'});const rejected=assert.rejects(first);h.d.setEnabled(false);h.d.setEnabled(true);h.response={status:200,body:state()};await h.identify();const newer=deferred();h.response=()=>newer.promise;const second=h.d.control({type:'previous'});const id=h.d.commandPending;old.resolve({status:200,body:{}});await rejected;assert.equal(h.d.commandPending,id);newer.resolve({status:200,body:{}});await second;assert.equal(h.posts().length,2);h.d.clear();
 });
 await check('offline suppresses periodic work; unknown attempts; online/active/renderer/manual events coalesce',async()=>{
- const h=setup();h.d.setReachability('offline');h.start();await h.clock.advance(120000);assert.equal(h.sockets.length,0);h.d.setReachability('online');h.d.setEnabled(true);h.d.refresh();h.d.refresh(true);await h.clock.advance(500);assert.equal(h.sockets.length,1);await h.identify();h.d.setActivity('inactive');await allDisabled(h);h.d.setActivity('active');assert(h.d.health.controlsEnabled);h.d.clear();
+ const h=setup();h.d.setReachability('offline');h.start();await h.clock.advance(120000);assert.equal(h.sockets.length,0);h.d.setReachability('online');h.d.setEnabled(true);h.d.refresh();h.d.refresh(true);await h.clock.advance(500);assert.equal(h.sockets.length,1);await h.identify();h.d.setActivity('inactive');await allDisabled(h);h.d.setActivity('active');await allDisabled(h);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  const u=setup();u.start();assert.equal(u.sockets.length,1);u.d.clear();
 });
 await check('online hint never certifies Spotify; malformed frames cannot renew liveness; onerror recovers locally',async()=>{
@@ -459,7 +477,7 @@ await check('sign-in requirement survives background, renderer, reachability and
 });
 await check('active rechecks silent liveness and establishment deadlines when native timers were suspended',async()=>{
  for(const phase of ['ready','connecting']) {
-  const h=setup();h.start();if(phase==='ready')await h.identify();h.d.setActivity('inactive');h.clock.wall+=50000;h.clock.mono+=50000;h.d.setActivity('active');assert.equal(h.d.health.phase,'retryWait');await allDisabled(h);assert.equal(h.d.socket,null);h.d.clear();
+  const h=setup();h.start();if(phase==='ready')await h.identify();h.d.setActivity('inactive');h.clock.wall+=50000;h.clock.mono+=50000;h.d.setActivity('active');assert.equal(h.d.health.phase,'connecting');await allDisabled(h);assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  }
 });
 await check('native send throwing without an error/close event still detaches and retries locally',async()=>{

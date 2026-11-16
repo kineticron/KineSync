@@ -212,12 +212,18 @@ export class SpotifyDetector {
   }
   private cooldownRemaining() { return Math.max(0, this.cooldownWall - this.runtime.wall(), this.cooldownMono - this.runtime.mono()); }
   setActivity(activity: 'active' | 'inactive' | 'background') {
+    const previous = this.activity;
     this.activity = activity;
     if (activity === 'background') this.setEnabled(false);
     else if (activity === 'active' && this.enabled && this.token && this.runtime.wall() >= this.expiresAt - 30000 && this.cooldownRemaining() <= 0) this.needSession('Refreshing Spotify session…');
-    else if (activity === 'active' && this.enabled && this.socket &&
-      ((this.phase === 'ready' && this.runtime.mono() - this.lastContact >= 45000) ||
-       (this.phase !== 'ready' && this.runtime.mono() - this.phaseStarted >= 10000))) this.retryObservation();
+    else if (activity === 'active' && previous !== 'active' && this.enabled && this.socket) {
+      // A host such as LiveContainer can suspend us through inactive alone.
+      // OPEN and recent pongs prove transport, not a live observer subscription.
+      // Replace the pre-suspension socket and obtain a fresh registration state
+      // immediately, without spending retry budget or replaying commands.
+      this.disconnect();
+      this.connectIfReady();
+    }
     else this.publishHealth();
   }
   setReachability(hint: Reachability) {
