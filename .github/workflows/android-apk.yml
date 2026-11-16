@@ -69,6 +69,32 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Setup Android NDK and Rust
+        env:
+          BUILD_ARCHITECTURE: ${{ inputs.architecture || 'universal' }}
+        run: |
+          set -euo pipefail
+          case "${BUILD_ARCHITECTURE}" in
+            universal) abis=armeabi-v7a,arm64-v8a,x86,x86_64 ;;
+            arm64-v8a|x86_64|x86) abis="${BUILD_ARCHITECTURE}" ;;
+            *) echo "Unsupported Android architecture: ${BUILD_ARCHITECTURE}" >&2; exit 2 ;;
+          esac
+          echo "RUST_ANDROID_ABIS=${abis}" >> "$GITHUB_ENV"
+          # Use the same NDK as the installed React Native Gradle plugin.
+          ndk_version=$(node -e 'const fs = require("fs"); const source = fs.readFileSync("ExpoLyrics/node_modules/react-native/gradle/libs.versions.toml", "utf8"); const match = source.match(/^ndkVersion\s*=\s*"([0-9.]+)"/m); if (!match) throw new Error("React Native NDK version not found"); process.stdout.write(match[1]);')
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "${sdk_root}" ]]; then
+            echo 'ANDROID_HOME/ANDROID_SDK_ROOT is required.' >&2
+            exit 1
+          fi
+          sdkmanager --install "ndk;${ndk_version}"
+          echo "ANDROID_NDK_HOME=${sdk_root}/ndk/${ndk_version}" >> "$GITHUB_ENV"
+          rustup toolchain install 1.97.0 --profile minimal
+          cargo +1.97.0 install cargo-ndk --version 4.1.2 --locked
+
+      - name: Build Android Rust static libraries
+        run: bash scripts/build-rust-lyrics-android.sh "${RUST_ANDROID_ABIS}"
+
       - name: Set shared release version
         working-directory: ExpoLyrics
         run: |
@@ -181,10 +207,8 @@ jobs:
             gradle_task=assembleRelease
             apk_path=android/app/build/outputs/apk/release/app-release.apk
           fi
-          architecture_args=()
-          if [[ "${BUILD_ARCHITECTURE}" != "universal" ]]; then
-            architecture_args=("-PreactNativeArchitectures=${BUILD_ARCHITECTURE}")
-          fi
+          # Keep Gradle's ABI set identical to the archives built above.
+          architecture_args=("-PreactNativeArchitectures=${RUST_ANDROID_ABIS}")
           (cd android && ./gradlew --no-daemon --stacktrace --max-workers=2 \
             '-Dorg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g' "${architecture_args[@]}" "${gradle_task}")
           cp "${apk_path}" KineSync-Android.apk
