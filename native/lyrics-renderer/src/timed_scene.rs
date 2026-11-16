@@ -566,32 +566,30 @@ impl TrackScene {
             return;
         }
         let dpr = f64::from(self.scale);
-        let draw = |scene: &mut Scene, cx: f64, cy: f64, radius: f64, alpha: f64, glow: f64| {
+        // Skia draws the Spicy dot glyph with a single text shadow: sigma
+        // `(4 + 6 * glow) / 2` and white alpha `min(1, glow * 0.9)`
+        // (`native-interlude.tsx` SpicyDot). There is no extra halo disc.
+        // Encode the shadow into the existing half-resolution glow bases so the
+        // frame cost stays inside the same shared filter pass.
+        let draw = |scene: &mut Scene,
+                    cx: f64,
+                    cy: f64,
+                    radius: f64,
+                    alpha: f64,
+                    glow: f64,
+                    sigma: f64| {
             if radius <= 0.0 || alpha <= 0.001 {
                 return;
             }
-            // Cheap two-radius glow; the live policy rejects per-glyph blur.
-            if glow > 0.01 {
-                let halo = (alpha * glow).clamp(0.0, 1.0) as f32;
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    Color::new([1.0, 1.0, 1.0, halo * 0.12]),
-                    None,
-                    &Circle::new((cx, cy), radius + 6.0 * dpr * glow),
-                );
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    Color::new([1.0, 1.0, 1.0, halo * 0.2]),
-                    None,
-                    &Circle::new((cx, cy), radius + 2.5 * dpr * glow),
-                );
-            }
+            let brush = if glow > 0.001 {
+                crate::timed_scene::encoded(alpha, glow, sigma, dpr)
+            } else {
+                Color::new([1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0) as f32])
+            };
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
-                Color::new([1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0) as f32]),
+                brush,
                 None,
                 &Circle::new((cx, cy), radius),
             );
@@ -629,7 +627,8 @@ impl TrackScene {
                     py,
                     cell * 0.45 * dot_scale * group_scale,
                     0.85 * group_opacity * opacity,
-                    glow * group_opacity * opacity,
+                    (glow * 0.9).clamp(0.0, 1.0) * group_opacity * opacity,
+                    (4.0 + 6.0 * glow) / 2.0 * dot_scale * group_scale * dpr,
                 );
             }
         } else {
@@ -654,7 +653,15 @@ impl TrackScene {
             for (index, alpha) in dots.iter().enumerate() {
                 let cx = x0 + size * 0.5 + index as f64 * (size + gap);
                 let px = origin_x + (cx - origin_x) * group_scale;
-                draw(scene, px, origin_y, size * 0.5 * group_scale, *alpha, 0.0);
+                draw(
+                    scene,
+                    px,
+                    origin_y,
+                    size * 0.5 * group_scale,
+                    *alpha,
+                    0.0,
+                    0.0,
+                );
             }
         }
     }
