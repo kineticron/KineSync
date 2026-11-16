@@ -54,7 +54,7 @@ function prove({ app, executable, linkMap, ios, evidence }) {
   const sourcemap = path.join(evidence, 'rust-js-path.map');
   const source = fs.readFileSync(bundle, 'utf8');
   const sources = sourceMapSources(JSON.parse(fs.readFileSync(sourcemap, 'utf8')));
-  if (!source.includes('KineSyncRustLyrics') || !source.includes('Use experimental Rust lyrics renderer') || !sources.some(name => name.includes('rust-lyrics-view.tsx')) || !sources.some(name => name.includes('app/(tabs)/index.tsx'))) throw new Error('Compiled development JS does not contain player selection/native view path');
+  if (!source.includes('KineSyncRustLyrics') || !source.includes('Use experimental Rust lyrics renderer') || !source.includes('kinesync_use_rust_renderer') || !sources.some(name => name.includes('rust-lyrics-view.tsx')) || !sources.some(name => name.includes('app/(tabs)/index.tsx')) || !sources.some(name => name.includes('app/(tabs)/explore.tsx')) || !sources.some(name => name.includes('store/playback-store.ts'))) throw new Error('Compiled development JS does not contain player selection/native view path');
   const font_resources = inspectFonts(app);
   const report = { font_resources, app_image: path.join(app, executable), sha256: digest(path.join(app, executable)), symbols: matched,
     link_map: { sha256: digest(linkMap), static_archive: 'liblyrics_renderer.a' }, registrations,

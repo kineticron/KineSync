@@ -359,8 +359,8 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(app, 'Final', 'final Mach-O mock');
   const map = path.join(root, 'App-LinkMap.txt'); put(root, 'App-LinkMap.txt', 'liblyrics_renderer.a _kr_render');
   put(ios, 'Pods/Target Support Files/Pods-App/ExpoModulesProvider.swift', 'KineSyncRustLyricsModule.self');
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
-  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer kinesync_use_rust_renderer');
+  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
   // The archive exists and its metadata passes, but the actual app lacks Rust.
   process.env.TEST_NM = '0000 T _unrelated';
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Final app Mach-O/);
@@ -372,8 +372,8 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   const indexed = maps => ({ version: 3, sections: maps.map((map, line) => ({ offset: { line, column: 0 }, map })) });
   // Metro's indexed output has no top-level sources and can contain empty sections.
   for (const sourcemap of [
-    indexed([flat([]), flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])]),
-    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])])]),
+    indexed([flat([]), flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])]),
+    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])])]),
   ]) {
     put(evidence, 'rust-js-path.map', JSON.stringify(sourcemap));
     assert.equal(Object.keys(prove({ app, executable: 'Final', linkMap: map, ios, evidence }).symbols).length, symbols.length);
@@ -386,9 +386,16 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   assert.equal(fs.readFileSync(path.join(evidence, 'app-rust-LinkMap.txt'), 'utf8'), fs.readFileSync(map, 'utf8'));
   assert.match(fs.readFileSync(path.join(evidence, 'ExpoModulesProvider-0.swift'), 'utf8'), /KineSyncRustLyricsModule/);
   assert.ok(!fs.existsSync(path.join(evidence, 'rust-link-proof.json')));
+  // Removing any wiring marker must fail the proof.
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
+  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer kinesync_use_rust_renderer');
   put(evidence, 'rust-js-path.map', '{invalid JSON');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), SyntaxError);
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
 });
