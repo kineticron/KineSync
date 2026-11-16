@@ -680,11 +680,26 @@ fn transparent_alpha(
     backend: Backend,
     modes: &[CompositeAlphaMode],
 ) -> Result<CompositeAlphaMode, Error> {
+    transparent_alpha_for_platform(backend, modes, cfg!(target_os = "android"))
+}
+
+fn transparent_alpha_for_platform(
+    backend: Backend,
+    modes: &[CompositeAlphaMode],
+    android_texture: bool,
+) -> Result<CompositeAlphaMode, Error> {
     if modes.contains(&CompositeAlphaMode::PreMultiplied) {
         Ok(CompositeAlphaMode::PreMultiplied)
     } else if backend == Backend::Metal && modes.contains(&CompositeAlphaMode::PostMultiplied) {
         // Only the exact locked Metal backend has the documented metadata bug.
         Ok(CompositeAlphaMode::PostMultiplied)
+    } else if android_texture
+        && backend == Backend::Vulkan
+        && modes.contains(&CompositeAlphaMode::Inherit)
+    {
+        // Android WSI inherits native window composition. Our non-opaque
+        // TextureView consumes premultiplied RGBA, matching the shared blit.
+        Ok(CompositeAlphaMode::Inherit)
     } else {
         Err("Surface lacks supported premultiplied transparency".into())
     }
@@ -1085,6 +1100,22 @@ mod ownership_tests {
         );
         assert!(transparent_alpha(Backend::Vulkan, &[Opaque, PostMultiplied]).is_err());
         assert!(transparent_alpha(Backend::Metal, &[Opaque]).is_err());
+    }
+    #[test]
+    fn android_texture_inherits_only_native_vulkan_composition() {
+        use CompositeAlphaMode::{Inherit, Opaque, PreMultiplied};
+        assert_eq!(
+            transparent_alpha_for_platform(Backend::Vulkan, &[Inherit], true).unwrap(),
+            Inherit
+        );
+        assert_eq!(
+            transparent_alpha_for_platform(Backend::Vulkan, &[Inherit, PreMultiplied], true)
+                .unwrap(),
+            PreMultiplied
+        );
+        assert!(transparent_alpha_for_platform(Backend::Vulkan, &[Inherit], false).is_err());
+        assert!(transparent_alpha_for_platform(Backend::Metal, &[Inherit], true).is_err());
+        assert!(transparent_alpha_for_platform(Backend::Vulkan, &[Opaque], true).is_err());
     }
     #[test]
     fn burst_capacity_drops_opportunities_without_backlog() {

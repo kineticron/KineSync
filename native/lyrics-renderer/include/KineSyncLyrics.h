@@ -25,7 +25,9 @@ typedef struct {
 uint32_t kr_abi_version(void);
 /* ABI 9 adds idle-frame scheduling metrics and a resume display step.
    Schema6 includes background voices. The ABI is the client compatibility gate. */
-uint64_t kr_create(void *retained_ca_metal_layer, uint32_t width, uint32_t height, float scale);
+/* Native owner retains CAMetalLayer (iOS) or acquired ANativeWindow (Android)
+   until kr_destroy completes. Same ABI9 contract on both platforms. */
+uint64_t kr_create(void *retained_native_surface, uint32_t width, uint32_t height, float scale);
 /* ABI8: font bytes copied once before the first track; immutable owner font set. */
 int32_t kr_set_fonts(uint64_t handle, const uint8_t *regular, size_t regular_length, const uint8_t *bold, size_t bold_length);
 size_t kr_copy_layout_json(uint64_t handle, uint8_t *out, size_t capacity);

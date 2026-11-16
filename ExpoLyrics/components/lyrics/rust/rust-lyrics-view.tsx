@@ -23,10 +23,10 @@ type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<N
 // Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
 const STALE_VIEW = /Unable to find[^\n]*KineSyncRustLyricsView[^\n]*tag/i;
 const WAITING_LYRICS = 'Waiting for current-track timed lyrics';
-// No native require on Android/web/Expo Go. Missing modules are an explicit unavailable state.
+// No native require on web/Expo Go. Missing modules are an explicit unavailable state.
 function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props> | null; error: string } {
   if (!__DEV__) return { api: null, view: null, error: 'Rust renderer is available only in a development client' };
-  if (Platform.OS !== 'ios') return { api: null, view: null, error: 'Rust native surface is available on iOS only' };
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return { api: null, view: null, error: 'Rust native surfaces require iOS or Android' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
     if (!api || api.abiVersion() !== 9) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
@@ -123,6 +123,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     onPanResponderRelease: () => gesture.release(),
     onPanResponderTerminate: () => gesture.terminate(),
     onPanResponderTerminationRequest: () => false,
+    // Keep Android's native drag stream while JS classifies taps and holds.
+    onShouldBlockNativeResponder: () => Platform.OS !== 'android',
   }), [gesture]);
   useEffect(() => () => gesture.terminate(), [gesture]);
   const followEnabled = autoFollowEnabled ?? true;

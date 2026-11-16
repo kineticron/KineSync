@@ -72,6 +72,11 @@ ios/
 !ExpoLyrics/modules/kinesync-rust-lyrics/ios/*.podspec
 !ExpoLyrics/modules/kinesync-rust-lyrics/ios/.gitignore
 android/
+!ExpoLyrics/modules/kinesync-rust-lyrics/android/
+!ExpoLyrics/modules/kinesync-rust-lyrics/android/**
+ExpoLyrics/modules/kinesync-rust-lyrics/android/build/
+ExpoLyrics/modules/kinesync-rust-lyrics/android/.cxx/
+ExpoLyrics/modules/kinesync-rust-lyrics/android/src/main/jniLibs/
 app-example/
 
 # Electron / bundler output

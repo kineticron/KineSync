@@ -3,6 +3,7 @@
  * list takeover that disables auto-follow until the next tap or resume. */
 const assert = require('node:assert/strict');
 require('./check-rust-scheduling.cjs');
+require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
@@ -40,6 +41,8 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     assert.match(body, /TrackScene::max_scroll/);
     assert.ok(body.includes('engine.scroll.' + method + '(' + value + ' * scale, max_offset, viewport)'));
   }
+  const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
+  assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
   const swift = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
   assert.match(swift, /case \.ended:[\s\S]*?fling\(-Double\(pan\.velocity\(in: self\)\.y\) \/ 1000\.0\)/);
   assert.match(swift, /case \.cancelled, \.failed:\s*fling\(0\)/);

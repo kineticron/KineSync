@@ -76,7 +76,7 @@ struct Engine {
     following: bool,
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 fn engines() -> &'static Mutex<HashMap<u64, Engine>> {
     ENGINES.get_or_init(Mutex::default)
@@ -120,7 +120,8 @@ pub extern "C" fn kr_abi_version() -> u32 {
     9
 }
 /// # Safety
-/// `layer` is a live CAMetalLayer, retained by Swift until kr_destroy completes.
+/// `layer` is a CAMetalLayer on iOS or ANativeWindow on Android.
+/// The native owner retains it until kr_destroy completes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, scale: f32) -> u64 {
     boundary(0, || {
@@ -129,20 +130,42 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
             return 0;
         }
         if layer.is_null() {
-            error("Null CAMetalLayer");
+            error("Null native surface");
             return 0;
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "ios", target_os = "android"))]
         {
             let result = (|| -> Result<Engine, Box<dyn std::error::Error>> {
+                #[cfg(target_os = "ios")]
+                let backends = wgpu::Backends::METAL;
+                #[cfg(target_os = "android")]
+                let backends = wgpu::Backends::VULKAN;
                 let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                    backends: wgpu::Backends::METAL,
+                    backends,
                     ..wgpu::InstanceDescriptor::new_without_display_handle()
                 });
                 // SAFETY: caller retains the layer, serial owner drops surface before releasing it.
+                #[cfg(target_os = "ios")]
                 let surface = unsafe {
                     instance
                         .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer))
+                }?;
+                // SAFETY: JNI owns an acquired ANativeWindow until after kr_destroy.
+                #[cfg(target_os = "android")]
+                let surface = unsafe {
+                    use wgpu::rwh::{
+                        AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle,
+                        RawWindowHandle,
+                    };
+                    let window = std::ptr::NonNull::new(layer).ok_or("Null ANativeWindow")?;
+                    instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                        raw_display_handle: Some(RawDisplayHandle::Android(
+                            AndroidDisplayHandle::new(),
+                        )),
+                        raw_window_handle: RawWindowHandle::AndroidNdk(
+                            AndroidNdkWindowHandle::new(window),
+                        ),
+                    })
                 }?;
                 let surface = pollster::block_on(SurfaceRenderer::new(
                     instance, surface, width, height, scale,
@@ -187,9 +210,9 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                 }
             }
         }
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            error("Rust native surface is available only on iOS device builds");
+            error("Rust native surfaces require an iOS or Android build");
             0
         }
     })
