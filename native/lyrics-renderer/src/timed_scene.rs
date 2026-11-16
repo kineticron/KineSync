@@ -592,6 +592,15 @@ impl TrackScene {
             + shift(next)
             + self.cached[next].height
             + 10.0 * scale) as f32;
+        // The slot sits ABOVE the upcoming row. When visual priming moves
+        // the protected range to that row, keep the dots and their shadow in
+        // the same unblurred group as Skia (AMLL has no dot blur at all).
+        if let Some((row, _)) = self.interlude_at(time) {
+            let dot_top = anchor + self.prefix[row] + self.cached[row].top - scroll
+                + adjust_at(row)
+                - 32.0 * scale;
+            band_top = band_top.min(dot_top as f32);
+        }
         if let Some(footer) = &self.footer {
             let y = anchor + footer.text_top - scroll + interlude_row.map_or(0.0, |_| extra);
             if let Some((top, bottom)) =
@@ -605,7 +614,7 @@ impl TrackScene {
     }
 
     /// Spicy bullet dots / AMLL breathing dots for the active interlude. Drawn
-    /// after the rows at the slot origin so no row layer clips them.
+    /// before the rows at the padded slot origin so no row layer clips them.
     fn draw_interlude_dots(
         &self,
         time: f64,
@@ -623,7 +632,7 @@ impl TrackScene {
             return;
         }
         let spicy = self.style() == Some(Style::Spicy);
-        let top = self.scroll_anchor() + self.prefix[row] - scroll
+        let top = self.scroll_anchor() + self.prefix[row] + cached.top - scroll
             + adjust.get(row).copied().unwrap_or(0.0);
         let slot_height =
             crate::interlude::slot_height(&slot, spicy, font, f64::from(self.width), time);
@@ -631,34 +640,6 @@ impl TrackScene {
             return;
         }
         let dpr = f64::from(self.scale);
-        // Skia draws the Spicy dot glyph with a single text shadow: sigma
-        // `(4 + 6 * glow) / 2` and white alpha `min(1, glow * 0.9)`
-        // (`native-interlude.tsx` SpicyDot). There is no extra halo disc.
-        // Encode the shadow into the existing half-resolution glow bases so the
-        // frame cost stays inside the same shared filter pass.
-        let draw = |scene: &mut Scene,
-                    cx: f64,
-                    cy: f64,
-                    radius: f64,
-                    alpha: f64,
-                    glow: f64,
-                    sigma: f64| {
-            if radius <= 0.0 || alpha <= 0.001 {
-                return;
-            }
-            let brush = if glow > 0.001 {
-                crate::timed_scene::encoded(alpha, glow, sigma, dpr)
-            } else {
-                Color::new([1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0) as f32])
-            };
-            scene.fill(
-                Fill::NonZero,
-                Affine::IDENTITY,
-                brush,
-                None,
-                &Circle::new((cx, cy), radius),
-            );
-        };
         if spicy {
             if state.interlude.row() != Some(row) {
                 return;
@@ -668,16 +649,16 @@ impl TrackScene {
             if group_opacity <= 0.001 || group_scale <= 0.001 {
                 return;
             }
-            let dot_font = font * 1.3;
-            let cell = dot_font * 0.35;
-            let gap = 2.88 * dpr;
+            let Some(dot) = &self.dot_glyph else { return };
+            let cell = dot.width;
+            let gap = crate::interlude::SPICY_GAP * dpr;
             let width = cell * 3.0 + gap * 2.0;
             let x0 = if cached.right {
                 cached.x + cached.lane - width
             } else {
                 cached.x
             };
-            let box_height = dot_font * 0.65;
+            let box_height = dot.height;
             let origin_x = x0 + width * 0.5;
             let origin_y = top + box_height * 0.5;
             for index in 0..3 {
@@ -686,19 +667,55 @@ impl TrackScene {
                 let cy = origin_y + dot_y * font;
                 let px = origin_x + (cx - origin_x) * group_scale;
                 let py = origin_y + (cy - origin_y) * group_scale;
-                draw(
-                    scene,
-                    px,
-                    py,
-                    cell * 0.45 * dot_scale * group_scale,
-                    0.85 * group_opacity * opacity,
-                    (glow * 0.9).clamp(0.0, 1.0) * group_opacity * opacity,
-                    (4.0 + 6.0 * glow) / 2.0 * dot_scale * group_scale * dpr,
+                let dot_transform = Affine::translate((px, py))
+                    * Affine::scale(dot_scale * group_scale)
+                    * Affine::translate((-cell * 0.5, -box_height * 0.5));
+                // Apply opacity to the combined glyph+shadow, as Animated.View
+                // does. Draw the shadow at its continuously varying local sigma
+                // instead of mixing the shared 2.5/6px row-blur bases.
+                scene.push_layer(
+                    Fill::NonZero,
+                    BlendMode::default(),
+                    (group_opacity * opacity).clamp(0.0, 1.0) as f32,
+                    dot_transform,
+                    &Rect::new(
+                        -32.0 * dpr,
+                        -32.0 * dpr,
+                        cell + 32.0 * dpr,
+                        box_height + 32.0 * dpr,
+                    ),
                 );
+                let shadow = (glow * 0.9).clamp(0.0, 1.0);
+                if shadow > 0.0 {
+                    scene.draw_blurred_rounded_rect(
+                        dot_transform,
+                        dot.ink,
+                        Color::new([
+                            1.0,
+                            0.0,
+                            0.0,
+                            (crate::interlude::SPICY_ALPHA * shadow) as f32,
+                        ]),
+                        dot.ink.width().min(dot.ink.height()) * 0.5,
+                        (4.0 + 6.0 * glow) / 2.0 * dpr,
+                    );
+                }
+                scene
+                    .draw_glyphs(&dot.font)
+                    .font_size(dot.size)
+                    .transform(dot_transform)
+                    .brush(Color::new([
+                        1.0,
+                        0.0,
+                        0.0,
+                        crate::interlude::SPICY_ALPHA as f32,
+                    ]))
+                    .draw(Fill::NonZero, [dot.glyph].into_iter());
+                scene.pop_layer();
             }
         } else {
-            let size = font * 0.5;
-            let gap = font * 0.25 + 4.0 * dpr;
+            let size = font * crate::interlude::AMLL_DIAMETER;
+            let gap = font * crate::interlude::AMLL_GAP + crate::interlude::AMLL_MARGIN * dpr;
             let width = size * 3.0 + gap * 2.0;
             let x0 = if cached.right {
                 cached.x + cached.lane - width
@@ -714,18 +731,18 @@ impl TrackScene {
                 return;
             }
             let origin_x = if cached.right { x0 + width } else { x0 };
-            let origin_y = top + font * 0.4 + size * 0.5;
+            let origin_y = top + font * crate::interlude::AMLL_TOP + size * 0.5;
             for (index, alpha) in dots.iter().enumerate() {
                 let cx = x0 + size * 0.5 + index as f64 * (size + gap);
                 let px = origin_x + (cx - origin_x) * group_scale;
-                draw(
-                    scene,
-                    px,
-                    origin_y,
-                    size * 0.5 * group_scale,
-                    *alpha,
-                    0.0,
-                    0.0,
+                // Red is coverage; green/blue are exclusively glow emission.
+                // White here silently added a halo even though AMLL has none.
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    encoded(*alpha, 0.0, 0.0, dpr),
+                    None,
+                    &Circle::new((px, origin_y), size * 0.5 * group_scale),
                 );
             }
         }

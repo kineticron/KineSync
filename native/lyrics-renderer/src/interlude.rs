@@ -16,6 +16,85 @@ const AMLL_COLLAPSE_BEFORE_END: f64 = 625.0;
 const AMLL_SLOT_DURATION: f64 = 375.0;
 pub(crate) const AMLL_SNAPSHOT_BEFORE_END: f64 = 250.0;
 
+// native-interlude.tsx: these are layout units before the animated transforms.
+pub(crate) const SPICY_FONT: f64 = 1.3;
+pub(crate) const SPICY_HEIGHT: f64 = 0.65;
+pub(crate) const SPICY_GAP: f64 = 2.88;
+pub(crate) const SPICY_ALPHA: f64 = 0.85;
+pub(crate) const AMLL_DIAMETER: f64 = 0.5;
+pub(crate) const AMLL_GAP: f64 = 0.25;
+pub(crate) const AMLL_MARGIN: f64 = 4.0;
+pub(crate) const AMLL_TOP: f64 = 0.4;
+
+/// The exact SF Pro Display Bold bullet used by Skia's SpicyDot. Its advance
+/// and ink bounds determine the cell, rather than guessed circle dimensions.
+pub(crate) struct DotGlyph {
+    pub font: parley::FontData,
+    pub size: f32,
+    pub width: f64,
+    pub height: f64,
+    pub glyph: vello::Glyph,
+    pub ink: vello::kurbo::Rect,
+}
+impl DotGlyph {
+    pub fn prepare(fonts: &mut crate::typography::Fonts, row_size: f64) -> Self {
+        use skrifa::{FontRef, MetadataProvider, instance::Size};
+        let size = (row_size * SPICY_FONT) as f32;
+        let mut layouts = parley::LayoutContext::new();
+        let mut layout = crate::scene::shape(
+            "•",
+            &mut fonts.context,
+            &mut layouts,
+            size,
+            size,
+            700.0,
+            "SF Pro Display",
+            &[],
+            0.0,
+        );
+        layout.break_all_lines(Some(10000.0));
+        let run = layout
+            .lines()
+            .next()
+            .unwrap()
+            .items()
+            .find_map(|item| {
+                if let parley::PositionedLayoutItem::GlyphRun(run) = item {
+                    Some(run)
+                } else {
+                    None
+                }
+            })
+            .expect("bundled bullet glyph");
+        let font = run.run().font().clone();
+        let id = run.positioned_glyphs().next().unwrap().id;
+        let parsed = FontRef::from_index(font.data.as_ref(), font.index).unwrap();
+        let metrics = parsed.glyph_metrics(Size::new(size), &[][..]);
+        let glyph_id = skrifa::GlyphId::new(id);
+        let width = f64::from(metrics.advance_width(glyph_id).unwrap());
+        let ink = metrics.bounds(glyph_id).unwrap();
+        let height = row_size * SPICY_FONT * SPICY_HEIGHT;
+        let glyph = vello::Glyph {
+            id,
+            x: ((width - f64::from(ink.x_max - ink.x_min)) / 2.0 - f64::from(ink.x_min)) as f32,
+            y: (height / 2.0 + f64::from(ink.y_max + ink.y_min) / 2.0) as f32,
+        };
+        Self {
+            font,
+            size,
+            width,
+            height,
+            glyph,
+            ink: vello::kurbo::Rect::new(
+                f64::from(glyph.x + ink.x_min),
+                f64::from(glyph.y - ink.y_max),
+                f64::from(glyph.x + ink.x_max),
+                f64::from(glyph.y - ink.y_min),
+            ),
+        }
+    }
+}
+
 const DOT_SCALE: Curve = Curve {
     xs: &[0.0, 0.7, 1.0],
     ys: &[0.75, 1.05, 1.0],
@@ -321,6 +400,76 @@ mod tests {
             background_end,
             atoms: Vec::new(),
             backgrounds: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn drawing_parameters_match_the_skia_source_constants() {
+        let view =
+            include_str!("../../../ExpoLyrics/components/lyrics/native/native-interlude.tsx");
+        let motion =
+            include_str!("../../../ExpoLyrics/components/lyrics/native/reference-motion.ts");
+        let number = |source: &str, prefix: &str| -> f64 {
+            source
+                .split_once(prefix)
+                .unwrap()
+                .1
+                .split(|c: char| !c.is_ascii_digit() && c != '.')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(SPICY_FONT, number(view, "fontSize: fontSize * "));
+        assert_eq!(
+            SPICY_HEIGHT,
+            number(view, "const dotHeight = fontSize * 1.3 * ")
+        );
+        assert_eq!(SPICY_GAP, number(view, "gap: spicy ? "));
+        assert_eq!(SPICY_ALPHA, number(view, "color=\"rgba(255,255,255,"));
+        assert_eq!(AMLL_DIAMETER, number(view, "size={fontSize * "));
+        assert_eq!(AMLL_GAP, number(view, "gap: spicy ? 2.88 : fontSize * "));
+        assert_eq!(AMLL_MARGIN, number(view, "marginRight: index < 2 ? "));
+        assert_eq!(AMLL_TOP, number(view, "top: spicy ? 0 : fontSize * "));
+        // The reference draws an actual bold bullet, not a circle, and adds
+        // exactly one animated shadow. AMLL uses plain white Views.
+        assert!(view.contains("text=\"•\""));
+        assert!(view.contains("fontWeight: '700'"));
+        assert!(view.contains("(4 + 6 * visibleState.value.glow.p) / 2"));
+        assert!(view.contains("visibleState.value.glow.p * 0.9"));
+        let amll = view
+            .split("const AmllDot =")
+            .nth(1)
+            .unwrap()
+            .split("/** Persistent")
+            .next()
+            .unwrap();
+        assert!(!amll.contains("Shadow") && !amll.contains("Blur"));
+        assert_eq!(SPICY_SLOT_DURATION, number(view, "duration: spicy ? "));
+        assert_eq!(AMLL_SLOT_DURATION, number(view, "duration: spicy ? 400 : "));
+        assert_eq!(
+            SPICY_FADE_DURATION,
+            number(view, "withTiming(Number(current.shown), { duration: ")
+        );
+        assert!(view.contains("{ duration: 140 }"));
+        for (name, curve) in [
+            ("SCALE", DOT_SCALE),
+            ("Y", DOT_Y),
+            ("GLOW", DOT_GLOW),
+            ("OPACITY", DOT_OPACITY),
+        ] {
+            let declaration = motion
+                .split_once(&format!("SPICY_DOT_{name} = curve("))
+                .unwrap()
+                .1;
+            let (xs, rest) = declaration.split_once("], [").unwrap();
+            let parse = |s: &str| {
+                s.split(',')
+                    .map(|n| n.trim().parse::<f64>().unwrap())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(curve.xs, parse(xs.trim_start_matches('[')));
+            assert_eq!(curve.ys, parse(rest.split(']').next().unwrap()));
         }
     }
 

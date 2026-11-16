@@ -119,6 +119,7 @@ pub struct TrackScene {
     pub missing_glyphs: usize,
     pub(crate) prefix: Vec<f64>,
     pub(crate) interludes: Vec<Option<crate::interlude::Interlude>>,
+    pub(crate) dot_glyph: Option<crate::interlude::DotGlyph>,
     pub diagnostics: Vec<serde_json::Value>,
     fonts: Option<crate::typography::Fonts>,
     settings: Option<crate::typography::Settings>,
@@ -388,6 +389,8 @@ impl TrackScene {
                 lines[0].paint.as_ref().expect("validated paint"),
             )
             .font_size;
+        let dot_glyph = (settings.style == crate::typography::Style::Spicy)
+            .then(|| crate::interlude::DotGlyph::prepare(fonts, f64::from(primary_size)));
         Ok(Self {
             lines,
             cached,
@@ -398,6 +401,7 @@ impl TrackScene {
             missing_glyphs: 0,
             prefix,
             interludes,
+            dot_glyph,
             diagnostics: vec![serde_json::Value::Null; count],
             fonts: Some(fonts.clone()),
             settings: Some(settings.clone()),
@@ -892,6 +896,9 @@ impl TrackScene {
             );
         }
         let interludes = crate::interlude::slots(&lines);
+        let dot_glyph = settings
+            .filter(|s| s.style == crate::typography::Style::Spicy)
+            .map(|_| crate::interlude::DotGlyph::prepare(fonts, cached[0].size));
         Ok(Self {
             lines,
             cached,
@@ -902,6 +909,7 @@ impl TrackScene {
             missing_glyphs,
             prefix,
             interludes,
+            dot_glyph,
             diagnostics,
             fonts: None,
             settings: None,
@@ -1772,6 +1780,15 @@ mod lazy_tests {
         state.prepare(&track, 2600.0, 1000.0);
         state.advance(&track, 2600.0, 1000.0, false, Effect::Motion);
         state.advance(&track, 2616.0, 1016.0, false, Effect::Motion);
+        let dot = track.dot_glyph.as_ref().unwrap();
+        // Bundled SF Pro Display Bold: bullet advance 994/2048 em;
+        // ink bounds (141,210)-(854,923). Skia uses this glyph at 1.3x.
+        assert!((dot.width - f64::from(dot.size) * 994.0 / 2048.0).abs() < 0.02);
+        assert!((dot.ink.width() - f64::from(dot.size) * 713.0 / 2048.0).abs() < 0.02);
+        assert_eq!(
+            fonts.describe(&dot.font).sha256,
+            crate::typography::BUNDLED_FONT_HASHES[1]
+        );
         assert_eq!(state.interlude.row(), Some(2));
         assert!(state.interlude.dot(0).0 >= 0.75);
         let mut scene = Scene::new();
@@ -1793,6 +1810,56 @@ mod lazy_tests {
         });
         assert_eq!(allocations, 0, "interlude dots must reuse scene buffers");
     }
+    #[test]
+    #[ignore = "GPU interlude draw regression; requires a GPU adapter"]
+    fn both_interlude_styles_render_entry_breathing_and_exit() {
+        use crate::appearance::{AppearanceState, Effect};
+        let mut fonts = fonts();
+        for style in [Style::Amll, Style::Spicy] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track = TrackScene::with_fonts(
+                long_gap_lines(),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts,
+            )
+            .unwrap();
+            let mut gpu = pollster::block_on(crate::gpu::Gpu::new(390, 640)).unwrap();
+            let mut scene = Scene::new();
+            let mut state = AppearanceState::default();
+            for time in [
+                2000.0, 2150.0, 2600.0, 5499.0, 5500.0, 5560.0, 5640.0, 5900.0,
+            ] {
+                track.prepare(time).unwrap();
+                state.prepare(&track, time, time);
+                state.advance(&track, time, time, true, Effect::Glow);
+                let scroll = track.scroll_target(time);
+                let band =
+                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                gpu.render_appearance(&scene, band, true, true).unwrap();
+                let pixels = gpu.read_pixels().unwrap();
+                assert!(
+                    pixels.chunks_exact(4).any(|p| p[3] > 0),
+                    "{style:?} at {time}"
+                );
+                if time == 5500.0 {
+                    let top =
+                        track.scroll_anchor() + track.prefix[2] + track.cached[2].top - scroll;
+                    assert!(
+                        f64::from(band.0) <= top - 31.0,
+                        "priming must not blur the dot group"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn amll_interlude_slot_uses_full_width_and_keeps_breathing_dots_in_budget() {
         use crate::appearance::{AppearanceState, Effect};
