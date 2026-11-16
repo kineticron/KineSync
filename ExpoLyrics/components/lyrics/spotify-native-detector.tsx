@@ -228,7 +228,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     };
     detector.setActivity(AppState.currentState === 'active' ? 'active' : AppState.currentState === 'background' ? 'background' : 'inactive');
     update();
-    const unsubscribeNetwork = subscribeSpotifyReachability(hint => detector.setReachability(hint));
+    const unsubscribeNetwork = subscribeSpotifyReachability((hint, path) => detector.setReachability(hint, path));
     let previous = AppState.currentState;
     const sub = AppState.addEventListener('change', next => {
       logDevelopmentLifecycle('app-state', { previous, next });
