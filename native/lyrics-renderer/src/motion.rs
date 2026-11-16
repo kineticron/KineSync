@@ -276,11 +276,17 @@ impl FollowScroll {
     /// `dy` is in surface pixels; the offset follows the finger 1:1 inside the
     /// content and rubber-bands past either edge.
     pub fn drag(&mut self, dy: f64, max_offset: f64, viewport: f64) {
+        let continuing = self.dragging;
         self.dragging = true;
         let max_offset = max_offset.max(0.0);
         self.max_offset = max_offset;
         self.viewport = viewport.max(1.0);
-        self.drag_raw = Self::unband(self.position, max_offset, self.viewport) + dy;
+        // Keep the uncompressed finger travel rather than repeatedly inverting
+        // a nearly saturated rubber band.
+        if !continuing {
+            self.drag_raw = Self::unband(self.position, max_offset, self.viewport);
+        }
+        self.drag_raw += dy;
         self.position = Self::band(self.drag_raw, max_offset, self.viewport);
         self.fling_velocity = 0.0;
         self.fling_last_ms = None;
@@ -311,8 +317,15 @@ impl FollowScroll {
         self.settling = false;
         self.settle_velocity = 0.0;
         self.freeze();
-        self.animating =
-            self.fling_velocity != 0.0 || self.position < 0.0 || self.position > self.max_offset;
+        // Releasing outside an edge springs immediately, not after a multi-
+        // second fling in invisible raw-offset space.
+        if self.position < 0.0 || self.position > self.max_offset {
+            let distance = (self.drag_raw - self.drag_raw.clamp(0.0, self.max_offset)).abs();
+            let derivative = RUBBER_BAND / (1.0 + distance * RUBBER_BAND / self.viewport).powi(2);
+            self.fling_velocity *= derivative;
+            self.begin_settle();
+        }
+        self.animating = self.settling || self.fling_velocity != 0.0;
     }
 
     fn begin_settle(&mut self) {
@@ -328,8 +341,8 @@ impl FollowScroll {
             return self.position;
         }
         let dt = self.fling_last_ms.map_or(
-            if self.fling_velocity != 0.0 {
-                16.0
+            if self.fling_velocity != 0.0 || self.settling {
+                1000.0 / 120.0
             } else {
                 0.0
             },
@@ -337,7 +350,6 @@ impl FollowScroll {
         );
         self.fling_last_ms = Some(now_ms);
         let max = self.max_offset;
-        let viewport = self.viewport;
         if self.settling {
             let bound = if self.position < 0.0 {
                 0.0
@@ -370,17 +382,34 @@ impl FollowScroll {
             self.animating = self.settling;
             return self.position;
         }
-        if dt > 0.0 && self.fling_velocity.abs() > 0.0 {
-            self.drag_raw += self.fling_velocity * dt;
-            self.position = Self::band(self.drag_raw, max, viewport);
-            self.fling_velocity *= FLING_DECELERATION.powf(dt);
-            if self.fling_velocity.abs() < FLING_MIN_VELOCITY {
-                if self.position < 0.0 || self.position > max {
-                    self.begin_settle();
-                } else {
+        if dt > 0.0 && self.fling_velocity != 0.0 {
+            // Integrate the per-millisecond exponential exactly so 60/120 Hz
+            // produce the same distance, including the time of edge impact.
+            let rate = FLING_DECELERATION.ln();
+            let velocity = self.fling_velocity;
+            let decay = (rate * dt).exp();
+            let next = self.position + velocity * (decay - 1.0) / rate;
+            if next < 0.0 || next > max {
+                let bound = next.clamp(0.0, max);
+                let impact_ms =
+                    ((1.0 + rate * (bound - self.position) / velocity).ln() / rate).clamp(0.0, dt);
+                self.position = bound;
+                self.fling_velocity = velocity * (rate * impact_ms).exp();
+                self.begin_settle();
+                // Continue the remaining frame as a critically damped bounce.
+                let remaining = dt - impact_ms;
+                let omega = 0.035;
+                let decay = (-omega * remaining).exp();
+                self.position = bound + self.settle_velocity * remaining * decay;
+                self.settle_velocity *= (1.0 - omega * remaining) * decay;
+            } else {
+                self.position = next;
+                self.fling_velocity *= decay;
+                if self.fling_velocity.abs() < FLING_MIN_VELOCITY {
                     self.fling_velocity = 0.0;
                 }
             }
+            self.drag_raw = self.position;
             self.animating = self.fling_velocity != 0.0 || self.settling;
         } else if self.position < 0.0 || self.position > max {
             self.begin_settle();
@@ -808,8 +837,8 @@ mod tests {
         let command = command(Style::Spicy, 0.0, 800.0, 0, 0);
         scroll.sample(&command, 0.0, true);
         scroll.fling(3.0, 10_000.0, 800.0);
-        let first = scroll.sample(&command, 16.0, false);
-        let second = scroll.sample(&command, 32.0, false);
+        let first = scroll.sample(&command, 1000.0 / 120.0, false);
+        let second = scroll.sample(&command, 2000.0 / 120.0, false);
         assert!(first > 0.0);
         assert!(second > first);
         assert!(second - first < first, "deceleration must shrink each step");
@@ -820,6 +849,72 @@ mod tests {
         }
         assert!(!scroll.animating());
         assert!(scroll.position() > second);
+    }
+
+    #[test]
+    fn repeated_drag_has_finite_edges_and_release_rebounds_immediately() {
+        for direction in [-1.0, 1.0] {
+            let mut scroll = FollowScroll::default();
+            scroll.configure(Style::Spicy, 3.0, 8);
+            let cmd = command(Style::Spicy, 0.0, 800.0, 0, 0);
+            scroll.sample(&cmd, 0.0, true);
+            for _ in 0..1000 {
+                scroll.drag(direction * 100.0, 1000.0, 800.0);
+                assert!(scroll.position() > -800.0 && scroll.position() < 1800.0);
+            }
+            scroll.fling(direction * 10.0, 1000.0, 800.0);
+            assert!(scroll.settling);
+            assert_eq!(scroll.fling_velocity, 0.0);
+            for frame in 0..240 {
+                scroll.sample(&cmd, f64::from(frame) * 1000.0 / 120.0, false);
+            }
+            assert_eq!(
+                scroll.position(),
+                if direction < 0.0 { 0.0 } else { 1000.0 }
+            );
+            assert!(!scroll.animating());
+        }
+    }
+
+    #[test]
+    fn fling_distance_is_display_cadence_independent() {
+        let run = |dt: f64| {
+            let mut scroll = FollowScroll::default();
+            scroll.configure(Style::Spicy, 3.0, 8);
+            let cmd = command(Style::Spicy, 500.0, 800.0, 0, 0);
+            scroll.sample(&cmd, 0.0, true);
+            scroll.fling(1.0, 10000.0, 800.0);
+            // Establish the same initial display sample for both cadences.
+            scroll.sample(&cmd, 0.0, false);
+            let mut now = 0.0;
+            while now < 1000.0 - 1e-6 {
+                now += dt;
+                scroll.sample(&cmd, now, false);
+            }
+            scroll.position()
+        };
+        assert!((run(1000.0 / 60.0) - run(1000.0 / 120.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn momentum_bounces_at_either_edge_without_waiting_for_deceleration() {
+        for velocity in [-3.0, 3.0] {
+            let mut scroll = FollowScroll::default();
+            scroll.configure(Style::Spicy, 3.0, 8);
+            let cmd = command(Style::Spicy, 500.0, 800.0, 0, 0);
+            scroll.sample(&cmd, 0.0, true);
+            scroll.fling(velocity, 1000.0, 800.0);
+            for frame in 0..60 {
+                scroll.sample(&cmd, f64::from(frame) * 8.0, false);
+            }
+            assert!(scroll.settling || !scroll.animating());
+            assert_eq!(scroll.fling_velocity, 0.0);
+            for frame in 60..300 {
+                scroll.sample(&cmd, f64::from(frame) * 8.0, false);
+            }
+            assert_eq!(scroll.position(), if velocity < 0.0 { 0.0 } else { 1000.0 });
+            assert!(!scroll.animating());
+        }
     }
 
     #[test]

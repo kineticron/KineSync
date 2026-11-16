@@ -26,6 +26,26 @@ function fixture(overrides = {}) {
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
+// Both native drag and release must use the same layout bounds and point-to-
+// pixel conversion. The Rust motion tests exercise resistance and edge bounce.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ffi = fs.readFileSync(path.join(__dirname, '../../native/lyrics-renderer/src/ffi.rs'), 'utf8');
+  for (const [name, next, method, value] of [
+    ['kr_scroll_by', 'kr_fling', 'drag', 'dy'],
+    ['kr_fling', 'kr_hit_test', 'fling', 'velocity'],
+  ]) {
+    const body = ffi.slice(ffi.indexOf('fn ' + name + '('), ffi.indexOf('fn ' + next + '('));
+    assert.match(body, /TrackScene::max_scroll/);
+    assert.ok(body.includes('engine.scroll.' + method + '(' + value + ' * scale, max_offset, viewport)'));
+  }
+  const swift = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
+  assert.match(swift, /case \.ended:[\s\S]*?fling\(-Double\(pan\.velocity\(in: self\)\.y\) \/ 1000\.0\)/);
+  assert.match(swift, /case \.cancelled, \.failed:\s*fling\(0\)/);
+}
+
+
 (async () => {
   assert.equal(LONG_PRESS_MS, 540);
   assert.equal(DRAG_SLOP, 4);
