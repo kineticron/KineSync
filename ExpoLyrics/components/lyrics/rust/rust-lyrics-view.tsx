@@ -68,7 +68,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const window = useWindowDimensions();
   const landscape = window.width > window.height;
   const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
-  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation }), [lyrics, trackId, style, fontScale, landscape, showTranslation]);
+  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation }), [lyrics, trackId, style, fontScale, landscape, showTranslation, credits]);
   const payload = useMemo(() => {
     try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits), error: '' }; }
     catch (error) { return { json: '', error: String(error) }; }
