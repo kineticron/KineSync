@@ -87,7 +87,9 @@ jobs:
             echo 'ANDROID_HOME/ANDROID_SDK_ROOT is required.' >&2
             exit 1
           fi
-          sdkmanager --install "ndk;${ndk_version}"
+          sdkmanager_bin="$(command -v sdkmanager || true)"
+          if [[ -z "${sdkmanager_bin}" ]]; then sdkmanager_bin="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"; fi
+          "${sdkmanager_bin}" --install "ndk;${ndk_version}"
           echo "ANDROID_NDK_HOME=${sdk_root}/ndk/${ndk_version}" >> "$GITHUB_ENV"
           rustup toolchain install 1.97.0 --profile minimal
           cargo +1.97.0 install cargo-ndk --version 4.1.2 --locked
