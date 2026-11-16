@@ -449,28 +449,43 @@ fn cold_and_first_prepared_frames_are_pixel_identical() {
         let (mut track, _) = track(if style == Style::Amll { 1 } else { 11 }, style, false);
         let time = track.lines[0].start - 2000.0;
         track.prepare(time).unwrap();
-        let mut state = AppearanceState::default();
-        // Set playback without creating the exact row owner: this is the raw
-        // paragraph's final frame immediately before detailed preparation.
-        state.advance(&track, time, 1000.0, true, Effect::Glow);
         let mut scene = vello::Scene::new();
         let mut gpu = pollster::block_on(Gpu::new(track.width, track.height)).unwrap();
-        let band = track.frame_appearance(time, 0.0, &[], &state, &mut scene, Effect::Glow);
-        render(&mut gpu, &scene, band, Effect::Glow);
-        let cold = gpu.read_pixels().unwrap();
-        assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
-        state.prepare(&track, time, 1000.0);
-        for frame in 0..4 {
-            state.advance(
-                &track,
-                time,
-                1000.0 + frame as f64 * 16.0,
-                true,
-                Effect::Glow,
-            );
-            let band = track.frame_appearance(time, 0.0, &[], &state, &mut scene, Effect::Glow);
-            render(&mut gpu, &scene, band, Effect::Glow);
-            assert_eq!(cold, gpu.read_pixels().unwrap(), "{style:?} frame {frame}");
+        // Include the screen's bottom fade and all shared blur bases, not just
+        // a fully visible row inside the protected band.
+        for bottom in [false, true] {
+            for blurred in [false, true] {
+                let scroll = if bottom {
+                    track.scroll_anchor() - f64::from(track.height) + 70.0
+                } else {
+                    0.0
+                };
+                let mut state = AppearanceState::default();
+                state.advance(&track, time, 1000.0, true, Effect::Glow);
+                let band =
+                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                let band = if blurred { (-400.0, -300.0) } else { band };
+                render(&mut gpu, &scene, band, Effect::Glow);
+                let cold = gpu.read_pixels().unwrap();
+                assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
+                state.prepare(&track, time, 1000.0);
+                for frame in 0..4 {
+                    state.advance(
+                        &track,
+                        time,
+                        1000.0 + frame as f64 * 16.0,
+                        true,
+                        Effect::Glow,
+                    );
+                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                    render(&mut gpu, &scene, band, Effect::Glow);
+                    assert_eq!(
+                        cold,
+                        gpu.read_pixels().unwrap(),
+                        "{style:?} bottom={bottom} blurred={blurred} frame={frame}"
+                    );
+                }
+            }
         }
     }
 }
@@ -508,4 +523,35 @@ fn spicy_primed_and_active_start_use_identical_glyph_geometry() {
         .max()
         .unwrap();
     assert!(max_delta <= 1, "primed -> active pixel delta {max_delta}");
+}
+
+#[test]
+#[ignore = "GPU surface orientation/clear regression; requires a GPU adapter"]
+fn surface_copy_preserves_text_orientation_and_clears_previous_glyphs() {
+    let (mut track, time) = track(11, Style::Spicy, false);
+    let mut state = AppearanceState::default();
+    let mut scene = vello::Scene::new();
+    let band = frame(
+        &mut track,
+        &mut state,
+        time,
+        1000.0,
+        &mut scene,
+        Effect::Glow,
+    );
+    let mut gpu = pollster::block_on(Gpu::new(track.width, track.height)).unwrap();
+    render(&mut gpu, &scene, band, Effect::Glow);
+    let target = gpu.read_pixels().unwrap();
+    let surface = gpu.surface_pixels().unwrap();
+    assert!(target.chunks_exact(4).any(|p| p[3] > 0));
+    for (a, b) in target.chunks_exact(4).zip(surface.chunks_exact(4)) {
+        assert_eq!(
+            a[3], b[3],
+            "surface must preserve each glyph pixel's coordinates"
+        );
+    }
+    scene.reset();
+    render(&mut gpu, &scene, band, Effect::Glow);
+    assert!(gpu.read_pixels().unwrap().iter().all(|v| *v == 0));
+    assert!(gpu.surface_pixels().unwrap().iter().all(|v| *v == 0));
 }
