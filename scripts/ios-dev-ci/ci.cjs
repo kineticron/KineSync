@@ -30,7 +30,7 @@ function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evid
 function rustIdentity(root, identity, buildConfig = config) {
   // Entire source directory includes WGSL, not only Rust modules. Include include_str! input.
   const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
-    'native/lyrics-renderer/src', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
+    'native/lyrics-renderer/src', 'native/lyrics-renderer/vendor', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
     'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
     'scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml',
     'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);

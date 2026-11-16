@@ -23,7 +23,7 @@ function fixture(root) {
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins/native.js', 'ExpoLyrics/modules/example/ios/Shim.swift',
     'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/ios/Podfile.lock',
     'native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/src/lib.rs',
-    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h',
+    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/vendor/vello_shaders/shader/fine.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h',
     'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/ci.cjs',
     '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) put(root, file);
 }
@@ -51,7 +51,7 @@ test('Rust prebuilt is source-exact, and independent of JS or Swift shims', t =>
   put(root, 'native/lyrics-renderer/target/out', 'build output');
   put(root, 'native/lyrics-renderer/evidence/report.json', 'evidence');
   assert.equal(rustIdentity(root, identity), initial);
-  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh',
+  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/vendor/vello_shaders/shader/fine.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh',
     'scripts/ios-dev-ci/ci.cjs', '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) {
     put(root, file, 'changed'); assert.notEqual(rustIdentity(root, identity), initial, file); put(root, file);
   }
