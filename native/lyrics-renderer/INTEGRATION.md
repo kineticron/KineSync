@@ -183,6 +183,14 @@ execution time. There is no per-frame explicit wait in the live path (`waitMs`
 remains zero). Headless profiling retains timestamp brackets/readback, includes
 submission gaps and excludes the final surface blit.
 
+ABI 9 adds two scheduling fields. `next_cue_native_ms` is an absolute monotonic
+deadline in ms, or negative when playback has no timed visual change left.
+`visible_changes` reports conservative visual activity for the frame just drawn.
+`animating` still requests continuous frames, including retained animation
+history for hidden or outgoing rows, so it is not a pixel-difference claim. The
+native owner invalidates the display link when a frame settles and rearms it
+from one cancellable wakeup only when a cue is projected.
+
 ### Transparent composition
 
 ExpoUIView, its child MetalHost and CAMetalLayer are clear/nonopaque. FIFO is

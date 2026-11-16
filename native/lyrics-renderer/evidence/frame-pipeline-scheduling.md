@@ -28,13 +28,12 @@ The ABI 9 render call also takes `resume_step_ms`. It is zero during ordinary re
 
 Scheduling is deliberately conservative. Hidden active owners, outgoing tails, and stateful dots can continue requesting frames because their history affects later visible output. The visible-change flag reports conservative visual activity, not a pixel-difference measurement. No claim is made that every static-looking manual viewport sleeps.
 
-Validation:
+Validation for this item:
 
-- Rust fmt, all-target clippy with warnings denied, and tests passed, with 77 ordinary tests passing and 15 ignored by default.
-- Continuous-versus-scheduled replay preserves scene streams and protection bounds through idle wakeups, ordinary and emphasized fills, scroll transitions, and final settling for both styles. It verifies that frames are actually omitted.
-- The explicitly enabled replay pixel test passed with byte-identical Vulkan output at the tested cue, fill, and transition frames using matched renderer cache history.
-- Dot cadence, overlap-safe cue lookup, strict boundaries, seek lookup, pause/rate-zero projection, and rate conversion tests passed.
-- C11 header size and offset assertions passed on the host.
-- Expo typecheck and tests passed. Gesture checks include executable tests of the Swift wake-delay and callback-guard expressions with controlled clocks, plus source wiring checks for lifecycle, cancellation, resume, and ABI consistency.
+- `cargo +1.97.0 fmt --manifest-path native/lyrics-renderer/Cargo.toml --check` passed.
+- `cargo +1.97.0 clippy --manifest-path native/lyrics-renderer/Cargo.toml --all-targets -- -D warnings` passed, so every new test type-checks.
+- Pending on a host with a C toolchain for linking: `cargo +1.97.0 test`. The crate holds 90 test functions, 15 ignored by default. That run covers continuous-versus-scheduled replay for ordinary and emphasized fills, scroll transitions and final settling, dot cadence, overlap-safe cue lookup, strict boundaries, seek lookup, pause and rate-zero projection, and rate conversion. The explicitly enabled replay pixel comparison needs a GPU adapter.
+- Pending on a host with Node.js: Expo `npm run typecheck`, `npm test`, and the gesture check, which now also runs `scripts/check-rust-scheduling.cjs` for the wake delay, stale-timer guards, lifecycle cancellation, resume step and ABI 9 wiring across Rust, header, Swift and JS.
+- Pending on a host with Node.js and a C compiler: `node --test scripts/test/*.test.cjs`. Its iOS ABI test now asserts the 168-byte layout, offsets 152 and 160, the four-argument render call and the ABI 9 guards.
 
 Host checks do not compile UIKit or prove device cadence, battery savings, or Metal parity. ABI 9 needs a rebuilt custom development IPA before use. An iOS build and device validation remain unperformed.
