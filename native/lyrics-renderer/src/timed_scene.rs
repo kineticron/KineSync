@@ -605,8 +605,7 @@ impl TrackScene {
             band_top = band_top.min(dot_top as f32);
         }
         if let Some(footer) = &self.footer {
-            let y = anchor + self.content_bottom() + footer.inset - scroll
-                + interlude_row.map_or(0.0, |_| extra);
+            let y = self.footer_y(footer, anchor, scroll, interlude_row.map_or(0.0, |_| extra));
             if let Some((top, bottom)) =
                 footer.draw(scene, y, self.width, f64::from(self.height), scale)
             {

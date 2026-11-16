@@ -59,7 +59,7 @@ jobs:
   ios-development-build:
     # A spike push only registers/validates the existing workflow. The two
     # measured macOS builds are explicit coordinator dispatches after review.
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/rust-renderer-spike'
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/rust-renderer-spike' || github.ref == 'refs/heads/development')
     needs: validate
     runs-on: xcode-27
     timeout-minutes: 120

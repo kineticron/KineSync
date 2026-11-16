@@ -1025,6 +1025,18 @@ impl TrackScene {
     /// Skia native `scrollTo` anchor: AMLL lands at 8% of the list plus 8 pt,
     /// landscape Spicy at 32 pt, portrait Spicy directly below the top bar.
     /// The pre-ABI7 fixture path keeps its historical center anchor.
+    /// Single placement rule for the credits footer, shared by both draw paths:
+    /// below the final lyric row at its current measured height.
+    pub(crate) fn footer_y(
+        &self,
+        footer: &crate::credits::Footer,
+        anchor: f64,
+        scroll: f64,
+        extra: f64,
+    ) -> f64 {
+        anchor + self.content_bottom() + footer.inset - scroll + extra
+    }
+
     pub(crate) fn scroll_anchor(&self) -> f64 {
         let scale = f64::from(self.scale);
         match self.settings.as_ref() {
@@ -1387,8 +1399,7 @@ impl TrackScene {
         let mut band_top = position(first) - 10.0 * scale;
         let mut band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
         if let Some(footer) = &self.footer {
-            let y = anchor + self.content_bottom() + footer.inset - scroll
-                + interlude_row.map_or(0.0, |_| extra);
+            let y = self.footer_y(footer, anchor, scroll, interlude_row.map_or(0.0, |_| extra));
             if let Some((top, bottom)) =
                 footer.draw(scene, y, self.width, f64::from(self.height), scale)
             {
@@ -2447,6 +2458,52 @@ mod lazy_tests {
             grew |= footer_top(&track) > estimated + 1e-6;
         }
         assert!(grew, "fixture must grow past the lazy estimate");
+    }
+
+    #[test]
+    fn credits_footer_draw_path_stays_below_final_row_after_growth() {
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let credits = crate::live::Credits {
+            songwriters: vec!["A".into()],
+            attribution: None,
+        };
+        let mut fonts = fonts();
+        let mut track = TrackScene::with_fonts_credits(
+            source(40),
+            200,
+            640,
+            1.0,
+            Some(&settings),
+            Some(&credits),
+            &mut fonts,
+        )
+        .unwrap();
+        for scroll in [0.0, track.max_scroll() / 2.0, track.max_scroll()] {
+            track.prepare_viewport(scroll).unwrap();
+            let footer = track.footer.as_ref().unwrap();
+            let y = track.footer_y(footer, track.scroll_anchor(), scroll, 0.0);
+            let mut scene = vello::Scene::new();
+            let Some((top, _)) =
+                footer.draw(&mut scene, y, track.width, f64::from(track.height), 1.0)
+            else {
+                assert!(
+                    scroll < track.max_scroll(),
+                    "footer must be drawn at the final scroll"
+                );
+                continue;
+            };
+            let last = track.lines.len() - 1;
+            let row_bottom =
+                track.scroll_anchor() + track.prefix[last] + track.cached[last].height - scroll;
+            assert!(
+                top >= row_bottom - 1e-6,
+                "drawn footer top {top} overlaps final row bottom {row_bottom}"
+            );
+        }
     }
 
     #[test]
