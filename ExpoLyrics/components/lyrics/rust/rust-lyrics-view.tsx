@@ -213,6 +213,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`Acquire ${metrics.native.acquireMs.toFixed(2)} ms · blit submit ${metrics.native.blitSubmitMs.toFixed(2)} ms · present call ${metrics.native.presentCallMs.toFixed(2)} ms · poll ${metrics.native.pollMs.toFixed(2)} ms\n`}
         {`Observed GPU blit completions ${metrics.native.gpuCompleted} · outstanding ${metrics.native.gpuOutstanding}/2 · capacity retries ${metrics.native.gpuBusy}\n`}
         {`Callbacks ${metrics.native.callbackTotal} · worker requests ${metrics.native.submitted} · busy ${metrics.native.busy} · idle ${metrics.native.idle} · inactive ${metrics.native.inactive} · no drawable ${metrics.native.noDrawable}\n`}
+        {`Next cue ${metrics.native.nextCueNativeMs < 0 ? 'none' : `${Math.max(0, metrics.native.nextCueNativeMs - metrics.native.sampleNativeMs).toFixed(1)} ms`} · visible changes ${metrics.native.visibleChanges ? 'yes' : 'no'}\n`}
         {`Observed interval gaps (estimate) ${metrics.native.missedObservedIntervalsEstimate} · UI tick ${metrics.native.uiTickMs.toFixed(2)} ms\n`}
         {`JS anchors ${work.current.anchors} · renders ${work.current.renders} · anchor work ${work.current.anchorMs.toFixed(2)} ms\n`}
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
