@@ -389,9 +389,8 @@ impl TrackScene {
         let count = lines.len();
         let cues = crate::scheduling::VisualCues::new(&lines);
         let interludes = crate::interlude::slots(&lines);
-        let footer = credits.and_then(|credits| {
-            crate::credits::build(credits, settings, width, scale, offset, fonts)
-        });
+        let footer = credits
+            .and_then(|credits| crate::credits::build(credits, settings, width, scale, fonts));
         let primary_size = settings
             .geometry(
                 width,
@@ -1118,6 +1117,12 @@ impl TrackScene {
             .unwrap_or(self.prefix[window.focus.max(0) as usize])
     }
 
+    /// Bottom of the final row using current (measured) heights.
+    pub(crate) fn content_bottom(&self) -> f64 {
+        let last = self.lines.len().saturating_sub(1);
+        self.prefix[last] + self.cached[last].height
+    }
+
     /// Highest scroll offset Skia allows: the last row can reach the top
     /// anchor, and the credits footer can reach the bottom padding.
     pub fn max_scroll(&self) -> f64 {
@@ -1125,7 +1130,10 @@ impl TrackScene {
         let mut max = self.prefix[last].max(0.0);
         if let Some(footer) = &self.footer {
             let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
-            max = max.max(self.scroll_anchor() + footer.bottom - f64::from(self.height) + padding);
+            max = max.max(
+                self.scroll_anchor() + self.content_bottom() + footer.tail - f64::from(self.height)
+                    + padding,
+            );
         }
         max
     }
@@ -1136,7 +1144,9 @@ impl TrackScene {
         let footer = self.footer.as_ref()?;
         let last = self.lines.len() - 1;
         let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
-        let target = self.scroll_anchor() + footer.bottom - f64::from(self.height) + padding;
+        let target = self.scroll_anchor() + self.content_bottom() + footer.tail
+            - f64::from(self.height)
+            + padding;
         Some(target.max(self.prefix[last]).clamp(0.0, self.max_scroll()))
     }
 
@@ -1377,7 +1387,8 @@ impl TrackScene {
         let mut band_top = position(first) - 10.0 * scale;
         let mut band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
         if let Some(footer) = &self.footer {
-            let y = anchor + footer.text_top - scroll + interlude_row.map_or(0.0, |_| extra);
+            let y = anchor + self.content_bottom() + footer.inset - scroll
+                + interlude_row.map_or(0.0, |_| extra);
             if let Some((top, bottom)) =
                 footer.draw(scene, y, self.width, f64::from(self.height), scale)
             {
@@ -2374,6 +2385,68 @@ mod lazy_tests {
             }
         });
         assert_eq!(allocations, 0, "steady credits frames must reuse buffers");
+    }
+
+    #[test]
+    fn credits_footer_follows_measured_row_heights_after_incremental_layout() {
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let credits = crate::live::Credits {
+            songwriters: vec!["A".into()],
+            attribution: Some(crate::live::Attribution {
+                provider: Some("Spicy".into()),
+                community: true,
+                maker: None,
+                uploader: Some("uploader".into()),
+            }),
+        };
+        let mut fonts = fonts();
+        let mut track = TrackScene::with_fonts_credits(
+            source(40),
+            200,
+            640,
+            1.0,
+            Some(&settings),
+            Some(&credits),
+            &mut fonts,
+        )
+        .unwrap();
+        let footer_top =
+            |track: &TrackScene| track.content_bottom() + track.footer.as_ref().unwrap().inset;
+        let estimated = footer_top(&track);
+        let mut grew = false;
+        let mut offset = 0.0;
+        for row in &track.cached {
+            offset += row.height;
+        }
+        assert!((estimated - offset - track.footer.as_ref().unwrap().inset).abs() < 1e-9);
+        for scroll in [0.0, track.max_scroll() / 2.0, track.max_scroll()] {
+            track.prepare_viewport(scroll).unwrap();
+            let sum: f64 = track.cached.iter().map(|row| row.height).sum();
+            let last = track.lines.len() - 1;
+            assert!((track.prefix[last] + track.cached[last].height - sum).abs() < 1e-6);
+            assert!(
+                footer_top(&track) >= estimated,
+                "wrapped rows grow past the lazy estimate"
+            );
+            assert!(
+                footer_top(&track) >= track.prefix[last] + track.cached[last].height,
+                "footer must stay below the final lyric row"
+            );
+            let tail = track.footer.as_ref().unwrap().tail;
+            let expected = (track.scroll_anchor() + sum + tail - f64::from(track.height)
+                + crate::ACTIVE_RANGE_BOTTOM_PADDING)
+                .max(track.prefix[last]);
+            assert!(
+                (track.max_scroll() - expected).abs() < 1e-6,
+                "max scroll must follow measured content plus footer tail"
+            );
+            grew |= footer_top(&track) > estimated + 1e-6;
+        }
+        assert!(grew, "fixture must grow past the lazy estimate");
     }
 
     #[test]

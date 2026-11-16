@@ -27,10 +27,11 @@ pub(crate) const ALPHA: f64 = 0.56;
 
 pub(crate) struct Footer {
     scene: Scene,
-    /// Footer text top, relative to the list content origin.
-    pub(crate) text_top: f64,
-    /// Footer block bottom, relative to the list content origin.
-    pub(crate) bottom: f64,
+    /// Footer text top below the final row bottom (margin plus padding).
+    pub(crate) inset: f64,
+    /// Footer block bottom below the final row bottom. Row heights change as
+    /// lazy layout measures them, so absolute tops are derived at use.
+    pub(crate) tail: f64,
     pub(crate) height: f64,
     x: f64,
     width: f64,
@@ -71,14 +72,13 @@ fn lines(credits: &Credits) -> Vec<(String, usize)> {
     result
 }
 
-/// Build the footer after the last row. `top` is the content bottom; the
+/// Build the footer (placed relative to the final row at draw). `top` is the content bottom; the
 /// returned scene excludes the container margins and alpha (applied at draw).
 pub(crate) fn build(
     credits: &Credits,
     settings: &Settings,
     width: u32,
     scale: f32,
-    top: f64,
     fonts: &mut Fonts,
 ) -> Option<Footer> {
     let rows = lines(credits);
@@ -150,11 +150,11 @@ pub(crate) fn build(
         }
         cursor += f64::from(layout.height());
     }
-    let text_top = top + MARGIN_TOP * dpr + PADDING_TOP * dpr;
+    let inset = MARGIN_TOP * dpr + PADDING_TOP * dpr;
     Some(Footer {
         scene,
-        text_top,
-        bottom: text_top + cursor + PADDING_BOTTOM * dpr,
+        inset,
+        tail: inset + cursor + PADDING_BOTTOM * dpr,
         height: cursor,
         x,
         width: block_width,
