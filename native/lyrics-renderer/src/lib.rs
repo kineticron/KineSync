@@ -3,6 +3,7 @@ use std::ops::Range;
 
 pub mod appearance;
 mod auxiliary;
+mod credits;
 pub mod ffi;
 pub mod gpu;
 mod interlude;

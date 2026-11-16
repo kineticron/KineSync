@@ -4,7 +4,9 @@ import type { LyricLine } from '@/types/bridge';
 import { buildNativeVoice, type NativeLyricsStyle, type NativeVoice } from '@/components/lyrics/native/native-lyrics-model';
 import { spicyIsRtl } from '@/components/lyrics/native/spicy-text-policy';
 import { isCJK } from '@/components/lyrics/native/amll-reference-is-cjk';
-import { buildRustTrack } from './rust-lyrics-protocol';
+import { buildRustTrack, type RustCredits } from './rust-lyrics-protocol';
+
+export type { RustCredits };
 
 /** Same source blocks as native-lyrics-model.ts `getBackgroundBlocks`: Spicy keeps
  *  its per-speaker blocks, every other source uses the line's background
@@ -19,7 +21,8 @@ function backgroundBlocks(line: LyricLine, style: NativeLyricsStyle) {
 }
 
 export function prepareRustTrack(trackId: string, generation: number, lines: LyricLine[],
-  style: NativeLyricsStyle, fontScale = 1, landscape = false, showTranslation = true) {
+  style: NativeLyricsStyle, fontScale = 1, landscape = false, showTranslation = true,
+  credits: RustCredits | null = null) {
   const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'word' }) : new Segmenter(undefined, { granularity: 'word' });
   const duet = lines.some(row => landscape ? !row.oppositeAligned : !!row.oppositeAligned);
   const edges = (voice: NativeVoice) => {
@@ -48,5 +51,5 @@ export function prepareRustTrack(trackId: string, generation: number, lines: Lyr
       showTranslation ? line.backgroundTranslatedText : undefined))
     .filter(voice => voice.paintWords.length > 0)
     .map(voice => paint(voice, !!line.oppositeAligned)));
-  return buildRustTrack(trackId, generation, lines, { settings: { style, font_scale: fontScale, landscape }, paints, backgrounds });
+  return buildRustTrack(trackId, generation, lines, { settings: { style, font_scale: fontScale, landscape }, paints, backgrounds, credits });
 }

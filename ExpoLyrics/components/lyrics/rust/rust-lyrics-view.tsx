@@ -43,6 +43,20 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
 }) {
   const lyrics = usePlaybackStore(state => state.lyrics);
+  const metadata = usePlaybackStore(state => state.lyricsMetadata);
+  const credits = useMemo(() => {
+    const songwriters = metadata?.credits?.songwriters?.filter(name => typeof name === 'string' && name.length > 0) ?? [];
+    const a = metadata?.attribution;
+    const attribution = a ? {
+      ...(a.provider ? { provider: a.provider } : {}),
+      ...(a.community ? { community: true } : {}),
+      ...(a.maker?.username ? { maker: a.maker.username } : {}),
+      ...(a.uploader?.username ? { uploader: a.uploader.username } : {}),
+    } : null;
+    const hasAttribution = attribution && Object.keys(attribution).length > 0;
+    if (!songwriters.length && !hasAttribution) return null;
+    return { ...(songwriters.length ? { songwriters } : {}), ...(hasAttribution ? { attribution } : {}) };
+  }, [metadata]);
   const showRustDebugOverlay = usePlaybackStore(state => state.showRustDebugOverlay);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => state.lyricsStyle);
@@ -52,9 +66,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
   const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation }), [lyrics, trackId, style, fontScale, landscape, showTranslation]);
   const payload = useMemo(() => {
-    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation), error: '' }; }
+    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits), error: '' }; }
     catch (error) { return { json: '', error: String(error) }; }
-  }, [lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation]);
+  }, [lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits]);
   const native = useRef<NativeRef | null>(null);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);

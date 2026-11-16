@@ -10,7 +10,31 @@ pub struct TrackPacket {
     pub settings: Option<crate::typography::Settings>,
     pub generation: u64,
     pub track_id: String,
+    /// Footer credits shown below the last row (`native-lyrics-view.tsx`
+    /// footer). Optional so older packets keep parsing unchanged.
+    #[serde(default)]
+    pub credits: Option<Credits>,
     pub lines: Vec<WireLine>,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Credits {
+    #[serde(default)]
+    pub songwriters: Vec<String>,
+    #[serde(default)]
+    pub attribution: Option<Attribution>,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attribution {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub community: bool,
+    #[serde(default)]
+    pub maker: Option<String>,
+    #[serde(default)]
+    pub uploader: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +79,13 @@ impl TrackPacket {
             || packet.lines.len() > 2000
         {
             return Err("Invalid track identity or line count".into());
+        }
+        if packet
+            .credits
+            .as_ref()
+            .is_some_and(|credits| !crate::credits::valid(credits))
+        {
+            return Err("Invalid footer credits".into());
         }
         let mut count = 0;
         for line in &packet.lines {

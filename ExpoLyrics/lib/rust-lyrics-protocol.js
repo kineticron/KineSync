@@ -23,7 +23,7 @@ function buildRustTrack(trackId, generation, lines, prepared) {
       if (!Number.isFinite(atom.startTime) || !Number.isFinite(atom.endTime) || atom.endTime < atom.startTime || !atom.text) throw new Error('Rust received invalid syllable timing');
     }
   }
-  const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => {
+  const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), ...(prepared?.credits ? { credits: prepared.credits } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => {
     const backgroundEnd = getBackgroundEnd(line);
     const backgrounds = prepared?.backgrounds?.[lineIndex] ?? [];
     if (backgrounds.some(invalidVoiceTiming)) throw new Error('Rust received invalid background vocal timing');

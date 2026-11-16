@@ -528,15 +528,23 @@ impl TrackScene {
         let last = active.map_or(first, |(_, end)| end);
         let next = (last.max(first) + 1).min(self.lines.len() - 1);
         let adjust_at = |index: usize| adjust.get(index).copied().unwrap_or(0.0);
-        (
-            (anchor + self.prefix[first] - scroll + adjust_at(first) + shift(first) - 10.0 * scale)
-                as f32,
-            (anchor + self.prefix[next] - scroll
-                + adjust_at(next)
-                + shift(next)
-                + self.cached[next].height
-                + 10.0 * scale) as f32,
-        )
+        let mut band_top = (anchor + self.prefix[first] - scroll + adjust_at(first) + shift(first)
+            - 10.0 * scale) as f32;
+        let mut band_bottom = (anchor + self.prefix[next] - scroll
+            + adjust_at(next)
+            + shift(next)
+            + self.cached[next].height
+            + 10.0 * scale) as f32;
+        if let Some(footer) = &self.footer {
+            let y = anchor + footer.text_top - scroll + interlude_row.map_or(0.0, |_| extra);
+            if let Some((top, bottom)) =
+                footer.draw(scene, y, self.width, f64::from(self.height), scale)
+            {
+                band_top = band_top.min(top as f32);
+                band_bottom = band_bottom.max(bottom as f32);
+            }
+        }
+        (band_top, band_bottom)
     }
 
     /// Spicy bullet dots / AMLL breathing dots for the active interlude. Drawn

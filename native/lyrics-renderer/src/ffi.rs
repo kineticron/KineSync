@@ -59,6 +59,7 @@ struct Engine {
     lines: Vec<Line>,
     fonts: crate::typography::Fonts,
     settings: Option<crate::typography::Settings>,
+    credits: Option<crate::live::Credits>,
     layout: Option<TrackScene>,
     layout_key: String,
     track_id: String,
@@ -152,6 +153,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     lines: Vec::new(),
                     fonts: crate::typography::Fonts::default(),
                     settings: None,
+                    credits: None,
                     layout: None,
                     layout_key: String::new(),
                     track_id: String::new(),
@@ -267,6 +269,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         }
         let generation = packet.generation;
         let track_id = packet.track_id.clone();
+        let credits = packet.credits.clone();
         let settings = packet
             .settings
             .clone()
@@ -282,24 +285,26 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         }
         let lines = packet.into_lines();
         let started = Instant::now();
-        let key = crate::scene::LayoutCache::key(
+        let key = crate::scene::LayoutCache::key_with_credits(
             &track_id,
             &lines,
             &settings,
             engine.metrics.width,
             engine.metrics.height,
             engine.scale,
+            credits.as_ref(),
         )
         .map_err(|e| e.to_string())?;
         let layout = if let Some(cached) = engine.layout_cache.take(&key) {
             cached
         } else {
-            TrackScene::with_fonts(
+            TrackScene::with_fonts_credits(
                 lines.clone(),
                 engine.metrics.width,
                 engine.metrics.height,
                 engine.scale,
                 Some(&settings),
+                credits.as_ref(),
                 &mut engine.fonts,
             )
             .map_err(|e| e.to_string())?
@@ -308,6 +313,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine.lines = lines;
         engine.track_id = track_id;
         engine.settings = Some(settings);
+        engine.credits = credits;
         if let Some(old) = engine.layout.take() {
             engine
                 .layout_cache
@@ -378,13 +384,14 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             .settings
             .as_ref()
             .map(|settings| {
-                crate::scene::LayoutCache::key(
+                crate::scene::LayoutCache::key_with_credits(
                     &engine.track_id,
                     &engine.lines,
                     settings,
                     width,
                     height,
                     scale,
+                    engine.credits.as_ref(),
                 )
             })
             .transpose()
@@ -396,12 +403,13 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             Some(cached)
         } else {
             Some(
-                TrackScene::with_fonts(
+                TrackScene::with_fonts_credits(
                     engine.lines.clone(),
                     width,
                     height,
                     scale,
                     engine.settings.as_ref(),
+                    engine.credits.as_ref(),
                     &mut engine.fonts,
                 )
                 .map_err(|e| e.to_string())?,

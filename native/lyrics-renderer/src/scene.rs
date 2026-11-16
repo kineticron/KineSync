@@ -122,6 +122,7 @@ pub struct TrackScene {
     pub(crate) scale: f32,
     pub plain_preparations: usize,
     pub detailed_preparations: usize,
+    pub(crate) footer: Option<crate::credits::Footer>,
     prepared_signature: Option<(usize, usize, usize, usize)>,
 }
 
@@ -299,6 +300,21 @@ impl TrackScene {
         settings: Option<&crate::typography::Settings>,
         fonts: &mut crate::typography::Fonts,
     ) -> Result<Self, Error> {
+        Self::with_fonts_credits(lines, width, height, scale, settings, None, fonts)
+    }
+
+    /// Track layout plus the optional Skia footer. Credits are part of the
+    /// prepared content (scroll extent, auto-scroll target and blur band), so
+    /// they are built with the same fonts in the same layout pass.
+    pub(crate) fn with_fonts_credits(
+        lines: Vec<Line>,
+        width: u32,
+        height: u32,
+        scale: f32,
+        settings: Option<&crate::typography::Settings>,
+        credits: Option<&crate::live::Credits>,
+        fonts: &mut crate::typography::Fonts,
+    ) -> Result<Self, Error> {
         let Some(settings) = settings else {
             return Self::with_fonts_eager(lines, width, height, scale, None, fonts, true);
         };
@@ -359,6 +375,9 @@ impl TrackScene {
         }
         let count = lines.len();
         let interludes = crate::interlude::slots(&lines);
+        let footer = credits.and_then(|credits| {
+            crate::credits::build(credits, settings, width, scale, offset, fonts)
+        });
         let primary_size = settings
             .geometry(
                 width,
@@ -382,6 +401,7 @@ impl TrackScene {
             scale,
             plain_preparations: 0,
             detailed_preparations: 0,
+            footer,
             prepared_signature: None,
         })
     }
@@ -872,6 +892,7 @@ impl TrackScene {
             scale,
             plain_preparations: 0,
             detailed_preparations: 0,
+            footer: None,
             prepared_signature: None,
         })
     }
@@ -919,6 +940,18 @@ impl TrackScene {
     }
 
     fn target_at(&self, window: &crate::Window, time: f64) -> Option<f64> {
+        // Skia's `maxEndTimeByIndex[last]` gate: once the track is over the
+        // list scrolls to the credits footer instead of holding the last row.
+        let song_end = self
+            .lines
+            .iter()
+            .map(|line| line.background_end)
+            .fold(0.0, f64::max);
+        if time >= song_end {
+            if let Some(target) = self.credits_scroll() {
+                return Some(target);
+            }
+        }
         let (start, end) = crate::auto_scroll_range(window)?;
         let last = self.lines.len() - 1;
         let start = crate::follow_index(&self.lines, start.min(last), time);
@@ -974,10 +1007,26 @@ impl TrackScene {
             .unwrap_or(self.prefix[window.focus.max(0) as usize])
     }
 
-    /// Highest scroll offset Skia allows: the last row can reach the top anchor.
+    /// Highest scroll offset Skia allows: the last row can reach the top
+    /// anchor, and the credits footer can reach the bottom padding.
     pub fn max_scroll(&self) -> f64 {
         let last = self.lines.len().saturating_sub(1);
-        self.prefix[last].max(0.0)
+        let mut max = self.prefix[last].max(0.0);
+        if let Some(footer) = &self.footer {
+            let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
+            max = max.max(self.scroll_anchor() + footer.bottom - f64::from(self.height) + padding);
+        }
+        max
+    }
+
+    /// Skia footer target: the whole credits block ends at the viewport bottom
+    /// minus the same 24 pt bottom padding used by fit-scroll.
+    fn credits_scroll(&self) -> Option<f64> {
+        let footer = self.footer.as_ref()?;
+        let last = self.lines.len() - 1;
+        let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
+        let target = self.scroll_anchor() + footer.bottom - f64::from(self.height) + padding;
+        Some(target.max(self.prefix[last]).clamp(0.0, self.max_scroll()))
     }
 
     /// First row intersecting `scroll` (Skia `getFirstVisibleIndex`).
@@ -1130,10 +1179,20 @@ impl TrackScene {
         let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
         let last = active.map_or(first, |(_, end)| end);
         let next = (last.max(first) + 1).min(self.lines.len() - 1);
-        (
-            (position(first) - 10.0 * scale) as f32,
-            (position(next) + self.cached[next].height + 10.0 * scale) as f32,
-        )
+        let mut band_top = position(first) - 10.0 * scale;
+        let mut band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
+        if let Some(footer) = &self.footer {
+            let y = anchor + footer.text_top - scroll + interlude_row.map_or(0.0, |_| extra);
+            if let Some((top, bottom)) =
+                footer.draw(scene, y, self.width, f64::from(self.height), scale)
+            {
+                // Skia ignores attribution when deciding whether to blur
+                // (`hasAttribution`), so keep the footer outside the band.
+                band_top = band_top.min(top);
+                band_bottom = band_bottom.max(bottom);
+            }
+        }
+        (band_top as f32, band_bottom as f32)
     }
 }
 
@@ -1152,6 +1211,18 @@ impl LayoutCache {
         height: u32,
         scale: f32,
     ) -> Result<String, serde_json::Error> {
+        Self::key_with_credits(track_id, lines, settings, width, height, scale, None)
+    }
+    /// Credits change the measured content, so they participate in the key.
+    pub fn key_with_credits(
+        track_id: &str,
+        lines: &[Line],
+        settings: &crate::typography::Settings,
+        width: u32,
+        height: u32,
+        scale: f32,
+        credits: Option<&crate::live::Credits>,
+    ) -> Result<String, serde_json::Error> {
         use sha2::Digest;
         let bytes = serde_json::to_vec(&(
             track_id,
@@ -1160,6 +1231,7 @@ impl LayoutCache {
             width,
             height,
             scale,
+            credits,
             crate::typography::BUNDLED_FONT_HASHES,
         ))?;
         Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
@@ -1474,6 +1546,42 @@ mod lazy_tests {
                 assert!(state.row(0).unwrap().bright < 1.0);
             }
         }
+    }
+
+    #[test]
+    fn credits_footer_extends_content_and_owns_the_final_scroll() {
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let credits = crate::live::Credits {
+            songwriters: vec!["A".into(), "B".into()],
+            attribution: Some(crate::live::Attribution {
+                provider: Some("Spicy".into()),
+                community: true,
+                maker: Some("maker".into()),
+                uploader: Some("uploader".into()),
+            }),
+        };
+        let mut fonts = fonts();
+        let mut track = TrackScene::with_fonts_credits(
+            source(6),
+            390,
+            640,
+            1.0,
+            Some(&settings),
+            Some(&credits),
+            &mut fonts,
+        )
+        .unwrap();
+        assert!(track.footer.is_some());
+        let end = track.lines.last().unwrap().background_end;
+        assert!((track.scroll_target(end + 1000.0) - track.max_scroll()).abs() < 1e-9);
+        assert!(track.max_scroll() >= track.prefix[track.lines.len() - 1]);
+        let mut scene = Scene::new();
+        let (_, bottom) = track.frame(end + 1000.0, &mut scene);
+        assert!(bottom > 0.0);
     }
 
     #[test]
