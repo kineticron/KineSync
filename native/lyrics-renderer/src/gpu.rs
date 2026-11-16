@@ -25,6 +25,31 @@ struct Timestamps {
     resolve: Buffer,
     readback: Buffer,
 }
+// Match composite.wgsl exactly. A skipped tier is never sampled by the
+// composite, including the two Gaussian bases used for active glyph glow.
+fn required_blur_tiers(
+    height: u32,
+    protection: (f32, f32),
+    scale: f32,
+    blur: bool,
+    glow: bool,
+) -> usize {
+    if glow {
+        return 2;
+    }
+    let max_distance = protection
+        .0
+        .max((height - 1) as f32 - protection.1)
+        .max(0.0);
+    if !blur || max_distance == 0.0 {
+        0
+    } else if max_distance <= 160.0 * scale {
+        1
+    } else {
+        2
+    }
+}
+
 struct Filter {
     downsample: ComputePipeline,
     downsample_group: BindGroup,
@@ -250,8 +275,8 @@ impl Filter {
             _textures: textures,
         }
     }
-    fn encode(&self, encoder: &mut CommandEncoder, width: u32, height: u32) {
-        {
+    fn encode(&self, encoder: &mut CommandEncoder, width: u32, height: u32, tiers: usize) {
+        if tiers > 0 {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                 label: Some("half-resolution box"),
                 timestamp_writes: None,
@@ -260,7 +285,7 @@ impl Filter {
             pass.set_bind_group(0, &self.downsample_group, &[]);
             pass.dispatch_workgroups(self.extent.0.div_ceil(8), self.extent.1.div_ceil(8), 1);
         }
-        for group in &self.groups {
+        for group in self.groups.iter().take(tiers * 2) {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                 label: Some("shared blur tier/axis"),
                 timestamp_writes: None,
@@ -500,7 +525,18 @@ impl Gpu {
         let band: [u8; 16] = std::array::from_fn(|i| values[i / 4].to_le_bytes()[i % 4]);
         self.queue.write_buffer(&self.filter.band, 0, &band);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.filter.encode(&mut encoder, self.width, self.height);
+        self.filter.encode(
+            &mut encoder,
+            self.width,
+            self.height,
+            required_blur_tiers(
+                self.height,
+                protection,
+                self.scale,
+                blur,
+                appearance && glow,
+            ),
+        );
         if let Some(ts) = timestamps {
             encoder.write_timestamp(&ts.queries, 1);
             encoder.resolve_query_set(&ts.queries, 0..2, &ts.resolve, 0);
@@ -1081,5 +1117,35 @@ mod ownership_tests {
         // callback ownership is independent of owner/resize destruction.
         drop(flight);
         done.fetch_max(c, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod filter_work_tests {
+    use super::required_blur_tiers;
+    #[test]
+    fn only_skip_gaussian_bases_that_composite_cannot_sample() {
+        assert_eq!(
+            required_blur_tiers(900, (350.0, 500.0), 1.0, false, false),
+            0
+        );
+        assert_eq!(required_blur_tiers(900, (0.0, 899.0), 1.0, true, false), 0);
+        assert_eq!(
+            required_blur_tiers(900, (140.0, 760.0), 1.0, true, false),
+            1
+        );
+        assert_eq!(
+            required_blur_tiers(900, (160.0, 739.0), 1.0, true, false),
+            1
+        );
+        assert_eq!(
+            required_blur_tiers(900, (160.1, 739.0), 1.0, true, false),
+            2
+        );
+        assert_eq!(
+            required_blur_tiers(900, (280.0, 620.0), 2.0, true, false),
+            1
+        );
+        assert_eq!(required_blur_tiers(900, (0.0, 899.0), 1.0, false, true), 2);
     }
 }
