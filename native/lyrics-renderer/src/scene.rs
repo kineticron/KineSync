@@ -1398,6 +1398,36 @@ mod lazy_tests {
         assert!(cache.take(&key).is_none());
     }
     #[test]
+    fn prepared_future_rows_start_at_their_placeholder_alpha() {
+        use crate::appearance::AppearanceState;
+        let lines = source(6);
+        let mut fonts = fonts();
+        for (style, bright, dark, outer) in
+            [(Style::Amll, 0.2, 0.2, 1.0), (Style::Spicy, 1.0, 0.4, 0.51)]
+        {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track =
+                TrackScene::with_fonts(lines.clone(), 390, 640, 1.0, Some(&settings), &mut fonts)
+                    .unwrap();
+            track.prepare(500.0).unwrap();
+            assert!(track.timed_ready(1), "future row must be shape-ready");
+            let mut state = AppearanceState::default();
+            state.prepare(&track, 500.0, 1000.0);
+            let row = state.row(1).unwrap();
+            // The raw placeholder painted this alpha; the first prepared frame
+            // must start there instead of at active white.
+            assert!((row.bright - bright).abs() < 1e-12, "{style:?} bright");
+            assert!((row.dark - dark).abs() < 1e-12, "{style:?} dark");
+            assert!((row.outer - outer).abs() < 1e-12, "{style:?} outer");
+            assert!(!row.active);
+        }
+    }
+
+    #[test]
     fn outgoing_line_keeps_its_timed_completion_owner() {
         use crate::appearance::{AppearanceState, Effect};
         let lines = source(6);

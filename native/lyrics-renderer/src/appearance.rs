@@ -111,8 +111,12 @@ impl AppearanceState {
                         .collect(),
                     clock: FloatClock::default(),
                     scale: Spring { p: 1.0, v: 0.0 },
-                    bright: 1.0,
-                    dark: 0.4,
+                    // Skia's line springs have already settled a future row to
+                    // bright=dark=0.2 long before it is promoted to exact glyphs.
+                    // The raw placeholder paints the same inactive alpha, so the
+                    // handoff cannot flash white.
+                    bright: if spicy || active { 1.0 } else { 0.2 },
+                    dark: if spicy || active { 0.4 } else { 0.2 },
                     outer,
                     target_outer: outer,
                     from_outer: outer,
