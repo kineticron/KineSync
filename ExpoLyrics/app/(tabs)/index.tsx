@@ -442,7 +442,7 @@ export default function HomeScreen() {
     return () => { clearTimeout(timer); subscription.remove(); };
   }, [spicyExpiry, liveLyrics.length]);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [rustRenderer, setRustRenderer] = useState(false);
+  const rustRenderer = usePlaybackStore(state => state.useRustRenderer);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
   const [topBarMounted, setTopBarMounted] = useState(true);
@@ -1341,11 +1341,6 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
-      {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer" disabled={tour.active}
-        onPress={() => setRustRenderer(value => !value)}
-        style={{ position: 'absolute', zIndex: 100, top: insets.top + 4, right: 12, padding: 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)' }}>
-        <Text style={{ color: '#fff', fontSize: 11 }}>{tour.active ? 'Rust unavailable during tour' : rustRenderer ? 'Rust · switch to Skia' : 'Try Rust renderer'}</Text>
-      </Pressable> : null}
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
       ) : null}

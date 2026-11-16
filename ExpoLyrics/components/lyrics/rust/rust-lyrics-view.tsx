@@ -61,6 +61,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (!songwriters.length && !hasAttribution) return null;
     return { ...(songwriters.length ? { songwriters } : {}), ...(hasAttribution ? { attribution } : {}) };
   }, [metadata]);
+  const lyricsSource = usePlaybackStore(state => state.lyricsSource);
+  const lyricsStatusMessage = usePlaybackStore(state => state.lyricsStatusMessage);
   const showRustDebugOverlay = usePlaybackStore(state => state.showRustDebugOverlay);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => state.lyricsStyle);
@@ -187,7 +189,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   }, [unavailable, failed, status]);
   const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
   return <View style={styles.root}>
-    {__DEV__ ? <View pointerEvents="none" style={styles.fpsStrip}>
+    {__DEV__ && showRustDebugOverlay ? <View pointerEvents="none" style={styles.fpsStrip}>
       <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust presents per second, callback interval, busy skips and estimated missed callback intervals in this window. Not display scanout or measured GPU time.">
         {currentMetrics ? `${currentMetrics.presentCallRate.toFixed(0)} presents/s · cb ${currentMetrics.displayIntervalMs.toFixed(1)}ms · busy ${currentMetrics.busyCallbacksInWindow ?? 0} · gaps~${currentMetrics.missedIntervalsInWindow ?? 0}` : 'presents/s · awaiting native sample'}
       </Text>
@@ -221,6 +223,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
     </ScrollView> : null}
+    {!lyrics.length ? <View style={styles.empty} testID="rust-lyrics-empty">
+      <Text style={styles.emptyTitle}>{metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text>
+      <Text style={styles.emptySub}>{lyricsStatusMessage || `Source: ${lyricsSource || 'unavailable'}`}</Text>
+    </View> : null}
     {payload.json && !unavailable && NativeView ? <View style={styles.gestureWrap} {...panResponder.panHandlers}>
       <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} />
     </View> : null}
@@ -228,6 +234,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
 });
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: 0, overflow: 'hidden' }, gestureWrap: { flex: 1, minHeight: 0 }, canvas: { flex: 1, minHeight: 0 },
+  empty: { ...StyleSheet.absoluteFill, justifyContent: 'center', alignItems: 'center', padding: 28 },
+  emptyTitle: { color: '#fff', fontSize: 22, fontWeight: '700', textAlign: 'center' },
+  emptySub: { color: 'rgba(255,255,255,0.56)', fontSize: 13, lineHeight: 18, fontWeight: '600', textAlign: 'center' },
   fpsStrip: { height: 16, flexShrink: 0, paddingHorizontal: 28, backgroundColor: 'rgba(10,11,17,0.8)' },
   fps: { color: 'rgba(255,255,255,0.68)', fontSize: 10, lineHeight: 16, fontVariant: ['tabular-nums'] },
   overlay: { flexGrow: 0, flexShrink: 1, maxHeight: '45%', backgroundColor: 'rgba(10,11,17,0.8)' },

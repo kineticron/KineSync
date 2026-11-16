@@ -150,6 +150,8 @@ type PlaybackState = {
   packetDropRate: number;
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
+  useRustRenderer: boolean;
+  setUseRustRenderer: (value: boolean) => void;
   showRustDebugOverlay: boolean;
   setShowRustDebugOverlay: (value: boolean) => void;
   setShowSpotifyStatusBar: (value: boolean) => void;
@@ -190,6 +192,7 @@ type PlaybackState = {
 let rendererChanged = false;
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
+let rustRendererSettingChanged = false;
 let rustDebugOverlaySettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
@@ -276,6 +279,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
+  useRustRenderer: false,
   showRustDebugOverlay: true,
   showTranslatedText: true,
   translationLanguage: 'English',
@@ -480,6 +484,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
+  setUseRustRenderer: (value) => {
+    rustRendererSettingChanged = true;
+    const useRustRenderer = Boolean(value);
+    set({ useRustRenderer });
+    void AsyncStorage.setItem('kinesync_use_rust_renderer', String(useRustRenderer)).catch(error => console.error('Could not save Rust renderer setting', error));
+  },
   setShowRustDebugOverlay: (value) => {
     rustDebugOverlaySettingChanged = true;
     const showRustDebugOverlay = Boolean(value);
@@ -538,6 +548,11 @@ void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   if (value === null || spotifyStatusBarSettingChanged) return;
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
+
+void AsyncStorage.getItem('kinesync_use_rust_renderer').then(value => {
+  if (rustRendererSettingChanged || (value !== 'true' && value !== 'false')) return;
+  usePlaybackStore.setState({ useRustRenderer: value === 'true' });
+}).catch(error => console.error('Could not load Rust renderer setting', error));
 
 void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
   if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;
