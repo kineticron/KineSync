@@ -1,0 +1,266 @@
+{
+  "baseline": "a9b6398e1b4d0089cf2935a49befe8519f4a665f",
+  "scope": "Audit before parity edits; paths and line numbers refer to these bytes. No OS fonts copied.",
+  "files": [
+    {
+      "path": "ExpoLyrics/components/lyrics/native/spicy-native-layout.ts",
+      "sha256": "9b0e5ece4d6f8d69fe5810867fef12c8fbe14f434fcc59dbe8bedc8e7014dab8",
+      "lines": 34
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/blur-layer-bounds.ts",
+      "sha256": "4a7238277410908b5e817a09ddf6fe95021d9a601beb9035d76bed02b5d57c15",
+      "lines": 19
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-float-clock.ts",
+      "sha256": "232dd3849c432a09219618f1fba475be4104ff1f414d5523d66343060a5c788f",
+      "lines": 14
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-progressive-blur.ts",
+      "sha256": "f7423c3554fe32568989e8b4e8ab97960bc0b471bcfae8135efc9854622eeca5",
+      "lines": 66
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/use-reference-word-motion.ts",
+      "sha256": "fe6c64fa9f0df39f784452ca4dca25aad4b21ce87a38afd6ee0123b73b7fa662",
+      "lines": 33
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-shared-blur.tsx",
+      "sha256": "ffe0b6e028c3a918e1c3700cb4824e1937d7529111b6fe8aa79ab3994fba82e7",
+      "lines": 343
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-renderer-ready-refresh.ts",
+      "sha256": "3785718ef72bf4a920fb83976b0431b3986e0fd1fef55722d01fe1ae23790f84",
+      "lines": 67
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-fast-voice.tsx",
+      "sha256": "07f25c71df1695ab3d1353eb0c841402885d9a0b6a3da9866143f57e105bd0eb",
+      "lines": 56
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-glyph-layout.ts",
+      "sha256": "679aae5da4b2dcb47fcecbcaede475e54f47102708b0eedfbbdeaea719199c58",
+      "lines": 74
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-glyph-mask.ts",
+      "sha256": "7ef42f328ecb639b0aee281b267b15fe8a4486beac42c4b70b19443093a44938",
+      "lines": 16
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyrics-fonts.ts",
+      "sha256": "b919f88d4fd2885b9e5bd7fe3b155dafbc95d59329c71f795cc1c95f627700ec",
+      "lines": 33
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyric-row.tsx",
+      "sha256": "1d2c2164fef9dfa6119bb7e4d5a989bb5eb65e24826c119c7e09944cf3e3e242",
+      "lines": 145
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/reference-word-motion.ts",
+      "sha256": "0acd49af550bd29580b1ba7a8f3d970387fcb0b3d0a4b1587234e6cd29100138",
+      "lines": 53
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-reference-line-break.ts",
+      "sha256": "418c2b438ae2b82f6f69634f3d067cb8c5c91928a3450dfbac6c2b6a700f5018",
+      "lines": 147
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/use-reference-line-motion.ts",
+      "sha256": "aaa3cbc075f9f5fee810f2ec5accf918218f4afe0f222476c5e4f97d1941c0e3",
+      "lines": 58
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-interlude-motion.ts",
+      "sha256": "23cc566fabf5bd1d9809b5f1448acf94266b01cc071aac0c4c0532042b1cdfdb",
+      "lines": 72
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lazy-skia-voice.tsx",
+      "sha256": "6e8fc0bfdce2d5b10eeec5b0adc4d87b6405751d3b4fa43d9a61ef6062099ffc",
+      "lines": 211
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-reference-is-cjk.ts",
+      "sha256": "7d0b3e50240b964cd1b8509ccfb22e654dfb3516c77efe788aa82c02e94fe5e6",
+      "lines": 5
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-geometry-cache.ts",
+      "sha256": "ff4db503f85de376d26df3d37712d51366b999f288e3f4d0b85448444b62a210",
+      "lines": 36
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/reference-scroll.tsx",
+      "sha256": "3a568c66eebd2673fa20b73a5d54f3632963c46b028fa3a07ddfbe9aaa3664b8",
+      "lines": 274
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyrics-model.ts",
+      "sha256": "f66c433d28c8ed8ade0eaf2656099e341c8534a4652c49188ca9c804911e1b4e",
+      "lines": 284
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/spicy-text-policy.ts",
+      "sha256": "05de028cca928236af5ea0d60b2f634e34796dd1d173a14a50a920d886722805",
+      "lines": 20
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-layout-cell.tsx",
+      "sha256": "99954c488241b65d4baab544e1ce5bdaba4d1ab726b5ba16f542e9dc582a7caf",
+      "lines": 109
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-native-layout.ts",
+      "sha256": "668b07a564b60d1b1b0af8bcbda90810d0f979e8d58d494c6687a2ab7354acaf",
+      "lines": 58
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/reference-motion.ts",
+      "sha256": "c65aa0abb1a8a749bafbdb4f3681fcedf272479a856b96449648b27d8cac0ff6",
+      "lines": 140
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-interlude.tsx",
+      "sha256": "6771eabceca4a62b4b4ee52d97bf9e86eaad86a7d67b2e0880fe10a6f79a141b",
+      "lines": 105
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-background.tsx",
+      "sha256": "dfb94229cbae4dda93dcc569b1efa2fa0094762f5167f38fe7d236493601d78b",
+      "lines": 9
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-skia-voice.tsx",
+      "sha256": "c7aa3ddded15118b9b06c1e1988a5301657e2f6c147dd9fddef69baba180b239",
+      "lines": 259
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/simple-amll-motion.ts",
+      "sha256": "d991268ae1c7814c60c087f5b2cd2f6a3a0bfd9825d17c9818df2ae4dbc20083",
+      "lines": 363
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-reference-word-split.ts",
+      "sha256": "9fb02acedbbe9356dba357b66419c750baa36ddf4cdf27f1a7facf5a38927269",
+      "lines": 115
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyrics-view.tsx",
+      "sha256": "722056316e6e5988ba833b78b02bb2e51dc6035e09da8f258b048f6902361889",
+      "lines": 493
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-cue-timeline.ts",
+      "sha256": "8d881d2ee014b472b7d2443731ed58a87e6d50d35cbcb39a52d68226dc25da5d",
+      "lines": 24
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/use-native-lyrics-clock.ts",
+      "sha256": "a9ef48d858f4ba9d451a238ed30feea465a859e9f2262d83363ed001e846b464",
+      "lines": 126
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/renderer-lab.tsx",
+      "sha256": "6a58335281493aedc8a59e0c06043efd35a4496d2ced8f4b761f5747290c41ee",
+      "lines": 92
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/batched-amll-motion.ts",
+      "sha256": "63aebe2d2fcde6635542706c4d5a2595df3d2434488ee2f0ae0d77924543d163",
+      "lines": 152
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-glyph-picture.tsx",
+      "sha256": "573b5e891597b91f8ad0b408fcdc38c538d459c48a54fbd0a84df8fd38ba63c9",
+      "lines": 557
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx",
+      "sha256": "341fe444a37afe38d768bdf9e8fece6861bd77bd18c01b44ab14334ec103917c",
+      "lines": 134
+    },
+    {
+      "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+      "sha256": "f157b1cb48bfc3a0d93b36486b5a0bacbd7a344eeb8a1f2698ca7744cc7aca63",
+      "lines": 483
+    },
+    {
+      "path": "native/lyrics-renderer/src/main.rs",
+      "sha256": "aff3f50caa8421bc5c03cb565cf259c33ff0cd4af68c86d26f45d2e60ce3bf64",
+      "lines": 393
+    },
+    {
+      "path": "native/lyrics-renderer/src/scene.rs",
+      "sha256": "2f28e53f9c18f80d5f8cda2b51756fda802af521bd521cfad7fbe30507758b6c",
+      "lines": 284
+    },
+    {
+      "path": "native/lyrics-renderer/src/live.rs",
+      "sha256": "d866ac881c6b2ab254ac0a7e57180676c044cf92c9fbb33a7fa1301fb87b5973",
+      "lines": 225
+    },
+    {
+      "path": "native/lyrics-renderer/src/lib.rs",
+      "sha256": "e836a40eb93adcf7e5a1279ee5d8072e0a758d7800b03f503889096091ca2bbf",
+      "lines": 138
+    },
+    {
+      "path": "native/lyrics-renderer/src/blur.wgsl",
+      "sha256": "acc05024f6ae007ef0660e15f76680c115b2133ab6bac07ba6ecc6927ee398df",
+      "lines": 21
+    },
+    {
+      "path": "native/lyrics-renderer/src/ffi.rs",
+      "sha256": "dc899f13762ca4eefd5d0a8e4dfc6c1010ee50de4b7deeae00f829805a33dd78",
+      "lines": 410
+    },
+    {
+      "path": "native/lyrics-renderer/src/composite.wgsl",
+      "sha256": "55248e53a93fb885b39c94bfa41e86c2e15782bb940c22b25c64886766d166d5",
+      "lines": 36
+    },
+    {
+      "path": "native/lyrics-renderer/src/gpu.rs",
+      "sha256": "0dd79ba495eaad177ff987b4f15b2ad22b0d0f2fbcca158a03dc60718d79a76b",
+      "lines": 993
+    },
+    {
+      "path": "native/lyrics-renderer/src/surface.wgsl",
+      "sha256": "b45ad16186060f65012423975691145b3912c9d8fb9b36a61a6bf784c28ec8cf",
+      "lines": 16
+    },
+    {
+      "path": "native/lyrics-renderer/src/motion.rs",
+      "sha256": "b6ee82dc7aa35b89eba7668cbb12b55f52c0a883290b630830df92f9ff16b8cd",
+      "lines": 84
+    },
+    {
+      "path": "native/lyrics-renderer/src/downsample.wgsl",
+      "sha256": "7c60a8b0bf834c35a139a488a0206942fcc20317e2e4400d29ed3796d91c42a8",
+      "lines": 18
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
+      "sha256": "f5f6cbe15587322e00f89556d3eff73fb9b904d7a5ce9b28d9e3b942da491c04",
+      "lines": 58
+    },
+    {
+      "path": "ExpoLyrics/lib/graphemes.ts",
+      "sha256": "8001732e73627126ee5f29ec733ad2750ea812107efa13ab36011dcf1f946295",
+      "lines": 29
+    },
+    {
+      "path": "ExpoLyrics/assets/fonts/README.md",
+      "sha256": "b0bb29aa1cf384606ec1cd541754ed1731b1c1f57b39563c9e1aebbf21a61b5d",
+      "lines": 9
+    }
+  ]
+}

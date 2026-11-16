@@ -1,0 +1,252 @@
+{
+  "scope": "Actual current Skia NativeSkiaVoice preparation + drawVoice via CanvasKit vs unchanged Rust isolated voice. NOT full native screen parity.",
+  "artifacts": [
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-spicy-skia.png",
+      "sha256": "5d7fd15fa0eb0a2bf604a5105f890ae6fa1883630196dbe7ac91d29b43982c84",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-1x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-rust.png",
+      "sha256": "b52cd3d90b5ace5fe087f8f8eaa59b510d8cdd63ee5fb28436c478a3906fb0f4",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-1x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-amll-skia.png",
+      "sha256": "d5bde15c4b5480ad78956410352678f3ade6b5e7de0f5314c6a419f0495f5686",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-1x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-spicy-skia.png",
+      "sha256": "5b5d47f566468f9ca656c6941e798913d6fa4448d472ee1b340576ed56da80f9",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-844x390-1x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-rust.png",
+      "sha256": "55e7b5bc28de297465a1bd4ebe4eba08b23bf2279ee4f8aee6975d4182cf9707",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/korean-844x390-1x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-amll-skia.png",
+      "sha256": "d296201368737bf336ad81cb1183ee57c697f12c043d8a17643ab9d92cb14846",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-844x390-1x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-spicy-skia.png",
+      "sha256": "6903f67e799da728591b8cff1e0c33af876d63de89e162ac4737c043d516cfb0",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-3x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-rust.png",
+      "sha256": "62c3b62f18b2aad05d9bc31e44d7e4863a59be35d8b9fce90808dd41dcb73c49",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-3x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-amll-skia.png",
+      "sha256": "7b6ea65dd7d821d1da079a94069a78294b15890f36aca4afea5e95d850694590",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/korean-390x640-3x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-spicy-skia.png",
+      "sha256": "b1484a538e6b94fc2448c55477eddad4579e77f6b7ad2b4e12f010d26129a463",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-1x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-rust.png",
+      "sha256": "1787d2aed318b9b02d77845079dfc29cb22cce08634a3df501dced596219c7aa",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-1x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-amll-skia.png",
+      "sha256": "2b6630138ee887a4f3f0d4232d5ba9f8bac1c233c0058abf07883dda74b1b8db",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-1x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-spicy-skia.png",
+      "sha256": "9ae1d8f66d2363fa36e3d2515987f28f26ccb74059ed6576c8a86f5b75460bc0",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-844x390-1x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-rust.png",
+      "sha256": "2db365aaa3a6b652b858ff2956703f7bd8a2a74761c2be8894380229ed2ef447",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/latin-844x390-1x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-amll-skia.png",
+      "sha256": "7619149fd074a3ee661e8e47cd34592722cfd28a9a0f2db862c3033a1fdbecc4",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-844x390-1x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-spicy-skia.png",
+      "sha256": "add312cab0e1ec814d95bb6351a4c32f6b8261e9d90bdde1deb0673a5a382efb",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-3x-spicy-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-rust.png",
+      "sha256": "dd5470f90991d2f5e3e5054d2d65c0c9f90ffd5c6ebed6de9d011b7e5d8c2160",
+      "role": "rust",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-3x-rust.png"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-amll-skia.png",
+      "sha256": "50f84c90a705ab18d21202863ef58f00fad5a52d23d6144d65550b5243814271",
+      "role": "skia",
+      "source": "/tmp/rust-parity-verified/captures/latin-390x640-3x-amll-skia.png"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-spicy_compare.png",
+      "sha256": "09b1b7b84d5f581ca7164b3086acaf6524341bf312843238d9193f56ff012500",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-amll_compare.png",
+      "sha256": "6a3ca2d4b3753a4654bbe3128e15d55adf5dc7ca160233e47725f1254def3100",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-spicy_compare.png",
+      "sha256": "49ca978f523420f2910044d8154adf1351f2d0a4bd299ac79877e5f4a461a767",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-amll_compare.png",
+      "sha256": "c5a52b54e8c9efbd340755500ec2ae369593482996359a8bac421ba72e379a87",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-spicy_compare.png",
+      "sha256": "e1f67f9e1e8ea2092cd35afbbbf8e7ad88b0d078f03f17c29179ba31b0678094",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-amll_compare.png",
+      "sha256": "d843901752ab7af5eb79e0e4a92ba9744d600e0ef173d907563026147a43bb65",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-spicy_compare.png",
+      "sha256": "2f37352a3ad2340138fc68b9bdd917af41c2449a7da04e71fe7c848efe372bdb",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-amll_compare.png",
+      "sha256": "8ce224fa42efdcc49d63376618f7f14119363b999c284c4abf0b5881b94cb9d8",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-spicy_compare.png",
+      "sha256": "60721d3717a90b127e2472b24239b47119e991c1ba5cd3ac3376278184c776f4",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-amll_compare.png",
+      "sha256": "563631431b5e2e51ec1cd5e9f67f6b1ded0f9b2752f0163fe4f1651a5a909a81",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-spicy_compare.png",
+      "sha256": "3470c72379a4be10b3b50243df5071a12b6a2316513938571aff99420839072e",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-amll_compare.png",
+      "sha256": "e2104a680f88a464ca96390e4c4df83366e48ad1a0242a202063af5b5fbc2cf1",
+      "role": "comparison"
+    },
+    {
+      "path": "/files/rust_parity_first_contact.png",
+      "sha256": "c8a3dbfcbb78a4d4674b798ce57b0bcb8e4746fce525621d7c054d1a718c7f7e",
+      "role": "comparison"
+    }
+  ],
+  "logs": [
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-actionlint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-alpha1.log",
+      "sha256": "c781537461ed4463e185a991a5133845df7f2d6b6516197b92965aa91209d75b"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-alpha3.log",
+      "sha256": "3be14085f05d6c0b0ba04f9a03404b5d4f0b72dd37a5c84914d1b830e5bcae52"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-baseline-benchmark.log",
+      "sha256": "ab73b7367af110ef0a1e58f2a1be4052acbdb3822db94cfdaeba6f664d87a775"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-capture-build.log",
+      "sha256": "4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-capture-repeat.log",
+      "sha256": "1ea30fa0dd35523712cbbbc69b01039bd3028271a7f26d575705e1e4232262ce"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-capture.log",
+      "sha256": "3a0ac5371e869869f1eb60bd60e0b1c3dce92ca0189ecacb1548ff0ebe10c4aa"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-clippy-host.log",
+      "sha256": "634b9f737c0d9af79fa7cce7e02d7c553208f9c3a1a9ae65e540cd10ccd6fef1"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-clippy-ios.log",
+      "sha256": "a41051563a4cb5fc1b1bcdd9aa0ba28ca80f7736d629d90cc138218756e8e3a9"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-diff.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-node-tests.log",
+      "sha256": "95a6097435c8ccc380756e852ed49cacf7b7cba9fe68b140c89cc067b254e9ae"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-repository.log",
+      "sha256": "a83de2502f1715dad255434f5b7c2713619da39f6c2ae4532b4872ebd8271a8f"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-runtime-unchanged.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-rust-tests.log",
+      "sha256": "a430d71f3ca3da097871af6a78871df50ffd739338e7783bea550fee75f44bc7"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-sheets.log",
+      "sha256": "71093bf55f545b7b1cfca83eba1152075e5623923bc046000879ac6c876fae10"
+    },
+    {
+      "path": "/home/kit/rust-renderer-spike/native/lyrics-renderer/evidence/parity-typescript.log",
+      "sha256": "bebaf8fcaa1a02141103758d863efe92d68af78b6abe0d38a08cdf675438e2c9"
+    }
+  ]
+}

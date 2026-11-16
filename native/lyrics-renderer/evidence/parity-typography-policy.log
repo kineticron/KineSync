@@ -1,0 +1,8 @@
+   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
+    Finished `test` profile [unoptimized] target(s) in 1.91s
+     Running unittests src/lib.rs (native/lyrics-renderer/target/debug/deps/lyrics_renderer-13335a4112ab25fb)
+
+running 1 test
+test typography::source_policy_tests::production_wrapping_and_unicode_offset_goldens ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 26 filtered out; finished in 0.02s

@@ -1,0 +1,450 @@
+# Phase 2: live iOS renderer implementation
+
+The branch now implements the Rust renderer in the actual development player's
+current-track path. This is more than a generic development-client build. It is
+still experimental. The coordinator reports that the baseline linked and rendered
+on a phone, with choppy motion and controls overlap. The phone-fix changes below
+still require independent review, macOS compilation, re-signing and device tests.
+No phone performance or runtime leak-free claim is made.
+No push, dispatch or Metro server operation was performed by the implementing
+agent. Coordinator independent review precedes the authorized one CI build.
+
+## Select and exercise it
+
+In a rebuilt arm64 Debug development client, open the existing player with a
+current track and timed lyrics. Tap **Try Rust renderer** at the upper right.
+The same toggle switches back to the existing renderer. Default selection is
+unchanged and the toggle is development-only. The module's Expo Apple config is
+also Debug-only. Onboarding demos explicitly mark Rust unavailable. Android,
+web, Expo Go, missing native registration and ABI mismatch display unavailable
+states rather than silently substituting the old renderer.
+
+The Rust view receives the actual playback store's track ID, immutable lyrics
+and stable timing anchors. It does not load a fixture or fetch another song.
+Existing pause/resume and scrub/seek controls update anchors. The view includes
+a labeled **visual rate** control for 0.5/1/1.5x renderer-clock testing, which does
+not change audio speed. **Recreate Rust surface** explicitly disposes/recreates
+the native view after an error. **Show metrics** opts into the diagnostic panel above the canvas. The panel scrolls within at most 45% of
+the measured lyric viewport; it does not cover glyphs.
+
+Track replacement sends a generation, UTF-8 atom text and source timing once.
+Native code reconstructs byte ranges after decoding, shapes whole lines, caches
+Vello glyph scenes and independently fills timed atoms. Literal spaces are
+preserved and explicit word-end flags add missing gaps. Invalid/untimed tracks,
+oversized packets and missing glyphs produce explicit errors. Lead-line overlaps
+are now highlighted/protected together, including the phase-1 88.2-second case.
+This is not a complete port of romanization, native scrolling footer/timestamp
+seek or accessibility semantics. ABI8 renders translations, background voices,
+duet alignment and word glow/syllable spring motion per source. Existing player seek
+controls still work. System Apple fonts replace
+the Linux Noto stack. Phone font and visual acceptance are pending.
+
+## Clock, stale updates and ownership
+
+JS subscribes only to changes in anchor position/time, playing state and track
+identity. A position-only UI tick does not send a native command. It projects
+the store's position at a one-time sample, samples native `CACurrentMediaTime`
+through a synchronous Expo function, and sends that anchor. JS sends no display
+frame calls and has no animation/timer loop for Rust. Foreground and renderer
+readiness trigger occasional resynchronization. Native CADisplayLink scheduling
+and the shared Rust timeline project elapsed native time, pause, seek and rate.
+ABI version 9 retains explicit seek-snap intent and separate display-target/sample
+clocks. Its 168-byte metrics include visible changes and the next native cue.
+Both JS and Swift reject an older native ABI. This requires a rebuilt IPA.
+A Metro-only update cannot install the Rust/Swift changes.
+
+The display link requests preferredFrameRateRange with a hardware-capped maximum
+and preference up to 120Hz (minimum up to 30Hz). This is a best-effort hint, never
+a 120fps guarantee. Hardware, thermal state, Low Power Mode, accessibility frame
+rate limits and system policy determine delivered cadence. Generated app plist,
+built app plist, source app and packaged IPA must all contain Boolean true for
+CADisableMinimumFrameDurationOnPhone; existing app.json already supplied it.
+
+Each callback passes targetTimestamp in the CACurrentMediaTime clock domain to
+Rust. Actual worker sample time remains separately reported. The JS comparison
+projects the native position from the target time, and reports sample delivery
+age from the actual sample. No display-frame calls cross JS. Visual rate changes
+capture accumulated visual time; ordinary pause/resume/reanchors preserve it.
+Scrub previews, release from preview, track replacement and source discontinuities
+over 250ms intentionally snap scroll. Small source corrections stay continuous.
+
+Rust integrates a critically damped scroll using the closed-form solution and
+actual native dt. Focus changes retarget without resetting position or velocity;
+active/syllable fill and the protected blur band follow the moving text each
+frame. Pause freezes lyric time while residual scroll settles, then stops the
+display link. Resize remaps the relative scroll offset into the new layout. Track
+replacement resets motion; explicit seek anchors snap rather than traversing the
+intervening song. Tests cover regular/irregular dt, long gaps, pause settling,
+resize, target-time projection and protected-band continuity.
+
+Portrait clipping derives from the player's actual root height and dock top
+(onLayout of the entire SafeAreaView containing scrubber, transport and utility
+icons), using the existing lyric top. Initial/stale-orientation measurements
+collapse the surface until valid. Hidden controls conservatively retain their
+reserve. Landscape already puts controls in the left pane and lyrics in the
+right safe pane. The diagnostic header consumes normal layout space; the actual
+remaining native view size drives Rust layout. The portrait dock-sized gradient
+is omitted for Rust because its viewport already ends above the dock and the
+GPU compositor supplies its own edge fade.
+
+Track generations and anchor sequences reject stale updates in Swift and Rust.
+JS also rejects callbacks/promises from an older track or recreated surface.
+One native view persists across track replacements. An explicit recreation or
+orientation layout replacement retires its old handle. `kr_create` returns a
+registry ID rather than a raw Rust object pointer. Unknown/disposed handles are
+rejected and destroy is idempotent.
+
+The Expo view contains a CAMetalLayer-backed UIView. A serial native owner keeps
+that layer strongly alive while Rust owns a wgpu Metal surface. Create, track,
+anchor, resize, frame and disposal operations are serialized on one shared worker
+queue, which also orders retirement before a rapid remount's creation. Latest
+track/size and anchor inputs coalesce into one pending drain; seek intent survives
+coalescing. One CPU draw request may be outstanding, with no target backlog;
+two GPU application frames may be in flight. Per-work-item
+autorelease pools bound temporary Objective-C objects. No per-frame image pixels
+cross Swift/JS. Vello writes an offscreen GPU texture, shared compute passes blur
+it, a GPU blit writes the acquired surface texture and wgpu presents it.
+
+Layout/visibility changes occur on main. Zero-size, background and inactive
+views stop rendering. Reactivation marks dirty and flushes the latest stored
+track, size and anchor before resuming, including initial attachment while
+inactive. Background immediately closes a short-lock visibility gate without
+waiting on the worker. Detach retires asynchronously: queued inputs are rejected,
+the worker drains the bounded frame, destroys Rust and then releases its retained
+layer. A frame already executing can finish; backgrounding does not synchronously
+cancel submitted GPU commands. Display-link targets are weak and notification
+registrations are removed on deinit. A session/revision guard
+rejects stale completions and retry work.
+
+The ABI returns 0 after a present call (not scanout), 1 while waiting for
+track/anchor, 2 for retryable acquisition failure, 3 for full GPU capacity, and -1
+for failure. Capacity retry leaves dirty work armed for the next fresh vsync;
+it does not use surface-error backoff or retain an old display target. Paused first frames, seeks
+and resizes retain/re-arm dirty work on Timeout/Occluded/Outdated. At most four
+retries run after 100/200/400/800 ms with no active display link during backoff.
+Exhaustion hides the stale surface and reports waiting until a new anchor,
+activation, foreground, resize or explicit recreation rearms it. Waiting for an
+anchor does not spin a frame loop. New input invalidates old retry work.
+
+Ordinary Rust panics are caught before crossing C, panicking handles are retired,
+and wgpu uncaptured/device-loss errors are recorded and surfaced. The ABI trusts
+Swift's buffer/layer lifetime contract. Invalid foreign pointers, OOM aborts,
+Objective-C exceptions and fatal driver failures are not made recoverable by
+`catch_unwind`. Surface loss requires explicit recreation. There are no main-thread queue.sync GPU/lifecycle barriers. Device loss, long
+worker stalls and actual app lifecycle responsiveness still require device
+validation; an indefinitely stalled driver can retain retired resources.
+
+## Metrics and interpretation
+
+Native metrics are emitted at most once per second of successful rendering, and
+cadence windows must span at least one real second after start/resume before they
+are exposed. Hidden diagnostics retain them in a JS ref without metric React
+state updates. Counters are per view: callback total, submitted, idle, busy,
+inactive and retryable no-drawable outcomes. No-drawable is a submission outcome,
+not an additional callback category. Busy rejects a delivered callback while one
+frame is outstanding; it is not a missed display interval. Observed interval
+misses are explicitly an estimate from callback timestamp gaps divided by the
+previous reported interval; system refresh-rate changes can also affect it.
+Requested Hz is a hint. Delivered callback Hz and `presentCallRate` use count
+deltas and real elapsed window seconds. Present calls are CPU returns from
+Queue.present, not drawable presentation or measured screen scanout. `submitted`
+counts worker requests, including capacity retries; `frames` counts present calls. No nominal-120 extrapolation or tiny
+first-frame window is used. Idle/background pauses reset the next cadence window.
+
+GPU Metal Vello and compute blur activity are reported independently of timestamp
+profiling. Successful rendering runs Vello compute, a half-resolution downsample,
+four shared blur passes and full-resolution composition even without queries. Adapter TIMESTAMP_QUERY and
+TIMESTAMP_QUERY_INSIDE_ENCODERS flags and enabled bracket features are separate.
+Locked wgpu-types 30.0.1 documents encoder timestamps as unavailable on Apple GPUs;
+wgpu-hal Metal checks stage and blit boundary counters separately. No unsupported
+features are forced. The sampled RGBA8 Vello output feeds write-only RGBA16Float
+half-resolution storage filters, then RGBA8 full-resolution composition. These
+formats need no adapter-specific storage read/write feature. The UI reports the exact missing
+profiler feature, or that live timestamp readback is disabled.
+
+The live path has no explicit GPU completion wait or timestamp readback. It polls
+with PollType::Poll and admits at most two application frames. Safe Queue
+completion callbacks record final blit GPU completion; they neither prove
+presentation nor include Metal's separately committed present command buffer.
+Three OS drawables (latency hint 2) separately bound display resources. When full,
+no animation state is advanced and no display target is stored. Acquisition can
+still block in nextDrawable; after acquisition Rust refreshes its native clock
+from the separately retained sample plus elapsed monotonic time, keeping a
+future display target when applicable. Resize/destruction wait on the worker;
+UIKit never waits for that worker. Completion counts are observations from the
+last poll/submit and can lag while idle.
+
+`cpuSceneMs`, `cpuEncodeMs`, `cpuBlitMs`, `acquireMs`, `blitSubmitMs`,
+`presentCallMs`, `pollMs` are CPU wall spans. `cpuBlitMs` includes final encoder,
+submit, callback registration and present-call cost. `blitSubmitMs` covers only
+the final explicit blit submit; Vello's internal submits and filter submit remain
+in `cpuEncodeMs`. Driver submit/acquisition can stall; none of these are GPU
+execution time. There is no per-frame explicit wait in the live path (`waitMs`
+remains zero). Headless profiling retains timestamp brackets/readback, includes
+submission gaps and excludes the final surface blit.
+
+ABI 9 adds two scheduling fields. `next_cue_native_ms` is an absolute monotonic
+deadline in ms, or negative when playback has no timed visual change left.
+`visible_changes` reports conservative visual activity for the frame just drawn.
+`animating` still requests continuous frames, including retained animation
+history for hidden or outgoing rows, so it is not a pixel-difference claim. The
+native owner invalidates the display link when a frame settles and rearms it
+from one cancellable wakeup only when a cue is projected.
+
+### Transparent composition
+
+ExpoUIView, its child MetalHost and CAMetalLayer are clear/nonopaque. FIFO is
+retained. The surface copy writes premultiplied encoded sRGB to a supported
+sRGB-color-space non-sRGB RGBA/BGRA unorm surface. Prefer advertised PreMultiplied.
+Locked Metal HAL 30.0.1 (also inspected 30.0.2 without changing the lock) incorrectly
+advertises PostMultiplied while Core Animation actually composites premultiplied
+content. Upstream confirmed/corrected this in
+[wgpu #9922](https://github.com/gfx-rs/wgpu/pull/9922/files). Only on Metal, select
+that advertised transparent option and supply the actual required premultiplied
+content. No unsupported mode, registry patch, dependency upgrade or unsafe HAL
+access is used. Other backends must advertise PreMultiplied or initialization fails.
+
+Vello clears alpha0 and writes straight sRGB RGBA8; box downsample converts to
+linear premultiplied RGBA16Float. Cached normalized Gaussian weights operate on
+that representation with transparent zero padding. Bilinear reconstruction
+mixes near/far only outside the full-resolution sharp protection band; viewport
+fade scales alpha and RGB together. The final copy unpremultiplies only for
+linear-to-sRGB color conversion, then multiplies encoded RGB by alpha exactly
+once. Blending is disabled and the attachment clears alpha0. No final alpha1
+override or double premultiplication occurs. Empty/initial and resized resource contents are fully
+written before presenting. Backgrounding retains the last transparent frame.
+
+This accounts for the locked Metal backend's mislabeled alpha capability;
+actual CAMetalLayer/RN compositor behavior and color matching still need phone proof. Half-resolution filtering,
+3-sigma truncation, RGBA8 final quantization and linear-light blur differ from
+Skia's exact filter implementation. Off-viewport content is clipped before blur;
+zero padding does not invent offscreen glyph coverage. The viewport fade hides
+that boundary; no clamp-to-edge color smear is introduced.
+
+## Device build and proof
+
+See [the CI guide](../../docs/ios-development-ci.md). Rust is enabled in
+`scripts/ios-dev-ci/config.json`: toolchain 1.97.0, aarch64-apple-ios, Cargo dev
+profile with opt-level 1 and debug-info 1, unwind panics, iOS deployment 16.4 and
+explicit flags/features. The app remains Debug and unsigned. The source-exact
+XCFramework cache includes code, WGSL, header, lockfile, producer/validator,
+configuration and Xcode identity. A verified hit skips Cargo, including after a
+JS or Swift-shim-only change. The native build identity still changes for shims.
+
+The producer runs before Expo prebuild/Pods, builds `liblyrics_renderer.a`, checks
+arm64, creates one device-only XCFramework with a Clang module map, seals a hash
+manifest and verifies the public ABI symbols. Cache restore validates that same
+manifest and architecture before copying into the module's ignored Frameworks
+directory. Swatinem/rust-cache stores registry and target work on a prebuilt miss.
+No simulator or x86_64 Rust slice is produced.
+
+CI then compiles a development JS path bundle using the installed Expo
+`export:embed` export/mock-server path without a listening Metro server. The
+implementing agent does not run or restart the caller's Metro. The proof bundle
+is an audit artifact, not a claim that the caller's running Metro already serves
+this branch or that the debug client has launched it.
+
+The final app must provide `rust-link-proof.json` proving all `kr_*` symbols are
+defined in the host Mach-O, the app link map contains the Rust archive/render
+symbol, ExpoModulesProvider registers KineSyncRustLyricsModule, and the compiled
+JS/source map includes the player selector and Rust view. Debug dylib indirection
+is disabled so proof targets the host executable. Merely finding a `.a` is
+insufficient. Registration discovery on Linux is not this final link proof.
+
+Before packaging, the helper sets bundled Mach-O and CFBundleExecutable files
+to 0755. `validate_ipa.py` independently rejects non-executable/missing code in
+the source app and IPA, even when source and archive both have identical 0644
+modes. Normal source-to-ZIP byte/type/mode and CRC checks also remain. Repair
+paths, source validation, IPA entry manifest and full IPA hash are artifacts.
+The opaque IPA is uploaded without recompressing. It is unsigned and not
+LiveContainer launch-tested. Re-signing/rebuilding a custom client is required.
+
+## Feasible local validation and next acceptance
+
+See [phone-fix-diagnosis.md](evidence/phone-fix-diagnosis.md) for frozen pre-fix
+source evidence and [phone-fix-verification.md](evidence/phone-fix-verification.md)
+for this change's commands, results and remaining acceptance. Local checks cover
+Cargo fmt/test/strict Clippy, iOS-target Rust type checking,
+headless shared-engine GPU rendering, TypeScript, touched-file ESLint,
+Expo Apple autolinking discovery, Node CI/protocol/negative-proof tests, shell
+syntax and actionlint. The lifecycle test is explicitly a source-level harness,
+not compiled Swift or an iOS runtime test. Linux has no UIKit/Xcode SDK for
+compiling the Swift shim or linking/running the final iOS app.
+
+After final independent review, the coordinator pushes only this branch via the
+approved DEFAULT-host bundle route and dispatches one integrated build. Inspect
+all final-image/link/provider/JS and executable-mode artifacts. Only then attempt
+a signed device client: live track replacement, pause/seek/rate, inactive updates,
+first attachment inactive, retryable paused-frame acquisition, rotation/resize,
+background/foreground and repeated mount/unmount/recreation. Capture native
+metrics and actual screenshots while checking memory and callback cleanup. No
+phone-performance, launch or leak-free acceptance is inferred from Linux checks.
+
+API contracts were checked against the official
+[Expo native view tutorial](https://docs.expo.dev/modules/native-view-tutorial/),
+[Expo module API](https://docs.expo.dev/modules/module-api/) and installed
+ExpoModulesCore ViewDefinitionBuilder/ViewFactories sources, plus the pinned
+wgpu 30 registry source for CoreAnimationLayer, CurrentSurfaceTexture,
+Queue completion callbacks, transparent surface formats and Queue.present.
+
+
+## ABI4 static typography preparation
+
+Schema4 track packets carry distinct Spicy/AMLL settings and exact production
+paint-word/UTF16/grapheme metadata alongside original syllables. Existing bundled
+SF Pro Display Regular/Bold assets are packaged by the pod resource bundle and
+read once on the worker. Rust validates exact asset SHA256/role/weight and retains
+registered font bytes; missing assets fail visibly. Fonts are immutable per owner.
+`kr_set_fonts` precedes track setup. JS/native ABI guards reject ABI3 clients.
+No device-only slice/cache checks or phone compiler optimization settings change.
+
+Detailed timed fragments are prepared only for active/overlapping leads and next
+two rows. Visible inactive rows use cached plain paragraphs, without timed slice
+construction. Row preparation is on demand; measured heights persist after glyph
+eviction. A per-owner cache retains at most three inactive source/style/viewport
+variants, keyed by original text/timing, complete paint mappings, settings, DPR,
+extent and immutable font identity. Rotation/settings changes cannot reuse a
+mismatched key. Shared GPU blur, premultiplied output, two-frame ownership and
+clock/gating controls remain unchanged.
+
+`copyLayout()` is an explicit asynchronous diagnostic request, not per-frame JS
+telemetry. Call after rendering; unprepared rows are null. It returns actual face
+SHA256/collection index/names/variation coordinates and measured geometry. Native
+fallback equivalence and packaged font execution require final native proof.
+There are no intermediate phone-test/IPA dependencies; one final IPA delivery
+follows near-complete parity and host gates. Physical presentation remains
+unverified until the final user test.
+
+## ABI5 timed appearance checkpoint
+
+Schema5 requires validated per-word emphasis, pivot, direction and AMLL group
+metadata from the actual production JS preparation helpers. C/Swift/JS guards
+all require5; KRMetrics remains152 bytes. Existing SF resource ownership and
+cache keys remain; metadata changes invalidate immutable geometry.
+
+Mutable source timing belongs to the native owner, separately from retained
+geometry. Track/seek/resize reset timing; pause preserves source release motion.
+Active/overlapping and next-two geometry is prepared on demand; plain inactive
+rows remain cached. The live per-effect policy and measured/rejected stages are
+recorded in `evidence/parity-live-appearance-handoff.md`, which is the historical
+record of the stages measured before ABI8. Glow uses a two-radius shared
+approximation; its intensity, radius and activation now follow the Skia sources
+and it is the live effect (see the ABI8 section below), so that handoff's
+glow-off policy is superseded. No per-line GPU filter, full-resolution blur,
+active animated-picture cache, new wait or deeper queue was introduced.
+
+One coordinator-built parity-so-far IPA is now user-authorized after independent
+review; this supersedes the earlier near-complete-only delivery rule. This
+worker performs no push, CI dispatch, Metro operation or IPA build. Physical
+phone HUD/performance and native font packaging remain unverified for ABI5.
+
+## ABI6 auxiliary subtitle visibility and sharp attribution
+
+Schema6 adds an optional foreground `paint.translation` string. It is the exact
+upstream `LyricLine.translatedText`, selected by `showTranslatedText` using the
+actual production `buildNativeVoice` preparation helper. Visibility changes send
+a new track generation; translation bytes participate in retained geometry keys.
+A subtitle is shaped once with its visible row, contributes to row height,
+scrolling and the shared protected envelope, and inherits source outer opacity /
+AMLL voice scale rather than timed word brightness. Spicy and AMLL preserve their
+different source subtitle size/leading/inset/weight policies. Actual faces are
+reported in sparse `translation` layout diagnostics. No per-frame JS, shape or
+readback was added. C/JS/Swift all require6; KRMetrics remains152 bytes.
+
+The existing sharp attribution overlay now accepts all available providers and
+credit-only metadata while Rust is selected. Its existing modal and HTTPS profile
+callbacks are reused, with a matching HTTPS provider link. It lives outside the
+GPU blur/viewport and preserves player chrome rules. This is not the unimplemented
+native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
+for actual source inputs, performance gates, pixel receipts and remaining
+romanization / native capture limitations. Rows with background voices are drawn
+per voice since ABI8 (see below). The live effect is now `Glow`: intensity,
+radius and activation follow the Skia sources and the glow is composited inside
+the existing shared half-resolution filter pass, so there is no additional pass,
+texture or full-resolution blur.
+
+## ABI7 Skia follow ownership and overlapping line timing
+
+Schema6 gains an optional `background_end` per line (the JS producer sends
+`getBackgroundEndTime`, covering `backgroundSyllables` and `spicyBackgrounds`).
+A line stays in the active presentation package until that end, so background
+vocal tails no longer collapse the highlight or scroll at the lead end. Line
+starts may overlap or be out of source order: the parser still rejects inverted
+line/atom intervals but no longer rejects unordered starts, and the playback
+window scans source order so a duet line that starts a few milliseconds before
+the line above it stays active together with it. Display order is unchanged.
+
+The native playback window, auto-scroll target range and follow index are ported
+from `lib/lyrics-layout.ts` (`getPlaybackWindowState`,
+`getAutoScrollTargetRange`, `interludeIndex`) including 3000 ms long pauses,
+500 ms dot early exit, 24 pt bottom padding and per-style anchors (AMLL 8% + 8 pt,
+landscape Spicy 32 pt, portrait 0). Spicy uses the same 240-440 ms tween and
+cubic-bezier(0.22, 0.88, 0.34, 1); AMLL uses the same stiffness/damping, 0.9 mass
+and per-row cascade residual. Interlude dots are native: the break slot expands
+above the upcoming row (Spicy 400 ms, AMLL 375 ms, cubic-bezier(0.25,0.1,0.25,1))
+and shifts that row and every later row without changing stored row heights.
+Spicy draws three spring-animated bullet dots (`spline` goals, 0.7/0.6,
+1.25/0.4 and 1/0.5 frequencies/damping), a 300 ms group entrance and the CSS
+`linear()` exit group; AMLL draws the three breathing circles from the source
+snapshot. A two-radius translucent halo approximates the Spicy glyph shadow
+without per-glyph blur; seek resets the springs and the color/layout policy is
+unchanged. The Spicy intro seed (`spicyLyricsStartTime`) is not on the wire yet,
+so the first break starts at 0 like AMLL. Group/slot transitions are evaluated
+from playback time, so they freeze with pause and follow the visual debug rate.
+
+`kr_set_following(bool)`, `kr_scroll_by(double)` and
+`kr_hit_test(double) -> int32` add Skia's explicit ownership contract. A touch
+freezes the current offset (turning follow off), drag deltas are applied in touch
+order, and a line tap restores follow before seeking; the Swift view exposes
+`setFollowing`, `scrollBy` and `hitTest`, and the JS PanResponder implements the
+540 ms long press, tap-to-seek and drag threshold from the Skia row Pressables.
+The Rust surface now fills the whole area below the top bar with the controls
+dock's gradient over it instead of being clipped above the dock.
+
+## ABI8 background voices, duet rows and glow parity
+
+Schema6 gains an optional additive per-line `backgrounds` array plus an explicit
+per-voice `start`/`end`. It is produced by the real `spicyBackgrounds` /
+`backgroundSyllables` source blocks through the actual `buildNativeVoice` helper
+(the same blocks and helper the Skia rows consume), so no rule is re-invented in
+JS. ABI8, not the schema number, is the client gate: older binaries reject the
+additive field, and C/JS/Swift all require 8 now. The JS producer refuses a voice
+whose own word timing is unusable; the Rust parser additionally bounds the voice
+count (16), keeps every voice inside its row's package end (1 ms rounding
+tolerance), and requires the background `duet`/`opposite` flags to equal the
+row's, so a background voice can never flip a duet side.
+
+Each voice is shaped, wrapped and timed on its own, from the pinned Skia
+renderers: Spicy uses 0.75x parent type, 0.62x leading, weight 500, a 3 pt top
+margin and the parent's text width, while AMLL uses 0.7x type, 0.7x leading, the
+parent weight, a 0.3em top margin, 0.2em inner padding, 0.4 container alpha and
+the duet-inset text width. Background voices stack under the lead in source
+order, keep the row's alignment origin (AMLL right-aligned voices align on the
+shared right edge), fill from their own syllable timings inside the parent
+reveal, and reuse the parent type size for Spicy word/letter motion. A voice's
+own `translation` contributes its own subtitle policy and height.
+
+Voice boxes participate in the row measurement, so `content_height`, the row
+height, `prefix`, the auto-scroll target, the protected blur band and the
+interlude shift all include background vocals; that is what keeps the active line
+in the right place while a background tail is still singing. The presentation
+window already used `background_end` for activation.
+
+Glow parity is source-derived and stays inside the existing shared half-resolution
+pass: Spicy uses `clamp01(glow * 1.85) * 0.5` with `(4 + 12 * glow) / 2` for
+emphasized letters and `clamp01(glow * 0.35) * 0.5` with `(4 + 2 * glow) / 2` for
+other syllables; AMLL keeps `style_timing::amll_emphasis` scaled by the voice's
+own type size and filters its white glow through the bright/dark reveal channels.
+Glow now follows the whole active package (it no longer drops at the lead end
+while a background voice is singing), settled/dimmed Spicy voices use their sung
+or unsung alpha instead of the reveal alpha, and background voices glow at their
+own size and alpha. Intensity is packed into the existing near/far Gaussian bases,
+so there is no new pass, texture, allocation or full-resolution blur; the far base
+stops mixing past 6 logical px, which is the documented radius residual versus
+Skia's variable-radius glyph blur.
+
+Measured host gates, fresh pixel receipts and phone performance with glow
+composited remain open, and the recorded Motion->Glow encode comparison must be
+re-run on the real adapter before any phone claim. Nothing in the enabled path
+adds a pass, texture, allocation or deeper queue: the glow rides the two existing
+half-resolution Gaussian bases that the inactive blur ramp already owns.

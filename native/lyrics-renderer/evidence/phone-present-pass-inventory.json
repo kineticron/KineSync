@@ -1,0 +1,147 @@
+{
+  "note": "Logical source-derived work and allocation inventory, NOT GPU timing/bandwidth measurements. Example extents, not measured phone viewport. Excludes Vello internal variable pass count/buffers, driver allocations, padding/metadata, cache behavior and retained old resources. New extra OS drawable offsets some filter memory savings.",
+  "source": "gpu.rs Filter::new/encode, blur.wgsl, composite.wgsl, downsample.wgsl, SurfaceRenderer::new",
+  "pipeline": [
+    "Vello variable internal compute passes -> full RGBA8 straight sRGB alpha0",
+    "one half box: straight sRGB -> linear premult RGBA16Float",
+    "four separable half RGBA16Float Gaussian passes",
+    "one full RGBA8 linear premult protected composite",
+    "one surface render pass: premultiplied encoded sRGB unorm, no blending; locked Metal metadata workaround for upstream #9922"
+  ],
+  "weights": "Normalized CPU Gaussian table once per resize, symmetric +/-ceil(3*sigma), no per-sample exp in shader; transparent zero outside half extent; bilinear four-load reconstruction; protected band skips blur reads.",
+  "bounds": "At most two application frames, three OS drawables, one CPU frame request. Same-queue resources retained/ordered by wgpu. No per-line CPU blur, no per-frame texture creation outside Vello internal resources.",
+  "examples": [
+    {
+      "width": 390,
+      "height": 640,
+      "scale": 1,
+      "half_extent": [
+        195,
+        320
+      ],
+      "old": {
+        "filter_passes": 5,
+        "full_rgba8_textures": 6,
+        "retained_texture_bytes": 5990400,
+        "drawables": 2,
+        "drawable_bytes": 1996800,
+        "sigma": [
+          2.5,
+          6
+        ],
+        "radius": [
+          8,
+          18
+        ],
+        "blur_texture_loads": 26956800
+      },
+      "new": {
+        "filter_passes": 6,
+        "full_rgba8_textures": 2,
+        "half_rgba16float_textures": 5,
+        "retained_texture_bytes": 4492800,
+        "drawables": 3,
+        "drawable_bytes": 2995200,
+        "sigma": [
+          1.25,
+          3.0
+        ],
+        "radius": [
+          4,
+          9
+        ],
+        "blur_texture_loads": 3494400,
+        "box_texture_loads": 249600,
+        "composite_texture_loads_upper_bound": 2246400
+      }
+    },
+    {
+      "width": 1170,
+      "height": 1920,
+      "scale": 3,
+      "half_extent": [
+        585,
+        960
+      ],
+      "old": {
+        "filter_passes": 5,
+        "full_rgba8_textures": 6,
+        "retained_texture_bytes": 53913600,
+        "drawables": 2,
+        "drawable_bytes": 17971200,
+        "sigma": [
+          7.5,
+          18
+        ],
+        "radius": [
+          23,
+          54
+        ],
+        "blur_texture_loads": 700876800
+      },
+      "new": {
+        "filter_passes": 6,
+        "full_rgba8_textures": 2,
+        "half_rgba16float_textures": 5,
+        "retained_texture_bytes": 40435200,
+        "drawables": 3,
+        "drawable_bytes": 26956800,
+        "sigma": [
+          3.75,
+          9.0
+        ],
+        "radius": [
+          12,
+          27
+        ],
+        "blur_texture_loads": 89856000,
+        "box_texture_loads": 2246400,
+        "composite_texture_loads_upper_bound": 20217600
+      }
+    },
+    {
+      "width": 1920,
+      "height": 1170,
+      "scale": 3,
+      "half_extent": [
+        960,
+        585
+      ],
+      "old": {
+        "filter_passes": 5,
+        "full_rgba8_textures": 6,
+        "retained_texture_bytes": 53913600,
+        "drawables": 2,
+        "drawable_bytes": 17971200,
+        "sigma": [
+          7.5,
+          18
+        ],
+        "radius": [
+          23,
+          54
+        ],
+        "blur_texture_loads": 700876800
+      },
+      "new": {
+        "filter_passes": 6,
+        "full_rgba8_textures": 2,
+        "half_rgba16float_textures": 5,
+        "retained_texture_bytes": 40435200,
+        "drawables": 3,
+        "drawable_bytes": 26956800,
+        "sigma": [
+          3.75,
+          9.0
+        ],
+        "radius": [
+          12,
+          27
+        ],
+        "blur_texture_loads": 89856000,
+        "box_texture_loads": 2246400,
+        "composite_texture_loads_upper_bound": 20217600
+      }
+    }
+  ]
+}

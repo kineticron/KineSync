@@ -1,0 +1,34 @@
+✔ absolute normalized cache paths and build flags survive runner paths with spaces (3.06303ms)
+✔ Rust prebuilt is source-exact, and independent of JS or Swift shims (10.080689ms)
+✔ Podfile.lock and native/SDK identities invalidate native caches without JS-only churn (17.913999ms)
+✔ workflow restore/save paths and identities match exactly, all are resolved once (1.84267ms)
+✔ stage failure and warm-cache failure still produce machine-readable evidence (212.181408ms)
+✔ IPA inner ZIP preserves framework executable modes, symlinks, and bytes (77.890405ms)
+✔ restored Podfile.lock cannot silently change between restore and save (308.858341ms)
+✔ runner initialization emits actual paths, pinned Cargo target and no Rust build (459.836693ms)
+✔ workflow shell commands pass bash syntax checks (65.010516ms)
+✔ independent executable validator rejects equal 0644 source and archive, repair fixes only code (308.882352ms)
+✔ live Rust track protocol preserves source atoms and sends anchors only for actual anchor changes (2.22537ms)
+✔ native lifecycle source harness flushes inactive updates and bounds paused surface retries (2.132399ms)
+✔ Rust cache verifier rejects simulator slices and final proof rejects archive-only integration (373.254498ms)
+✔ real Rust producer preserves empty/nonempty feature arguments under /tmp/rust-bash32-src/bash-3.2.57/bash (741.789306ms)
+ℹ GNU bash, version 3.2.57(1)-release (x86_64-unknown-linux-gnu)
+✔ real Rust producer preserves empty/nonempty feature arguments under /bin/bash (820.657511ms)
+ℹ GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+✔ Cargo cache identity covers the toolchain and archive check scripts (14.698079ms)
+✔ producer sealing and cache-hit validation use pinned llvm-nm and reject failed or incomplete inventories (1948.895734ms)
+✔ SourceMap v3 source collection accepts flat and nested Metro sections and fails closed on malformed maps (1.45501ms)
+✔ native frame source contract uses display targets, one draw and asynchronous retirement (22.931529ms)
+✔ visual anchor clock preserves rate/pause/resume and snaps scrub/track/discontinuities (0.91679ms)
+✔ measured player viewport clips before the complete dock and diagnostics reserve canvas space (1.487669ms)
+✔ generated, built and packaged app ProMotion key must be Boolean true (365.331909ms)
+✔ ABI 5 C layout and both native-client guards reject incompatible clients (19.454378ms)
+✔ font resources invalidate native caches and packaged bytes fail closed (20.641319ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5909.302308

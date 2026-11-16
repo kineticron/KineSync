@@ -158,6 +158,8 @@ async function resetOnboardingCompleted(): Promise<void> {
 export default function BridgeSettingsScreen() {
   const router = useRouter();
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
+  const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
+  const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
@@ -638,6 +640,17 @@ export default function BridgeSettingsScreen() {
                 <Text style={styles.fieldLabel}>Language applies the next time you translate lyrics. Use the translation button in playback to translate the current song.</Text>
               </SettingSection>
               <View style={styles.divider} />
+
+              {__DEV__ ? <>
+                <SettingSection title="Rust diagnostics">
+                  <View style={styles.sectionToggle}>
+                    <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
+                    <Switch accessibilityLabel="Show Rust debug overlay" value={showRustDebugOverlay} onValueChange={setShowRustDebugOverlay} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
+                  </View>
+                  <Text style={styles.fieldLabel}>Show status, controls and stats. The compact FPS strip stays visible. Errors are also logged when hidden.</Text>
+                </SettingSection>
+                <View style={styles.divider} />
+              </> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
                 {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>

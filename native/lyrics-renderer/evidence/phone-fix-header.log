@@ -1,0 +1,8 @@
+Command: cc -x c -std=c11 -fsyntax-only -I native/lyrics-renderer/include -
+Input:
+#include "KineSyncLyrics.h"
+_Static_assert(sizeof(KRMetrics) == 88, "ABI v2 metrics size");
+_Static_assert(offsetof(KRMetrics, capabilities) == 80, "capabilities offset");
+_Static_assert(offsetof(KRMetrics, animating) == 84, "animation offset");
+
+Exit code: 0

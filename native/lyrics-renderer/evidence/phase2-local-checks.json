@@ -1,0 +1,166 @@
+{
+  "scope": "Linux feasibility checks, no macOS Swift/final app link or phone launch performed",
+  "checks": [
+    {
+      "cwd": "/home/kit/rust-renderer-spike/native/lyrics-renderer",
+      "command": [
+        "/home/kit/.cargo/bin/cargo",
+        "+1.97.0",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike/native/lyrics-renderer",
+      "command": [
+        "/home/kit/.cargo/bin/cargo",
+        "+1.97.0",
+        "test",
+        "--locked"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike/native/lyrics-renderer",
+      "command": [
+        "/home/kit/.cargo/bin/cargo",
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike/native/lyrics-renderer",
+      "command": [
+        "/home/kit/.cargo/bin/cargo",
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--target",
+        "aarch64-apple-ios",
+        "--lib",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "command": [
+        "./node_modules/.bin/tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "command": [
+        "./node_modules/.bin/eslint",
+        "components/lyrics/rust/rust-lyrics-view.tsx",
+        "lib/rust-lyrics-protocol.js",
+        "app/(tabs)/index.tsx"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike",
+      "command": [
+        "node",
+        "--test",
+        "/home/kit/rust-renderer-spike/scripts/test/ios-dev-ci.test.cjs",
+        "/home/kit/rust-renderer-spike/scripts/test/release-publisher.test.cjs",
+        "/home/kit/rust-renderer-spike/scripts/test/repository-check.test.cjs"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike",
+      "command": [
+        "/tmp/rust-spike-actionlint/actionlint",
+        "-shellcheck=",
+        "-pyflakes="
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike",
+      "command": [
+        "bash",
+        "-n",
+        "scripts/ios-dev-ci/build-rust-device.sh"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike",
+      "command": [
+        "node",
+        "scripts/check-repository.cjs"
+      ],
+      "exit_code": 0
+    },
+    {
+      "cwd": "/home/kit/rust-renderer-spike",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "apple_autolinking": [
+    {
+      "packageName": "kinesync-rust-lyrics",
+      "pods": [
+        {
+          "podName": "KineSyncRustLyrics",
+          "podspecDir": "/home/kit/rust-renderer-spike/ExpoLyrics/modules/kinesync-rust-lyrics/ios"
+        }
+      ],
+      "swiftModuleNames": [
+        "KineSyncRustLyrics"
+      ],
+      "modules": [
+        {
+          "name": null,
+          "class": "KineSyncRustLyricsModule"
+        }
+      ],
+      "appDelegateSubscribers": [],
+      "reactDelegateHandlers": [],
+      "debugOnly": true,
+      "packageVersion": ""
+    }
+  ],
+  "headless_regression": {
+    "png": "/files/rust_spike_phase2_overlap_88200.png",
+    "sha256": "f9a680d173405354f44cf6eb5b5c527eb29f147569874d8562918e23a38b3e6d",
+    "timestamp_ms": 88200,
+    "glyphs": 671,
+    "missing_glyphs": 0,
+    "adapter": "llvmpipe Vulkan Linux host proxy"
+  },
+  "pending": [
+    "Final independent review",
+    "Coordinator push spike branch and dispatch one integrated CI build",
+    "Swift/Xcode compile and final nm/link-map/provider/JS artifact proof",
+    "Signed device and LiveContainer launch, lifecycle, leaks and metrics acceptance"
+  ],
+  "code_head": "4dd18d4fede2bf39dd8ba2c187a5e323f7ce7262",
+  "additional_checks": [
+    "C header syntax and metrics sizeof=80/width offset=72 checked with host cc",
+    "Python AST syntax for CI helpers",
+    "Rust integration Markdown links checked",
+    "13 focused Node tests repeated after explicit Swift actor annotations"
+  ]
+}

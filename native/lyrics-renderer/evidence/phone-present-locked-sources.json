@@ -1,0 +1,52 @@
+[
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-hal-30.0.1/src/metal/surface.rs",
+    "sha256": "727921852b7743d59480de3fa048420fdd2cfb8a1fec98dec5c3d63ab53dbdf1",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-hal-30.0.1/src/metal/adapter.rs",
+    "sha256": "50ae470024e8d0aa4f031f4d503aa73bfa8ecac69c4496f1080a07fdfc8a10c3",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-hal-30.0.1/src/metal/mod.rs",
+    "sha256": "94049a6ab36f04a440517c891ee32f3e79fd6225665c93679cc5faae6ca0077b",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.0/src/api/queue.rs",
+    "sha256": "14dae3b36f75911a5ac4ed556d48875930e097990649110f9a5e53deada8d846",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.0/src/api/surface.rs",
+    "sha256": "13df4577966d4bcc10aba4b8950023ec17a7cd3933019df1cf1f7f139e92b9a3",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-types-30.0.1/src/surface.rs",
+    "sha256": "ab65f132d1a469fcf934df5187bf9fb6e2dee5efc75e7e57f23ec83785202f78",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vello_shaders-0.12.0/shader/fine.wgsl",
+    "sha256": "48fe8e6c193718b152006c00094a354af00096aa7e33ad44adc774187851d6fd",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vello-0.12.0/src/wgpu_engine.rs",
+    "sha256": "d893b8ba540a0627ee08b36222f7d917d97bbdc9f18ff0f40d78b72a7c5c1d0c",
+    "role": "locked"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-hal-30.0.2/src/metal/adapter.rs",
+    "sha256": "50ae470024e8d0aa4f031f4d503aa73bfa8ecac69c4496f1080a07fdfc8a10c3",
+    "role": "inspected only, not adopted"
+  },
+  {
+    "path": "/home/kit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-hal-30.0.2/src/metal/surface.rs",
+    "sha256": "450ddebf1d2229df23a460d4c638f5a3e128231dec2382f437b4eeedf89e09e7",
+    "role": "inspected only, not adopted"
+  }
+]

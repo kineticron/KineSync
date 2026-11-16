@@ -1,0 +1,26 @@
+[
+  {
+    "check": "typescript",
+    "argv": [
+      "npm",
+      "run",
+      "typecheck"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+    "exit_code": 0,
+    "log": "phone-fix-typescript.log"
+  },
+  {
+    "check": "eslint",
+    "argv": [
+      "./node_modules/.bin/eslint",
+      "app/(tabs)/index.tsx",
+      "components/lyrics/rust/rust-lyrics-view.tsx",
+      "lib/rust-lyrics-protocol.js",
+      "lib/rust-lyrics-protocol.d.ts"
+    ],
+    "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+    "exit_code": 0,
+    "log": "phone-fix-eslint.log"
+  }
+]

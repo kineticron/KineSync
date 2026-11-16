@@ -1,0 +1,268 @@
+{
+  "out": "/tmp/rust-parity-verified",
+  "note": "Audit/capture milestone only. Linux llvmpipe baseline proxy, no runtime edit or phone speed claim.",
+  "checks": [
+    {
+      "name": "fmt",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "fmt",
+        "--check",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "rust-tests",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "--include-ignored"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "clippy-host",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "clippy-ios",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--lib",
+        "--target",
+        "aarch64-apple-ios",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "typescript",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "ExpoLyrics",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "eslint",
+      "command": "./node_modules/.bin/eslint",
+      "args": [
+        "components/lyrics/rust/rust-lyrics-view.tsx"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "node-tests",
+      "command": "node",
+      "args": [
+        "--test",
+        "scripts/test/ios-dev-ci.test.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "actionlint",
+      "command": "/tmp/rust-spike-actionlint/actionlint",
+      "args": [
+        ".github/workflows/ios-development-build.yml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "repository",
+      "command": "node",
+      "args": [
+        "scripts/check-repository.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "alpha1",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "alpha-proof",
+        "/tmp/rust-parity-verified/alpha1",
+        "1"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "alpha3",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "alpha-proof",
+        "/tmp/rust-parity-verified/alpha3",
+        "3"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "baseline-benchmark",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "run",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--",
+        "bench",
+        "/tmp/rust-parity-verified/baseline-benchmark.json",
+        "30",
+        "6",
+        "/tmp/rust-parity-verified/bench-png"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "capture-build",
+      "command": "cargo",
+      "args": [
+        "+1.97.0",
+        "build",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--example",
+        "parity-capture"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "capture",
+      "command": "node",
+      "args": [
+        "native/lyrics-renderer/evidence/parity-capture.cjs",
+        "/tmp/rust-parity-verified/captures"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "capture-repeat",
+      "command": "node",
+      "args": [
+        "native/lyrics-renderer/evidence/parity-capture.cjs",
+        "/tmp/rust-parity-verified/repeat"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "sheets",
+      "command": "python3",
+      "args": [
+        "native/lyrics-renderer/evidence/parity-contact-sheets.py",
+        "/tmp/rust-parity-verified/captures",
+        "/files"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "diff",
+      "command": "git",
+      "args": [
+        "diff",
+        "--check"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    },
+    {
+      "name": "runtime-unchanged",
+      "command": "git",
+      "args": [
+        "diff",
+        "--exit-code",
+        "a9b6398",
+        "--",
+        "native/lyrics-renderer/src",
+        "native/lyrics-renderer/Cargo.lock",
+        "native/lyrics-renderer/Cargo.toml",
+        "native/lyrics-renderer/include",
+        "ExpoLyrics/components/lyrics",
+        "ExpoLyrics/lib/rust-lyrics-protocol.js",
+        "ExpoLyrics/modules/kinesync-rust-lyrics",
+        "ExpoLyrics/app/(tabs)/index.tsx"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit": 0,
+      "signal": null
+    }
+  ],
+  "repeatPixelHashesIdentical": true,
+  "captureRecords": 12
+}

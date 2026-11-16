@@ -1,0 +1,11 @@
+Cached layout: 24.31 ms, 42 lines, 671 glyphs, 0 missing glyphs
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+portrait: {"cpu_scene_ms":{"p50":0.05331,"p95":0.08030999999999999,"p99":0.09383999999999999,"max":0.09383999999999999},"cpu_encode_ms":{"p50":27.774209000000003,"p95":33.071258,"p99":34.093458,"max":34.093458},"wait_readback_ms":{"p50":0.11179,"p95":0.12925,"p99":0.12993,"max":0.12993},"gpu_interval_ms":{"p50":27.509849,"p95":32.766678,"p99":33.810618,"max":33.810618},"wall_frame_ms":{"p50":27.945709,"p95":33.247888,"p99":34.281058,"max":34.281058}}
+Cached layout: 21.73 ms, 42 lines, 671 glyphs, 0 missing glyphs
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+landscape: {"cpu_scene_ms":{"p50":0.05198,"p95":0.07583,"p99":0.07787,"max":0.07787},"cpu_encode_ms":{"p50":26.995469,"p95":38.201138,"p99":39.371407999999995,"max":39.371407999999995},"wait_readback_ms":{"p50":0.11025,"p95":0.14769,"p99":0.17015,"max":0.17015},"gpu_interval_ms":{"p50":26.732139,"p95":37.844778,"p99":39.026208,"max":39.026208},"wall_frame_ms":{"p50":27.160028999999998,"p95":38.375527999999996,"p99":39.547728,"max":39.547728}}
+Benchmark raw samples and percentiles: /tmp/phone-present-final/benchmark.json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `native/lyrics-renderer/target/debug/lyrics-renderer bench /tmp/phone-present-final/benchmark.json 30 6 /tmp/phone-present-final/bench-png`

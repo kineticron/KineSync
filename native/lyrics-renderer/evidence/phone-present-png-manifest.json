@@ -1,0 +1,86 @@
+[
+  {
+    "path": "/files/rust_spike_phone_present_1x_checkerboard_0.png",
+    "bytes": 72038,
+    "sha256": "9e57c8b5ac16dd3605e94737d84960faab92b88e94943597b0091728214ac6e5",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_checkerboard_0.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_1x_checkerboard_1.png",
+    "bytes": 72932,
+    "sha256": "e24f808c060549ab09c6a409fcd4437361d156d2fd92795934307cc755911ac9",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_checkerboard_1.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_1x_checkerboard_2.png",
+    "bytes": 72600,
+    "sha256": "ed23cdf74274647e588013ffc38809129faae20fe82f91f2f79b2875e02dbb8f",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_checkerboard_2.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_1x_transparent_0.png",
+    "bytes": 41759,
+    "sha256": "b8455173682fd7d386ced31d1f50b05c8e02d0985e421ffaeb52e8e4e218e445",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_transparent_0.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_1x_transparent_1.png",
+    "bytes": 41822,
+    "sha256": "d1469e4f74daaeeb757561a83b7cb8282e25b4510152a461724fc884e49da15b",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_transparent_1.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_1x_transparent_2.png",
+    "bytes": 41937,
+    "sha256": "132379628e8f7bc4cd322389dd93058abf7bf4a69cdbbf63f54a2980d6709d8f",
+    "source": "/tmp/phone-present-final/alpha1/rust_spike_transparent_2.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_checkerboard_0.png",
+    "bytes": 324808,
+    "sha256": "79c5d5a868aa264d8e13757c64bad27b578ca5cad22b0a8aa50329a8bcbe0b80",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_checkerboard_0.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_checkerboard_1.png",
+    "bytes": 325904,
+    "sha256": "354276ffba7cf06236752646a015803322ddda744527b783b4522ef33973edc9",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_checkerboard_1.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_checkerboard_2.png",
+    "bytes": 325307,
+    "sha256": "e76dd21807a38a1c0bc35519b70756149e16e5871cf07a109a7a5b6acb71b32e",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_checkerboard_2.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_transparent_0.png",
+    "bytes": 181592,
+    "sha256": "2e3bbc1fdf5c9385bf4d7cdea9519369d544f740ca219fb0aa40e03cbb2d31aa",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_transparent_0.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_transparent_1.png",
+    "bytes": 181724,
+    "sha256": "ec176dc8fa82be2f47145ec0dadd658c1934de97bf71a0d19964624d866e9a29",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_transparent_1.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_3x_transparent_2.png",
+    "bytes": 181972,
+    "sha256": "06355fa5b4471361cde7a298321cadbe0362cbc1ca4bd084cdebad7aaaeafdc5",
+    "source": "/tmp/phone-present-final/alpha3/rust_spike_transparent_2.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_benchmark_landscape.png",
+    "bytes": 34336,
+    "sha256": "5c3c93085747c2399a6a0a17dd3da5f47884e09e8ca7bfe3b6f0d274deac2aac",
+    "source": "/tmp/phone-present-final/bench-png/rust_spike_benchmark_landscape.png"
+  },
+  {
+    "path": "/files/rust_spike_phone_present_benchmark_portrait.png",
+    "bytes": 51767,
+    "sha256": "529ce31ca72b3686c5366a75b3de59c01d12a0b5fbe1640d56687d3dbd64936d",
+    "source": "/tmp/phone-present-final/bench-png/rust_spike_benchmark_portrait.png"
+  }
+]

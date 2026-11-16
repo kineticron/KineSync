@@ -1,0 +1,41 @@
+$ /home/kit/.cargo/bin/cargo +1.97.0 fmt --check
+Exit: 0
+
+$ /home/kit/.cargo/bin/cargo +1.97.0 test --locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/lyrics_renderer-9d8bd9b0ecbb3242)
+
+running 3 tests
+test tests::boundaries_and_zero_duration ... ok
+test tests::formats_pause_seek_rate ... ok
+test tests::real_fixture_ranges_and_focus ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (target/debug/deps/lyrics_renderer-da781a6a1eea1b88)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lyrics_renderer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Exit: 0
+
+$ /home/kit/.cargo/bin/cargo +1.97.0 clippy --locked --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.22s
+Exit: 0
+
+$ python3 scripts/verify_images.py /files
+{
+  "protected_band_changed_pixels": 0,
+  "inactive_blur_changed_pixels": 11285,
+  "fill_progress_changed_pixels": 617,
+  "unrelated_lower_rows_changed_pixels": 0,
+  "note": "Actual PNG checks; no Skia pixel-diff gate."
+}
+Exit: 0

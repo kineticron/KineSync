@@ -1,0 +1,43 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/lyrics_renderer-8861bdc4b7f8aa9c)
+
+running 11 tests
+test appearance_tests::actual_glyph_fill_motion_glow_alpha_proof ... ok
+test appearance_tests::cold_and_first_prepared_frames_are_pixel_identical ... ok
+test appearance_tests::live_effect_interleaved_budget ... FAILED
+test appearance_tests::spicy_primed_and_active_start_use_identical_glyph_geometry ... ok
+test appearance_tests::surface_copy_preserves_text_orientation_and_clears_previous_glyphs ... ok
+test auxiliary::tests::actual_auxiliary_gpu_pixels ... FAILED
+test auxiliary::tests::auxiliary_effect_budget ... ok
+test gpu::ownership_tests::real_gpu_two_frames_keep_texture_and_buffer_ownership_ordered ... ok
+test scene::lazy_tests::both_interlude_styles_render_entry_breathing_and_exit ... ok
+test scene::lazy_tests::spicy_gap_priming_to_active_preserves_word_and_letter_geometry ... ok
+test typography_budget::host_typography_effect_budget ... ok
+
+failures:
+
+---- appearance_tests::live_effect_interleaved_budget stdout ----
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+
+thread 'appearance_tests::live_effect_interleaved_budget' (216268) panicked at src/appearance_tests.rs:439:5:
+an enabled effect was rejected; inspect /tmp/rust-parity-appearance-budget.json
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- auxiliary::tests::actual_auxiliary_gpu_pixels stdout ----
+Adapter: AdapterInfo { name: "llvmpipe (LLVM 20.1.2, 256 bits)", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: "", driver: "llvmpipe", driver_info: "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }
+GPU timestamp brackets: supported (includes queue gaps across Vello submission)
+
+thread 'auxiliary::tests::actual_auxiliary_gpu_pixels' (216345) panicked at src/auxiliary.rs:347:13:
+actual subtitle glyph region must contain ink
+
+
+failures:
+    appearance_tests::live_effect_interleaved_budget
+    auxiliary::tests::actual_auxiliary_gpu_pixels
+
+test result: FAILED. 9 passed; 2 failed; 0 ignored; 0 measured; 69 filtered out; finished in 159.71s
+
+error: test failed, to rerun pass `--lib`

@@ -1,0 +1,144 @@
+{
+  "scope": "ABI4 static typography/runtime checkpoint; no native app build or phone test",
+  "host_build_environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0"
+  },
+  "checks": [
+    {
+      "name": "Rust tests including actual GPU ownership",
+      "command": "cargo +1.97.0 test --locked --manifest-path native/lyrics-renderer/Cargo.toml --lib -- --skip host_typography_effect_budget --include-ignored",
+      "exit": 0,
+      "passed": 26
+    },
+    {
+      "name": "Isolated typography effect budget",
+      "command": "cargo +1.97.0 test --locked --manifest-path native/lyrics-renderer/Cargo.toml --lib -- --include-ignored",
+      "exit": 0,
+      "cases": 8,
+      "samples_per_pair": 30,
+      "warmup": 6,
+      "baseline": "a9b6398 exact scene source copy checked by SHA256"
+    },
+    {
+      "name": "Host strict Clippy all targets",
+      "command": "cargo +1.97.0 clippy --locked --manifest-path native/lyrics-renderer/Cargo.toml --all-targets -- -D warnings",
+      "exit": 0
+    },
+    {
+      "name": "iOS strict Clippy",
+      "command": "cargo +1.97.0 clippy --locked --manifest-path native/lyrics-renderer/Cargo.toml --lib --target aarch64-apple-ios -- -D warnings",
+      "exit": 0
+    },
+    {
+      "name": "Node ABI/cache/resource/C tests",
+      "command": "BASH32=/tmp/rust-bash32-src/bash-3.2.57/bash node --test scripts/test/ios-dev-ci.test.cjs",
+      "exit": 0,
+      "passed": 24
+    },
+    {
+      "name": "TypeScript",
+      "command": "npm --prefix ExpoLyrics run typecheck",
+      "exit": 0
+    },
+    {
+      "name": "ESLint",
+      "cwd": "ExpoLyrics",
+      "command": "./node_modules/.bin/eslint --max-warnings 0 lib/rust-lyrics-preparation.ts components/lyrics/rust/rust-lyrics-view.tsx",
+      "exit": 0
+    },
+    {
+      "name": "Fmt",
+      "command": "cargo +1.97.0 fmt --check --manifest-path native/lyrics-renderer/Cargo.toml",
+      "exit": 0
+    },
+    {
+      "name": "Actionlint",
+      "command": "/tmp/rust-spike-actionlint/actionlint .github/workflows/ios-development-build.yml",
+      "exit": 0
+    },
+    {
+      "name": "Repository",
+      "command": "node scripts/check-repository.cjs",
+      "exit": 0
+    },
+    {
+      "name": "Actual alpha1/alpha3 readback",
+      "command": "cargo +1.97.0 run --locked --manifest-path native/lyrics-renderer/Cargo.toml -- alpha-proof /tmp/parity-typography-checks/alpha{1,3} {1,3}",
+      "exit": 0
+    },
+    {
+      "name": "Baseline GPU/clock/player sources unchanged",
+      "command": "git diff --exit-code a9b6398 -- native/lyrics-renderer/src/gpu.rs native/lyrics-renderer/src/{blur,composite,downsample,surface}.wgsl native/lyrics-renderer/src/motion.rs 'ExpoLyrics/app/(tabs)/index.tsx'",
+      "exit": 0
+    }
+  ],
+  "logs": [
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-actionlint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-alpha1.log",
+      "sha256": "5a8c2ade4cb42f07b869f044eccf95dde16ac30555e83d8576b053a65f2002c5"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-alpha3.log",
+      "sha256": "e5880b6f7fab56c2bb8858b8abb9c7bcefc468ee865f407be96f2fdf8e8b97bd"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-baseline-gpu-clock-viewport.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-clippy-host.log",
+      "sha256": "410c32f5c334b36ee88ee3d9a9c9ec4dd235f1908eb8b3197536b0b5c1c327d5"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-clippy-ios.log",
+      "sha256": "0d560c6e194cd4e693c88dbb59bdb19de91618494c4ce7e19155b9e580a43b79"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-node.log",
+      "sha256": "667e73ce081909807f85477b63f29a19c4d1160cb6800db617c3fd69d8248e12"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-policy.log",
+      "sha256": "326f6fb627bc62b31d4e9760952af035e9b59c32288524911a24f69881cceaca"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-repository.log",
+      "sha256": "a83de2502f1715dad255434f5b7c2713619da39f6c2ae4532b4872ebd8271a8f"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-rust-tests.log",
+      "sha256": "b9c03627cc1e33af7c1fd99d0004bc02871dde28ae05a0295c1a0a3d8e28f1d2"
+    },
+    {
+      "path": "native/lyrics-renderer/evidence/parity-typography-typescript.log",
+      "sha256": "bebaf8fcaa1a02141103758d863efe92d68af78b6abe0d38a08cdf675438e2c9"
+    }
+  ],
+  "unverified": [
+    "Swift compilation and resource bundle resolution on Apple",
+    "Native UIKit/Yoga/shared blur reference captures",
+    "Physical phone presentation/scanout; no intermediate test dependency"
+  ],
+  "comparison_owner": "Parent/Gemini task f4169b6c; no numeric/CLI/comparison script edits by Codex in this active run",
+  "budget_guard": {
+    "live_endpoint": "account/rateLimits/read",
+    "available": false,
+    "live_remaining_percent": null,
+    "no_banked_reset": true,
+    "no_provider_substitution": true
+  }
+}

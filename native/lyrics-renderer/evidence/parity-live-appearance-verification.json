@@ -1,0 +1,247 @@
+{
+  "scope": "ABI5 fill/motion live; glow prototype disabled; Linux host proxy only; actual Skia numeric/native acceptance pending",
+  "enabled_effect": "Motion",
+  "glow_enabled": false,
+  "checks": [
+    {
+      "name": "35 dev tests/GPU checks",
+      "result": "pass",
+      "log": "parity-live-appearance-tests.log"
+    },
+    {
+      "name": "36 release tests including 12 isolated effect gates",
+      "result": "pass",
+      "log": "parity-live-appearance-final-release.log"
+    },
+    {
+      "name": "host strict all-target Clippy",
+      "result": "pass",
+      "log": "parity-live-appearance-clippy-host.log"
+    },
+    {
+      "name": "iOS strict Clippy",
+      "result": "pass",
+      "log": "parity-live-appearance-clippy-ios.log"
+    },
+    {
+      "name": "24 Node ABI/C/cache/resource guards",
+      "result": "pass",
+      "log": "parity-live-appearance-node.log"
+    },
+    {
+      "name": "TypeScript",
+      "result": "pass",
+      "log": "parity-live-appearance-ts.log"
+    },
+    {
+      "name": "ESLint zero warnings",
+      "result": "pass",
+      "log": "parity-live-appearance-eslint.log"
+    },
+    {
+      "name": "fmt check",
+      "result": "pass",
+      "log": "parity-live-appearance-fmt.log"
+    },
+    {
+      "name": "actual legacy pipeline alpha 1x",
+      "result": "pass",
+      "log": "parity-live-appearance-alpha1.log"
+    },
+    {
+      "name": "actual legacy pipeline alpha 3x",
+      "result": "pass",
+      "log": "parity-live-appearance-alpha3.log"
+    },
+    {
+      "name": "repository check",
+      "result": "pass",
+      "log": "parity-live-appearance-repository.log"
+    },
+    {
+      "name": "existing workflow actionlint",
+      "result": "pass",
+      "log": "parity-live-appearance-actionlint.log"
+    }
+  ],
+  "build_environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "performance_profile": "release opt3; unchanged phone opt1/debug1"
+  },
+  "runtime_and_test_inputs": [
+    {
+      "path": "ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx",
+      "sha256": "b62096fe3f1c1d3312cf5c8199943a08cf9494e5e9f730173beb16cef078f0a2"
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
+      "sha256": "8be3196fe3f7be785f1effef56e3bfe2a020a2798248a0b719f48cfe15c42b21"
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-protocol.d.ts",
+      "sha256": "8ef921c18c79b171df211003410e94e90b3778b67e514489f61ae5c53212ee78"
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
+      "sha256": "049fbce070e1f1d9c0133789a17cac45e8ea4a5dca573014af4a4606fb284458"
+    },
+    {
+      "path": "ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift",
+      "sha256": "800413404ba5841a9654ae7548164addcdb69a3bd3e1eb9c88baf153bc290957"
+    },
+    {
+      "path": "native/lyrics-renderer/include/KineSyncLyrics.h",
+      "sha256": "77820e8ef7bfeeab830038aea297b47cc25e9c8ddd00f6dbd61b7487ed657a99"
+    },
+    {
+      "path": "native/lyrics-renderer/src/composite.wgsl",
+      "sha256": "d83d11e3827eca0461ab0b117c3976ee1c5f886d379cbe76acb00457d8501e5f"
+    },
+    {
+      "path": "native/lyrics-renderer/src/ffi.rs",
+      "sha256": "8d8c29a8c7d8811d1065ab7b2d5a667e0c7b7899d4de65300b65d2c4dd03e499"
+    },
+    {
+      "path": "native/lyrics-renderer/src/gpu.rs",
+      "sha256": "ba8f08305e04a3370bf799683f1c09568d3d920837ea7107e47c2bcd4f616b6a"
+    },
+    {
+      "path": "native/lyrics-renderer/src/lib.rs",
+      "sha256": "2878c26829f8b53744cd661149b2de0cb633b2c1684190d30b3ae4e46fd80880"
+    },
+    {
+      "path": "native/lyrics-renderer/src/live.rs",
+      "sha256": "6877d809fac9453d198a7f8d89e8bc12ae6cc3fa245f95d5819dd657f2f8da15"
+    },
+    {
+      "path": "native/lyrics-renderer/src/scene.rs",
+      "sha256": "9c9325ca3f0e94215cbd65cd2a7f498b608ab14b1c2c2bd9ad8b3056940a8930"
+    },
+    {
+      "path": "native/lyrics-renderer/src/style_timing.rs",
+      "sha256": "5327f73670a1f5b8197ab4b025e2596a65fc0db002c2b7ae06f414c35b8e7e60"
+    },
+    {
+      "path": "native/lyrics-renderer/src/typography.rs",
+      "sha256": "1db8b0bba6d11623e73befee98365e017eb3e3c6fbba21f9633e3a0c5e08943a"
+    },
+    {
+      "path": "native/lyrics-renderer/src/typography_budget.rs",
+      "sha256": "afd326a71f94b88968f24a7f7483b3d5fb7a83d0349a6950d7b54bb92c705388"
+    },
+    {
+      "path": "native/lyrics-renderer/test/typography-policy.json",
+      "sha256": "5b7af710b14816ca80e7f278a37f6472c058bafc4999bd1adc4dd39a6e1e5cc1"
+    },
+    {
+      "path": "scripts/test/ios-dev-ci.test.cjs",
+      "sha256": "925ed872277425ef52e39e23194d9e3cd7a3b139439e86d6804c47a383750355"
+    },
+    {
+      "path": "native/lyrics-renderer/src/appearance.rs",
+      "sha256": "e8af7e2740de5c4aa6e23ce23fe53906219d5dc3a087bc72d377ad3f8c6033f4"
+    },
+    {
+      "path": "native/lyrics-renderer/src/appearance_tests.rs",
+      "sha256": "dabee92a44278691790399b92e3931bc390f2649ed6d54dd1feb14078de2a5e4"
+    },
+    {
+      "path": "native/lyrics-renderer/src/timed_scene.rs",
+      "sha256": "015c32a4a733b3783cd6b9b73d613bb752d151541b7e1f54208f52548cca9392"
+    },
+    {
+      "path": "native/lyrics-renderer/test/appearance-track.json",
+      "sha256": "97023439b00604dfb7aab8ff95f8105d07751d2e48893587f427a0dcede5c539"
+    },
+    {
+      "path": "native/lyrics-renderer/Cargo.lock",
+      "sha256": "d723a07af616e92bbbca29112ace206fa39031b52849951c0f9784c4bad7c565"
+    },
+    {
+      "path": "ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf",
+      "sha256": "71a2162c852e87baa6440c983e406283391646778c8bc74e57b00613a3412f80"
+    },
+    {
+      "path": "ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf",
+      "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "native/lyrics-renderer/target/release/deps/lyrics_renderer-f8836f2ba3b59edc",
+      "sha256": "5920b05f5e74ce8198f87604056b3536e87616686c71ca455ea8c025f15a3d54"
+    },
+    {
+      "path": "native/lyrics-renderer/target/release/lyrics-renderer",
+      "sha256": "f97de931dc5008f4062e776168ee80d4d9dea35ac0385af51bcdb55ca1c58d87"
+    }
+  ],
+  "pngs": [
+    {
+      "path": "/files/rust_parity_live_motion_Spicy.png",
+      "sha256": "a5f64c1931c72a3e9402359a3f91b6f841d61cf190111c12d10135209c0c7cab"
+    },
+    {
+      "path": "/files/rust_parity_live_appearance_Spicy.png",
+      "sha256": "cf308089baf6f1a797a1745273436d2fe6fdff3463017a0ce6cf0c20c14e3471"
+    },
+    {
+      "path": "/files/rust_parity_live_motion_Amll.png",
+      "sha256": "cc5d2fa872e12e2ca1d5ed8abe7ab28937e787be37a3cc62e0bd43a6db5fb7c9"
+    },
+    {
+      "path": "/files/rust_parity_live_appearance_Amll.png",
+      "sha256": "8037234e34d3ca48a71903d60f868ed280d658c8da764c81edf78634bc8a520b"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_checkerboard_1.png",
+      "sha256": "e24f808c060549ab09c6a409fcd4437361d156d2fd92795934307cc755911ac9"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_transparent_1.png",
+      "sha256": "d1469e4f74daaeeb757561a83b7cb8282e25b4510152a461724fc884e49da15b"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_checkerboard_2.png",
+      "sha256": "ed23cdf74274647e588013ffc38809129faae20fe82f91f2f79b2875e02dbb8f"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_checkerboard_0.png",
+      "sha256": "3ca46ce8a1a55c0732c0f7b8d8a232e6caa7bfd9c9667a77f90cbfb00dfe32c0"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_transparent_2.png",
+      "sha256": "132379628e8f7bc4cd322389dd93058abf7bf4a69cdbbf63f54a2980d6709d8f"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha1/rust_spike_transparent_0.png",
+      "sha256": "28627ebc0c727dbf48d70f4031117a397eae9fd60e2b9f3f03dc98976e2625d3"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_checkerboard_1.png",
+      "sha256": "354276ffba7cf06236752646a015803322ddda744527b783b4522ef33973edc9"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_transparent_1.png",
+      "sha256": "ec176dc8fa82be2f47145ec0dadd658c1934de97bf71a0d19964624d866e9a29"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_checkerboard_2.png",
+      "sha256": "e76dd21807a38a1c0bc35519b70756149e16e5871cf07a109a7a5b6acb71b32e"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_checkerboard_0.png",
+      "sha256": "79c5d5a868aa264d8e13757c64bad27b578ca5cad22b0a8aa50329a8bcbe0b80"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_transparent_2.png",
+      "sha256": "06355fa5b4471361cde7a298321cadbe0362cbc1ca4bd084cdebad7aaaeafdc5"
+    },
+    {
+      "path": "/tmp/parity-live-appearance-alpha3/rust_spike_transparent_0.png",
+      "sha256": "2e3bbc1fdf5c9385bf4d7cdea9519369d544f740ca219fb0aa40e03cbb2d31aa"
+    }
+  ]
+}

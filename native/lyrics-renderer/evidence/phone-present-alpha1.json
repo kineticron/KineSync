@@ -1,0 +1,48 @@
+{
+  "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }",
+  "empty_frame_clear": true,
+  "frames": [
+    {
+      "frame": 0,
+      "protected_max_delta_u8": 0,
+      "stats": {
+        "cpu_encode_ms": 175.25962,
+        "gpu_interval_ms": 173.80605,
+        "wait_readback_ms": 0.32753
+      },
+      "time_ms": 17500.0,
+      "translucent_pixels": 65216,
+      "transparent_pixels": 183937
+    },
+    {
+      "frame": 1,
+      "protected_max_delta_u8": 1,
+      "stats": {
+        "cpu_encode_ms": 51.455487,
+        "gpu_interval_ms": 50.800137,
+        "wait_readback_ms": 0.20911000000000002
+      },
+      "time_ms": 18250.0,
+      "translucent_pixels": 64736,
+      "transparent_pixels": 183936
+    },
+    {
+      "frame": 2,
+      "protected_max_delta_u8": 0,
+      "stats": {
+        "cpu_encode_ms": 43.354647,
+        "gpu_interval_ms": 41.329637,
+        "wait_readback_ms": 0.22755
+      },
+      "time_ms": 20250.0,
+      "translucent_pixels": 63964,
+      "transparent_pixels": 183935
+    }
+  ],
+  "height": 640,
+  "note": "Linux offscreen host proxy; actual Vello, compute and surface shader. Checkerboards CPU-composite actual linear GPU readback; no UIKit/Metal compositor proof.",
+  "red_blur_pixels": 15588,
+  "scale": 1,
+  "shared_resize_odd_extent_clear": true,
+  "width": 390
+}

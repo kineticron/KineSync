@@ -1,0 +1,2795 @@
+{
+  "scope": "Actual production importer + preparation visibility packets for runtime auxiliary content tests, not a Skia comparison fixture",
+  "sources": [
+    {
+      "path": "DesktopBridge/src/lyricsLineSegmentation.js",
+      "sha256": "e282232fa86370e72ea52dabb50e7d430f31a57278a1204220d39ceaef64a685"
+    },
+    {
+      "path": "DesktopBridge/src/lyricsTtmlTranslations.js",
+      "sha256": "0540d689d308b7ad627b0e6e93c2ede81ab8f9dc9ab16954a19bc832f6921ad4"
+    },
+    {
+      "path": "DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml",
+      "sha256": "040d3d229bc0289c29bbbbab661e863414279b6e1e62b3a39f6a754bcfc4827e"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/amll-word-spacing.ts",
+      "sha256": "91368de55f887dd06d74645ad2367896284831bb22d7a6a126e52b166092904a"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/cluster-safe-syllables.ts",
+      "sha256": "f1cf47ba26f8fbcdf99ccd9fa490ae465deda192bae3af3c05a7e2a53f916cef"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-reference-is-cjk.ts",
+      "sha256": "7d0b3e50240b964cd1b8509ccfb22e654dfb3516c77efe788aa82c02e94fe5e6"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/amll-reference-word-split.ts",
+      "sha256": "9fb02acedbbe9356dba357b66419c750baa36ddf4cdf27f1a7facf5a38927269"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyrics-model.ts",
+      "sha256": "f66c433d28c8ed8ade0eaf2656099e341c8534a4652c49188ca9c804911e1b4e"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-skia-voice.tsx",
+      "sha256": "c7aa3ddded15118b9b06c1e1988a5301657e2f6c147dd9fddef69baba180b239"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/spicy-text-policy.ts",
+      "sha256": "05de028cca928236af5ea0d60b2f634e34796dd1d173a14a50a920d886722805"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/spicy-word-spacing.ts",
+      "sha256": "81be0b462327e2d0b976435b7ce0f74062b4c2ac4486300e59bacdde3cafbc5b"
+    },
+    {
+      "path": "ExpoLyrics/lib/graphemes.ts",
+      "sha256": "8001732e73627126ee5f29ec733ad2750ea812107efa13ab36011dcf1f946295"
+    },
+    {
+      "path": "ExpoLyrics/lib/lyrics-layout.ts",
+      "sha256": "bf6c3f1a836b493f47254589b738684423ba570f325ac4f494d7b51cd9620dc0"
+    },
+    {
+      "path": "ExpoLyrics/lib/lyrics-ttml-import.js",
+      "sha256": "a4857179591313f35ec6742f138d4e1eeab49271439a025ece0f2c16ccb97459"
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
+      "sha256": "160c990dd7a9003a010f077130c5ade5f76a01b078eaeef35505a4020137d175"
+    },
+    {
+      "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
+      "sha256": "6d97ead0f252f99636e845804ded99987c378f816eeff3385961d8b58ae93b38"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/@formatjs/fast-memoize/index.js",
+      "sha256": "bc7aa788e52c49b3038e91d26c42121dca9635bdb4ed861701cdf01ab1f4c486"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/@formatjs/intl-localematcher/index.js",
+      "sha256": "8231e86893c5341360f06bf438791708f88d69f1a4cf0871ebf0d6f4cb9b56eb"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/@formatjs/intl-segmenter/index.js",
+      "sha256": "9e919a3aed9da2532ec5d7e8daca09f472549e70ed68cc91fd2c8138ce903bad"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/unicode-segmenter/_grapheme_data.js",
+      "sha256": "213b0e5805e4366290b43adfe9544ff785fcfcc9b8a7ba6a057f4ae093412e28"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/unicode-segmenter/core.js",
+      "sha256": "b156c030dcf5f42f30cb6097cd16f2ea71b9e984944a976f35de07ac32a739aa"
+    },
+    {
+      "path": "ExpoLyrics/node_modules/unicode-segmenter/grapheme.js",
+      "sha256": "a3d8f8b2a44c1514d855399252b88be406bb10231fafecf2d927afbf16183e73"
+    },
+    {
+      "path": "ExpoLyrics/package-lock.json",
+      "sha256": "0e7139c5beb5281d6d1599b14521016bf6d8b891cf3a132ccf33ae8d83e3599b"
+    }
+  ],
+  "packets": [
+    {
+      "fixture_line": 1,
+      "style": "spicy",
+      "landscape": false,
+      "original_translation": "My hand that lost its grip",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "translation": "My hand that lost its grip",
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "지",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "친",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "지",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "친",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 11,
+      "style": "spicy",
+      "landscape": false,
+      "original_translation": "Du-ru-du-du",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "translation": "Du-ru-du-du",
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 1,
+      "style": "spicy",
+      "landscape": true,
+      "original_translation": "My hand that lost its grip",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "translation": "My hand that lost its grip",
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "지",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "친",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "지",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "친",
+                    " "
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 11,
+      "style": "spicy",
+      "landscape": true,
+      "original_translation": "Du-ru-du-du",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "translation": "Du-ru-du-du",
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "spicy",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 1,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": true,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": null
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": null,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": null
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 1,
+      "style": "amll",
+      "landscape": false,
+      "original_translation": "My hand that lost its grip",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "translation": "My hand that lost its grip",
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "지"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "친"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 0,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 1,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "지"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "친"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 0,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 1,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 11,
+      "style": "amll",
+      "landscape": false,
+      "original_translation": "Du-ru-du-du",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "translation": "Du-ru-du-du",
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 0,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 3,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 6,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 9,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 1,
+          "landscape": false
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 0,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 3,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 6,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 9,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": false
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 1,
+      "style": "amll",
+      "landscape": true,
+      "original_translation": "My hand that lost its grip",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "translation": "My hand that lost its grip",
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "지"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "친"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 0,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 1,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 13170,
+            "end": 16440,
+            "paint": {
+              "text": "깍지 놓친 손은",
+              "words": [
+                {
+                  "text": "깍",
+                  "offset": 0,
+                  "start": 13170,
+                  "end": 13937,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "깍"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "지 ",
+                  "offset": 1,
+                  "start": 13937,
+                  "end": 14518,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "지"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 13170,
+                      "end": 14518,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "놓",
+                  "offset": 3,
+                  "start": 14518,
+                  "end": 14831,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "놓"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 0,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "친 ",
+                  "offset": 4,
+                  "start": 14831,
+                  "end": 15113,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 1,
+                  "graphemes": [
+                    "친"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 14518,
+                      "end": 15113,
+                      "index": 1,
+                      "count": 2,
+                      "last": false
+                    }
+                  }
+                },
+                {
+                  "text": "손",
+                  "offset": 6,
+                  "start": 15113,
+                  "end": 15999,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "손"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 0,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "은",
+                  "offset": 7,
+                  "start": 15999,
+                  "end": 16440,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 2,
+                  "graphemes": [
+                    "은"
+                  ],
+                  "appearance": {
+                    "emphasized": true,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 15113,
+                      "end": 16440,
+                      "index": 1,
+                      "count": 2,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "깍",
+                "start": 13170,
+                "end": 13937
+              },
+              {
+                "text": "지 ",
+                "start": 13937,
+                "end": 14518
+              },
+              {
+                "text": "놓",
+                "start": 14518,
+                "end": 14831
+              },
+              {
+                "text": "친 ",
+                "start": 14831,
+                "end": 15113
+              },
+              {
+                "text": "손",
+                "start": 15113,
+                "end": 15999
+              },
+              {
+                "text": "은",
+                "start": 15999,
+                "end": 16440
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "fixture_line": 11,
+      "style": "amll",
+      "landscape": true,
+      "original_translation": "Du-ru-du-du",
+      "visible": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "translation": "Du-ru-du-du",
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 0,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 3,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 6,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 9,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      },
+      "hidden": {
+        "schema": 6,
+        "settings": {
+          "style": "amll",
+          "font_scale": 0.9,
+          "landscape": true
+        },
+        "generation": 1,
+        "track_id": "aux-fixture",
+        "lines": [
+          {
+            "start": 62146,
+            "end": 65365,
+            "paint": {
+              "text": "Du-ru-du-du",
+              "words": [
+                {
+                  "text": "Du-",
+                  "offset": 0,
+                  "start": 62146,
+                  "end": 62750,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "D",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 0,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "ru-",
+                  "offset": 3,
+                  "start": 62750,
+                  "end": 63111,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "r",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 3,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du-",
+                  "offset": 6,
+                  "start": 63111,
+                  "end": 63456,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u",
+                    "-"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": false,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 6,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                },
+                {
+                  "text": "du",
+                  "offset": 9,
+                  "start": 63456,
+                  "end": 65365,
+                  "joined": false,
+                  "gap_after": false,
+                  "group": 0,
+                  "graphemes": [
+                    "d",
+                    "u"
+                  ],
+                  "appearance": {
+                    "emphasized": false,
+                    "origin": 0.5,
+                    "rtl": false,
+                    "last": true,
+                    "emphasis": {
+                      "start": 62146,
+                      "end": 65365,
+                      "index": 9,
+                      "count": 11,
+                      "last": true
+                    }
+                  }
+                }
+              ],
+              "cjk_breaks": [],
+              "opposite": false,
+              "duet": true
+            },
+            "atoms": [
+              {
+                "text": "Du-",
+                "start": 62146,
+                "end": 62750
+              },
+              {
+                "text": "ru-",
+                "start": 62750,
+                "end": 63111
+              },
+              {
+                "text": "du-",
+                "start": 63111,
+                "end": 63456
+              },
+              {
+                "text": "du",
+                "start": 63456,
+                "end": 65365
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

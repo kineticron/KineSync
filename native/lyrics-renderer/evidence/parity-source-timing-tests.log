@@ -1,0 +1,14 @@
+   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
+    Finished `test` profile [unoptimized] target(s) in 2.28s
+     Running unittests src/lib.rs (native/lyrics-renderer/target/debug/deps/lyrics_renderer-13335a4112ab25fb)
+
+running 5 tests
+test style_timing::spring_tests::actual_source_amll_critical_and_underdamped_branches ... ok
+source AMLL maximum numeric delta: 0.0000000000000002220446049250313
+test style_timing::tests::motion_update_reuses_all_buffers_with_no_allocations ... ok
+test style_timing::tests::actual_source_amll_emphasis_float_and_reversed_release_goldens ... ok
+test style_timing::tests::timing_goldens_pin_production_source_and_spline_dependency ... ok
+source Spicy maximum numeric delta: 0.0000000000000004440892098500626
+test style_timing::tests::actual_source_word_release_seek_pause_and_variable_dt_goldens ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.02s

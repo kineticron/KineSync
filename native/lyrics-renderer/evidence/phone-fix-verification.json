@@ -1,0 +1,182 @@
+{
+  "baseline": "4bcfe6e29c200965013b6165546d69b8e1189a50",
+  "code_head": "6ebc0b2d8ef157e1ecde48c4af9a0c763d579d1c",
+  "branch": "rust-renderer-spike",
+  "commits": [
+    "6ebc0b2d8ef157e1ecde48c4af9a0c763d579d1c fix(player): clip Rust lyrics above measured controls and guard ProMotion evidence",
+    "6d9838b2b82434d18e1a90e7bed5ce3d7a5d809f fix(renderer): drive bounded native frames and continuous scroll from display targets",
+    "5b3d864c172251d28ddcfc4cb5940c6b332b8d75 docs(renderer): record phone baseline diagnosis before fixes"
+  ],
+  "rust_tests": 12,
+  "node_tests": 22,
+  "checks": [
+    {
+      "check": "fmt",
+      "argv": [
+        "cargo",
+        "+1.97.0",
+        "fmt",
+        "--check",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-fmt.log"
+    },
+    {
+      "check": "rust-tests",
+      "argv": [
+        "cargo",
+        "+1.97.0",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-rust-tests.log"
+    },
+    {
+      "check": "clippy-host",
+      "argv": [
+        "cargo",
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-clippy-host.log"
+    },
+    {
+      "check": "clippy-ios",
+      "argv": [
+        "cargo",
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "native/lyrics-renderer/Cargo.toml",
+        "--lib",
+        "--target",
+        "aarch64-apple-ios",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-clippy-ios.log"
+    },
+    {
+      "check": "typescript",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "exit_code": 0,
+      "log": "phone-fix-typescript.log"
+    },
+    {
+      "check": "eslint",
+      "argv": [
+        "./node_modules/.bin/eslint",
+        "app/(tabs)/index.tsx",
+        "components/lyrics/rust/rust-lyrics-view.tsx",
+        "lib/rust-lyrics-protocol.js",
+        "lib/rust-lyrics-protocol.d.ts"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike/ExpoLyrics",
+      "exit_code": 0,
+      "log": "phone-fix-eslint.log"
+    },
+    {
+      "check": "node-tests",
+      "argv": [
+        "env",
+        "BASH32=/tmp/rust-bash32-src/bash-3.2.57/bash",
+        "node",
+        "--test",
+        "scripts/test/ios-dev-ci.test.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-node-tests.log"
+    },
+    {
+      "check": "baseline",
+      "argv": [
+        "node",
+        "native/lyrics-renderer/evidence/phone-baseline.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-baseline.log"
+    },
+    {
+      "check": "actionlint",
+      "argv": [
+        "/tmp/rust-spike-actionlint/actionlint",
+        ".github/workflows/ios-development-build.yml"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-actionlint.log"
+    },
+    {
+      "check": "repository",
+      "argv": [
+        "node",
+        "scripts/check-repository.cjs"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-repository.log"
+    },
+    {
+      "check": "diff",
+      "argv": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-diff.log"
+    },
+    {
+      "check": "C header ABI",
+      "argv": [
+        "cc",
+        "-x",
+        "c",
+        "-std=c11",
+        "-fsyntax-only",
+        "-I",
+        "native/lyrics-renderer/include",
+        "-"
+      ],
+      "cwd": "/home/kit/rust-renderer-spike",
+      "exit_code": 0,
+      "log": "phone-fix-header.log"
+    }
+  ],
+  "native_abi": 2,
+  "metrics_bytes": 88,
+  "app_build_performed": false,
+  "push_performed": false,
+  "metro_operations_performed": false,
+  "swift_uikit_compilation": "Not available on Linux; coordinator macOS build required",
+  "phone_fix_validation": "Pending coordinator review, updated native client and device capture; no performance claim",
+  "files_manifest": "native/lyrics-renderer/evidence/phone-fix-files.sha256"
+}

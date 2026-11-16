@@ -1,0 +1,167 @@
+{
+  "scope": "First isolated-voice comparison. Differences are diagnostic, no pixel acceptance threshold or full parity claim.",
+  "records": [
+    {
+      "id": "korean-390x640-1x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 4750,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.792361111111111,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "korean-390x640-1x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 4192,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.6731543803418802,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "korean-844x390-1x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 5803,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.6477751448130595,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "korean-844x390-1x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 4554,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.5654372746789809,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "korean-390x640-3x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 37935,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.7830374525166193,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "korean-390x640-3x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 32741,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 1.665886158594492,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-390x640-1x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 9120,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 3.8602403846153845,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-390x640-1x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 8396,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 4.1757905982905985,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-844x390-1x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 8809,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 2.6460171345242434,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-844x390-1x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 7245,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 2.6330092761372383,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-390x640-3x-spicy",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 75602,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 3.8136694266381768,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    },
+    {
+      "id": "latin-390x640-3x-amll",
+      "compared": "unregistered same-viewport composited bytes; includes known layout/font/appearance differences",
+      "changed_pixels": 66950,
+      "max_rgb_delta": 233,
+      "mean_rgb_delta": 4.096897702991453,
+      "max_alpha_delta": 255,
+      "accepted_parity": false
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-spicy_compare.png",
+      "sha256": "09b1b7b84d5f581ca7164b3086acaf6524341bf312843238d9193f56ff012500"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-1x-amll_compare.png",
+      "sha256": "6a3ca2d4b3753a4654bbe3128e15d55adf5dc7ca160233e47725f1254def3100"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-spicy_compare.png",
+      "sha256": "49ca978f523420f2910044d8154adf1351f2d0a4bd299ac79877e5f4a461a767"
+    },
+    {
+      "path": "/files/rust_parity_korean-844x390-1x-amll_compare.png",
+      "sha256": "c5a52b54e8c9efbd340755500ec2ae369593482996359a8bac421ba72e379a87"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-spicy_compare.png",
+      "sha256": "e1f67f9e1e8ea2092cd35afbbbf8e7ad88b0d078f03f17c29179ba31b0678094"
+    },
+    {
+      "path": "/files/rust_parity_korean-390x640-3x-amll_compare.png",
+      "sha256": "d843901752ab7af5eb79e0e4a92ba9744d600e0ef173d907563026147a43bb65"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-spicy_compare.png",
+      "sha256": "2f37352a3ad2340138fc68b9bdd917af41c2449a7da04e71fe7c848efe372bdb"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-1x-amll_compare.png",
+      "sha256": "8ce224fa42efdcc49d63376618f7f14119363b999c284c4abf0b5881b94cb9d8"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-spicy_compare.png",
+      "sha256": "60721d3717a90b127e2472b24239b47119e991c1ba5cd3ac3376278184c776f4"
+    },
+    {
+      "path": "/files/rust_parity_latin-844x390-1x-amll_compare.png",
+      "sha256": "563631431b5e2e51ec1cd5e9f67f6b1ded0f9b2752f0163fe4f1651a5a909a81"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-spicy_compare.png",
+      "sha256": "3470c72379a4be10b3b50243df5071a12b6a2316513938571aff99420839072e"
+    },
+    {
+      "path": "/files/rust_parity_latin-390x640-3x-amll_compare.png",
+      "sha256": "e2104a680f88a464ca96390e4c4df83366e48ad1a0242a202063af5b5fbc2cf1"
+    },
+    {
+      "path": "/files/rust_parity_first_contact.png",
+      "sha256": "c8a3dbfcbb78a4d4674b798ce57b0bcb8e4746fce525621d7c054d1a718c7f7e"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
 import { BlurView } from "expo-blur";
@@ -27,6 +28,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   View,
+  Text,
 } from "react-native";
 import Reanimated, {
   useSharedValue,
@@ -440,6 +442,7 @@ export default function HomeScreen() {
     return () => { clearTimeout(timer); subscription.remove(); };
   }, [spicyExpiry, liveLyrics.length]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [rustRenderer, setRustRenderer] = useState(false);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
   const [topBarMounted, setTopBarMounted] = useState(true);
@@ -1281,6 +1284,9 @@ export default function HomeScreen() {
     topBarTrackPress,
   ]);
 
+  // Skia parity: the lyric surface owns the whole area under the top bar, so
+  // rows keep rendering below the controls dock (bottom padding lives in the
+  // renderer) instead of being clipped above it. The dock gradient fades them.
   const lyricsViewportStyle = useMemo(
     () => ({
       position: "absolute" as const,
@@ -1335,6 +1341,11 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
+      {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer" disabled={tour.active}
+        onPress={() => setRustRenderer(value => !value)}
+        style={{ position: 'absolute', zIndex: 100, top: insets.top + 4, right: 12, padding: 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)' }}>
+        <Text style={{ color: '#fff', fontSize: 11 }}>{tour.active ? 'Rust unavailable during tour' : rustRenderer ? 'Rust · switch to Skia' : 'Try Rust renderer'}</Text>
+      </Pressable> : null}
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
       ) : null}
@@ -1428,6 +1439,18 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+              ) : __DEV__ && rustRenderer && !tour.active ? (
+                <RustLyricsView
+                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onUserInteraction={handleControlsInteraction}
+                />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}
@@ -1659,6 +1682,18 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
+              ) : __DEV__ && rustRenderer && !tour.active ? (
+                <RustLyricsView
+                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onUserInteraction={handleControlsInteraction}
+                />
               ) : lyricsStyle === "amll" ? (
                 <AmllLyricsView
                   active={isScreenFocused && (!tour.active || tour.foreground)}

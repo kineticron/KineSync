@@ -1,0 +1,357 @@
+{
+  "sources": [
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-interlude-motion.ts",
+      "sha256": "23cc566fabf5bd1d9809b5f1448acf94266b01cc071aac0c4c0532042b1cdfdb"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/reference-motion.ts",
+      "sha256": "c65aa0abb1a8a749bafbdb4f3681fcedf272479a856b96449648b27d8cac0ff6"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-interlude.tsx",
+      "sha256": "6771eabceca4a62b4b4ee52d97bf9e86eaad86a7d67b2e0880fe10a6f79a141b"
+    },
+    {
+      "path": "ExpoLyrics/components/lyrics/native/native-lyric-row.tsx",
+      "sha256": "1d2c2164fef9dfa6119bb7e4d5a989bb5eb65e24826c119c7e09944cf3e3e242"
+    }
+  ],
+  "start": 2000,
+  "end": 6000,
+  "frames": [
+    {
+      "time": 2000,
+      "dt": 0,
+      "amll": {
+        "scale": 0,
+        "dots": [
+          0,
+          0,
+          0
+        ]
+      },
+      "rowOpacity": 1,
+      "spicy": {
+        "groupScale": 0,
+        "groupOpacity": 0,
+        "dots": [
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ]
+        ]
+      }
+    },
+    {
+      "time": 2150,
+      "dt": 0.064,
+      "amll": {
+        "scale": 0.269995316167638,
+        "dots": [
+          0,
+          0,
+          0
+        ]
+      },
+      "rowOpacity": 1,
+      "spicy": {
+        "groupScale": 0.8024033590617052,
+        "groupOpacity": 1,
+        "dots": [
+          [
+            0.7528976512164707,
+            -0.0102204333554924,
+            0.01959371996479975,
+            0.3627359179771198
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ]
+        ]
+      }
+    },
+    {
+      "time": 2600,
+      "dt": 0.064,
+      "amll": {
+        "scale": 0.5949359504265309,
+        "dots": [
+          0.09,
+          0.05,
+          0.05
+        ]
+      },
+      "rowOpacity": 1,
+      "spicy": {
+        "groupScale": 1,
+        "groupOpacity": 1,
+        "dots": [
+          [
+            1.0219139928511884,
+            -0.2774060984630559,
+            0.9331799128790995,
+            0.9565669433714147
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ],
+          [
+            0.75,
+            0,
+            0,
+            0.35
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5499,
+      "dt": 0.064,
+      "amll": {
+        "scale": 0.7031384778147352,
+        "dots": [
+          0.6693333333333333,
+          0.6693333333333333,
+          0.6693333333333333
+        ]
+      },
+      "rowOpacity": 1,
+      "spicy": {
+        "groupScale": 1,
+        "groupOpacity": 1,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5500,
+      "dt": 0.001,
+      "amll": {
+        "scale": 0.7025061533028779,
+        "dots": [
+          0.6666666666666666,
+          0.6666666666666666,
+          0.6666666666666666
+        ]
+      },
+      "rowOpacity": 1,
+      "spicy": {
+        "groupScale": 1,
+        "groupOpacity": 1,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5540,
+      "dt": 0.04,
+      "amll": {
+        "scale": 0.6726420297460617,
+        "dots": [
+          0.56,
+          0.56,
+          0.56
+        ]
+      },
+      "rowOpacity": 0.9857805539708828,
+      "spicy": {
+        "groupScale": 1.0076046511627907,
+        "groupOpacity": 0.8367346938775511,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5600,
+      "dt": 0.06,
+      "amll": {
+        "scale": 0.6094602045156037,
+        "dots": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      },
+      "rowOpacity": 0.9387234145452029,
+      "spicy": {
+        "groupScale": 1.064415019762846,
+        "groupOpacity": 0.16326530612244894,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5750,
+      "dt": 0.064,
+      "amll": {
+        "scale": 0.33319701998361856,
+        "dots": [
+          0,
+          0,
+          0
+        ]
+      },
+      "rowOpacity": 0.8647948363906626,
+      "spicy": {
+        "groupScale": 1.1698205128205128,
+        "groupOpacity": 0,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "time": 5900,
+      "dt": 0.064,
+      "amll": {
+        "scale": 0,
+        "dots": [
+          0,
+          0,
+          0
+        ]
+      },
+      "rowOpacity": 0.85,
+      "spicy": {
+        "groupScale": 0,
+        "groupOpacity": 0,
+        "dots": [
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,666 @@
+[
+  {
+    "landscape": false,
+    "png": "/files/rust_parity_aux_spicy_portrait.png",
+    "premultiplied": true,
+    "scope": "actual Rust render; not Skia parity acceptance",
+    "selected_layout": [
+      {
+        "content_height": 66.0999984741211,
+        "content_top": 12.0,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              0,
+              6
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              6,
+              7
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              7,
+              13
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              13,
+              14
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 33.599998474121094,
+            "text_bytes": [
+              14,
+              20
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 33.599998474121094,
+          "lane_width": 293.9200134277344,
+          "line_height": 44.099998474121094,
+          "right": false,
+          "row_padding": 12.0,
+          "text_width": 293.9200134277344,
+          "weight": 700.0,
+          "x": 28.0
+        },
+        "height": 90.0999984741211,
+        "line_count": 1,
+        "text": "깍지 놓친 손은",
+        "translation": {
+          "faces": [
+            {
+              "face": {
+                "collection_index": 0,
+                "family": "SF Pro Display",
+                "postscript": "SFProDisplay-Regular",
+                "sha256": "71a2162c852e87baa6440c983e406283391646778c8bc74e57b00613a3412f80",
+                "subfamily": "Regular"
+              },
+              "normalized_coords": [],
+              "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(500.0) }",
+              "text_bytes": [
+                0,
+                26
+              ]
+            }
+          ],
+          "height": 18.0,
+          "line_count": 1,
+          "policy": {
+            "leading": 18.0,
+            "margin": 4.0,
+            "size": 14.0,
+            "weight": 500.0,
+            "width": 289.9200134277344,
+            "x": 2.0
+          },
+          "text": "My hand that lost its grip",
+          "y": 48.099998474121094
+        },
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            7
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            10,
+            14
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            17,
+            20
+          ]
+        ]
+      }
+    ],
+    "style": "spicy",
+    "subtitle_pixels": 844
+  },
+  {
+    "landscape": true,
+    "png": "/files/rust_parity_aux_spicy_landscape.png",
+    "premultiplied": true,
+    "scope": "actual Rust render; not Skia parity acceptance",
+    "selected_layout": [
+      {
+        "content_height": 59.88999938964844,
+        "content_top": 12.0,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 30.23999786376953,
+            "text_bytes": [
+              0,
+              6
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 30.23999786376953,
+            "text_bytes": [
+              6,
+              7
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 30.23999786376953,
+            "text_bytes": [
+              7,
+              13
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 30.23999786376953,
+            "text_bytes": [
+              13,
+              14
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+            "size": 30.23999786376953,
+            "text_bytes": [
+              14,
+              20
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 30.23999786376953,
+          "lane_width": 734.3999633789062,
+          "line_height": 39.689998626708984,
+          "right": true,
+          "row_padding": 12.0,
+          "text_width": 734.3999633789062,
+          "weight": 700.0,
+          "x": 95.60003662109375
+        },
+        "height": 83.88999938964844,
+        "line_count": 1,
+        "text": "깍지 놓친 손은",
+        "translation": {
+          "faces": [
+            {
+              "face": {
+                "collection_index": 0,
+                "family": "SF Pro Display",
+                "postscript": "SFProDisplay-Regular",
+                "sha256": "71a2162c852e87baa6440c983e406283391646778c8bc74e57b00613a3412f80",
+                "subfamily": "Regular"
+              },
+              "normalized_coords": [],
+              "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(500.0) }",
+              "text_bytes": [
+                0,
+                26
+              ]
+            }
+          ],
+          "height": 16.200000762939453,
+          "line_count": 1,
+          "policy": {
+            "leading": 16.200000762939453,
+            "margin": 4.0,
+            "size": 12.59999942779541,
+            "weight": 500.0,
+            "width": 730.3999633789062,
+            "x": 2.0
+          },
+          "text": "My hand that lost its grip",
+          "y": 43.689998626708984
+        },
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            7
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            10,
+            14
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            17,
+            20
+          ]
+        ]
+      }
+    ],
+    "style": "spicy",
+    "subtitle_pixels": 682
+  },
+  {
+    "landscape": false,
+    "png": "/files/rust_parity_aux_amll_portrait.png",
+    "premultiplied": true,
+    "scope": "actual Rust render; not Skia parity acceptance",
+    "selected_layout": [
+      {
+        "content_height": 70.20000076293945,
+        "content_top": 14.40000057220459,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              0,
+              6
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              6,
+              7
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              7,
+              13
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              13,
+              14
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 36.0,
+            "text_bytes": [
+              14,
+              20
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 36.0,
+          "lane_width": 306.0,
+          "line_height": 43.20000076293945,
+          "right": false,
+          "row_padding": 14.40000057220459,
+          "text_width": 291.6000061035156,
+          "weight": 800.0,
+          "x": 42.0
+        },
+        "height": 99.00000190734863,
+        "line_count": 1,
+        "text": "깍지 놓친 손은",
+        "translation": {
+          "faces": [
+            {
+              "face": {
+                "collection_index": 0,
+                "family": "SF Pro Display",
+                "postscript": "SFProDisplay-Bold",
+                "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+                "subfamily": "Bold"
+              },
+              "normalized_coords": [],
+              "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+              "text_bytes": [
+                0,
+                26
+              ]
+            }
+          ],
+          "height": 27.0,
+          "line_count": 1,
+          "policy": {
+            "leading": 27.0,
+            "margin": 0.0,
+            "size": 18.0,
+            "weight": 700.0,
+            "width": 291.6000061035156,
+            "x": 0.0
+          },
+          "text": "My hand that lost its grip",
+          "y": 43.20000076293945
+        },
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            10,
+            13
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            17,
+            20
+          ]
+        ]
+      }
+    ],
+    "style": "amll",
+    "subtitle_pixels": 1626
+  },
+  {
+    "landscape": true,
+    "png": "/files/rust_parity_aux_amll_landscape.png",
+    "premultiplied": true,
+    "scope": "actual Rust render; not Skia parity acceptance",
+    "selected_layout": [
+      {
+        "content_height": 56.15999984741211,
+        "content_top": 11.519999504089355,
+        "faces": [
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 28.799999237060547,
+            "text_bytes": [
+              0,
+              6
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 28.799999237060547,
+            "text_bytes": [
+              6,
+              7
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 28.799999237060547,
+            "text_bytes": [
+              7,
+              13
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "SF Pro Display",
+              "postscript": "SFProDisplay-Bold",
+              "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 28.799999237060547,
+            "text_bytes": [
+              13,
+              14
+            ]
+          },
+          {
+            "face": {
+              "collection_index": 0,
+              "family": "Noto Sans CJK JP",
+              "postscript": "NotoSansCJKjp-Bold",
+              "sha256": "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb",
+              "subfamily": "Bold"
+            },
+            "normalized_coords": [],
+            "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(800.0) }",
+            "size": 28.799999237060547,
+            "text_bytes": [
+              14,
+              20
+            ]
+          }
+        ],
+        "geometry": {
+          "font_size": 28.799999237060547,
+          "lane_width": 730.4000244140625,
+          "line_height": 34.560001373291016,
+          "right": true,
+          "row_padding": 11.519999504089355,
+          "text_width": 615.0800170898438,
+          "weight": 800.0,
+          "x": 172.1199951171875
+        },
+        "height": 79.19999885559082,
+        "line_count": 1,
+        "text": "깍지 놓친 손은",
+        "translation": {
+          "faces": [
+            {
+              "face": {
+                "collection_index": 0,
+                "family": "SF Pro Display",
+                "postscript": "SFProDisplay-Bold",
+                "sha256": "a981001f6d4e70292fd26fa8e05437c4a9f0f8c5981027ff0ceead01bb30311f",
+                "subfamily": "Bold"
+              },
+              "normalized_coords": [],
+              "requested_attributes": "Attributes { width: FontWidth(1.0), style: Normal, weight: FontWeight(700.0) }",
+              "text_bytes": [
+                0,
+                26
+              ]
+            }
+          ],
+          "height": 21.599998474121094,
+          "line_count": 1,
+          "policy": {
+            "leading": 21.599998474121094,
+            "margin": 0.0,
+            "size": 14.399999618530273,
+            "weight": 700.0,
+            "width": 615.0800170898438,
+            "x": 0.0
+          },
+          "text": "My hand that lost its grip",
+          "y": 34.560001373291016
+        },
+        "word_ranges": [
+          [
+            0,
+            3
+          ],
+          [
+            3,
+            6
+          ],
+          [
+            7,
+            10
+          ],
+          [
+            10,
+            13
+          ],
+          [
+            14,
+            17
+          ],
+          [
+            17,
+            20
+          ]
+        ]
+      }
+    ],
+    "style": "amll",
+    "subtitle_pixels": 1148
+  }
+]

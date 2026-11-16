@@ -1,0 +1,12 @@
+{
+  "platforms": [
+    "apple"
+  ],
+  "apple": {
+    "modules": [
+      "KineSyncRustLyricsModule"
+    ],
+    "swiftModuleName": "KineSyncRustLyrics",
+    "debugOnly": true
+  }
+}

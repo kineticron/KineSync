@@ -1,0 +1,85 @@
+$ /home/kit/.cargo/bin/cargo +1.97.0 fmt --check
+Exit: 0
+
+$ /home/kit/.cargo/bin/cargo +1.97.0 test --locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (target/debug/deps/lyrics_renderer-7d96e7e209b0824a)
+
+running 7 tests
+test live::tests::stale_track_and_anchor_pause_seek_rate ... ok
+test ffi::tests::panic_containment_and_invalid_handles ... ok
+test tests::boundaries_and_zero_duration ... ok
+test tests::formats_pause_seek_rate ... ok
+test live::tests::live_korean_byte_ranges_and_invalid_payload ... ok
+test tests::real_fixture_ranges_and_focus ... ok
+test scene::tests::overlapping_live_leads_keep_both_in_protected_band ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (target/debug/deps/lyrics_renderer-8ced91e5751b82a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lyrics_renderer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Exit: 0
+
+$ /home/kit/.cargo/bin/cargo +1.97.0 clippy --locked --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+Exit: 0
+
+$ /home/kit/.cargo/bin/cargo +1.97.0 clippy --locked --target aarch64-apple-ios --lib -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+Exit: 0
+
+$ ./node_modules/.bin/tsc --noEmit --incremental false
+Exit: 0
+
+$ ./node_modules/.bin/eslint components/lyrics/rust/rust-lyrics-view.tsx lib/rust-lyrics-protocol.js app/(tabs)/index.tsx
+Exit: 0
+
+$ node --test /home/kit/rust-renderer-spike/scripts/test/ios-dev-ci.test.cjs /home/kit/rust-renderer-spike/scripts/test/release-publisher.test.cjs /home/kit/rust-renderer-spike/scripts/test/repository-check.test.cjs
+✔ absolute normalized cache paths and build flags survive runner paths with spaces (2.17314ms)
+✔ Rust prebuilt is source-exact, and independent of JS or Swift shims (12.893479ms)
+✔ Podfile.lock and native/SDK identities invalidate native caches without JS-only churn (182.038069ms)
+✔ workflow restore/save paths and identities match exactly, all are resolved once (0.79778ms)
+✔ stage failure and warm-cache failure still produce machine-readable evidence (149.181821ms)
+✔ IPA inner ZIP preserves framework executable modes, symlinks, and bytes (85.493575ms)
+✔ restored Podfile.lock cannot silently change between restore and save (81.000805ms)
+✔ runner initialization emits actual paths, pinned Cargo target and no Rust build (333.6402ms)
+✔ workflow shell commands pass bash syntax checks (85.299455ms)
+✔ independent executable validator rejects equal 0644 source and archive, repair fixes only code (313.613882ms)
+✔ live Rust track protocol preserves source atoms and sends anchors only for actual anchor changes (1.971519ms)
+✔ native lifecycle source harness flushes inactive updates and bounds paused surface retries (1.96349ms)
+✔ Rust cache verifier rejects simulator slices and final proof rejects archive-only integration (165.80986ms)
+✔ a version-tag collision stops the actual publisher before GitHub mutations (226.532867ms)
+✔ platform uploads preserve the existing GitHub release title and notes (53.595067ms)
+✔ documentation checks resolve links and reject broken files, anchors, and escapes (3.64509ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1506.67107
+Exit: 0
+
+$ /tmp/rust-spike-actionlint/actionlint -shellcheck= -pyflakes=
+Exit: 0
+
+$ bash -n scripts/ios-dev-ci/build-rust-device.sh
+Exit: 0
+
+$ node scripts/check-repository.cjs
+Repository checks passed: 42 documents, pinned actions, community files, and tracked secret-file exclusions.
+Exit: 0
+
+$ git diff --check
+Exit: 0
