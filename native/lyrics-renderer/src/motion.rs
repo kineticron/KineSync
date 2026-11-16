@@ -518,6 +518,14 @@ impl FollowScroll {
             }
             return self.advance_manual(now_ms);
         }
+        if self.frozen {
+            // Momentum/rebound may have moved since freeze() captured the target.
+            // Rebase the follow trajectory on the last displayed offset, not the
+            // fling's starting offset, and start the spring at zero elapsed time.
+            self.freeze();
+            self.drag_raw = Self::unband(self.position, self.max_offset, self.viewport);
+            self.last_ms = Some(now_ms);
+        }
         self.frozen = false;
         self.dragging = false;
         self.fling_velocity = 0.0;
@@ -812,6 +820,38 @@ mod tests {
         }
         assert!(!scroll.animating());
         assert!(scroll.position() > second);
+    }
+
+    #[test]
+    fn return_during_fling_or_rebound_preserves_offset_and_stops_momentum() {
+        for style in [Style::Amll, Style::Spicy] {
+            for overscroll in [false, true] {
+                let mut scroll = FollowScroll::default();
+                scroll.configure(style, 3.0, 8);
+                let target = command(style, 500.0, 800.0, 1, 0);
+                scroll.sample(&target, 0.0, true);
+                scroll.drag(if overscroll { -800.0 } else { 120.0 }, 2000.0, 800.0);
+                scroll.fling(if overscroll { 0.0 } else { 3.0 }, 2000.0, 800.0);
+                scroll.sample(&target, 16.0, false);
+                let before = scroll.sample(&target, 32.0, false);
+                assert!(scroll.fling_velocity != 0.0 || scroll.settling);
+                assert!((scroll.sample(&target, 48.0, true) - before).abs() < 1e-9);
+                assert_eq!(scroll.fling_velocity, 0.0);
+                assert_eq!(scroll.settle_velocity, 0.0);
+                assert!(!scroll.settling);
+                assert!(!scroll.dragging);
+                assert!(scroll.fling_last_ms.is_none());
+                assert!(scroll.animating(), "return must keep native frames awake");
+                let next = scroll.sample(&target, 49.0, true);
+                assert!((next - before).abs() < (target.offset - before).abs() * 0.02);
+                assert!((target.offset - next).abs() < (target.offset - before).abs());
+                for frame in 1..600 {
+                    scroll.sample(&target, 49.0 + f64::from(frame) * 16.0, true);
+                }
+                assert_eq!(scroll.position(), target.offset);
+                assert!(!scroll.animating(), "return must eventually go idle");
+            }
+        }
     }
 
     #[test]
