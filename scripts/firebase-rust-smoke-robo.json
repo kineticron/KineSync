@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "contextDescriptor": {
+      "condition": "app_under_test_shown"
+    },
+    "maxNumberOfRuns": 1,
+    "actions": [
+      {
+        "eventType": "WAIT",
+        "delayTime": 10000
+      },
+      {
+        "eventType": "TAKE_SCREENSHOT",
+        "screenshotName": "rust_lyrics_10s"
+      },
+      {
+        "eventType": "WAIT",
+        "delayTime": 15000
+      },
+      {
+        "eventType": "TAKE_SCREENSHOT",
+        "screenshotName": "rust_lyrics_25s"
+      },
+      {
+        "eventType": "TERMINATE_CRAWL"
+      }
+    ]
+  }
+]
