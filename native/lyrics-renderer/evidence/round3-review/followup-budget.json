@@ -1,0 +1,205 @@
+{
+  "scope": "Linux host same adapter; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence",
+  "build": "debug",
+  "thresholds": {
+    "encode_p95": "before*1.25+0.5ms",
+    "scene_p50": "before*1.25+0.01ms",
+    "steady_scene_allocations": 0
+  },
+  "samples": 90,
+  "warmup": 8,
+  "reports": [
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.04766,
+        0.09993
+      ],
+      "encode_p95_ms": [
+        30.690307999999998,
+        28.489227999999997
+      ],
+      "accepted": false
+    },
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.08904999999999999,
+        0.09478
+      ],
+      "encode_p95_ms": [
+        24.856248,
+        24.969378
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.08033,
+        0.08014
+      ],
+      "encode_p95_ms": [
+        26.020029,
+        27.151358000000002
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.047080000000000004,
+        0.10257000000000001
+      ],
+      "encode_p95_ms": [
+        32.524598000000005,
+        28.632309000000003
+      ],
+      "accepted": false
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.08852,
+        0.08921
+      ],
+      "encode_p95_ms": [
+        25.373848000000002,
+        26.025909
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.09055,
+        0.0914
+      ],
+      "encode_p95_ms": [
+        25.783969,
+        26.344348
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.04173,
+        0.09145
+      ],
+      "encode_p95_ms": [
+        31.615848000000003,
+        27.789578
+      ],
+      "accepted": false
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.07947,
+        0.08357
+      ],
+      "encode_p95_ms": [
+        27.156419,
+        28.747498
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.08534000000000001,
+        0.08464
+      ],
+      "encode_p95_ms": [
+        29.354868,
+        30.980248
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.06054,
+        0.1159
+      ],
+      "encode_p95_ms": [
+        34.974498,
+        33.510208
+      ],
+      "accepted": false
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.1493,
+        0.14980000000000002
+      ],
+      "encode_p95_ms": [
+        37.487507,
+        35.106038
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.15428999999999998,
+        0.15442999999999998
+      ],
+      "encode_p95_ms": [
+        36.435528000000005,
+        35.616778000000004
+      ],
+      "accepted": true
+    }
+  ]
+}

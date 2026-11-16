@@ -1,0 +1,205 @@
+{
+  "scope": "Linux host same adapter/release opt3; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence",
+  "thresholds": {
+    "encode_p95": "before*1.25+0.5ms",
+    "scene_p50": "before*1.25+0.01ms",
+    "steady_scene_allocations": 0
+  },
+  "samples": 90,
+  "warmup": 8,
+  "build": "debug (cargo test log confirms; legacy scope mislabeled release)",
+  "reports": [
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.061130000000000004,
+        0.12386
+      ],
+      "encode_p95_ms": [
+        32.157248,
+        30.877268
+      ],
+      "accepted": false
+    },
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.12028,
+        0.12671000000000002
+      ],
+      "encode_p95_ms": [
+        29.313578,
+        28.895917999999998
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 390,
+      "height": 640,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.12792,
+        0.12568000000000001
+      ],
+      "encode_p95_ms": [
+        27.615008,
+        29.315979
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.06677999999999999,
+        0.1384
+      ],
+      "encode_p95_ms": [
+        30.911989000000002,
+        28.050577999999998
+      ],
+      "accepted": false
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.12105,
+        0.10679
+      ],
+      "encode_p95_ms": [
+        29.058068,
+        30.268397999999998
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 390,
+      "height": 640,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.11197,
+        0.11365
+      ],
+      "encode_p95_ms": [
+        27.112609,
+        28.011318
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.06161,
+        0.12587
+      ],
+      "encode_p95_ms": [
+        33.322818,
+        32.289279
+      ],
+      "accepted": false
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.12053,
+        0.12272
+      ],
+      "encode_p95_ms": [
+        29.555578,
+        30.548619
+      ],
+      "accepted": true
+    },
+    {
+      "style": "spicy",
+      "width": 844,
+      "height": 390,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.11111,
+        0.10404999999999999
+      ],
+      "encode_p95_ms": [
+        27.565388,
+        32.283798000000004
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Baseline",
+      "after": "Fill",
+      "scene_p50_ms": [
+        0.04877,
+        0.10666
+      ],
+      "encode_p95_ms": [
+        30.583809,
+        29.964568
+      ],
+      "accepted": false
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Fill",
+      "after": "Motion",
+      "scene_p50_ms": [
+        0.09403,
+        0.0943
+      ],
+      "encode_p95_ms": [
+        31.986298000000005,
+        31.836468
+      ],
+      "accepted": true
+    },
+    {
+      "style": "amll",
+      "width": 844,
+      "height": 390,
+      "before": "Motion",
+      "after": "Glow",
+      "scene_p50_ms": [
+        0.09335,
+        0.0949
+      ],
+      "encode_p95_ms": [
+        31.479677999999996,
+        30.418568
+      ],
+      "accepted": true
+    }
+  ]
+}
