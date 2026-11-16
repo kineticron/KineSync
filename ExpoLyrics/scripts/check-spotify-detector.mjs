@@ -313,7 +313,9 @@ try {
   globalThis.fetch = () => new Promise(() => {});
   const unknown = detector.control({ type: 'next' });
   const rejected = assert.rejects(unknown, /outcome unknown/);
-  for (const [id, timer] of [...timers]) if (timer.ms === 10000) { timers.delete(id); timer.fn(); }
+  const commandDeadlines = [...timers].filter(([, timer]) => timer.ms === 5000);
+  assert(commandDeadlines.length > 0, 'hanging command owns a bounded request deadline');
+  for (const [id, timer] of commandDeadlines) { timers.delete(id); timer.fn(); }
   await rejected; await flush();
   assert.equal(detector.commandPending, null, 'ignored fetch abort still settles command ownership');
   globalThis.fetch = normalFetch;

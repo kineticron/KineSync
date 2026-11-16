@@ -10,6 +10,13 @@ import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
 import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureActive } from '../native-clock-diagnostics';
 const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 let nextSourceClockScope = 0;
+const TRANSPORT_DEADLINE_MS = 5000;
+const SESSION_DEADLINE_MS = 20000;
+const HEARTBEAT_INTERVAL_MS = 10000;
+const PONG_DEADLINE_MS = 5000;
+const SNAPSHOT_PLAYING_MS = 15000;
+const SNAPSHOT_PAUSED_MS = 30000;
+const SNAPSHOT_IDLE_MS = 60000;
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -119,6 +126,7 @@ export class SpotifyDetector {
   private orderingDeviceId: string | undefined;
   private orderingSessionId: string | undefined;
   private lastDealerConnection = '';
+  private dealerStateRevision = 0;
   private registered = false;
   private observed = false;
   private currentTarget: string | undefined;
@@ -161,6 +169,11 @@ export class SpotifyDetector {
   private lastState = 0;
   private targetVersion = 0;
   private manualAt = -Infinity;
+  private networkPath = '';
+  private pathRestartAt = -Infinity;
+  private snapshotAt = 0;
+  private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private pongDeadline: ReturnType<typeof setTimeout> | null = null;
   private onlineTimer: ReturnType<typeof setTimeout> | null = null;
   private renewalTimer: ReturnType<typeof setTimeout> | null = null;
   private rejectedFreshToken = false;
@@ -226,15 +239,31 @@ export class SpotifyDetector {
     }
     else this.publishHealth();
   }
-  setReachability(hint: Reachability) {
-    if (hint === this.reachability) return;
+  setReachability(hint: Reachability, path?: string) {
+    const pathChanged = !!path && !!this.networkPath && path !== this.networkPath;
+    if (path) this.networkPath = path;
+    if (hint === this.reachability && !pathChanged) return;
     const previous = this.reachability; this.reachability = hint;
     if (this.onlineTimer) this.runtime.clearTimeout(this.onlineTimer); this.onlineTimer = null;
     if (hint === 'offline') { this.disconnect(); if (this.enabled) this.transition('offline'); return; }
     this.publishHealth();
-    if (this.enabled && previous === 'offline') this.onlineTimer = this.runtime.setTimeout(() => {
-      this.onlineTimer = null; this.connectIfReady();
+    if (!this.enabled) return;
+    if (pathChanged) {
+      // Retire old interface work immediately. Coalesce flapping notifications
+      // without allowing them to bypass auth, cooldown or request ownership.
+      this.disconnect();
+      if (this.phase === 'renewingSession') this.transition('connecting');
+      const delay = Math.max(0, this.pathRestartAt + 1000 - this.runtime.mono());
+      if (!delay) { this.pathRestartAt = this.runtime.mono(); this.connectIfReady(); }
+      else this.onlineTimer = this.runtime.setTimeout(() => {
+        this.onlineTimer = null; this.pathRestartAt = this.runtime.mono(); this.connectIfReady();
+      }, delay);
+    } else if (previous === 'offline') this.onlineTimer = this.runtime.setTimeout(() => {
+      this.onlineTimer = null;
+      if (this.phase === 'renewingSession') this.transition('connecting');
+      this.connectIfReady();
     }, 500);
+    else this.connectIfReady();
   }
   private binding() { return JSON.stringify([this.generation, this.connectionId, this.currentTarget, this.lastSample?.uri, this.lastSample?.playbackSessionId]); }
   private stateConfirmed(target: string | undefined, positive = true) {
@@ -248,7 +277,7 @@ export class SpotifyDetector {
       this.commandPhase = 'idle'; this.commandConfirmed = null;
     }
     this.reconciling = false;
-    this.transition('ready'); this.callbacks.ready();
+    this.transition('ready'); this.callbacks.ready(); this.scheduleSnapshot();
   }
 
   private authorityToken() {
@@ -466,7 +495,7 @@ export class SpotifyDetector {
     const run = this.generation; const requestConnection = this.connectionId;
     const started = nativeDiagnosticsEnabled ? this.runtime.mono() : 0;
     const controller = new AbortController(); this.requests.add(controller);
-    const timeout = this.runtime.setTimeout(() => controller.abort(), 10000);
+    const timeout = this.runtime.setTimeout(() => controller.abort(), TRANSPORT_DEADLINE_MS);
     const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
       'x-spotify-connection-id': this.connectionId };
     if (this.clientToken) headers['client-token'] = this.clientToken;
@@ -498,6 +527,8 @@ export class SpotifyDetector {
     if (this.renewalTimer) this.runtime.clearTimeout(this.renewalTimer); this.renewalTimer = null;
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
     if (!preserveDeliveryBaseline) this.deliveryBaseline.clear();
+    if (this.snapshotTimer) this.runtime.clearTimeout(this.snapshotTimer); this.snapshotTimer = null;
+    if (this.pongDeadline) this.runtime.clearTimeout(this.pongDeadline); this.pongDeadline = null;
     this.controller?.abort(); this.controller = null;
     for (const controller of this.requests) controller.abort();
     this.requests.clear(); this.metadataPending.clear();
@@ -528,7 +559,7 @@ export class SpotifyDetector {
       this.renewalTimer = null;
       if (this.phase !== 'renewingSession') return;
       this.retryObservation();
-    }, 45000);
+    }, SESSION_DEADLINE_MS);
     this.transition('renewingSession');
     if (!this.enabled || run !== this.generation) return;
     this.callbacks.status(message);
@@ -538,7 +569,7 @@ export class SpotifyDetector {
     this.fingerprint = ''; this.lastSourceTimestamp = 0;
     this.orderingDeviceId = undefined; this.orderingSessionId = undefined; this.lastDealerConnection = '';
   }
-  private emit(payload: unknown, receivedAt = this.runtime.wall(), timing: TimingContext = {}, authorityScope = this.sourceClockScope) {
+  private emit(payload: unknown, receivedAt = this.runtime.wall(), timing: TimingContext = {}, authorityScope = this.sourceClockScope, allowRegistrationHandoff = false) {
     const selected = sampleWithContext(payload, 0, timing);
     const s = selected?.sample;
     if (!s || !/^spotify:track:[a-zA-Z0-9]{22}$/.test(s.uri)) {
@@ -566,7 +597,7 @@ export class SpotifyDetector {
     const connection = `${this.generation}:${this.connectionId}`;
     // A registration snapshot can predate a Dealer handoff on a different clock.
     // Comparing timestamps across those identities cannot order that race.
-    if (timing.origin === 'registration' && this.lastDealerConnection === connection && identityChanged) {
+    if (timing.origin === 'registration' && !allowRegistrationHandoff && this.lastDealerConnection === connection && identityChanged) {
       this.logDeliveryRejection(s, timing.origin, 'registration-conflicts-with-dealer-identity');
       logDevelopmentTiming('registration-conflict', s);
       recordTiming('stale', s.timingProvenance); return true;
@@ -699,7 +730,7 @@ export class SpotifyDetector {
     if (!this.token) { this.needSession('Refreshing Spotify session…'); return; }
     if (!this.route || !this.dealer) {
       const run = this.generation;
-      this.renewalTimer = this.runtime.setTimeout(() => { this.renewalTimer = null; this.retryObservation(); }, 45000);
+      this.renewalTimer = this.runtime.setTimeout(() => { this.renewalTimer = null; this.retryObservation(); }, SESSION_DEADLINE_MS);
       this.transition('renewingSession', 'discoveringRoutes');
       if (this.enabled && run === this.generation) this.callbacks.sessionNeeded();
       return;
@@ -716,13 +747,16 @@ export class SpotifyDetector {
     this.armPhaseDeadline();
     const alive = () => this.enabled && run === this.generation && this.socket === ws;
     let lastReceived = this.runtime.mono();
+    const ping = () => {
+      if (!alive() || ws.readyState !== 1 || this.pongDeadline) return;
+      this.pongDeadline = this.runtime.setTimeout(() => {
+        this.pongDeadline = null; if (alive()) this.retryObservation();
+      }, PONG_DEADLINE_MS);
+      try { ws.send(JSON.stringify({ type: 'ping' })); } catch { this.retryObservation(); }
+    };
     this.expiry = this.runtime.setTimeout(() => { if (alive()) this.needSession('Refreshing Spotify session…'); }, Math.max(1, this.expiresAt - this.runtime.wall() - 30_000));
-    this.heartbeat = this.runtime.setInterval(() => {
-      if (!alive()) return;
-      if (this.runtime.mono() - lastReceived >= 45000) { this.retryObservation(); return; }
-      if (ws.readyState === 1) { try { ws.send(JSON.stringify({ type: 'ping' })); } catch { this.retryObservation(); } }
-    }, 15000);
-    ws.onopen = () => { if (alive()) { lastReceived = this.runtime.mono(); this.armPhaseDeadline(); try { ws.send(JSON.stringify({ type: 'ping' })); } catch { this.retryObservation(); } } };
+    this.heartbeat = this.runtime.setInterval(ping, HEARTBEAT_INTERVAL_MS);
+    ws.onopen = () => { if (alive()) { lastReceived = this.runtime.mono(); this.armPhaseDeadline(); ping(); } };
     ws.onmessage = e => {
       if (!alive()) return;
       const receivedAt = this.runtime.wall();
@@ -734,13 +768,17 @@ export class SpotifyDetector {
         if (payload.type !== 'pong' && !id && !sampleFrom(decoded) && !idleState(decoded)) return;
         lastReceived = this.runtime.mono(); this.lastContact = lastReceived;
         if (this.healthySince !== null && lastReceived - this.healthySince >= 60000) { this.reconnects = 0; this.rateLimits = 0; this.rejectedFreshToken = false; }
-        if (payload.type === 'pong') return;
+        if (payload.type === 'pong') {
+          if (this.pongDeadline) this.runtime.clearTimeout(this.pongDeadline); this.pongDeadline = null;
+          return;
+        }
         if (id && id !== this.connectionId) { this.registered = false; this.observed = false; this.currentTarget = undefined; this.pendingState = null;
           this.blockedOperations.clear();
           if (this.confirmation) this.runtime.clearTimeout(this.confirmation); this.confirmation = null;
           if (this.commandPending || this.commandPhase === 'awaitingConfirmation') this.commandPhase = 'outcomeUnknown';
           this.commandPending = null; for (const request of this.requests) request.abort();
           this.connectionId = id; this.phaseStarted = this.runtime.mono(); this.transition('registering'); this.armPhaseDeadline(); void this.register(run, ws, sourceClockScope); }
+        if (sampleFrom(decoded) || idleState(decoded)) this.dealerStateRevision++;
         const timing: TimingContext = { receipt, origin: 'dealer', connectionId: this.connectionId, generation: run };
         if (this.registered) this.emit(decoded, receivedAt, timing, sourceClockScope);
         else if (sampleFrom(decoded) || idleState(decoded)) this.pendingState = { payload: decoded, receivedAt, timing, sourceClockScope };
@@ -751,6 +789,28 @@ export class SpotifyDetector {
     // Publish only after local ownership, handlers and deadlines are installed.
     this.transition('connecting');
     if (alive()) this.callbacks.status('Connecting to Spotify playback…');
+  }
+  private scheduleSnapshot() {
+    if (this.controller || !this.enabled || this.activity !== 'active' ||
+        !this.registered || !this.observed || !this.socket || this.cooldownRemaining() > 0) return;
+    // Remote snapshots, not pongs or locally extrapolated progress, bound lost
+    // pause, seek and track events. Never send playback commands as probes.
+    const delay = !this.currentTarget ? SNAPSHOT_IDLE_MS :
+      this.lastSample?.playing ? SNAPSHOT_PLAYING_MS : SNAPSHOT_PAUSED_MS;
+    const due = this.runtime.mono() + delay;
+    if (this.snapshotTimer && this.snapshotAt <= due) return;
+    if (this.snapshotTimer) this.runtime.clearTimeout(this.snapshotTimer);
+    this.snapshotAt = due;
+    const run = this.generation;
+    this.snapshotTimer = this.runtime.setTimeout(() => {
+      this.snapshotTimer = null;
+      const ws = this.socket;
+      if (run !== this.generation || !ws || !this.enabled || this.activity !== 'active') return;
+      if (this.controller || this.commandPending || this.commandPhase === 'awaitingConfirmation') {
+        this.scheduleSnapshot(); return;
+      }
+      void this.register(run, ws, this.sourceClockScope, true);
+    }, delay);
   }
   private reconcileObservation() {
     const ws = this.socket;
@@ -764,7 +824,7 @@ export class SpotifyDetector {
   }
   private armPhaseDeadline() {
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline);
-    this.phaseDeadline = this.runtime.setTimeout(() => { this.retryObservation(); this.lastError = { category: 'timeout', occurredAtWall: this.runtime.wall() }; this.publishHealth(); }, 10000);
+    this.phaseDeadline = this.runtime.setTimeout(() => { this.retryObservation(); this.lastError = { category: 'timeout', occurredAtWall: this.runtime.wall() }; this.publishHealth(); }, TRANSPORT_DEADLINE_MS);
   }
   private retryObservation() {
     this.lastError = { category: 'transport', occurredAtWall: this.runtime.wall() };
@@ -797,7 +857,7 @@ export class SpotifyDetector {
     let cleanup = () => {};
     return new Promise<T>((resolve, reject) => {
       const abort = () => reject(new Error('Spotify request interrupted; playback outcome may be unknown.'));
-      const timer = this.runtime.setTimeout(() => { controller.abort(); abort(); }, 10000);
+      const timer = this.runtime.setTimeout(() => { controller.abort(); abort(); }, TRANSPORT_DEADLINE_MS);
       controller.signal.addEventListener('abort', abort, { once: true });
       if (controller.signal.aborted) abort();
       cleanup = () => { this.runtime.clearTimeout(timer); controller.signal.removeEventListener('abort', abort); };
@@ -805,16 +865,18 @@ export class SpotifyDetector {
     }).finally(() => cleanup());
   }
 
-  private async register(run: number, ws: WebSocket, sourceClockScope = this.sourceClockScope) {
+  private async register(run: number, ws: WebSocket, sourceClockScope = this.sourceClockScope, snapshot = false) {
     const connectionId = this.connectionId;
+    const dealerRevision = this.dealerStateRevision;
     const requestCapture = nativeDiagnosticsEnabled ? getNativeClockCapture() : null;
     const requestStarted = nativeDiagnosticsEnabled ? this.runtime.mono() : 0;
     if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-request', { endpoint: 'connect-state-registration', method: 'PUT',
       requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
       registered: this.registered, cacheProvenance: 'network-request' });
+    if (this.snapshotTimer) this.runtime.clearTimeout(this.snapshotTimer); this.snapshotTimer = null;
     const controller = new AbortController(); this.controller?.abort(); this.controller = controller;
-    const timeout = this.runtime.setTimeout(() => controller.abort(), 10000);
-    const alive = () => this.enabled && run === this.generation && this.socket === ws && this.connectionId === connectionId;
+    const timeout = this.runtime.setTimeout(() => controller.abort(), TRANSPORT_DEADLINE_MS);
+    const alive = () => this.enabled && run === this.generation && this.socket === ws && this.connectionId === connectionId && this.controller === controller;
     try {
       const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, accept: 'application/json',
         'content-type': 'application/json', 'x-spotify-connection-id': this.connectionId };
@@ -845,17 +907,24 @@ export class SpotifyDetector {
         responseAction: !response.ok ? 'no-state-emitted-existing-error-path' : 'pending-dealer-then-response-state' });
       if (!alive()) return;
       if (!response.ok) { this.retryObservation(); this.lastError = { category: 'http', httpStatus: response.status, occurredAtWall: this.runtime.wall() }; this.publishHealth(); return; }
-      this.registered = true; this.phaseStarted = this.runtime.mono(); this.armPhaseDeadline();
-      this.callbacks.status('Spotify detector connected. Play music in the Spotify app.');
+      // A Dealer update received during this request outranks its potentially
+      // older snapshot, including idle responses and device/session handoffs.
+      if (snapshot && dealerRevision !== this.dealerStateRevision) return;
+      const decoded = bytes.length ? decodeStateBody(bytes) : null;
+      if (snapshot && !sampleFrom(decoded) && !idleState(decoded)) { this.retryObservation(); return; }
+      this.registered = true;
+      if (!snapshot) { this.phaseStarted = this.runtime.mono(); this.armPhaseDeadline(); }
+      if (!snapshot) this.callbacks.status('Spotify detector connected. Play music in the Spotify app.');
       // Apply any newer Dealer anchor first, so an HTTP response that was
       // generated earlier cannot undo a pause/seek received during registration.
       const pending = this.pendingState; this.pendingState = null;
       if (pending) this.emit(pending.payload, pending.receivedAt, pending.timing, pending.sourceClockScope);
-      if (bytes.length) this.emit(decodeStateBody(bytes), undefined,
-        { receipt, origin: 'registration', connectionId: this.connectionId, generation: run }, sourceClockScope);
+      if (bytes.length) this.emit(decoded, undefined,
+        { receipt, origin: 'registration', connectionId: this.connectionId, generation: run }, sourceClockScope,
+        snapshot && dealerRevision === this.dealerStateRevision);
     } catch { if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
       requestGeneration: run, currentGeneration: this.generation, alive: alive(), elapsedMs: this.runtime.mono() - requestStarted,
       cacheProvenance: 'no-state-emitted' }); if (alive()) this.retryObservation(); }
-    finally { this.runtime.clearTimeout(timeout); if (this.controller === controller) this.controller = null; }
+    finally { this.runtime.clearTimeout(timeout); if (this.controller === controller) { this.controller = null; this.scheduleSnapshot(); } }
   }
 }

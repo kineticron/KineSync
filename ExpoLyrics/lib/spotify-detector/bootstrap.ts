@@ -112,7 +112,7 @@ export const bootstrap = String.raw`(function () {
     var timeout = new Promise(function(_, reject) {
       cancel = function(){ reject(new Error('probe canceled')); };
       own.signal.addEventListener('abort',cancel,{once:true});
-      limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 15000);
+      limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 5000);
     });
     var work = Promise.resolve().then(function(){
       return nativeFetch('/api/token?reason=init&productType=web_player',{credentials:'include',signal:own.signal});
@@ -143,7 +143,7 @@ export const bootstrap = String.raw`(function () {
   var start = function () {
     if (!stopped && (inFlight || attempts > 0)) return;
     stopped = false; attempts = 0; epoch++;
-    deadline = setTimeout(function(){stop();send({type:'session',state:'unavailable'});},45000);
+    deadline = setTimeout(function(){stop();send({type:'session',state:'unavailable'});},20000);
     probeToken();
   };
   window.__probeToken = probeToken;
