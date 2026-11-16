@@ -113,7 +113,14 @@ pub(crate) fn build(
         }
         let mut layout = builder.build(&text);
         layout.break_all_lines(Some(block_width as f32));
-        layout.align(Alignment::Start, AlignmentOptions::default());
+        layout.align(
+            if settings.landscape {
+                Alignment::End
+            } else {
+                Alignment::Start
+            },
+            AlignmentOptions::default(),
+        );
         for line in layout.lines() {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = item {
