@@ -1,4 +1,4 @@
-// Device-only dev-client CI. No release, dispatch or signing operations.
+// Device-only dev-client CI with a release-optimized Rust static library.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -119,7 +119,8 @@ function initialize(env = process.env) {
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
     npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
     RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
-    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_DEV_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_DEV_DEBUG: String(config.rust.debugInfo),
+    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_RELEASE_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_RELEASE_DEBUG: String(config.rust.debugInfo),
+    CARGO_PROFILE_RELEASE_LTO: config.rust.lto, CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: String(config.rust.debugAssertions),
     RUST_PREBUILT_DIR: paths.prebuilt, RUST_DEVICE_KEY: keys.prebuilt, CARGO_BUILD_TARGET: config.rust.target, CARGO_TARGET_DIR: paths.rustTarget,
   };
   output(vars, env.GITHUB_ENV);

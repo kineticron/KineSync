@@ -55,7 +55,7 @@ test('Rust prebuilt is source-exact, and independent of JS or Swift shims', t =>
     'scripts/ios-dev-ci/ci.cjs', '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) {
     put(root, file, 'changed'); assert.notEqual(rustIdentity(root, identity), initial, file); put(root, file);
   }
-  for (const [field, value] of [['toolchain', '1.98.0'], ['target', 'other-target'], ['profile', 'release'], ['features', ['new-feature']]]) {
+  for (const [field, value] of [['toolchain', '1.98.0'], ['target', 'other-target'], ['profile', 'dev'], ['features', ['new-feature']]]) {
     const changed = structuredClone(config); changed.rust[field] = value;
     assert.notEqual(rustIdentity(root, identity, changed), initial, field);
   }
@@ -421,7 +421,7 @@ if (name === 'node') {
   fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR,'rust-static-nm.txt'),'0000 T _kr_abi_version');
  }
 } else if (name === 'cargo') {
- const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/debug/liblyrics_renderer.a');
+ const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/release/liblyrics_renderer.a');
  fs.mkdirSync(path.dirname(library),{recursive:true}); fs.writeFileSync(library,'fake arm64 archive');
 } else if (name === 'xcrun') {
  if (args.join(' ') === '--sdk iphoneos --show-sdk-path') console.log('/fake iPhoneOS SDK');
@@ -451,7 +451,7 @@ if (name === 'node') {
       const cargo = calls.filter(call => call.name === 'cargo');
       assert.equal(cargo.length, 1);
       assert.deepEqual(cargo[0].args, [`+${buildConfig.rust.toolchain}`, 'build', '--locked', '--lib', '--manifest-path',
-        'native/lyrics-renderer/Cargo.toml', '--target', 'aarch64-apple-ios', '--profile', 'dev',
+        'native/lyrics-renderer/Cargo.toml', '--target', 'aarch64-apple-ios', '--profile', 'release',
         ...(features.length ? ['--features', features.join(',')] : [])]);
       assert.equal(cargo[0].sdk, '/fake iPhoneOS SDK');
       assert.equal(fs.readFileSync(path.join(evidence, 'sealed'), 'utf8'), 'yes');
@@ -756,4 +756,16 @@ test('font resources invalidate native caches and packaged bytes fail closed', t
   put(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf','bad');assert.throws(()=>inspectFonts(app),/digest mismatch/);
   fs.unlinkSync(path.join(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf'));assert.throws(()=>inspectFonts(app),/Missing packaged/);
   fs.mkdirSync(path.join(app,'Duplicate/KineSyncLyricsFonts.bundle'),{recursive:true});assert.throws(()=>inspectFonts(app),/exactly one/);
+});
+
+test('device Rust uses release optimization without changing host dev profile', () => {
+  assert.equal(config.rust.profile, 'release');
+  assert.equal(config.rust.optLevel, 3);
+  assert.equal(config.rust.lto, 'thin');
+  assert.equal(config.rust.debugAssertions, false);
+  const source = fs.readFileSync(path.join(repo, 'scripts/ios-dev-ci/ci.cjs'), 'utf8');
+  assert.match(source, /CARGO_PROFILE_RELEASE_OPT_LEVEL/);
+  assert.match(source, /CARGO_PROFILE_RELEASE_LTO/);
+  assert.match(source, /CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS/);
+  assert.doesNotMatch(source, /CARGO_PROFILE_DEV_OPT_LEVEL/);
 });
