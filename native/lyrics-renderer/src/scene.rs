@@ -112,6 +112,8 @@ impl CachedLine {
 pub struct TrackScene {
     pub lines: Vec<Line>,
     pub(crate) cached: Vec<CachedLine>,
+    resident: std::collections::BTreeSet<usize>,
+    max_row_height: f64,
     pub width: u32,
     pub height: u32,
     pub font_size: f64,
@@ -399,6 +401,8 @@ impl TrackScene {
         Ok(Self {
             lines,
             cached,
+            resident: std::collections::BTreeSet::new(),
+            max_row_height: 0.0,
             width,
             height,
             font_size: f64::from(primary_size),
@@ -486,6 +490,8 @@ impl TrackScene {
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
                 self.cached[i] = prepared.cached.remove(0);
+                self.resident.insert(i);
+                self.max_row_height = self.max_row_height.max(self.cached[i].height);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
                 self.diagnostics_json = None;
                 self.plain_preparations += 1;
@@ -532,6 +538,7 @@ impl TrackScene {
                 for voice in &mut self.cached[i].voices {
                     voice.clear_geometry();
                 }
+                self.resident.remove(&i);
                 self.diagnostics[i] = serde_json::Value::Null;
                 self.diagnostics_json = None;
             }
@@ -570,6 +577,8 @@ impl TrackScene {
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
                 self.cached[i] = prepared.cached.remove(0);
+                self.resident.insert(i);
+                self.max_row_height = self.max_row_height.max(self.cached[i].height);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
                 self.diagnostics_json = None;
                 self.plain_preparations += 1;
@@ -583,6 +592,7 @@ impl TrackScene {
                 for voice in &mut self.cached[i].voices {
                     voice.clear_geometry();
                 }
+                self.resident.remove(&i);
                 self.diagnostics[i] = serde_json::Value::Null;
                 self.diagnostics_json = None;
             }
@@ -928,9 +938,13 @@ impl TrackScene {
             );
         }
         let interludes = crate::interlude::slots(&lines);
+        let resident = (0..cached.len()).collect();
+        let max_row_height = cached.iter().map(|row| row.height).fold(0.0, f64::max);
         Ok(Self {
             lines,
             cached,
+            resident,
+            max_row_height,
             width,
             height,
             font_size: font_size as f64,
@@ -1143,6 +1157,35 @@ impl TrackScene {
         first.min(self.lines.len() - 1)..last
     }
 
+    pub(crate) fn resident_rows(&self) -> impl Iterator<Item = usize> + '_ {
+        self.resident.iter().copied()
+    }
+
+    /// Conservative prefix search, then only resident rows in that range.
+    /// Offset extrema are bounded by resident geometry, not the source length.
+    /// The exact historical row rejection remains in each painter.
+    pub(crate) fn drawing_rows(
+        &self,
+        time: f64,
+        scroll: f64,
+        adjust: &[f64],
+    ) -> impl Iterator<Item = usize> + '_ {
+        let (mut min_adjust, mut max_adjust) = (0.0_f64, 0.0_f64);
+        for &index in &self.resident {
+            let value = adjust.get(index).copied().unwrap_or(0.0);
+            min_adjust = min_adjust.min(value);
+            max_adjust = max_adjust.max(value);
+        }
+        let extra = self.interlude_shift(time).1;
+        let margin = (64.0 * f64::from(self.scale)).max(40.0);
+        let origin = scroll - self.scroll_anchor();
+        let lower = origin - max_adjust - extra.max(0.0) - self.max_row_height - margin;
+        let upper = origin - min_adjust - extra.min(0.0) + f64::from(self.height) + margin;
+        let first = self.prefix.partition_point(|top| *top < lower);
+        let last = self.prefix.partition_point(|top| *top <= upper).max(first);
+        self.resident.range(first..last).copied()
+    }
+
     /// Per-frame follow command. `position` is the current visual offset, used
     /// for Skia's first-visible row, duration interval and interlude flag.
     pub fn scroll_command(&self, time: f64, position: f64) -> crate::motion::Command {
@@ -1222,7 +1265,8 @@ impl TrackScene {
                 + adjust.get(index).copied().unwrap_or(0.0)
                 + interlude_row.map_or(0.0, |row| if index >= row { extra } else { 0.0 })
         };
-        for (i, cached) in self.cached.iter().enumerate() {
+        for i in self.drawing_rows(time, scroll, adjust) {
+            let cached = &self.cached[i];
             let y = position(i);
             if y + cached.height < -40.0 || y > self.height as f64 + 40.0 {
                 continue;
@@ -1448,6 +1492,88 @@ mod lazy_tests {
             .unwrap();
         fonts
     }
+    #[test]
+    fn conservative_drawing_range_matches_full_scan_with_offsets_and_interludes() {
+        for style in [Style::Spicy, Style::Amll] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut lines = source(1000);
+            lines[0].paint.as_mut().unwrap().translation = Some("Tall translated row ".repeat(40));
+            let mut track =
+                TrackScene::with_fonts(lines, 390, 640, 2.0, Some(&settings), &mut fonts())
+                    .unwrap();
+            for time in [500.0, 50_500.0, 80_500.0, 500.0] {
+                track.prepare(time).unwrap();
+                for index in [0, 50, 80, 999] {
+                    let scroll = track.prefix[index];
+                    track.prepare_viewport(scroll).unwrap();
+                    let mut adjust = vec![0.0; track.lines.len()];
+                    for &i in &track.resident {
+                        adjust[i] = if i % 2 == 0 { -2400.0 } else { 1600.0 };
+                    }
+                    for dy in [-640.0, 0.0, 640.0] {
+                        assert_drawing_matches_full_scan(&track, time, scroll + dy, &adjust);
+                        assert_drawing_matches_full_scan(&track, time, scroll + dy, &[]);
+                    }
+                }
+            }
+            let mut interlude = TrackScene::with_fonts(
+                long_gap_lines(),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+            )
+            .unwrap();
+            for time in [999.0, 1000.0, 2600.0, 5499.0, 5500.0, 5999.0, 6000.0] {
+                interlude.prepare(time).unwrap();
+                let scroll = interlude.scroll_target(time);
+                for delta in [-1000.0, 0.0, 1000.0] {
+                    assert_drawing_matches_full_scan(
+                        &interlude,
+                        time,
+                        scroll + delta,
+                        &[500.0, -400.0, 200.0],
+                    );
+                }
+            }
+        }
+    }
+
+    fn assert_drawing_matches_full_scan(
+        track: &TrackScene,
+        time: f64,
+        scroll: f64,
+        adjust: &[f64],
+    ) {
+        let (row, extra) = track.interlude_shift(time);
+        let accepted = |i: usize| {
+            let cached = &track.cached[i];
+            let y = track.scroll_anchor() + track.prefix[i] - scroll
+                + adjust.get(i).copied().unwrap_or(0.0)
+                + row.map_or(0.0, |r| if i >= r { extra } else { 0.0 });
+            cached.layout_ready()
+                && y + cached.height >= -40.0
+                && y <= f64::from(track.height) + 40.0
+        };
+        let old: Vec<_> = (0..track.lines.len()).filter(|&i| accepted(i)).collect();
+        let candidates: Vec<_> = track.drawing_rows(time, scroll, adjust).collect();
+        assert!(candidates.len() <= track.resident.len());
+        assert!(candidates.iter().all(|i| track.resident.contains(i)));
+        let selected: Vec<_> = candidates.into_iter().filter(|&i| accepted(i)).collect();
+        assert_eq!(selected, old, "time={time} scroll={scroll}");
+        if track.lines.len() == 1000 {
+            assert!(
+                track.resident.len() < 100,
+                "work must follow residency, not source count"
+            );
+        }
+    }
+
     #[test]
     fn diagnostics_snapshot_matches_pre_deferral_receipts() {
         use sha2::{Digest, Sha256};

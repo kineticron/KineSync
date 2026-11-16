@@ -44,6 +44,7 @@ pub struct RowState {
 #[derive(Default)]
 pub struct AppearanceState {
     pub(crate) rows: Vec<Option<RowState>>,
+    owners: Vec<usize>,
     pub(crate) interlude: crate::interlude::InterludeState,
     last_ms: Option<f64>,
     playing: bool,
@@ -51,6 +52,7 @@ pub struct AppearanceState {
 impl AppearanceState {
     pub fn reset(&mut self) {
         self.rows.clear();
+        self.owners.clear();
         self.interlude.reset();
         self.last_ms = None;
     }
@@ -64,7 +66,9 @@ impl AppearanceState {
             self.reset();
             self.rows.resize_with(track.lines.len(), || None);
         }
-        for (i, line) in track.lines.iter().enumerate() {
+        let primed = crate::window(&track.lines, time).active();
+        for i in track.resident_rows() {
+            let line = &track.lines[i];
             if !track.timed_ready(i) {
                 continue;
             }
@@ -76,10 +80,8 @@ impl AppearanceState {
                 // `endTimeByIndex` (getBackgroundEndTime) presentation window.
                 let active = time >= line.start && time < line.background_end;
                 let spicy = track.style() == Some(Style::Spicy);
-                let primed = time < line.start
-                    && crate::window(&track.lines, time)
-                        .active()
-                        .is_some_and(|(start, end)| i >= start && i <= end);
+                let primed =
+                    time < line.start && primed.is_some_and(|(start, end)| i >= start && i <= end);
                 let outer = if spicy {
                     if active || primed {
                         1.0
@@ -93,6 +95,7 @@ impl AppearanceState {
                 } else {
                     1.0
                 };
+                self.owners.push(i);
                 self.rows[i] = Some(RowState {
                     voices: line
                         .voices()
@@ -167,7 +170,8 @@ impl AppearanceState {
                 self.interlude.clear();
             }
         }
-        for (i, slot) in self.rows.iter_mut().enumerate() {
+        for &i in &self.owners {
+            let slot = &mut self.rows[i];
             let Some(row) = slot else {
                 continue;
             };
@@ -279,12 +283,15 @@ impl AppearanceState {
                         row.releasing || row.scale.v != 0.0 || line_animating
                     });
         }
+        self.owners.retain(|&i| self.rows[i].is_some());
     }
     pub fn playing(&self) -> bool {
         self.playing
     }
     pub fn animating(&self) -> bool {
-        self.rows.iter().flatten().any(|r| r.animating)
+        self.owners
+            .iter()
+            .any(|&i| self.rows[i].as_ref().is_some_and(|r| r.animating))
     }
     pub fn row(&self, index: usize) -> Option<&RowState> {
         self.rows.get(index).and_then(Option::as_ref)

@@ -306,7 +306,8 @@ impl TrackScene {
         // Skia paints the interlude group before the lead voice, so the
         // collapsing row text stays above the fading dots.
         self.draw_interlude_dots(time, scroll, adjust, state, scene);
-        for (index, cached) in self.cached.iter().enumerate() {
+        for index in self.drawing_rows(time, scroll, adjust) {
+            let cached = &self.cached[index];
             let y = anchor + self.prefix[index] - scroll
                 + adjust.get(index).copied().unwrap_or(0.0)
                 + shift(index);
