@@ -129,6 +129,7 @@ pub struct FollowScroll {
     animating: bool,
     frozen: bool,
     /// Manual scroll: raw (unbanded) offset, iOS deceleration and rebound.
+    dragging: bool,
     max_offset: f64,
     viewport: f64,
     drag_raw: f64,
@@ -172,6 +173,7 @@ impl FollowScroll {
         self.last_ms = None;
         self.animating = false;
         self.frozen = false;
+        self.dragging = false;
         self.max_offset = 0.0;
         self.viewport = 1.0;
         self.drag_raw = 0.0;
@@ -263,6 +265,7 @@ impl FollowScroll {
     /// `dy` is in surface pixels; the offset follows the finger 1:1 inside the
     /// content and rubber-bands past either edge.
     pub fn drag(&mut self, dy: f64, max_offset: f64, viewport: f64) {
+        self.dragging = true;
         let max_offset = max_offset.max(0.0);
         self.max_offset = max_offset;
         self.viewport = viewport.max(1.0);
@@ -288,6 +291,7 @@ impl FollowScroll {
     /// Start an iOS fling after the finger lifts. `velocity` is surface pixels
     /// per millisecond in content direction (positive = content moves up).
     pub fn fling(&mut self, velocity: f64, max_offset: f64, viewport: f64) {
+        self.dragging = false;
         self.max_offset = max_offset.max(0.0);
         self.viewport = viewport.max(1.0);
         self.drag_raw = Self::unband(self.position, self.max_offset, self.viewport);
@@ -309,6 +313,9 @@ impl FollowScroll {
     /// Advance manual deceleration/rebound by one native frame. Returns the
     /// displayed (rubber-banded) offset.
     fn advance_manual(&mut self, now_ms: f64) -> f64 {
+        if self.dragging {
+            return self.position;
+        }
         let dt = self.fling_last_ms.map_or(
             if self.fling_velocity != 0.0 {
                 16.0
@@ -342,7 +349,9 @@ impl FollowScroll {
             let decay = (-omega * dt).exp();
             self.position = bound + (displacement + c * dt) * decay;
             self.settle_velocity = (self.settle_velocity - omega * c * dt) * decay;
-            if (self.position < 0.0 && bound == 0.0) || (self.position > max && bound == max) {
+            if (displacement < 0.0 && self.position >= bound)
+                || (displacement > 0.0 && self.position <= bound)
+            {
                 self.position = bound;
                 self.settle_velocity = 0.0;
                 self.settling = false;
@@ -499,6 +508,7 @@ impl FollowScroll {
             return self.advance_manual(now_ms);
         }
         self.frozen = false;
+        self.dragging = false;
         self.fling_velocity = 0.0;
         self.fling_last_ms = None;
         self.settling = false;
@@ -750,6 +760,26 @@ mod tests {
             scroll.sample(&command, now, false);
         }
         assert!(scroll.position().abs() < 0.05);
+    }
+
+    #[test]
+    fn overscroll_holds_under_the_finger_and_rebounds_gradually() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let command = command(Style::Spicy, 0.0, 800.0, 0, 0);
+        scroll.sample(&command, 0.0, true);
+        scroll.drag(-200.0, 1000.0, 800.0);
+        let held = scroll.position();
+        for now in [16.0, 32.0, 48.0] {
+            assert_eq!(scroll.sample(&command, now, false), held);
+        }
+        scroll.fling(0.0, 1000.0, 800.0);
+        scroll.sample(&command, 64.0, false);
+        let rebound = scroll.sample(&command, 80.0, false);
+        assert!(
+            rebound > held && rebound < 0.0,
+            "rebound must animate, not snap"
+        );
     }
 
     #[test]
