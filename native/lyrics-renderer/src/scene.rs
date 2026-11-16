@@ -1811,6 +1811,76 @@ mod lazy_tests {
         assert_eq!(allocations, 0, "interlude dots must reuse scene buffers");
     }
     #[test]
+    #[ignore = "GPU real-gap glyph transition; requires a GPU adapter"]
+    fn spicy_gap_priming_to_active_preserves_word_and_letter_geometry() {
+        use crate::appearance::{AppearanceState, Effect};
+        let mut fonts = fonts();
+        for emphasized in [false, true] {
+            let mut lines = long_gap_lines();
+            for line in &mut lines {
+                for voice in line.paint.iter_mut() {
+                    voice.start = line.start;
+                    voice.end = line.end;
+                    for word in &mut voice.words {
+                        word.appearance = Some(crate::typography::WordAppearance {
+                            emphasized,
+                            origin: 0.5,
+                            rtl: false,
+                            last: true,
+                            emphasis: None,
+                        });
+                    }
+                }
+            }
+            let settings = Settings {
+                style: Style::Spicy,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track =
+                TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+            track.prepare(5500.0).unwrap();
+            let mut state = AppearanceState::default();
+            state.prepare(&track, 5500.0, 5500.0);
+            for i in 0..32 {
+                state.advance(
+                    &track,
+                    5500.0 + i as f64 * 16.0,
+                    5500.0 + i as f64 * 16.0,
+                    true,
+                    Effect::Glow,
+                );
+            }
+            assert_eq!(state.row(2).unwrap().outer, 1.0);
+            assert!(!state.row(2).unwrap().active);
+            let mut scene = Scene::new();
+            let scroll = track.scroll_target(5999.0);
+            let mut gpu = pollster::block_on(crate::gpu::Gpu::new(390, 640)).unwrap();
+            let band =
+                track.frame_appearance(5999.0, scroll, &[], &state, &mut scene, Effect::Glow);
+            gpu.render_appearance(&scene, band, true, true).unwrap();
+            let primed = gpu.read_pixels().unwrap();
+            state.advance(&track, 6000.0, 6012.0, true, Effect::Glow);
+            let band =
+                track.frame_appearance(6000.0, scroll, &[], &state, &mut scene, Effect::Glow);
+            gpu.render_appearance(&scene, band, true, true).unwrap();
+            let active = gpu.read_pixels().unwrap();
+            let delta = primed
+                .iter()
+                .zip(active)
+                .map(|(a, b)| a.abs_diff(b))
+                .max()
+                .unwrap();
+            // Layer alpha and the active gradient quantize at different
+            // RGBA8 stages; tolerate two levels, not a geometry change.
+            assert!(
+                delta <= 2,
+                "emphasized={emphasized}: max pixel delta {delta}"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "GPU interlude draw regression; requires a GPU adapter"]
     fn both_interlude_styles_render_entry_breathing_and_exit() {
         use crate::appearance::{AppearanceState, Effect};
