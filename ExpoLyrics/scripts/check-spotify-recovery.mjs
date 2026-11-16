@@ -171,6 +171,40 @@ for (const elapsed of [0, 1000, 30000]) await check(`review: inactive-only resum
   assert.equal(h.posts().length,0);
  }finally{h.d.clear();}
 });
+for (const stage of ['connecting','headers','body','ready']) await check(`review: explicit Retry cancels ${stage} and reconnects without waiting for timeout`,async()=>{
+ const h=setup();try {
+  const pending=deferred();h.start();
+  const old=h.sockets.at(-1);
+  if(stage==='headers')h.response=()=>pending.promise;
+  if(stage==='body')h.response={status:200,bodyPromise:pending.promise};
+  if(stage!=='connecting')await h.identify();
+  const request=h.requests.at(-1);
+  h.clock.wall+=2001;h.clock.mono+=2001;
+  const before=h.clock.mono;
+  h.d.refresh(true);
+  assert.equal(h.clock.mono,before);assert.equal(old.readyState,3);
+  assert.equal(h.sockets.length,2);assert.equal(h.d.health.observerConfirmed,false);
+  if(stage==='headers'||stage==='body')assert.equal(request.signal.aborted,true);
+  h.d.refresh(true);assert.equal(h.sockets.length,2,'rapid Retry remains debounced');
+  const next='spotify:track:0000000000000000000002';
+  h.response={status:200,body:state('fresh',next,h.clock.wall)};
+  await h.identify();assert.equal(h.samples.at(-1).uri,next);assert(h.d.health.controlsEnabled);
+  pending.resolve(stage==='body'?new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer:{status:200,body:state('obsolete')});
+  await flush();assert.equal(h.samples.at(-1).uri,next);assert.equal(h.sockets.length,2);
+  assert.equal(h.posts().length,0);
+ }finally{h.d.clear();}
+});
+await check('review: explicit Retry replaces hanging session renewal deadline immediately',async()=>{
+ const h=setup();try {
+  h.d.setEnabled(true);assert.equal(h.d.health.phase,'renewingSession');
+  h.clock.wall+=2001;h.clock.mono+=2001;const needed=h.needed;
+  h.d.refresh(true);assert.equal(h.needed,needed+1);
+  assert.equal(h.clock.timers.size,1,'old renewal deadline cancelled');
+  h.capture({type:'observerEndpoint',url:'https://spclient.spotify.com/connect-state/v1/devices/observer'});
+  h.capture({type:'socket',url:'wss://dealer.spotify.com/'});
+  h.credentials();await h.identify();assert(h.d.health.controlsEnabled);
+ }finally{h.d.clear();}
+});
 await check('expiry across suspended timers renews once; repeated fresh-token 401 stops at sign-in',async()=>{
  const h=setup();h.start();await h.identify();h.d.setEnabled(false);h.clock.wall+=4000000;h.clock.mono+=4000000;h.d.setEnabled(true);
  assert.equal(h.d.health.phase,'renewingSession');const needed=h.needed;h.d.setEnabled(true);assert.equal(h.needed,needed);await allDisabled(h);

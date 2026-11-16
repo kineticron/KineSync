@@ -332,7 +332,8 @@ export class SpotifyDetector {
   refresh(explicit = false) {
     if (this.startingConnection) return;
     if (!this.enabled || this.reachability === 'offline' || (explicit && this.activity !== 'active')) return;
-    if (this.onlineTimer || (this.socket && !this.observed)) return;
+    // Automatic nudges coalesce, but Retry must retire a stuck attempt.
+    if (!explicit && (this.onlineTimer || (this.socket && !this.observed))) return;
     if (explicit && this.runtime.mono() - this.manualAt < 2000) return;
     if (explicit) { this.manualAt = this.runtime.mono(); this.rejectedFreshToken = false; this.sessionRequired = false; }
     if (this.cooldownRemaining() > 0) { this.connectIfReady(); return; }
@@ -345,7 +346,7 @@ export class SpotifyDetector {
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-preserved', {
       generation: this.generation, ...this.deliveryBaseline.diagnosticSummary() });
     this.blocked = false;
-    if (explicit && (this.phase === 'signInRequired' || this.phase === 'denied')) this.transition('connecting');
+    if (explicit && (this.phase === 'signInRequired' || this.phase === 'denied' || this.phase === 'renewingSession')) this.transition('connecting');
     this.resetOrdering();
     this.disconnect(true); this.connectIfReady();
   }
