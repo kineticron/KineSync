@@ -21,7 +21,7 @@ type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<N
   onMetrics(event: { nativeEvent: Metrics }): void };
 // A view can be torn down while a command is in flight during a track switch.
 // Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
-const STALE_VIEW = /Unable to find the .*KineSyncRustLyricsView.* view with tag/i;
+const STALE_VIEW = /Unable to find[^\n]*KineSyncRustLyricsView[^\n]*tag/i;
 const WAITING_LYRICS = 'Waiting for current-track timed lyrics';
 // No native require on Android/web/Expo Go. Missing modules are an explicit unavailable state.
 function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props> | null; error: string } {
@@ -68,7 +68,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const window = useWindowDimensions();
   const landscape = window.width > window.height;
   const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
-  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation }), [lyrics, trackId, style, fontScale, landscape, showTranslation, credits]);
+  const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation, credits }), [lyrics, trackId, style, fontScale, landscape, showTranslation, credits]);
   const payload = useMemo(() => {
     try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits), error: '' }; }
     catch (error) { return { json: '', error: String(error) }; }
@@ -106,8 +106,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   }, [commandFailed]);
   const gesture = useMemo(() => createRustLyricsGesture({
     hitTest: y => native.current ? native.current.hitTest(y) : Promise.resolve(-1),
-    scrollBy: dy => send(view => view.scrollBy(dy)),
-    fling: velocity => send(view => view.fling(velocity)),
+    // UIKit pan recognizer drives drag/fling directly on the native owner.
+    scrollBy: () => {},
+    fling: () => {},
     setFollowing: following => send(view => view.setFollowing(following)),
     tapEnabled: () => latest.current.tapToSeekEnabled,
     onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },

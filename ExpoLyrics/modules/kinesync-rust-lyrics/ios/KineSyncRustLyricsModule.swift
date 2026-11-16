@@ -313,7 +313,7 @@ private final class DisplayTarget: NSObject {
   @objc func tick(_ link: CADisplayLink) { view?.tick(link) }
 }
 
-final class KineSyncRustLyricsView: ExpoView {
+final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   let onStatus = EventDispatcher()
   let onMetrics = EventDispatcher()
   private let metal = MetalHost()
@@ -366,9 +366,34 @@ final class KineSyncRustLyricsView: ExpoView {
     (metal.layer as? CAMetalLayer)?.backgroundColor = UIColor.clear.cgColor
     (metal.layer as? CAMetalLayer)?.presentsWithTransaction = false
     addSubview(metal)
+    let pan = UIPanGestureRecognizer(target: self, action: #selector(manualPan(_:)))
+    pan.cancelsTouchesInView = false
+    pan.delegate = self
+    addGestureRecognizer(pan)
     target.view = self
     NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(foregrounded), name: UIApplication.didBecomeActiveNotification, object: nil)
+  }
+  // UIKit owns translation/velocity sampling. JS only classifies taps and holds;
+  // it never sends per-move scrolling commands.
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+  @objc private func manualPan(_ pan: UIPanGestureRecognizer) {
+    switch pan.state {
+    case .began:
+      setFollowing(false)
+      fallthrough
+    case .changed:
+      let dy = pan.translation(in: self).y
+      pan.setTranslation(.zero, in: self)
+      owner?.scrollBy(-Double(dy))
+      markDirty(); lifecycle()
+    case .ended:
+      fling(-Double(pan.velocity(in: self).y) / 1000.0)
+    case .cancelled, .failed:
+      fling(0)
+    default: break
+    }
   }
   override func didMoveToWindow() {
     super.didMoveToWindow()
