@@ -359,7 +359,7 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(app, 'Final', 'final Mach-O mock');
   const map = path.join(root, 'App-LinkMap.txt'); put(root, 'App-LinkMap.txt', 'liblyrics_renderer.a _kr_render');
   put(ios, 'Pods/Target Support Files/Pods-App/ExpoModulesProvider.swift', 'KineSyncRustLyricsModule.self');
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Try Rust renderer');
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
   put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
   // The archive exists and its metadata passes, but the actual app lacks Rust.
   process.env.TEST_NM = '0000 T _unrelated';
