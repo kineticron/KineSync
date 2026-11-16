@@ -1578,10 +1578,14 @@ mod lazy_tests {
             if style == Style::Amll {
                 let mut state = AppearanceState::default();
                 let mut scene = Scene::new();
-                state.prepare(&track, end, 1000.0);
-                state.advance(&track, end, 1000.0, true, Effect::Glow);
+                // Establish the active white state before the boundary; a row
+                // first prepared after its line ended starts at the inactive
+                // placeholder alpha by design.
+                state.prepare(&track, end - 100.0, 900.0);
+                state.advance(&track, end - 100.0, 900.0, true, Effect::Glow);
                 let before = state.row(0).unwrap().bright;
-                for step in 1..=4 {
+                assert!(before > 0.9, "active AMLL row must be white");
+                for step in 0..=4 {
                     let wall = 1000.0 + step as f64 * 16.0;
                     state.advance(&track, end + step as f64 * 16.0, wall, true, Effect::Glow);
                 }
