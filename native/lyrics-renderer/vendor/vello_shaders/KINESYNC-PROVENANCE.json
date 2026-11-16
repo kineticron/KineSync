@@ -1,0 +1,288 @@
+{
+  "crate": "vello_shaders",
+  "version": "0.12.0",
+  "registry_package_sha256": "8af58dc04b4e7b87a9688fa12443a49d5916814fe78fa64d93f5b2d3f3e5bcac",
+  "upstream_vcs_commit": "b7e8f523b45c07a5edb806bb7241ef5afe34a882",
+  "upstream_vcs_path": "research/vello_shaders",
+  "omitted_registry_files": [
+    ".cargo-ok",
+    ".cargo_vcs_info.json",
+    "Cargo.lock"
+  ],
+  "modified_files": [
+    "shader/backdrop_dyn.wgsl",
+    "shader/coarse.wgsl",
+    "shader/fine.wgsl",
+    "shader/tile_alloc.wgsl"
+  ],
+  "files": {
+    "Cargo.toml": {
+      "upstream_sha256": "c49bf05306ea7131baa6ef8182189fb3b6e6c63a7d5334cee671af81fcb97ac8",
+      "vendored_sha256": "c49bf05306ea7131baa6ef8182189fb3b6e6c63a7d5334cee671af81fcb97ac8"
+    },
+    "Cargo.toml.orig": {
+      "upstream_sha256": "8b4425f0bd518b87274eecc3e8a313a26230d80274bc247f917f07b0ceda0692",
+      "vendored_sha256": "8b4425f0bd518b87274eecc3e8a313a26230d80274bc247f917f07b0ceda0692"
+    },
+    "LICENSE-APACHE": {
+      "upstream_sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+      "vendored_sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+    },
+    "LICENSE-MIT": {
+      "upstream_sha256": "adf157330f722fe7cfd5964a2a6974eff851b718228c6735724a11706e6f4dec",
+      "vendored_sha256": "adf157330f722fe7cfd5964a2a6974eff851b718228c6735724a11706e6f4dec"
+    },
+    "README.md": {
+      "upstream_sha256": "3658b24dac26636f4d945ba1a297a7b7ec8db5e2b18aaab6144b7e8aa6564582",
+      "vendored_sha256": "3658b24dac26636f4d945ba1a297a7b7ec8db5e2b18aaab6144b7e8aa6564582"
+    },
+    "build.rs": {
+      "upstream_sha256": "4e08e88d6085b23baa5aa7930b8fc7642f730a888ed008f3db38f1c7e16e9654",
+      "vendored_sha256": "4e08e88d6085b23baa5aa7930b8fc7642f730a888ed008f3db38f1c7e16e9654"
+    },
+    "shader/UNLICENSE": {
+      "upstream_sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+      "vendored_sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+    },
+    "shader/backdrop.wgsl": {
+      "upstream_sha256": "2b69b6de2f83275213ed7a7cd2c40335c30c5913a46853c209d6358f7a99797f",
+      "vendored_sha256": "2b69b6de2f83275213ed7a7cd2c40335c30c5913a46853c209d6358f7a99797f"
+    },
+    "shader/backdrop_dyn.wgsl": {
+      "upstream_sha256": "9a3e0c9a9c6d610b254ee04c240b4834e16f2aa19eecfa2d772e4421d3b0f80a",
+      "vendored_sha256": "163f327b208cb0e55816c0ab2817600c7b286ddc6476c651c649b173fbf0951b"
+    },
+    "shader/bbox_clear.wgsl": {
+      "upstream_sha256": "4a5509133f3a4717da196f3ae3287a0837f88d9e5b66e08deef0a69d5f119d82",
+      "vendored_sha256": "4a5509133f3a4717da196f3ae3287a0837f88d9e5b66e08deef0a69d5f119d82"
+    },
+    "shader/binning.wgsl": {
+      "upstream_sha256": "8591cd6e0375cbca88e780ec5c5da10daae0b0db945cec7e79581e359a4a8d0e",
+      "vendored_sha256": "8591cd6e0375cbca88e780ec5c5da10daae0b0db945cec7e79581e359a4a8d0e"
+    },
+    "shader/clip_leaf.wgsl": {
+      "upstream_sha256": "2a768267fe863c85522464b372004a87aa8ee0f9299414f9f3539e8109ad3ea8",
+      "vendored_sha256": "2a768267fe863c85522464b372004a87aa8ee0f9299414f9f3539e8109ad3ea8"
+    },
+    "shader/clip_reduce.wgsl": {
+      "upstream_sha256": "02cf3e18591329da38d01bad6d76e3572b69cd9671f32c602443d87959b1fb87",
+      "vendored_sha256": "02cf3e18591329da38d01bad6d76e3572b69cd9671f32c602443d87959b1fb87"
+    },
+    "shader/coarse.wgsl": {
+      "upstream_sha256": "83e9ba78f9ad26bd9d3e8feb73971e81e7987dbe4af44f2d2cf41d0d1c6eb5e3",
+      "vendored_sha256": "0af2145918d12ed4d9c5c736f12d97bf432733c166d625847385fc9f952facdd"
+    },
+    "shader/draw_leaf.wgsl": {
+      "upstream_sha256": "489cfa784f42f1c4802950cec874c6d488b286da203acd0c7dbce382a595591a",
+      "vendored_sha256": "489cfa784f42f1c4802950cec874c6d488b286da203acd0c7dbce382a595591a"
+    },
+    "shader/draw_reduce.wgsl": {
+      "upstream_sha256": "fa9666fb0b2e2b426e74699defb7bab36538faa6c9d7dd67a77eb5ae65e584b8",
+      "vendored_sha256": "fa9666fb0b2e2b426e74699defb7bab36538faa6c9d7dd67a77eb5ae65e584b8"
+    },
+    "shader/fine.wgsl": {
+      "upstream_sha256": "48fe8e6c193718b152006c00094a354af00096aa7e33ad44adc774187851d6fd",
+      "vendored_sha256": "23d3a3e33b7eb95d62ead28bfcbbedbcefa35a0d12b6f9fc8013c8411272823d"
+    },
+    "shader/flatten.wgsl": {
+      "upstream_sha256": "d610683837057363eb37186e55377b7873ada7e06cfa58b58eddfded1badd403",
+      "vendored_sha256": "d610683837057363eb37186e55377b7873ada7e06cfa58b58eddfded1badd403"
+    },
+    "shader/path_count.wgsl": {
+      "upstream_sha256": "d178f04f04bc7fdd3808729aa8ec747923a1e774a85738ff4f6a12a97b5413fc",
+      "vendored_sha256": "d178f04f04bc7fdd3808729aa8ec747923a1e774a85738ff4f6a12a97b5413fc"
+    },
+    "shader/path_count_setup.wgsl": {
+      "upstream_sha256": "f2e6c3c3f4fa0d791655199773609debb239758daad3245ab8a1a88c9ce556ae",
+      "vendored_sha256": "f2e6c3c3f4fa0d791655199773609debb239758daad3245ab8a1a88c9ce556ae"
+    },
+    "shader/path_tiling.wgsl": {
+      "upstream_sha256": "e40e28183ffd94468a5221ec333bb9cd6d829f9b65193c37f9da12ce218c58a8",
+      "vendored_sha256": "e40e28183ffd94468a5221ec333bb9cd6d829f9b65193c37f9da12ce218c58a8"
+    },
+    "shader/path_tiling_setup.wgsl": {
+      "upstream_sha256": "75105ae0474c8d9c4fbbbcdf9f91545f6e4bada35884ba161ef5a95c85a94eed",
+      "vendored_sha256": "75105ae0474c8d9c4fbbbcdf9f91545f6e4bada35884ba161ef5a95c85a94eed"
+    },
+    "shader/pathtag_reduce.wgsl": {
+      "upstream_sha256": "59cefc7c7ff20f3d34fac167f0cd41d1a30308fbf291f909964c6fe110594219",
+      "vendored_sha256": "59cefc7c7ff20f3d34fac167f0cd41d1a30308fbf291f909964c6fe110594219"
+    },
+    "shader/pathtag_reduce2.wgsl": {
+      "upstream_sha256": "b4f003afa194aacb6ecf6ff8b874e089f695888af8bef6274bb205fa1ea2886d",
+      "vendored_sha256": "b4f003afa194aacb6ecf6ff8b874e089f695888af8bef6274bb205fa1ea2886d"
+    },
+    "shader/pathtag_scan.wgsl": {
+      "upstream_sha256": "51eff52c3a12d5ad5c6a2a9b1ae0531c0b05354bf80ff8def1ac2ff610737433",
+      "vendored_sha256": "51eff52c3a12d5ad5c6a2a9b1ae0531c0b05354bf80ff8def1ac2ff610737433"
+    },
+    "shader/pathtag_scan1.wgsl": {
+      "upstream_sha256": "15d492b5e938cacd152f6da52cf9ad3dcf2f86d1c69c10958de2bab36d82a782",
+      "vendored_sha256": "15d492b5e938cacd152f6da52cf9ad3dcf2f86d1c69c10958de2bab36d82a782"
+    },
+    "shader/permutations": {
+      "upstream_sha256": "223583fafc4247d174a1e56cba4cc821503afa64ef1f594ae5fd6cab1dbf9f3b",
+      "vendored_sha256": "223583fafc4247d174a1e56cba4cc821503afa64ef1f594ae5fd6cab1dbf9f3b"
+    },
+    "shader/shared/bbox.wgsl": {
+      "upstream_sha256": "664810bade226d372f6b4b8fcff5e88dccdc3ffb1bbac86ddb540a76e2c031a3",
+      "vendored_sha256": "664810bade226d372f6b4b8fcff5e88dccdc3ffb1bbac86ddb540a76e2c031a3"
+    },
+    "shader/shared/blend.wgsl": {
+      "upstream_sha256": "2c8abe00dbe7043a652f775caa3e5060bf92300b647fe1055937f95e320b9ac7",
+      "vendored_sha256": "2c8abe00dbe7043a652f775caa3e5060bf92300b647fe1055937f95e320b9ac7"
+    },
+    "shader/shared/bump.wgsl": {
+      "upstream_sha256": "5c4d33425071ded0f6d5a531322b5ae89afca37cacaaa305f05d5d20192a9a61",
+      "vendored_sha256": "5c4d33425071ded0f6d5a531322b5ae89afca37cacaaa305f05d5d20192a9a61"
+    },
+    "shader/shared/clip.wgsl": {
+      "upstream_sha256": "be184c8c6e7801cae10e3c822becb9215cef96b708d6102ede0ab32825405d9f",
+      "vendored_sha256": "be184c8c6e7801cae10e3c822becb9215cef96b708d6102ede0ab32825405d9f"
+    },
+    "shader/shared/config.wgsl": {
+      "upstream_sha256": "357c578c1ebae530f0867e592bb7bfacc2c4425cacd8738c1c94ad66654a596f",
+      "vendored_sha256": "357c578c1ebae530f0867e592bb7bfacc2c4425cacd8738c1c94ad66654a596f"
+    },
+    "shader/shared/cubic.wgsl": {
+      "upstream_sha256": "6e314b5b26e2fbf127fca3dd4f96062d21400182dcb4ea7ac6cc048136c4de49",
+      "vendored_sha256": "6e314b5b26e2fbf127fca3dd4f96062d21400182dcb4ea7ac6cc048136c4de49"
+    },
+    "shader/shared/drawtag.wgsl": {
+      "upstream_sha256": "f10cfd6cda3f9cbf9a7e71513ed4ec7ff87d7e0345ea2b979d2214759b81faad",
+      "vendored_sha256": "f10cfd6cda3f9cbf9a7e71513ed4ec7ff87d7e0345ea2b979d2214759b81faad"
+    },
+    "shader/shared/pathtag.wgsl": {
+      "upstream_sha256": "a03ffe2e9319876279241e9adf01b366ea90874f92abdfb3fff18a2d2e8a5c86",
+      "vendored_sha256": "a03ffe2e9319876279241e9adf01b366ea90874f92abdfb3fff18a2d2e8a5c86"
+    },
+    "shader/shared/ptcl.wgsl": {
+      "upstream_sha256": "3b1af6c6b120ce8c46be490cbfdb33786e9d469776cca319b659b5063a77a466",
+      "vendored_sha256": "3b1af6c6b120ce8c46be490cbfdb33786e9d469776cca319b659b5063a77a466"
+    },
+    "shader/shared/segment.wgsl": {
+      "upstream_sha256": "58b48904bb2edc760855f2f53f6d814df81cd6ba3f3dad632ccb71ef9b7ddc5b",
+      "vendored_sha256": "58b48904bb2edc760855f2f53f6d814df81cd6ba3f3dad632ccb71ef9b7ddc5b"
+    },
+    "shader/shared/tile.wgsl": {
+      "upstream_sha256": "1c103624a2e4f3020dd13b9bf9199d44b4e2d3709c8bd8c0a72bd5f118cece4d",
+      "vendored_sha256": "1c103624a2e4f3020dd13b9bf9199d44b4e2d3709c8bd8c0a72bd5f118cece4d"
+    },
+    "shader/shared/transform.wgsl": {
+      "upstream_sha256": "da5d9c0a83f04d3f70432a13250466e8632960761cda1ae69632d2bc325d3552",
+      "vendored_sha256": "da5d9c0a83f04d3f70432a13250466e8632960761cda1ae69632d2bc325d3552"
+    },
+    "shader/shared/util.wgsl": {
+      "upstream_sha256": "ea47fe879ab7450ae798d6c11a74d6a40cc2ff771178fb0808b25b515e75285f",
+      "vendored_sha256": "ea47fe879ab7450ae798d6c11a74d6a40cc2ff771178fb0808b25b515e75285f"
+    },
+    "shader/tile_alloc.wgsl": {
+      "upstream_sha256": "48ea39ca49fc9d40af1cb18ee509fd8da24b8f0e9cec30dc28878fd14b7b2646",
+      "vendored_sha256": "5323a5ffc61241cfb40b9ae312b022a316dadd670514908d58d4918d745e313d"
+    },
+    "src/compile/mod.rs": {
+      "upstream_sha256": "38b11a7aa046a6eec4d74088d622e1a1daf6f7a49fe3cb71772422c2002a34fd",
+      "vendored_sha256": "38b11a7aa046a6eec4d74088d622e1a1daf6f7a49fe3cb71772422c2002a34fd"
+    },
+    "src/compile/msl.rs": {
+      "upstream_sha256": "34044036c8a8da60421335fac45775812f0be8b6ee933e302712792913cb5908",
+      "vendored_sha256": "34044036c8a8da60421335fac45775812f0be8b6ee933e302712792913cb5908"
+    },
+    "src/compile/permutations.rs": {
+      "upstream_sha256": "c2927c13c77d7d2f748665c5f70fdaf5caf9a1c0c1eb61a65b624472cb95576f",
+      "vendored_sha256": "c2927c13c77d7d2f748665c5f70fdaf5caf9a1c0c1eb61a65b624472cb95576f"
+    },
+    "src/compile/preprocess.rs": {
+      "upstream_sha256": "118648a77cd904418919189aaa738ee602ae7d16c6569e5121bc8435048232af",
+      "vendored_sha256": "118648a77cd904418919189aaa738ee602ae7d16c6569e5121bc8435048232af"
+    },
+    "src/cpu/backdrop.rs": {
+      "upstream_sha256": "3971e338e23128641e8ff5abca87b53ca589f393c710ee4da8d2c291c1d13943",
+      "vendored_sha256": "3971e338e23128641e8ff5abca87b53ca589f393c710ee4da8d2c291c1d13943"
+    },
+    "src/cpu/bbox_clear.rs": {
+      "upstream_sha256": "03e1c3efa35d20d06136b8aff9857cacf93e8e2e1fc90debac36379aa3da1486",
+      "vendored_sha256": "03e1c3efa35d20d06136b8aff9857cacf93e8e2e1fc90debac36379aa3da1486"
+    },
+    "src/cpu/binning.rs": {
+      "upstream_sha256": "32db97a5711ea35ab9d669276b30c3286788c2439a6fce687be3e44d2c0aef90",
+      "vendored_sha256": "32db97a5711ea35ab9d669276b30c3286788c2439a6fce687be3e44d2c0aef90"
+    },
+    "src/cpu/clip_leaf.rs": {
+      "upstream_sha256": "2f2f77071fa67e218601a1cb6ec4362ac94d1681612be4eea0ddff03b2e5a5fb",
+      "vendored_sha256": "2f2f77071fa67e218601a1cb6ec4362ac94d1681612be4eea0ddff03b2e5a5fb"
+    },
+    "src/cpu/clip_reduce.rs": {
+      "upstream_sha256": "5a25efa2fcee417c8b920ab7df0b40131e1d2cade40b2c26c7c5f2d229d19eb7",
+      "vendored_sha256": "5a25efa2fcee417c8b920ab7df0b40131e1d2cade40b2c26c7c5f2d229d19eb7"
+    },
+    "src/cpu/coarse.rs": {
+      "upstream_sha256": "ae8b2515693d23d42f4ad0ccb439702255d757e080adf267eea93eb2d3a08d36",
+      "vendored_sha256": "ae8b2515693d23d42f4ad0ccb439702255d757e080adf267eea93eb2d3a08d36"
+    },
+    "src/cpu/draw_leaf.rs": {
+      "upstream_sha256": "3f0c0779ecf123e321f57f80266178ea93dddc41b6a61eba049863867cc5acd0",
+      "vendored_sha256": "3f0c0779ecf123e321f57f80266178ea93dddc41b6a61eba049863867cc5acd0"
+    },
+    "src/cpu/draw_reduce.rs": {
+      "upstream_sha256": "3c3d5876cd4351a4f78d7320c7ac8153873d48a3ef9867f33d3d04f1d46ce553",
+      "vendored_sha256": "3c3d5876cd4351a4f78d7320c7ac8153873d48a3ef9867f33d3d04f1d46ce553"
+    },
+    "src/cpu/euler.rs": {
+      "upstream_sha256": "0588b675cf9c28790aaf20d145d414fa84eaa51a64b5cd47b3be14a824e3254f",
+      "vendored_sha256": "0588b675cf9c28790aaf20d145d414fa84eaa51a64b5cd47b3be14a824e3254f"
+    },
+    "src/cpu/fine.rs": {
+      "upstream_sha256": "399632fb5d28bdec9ca7ef020fd4a7b3ef9a97b071501dc9e130e0f3305ac40c",
+      "vendored_sha256": "399632fb5d28bdec9ca7ef020fd4a7b3ef9a97b071501dc9e130e0f3305ac40c"
+    },
+    "src/cpu/flatten.rs": {
+      "upstream_sha256": "10fbb9bdf40d6b14ec5aa2aa5356c852b0b8d86e822d5a5d37bbfca451ec939d",
+      "vendored_sha256": "10fbb9bdf40d6b14ec5aa2aa5356c852b0b8d86e822d5a5d37bbfca451ec939d"
+    },
+    "src/cpu/path_count.rs": {
+      "upstream_sha256": "6855dae1bd5ad76879fbbf1ffc2cb55757f4e80e89c9506049e902c3c9c478e2",
+      "vendored_sha256": "6855dae1bd5ad76879fbbf1ffc2cb55757f4e80e89c9506049e902c3c9c478e2"
+    },
+    "src/cpu/path_count_setup.rs": {
+      "upstream_sha256": "e06155e2241e5c7596f8b03b650d27ab36b9cd16fd2c4c32ac2960c0d2f9b37d",
+      "vendored_sha256": "e06155e2241e5c7596f8b03b650d27ab36b9cd16fd2c4c32ac2960c0d2f9b37d"
+    },
+    "src/cpu/path_tiling.rs": {
+      "upstream_sha256": "c02e56b2dcdce6cfc8050bfc6d641e1083b5fab73df558887f8c4c4ee6ffe5f7",
+      "vendored_sha256": "c02e56b2dcdce6cfc8050bfc6d641e1083b5fab73df558887f8c4c4ee6ffe5f7"
+    },
+    "src/cpu/path_tiling_setup.rs": {
+      "upstream_sha256": "7708c50efefb02b02b910e9df1ed43b8b34bf7f981f0241df6a7e57565a0d5e4",
+      "vendored_sha256": "7708c50efefb02b02b910e9df1ed43b8b34bf7f981f0241df6a7e57565a0d5e4"
+    },
+    "src/cpu/pathtag_reduce.rs": {
+      "upstream_sha256": "38b816022cc49b9a9d67af3636617dd7df52b30922592a5f44756859130fd0d8",
+      "vendored_sha256": "38b816022cc49b9a9d67af3636617dd7df52b30922592a5f44756859130fd0d8"
+    },
+    "src/cpu/pathtag_scan.rs": {
+      "upstream_sha256": "b1632ab4259977a6f6affe0f81a8ecf967f4d96d17ff9f2f81388a53f94fe896",
+      "vendored_sha256": "b1632ab4259977a6f6affe0f81a8ecf967f4d96d17ff9f2f81388a53f94fe896"
+    },
+    "src/cpu/tile_alloc.rs": {
+      "upstream_sha256": "a5bf2504bde4fcba12fa6674ec1728cade03bd13b5c27c26ce88c5736338603e",
+      "vendored_sha256": "a5bf2504bde4fcba12fa6674ec1728cade03bd13b5c27c26ce88c5736338603e"
+    },
+    "src/cpu/util.rs": {
+      "upstream_sha256": "984cc0515a8ef1de51a3569377b9e5ec128fba03b7b05ba68ac7b67764091986",
+      "vendored_sha256": "984cc0515a8ef1de51a3569377b9e5ec128fba03b7b05ba68ac7b67764091986"
+    },
+    "src/cpu.rs": {
+      "upstream_sha256": "5c3c4e15f11b768b538c222d8fa6930c04563263a037d1dd4f2924585a5962f1",
+      "vendored_sha256": "5c3c4e15f11b768b538c222d8fa6930c04563263a037d1dd4f2924585a5962f1"
+    },
+    "src/lib.rs": {
+      "upstream_sha256": "e1dc1fb158909c8f21ee4cd5da4cc30268b8e2e8828e2e5d6c7f7c8fd254eb70",
+      "vendored_sha256": "e1dc1fb158909c8f21ee4cd5da4cc30268b8e2e8828e2e5d6c7f7c8fd254eb70"
+    },
+    "src/types.rs": {
+      "upstream_sha256": "a43dbd197b65e3fb865603549179289427e4dd4d6fae6152c489feeffa2919ce",
+      "vendored_sha256": "a43dbd197b65e3fb865603549179289427e4dd4d6fae6152c489feeffa2919ce"
+    }
+  }
+}
