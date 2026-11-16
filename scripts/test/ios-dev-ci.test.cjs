@@ -673,6 +673,9 @@ test('ABI 8 C layout and both native-client guards reject incompatible clients',
   assert.match(swift, /AsyncFunction\("scrollBy"\)/);
   assert.match(swift, /AsyncFunction\("hitTest"\)/);
   assert.match(swift, /kr_scroll_by\(self\.handle, dy\)/);
+  assert.match(swift, /UIPanGestureRecognizer\(target: self/);
+  assert.match(swift, /pan\.velocity\(in: self\)\.y/);
+  assert.match(swift, /kr_fling\(self\.handle, velocity\)/);
   assert.match(swift, /kr_hit_test\(self\.handle, y\)/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
@@ -686,6 +689,7 @@ int32_t (*fonts_signature)(uint64_t, const uint8_t *, size_t, const uint8_t *, s
 size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
 int32_t (*follow_signature)(uint64_t, bool) = kr_set_following;
 int32_t (*scroll_signature)(uint64_t, double) = kr_scroll_by;
+int32_t (*fling_signature)(uint64_t, double) = kr_fling;
 int32_t (*hit_signature)(uint64_t, double) = kr_hit_test;
 ` });
   assert.equal(result.status, 0, result.stderr);

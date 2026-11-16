@@ -1409,7 +1409,7 @@ mod lazy_tests {
                 .iter()
                 .filter(|row| row.voices.iter().any(|voice| voice.detailed))
                 .count()
-                <= 3
+                <= 4 // current/next rows plus the one-second outgoing owner
         );
     }
     #[test]
@@ -1554,7 +1554,18 @@ mod lazy_tests {
     #[test]
     fn outgoing_line_keeps_its_timed_completion_owner() {
         use crate::appearance::{AppearanceState, Effect};
-        let lines = source(6);
+        let mut lines = source(6);
+        for line in &mut lines {
+            for word in &mut line.paint.as_mut().unwrap().words {
+                word.appearance = Some(crate::typography::WordAppearance {
+                    emphasized: false,
+                    origin: 0.5,
+                    rtl: false,
+                    last: true,
+                    emphasis: None,
+                });
+            }
+        }
         let mut fonts = fonts();
         for style in [Style::Amll, Style::Spicy] {
             let settings = Settings {
@@ -1638,6 +1649,13 @@ mod lazy_tests {
         let mut scene = Scene::new();
         let (_, bottom) = track.frame(end + 1000.0, &mut scene);
         assert!(bottom > 0.0);
+        track.frame(end + 1000.0, &mut scene);
+        let allocations = crate::allocation_probe::measure(|| {
+            for _ in 0..120 {
+                track.frame(end + 1000.0, &mut scene);
+            }
+        });
+        assert_eq!(allocations, 0, "steady credits frames must reuse buffers");
     }
 
     #[test]
