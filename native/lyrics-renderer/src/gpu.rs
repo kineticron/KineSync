@@ -14,6 +14,11 @@ use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
 use wgpu::{util::DeviceExt, *};
 type Error = Box<dyn std::error::Error>;
 
+// Shared by Spicy and AMLL. Narrow the distance kernels to 40% of the
+// original sigma so each separable pass also executes fewer texture taps.
+// Emphasized glyph glow shares these bases, so its spread narrows too.
+const LYRIC_BLUR_SIGMA_SCALE: f32 = 0.4;
+
 #[derive(Serialize)]
 pub struct FrameStats {
     pub cpu_encode_ms: f64,
@@ -210,11 +215,13 @@ impl Filter {
             layout: &downsample.get_bind_group_layout(0),
             entries: &[view_entry(0, &sharp_view), view_entry(1, &views[0])],
         });
+        let near_sigma = 0.625 * scale * LYRIC_BLUR_SIGMA_SCALE;
+        let far_sigma = 1.5 * scale * LYRIC_BLUR_SIGMA_SCALE;
         let specs = [
-            (&views[0], &views[1], [1.0, 0.0, 0.625 * scale, 0.0]),
-            (&views[1], &views[2], [0.0, 1.0, 0.625 * scale, 0.0]),
-            (&views[0], &views[3], [1.0, 0.0, 1.5 * scale, 0.0]),
-            (&views[3], &views[4], [0.0, 1.0, 1.5 * scale, 0.0]),
+            (&views[0], &views[1], [1.0, 0.0, near_sigma, 0.0]),
+            (&views[1], &views[2], [0.0, 1.0, near_sigma, 0.0]),
+            (&views[0], &views[3], [1.0, 0.0, far_sigma, 0.0]),
+            (&views[3], &views[4], [0.0, 1.0, far_sigma, 0.0]),
         ];
         let groups = specs
             .into_iter()
@@ -1125,7 +1132,25 @@ mod ownership_tests {
 
 #[cfg(test)]
 mod filter_work_tests {
-    use super::required_blur_tiers;
+    use super::{LYRIC_BLUR_SIGMA_SCALE, required_blur_tiers};
+
+    #[test]
+    fn reduced_shared_sigma_cuts_kernel_taps_at_every_supported_scale() {
+        for scale in [0.5_f32, 1.0, 2.0, 3.0, 4.0] {
+            for sigma in [0.625_f32, 1.5] {
+                let before = (sigma * scale * 3.0).ceil() as u32 * 2 + 1;
+                let after = (sigma * scale * LYRIC_BLUR_SIGMA_SCALE * 3.0).ceil() as u32 * 2 + 1;
+                assert!(after <= before);
+                if scale >= 1.0 {
+                    assert!(after < before);
+                }
+            }
+        }
+        assert!(
+            include_str!("composite.wgsl")
+                .contains("reconstructed(near,gid.xy).g+reconstructed(far,gid.xy).b")
+        );
+    }
     #[test]
     fn only_skip_gaussian_bases_that_composite_cannot_sample() {
         assert_eq!(
