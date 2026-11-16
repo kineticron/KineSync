@@ -122,7 +122,7 @@ pub struct TrackScene {
     pub(crate) scale: f32,
     pub plain_preparations: usize,
     pub detailed_preparations: usize,
-    prepared_signature: Option<(usize, usize, usize)>,
+    prepared_signature: Option<(usize, usize, usize, usize)>,
 }
 
 #[allow(
@@ -399,7 +399,19 @@ impl TrackScene {
         let first = window.active().map_or(active, |(start, _)| start);
         let last = window.active().map_or(first, |(_, end)| end);
         let detail_end = (last + 2).min(self.lines.len() - 1);
-        let signature = (active, first, detail_end);
+        // Skia retains an outgoing voice's exact animation owner after its cell
+        // was promoted (`NativeFastVoice`: retain until cell retirement), and
+        // keeps it within its own interval. Keep the previous package detailed
+        // for its AMLL bright/dark and spring release window; dropping the
+        // reveal gradient on the first inactive frame made the fill tail snap
+        // to flat grey instead of fading.
+        let retention_ms = 1000.0;
+        let mut detail_first = first;
+        while detail_first > 0 && self.lines[detail_first - 1].background_end + retention_ms >= time
+        {
+            detail_first -= 1;
+        }
+        let signature = (active, detail_first, first.min(detail_end), detail_end);
         if self.prepared_signature == Some(signature) {
             return Ok(());
         }
@@ -419,7 +431,7 @@ impl TrackScene {
         }
         let mut changed = false;
         for i in start..=end {
-            let detailed = i >= first && i <= detail_end;
+            let detailed = i >= detail_first && i <= detail_end;
             if !self.cached[i].layout_ready() {
                 let mut prepared = Self::with_fonts_eager(
                     vec![self.lines[i].clone()],
@@ -469,7 +481,7 @@ impl TrackScene {
         // Bound glyph/paragraph ownership while preserving measured row heights.
         // Cached track variants are bounded separately by the native owner.
         for i in 0..self.cached.len() {
-            if !(first..=detail_end).contains(&i) {
+            if !(detail_first..=detail_end).contains(&i) {
                 for voice in &mut self.cached[i].voices {
                     voice.detailed = false;
                 }
@@ -1385,6 +1397,55 @@ mod lazy_tests {
         assert_eq!(count, restored.plain_preparations);
         assert!(cache.take(&key).is_none());
     }
+    #[test]
+    fn outgoing_line_keeps_its_timed_completion_owner() {
+        use crate::appearance::{AppearanceState, Effect};
+        let lines = source(6);
+        let mut fonts = fonts();
+        for style in [Style::Amll, Style::Spicy] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut track =
+                TrackScene::with_fonts(lines.clone(), 390, 640, 1.0, Some(&settings), &mut fonts)
+                    .unwrap();
+            let end = track.lines[0].end;
+            track.prepare(end).unwrap();
+            assert!(track.timed_ready(0));
+            // The next row is already focused, but the outgoing row's timed
+            // reveal must survive so bright/dark can fade instead of snapping.
+            track.prepare(end + 1.0).unwrap();
+            assert!(
+                track.timed_ready(0),
+                "{style:?} outgoing row lost its timed completion owner"
+            );
+            if style == Style::Amll {
+                let mut state = AppearanceState::default();
+                let mut scene = Scene::new();
+                state.prepare(&track, end, 1000.0);
+                state.advance(&track, end, 1000.0, true, Effect::Glow);
+                let before = state.row(0).unwrap().bright;
+                for step in 1..=4 {
+                    let wall = 1000.0 + step as f64 * 16.0;
+                    state.advance(&track, end + step as f64 * 16.0, wall, true, Effect::Glow);
+                }
+                let after = state.row(0).unwrap().bright;
+                assert!(before > after, "AMLL completion colour must fade");
+                track.frame_appearance(
+                    end + 64.0,
+                    track.scroll_target(end + 64.0),
+                    &[],
+                    &state,
+                    &mut scene,
+                    Effect::Glow,
+                );
+                assert!(state.row(0).unwrap().bright < 1.0);
+            }
+        }
+    }
+
     #[test]
     fn manual_scroll_prepares_distant_rows_and_reuses_them() {
         let mut fonts = fonts();
