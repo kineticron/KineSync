@@ -7,6 +7,7 @@ const DRAG_SLOP = 4;
  * @param {{
  *   hitTest: (y: number) => number | Promise<number>,
  *   scrollBy: (dy: number) => void,
+ *   fling: (velocity: number) => void,
  *   setFollowing: (following: boolean) => void,
  *   tapEnabled: () => boolean,
  *   onLinePress: (index: number) => void,
@@ -15,12 +16,14 @@ const DRAG_SLOP = 4;
  *   onUserInteraction: () => void,
  *   setTimer?: (fn: () => void, ms: number) => unknown,
  *   clearTimer?: (handle: unknown) => void,
+ *   now?: () => number,
  * }} options
  */
 function createRustLyricsGesture({
   hitTest,
   scrollBy,
-  setFollowing,
+  fling = () => {},
+  setFollowing = () => {},
   tapEnabled,
   onLinePress,
   onLineLongPress,
@@ -28,6 +31,7 @@ function createRustLyricsGesture({
   onUserInteraction,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
+  now = () => performance.now(),
 }) {
   let active = null;
   let token = 0;
@@ -46,7 +50,7 @@ function createRustLyricsGesture({
     grant(y) {
       cancel(active);
       token += 1;
-      const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, timer: null, hit: null };
+      const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, lastTime: now(), velocity: 0, timer: null, hit: null };
       active = current;
       takeOwnership();
       current.hit = Promise.resolve(hitTest(y))
@@ -77,8 +81,15 @@ function createRustLyricsGesture({
       active.moved = true;
       cancel(active);
       const delta = dy - active.lastDy;
+      const stamp = now();
+      const interval = Math.max(1, stamp - active.lastTime);
+      // iOS keeps a trimmed velocity so a small final sample cannot erase a
+      // fast flick; positive content offset means the finger moved up.
+      active.velocity = active.velocity * 0.8 + (delta / interval) * 0.2;
       active.lastDy = dy;
-      if (delta !== 0) scrollBy(delta);
+      active.lastTime = stamp;
+      // PanResponder dy grows downward; content offset grows upward.
+      if (delta !== 0) scrollBy(-delta);
     },
     release() {
       if (!active) return;
@@ -86,7 +97,11 @@ function createRustLyricsGesture({
       active = null;
       current.released = true;
       cancel(current);
-      if (current.moved || current.longPressed) return;
+      if (current.moved) {
+        fling(-current.velocity);
+        return;
+      }
+      if (current.longPressed) return;
       // A fast tap can release before the native hit test resolves; finish the
       // press when it lands instead of dropping the seek. A tap outside every
       // row never restores follow (Skia only presses actual rows).
@@ -103,8 +118,12 @@ function createRustLyricsGesture({
     terminate() {
       token += 1;
       if (!active) return;
-      cancel(active);
+      const current = active;
+      cancel(current);
       active = null;
+      // Ending outside the content still rebounds instead of stranding the
+      // rubber band when the surface is torn down mid-drag.
+      if (current.moved) fling(0);
     },
     isActive() {
       return active !== null;

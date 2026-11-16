@@ -464,7 +464,25 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
             return Err("Invalid scroll delta".into());
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
-        engine.scroll.drag(dy, max_offset);
+        let scale = f64::from(engine.scale.max(0.001));
+        let viewport = f64::from(engine.metrics.height) / scale;
+        engine.scroll.drag(dy * scale, max_offset, viewport);
+        engine.following = false;
+        Ok(0)
+    })
+}
+/// Manual fling velocity in logical points per millisecond. Negative values
+/// move content up (finger swiped up); the native model owns deceleration.
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
+    with(handle, |engine| {
+        if !velocity.is_finite() {
+            return Err("Invalid fling velocity".into());
+        }
+        let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
+        let scale = f64::from(engine.scale.max(0.001));
+        let viewport = f64::from(engine.metrics.height) / scale;
+        engine.scroll.fling(velocity * scale, max_offset, viewport);
         engine.following = false;
         Ok(0)
     })

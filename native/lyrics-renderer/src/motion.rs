@@ -18,6 +18,12 @@ pub const AMLL_SETTLE_POSITION: f64 = 0.01;
 pub const AMLL_SETTLE_VELOCITY: f64 = 0.01;
 /// Bounded trajectory history; older segments only serve delayed rows.
 const MAX_SEGMENTS: usize = 8;
+/// iOS `UIScrollView.DecelerationRate.normal`, applied per millisecond.
+const FLING_DECELERATION: f64 = 0.998;
+/// Velocity below which the fling hands over to the rebound spring (pt/ms).
+const FLING_MIN_VELOCITY: f64 = 0.02;
+/// Rubber-band stiffness from `UIScrollView` (`0.55`).
+const RUBBER_BAND: f64 = 0.55;
 
 /// Native Spicy viewport tween duration (`spicyScrollDuration`).
 pub fn spicy_duration(interval: f64, interlude: bool, distance: f64) -> f64 {
@@ -122,6 +128,14 @@ pub struct FollowScroll {
     last_ms: Option<f64>,
     animating: bool,
     frozen: bool,
+    /// Manual scroll: raw (unbanded) offset, iOS deceleration and rebound.
+    max_offset: f64,
+    viewport: f64,
+    drag_raw: f64,
+    fling_velocity: f64,
+    fling_last_ms: Option<f64>,
+    settling: bool,
+    settle_velocity: f64,
 }
 
 impl FollowScroll {
@@ -158,6 +172,13 @@ impl FollowScroll {
         self.last_ms = None;
         self.animating = false;
         self.frozen = false;
+        self.max_offset = 0.0;
+        self.viewport = 1.0;
+        self.drag_raw = 0.0;
+        self.fling_velocity = 0.0;
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
     }
 
     /// Explicit seek/track replacement: the next sample teleports.
@@ -192,14 +213,67 @@ impl FollowScroll {
         self.segments.clear();
         self.last_ms = None;
         self.animating = false;
+        self.drag_raw = self.position;
+        self.fling_velocity = 0.0;
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
+    }
+
+    /// iOS rubber band: resistance grows as the offset leaves `[0, max]`.
+    fn rubber(distance: f64, viewport: f64) -> f64 {
+        if distance <= 0.0 {
+            0.0
+        } else {
+            let dim = viewport.max(1.0);
+            (1.0 - 1.0 / (distance * RUBBER_BAND / dim + 1.0)) * dim
+        }
+    }
+
+    fn unrubber(distance: f64, viewport: f64) -> f64 {
+        if distance <= 0.0 {
+            0.0
+        } else {
+            let dim = viewport.max(1.0);
+            distance / (RUBBER_BAND * (1.0 - distance / dim).max(1e-6))
+        }
+    }
+
+    fn band(raw: f64, max: f64, viewport: f64) -> f64 {
+        if raw < 0.0 {
+            -Self::rubber(-raw, viewport)
+        } else if raw > max {
+            max + Self::rubber(raw - max, viewport)
+        } else {
+            raw
+        }
+    }
+
+    fn unband(position: f64, max: f64, viewport: f64) -> f64 {
+        if position < 0.0 {
+            -Self::unrubber(-position, viewport)
+        } else if position > max {
+            max + Self::unrubber(position - max, viewport)
+        } else {
+            position
+        }
     }
 
     /// Manual drag: the user owns the offset until auto-follow is resumed.
-    pub fn drag(&mut self, dy: f64, max_offset: f64) {
-        let next = (self.position + dy).clamp(0.0, max_offset.max(0.0));
-        self.position = next;
-        self.target = next;
-        self.command_offset = next;
+    /// `dy` is in surface pixels; the offset follows the finger 1:1 inside the
+    /// content and rubber-bands past either edge.
+    pub fn drag(&mut self, dy: f64, max_offset: f64, viewport: f64) {
+        let max_offset = max_offset.max(0.0);
+        self.max_offset = max_offset;
+        self.viewport = viewport.max(1.0);
+        self.drag_raw = Self::unband(self.position, max_offset, self.viewport) + dy;
+        self.position = Self::band(self.drag_raw, max_offset, self.viewport);
+        self.fling_velocity = 0.0;
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
+        self.target = self.position;
+        self.command_offset = self.position;
         self.has_command = false;
         self.start_ms = None;
         self.timeline = 0.0;
@@ -209,6 +283,90 @@ impl FollowScroll {
         self.adjust.fill(0.0);
         self.last_visible = 0..0;
         self.animating = false;
+    }
+
+    /// Start an iOS fling after the finger lifts. `velocity` is surface pixels
+    /// per millisecond in content direction (positive = content moves up).
+    pub fn fling(&mut self, velocity: f64, max_offset: f64, viewport: f64) {
+        self.max_offset = max_offset.max(0.0);
+        self.viewport = viewport.max(1.0);
+        self.drag_raw = Self::unband(self.position, self.max_offset, self.viewport);
+        self.fling_velocity = if velocity.is_finite() { velocity } else { 0.0 };
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
+        self.freeze();
+        self.animating =
+            self.fling_velocity != 0.0 || self.position < 0.0 || self.position > self.max_offset;
+    }
+
+    fn begin_settle(&mut self) {
+        self.settling = true;
+        self.settle_velocity = self.fling_velocity;
+        self.fling_velocity = 0.0;
+    }
+
+    /// Advance manual deceleration/rebound by one native frame. Returns the
+    /// displayed (rubber-banded) offset.
+    fn advance_manual(&mut self, now_ms: f64) {
+        let dt = self.fling_last_ms.map_or(
+            if self.fling_velocity != 0.0 {
+                16.0
+            } else {
+                0.0
+            },
+            |last| (now_ms - last).clamp(0.0, MAX_STEP_SECONDS * 1000.0),
+        );
+        self.fling_last_ms = Some(now_ms);
+        let max = self.max_offset;
+        let viewport = self.viewport;
+        if self.settling {
+            let bound = if self.position < 0.0 {
+                0.0
+            } else if self.position > max {
+                max
+            } else {
+                self.position
+            };
+            let displacement = self.position - bound;
+            if displacement.abs() < 0.05 && self.settle_velocity.abs() < 0.005 {
+                self.position = bound;
+                self.settle_velocity = 0.0;
+                self.settling = false;
+                self.animating = false;
+                return self.position;
+            }
+            // Critically damped rebound, mirrored from the native scroll view.
+            let omega = 0.035;
+            let c = self.settle_velocity + omega * displacement;
+            let decay = (-omega * dt).exp();
+            self.position = bound + (displacement + c * dt) * decay;
+            self.settle_velocity = (self.settle_velocity - omega * c * dt) * decay;
+            if (self.position < 0.0 && bound == 0.0) || (self.position > max && bound == max) {
+                self.position = bound;
+                self.settle_velocity = 0.0;
+                self.settling = false;
+            }
+            self.animating = self.settling;
+            return self.position;
+        }
+        if dt > 0.0 && self.fling_velocity.abs() > 0.0 {
+            self.drag_raw += self.fling_velocity * dt;
+            self.position = Self::band(self.drag_raw, max, viewport);
+            self.fling_velocity *= FLING_DECELERATION.powf(dt);
+            if self.fling_velocity.abs() < FLING_MIN_VELOCITY {
+                if self.position < 0.0 || self.position > max {
+                    self.begin_settle();
+                } else {
+                    self.fling_velocity = 0.0;
+                }
+            }
+            self.animating = self.fling_velocity != 0.0 || self.settling;
+        } else if self.position < 0.0 || self.position > max {
+            self.begin_settle();
+            self.animating = true;
+        }
+        self.position
     }
 
     fn settled_spring(p: f64, v: f64) -> bool {
@@ -338,9 +496,13 @@ impl FollowScroll {
             if !self.frozen {
                 self.freeze();
             }
-            return self.position;
+            return self.advance_manual(now_ms);
         }
         self.frozen = false;
+        self.fling_velocity = 0.0;
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
         if self.armed {
             self.position = command.offset;
             self.target = command.offset;
@@ -554,7 +716,7 @@ mod tests {
         let mut scroll = FollowScroll::default();
         scroll.configure(Style::Spicy, 3.0, 8);
         scroll.sample(&command(Style::Spicy, 500.0, 800.0, 1, 0), 0.0, true);
-        scroll.drag(-120.0, 2_000.0);
+        scroll.drag(-120.0, 2_000.0, 800.0);
         assert_eq!(scroll.position(), 380.0);
         // Playback moves on while auto-follow is disabled: no scroll movement.
         let moved = command(Style::Spicy, 1_000.0, 800.0, 2, 1);
@@ -566,6 +728,49 @@ mod tests {
         let middle = scroll.sample(&moved, 2_100.0, true);
         assert!(middle > 380.0 && middle < 1_000.0);
         assert_eq!(scroll.sample(&moved, 3_000.0, true), 1_000.0);
+    }
+
+    #[test]
+    fn manual_drag_tracks_one_to_one_and_rubber_bands_at_the_edges() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let command = command(Style::Spicy, 0.0, 800.0, 0, 0);
+        scroll.sample(&command, 0.0, true);
+        scroll.drag(120.0, 1_000.0, 800.0);
+        assert_eq!(scroll.position(), 120.0);
+        scroll.drag(-40.0, 1_000.0, 800.0);
+        assert_eq!(scroll.position(), 80.0);
+        scroll.drag(-200.0, 1_000.0, 800.0);
+        assert!(scroll.position() < 0.0 && scroll.position() > -120.0);
+        // No finger velocity at release: the rubber band rebounds to the edge.
+        scroll.fling(0.0, 1_000.0, 800.0);
+        let mut now = 0.0;
+        for _ in 0..120 {
+            now += 16.0;
+            scroll.sample(&command, now, false);
+        }
+        assert!(scroll.position().abs() < 0.05);
+    }
+
+    #[test]
+    fn fling_decays_at_the_ios_rate_and_settles() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let command = command(Style::Spicy, 0.0, 800.0, 0, 0);
+        scroll.sample(&command, 0.0, true);
+        scroll.fling(3.0, 10_000.0, 800.0);
+        let first = scroll.sample(&command, 16.0, false);
+        let second = scroll.sample(&command, 32.0, false);
+        assert!(first > 0.0);
+        assert!(second > first);
+        assert!(second - first < first, "deceleration must shrink each step");
+        let mut now = 32.0;
+        for _ in 0..1_000 {
+            now += 16.0;
+            scroll.sample(&command, now, false);
+        }
+        assert!(!scroll.animating());
+        assert!(scroll.position() > second);
     }
 
     #[test]

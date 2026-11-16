@@ -25,6 +25,9 @@ public final class KineSyncRustLyricsModule: Module {
       AsyncFunction("scrollBy") { (view: KineSyncRustLyricsView, dy: Double) in
         MainActor.assumeIsolated { view.scrollBy(dy) }
       }
+      AsyncFunction("fling") { (view: KineSyncRustLyricsView, velocity: Double) in
+        MainActor.assumeIsolated { view.fling(velocity) }
+      }
       AsyncFunction("hitTest") { (view: KineSyncRustLyricsView, y: Double, promise: Promise) in
         MainActor.assumeIsolated { view.hitTest(y, promise) }
       }
@@ -149,6 +152,13 @@ private final class RustOwner: @unchecked Sendable {
     queue.async {
       guard self.permitted(), self.handle != 0, !self.failed else { return }
       if kr_scroll_by(self.handle, dy) < 0 { self.failure() }
+    }
+  }
+  func fling(_ velocity: Double) {
+    guard velocity.isFinite else { return }
+    queue.async {
+      guard self.permitted(), self.handle != 0, !self.failed else { return }
+      if kr_fling(self.handle, velocity) < 0 { self.failure() }
     }
   }
   func hitTest(_ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
@@ -456,6 +466,12 @@ final class KineSyncRustLyricsView: ExpoView {
   func scrollBy(_ dy: Double) {
     guard dy.isFinite, dy != 0 else { return }
     owner?.scrollBy(dy)
+    markDirty()
+    lifecycle()
+  }
+  func fling(_ velocity: Double) {
+    guard velocity.isFinite else { return }
+    owner?.fling(velocity)
     markDirty()
     lifecycle()
   }

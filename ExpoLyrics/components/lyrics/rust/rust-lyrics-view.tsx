@@ -10,7 +10,7 @@ import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; hitTest(y: number): Promise<number> };
+type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(y: number): Promise<number> };
 type Metrics = { frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
@@ -107,6 +107,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const gesture = useMemo(() => createRustLyricsGesture({
     hitTest: y => native.current ? native.current.hitTest(y) : Promise.resolve(-1),
     scrollBy: dy => send(view => view.scrollBy(dy)),
+    fling: velocity => send(view => view.fling(velocity)),
     setFollowing: following => send(view => view.setFollowing(following)),
     tapEnabled: () => latest.current.tapToSeekEnabled,
     onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },

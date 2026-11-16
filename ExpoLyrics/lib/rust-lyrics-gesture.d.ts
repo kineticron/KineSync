@@ -11,6 +11,7 @@ export type RustLyricsGesture = {
 export function createRustLyricsGesture(options: {
   hitTest: (y: number) => number | Promise<number>;
   scrollBy: (dy: number) => void;
+  fling: (velocity: number) => void;
   setFollowing: (following: boolean) => void;
   tapEnabled: () => boolean;
   onLinePress: (index: number) => void;
@@ -19,4 +20,5 @@ export function createRustLyricsGesture(options: {
   onUserInteraction: () => void;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  now?: () => number;
 }): RustLyricsGesture;

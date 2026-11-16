@@ -5,11 +5,12 @@ const assert = require('node:assert/strict');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
-  const calls = { follow: [], scroll: [], press: [], long: [], auto: [], interaction: 0 };
+  const calls = { follow: [], scroll: [], fling: [], press: [], long: [], auto: [], interaction: 0 };
   let timer = null;
   const gesture = createRustLyricsGesture({
     hitTest: () => 2,
     scrollBy: dy => calls.scroll.push(dy),
+    fling: velocity => calls.fling.push(velocity),
     setFollowing: value => calls.follow.push(value),
     tapEnabled: () => true,
     onLinePress: index => calls.press.push(index),
@@ -66,13 +67,15 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     assert.deepEqual(calls.scroll, []);
     assert.ok(timer(), 'sub-slop motion must not cancel the long press timer');
     gesture.move(-30);
-    assert.deepEqual(calls.scroll, [-30]);
+    assert.deepEqual(calls.scroll, [30], 'an upward drag increases the content offset');
     assert.equal(timer(), null, 'drag cancels long press');
     gesture.move(-80);
-    assert.deepEqual(calls.scroll, [-30, -50], 'deltas are relative to the previous move');
+    assert.deepEqual(calls.scroll, [30, 50], 'deltas are relative to the previous move');
     gesture.release();
     assert.deepEqual(calls.press, [], 'drag release never seeks');
     assert.deepEqual(calls.follow, [false], 'drag keeps auto-follow disabled');
+    assert.equal(calls.fling.length, 1, 'drag release starts inertial scrolling');
+    assert.ok(calls.fling[0] > 0, 'an upward flick flings the content upward');
   }
 
   // Tap-to-seek disabled: ownership still transfers and follow is restored, but
@@ -153,5 +156,5 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     gesture.release();
     assert.deepEqual(calls.press, []);
   }
-  console.log('Rust gesture ownership, 540 ms long press, tap-to-seek, drag deltas and cancellation passed.');
+  console.log('Rust gesture ownership, 540 ms long press, tap-to-seek, 1:1 drag deltas, fling and cancellation passed.');
 })().catch(error => { console.error(error); process.exit(1); });
