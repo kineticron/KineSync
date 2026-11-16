@@ -522,6 +522,49 @@ pub extern "C" fn kr_hit_test(handle: u64, y: f64) -> i32 {
             .map_or(-1, |index| index as i32))
     })
 }
+struct PreparedDrawable<T> {
+    drawable: T,
+    native_ms: f64,
+    preparation_ms: f64,
+}
+
+/// Never shape with a drawable held. A stall crossing a geometry boundary
+/// retires that drawable before retrying. No animation state is sampled here.
+fn prepare_drawable<T>(
+    layout: &mut TrackScene,
+    timeline: &Timeline,
+    manual_scroll: Option<f64>,
+    mut clock: impl FnMut() -> f64,
+    mut acquire: impl FnMut() -> Result<Option<T>, String>,
+) -> Result<Option<PreparedDrawable<T>>, String> {
+    let mut preparation_ms = 0.0;
+    for _ in 0..2 {
+        let position = timeline.position(clock());
+        let started = Instant::now();
+        layout.prepare(position).map_err(|e| e.to_string())?;
+        if let Some(scroll) = manual_scroll {
+            layout.prepare_viewport(scroll).map_err(|e| e.to_string())?;
+        }
+        preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
+        let key = layout.preparation_key(position);
+        let Some(drawable) = acquire()? else {
+            return Ok(None);
+        };
+        let native_ms = clock();
+        if layout.preparation_key(timeline.position(native_ms)) == key {
+            return Ok(Some(PreparedDrawable {
+                drawable,
+                native_ms,
+                preparation_ms,
+            }));
+        }
+        drop(drawable);
+    }
+    // No drawable for a fully prepared current frame. The native owner's
+    // existing bounded unavailable-drawable retry supplies another fresh clock.
+    Ok(None)
+}
+
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64) -> i32 {
@@ -548,25 +591,27 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
             engine.metrics.gpu_busy += 1;
             return Ok(3);
         }
-        let Some(frame) = engine.surface.acquire().map_err(|e| e.to_string())? else {
+        let Some(prepared) = prepare_drawable(
+            layout,
+            &engine.timeline,
+            (!engine.following).then_some(engine.scroll.position()),
+            || {
+                frame_clock(
+                    native_ms,
+                    sampled_native_ms,
+                    frame_started.elapsed().as_secs_f64() * 1000.0,
+                )
+            },
+            || engine.surface.acquire().map_err(|e| e.to_string()),
+        )?
+        else {
             return Ok(2);
         };
-        // nextDrawable may have waited. Retain the display target when still
-        // future, otherwise use a refreshed sample in the same native clock.
-        let native_ms = frame_clock(
-            native_ms,
-            sampled_native_ms,
-            frame_started.elapsed().as_secs_f64() * 1000.0,
-        );
+        let frame = prepared.drawable;
+        let native_ms = prepared.native_ms;
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
         let started = Instant::now();
-        layout.prepare(position).map_err(|e| e.to_string())?;
-        if !engine.following {
-            layout
-                .prepare_viewport(engine.scroll.position())
-                .map_err(|e| e.to_string())?;
-        }
         // Geometry changes reach the tween through `command.offset`; remapping
         // here would clear the spring history every frame.
         let command = layout.scroll_command(position, engine.scroll.position());
@@ -590,7 +635,8 @@ pub extern "C" fn kr_render(handle: u64, native_ms: f64, sampled_native_ms: f64)
                 || engine.appearance.interlude_animating(),
         );
         engine.metrics.position_ms = position;
-        engine.metrics.cpu_scene_ms = started.elapsed().as_secs_f64() * 1000.0;
+        engine.metrics.cpu_scene_ms =
+            prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
         let (stats, present) = engine
             .surface
             .render_appearance(
@@ -669,6 +715,112 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Metrics, acquire_ms), 88);
         assert_eq!(std::mem::offset_of!(Metrics, completed), 120);
     }
+    fn preparation_track() -> TrackScene {
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../test/background-voices.json")).unwrap();
+        let packet =
+            TrackPacket::parse(&serde_json::to_vec(&data["cases"][0]["packet"]).unwrap()).unwrap();
+        let settings = packet.settings.clone().unwrap();
+        let mut fonts = crate::typography::Fonts::default();
+        fonts
+            .register(
+                include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf"),
+                include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"),
+            )
+            .unwrap();
+        TrackScene::with_fonts(
+            packet.into_lines(),
+            390,
+            640,
+            1.0,
+            Some(&settings),
+            &mut fonts,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn acquisition_stall_retires_drawable_before_preparing_the_new_window() {
+        use std::{cell::Cell, rc::Rc};
+        struct Drawable(Rc<Cell<usize>>);
+        impl Drop for Drawable {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() - 1);
+            }
+        }
+        let mut layout = preparation_track();
+        let before = layout.lines[0].start + 1.0;
+        let after = layout.lines[1].background_end + 2000.0;
+        assert_ne!(
+            layout.preparation_key(before),
+            layout.preparation_key(after)
+        );
+        let mut timeline = Timeline::default();
+        timeline.replace(1);
+        timeline.anchor(1, 1, 0.0, 0.0, 0.0, true, 1.0).unwrap();
+        let mut times = [before, after, after, after].into_iter();
+        let held = Rc::new(Cell::new(0));
+        let mut acquisitions = 0;
+        let prepared = prepare_drawable(
+            &mut layout,
+            &timeline,
+            None,
+            || times.next().unwrap(),
+            || {
+                assert_eq!(
+                    held.get(),
+                    0,
+                    "previous drawable must be released before retry"
+                );
+                acquisitions += 1;
+                held.set(held.get() + 1);
+                Ok(Some(Drawable(held.clone())))
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(acquisitions, 2);
+        assert_eq!(prepared.native_ms, after);
+        assert_eq!(held.get(), 1);
+        let mut expected = preparation_track();
+        expected.prepare(before).unwrap();
+        expected.prepare(after).unwrap();
+        assert_eq!(
+            layout.layout_json().unwrap(),
+            expected.layout_json().unwrap()
+        );
+        drop(prepared);
+        assert_eq!(held.get(), 0);
+    }
+
+    #[test]
+    fn unavailable_drawable_prepares_without_sampling_animation_and_pause_holds_time() {
+        let mut layout = preparation_track();
+        let position = layout.lines[0].start + 1.0;
+        let mut timeline = Timeline::default();
+        timeline.replace(1);
+        timeline
+            .anchor(1, 1, position, 0.0, 0.0, false, 1.0)
+            .unwrap();
+        let result =
+            prepare_drawable::<()>(&mut layout, &timeline, Some(0.0), || 100_000.0, || Ok(None))
+                .unwrap();
+        assert!(result.is_none());
+        assert!(layout.geometry_ready(0));
+        assert_eq!(timeline.position(100_000.0), position);
+        let prepared = prepare_drawable(
+            &mut layout,
+            &timeline,
+            Some(0.0),
+            || 200_000.0,
+            || Ok(Some(())),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(prepared.native_ms, 200_000.0);
+        assert_eq!(timeline.position(prepared.native_ms), position);
+    }
+
     #[test]
     fn layout_copy_size_query_short_buffer_and_cached_copy() {
         let mut lines = crate::fixture().unwrap();

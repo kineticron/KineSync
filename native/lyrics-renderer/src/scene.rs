@@ -419,12 +419,9 @@ impl TrackScene {
         })
     }
 
-    /// Static preparation only when a row enters the visible/near-active window.
-    /// Inactive rows retain a plain paragraph; only active + next2 build timed fragments.
-    pub fn prepare(&mut self, time: f64) -> Result<(), Error> {
-        if self.settings.is_none() {
-            return Ok(());
-        }
+    /// Immutable key for the geometry/retention window. Acquisition can test
+    /// freshness without shaping, promoting rows, or advancing animation.
+    pub(crate) fn preparation_key(&self, time: f64) -> (usize, usize, usize, usize) {
         // Overlap-safe window; long pauses prepare the previous package and the
         // upcoming lyric, which is where Skia's interlude row and dots live.
         let window = crate::window(&self.lines, time);
@@ -444,7 +441,17 @@ impl TrackScene {
         {
             detail_first -= 1;
         }
-        let signature = (active, detail_first, first.min(detail_end), detail_end);
+        (active, detail_first, first.min(detail_end), detail_end)
+    }
+
+    /// Static preparation only when a row enters the visible/near-active window.
+    /// Inactive rows retain a plain paragraph; only active + next2 build timed fragments.
+    pub fn prepare(&mut self, time: f64) -> Result<(), Error> {
+        if self.settings.is_none() {
+            return Ok(());
+        }
+        let signature = self.preparation_key(time);
+        let (active, detail_first, first, detail_end) = signature;
         if self.prepared_signature == Some(signature) {
             return Ok(());
         }
