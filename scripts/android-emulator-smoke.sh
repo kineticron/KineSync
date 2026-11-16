@@ -27,7 +27,11 @@ adb shell input tap $((w / 2)) $((h * 92 / 100))
 sleep 3
 adb shell screencap -p /sdcard/menu.png && adb pull /sdcard/menu.png "${out}/after-menu.png"
 adb shell am start -a android.intent.action.VIEW -d 'expolyrics://rust-android-smoke'
-sleep 25
+sleep 15
+adb shell input keyevent KEYCODE_BACK
+sleep 3
+adb shell screencap -p /sdcard/menu2.png && adb pull /sdcard/menu2.png "${out}/after-back.png"
+sleep 10
 adb shell screencap -p /sdcard/smoke.png && adb pull /sdcard/smoke.png "${out}/smoke.png"
 sleep 5
 adb shell screencap -p /sdcard/smoke2.png && adb pull /sdcard/smoke2.png "${out}/smoke2.png"
