@@ -59,6 +59,7 @@ impl AppearanceState {
     }
     /// Invoked with static near-active geometry preparation; allocations only on window changes.
     pub fn prepare(&mut self, track: &TrackScene, time: f64, native_ms: f64) {
+        let paused = self.last_ms.is_some() && !self.playing;
         if self.rows.len() != track.lines.len() {
             self.reset();
             self.rows.resize_with(track.lines.len(), || None);
@@ -116,19 +117,20 @@ impl AppearanceState {
                     clock: FloatClock::default(),
                     // Match the cold paragraph transform before the first advance.
                     scale: Spring {
-                        p: if spicy || active || (self.last_ms.is_some() && !self.playing) {
-                            1.0
-                        } else {
-                            0.97
-                        },
+                        p: if spicy || active || paused { 1.0 } else { 0.97 },
                         v: 0.0,
                     },
                     // Skia's line springs have already settled a future row to
-                    // bright=dark=0.2 long before it is promoted to exact glyphs.
-                    // The raw placeholder paints the same inactive alpha, so the
-                    // handoff cannot flash white.
-                    bright: if spicy || active { 1.0 } else { 0.2 },
-                    dark: if spicy || active { 0.4 } else { 0.2 },
+                    // bright=dark=0.2 while playing, or 0.4 when paused.
+                    // Match both the cold alpha and its scale at promotion.
+                    bright: if spicy || active {
+                        1.0
+                    } else if paused {
+                        0.4
+                    } else {
+                        0.2
+                    },
+                    dark: if spicy || active || paused { 0.4 } else { 0.2 },
                     outer,
                     target_outer: outer,
                     from_outer: outer,

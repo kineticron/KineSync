@@ -361,7 +361,9 @@ impl TrackScene {
                     let alpha = if spicy {
                         spicy_voice_alpha(voice.background, sung) * outer
                     } else {
-                        row.map_or(0.2, |r| r.dark * r.outer) * voice.alpha
+                        row.map_or(if state.playing() { 0.2 } else { 0.4 }, |r| {
+                            r.dark * r.outer
+                        }) * voice.alpha
                     };
                     let base = Affine::translate((voice.x, row_top + voice.offset + voice.padding));
                     // AMLL ducks its line scale on background voices.

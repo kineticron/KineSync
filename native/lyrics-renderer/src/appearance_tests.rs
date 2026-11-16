@@ -455,35 +455,38 @@ fn cold_and_first_prepared_frames_are_pixel_identical() {
         // a fully visible row inside the protected band.
         for bottom in [false, true] {
             for blurred in [false, true] {
-                let scroll = if bottom {
-                    track.scroll_anchor() - f64::from(track.height) + 70.0
-                } else {
-                    0.0
-                };
-                let mut state = AppearanceState::default();
-                state.advance(&track, time, 1000.0, true, Effect::Glow);
-                let band =
-                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
-                let band = if blurred { (-400.0, -300.0) } else { band };
-                render(&mut gpu, &scene, band, Effect::Glow);
-                let cold = gpu.read_pixels().unwrap();
-                assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
-                state.prepare(&track, time, 1000.0);
-                for frame in 0..4 {
-                    state.advance(
-                        &track,
-                        time,
-                        1000.0 + frame as f64 * 16.0,
-                        true,
-                        Effect::Glow,
-                    );
-                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                for playing in [true, false] {
+                    let scroll = if bottom {
+                        track.scroll_anchor() - f64::from(track.height) + 70.0
+                    } else {
+                        0.0
+                    };
+                    let mut state = AppearanceState::default();
+                    state.advance(&track, time, 1000.0, playing, Effect::Glow);
+                    let band =
+                        track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                    let band = if blurred { (-400.0, -300.0) } else { band };
                     render(&mut gpu, &scene, band, Effect::Glow);
-                    assert_eq!(
-                        cold,
-                        gpu.read_pixels().unwrap(),
-                        "{style:?} bottom={bottom} blurred={blurred} frame={frame}"
-                    );
+                    let cold = gpu.read_pixels().unwrap();
+                    assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
+                    state.prepare(&track, time, 1000.0);
+                    for frame in 0..4 {
+                        state.advance(
+                            &track,
+                            time,
+                            1000.0 + frame as f64 * 16.0,
+                            playing,
+                            Effect::Glow,
+                        );
+                        track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
+                        render(&mut gpu, &scene, band, Effect::Glow);
+                        let prepared = gpu.read_pixels().unwrap();
+                        let changed = cold.iter().zip(&prepared).filter(|(a, b)| a != b).count();
+                        assert_eq!(
+                            changed, 0,
+                            "{style:?} playing={playing} bottom={bottom} blurred={blurred} frame={frame}"
+                        );
+                    }
                 }
             }
         }
