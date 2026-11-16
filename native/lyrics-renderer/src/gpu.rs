@@ -555,14 +555,9 @@ impl Gpu {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let blit = SurfaceBlit::new(&self.device, TextureFormat::Rgba8Unorm);
+        let blit = SurfaceBlit::new(&self.device, TextureFormat::Rgba8Unorm, &self.target_view);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        blit.copy(
-            &self.device,
-            &mut encoder,
-            &self.target_view,
-            &output.create_view(&Default::default()),
-        );
+        blit.copy(&mut encoder, &output.create_view(&Default::default()));
         self.queue.submit([encoder.finish()]);
         self.read_texture(&output)
     }
@@ -695,7 +690,7 @@ impl SurfaceRenderer {
         // Three OS drawables, at most two submitted application frames.
         config.desired_maximum_frame_latency = 2;
         surface.configure(&gpu.device, &config);
-        let blitter = SurfaceBlit::new(&gpu.device, config.format);
+        let blitter = SurfaceBlit::new(&gpu.device, config.format, &gpu.target_view);
         Ok(Self {
             surface,
             gpu,
@@ -708,6 +703,8 @@ impl SurfaceRenderer {
     }
     pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
         self.gpu.resize(width, height, scale)?;
+        self.blitter
+            .set_input(&self.gpu.device, &self.gpu.target_view);
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.gpu.device, &self.config);
@@ -789,9 +786,7 @@ impl SurfaceRenderer {
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
-            &self.gpu.device,
             &mut encoder,
-            &self.gpu.target_view,
             &frame.texture.create_view(&Default::default()),
         );
         let commands = encoder.finish();
@@ -844,9 +839,10 @@ pub struct SurfaceTiming {
 struct SurfaceBlit {
     pipeline: RenderPipeline,
     layout: BindGroupLayout,
+    group: BindGroup,
 }
 impl SurfaceBlit {
-    fn new(device: &Device, format: TextureFormat) -> Self {
+    fn new(device: &Device, format: TextureFormat, input: &TextureView) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("linear premultiplied to encoded premultiplied sRGB surface"),
             source: ShaderSource::Wgsl(include_str!("surface.wgsl").into()),
@@ -877,20 +873,24 @@ impl SurfaceBlit {
             cache: None,
         });
         let layout = pipeline.get_bind_group_layout(0);
-        Self { pipeline, layout }
+        let group = Self::input_group(device, &layout, input);
+        Self {
+            pipeline,
+            layout,
+            group,
+        }
     }
-    fn copy(
-        &self,
-        device: &Device,
-        encoder: &mut CommandEncoder,
-        input: &TextureView,
-        output: &TextureView,
-    ) {
-        let group = device.create_bind_group(&BindGroupDescriptor {
+    fn input_group(device: &Device, layout: &BindGroupLayout, input: &TextureView) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
             label: Some("surface copy"),
-            layout: &self.layout,
+            layout,
             entries: &[view_entry(0, input)],
-        });
+        })
+    }
+    fn set_input(&mut self, device: &Device, input: &TextureView) {
+        self.group = Self::input_group(device, &self.layout, input);
+    }
+    fn copy(&self, encoder: &mut CommandEncoder, output: &TextureView) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("premultiplied sRGB copy, no blending"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -905,7 +905,7 @@ impl SurfaceBlit {
             ..Default::default()
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(0, &self.group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
@@ -950,12 +950,8 @@ mod ownership_tests {
                 view_formats: &[],
             });
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
-            SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm).copy(
-                &gpu.device,
-                &mut encoder,
-                &gpu.target_view,
-                &output.create_view(&Default::default()),
-            );
+            SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm, &gpu.target_view)
+                .copy(&mut encoder, &output.create_view(&Default::default()));
             gpu.queue.submit([encoder.finish()]);
             let (id, done) = flight.submit();
             gpu.queue.on_submitted_work_done(move || {
@@ -972,6 +968,59 @@ mod ownership_tests {
         assert_eq!(&first[offset..offset + 4], &[128, 0, 0, 128]);
         assert_eq!(&second[offset..offset + 4], &[0, 192, 0, 192]);
         gpu.check_error().unwrap();
+    }
+    #[test]
+    #[ignore = "requires a working Vulkan adapter; cached surface inputs and resize proof"]
+    fn cached_surface_inputs_match_fresh_bindings_across_frames_and_resize() {
+        use vello::{
+            kurbo::{Affine, Rect},
+            peniko::Fill,
+        };
+        let mut gpu = pollster::block_on(Gpu::new(64, 64)).unwrap();
+        let mut blit = SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm, &gpu.target_view);
+        for (width, height) in [(64, 64), (80, 72), (64, 64)] {
+            if (width, height) != (gpu.width, gpu.height) {
+                gpu.resize(width, height, 1.0).unwrap();
+                blit.set_input(&gpu.device, &gpu.target_view);
+            }
+            for color in [
+                Color::from_rgba8(255, 0, 0, 128),
+                Color::from_rgba8(0, 255, 0, 192),
+            ] {
+                let mut scene = Scene::new();
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    color,
+                    None,
+                    &Rect::new(8.0, 8.0, f64::from(width - 8), f64::from(height - 8)),
+                );
+                gpu.render_frame(&scene, (0.0, height as f32), true, false, false, false)
+                    .unwrap();
+                let output = gpu.device.create_texture(&TextureDescriptor {
+                    label: Some("cached binding proof"),
+                    size: gpu.target.size(),
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+                let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                blit.copy(&mut encoder, &output.create_view(&Default::default()));
+                gpu.queue.submit([encoder.finish()]);
+                let cached = gpu.read_texture(&output).unwrap();
+                assert_eq!(cached, gpu.surface_pixels().unwrap());
+                let center = ((height / 2 * width + width / 2) * 4) as usize;
+                let expected = if color == Color::from_rgba8(255, 0, 0, 128) {
+                    [128, 0, 0, 128]
+                } else {
+                    [0, 192, 0, 192]
+                };
+                assert_eq!(&cached[center..center + 4], &expected);
+            }
+        }
     }
     #[test]
     fn alpha_selection_confines_locked_metal_workaround() {
