@@ -44,7 +44,9 @@ pub struct Gpu {
     queue: Queue,
     renderer: Renderer,
     sharp: Texture,
+    sharp_view: TextureView,
     target: Texture,
+    target_view: TextureView,
     filter: Filter,
     timestamps: Option<Timestamps>,
     width: u32,
@@ -362,6 +364,8 @@ impl Gpu {
         let sharp = texture(&device, width, height, "vello-sharp");
         let target = texture(&device, width, height, "final-composite");
         let filter = Filter::new(&device, &sharp, &target, width, height, scale);
+        let sharp_view = sharp.create_view(&Default::default());
+        let target_view = target.create_view(&Default::default());
         let timestamps = timestamp_supported.then(|| Timestamps {
             queries: device.create_query_set(&QuerySetDescriptor {
                 label: Some("whole frame GPU interval"),
@@ -395,7 +399,9 @@ impl Gpu {
             queue,
             renderer,
             sharp,
+            sharp_view,
             target,
+            target_view,
             filter,
             timestamps,
             width,
@@ -423,6 +429,8 @@ impl Gpu {
         self.scale = scale;
         self.sharp = texture(&self.device, width, height, "resized-sharp");
         self.target = texture(&self.device, width, height, "resized-composite");
+        self.sharp_view = self.sharp.create_view(&Default::default());
+        self.target_view = self.target.create_view(&Default::default());
         self.filter = Filter::new(
             &self.device,
             &self.sharp,
@@ -473,7 +481,7 @@ impl Gpu {
             &self.device,
             &self.queue,
             scene,
-            &self.sharp.create_view(&Default::default()),
+            &self.sharp_view,
             &RenderParams {
                 base_color: Color::TRANSPARENT,
                 width: self.width,
@@ -552,7 +560,7 @@ impl Gpu {
         blit.copy(
             &self.device,
             &mut encoder,
-            &self.target.create_view(&Default::default()),
+            &self.target_view,
             &output.create_view(&Default::default()),
         );
         self.queue.submit([encoder.finish()]);
@@ -783,7 +791,7 @@ impl SurfaceRenderer {
         self.blitter.copy(
             &self.gpu.device,
             &mut encoder,
-            &self.gpu.target.create_view(&Default::default()),
+            &self.gpu.target_view,
             &frame.texture.create_view(&Default::default()),
         );
         let commands = encoder.finish();
@@ -945,7 +953,7 @@ mod ownership_tests {
             SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm).copy(
                 &gpu.device,
                 &mut encoder,
-                &gpu.target.create_view(&Default::default()),
+                &gpu.target_view,
                 &output.create_view(&Default::default()),
             );
             gpu.queue.submit([encoder.finish()]);
