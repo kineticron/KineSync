@@ -617,7 +617,7 @@ impl TrackScene {
 
     /// Spicy bullet dots / AMLL breathing dots for the active interlude. Drawn
     /// before the rows at the padded slot origin so no row layer clips them.
-    fn draw_interlude_dots(
+    pub(crate) fn draw_interlude_dots(
         &self,
         time: f64,
         scroll: f64,
@@ -675,6 +675,9 @@ impl TrackScene {
                 // Apply opacity to the combined glyph+shadow, as Animated.View
                 // does. Draw the shadow at its continuously varying local sigma
                 // instead of mixing the shared 2.5/6px row-blur bases.
+                // LIMITATION: Vello 0.12 has no arbitrary glyph-mask blur.
+                // This rounded ink-bounds shadow is an approximation, not
+                // Skia glyph-mask parity; see the review follow-up report.
                 scene.push_layer(
                     Fill::NonZero,
                     BlendMode::default(),
@@ -742,7 +745,12 @@ impl TrackScene {
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
-                    encoded(*alpha, 0.0, 0.0, dpr),
+                    encoded(
+                        *alpha * state.row(row).map_or(1.0, |r| r.outer),
+                        0.0,
+                        0.0,
+                        dpr,
+                    ),
                     None,
                     &Circle::new((px, origin_y), size * 0.5 * group_scale),
                 );

@@ -1880,8 +1880,20 @@ mod lazy_tests {
 
     #[test]
     #[ignore = "GPU interlude draw regression; requires a GPU adapter"]
-    fn both_interlude_styles_render_entry_breathing_and_exit() {
+    fn isolated_interlude_regions_match_skia_parameters() {
         use crate::appearance::{AppearanceState, Effect};
+        use sha2::{Digest, Sha256};
+        let reference: serde_json::Value =
+            serde_json::from_str(include_str!("../test/interlude-reference.json")).unwrap();
+        for source in reference["sources"].as_array().unwrap() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(source["path"].as_str().unwrap());
+            assert_eq!(
+                format!("{:x}", Sha256::digest(std::fs::read(path).unwrap())),
+                source["sha256"].as_str().unwrap()
+            );
+        }
         let mut fonts = fonts();
         for style in [Style::Amll, Style::Spicy] {
             let settings = Settings {
@@ -1900,29 +1912,148 @@ mod lazy_tests {
             .unwrap();
             let mut gpu = pollster::block_on(crate::gpu::Gpu::new(390, 640)).unwrap();
             let mut scene = Scene::new();
+            let mut expected = Scene::new();
             let mut state = AppearanceState::default();
-            for time in [
-                2000.0, 2150.0, 2600.0, 5499.0, 5500.0, 5560.0, 5640.0, 5900.0,
-            ] {
+            for sample in reference["frames"].as_array().unwrap() {
+                let time = sample["time"].as_f64().unwrap();
                 track.prepare(time).unwrap();
                 state.prepare(&track, time, time);
                 state.advance(&track, time, time, true, Effect::Glow);
-                let scroll = track.scroll_target(time);
-                let band =
-                    track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
-                gpu.render_appearance(&scene, band, true, true).unwrap();
-                let pixels = gpu.read_pixels().unwrap();
-                assert!(
-                    pixels.chunks_exact(4).any(|p| p[3] > 0),
-                    "{style:?} at {time}"
-                );
-                if time == 5500.0 {
-                    let top =
-                        track.scroll_anchor() + track.prefix[2] + track.cached[2].top - scroll;
+                let cached = &track.cached[2];
+                let font = cached.size;
+                // Put only the dot slot in the middle of the output, away from
+                // fades. No lyric/translation ink can satisfy these comparisons.
+                let top = 160.0;
+                let scroll = track.scroll_anchor() + track.prefix[2] + cached.top - top;
+                scene.reset();
+                track.draw_interlude_dots(time, scroll, &[], &state, &mut scene);
+                expected.reset();
+                if style == Style::Amll {
+                    let scale = sample["amll"]["scale"].as_f64().unwrap();
+                    let outer = sample["rowOpacity"].as_f64().unwrap();
                     assert!(
-                        f64::from(band.0) <= top - 31.0,
-                        "priming must not blur the dot group"
+                        (state.row(2).unwrap().outer - outer).abs() < 1e-9,
+                        "row opacity at {time}"
                     );
+                    let size = font * 0.5;
+                    let gap = font * 0.25 + 4.0;
+                    for i in 0..3 {
+                        let alpha = sample["amll"]["dots"][i].as_f64().unwrap() * outer;
+                        expected.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            crate::timed_scene::encoded(alpha, 0.0, 0.0, 1.0),
+                            None,
+                            &vello::kurbo::Circle::new(
+                                (
+                                    cached.x + (size * 0.5 + i as f64 * (size + gap)) * scale,
+                                    top + font * 0.4 + size * 0.5,
+                                ),
+                                size * 0.5 * scale,
+                            ),
+                        );
+                    }
+                } else {
+                    let dot = track.dot_glyph.as_ref().unwrap();
+                    let group_scale = sample["spicy"]["groupScale"].as_f64().unwrap();
+                    let group_alpha = sample["spicy"]["groupOpacity"].as_f64().unwrap();
+                    let group = crate::interlude::spicy_group(2000.0, 6000.0, time);
+                    assert!(
+                        (group.0 - group_scale).abs() < 1e-9
+                            && (group.1 - group_alpha).abs() < 1e-9
+                    );
+                    let width = dot.width * 3.0 + 2.88 * 2.0;
+                    let ox = cached.x + width * 0.5;
+                    let oy = top + dot.height * 0.5;
+                    for i in 0..3 {
+                        let params = &sample["spicy"]["dots"][i];
+                        let values: Vec<f64> = params
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.as_f64().unwrap())
+                            .collect();
+                        let actual = state.interlude.dot(i);
+                        for (a, b) in [actual.0, actual.1, actual.2, actual.3]
+                            .into_iter()
+                            .zip(&values)
+                        {
+                            assert!((a - b).abs() < 1e-9, "Spicy param at {time}");
+                        }
+                        let (scale, y, glow, alpha) = (values[0], values[1], values[2], values[3]);
+                        if group_scale <= 0.001 || group_alpha <= 0.001 {
+                            continue;
+                        }
+                        let cx = cached.x + dot.width * 0.5 + i as f64 * (dot.width + 2.88);
+                        let transform = Affine::translate((
+                            ox + (cx - ox) * group_scale,
+                            oy + y * font * group_scale,
+                        )) * Affine::scale(scale * group_scale)
+                            * Affine::translate((-dot.width * 0.5, -dot.height * 0.5));
+                        expected.push_layer(
+                            Fill::NonZero,
+                            BlendMode::default(),
+                            (group_alpha * alpha).clamp(0.0, 1.0) as f32,
+                            transform,
+                            &Rect::new(-32.0, -32.0, dot.width + 32.0, dot.height + 32.0),
+                        );
+                        // Parameter/region check only: reproduce the explicitly
+                        // approximate Vello shadow, not a Skia pixel oracle.
+                        if glow > 0.0 {
+                            expected.draw_blurred_rounded_rect(
+                                transform,
+                                dot.ink,
+                                Color::new([
+                                    1.0,
+                                    0.0,
+                                    0.0,
+                                    (0.85 * (glow * 0.9).clamp(0.0, 1.0)) as f32,
+                                ]),
+                                dot.ink.width().min(dot.ink.height()) * 0.5,
+                                (4.0 + 6.0 * glow) / 2.0,
+                            );
+                        }
+                        expected
+                            .draw_glyphs(&dot.font)
+                            .font_size(dot.size)
+                            .transform(transform)
+                            .brush(Color::new([1.0, 0.0, 0.0, 0.85]))
+                            .draw(Fill::NonZero, [dot.glyph].into_iter());
+                        expected.pop_layer();
+                    }
+                }
+                let band = (-1000.0, 1000.0);
+                gpu.render_appearance(&scene, band, true, true).unwrap();
+                let actual = gpu.read_pixels().unwrap();
+                gpu.render_appearance(&expected, band, true, true).unwrap();
+                let expected_pixels = gpu.read_pixels().unwrap();
+                let delta = actual
+                    .iter()
+                    .zip(&expected_pixels)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                assert!(delta <= 1, "{style:?} dot-region delta {delta} at {time}");
+                if time == 2600.0 {
+                    assert!(actual.chunks_exact(4).any(|p| p[3] > 0));
+                }
+                // Priming-period alpha ratio is compared against the parent
+                // Animated.View opacity, independently of breathing/light-up.
+                if style == Style::Amll && time > 5500.0 && time < 5750.0 {
+                    state.rows[2].as_mut().unwrap().outer = 1.0;
+                    scene.reset();
+                    track.draw_interlude_dots(time, scroll, &[], &state, &mut scene);
+                    gpu.render_appearance(&scene, band, true, true).unwrap();
+                    let full = gpu.read_pixels().unwrap();
+                    let sum =
+                        |p: &[u8]| p.chunks_exact(4).map(|p| u64::from(p[3])).sum::<u64>() as f64;
+                    let ratio = sum(&actual) / sum(&full);
+                    let outer = sample["rowOpacity"].as_f64().unwrap();
+                    assert!(
+                        (ratio - outer).abs() < 0.015,
+                        "priming alpha ratio {ratio}, expected {outer}"
+                    );
+                    state.rows[2].as_mut().unwrap().outer = outer;
                 }
             }
         }
