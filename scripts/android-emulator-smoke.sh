@@ -21,10 +21,16 @@ for i in $(seq 1 60); do
 done
 sleep 20
 adb shell screencap -p /sdcard/launch.png && adb pull /sdcard/launch.png "${out}/launch.png"
+# Dismiss the one-time developer menu sheet (Continue is near the bottom).
+read -r w h <<< "$(adb shell wm size | grep -o '[0-9]*x[0-9]*' | tail -1 | tr x ' ')"
+adb shell input tap $((w / 2)) $((h * 92 / 100))
+sleep 3
+adb shell screencap -p /sdcard/menu.png && adb pull /sdcard/menu.png "${out}/after-menu.png"
 adb shell am start -a android.intent.action.VIEW -d 'expolyrics://rust-android-smoke'
 sleep 25
 adb shell screencap -p /sdcard/smoke.png && adb pull /sdcard/smoke.png "${out}/smoke.png"
 sleep 5
 adb shell screencap -p /sdcard/smoke2.png && adb pull /sdcard/smoke2.png "${out}/smoke2.png"
 adb shell dumpsys SurfaceFlinger --latency-clear >/dev/null 2>&1 || true
+grep -iE "KineSyncRust|lyrics_renderer|wgpu|vulkan|AndroidRuntime|FATAL|Rust lyrics" "${out}/logcat.txt" | cut -c1-300 > "${out}/rust-log.txt" || true
 ls -l "${out}"
