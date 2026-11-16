@@ -4,6 +4,9 @@ name: Android emulator smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - android-shim-wip
 
 permissions:
   contents: read
