@@ -482,44 +482,64 @@ pub(crate) mod allocation_probe {
         alloc::{GlobalAlloc, Layout, System},
         cell::Cell,
     };
-    thread_local! {static STATE:Cell<(bool,usize)>=const {Cell::new((false,0))};}
+    #[derive(Clone, Copy, Default, serde::Serialize)]
+    pub struct Profile {
+        pub allocations: usize,
+        pub allocated_bytes: usize,
+        pub retained_delta_bytes: isize,
+        pub peak_delta_bytes: isize,
+    }
+    thread_local! {static STATE:Cell<(bool,Profile)>=const {Cell::new((false,Profile {
+        allocations: 0, allocated_bytes: 0, retained_delta_bytes: 0, peak_delta_bytes: 0,
+    }))};}
     struct Counted;
-    fn count() {
+    fn record(allocated: Option<usize>, delta: isize) {
         let _ = STATE.try_with(|state| {
-            let (enabled, count) = state.get();
+            let (enabled, mut profile) = state.get();
             if enabled {
-                state.set((true, count + 1));
+                if let Some(bytes) = allocated {
+                    profile.allocations += 1;
+                    profile.allocated_bytes += bytes;
+                }
+                profile.retained_delta_bytes += delta;
+                profile.peak_delta_bytes =
+                    profile.peak_delta_bytes.max(profile.retained_delta_bytes);
+                state.set((true, profile));
             }
         });
     }
     // Test-only allocator delegates every pointer/layout unchanged to System.
     unsafe impl GlobalAlloc for Counted {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            count();
+            record(Some(layout.size()), layout.size() as isize);
             unsafe { System.alloc(layout) }
         }
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            count();
+            record(Some(layout.size()), layout.size() as isize);
             unsafe { System.alloc_zeroed(layout) }
         }
         unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            count();
+            record(Some(size), size as isize - layout.size() as isize);
             unsafe { System.realloc(p, layout, size) }
         }
         unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            record(None, -(layout.size() as isize));
             unsafe { System.dealloc(p, layout) }
         }
     }
     #[global_allocator]
     static ALLOCATOR: Counted = Counted;
-    pub fn measure(body: impl FnOnce()) -> usize {
-        STATE.with(|state| state.set((true, 0)));
+    pub fn profile(body: impl FnOnce()) -> Profile {
+        STATE.with(|state| state.set((true, Profile::default())));
         body();
         STATE.with(|state| {
-            let (_, count) = state.get();
-            state.set((false, 0));
-            count
+            let (_, profile) = state.get();
+            state.set((false, Profile::default()));
+            profile
         })
+    }
+    pub fn measure(body: impl FnOnce()) -> usize {
+        profile(body).allocations
     }
 }
 
@@ -534,3 +554,6 @@ mod typography_budget;
 mod appearance_tests;
 #[cfg(test)]
 mod background_tests;
+
+#[cfg(test)]
+mod cold_prepare_tests;

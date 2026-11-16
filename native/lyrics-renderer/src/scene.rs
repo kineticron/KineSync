@@ -896,9 +896,6 @@ impl TrackScene {
             );
         }
         let interludes = crate::interlude::slots(&lines);
-        let dot_glyph = settings
-            .filter(|s| s.style == crate::typography::Style::Spicy)
-            .map(|_| crate::interlude::DotGlyph::prepare(fonts, cached[0].size));
         Ok(Self {
             lines,
             cached,
@@ -909,7 +906,8 @@ impl TrackScene {
             missing_glyphs,
             prefix,
             interludes,
-            dot_glyph,
+            // Scratch row preparation does not own the interlude renderer.
+            dot_glyph: None,
             diagnostics,
             fonts: None,
             settings: None,
