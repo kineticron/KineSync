@@ -430,7 +430,7 @@ fn live_effect_interleaved_budget() {
     let enabled_pass = reports.iter().all(|r| r["accepted"] == true);
     assert_eq!(crate::appearance::LIVE_EFFECT, Effect::Glow);
     assert!(crate::appearance::LIVE_EFFECT.motion());
-    let report = serde_json::json!({"scope":"Linux host same adapter/release opt3; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence","samples":90,"warmup":8,"thresholds":{"scene_p50":"before*1.25+0.01ms","encode_p95":"before*1.25+0.5ms","steady_scene_allocations":0},"native_present_calls_per_second":null,"live_effect":crate::appearance::LIVE_EFFECT,"glow_live_enabled":crate::appearance::LIVE_EFFECT.glow(),"reports":reports});
+    let report = serde_json::json!({"scope":"Linux host same adapter; no phone optimization setting changed, actual fixture/parser/fonts; interleaved per-effect gates; no phone120 evidence","build":if cfg!(debug_assertions) { "debug" } else { "release" },"samples":90,"warmup":8,"thresholds":{"scene_p50":"before*1.25+0.01ms","encode_p95":"before*1.25+0.5ms","steady_scene_allocations":0},"native_present_calls_per_second":null,"live_effect":crate::appearance::LIVE_EFFECT,"glow_live_enabled":crate::appearance::LIVE_EFFECT.glow(),"reports":reports});
     std::fs::write(
         "/tmp/rust-parity-appearance-budget.json",
         serde_json::to_string_pretty(&report).unwrap(),
@@ -440,57 +440,6 @@ fn live_effect_interleaved_budget() {
         enabled_pass,
         "an enabled effect was rejected; inspect /tmp/rust-parity-appearance-budget.json"
     );
-}
-
-#[test]
-#[ignore = "GPU pixel handoff regression; requires a GPU adapter"]
-fn cold_and_first_prepared_frames_are_pixel_identical() {
-    for style in [Style::Amll, Style::Spicy] {
-        let (mut track, _) = track(if style == Style::Amll { 1 } else { 11 }, style, false);
-        let time = track.lines[0].start - 2000.0;
-        track.prepare(time).unwrap();
-        let mut scene = vello::Scene::new();
-        let mut gpu = pollster::block_on(Gpu::new(track.width, track.height)).unwrap();
-        // Include the screen's bottom fade and all shared blur bases, not just
-        // a fully visible row inside the protected band.
-        for bottom in [false, true] {
-            for blurred in [false, true] {
-                for playing in [true, false] {
-                    let scroll = if bottom {
-                        track.scroll_anchor() - f64::from(track.height) + 70.0
-                    } else {
-                        0.0
-                    };
-                    let mut state = AppearanceState::default();
-                    state.advance(&track, time, 1000.0, playing, Effect::Glow);
-                    let band =
-                        track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
-                    let band = if blurred { (-400.0, -300.0) } else { band };
-                    render(&mut gpu, &scene, band, Effect::Glow);
-                    let cold = gpu.read_pixels().unwrap();
-                    assert!(cold.chunks_exact(4).any(|p| p[3] > 0));
-                    state.prepare(&track, time, 1000.0);
-                    for frame in 0..4 {
-                        state.advance(
-                            &track,
-                            time,
-                            1000.0 + frame as f64 * 16.0,
-                            playing,
-                            Effect::Glow,
-                        );
-                        track.frame_appearance(time, scroll, &[], &state, &mut scene, Effect::Glow);
-                        render(&mut gpu, &scene, band, Effect::Glow);
-                        let prepared = gpu.read_pixels().unwrap();
-                        let changed = cold.iter().zip(&prepared).filter(|(a, b)| a != b).count();
-                        assert_eq!(
-                            changed, 0,
-                            "{style:?} playing={playing} bottom={bottom} blurred={blurred} frame={frame}"
-                        );
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[test]

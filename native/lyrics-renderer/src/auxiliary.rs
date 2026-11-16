@@ -327,8 +327,11 @@ mod tests {
             assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
             let cached = &shown.cached[0];
             let t = cached.lead().translation.as_ref().unwrap();
-            let y = (f64::from(shown.height) * 0.37
+            let y = (shown.scroll_anchor() + shown.prefix[0] - shown.scroll_target(time)
+                + shown.interlude_shift(time).1
                 + cached.top
+                + cached.lead().offset
+                + cached.lead().padding
                 + t.diagnostics["y"].as_f64().unwrap())
             .max(0.0) as usize;
             let y_end = (y + (t.diagnostics["height"].as_f64().unwrap().ceil() as usize))
@@ -346,7 +349,9 @@ mod tests {
                 .count();
             assert!(
                 visible > 20,
-                "actual subtitle glyph region must contain ink"
+                "{} landscape={}: actual subtitle region y={y}..{y_end} must contain ink",
+                item["style"],
+                item["landscape"]
             );
             let png = format!(
                 "/files/rust_parity_aux_{}_{}.png",
