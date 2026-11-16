@@ -11,7 +11,7 @@ fn padded(t: texture_2d<f32>, p: vec2<i32>) -> vec4<f32> {
     return textureLoad(t, p, 0);
 }
 fn reconstructed(t: texture_2d<f32>, p: vec2<u32>) -> vec4<f32> {
-    let q = (vec2<f32>(p) + 0.5) * 0.5 - 0.5;
+    let q = (vec2<f32>(p) + 0.5) * 0.25 - 0.5;
     let lo = vec2<i32>(floor(q)); let f = fract(q);
     return mix(mix(padded(t, lo), padded(t, lo + vec2<i32>(1,0)), f.x),
                mix(padded(t, lo + vec2<i32>(0,1)), padded(t, lo + vec2<i32>(1,1)), f.x), f.y);

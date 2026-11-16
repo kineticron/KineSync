@@ -177,9 +177,12 @@ impl Filter {
             include_str!("downsample.wgsl"),
             "downsample",
         );
-        let extent = (width.div_ceil(2), height.div_ceil(2));
+        // Keep Vello and protected glyphs full resolution. Only the shared
+        // Gaussian bases use quarter-size pixels. Sigma halves relative to the
+        // previous half-size buffers, preserving the point-space blur radius.
+        let extent = (width.div_ceil(4), height.div_ceil(4));
         let textures: Vec<_> = [
-            "half-linear-premultiplied",
+            "quarter-linear-premultiplied",
             "near-horizontal",
             "near-vertical",
             "far-horizontal",
@@ -208,10 +211,10 @@ impl Filter {
             entries: &[view_entry(0, &sharp_view), view_entry(1, &views[0])],
         });
         let specs = [
-            (&views[0], &views[1], [1.0, 0.0, 1.25 * scale, 0.0]),
-            (&views[1], &views[2], [0.0, 1.0, 1.25 * scale, 0.0]),
-            (&views[0], &views[3], [1.0, 0.0, 3.0 * scale, 0.0]),
-            (&views[3], &views[4], [0.0, 1.0, 3.0 * scale, 0.0]),
+            (&views[0], &views[1], [1.0, 0.0, 0.625 * scale, 0.0]),
+            (&views[1], &views[2], [0.0, 1.0, 0.625 * scale, 0.0]),
+            (&views[0], &views[3], [1.0, 0.0, 1.5 * scale, 0.0]),
+            (&views[3], &views[4], [0.0, 1.0, 1.5 * scale, 0.0]),
         ];
         let groups = specs
             .into_iter()
@@ -278,7 +281,7 @@ impl Filter {
     fn encode(&self, encoder: &mut CommandEncoder, width: u32, height: u32, tiers: usize) {
         if tiers > 0 {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                label: Some("half-resolution box"),
+                label: Some("quarter-resolution 4x4 box"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.downsample);

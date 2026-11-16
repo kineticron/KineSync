@@ -32,6 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         times.sort_by(f64::total_cmp);
+        if let Ok(dir) = std::env::var("FILTER_CAPTURE_DIR") {
+            gpu.save(&format!("{dir}/{name}.png"))?;
+        }
         let pixels = gpu.read_pixels()?;
         let hash: u64 = pixels.iter().fold(0xcbf29ce484222325, |h, b| {
             (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)

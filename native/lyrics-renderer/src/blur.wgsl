@@ -1,4 +1,4 @@
-// Half-resolution linear premultiplied images, transparent zero padding.
+// Quarter-resolution linear premultiplied images, transparent zero padding.
 @group(0) @binding(0) var input: texture_2d<f32>;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 struct Params { axis_sigma: vec4<f32>, weights: array<vec4<f32>, 40> }
