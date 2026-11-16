@@ -14,7 +14,7 @@ type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: 
 type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
-  missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentCallRate: number; windowSeconds: number;
+  busyCallbacksInWindow: number; missedIntervalsInWindow: number; missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentCallRate: number; windowSeconds: number;
   gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number } }): void;
@@ -186,8 +186,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
   return <View style={styles.root}>
     {__DEV__ ? <View pointerEvents="none" style={styles.fpsStrip}>
-      <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust FPS, native present calls per second, not display scanout">
-        {currentMetrics ? `FPS ${currentMetrics.presentCallRate.toFixed(1)} · present calls` : 'FPS — · awaiting native sample'}
+      <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust presents per second, callback interval, busy skips and estimated missed callback intervals in this window. Not display scanout or measured GPU time.">
+        {currentMetrics ? `${currentMetrics.presentCallRate.toFixed(0)} presents/s · cb ${currentMetrics.displayIntervalMs.toFixed(1)}ms · busy ${currentMetrics.busyCallbacksInWindow ?? 0} · gaps~${currentMetrics.missedIntervalsInWindow ?? 0}` : 'presents/s · awaiting native sample'}
       </Text>
     </View> : null}
     {showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>

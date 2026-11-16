@@ -358,6 +358,8 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var windowStart = 0.0
   private var windowCallbacks: UInt64 = 0
   private var windowPresentCalls: UInt64 = 0
+  private var windowBusyCallbacks: UInt64 = 0
+  private var windowMissedEstimate: UInt64 = 0
   private var previousStep = 0.0
   private var tickMs = 0.0
   private var intervalMs = 0.0
@@ -435,9 +437,12 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
           metrics["requestedHz"] = self.requestedHz
           metrics["windowSeconds"] = elapsed
           metrics["deliveredCallbackHz"] = elapsed > 0 ? Double(self.callbacks - self.windowCallbacks) / elapsed : 0
+          metrics["busyCallbacksInWindow"] = self.busyCallbacks - self.windowBusyCallbacks
+          metrics["missedIntervalsInWindow"] = self.missedObservedEstimate - self.windowMissedEstimate
           metrics["presentCallRate"] = elapsed > 0 ? Double(self.presentCalls - self.windowPresentCalls) / elapsed : 0
           self.windowStart = CACurrentMediaTime()
           self.windowCallbacks = self.callbacks; self.windowPresentCalls = self.presentCalls
+          self.windowBusyCallbacks = self.busyCallbacks; self.windowMissedEstimate = self.missedObservedEstimate
           self.onMetrics(metrics)
         } else {
           if event["state"] as? String == "error" {
@@ -530,9 +535,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         let next = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick(_:)))
         let maximum = Float(min(120, window?.screen.maximumFramesPerSecond ?? 60))
         requestedHz = Double(maximum)
-        next.preferredFrameRateRange = CAFrameRateRange(minimum: min(30, maximum), maximum: maximum, preferred: maximum)
+        next.preferredFrameRateRange = CAFrameRateRange(minimum: maximum, maximum: maximum, preferred: maximum)
         windowStart = CACurrentMediaTime()
         windowCallbacks = callbacks; windowPresentCalls = presentCalls
+        windowBusyCallbacks = busyCallbacks; windowMissedEstimate = missedObservedEstimate
         next.add(to: .main, forMode: .common)
         link = next
       }
