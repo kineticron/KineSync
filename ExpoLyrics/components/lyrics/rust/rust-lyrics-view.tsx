@@ -19,6 +19,10 @@ type Metrics = { frames: number; generation: number; positionMs: number; sampleN
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number } }): void;
   onMetrics(event: { nativeEvent: Metrics }): void };
+// A view can be torn down while a command is in flight during a track switch.
+// Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
+const STALE_VIEW = /Unable to find the .*KineSyncRustLyricsView.* view with tag/i;
+const WAITING_LYRICS = 'Waiting for current-track timed lyrics';
 // No native require on Android/web/Expo Go. Missing modules are an explicit unavailable state.
 function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props> | null; error: string } {
   if (!__DEV__) return { api: null, view: null, error: 'Rust renderer is available only in a development client' };
@@ -70,6 +74,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     catch (error) { return { json: '', error: String(error) }; }
   }, [lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits]);
   const native = useRef<NativeRef | null>(null);
+  const mounted = useRef(true);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);
   const work = useRef({ renders: 0, anchors: 0, anchorMs: 0 });
@@ -85,16 +90,30 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const latestMetrics = useRef<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const latest = useRef({ tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics });
   latest.current = { tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics };
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const commandFailed = useCallback((error: unknown) => {
+    if (!mounted.current || STALE_VIEW.test(String(error))) return;
+    setFailed(true);
+    setStatus(String(error));
+  }, []);
+  const send = useCallback((run: (view: NativeRef) => Promise<unknown>) => {
+    const view = native.current;
+    if (!view || !mounted.current) return;
+    void run(view).catch(commandFailed);
+  }, [commandFailed]);
   const gesture = useMemo(() => createRustLyricsGesture({
     hitTest: y => native.current ? native.current.hitTest(y) : Promise.resolve(-1),
-    scrollBy: dy => { void native.current?.scrollBy(dy).catch(() => {}); },
-    setFollowing: following => { void native.current?.setFollowing(following).catch(() => {}); },
+    scrollBy: dy => send(view => view.scrollBy(dy)),
+    setFollowing: following => send(view => view.setFollowing(following)),
     tapEnabled: () => latest.current.tapToSeekEnabled,
     onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },
     onLineLongPress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLineLongPress?.(line); },
     onAutoFollowChange: enabled => latest.current.onAutoFollowChange?.(enabled),
     onUserInteraction: () => latest.current.onUserInteraction?.(),
-  }), []);
+  }), [send]);
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
@@ -108,10 +127,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const followEnabled = autoFollowEnabled ?? true;
   useEffect(() => {
     if (!api || !native.current) return;
-    void native.current.setFollowing(followEnabled).catch(error => { setFailed(true); setStatus(String(error)); });
+    send(view => view.setFollowing(followEnabled));
     // `resumeAutoFollowSignal` re-asserts the same value after the player's
     // explicit resume gesture; the number itself carries no state.
-  }, [followEnabled, resumeAutoFollowSignal, revision.generation, surfaceEpoch]);
+  }, [followEnabled, resumeAutoFollowSignal, revision.generation, send, surfaceEpoch]);
   const sendAnchor = useCallback(() => {
     if (!api || !native.current || payload.error || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
     const state = usePlaybackStore.getState();
@@ -125,10 +144,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     work.current.anchors++;
     void native.current.setAnchor(JSON.stringify(command)).catch(error => {
       if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
-      setFailed(true); setStatus(String(error));
+      commandFailed(error);
     });
     work.current.anchorMs = performance.now() - started;
-  }, [payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
+  }, [commandFailed, payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
   useEffect(() => {
     sendAnchor();
     const unsubscribe = usePlaybackStore.subscribe((state, previous) => { if (anchorChanged(state, previous)) sendAnchor(); });
@@ -149,7 +168,16 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     latestMetrics.current = { native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs };
     if (showRustDebugOverlay && showMetrics) setMetrics(latestMetrics.current);
   }, [revision.generation, showRustDebugOverlay, showMetrics, surfaceEpoch]);
-  const unavailable = moduleError || payload.error;
+  const waiting = payload.error.includes(WAITING_LYRICS);
+  const unavailable = moduleError || (waiting ? '' : payload.error);
+  useEffect(() => {
+    if (waiting) setStatus(WAITING_LYRICS);
+  }, [waiting]);
+  useEffect(() => {
+    // A new track gets a fresh chance even if the previous surface raced with
+    // teardown; genuine errors return on the next status/anchor command.
+    setFailed(false);
+  }, [revision.generation]);
   useEffect(() => {
     if (unavailable || failed) console.error('Rust lyrics renderer:', unavailable || status);
   }, [unavailable, failed, status]);
@@ -182,7 +210,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
     </ScrollView> : null}
-    {!unavailable && NativeView ? <View style={styles.gestureWrap} {...panResponder.panHandlers}>
+    {payload.json && !unavailable && NativeView ? <View style={styles.gestureWrap} {...panResponder.panHandlers}>
       <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} />
     </View> : null}
   </View>;
