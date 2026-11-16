@@ -1500,6 +1500,58 @@ mod lazy_tests {
     }
 
     #[test]
+    fn spicy_primes_the_upcoming_line_before_it_starts() {
+        use crate::appearance::{AppearanceState, Effect};
+        let mut lines = source(2);
+        let shift = 4000.0;
+        let line = &mut lines[1];
+        line.start += shift;
+        line.end += shift;
+        line.background_end += shift;
+        for atom in &mut line.atoms {
+            atom.start += shift;
+            atom.end += shift;
+        }
+        if let Some(paint) = &mut line.paint {
+            paint.start += shift;
+            paint.end += shift;
+            for word in &mut paint.words {
+                word.start += shift;
+                word.end += shift;
+            }
+        }
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut fonts = fonts();
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+        let mut state = AppearanceState::default();
+        // During the interlude itself the next row keeps its dim future alpha.
+        track.prepare(1500.0).unwrap();
+        state.prepare(&track, 1500.0, 1000.0);
+        state.advance(&track, 1500.0, 1000.0, true, Effect::Motion);
+        assert!((state.row(1).unwrap().outer - 0.51).abs() < 1e-9);
+        // The visual window promotes it for the last 500 ms of the gap, giving
+        // Skia's 200 ms opacity timing time to reach full strength.
+        track.prepare(4600.0).unwrap();
+        state.prepare(&track, 4600.0, 3000.0);
+        state.advance(&track, 4600.0, 3000.0, true, Effect::Motion);
+        for step in 1..=6 {
+            state.advance(
+                &track,
+                4600.0,
+                3000.0 + step as f64 * 40.0,
+                true,
+                Effect::Motion,
+            );
+        }
+        assert!((state.row(1).unwrap().outer - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn outgoing_line_keeps_its_timed_completion_owner() {
         use crate::appearance::{AppearanceState, Effect};
         let lines = source(6);

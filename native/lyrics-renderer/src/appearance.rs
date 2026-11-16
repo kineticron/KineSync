@@ -142,6 +142,10 @@ impl AppearanceState {
         self.last_ms = Some(native_ms);
         self.playing = playing;
         let spicy = track.style() == Some(Style::Spicy);
+        // Skia's visual window promotes the upcoming line for the last 500 ms of
+        // a long gap (and for a short gap after the previous line ends), so its
+        // 200 ms opacity timing is already at full strength when it starts.
+        let primed = crate::window(&track.lines, time).active();
         if effect.motion() && spicy {
             if let Some((row, slot)) = track.interlude_at(time) {
                 self.interlude.advance(row, slot, time, dt);
@@ -159,10 +163,13 @@ impl AppearanceState {
             }
             let line = &track.lines[i];
             let active = time >= line.start && time < line.background_end;
+            let pre_active = !active
+                && time < line.start
+                && primed.is_some_and(|(start, end)| i >= start && i <= end);
             row.clock.advance(active, time, dt * 1000.0);
             row.active = active;
             let target = if spicy {
-                if active {
+                if active || pre_active {
                     1.0
                 } else if time > line.background_end {
                     0.497

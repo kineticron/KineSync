@@ -298,9 +298,17 @@ impl TrackScene {
                 for (voice_index, voice) in cached.voices.iter().enumerate() {
                     let voice_end = line.voice(voice_index).map_or(line.end, |v| v.interval().1);
                     let sung = time > voice_end;
+                    let pre_active = time < line.start
+                        && active.is_some_and(|(start, end)| index >= start && index <= end);
                     let outer = row.map_or(
                         if spicy {
-                            if sung { 0.497 } else { 0.51 }
+                            if pre_active {
+                                1.0
+                            } else if sung {
+                                0.497
+                            } else {
+                                0.51
+                            }
                         } else {
                             1.0
                         },
