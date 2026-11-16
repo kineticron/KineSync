@@ -474,3 +474,38 @@ fn cold_and_first_prepared_frames_are_pixel_identical() {
         }
     }
 }
+
+#[test]
+#[ignore = "GPU pixel transition regression; requires a GPU adapter"]
+fn spicy_primed_and_active_start_use_identical_glyph_geometry() {
+    let (mut track, _) = track(11, Style::Spicy, false);
+    let start = track.lines[0].start;
+    track.prepare(start - 1.0).unwrap();
+    let mut state = AppearanceState::default();
+    state.prepare(&track, start - 1.0, 1000.0);
+    for i in 0..30 {
+        state.advance(
+            &track,
+            start - 1.0,
+            1000.0 + i as f64 * 16.0,
+            true,
+            Effect::Glow,
+        );
+    }
+    let mut scene = vello::Scene::new();
+    let mut gpu = pollster::block_on(Gpu::new(track.width, track.height)).unwrap();
+    let band = track.frame_appearance(start - 1.0, 0.0, &[], &state, &mut scene, Effect::Glow);
+    render(&mut gpu, &scene, band, Effect::Glow);
+    let primed = gpu.read_pixels().unwrap();
+    state.advance(&track, start, 1480.0, true, Effect::Glow);
+    let band = track.frame_appearance(start, 0.0, &[], &state, &mut scene, Effect::Glow);
+    render(&mut gpu, &scene, band, Effect::Glow);
+    let active = gpu.read_pixels().unwrap();
+    let max_delta = primed
+        .iter()
+        .zip(&active)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(max_delta <= 1, "primed -> active pixel delta {max_delta}");
+}

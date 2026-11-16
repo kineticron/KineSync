@@ -75,8 +75,12 @@ impl AppearanceState {
                 // `endTimeByIndex` (getBackgroundEndTime) presentation window.
                 let active = time >= line.start && time < line.background_end;
                 let spicy = track.style() == Some(Style::Spicy);
+                let primed = time < line.start
+                    && crate::window(&track.lines, time)
+                        .active()
+                        .is_some_and(|(start, end)| i >= start && i <= end);
                 let outer = if spicy {
-                    if active {
+                    if active || primed {
                         1.0
                     } else if time > line.background_end {
                         0.497
@@ -184,7 +188,7 @@ impl AppearanceState {
                 } else {
                     0.51
                 }
-            } else if active {
+            } else if active || pre_active {
                 0.85
             } else {
                 1.0
@@ -214,7 +218,11 @@ impl AppearanceState {
                     }
                 }
             } else {
-                let target_scale = if active || !playing { 1.0 } else { 0.97 };
+                let target_scale = if active || pre_active || !playing {
+                    1.0
+                } else {
+                    0.97
+                };
                 let next = style_timing::amll_spring(row.scale, target_scale, 2.0, 25.0, 100.0, dt);
                 row.scale = if (next.p - target_scale).abs() < 0.0001 && next.v.abs() < 0.0001 {
                     Spring {
@@ -225,7 +233,7 @@ impl AppearanceState {
                     next
                 };
                 let factor = ((row.scale.p - 0.97) / 0.03).clamp(0.0, 1.0);
-                let bright = if active {
+                let bright = if active || pre_active {
                     factor * 0.8 + 0.2
                 } else {
                     factor * 0.2 + 0.2

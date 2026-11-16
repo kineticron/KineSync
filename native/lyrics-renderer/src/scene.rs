@@ -16,6 +16,7 @@ type Error = Box<dyn std::error::Error>;
 pub(crate) struct CachedVoice {
     pub(crate) white: Scene,
     pub(crate) plain: Scene,
+    pub(crate) idle: Option<Scene>,
     pub(crate) translation: Option<crate::auxiliary::Translation>,
     /// Shaped paragraph height, excluding this voice's padding and translation.
     pub(crate) height: f64,
@@ -49,6 +50,7 @@ impl CachedVoice {
         Self {
             white: Scene::new(),
             plain: Scene::new(),
+            idle: None,
             translation: None,
             height: 0.0,
             atoms: Vec::new(),
@@ -71,6 +73,7 @@ impl CachedVoice {
         self.layout = None;
         self.white = Scene::new();
         self.plain = Scene::new();
+        self.idle = None;
         self.translation = None;
         self.atoms = Vec::new();
         self.words = Vec::new();
@@ -793,15 +796,28 @@ impl TrackScene {
                 } else {
                     None
                 };
-                let timed = if detailed {
+                let spicy = settings.is_some_and(|s| s.style == crate::typography::Style::Spicy);
+                let timed = if detailed || spicy {
                     line.voice(index)
                         .map(|source| crate::timed_scene::geometry(&layout, &words, source))
                 } else {
                     None
                 };
+                let idle = if spicy {
+                    timed
+                        .as_ref()
+                        .zip(line.voice(index))
+                        .map(|(timed, source)| {
+                            crate::timed_scene::spicy_idle(timed, source, f64::from(voice_box.unit))
+                        })
+                } else {
+                    None
+                };
+                let timed = if detailed { timed } else { None };
                 let voice = CachedVoice {
                     white,
                     plain,
+                    idle,
                     translation,
                     height: layout.height() as f64,
                     atoms,
@@ -1500,55 +1516,70 @@ mod lazy_tests {
     }
 
     #[test]
-    fn spicy_primes_the_upcoming_line_before_it_starts() {
+    fn both_styles_prime_the_upcoming_line_before_it_starts() {
         use crate::appearance::{AppearanceState, Effect};
-        let mut lines = source(2);
-        let shift = 4000.0;
-        let line = &mut lines[1];
-        line.start += shift;
-        line.end += shift;
-        line.background_end += shift;
-        for atom in &mut line.atoms {
-            atom.start += shift;
-            atom.end += shift;
-        }
-        if let Some(paint) = &mut line.paint {
-            paint.start += shift;
-            paint.end += shift;
-            for word in &mut paint.words {
-                word.start += shift;
-                word.end += shift;
+        for style in [Style::Spicy, Style::Amll] {
+            let mut lines = source(2);
+            let shift = 4000.0;
+            let line = &mut lines[1];
+            line.start += shift;
+            line.end += shift;
+            line.background_end += shift;
+            for atom in &mut line.atoms {
+                atom.start += shift;
+                atom.end += shift;
             }
-        }
-        let settings = Settings {
-            style: Style::Spicy,
-            font_scale: 1.0,
-            landscape: false,
-        };
-        let mut fonts = fonts();
-        let mut track =
-            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
-        let mut state = AppearanceState::default();
-        // During the interlude itself the next row keeps its dim future alpha.
-        track.prepare(1500.0).unwrap();
-        state.prepare(&track, 1500.0, 1000.0);
-        state.advance(&track, 1500.0, 1000.0, true, Effect::Motion);
-        assert!((state.row(1).unwrap().outer - 0.51).abs() < 1e-9);
-        // The visual window promotes it for the last 500 ms of the gap, giving
-        // Skia's 200 ms opacity timing time to reach full strength.
-        track.prepare(4600.0).unwrap();
-        state.prepare(&track, 4600.0, 3000.0);
-        state.advance(&track, 4600.0, 3000.0, true, Effect::Motion);
-        for step in 1..=6 {
-            state.advance(
-                &track,
-                4600.0,
-                3000.0 + step as f64 * 40.0,
-                true,
-                Effect::Motion,
+            if let Some(paint) = &mut line.paint {
+                paint.start += shift;
+                paint.end += shift;
+                for word in &mut paint.words {
+                    word.start += shift;
+                    word.end += shift;
+                }
+            }
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut fonts = fonts();
+            let mut track =
+                TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
+            let mut state = AppearanceState::default();
+            // During the interlude itself the next row keeps its dim future alpha.
+            track.prepare(1500.0).unwrap();
+            state.prepare(&track, 1500.0, 1000.0);
+            state.advance(&track, 1500.0, 1000.0, true, Effect::Motion);
+            assert!(
+                (state.row(1).unwrap().outer - if style == Style::Spicy { 0.51 } else { 1.0 })
+                    .abs()
+                    < 1e-9
             );
+            // The visual window promotes it for the last 500 ms of the gap, giving
+            // Skia's 200 ms opacity timing time to reach full strength.
+            track.prepare(4600.0).unwrap();
+            state.prepare(&track, 4600.0, 3000.0);
+            state.advance(&track, 4600.0, 3000.0, true, Effect::Motion);
+            for step in 1..=120 {
+                state.advance(
+                    &track,
+                    4600.0,
+                    3000.0 + step as f64 * 40.0,
+                    true,
+                    Effect::Motion,
+                );
+            }
+            let row = state.row(1).unwrap();
+            if style == Style::Spicy {
+                assert_eq!(row.outer, 1.0);
+            } else {
+                assert_eq!(row.outer, 0.85);
+                assert_eq!(row.scale.p, 1.0);
+                assert!((row.bright - 1.0).abs() < 0.001);
+                assert!((row.dark - 0.4).abs() < 0.001);
+            }
+            assert!(!row.active);
         }
-        assert!((state.row(1).unwrap().outer - 1.0).abs() < 1e-6);
     }
 
     #[test]

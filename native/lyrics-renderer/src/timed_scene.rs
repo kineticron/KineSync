@@ -235,6 +235,50 @@ fn pivot(bounds: Rect, origin: f64, scale: f64, x: f64, y: f64) -> Affine {
         * Affine::scale(scale)
         * Affine::translate((-p.0, -p.1))
 }
+// Bake Skia's p=0 word and emphasized-letter transforms into cold glyphs.
+// This uses the same shaped runs, font size, pivots and clips as the live path;
+// promotion never changes layout or introduces the 1.0 -> 0.95 size jump.
+pub(crate) fn spicy_idle(
+    words: &[TimedWord],
+    source: &crate::typography::PaintVoice,
+    unit: f64,
+) -> Scene {
+    let mut scene = Scene::new();
+    for (geometry, word) in words.iter().zip(&source.words) {
+        let meta = word.appearance.as_ref();
+        let transform = pivot(
+            geometry.bounds,
+            meta.map_or(0.5, |m| m.origin),
+            0.95,
+            0.0,
+            0.01 * unit,
+        );
+        for slice in &geometry.slices {
+            let transform = if meta.is_some_and(|m| m.emphasized) {
+                transform * pivot(slice.rect, 0.5, 0.95, 0.0, 0.02 * unit)
+            } else {
+                transform
+            };
+            if slice.clip {
+                scene.push_clip_layer(Fill::NonZero, transform, &slice.path);
+            }
+            for run in &slice.runs {
+                scene
+                    .draw_glyphs(&run.font)
+                    .font_size(run.size)
+                    .normalized_coords(&run.coords)
+                    .transform(transform)
+                    .brush(Color::new([1.0, 0.0, 0.0, 1.0]))
+                    .draw(Fill::NonZero, run.glyphs.iter().copied());
+            }
+            if slice.clip {
+                scene.pop_layer();
+            }
+        }
+    }
+    scene
+}
+
 impl TrackScene {
     pub fn frame_appearance(
         &self,
@@ -339,7 +383,12 @@ impl TrackScene {
                         transform,
                         &full_bounds,
                     );
-                    scene.append(&voice.plain, Some(transform));
+                    let paragraph = if spicy && time <= line.start && effect.motion() {
+                        voice.idle.as_ref().unwrap_or(&voice.plain)
+                    } else {
+                        &voice.plain
+                    };
+                    scene.append(paragraph, Some(transform));
                     scene.pop_layer();
                     if let Some(t) = &voice.translation {
                         t.draw(scene, transform, outer * voice.alpha);
