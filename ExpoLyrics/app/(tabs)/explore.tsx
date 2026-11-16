@@ -647,7 +647,7 @@ export default function BridgeSettingsScreen() {
                     <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
                     <Switch accessibilityLabel="Show Rust debug overlay" value={showRustDebugOverlay} onValueChange={setShowRustDebugOverlay} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
                   </View>
-                  <Text style={styles.fieldLabel}>Show status, controls and stats. Errors are also logged when hidden.</Text>
+                  <Text style={styles.fieldLabel}>Show status, controls and stats. The compact FPS strip stays visible. Errors are also logged when hidden.</Text>
                 </SettingSection>
                 <View style={styles.divider} />
               </> : null}

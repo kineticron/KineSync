@@ -87,7 +87,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const [metrics, setMetrics] = useState<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
-  const latestMetrics = useRef<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const latest = useRef({ tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics });
   latest.current = { tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics };
   useEffect(() => {
@@ -167,9 +166,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     const now = performance.now();
     const deliveryMs = Math.max(0, api.monotonicMs() - value.sampleNativeMs);
     const projected = value.positionMs + (value.playing ? (api.monotonicMs() - value.targetNativeMs) * value.rate : 0);
-    latestMetrics.current = { native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs };
-    if (showRustDebugOverlay && showMetrics) setMetrics(latestMetrics.current);
-  }, [revision.generation, showRustDebugOverlay, showMetrics, surfaceEpoch]);
+    // Native emits at most once per second. Keep this update independent of
+    // both diagnostic toggles so the compact FPS strip stays live.
+    setMetrics({ native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs });
+  }, [revision.generation, surfaceEpoch]);
   const waiting = payload.error.includes(WAITING_LYRICS);
   const unavailable = moduleError || (waiting ? '' : payload.error);
   useEffect(() => {
@@ -183,7 +183,13 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   useEffect(() => {
     if (unavailable || failed) console.error('Rust lyrics renderer:', unavailable || status);
   }, [unavailable, failed, status]);
+  const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
   return <View style={styles.root}>
+    {__DEV__ ? <View pointerEvents="none" style={styles.fpsStrip}>
+      <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust FPS, native present calls per second, not display scanout">
+        {currentMetrics ? `FPS ${currentMetrics.presentCallRate.toFixed(1)} · present calls` : 'FPS — · awaiting native sample'}
+      </Text>
+    </View> : null}
     {showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
       <Text style={styles.caption}>{unavailable || (failed ? `Rust error: ${status}` : status)}</Text>
       <View style={styles.actions}>
@@ -193,7 +199,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       {!unavailable && !failed ? <Pressable accessibilityRole="button" onPress={() => setRate(value => value === 1 ? 0.5 : value === 0.5 ? 1.5 : 1)}>
         <Text style={styles.caption}>Visual rate {rate}× · audio unchanged</Text>
       </Pressable> : null}
-      {!unavailable ? <Pressable accessibilityRole="button" onPress={() => { setShowMetrics(value => !value); setMetrics(latestMetrics.current); }}>
+      {!unavailable ? <Pressable accessibilityRole="button" onPress={() => setShowMetrics(value => !value)}>
         <Text style={styles.caption}>{showMetrics ? 'Hide metrics' : 'Show metrics'}</Text>
       </Pressable> : null}
       </View>
@@ -219,6 +225,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
 });
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: 0, overflow: 'hidden' }, gestureWrap: { flex: 1, minHeight: 0 }, canvas: { flex: 1, minHeight: 0 },
+  fpsStrip: { height: 16, flexShrink: 0, paddingHorizontal: 28, backgroundColor: 'rgba(10,11,17,0.8)' },
+  fps: { color: 'rgba(255,255,255,0.68)', fontSize: 10, lineHeight: 16, fontVariant: ['tabular-nums'] },
   overlay: { flexGrow: 0, flexShrink: 1, maxHeight: '45%', backgroundColor: 'rgba(10,11,17,0.8)' },
   diagnostics: { paddingTop: 8, paddingHorizontal: 28 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
