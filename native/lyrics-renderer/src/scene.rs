@@ -1879,6 +1879,129 @@ mod lazy_tests {
     }
 
     #[test]
+    #[ignore = "GPU cold plain-to-detailed lifecycle; requires a GPU adapter"]
+    fn cold_plain_to_detailed_promotion_preserves_future_row_pixels() {
+        use crate::appearance::{AppearanceState, Effect};
+        let mut fonts = fonts();
+        for style in [Style::Amll, Style::Spicy] {
+            let mut gpu = pollster::block_on(crate::gpu::Gpu::new(390, 640)).unwrap();
+            for bottom in [false, true] {
+                for blurred in [false, true] {
+                    for playing in [false, true] {
+                        let settings = Settings {
+                            style,
+                            font_scale: 1.0,
+                            landscape: false,
+                        };
+                        let mut lines = source(12);
+                        for line in &mut lines {
+                            for word in &mut line.paint.as_mut().unwrap().words {
+                                word.appearance = Some(crate::typography::WordAppearance {
+                                    emphasized: false,
+                                    origin: 0.5,
+                                    rtl: false,
+                                    last: true,
+                                    emphasis: None,
+                                });
+                            }
+                        }
+                        let mut track = TrackScene::with_fonts(
+                            lines,
+                            390,
+                            640,
+                            1.0,
+                            Some(&settings),
+                            &mut fonts,
+                        )
+                        .unwrap();
+                        track.prepare(999.0).unwrap();
+                        let index = 3;
+                        let voice = track.cached[index].lead();
+                        assert!(voice.layout.is_some() && !voice.detailed && voice.timed.is_none());
+                        let layout_address = voice.layout.as_ref().unwrap() as *const _ as usize;
+                        let target_y = if bottom { 580.0 } else { 320.0 };
+                        let scroll =
+                            track.scroll_anchor() + track.prefix[index] + track.cached[index].top
+                                - target_y;
+                        let height = voice.height;
+                        let mut state = AppearanceState::default();
+                        state.prepare(&track, 999.0, 1000.0);
+                        state.advance(&track, 999.0, 1000.0, playing, Effect::Glow);
+                        assert!(
+                            state.row(index).is_none(),
+                            "baseline must have no timed row owner"
+                        );
+                        let mut scene = Scene::new();
+                        // Isolate the promoted row; activation of another row
+                        // at the same cue must not alter its shared blur input.
+                        let mut adjust = [10000.0; 12];
+                        adjust[index] = 0.0;
+                        track.frame_appearance(
+                            999.0,
+                            scroll,
+                            &adjust,
+                            &state,
+                            &mut scene,
+                            Effect::Glow,
+                        );
+                        let band = if blurred {
+                            (-400.0, -300.0)
+                        } else {
+                            (-1000.0, 1000.0)
+                        };
+                        gpu.render_appearance(&scene, band, true, true).unwrap();
+                        let cold = gpu.read_pixels().unwrap();
+                        // Actual next preparation window promotes the already shaped
+                        // row: no manual flags, no eager timing before the baseline.
+                        let before = track.detailed_preparations;
+                        track.prepare(1000.0).unwrap();
+                        assert!(track.detailed_preparations > before);
+                        let voice = track.cached[index].lead();
+                        assert!(voice.detailed && voice.timed.is_some());
+                        assert_eq!(
+                            layout_address,
+                            voice.layout.as_ref().unwrap() as *const _ as usize
+                        );
+                        state.prepare(&track, 1000.0, 1001.0);
+                        assert!(state.row(index).is_some());
+                        for frame in 0..4 {
+                            state.advance(
+                                &track,
+                                1000.0,
+                                1001.0 + frame as f64 * 16.0,
+                                playing,
+                                Effect::Glow,
+                            );
+                            track.frame_appearance(
+                                1000.0,
+                                scroll,
+                                &adjust,
+                                &state,
+                                &mut scene,
+                                Effect::Glow,
+                            );
+                            gpu.render_appearance(&scene, band, true, true).unwrap();
+                            let prepared = gpu.read_pixels().unwrap();
+                            let start = ((target_y - 8.0).max(0.0) as usize) * 390 * 4;
+                            let end = ((target_y + height + 8.0).min(640.0) as usize) * 390 * 4;
+                            assert!(cold[start..end].chunks_exact(4).any(|p| p[3] > 0));
+                            let changed = cold[start..end]
+                                .iter()
+                                .zip(&prepared[start..end])
+                                .filter(|(a, b)| a != b)
+                                .count();
+                            assert_eq!(
+                                changed, 0,
+                                "{style:?} playing={playing} bottom={bottom} blurred={blurred} frame={frame}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "GPU interlude draw regression; requires a GPU adapter"]
     fn isolated_interlude_regions_match_skia_parameters() {
         use crate::appearance::{AppearanceState, Effect};
