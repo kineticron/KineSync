@@ -25,3 +25,10 @@ serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 skrifa = "=0.44.0"
 icu_segmenter = { version = "=2.4.0", default-features = false, features = ["compiled_data"] }
+
+# Temporary Mali workgroup-index safety fix. See vendor/vello_shaders/KINESYNC-PATCH.md.
+[patch.crates-io]
+vello_shaders = { path = "vendor/vello_shaders" }
+
+[dev-dependencies]
+vello_shaders = "=0.12.0"
