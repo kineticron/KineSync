@@ -160,7 +160,7 @@ impl Footer {
         &self,
         scene: &mut Scene,
         y: f64,
-        width: u32,
+        _width: u32,
         screen_height: f64,
         scale: f64,
     ) -> Option<(f64, f64)> {

@@ -308,7 +308,7 @@ impl FollowScroll {
 
     /// Advance manual deceleration/rebound by one native frame. Returns the
     /// displayed (rubber-banded) offset.
-    fn advance_manual(&mut self, now_ms: f64) {
+    fn advance_manual(&mut self, now_ms: f64) -> f64 {
         let dt = self.fling_last_ms.map_or(
             if self.fling_velocity != 0.0 {
                 16.0

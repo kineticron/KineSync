@@ -1,6 +1,6 @@
 //! Validated live-track protocol and monotonic anchor state, independent of the platform ABI.
 use crate::{Atom, Line, clock};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

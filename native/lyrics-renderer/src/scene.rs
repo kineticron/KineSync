@@ -947,10 +947,10 @@ impl TrackScene {
             .iter()
             .map(|line| line.background_end)
             .fold(0.0, f64::max);
-        if time >= song_end {
-            if let Some(target) = self.credits_scroll() {
-                return Some(target);
-            }
+        if time >= song_end
+            && let Some(target) = self.credits_scroll()
+        {
+            return Some(target);
         }
         let (start, end) = crate::auto_scroll_range(window)?;
         let last = self.lines.len() - 1;
