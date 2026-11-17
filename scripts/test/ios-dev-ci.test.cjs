@@ -654,11 +654,12 @@ test('Rust lyric surface keeps a full-size viewport, soft moving edge and real d
   // The real animated artwork background remains mounted behind the lyrics.
   assert.equal((player.match(/<ArtworkBackground\s/g) || []).length, 1);
   assert.match(player, /<ArtworkBackground[\s\S]*?uri=\{resolvedArtworkUrl\}[\s\S]*?playing=\{isPlaying && !showEmptyState\}/);
-  // The dock gradient is a renderer-agnostic fade inside the masked edge. Its
-  // opacity includes controlsOpacity, so hidden controls leave no dock tint.
-  assert.match(player, /\{\/\* Keep the existing fade inside the same masked edge as the lyrics\. \*\/\}[\s\S]*?<Reanimated\.View\s+pointerEvents="none"/);
-  assert.match(player, /const lyricsBottomBlurOpacityStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?transform: \[\{ translateY: -Math\.max\(0, screenHeight - dockTop\.value\) \* controlsOpacity\.value \}\][\s\S]*?opacity:\s*controlsOpacity\.value \*[\s\S]*?modeOpacity \*[\s\S]*?lyricsRestoreOpacity\.value/);
-  assert.match(player, /height: Math\.max\(0, controlsDockHeight \+ 58\)/);
+  // The mask fades lyrics into the real dynamic background without a black
+  // overlay. Keep the moving dock boundary independent of the row stagger.
+  assert.doesNotMatch(player, /lyricsBottomBlurWrap|lyricsBottomBlurOpacityStyle|styles\.lyricsBottomBlur|_stableColors7/);
+  assert.doesNotMatch(player, /rgba\(0,0,0,0\.85\)/);
+  assert.match(player, /const fillTouchStyle = useAnimatedStyle\(\(\) => \(\{\s*top: screenHeight - Math\.max\(0, screenHeight - dockTop\.value\) \* controlsOpacity\.value/);
+  assert.match(player, /style=\{\[styles\.fillTouchBlocker, fillTouchStyle\]\}/);
   assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));

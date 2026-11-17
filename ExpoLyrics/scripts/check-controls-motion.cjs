@@ -28,71 +28,192 @@ const helper = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'lib/controls-motion.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, helper);
-const { controlsStage } = helper.exports;
+const { controlsStage, controlsRowIsExposed, controlsTouchIsCovered } = helper.exports;
 const layout = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'constants/player-layout.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, layout);
 const { LYRICS_EDGE_FADE_HEIGHT } = layout.exports;
-const windows = [[0, .70], [.15, .85], [.30, 1]];
-for (const progress of [-1, 0, .125, .375, .625, .9975, 1, 2]) {
+const windows = [[0, .6], [.2, .8], [.4, 1]];
+for (const progress of [-1, 0, .125, .2, .375, .4, .6, .625, .8, .9975, 1, 2]) {
   const stages = windows.map(([a, b]) => controlsStage(progress, a, b));
-  for (const stage of stages) {
+  for (const [index, stage] of stages.entries()) {
+    const [start, end] = windows[index];
+    const local = Math.max(0, Math.min(1, (progress - start) / (end - start)));
+    const expected = local === 1 ? 1 : 1 - 2 ** (-10 * local);
+    assert.equal(stage.opacity, expected, 'each window applies its own expo-out easing');
+    assert.equal(stage.transform[0].translateY, 36 * (1 - expected));
     assert.ok(stage.opacity >= 0 && stage.opacity <= 1);
-    assert.ok(stage.transform[0].translateY >= 0 && stage.transform[0].translateY <= 8);
+    assert.ok(stage.transform[0].translateY >= 0 && stage.transform[0].translateY <= 36);
   }
   assert.ok(stages[0].opacity >= stages[1].opacity && stages[1].opacity >= stages[2].opacity);
 }
+for (const [start, end] of windows) {
+  assert.equal(controlsStage(start, start, end).opacity, 0);
+  assert.equal(controlsStage(end, start, end).opacity, 1);
+  assert.ok(Math.abs(controlsStage((start + end) / 2, start, end).opacity - (1 - 2 ** -5)) < 1e-12);
+}
+assert.ok(controlsStage(.2, ...windows[0]).opacity > .8);
+assert.equal(controlsStage(.2, ...windows[1]).opacity, 0);
+assert.equal(controlsStage(.4, ...windows[2]).opacity, 0);
 assert.match(source, /bezier\(0\.16, 1, 0\.3, 1\)/);
-// Deterministic clock substitute tests the real transition callbacks, including
-// stale completions. Native Reanimated interpolation and hit testing need a phone.
-for (const interruption of [50, 150, 250, 399]) {
-  let now = 0, value = 0, animation = null, interactive = false;
+assert.match(source, /const controlsStageProgress = useSharedValue\(1\)/);
+assert.match(source, /clearControlsIdleTimer\(\);\s+cancelAnimation\(controlsOpacity\);\s+cancelAnimation\(controlsStageProgress\);/, 'unmount cancels both clocks');
+assert.match(source, /controlsProgress=\{controlsStageProgress\}/);
+assert.doesNotMatch(source, /controlsBackdropOffset/);
+assert.match(source, /controlsProgress=\{controlsOpacity\} controlsTarget=/, 'attribution retains geometry progress');
+// Sample the configured native cubic easing, not a linear substitute, so early
+// viewport assertions exercise the actual geometry trajectory.
+const controlsEase = progress => {
+  if (progress <= 0 || progress >= 1) return progress;
+  const cubic = (t, a, b) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+  let low = 0, high = 1;
+  for (let i = 0; i < 32; i++) {
+    const mid = (low + high) / 2;
+    if (cubic(mid, .16, .3) < progress) low = mid;
+    else high = mid;
+  }
+  return cubic((low + high) / 2, 1, 1);
+};
+// Execute production scheduling. Complementary lyric/control masks guarantee
+// coverage without making the rows inherit the moving backdrop's translation.
+function motionHarness(initial) {
+  let now = 0, interactive = initial === 1;
   const completions = [];
-  const progress = {
-    get: () => animation ? animation.from + (animation.target - animation.from) * Math.min(1, (now - animation.start) / 400) : value,
-    set value(next) {
-      if (typeof next === 'number') { value = next; animation = null; }
-      else { animation = { ...next, from: value, start: now }; }
+  const makeProgress = () => ({
+    current: initial, animation: null,
+    get() {
+      const animation = this.animation;
+      if (!animation) return this.current;
+      const elapsed = Math.max(0, Math.min(1, (now - animation.start - animation.delay) / animation.duration));
+      return animation.from + (animation.target - animation.from) * animation.easing(elapsed);
     },
-  };
+    get value() { return this.get(); },
+    set value(next) {
+      if (typeof next === 'number') { this.current = next; this.animation = null; }
+      else this.animation = { ...next, from: this.current, start: now };
+    },
+  });
+  const geometry = makeProgress(), stage = makeProgress();
   const context = {
-    ...common, controlsGeneration: { current: 0 }, controlsOpacity: progress,
+    ...common, controlsOpacity: geometry, controlsStageProgress: stage,
     liveReducedMotion: false, fullscreenAlbumModeRef: { current: false },
     setControlsInteractive: next => { interactive = next; }, setControlsVisible: () => {},
-    cancelAnimation: () => { value = progress.get(); animation = null; },
-    CONTROLS_EASE: 'configured cubic', runOnJS: fn => fn,
+    cancelAnimation: progress => { progress.current = progress.get(); progress.animation = null; },
+    CONTROLS_EASE: controlsEase, ReanimatedEasing: { linear: 'linear' },
+    withDelay: (delay, animation) => ({ ...animation, delay }),
     withTiming: (target, options, completion) => {
-      assert.equal(options.duration, 400);
-      completions.push(completion);
-      return { target };
+      assert.equal(options.duration, options.easing === 'linear' ? 700 : target === 1 ? 200 : 400);
+      if (completion) completions.push(completion);
+      return { target, duration: options.duration, completion, delay: 0, easing: options.easing === 'linear' ? value => value : options.easing };
     },
   };
-  context.finishControlsTransition = evaluate(callback('finishControlsTransition'), context);
   const animate = evaluate(callback('animateControls'), context);
-  animate(true);
-  now = interruption;
-  const before = progress.get();
-  const stagesBefore = windows.map(([a, b]) => controlsStage(before, a, b).opacity);
-  animate(false);
-  assert.equal(progress.get(), before, `no snap when reversed at ${interruption}ms`);
-  windows.forEach(([a, b], index) => assert.equal(controlsStage(progress.get(), a, b).opacity, stagesBefore[index]));
-  completions[0](true);
-  assert.equal(interactive, false, 'stale reveal cannot enable hidden controls');
-  animate(true);
-  completions[1](true);
-  assert.equal(interactive, false, 'stale hide cannot alter new reveal');
-  now += 400;
-  completions[2](true);
-  assert.equal(interactive, true);
-  context.liveReducedMotion = true;
-  animate(false);
-  assert.equal(progress.get(), 0);
-  assert.equal(interactive, false);
-  animate(true);
-  assert.equal(progress.get(), 1);
-  assert.equal(interactive, true);
+  const rows = () => windows.map(([a, b]) => controlsStage(stage.get(), a, b));
+  const surfaceContext = { Math, screenHeight: 844, lyricTop: 153, dockTop: { value: 624 }, controlsOpacity: geometry, controlsDockHeight: 220, LYRICS_EDGE_FADE_HEIGHT };
+  const coverage = evaluate(callback('controlsCoverage'), surfaceContext);
+  surfaceContext.controlsCoverage = { get value() { return coverage(); } };
+  const surfaceStyles = ['lyricsEdgeMaskSolidStyle', 'lyricsEdgeMaskFadeStyle', 'fillTouchStyle', 'controlsCoverageClipStyle', 'controlsCoverageContentStyle']
+    .map(name => evaluate(callback(name), surfaceContext));
+  const surfaces = () => surfaceStyles.map(style => style());
+  const assertCoverage = () => {
+    const [solid, fade, fill, clip, content] = surfaces();
+    assert.ok(Math.abs(624 + clip.top - fill.top) < 1e-9, 'control pixels start exactly where lyrics become fully transparent');
+    assert.ok(Math.abs(153 + solid.height + fade.height - fill.top) < 1e-9);
+    assert.ok(Math.abs(clip.top + content.transform[0].translateY) < 1e-9, 'clip movement never translates the rows');
+    assert.ok(Math.abs(clip.height + clip.marginBottom - 220) < 1e-9, 'clip bounds never resize the measured dock');
+    assert.equal(clip.paddingBottom, 0, 'measured clip can shrink below the initial measurement reserve');
+    rows().forEach(row => assert.ok(row.transform[0].translateY >= 0 && row.transform[0].translateY <= 36));
+  };
+  return {
+    context, geometry, stage, completions, animate, rows, surfaces,
+    get interactive() { return interactive; },
+    tick(ms) {
+      for (let elapsed = 0; elapsed < ms; elapsed++) {
+        now++;
+        for (const progress of [geometry, stage]) {
+          const animation = progress.animation;
+          if (animation && now >= animation.start + animation.delay + animation.duration) {
+            progress.current = animation.target;
+            progress.animation = null;
+            animation.completion?.(true);
+          }
+        }
+        assertCoverage();
+      }
+    },
+  };
 }
+for (const initial of [0, 1]) for (const interruption of [1, 16, 50, 150, 399, 400, 450, 699, 700]) {
+  const h = motionHarness(initial);
+  const shown = initial === 0;
+  h.animate(shown);
+  assert.equal(h.interactive, shown, 'show enables touch/accessibility immediately, hide disables immediately');
+  h.tick(interruption);
+  const before = [h.geometry.get(), h.stage.get()];
+  const rowsBefore = h.rows();
+  const surfacesBefore = JSON.stringify(h.surfaces());
+  h.animate(!shown);
+  assert.equal(h.interactive, !shown, 'reversal immediately applies the latest interaction target');
+  assert.equal(h.geometry.get(), before[0], 'backing geometry never snaps on reversal');
+  assert.equal(JSON.stringify(h.surfaces()), surfacesBefore, 'both masks and fill are continuous at reversal');
+  assert.equal(h.stage.get(), before[1], 'row reversal never snaps');
+  h.rows().forEach((row, index) => {
+    assert.equal(row.opacity, rowsBefore[index].opacity);
+    assert.equal(row.transform[0].translateY, rowsBefore[index].transform[0].translateY);
+  });
+  assert.equal(h.completions.length, 0, 'no stale animation completion can change interaction or accessibility');
+  h.tick(1100);
+  assert.equal(h.geometry.get(), initial);
+  assert.equal(h.stage.get(), initial);
+  assert.equal(h.interactive, initial === 1);
+  h.animate(shown); h.tick(150); h.animate(!shown); h.tick(75); h.animate(shown); h.tick(1100);
+  assert.equal(h.geometry.get(), shown ? 1 : 0);
+  assert.equal(h.stage.get(), shown ? 1 : 0);
+  assert.equal(h.interactive, shown);
+  for (const policy of ['reduced motion', 'fullscreen']) {
+    h.animate(!shown); h.tick(100);
+    if (policy === 'reduced motion') h.context.liveReducedMotion = true;
+    else h.context.fullscreenAlbumModeRef.current = true;
+    h.animate(false);
+    assert.equal(h.geometry.get(), 0); assert.equal(h.stage.get(), 0); assert.equal(h.interactive, false);
+    h.animate(true);
+    assert.equal(h.geometry.get(), 1); assert.equal(h.stage.get(), 1); assert.equal(h.interactive, true);
+    h.tick(700);
+    assert.equal(h.geometry.get(), 1); assert.equal(h.stage.get(), 1);
+    h.context.liveReducedMotion = false;
+    h.context.fullscreenAlbumModeRef.current = false;
+  }
+}
+// Both geometry and rows respond without a queued lead-in. Show geometry uses
+// 200ms to uncover the first row early, hide retains the full reverse stagger.
+const reveal = motionHarness(0);
+reveal.animate(true);
+assert.equal(reveal.interactive, true); assert.equal(reveal.geometry.get(), 0);
+reveal.tick(16); assert.ok(reveal.geometry.get() > 0 && reveal.geometry.get() < 1);
+assert.ok(reveal.rows()[0].opacity > 0);
+assert.equal(reveal.rows()[1].opacity, 0); assert.equal(reveal.rows()[2].opacity, 0);
+reveal.tick(125); assert.ok(reveal.rows()[1].opacity > 0); assert.equal(reveal.rows()[2].opacity, 0);
+assert.equal(reveal.interactive, true, 'visible transport accepts input before finishing its reveal');
+reveal.tick(140); assert.ok(reveal.rows()[2].opacity > 0);
+reveal.tick(419); assert.equal(reveal.stage.get(), 1); assert.equal(reveal.geometry.get(), 1);
+reveal.animate(false); assert.equal(reveal.interactive, false);
+reveal.tick(100); assert.equal(reveal.geometry.get(), 1);
+assert.equal(reveal.rows()[0].transform[0].translateY, 0, 'timeline has not been pushed offscreen at 100ms');
+reveal.tick(300); assert.equal(reveal.geometry.get(), 1);
+assert.ok(reveal.rows()[0].opacity > .9, 'timeline remains visible at 400ms');
+reveal.tick(300); assert.equal(reveal.stage.get(), 0); assert.equal(reveal.geometry.get(), 1);
+reveal.tick(200); assert.ok(reveal.geometry.get() > 0 && reveal.geometry.get() < 1);
+reveal.tick(200); assert.equal(reveal.geometry.get(), 0);
+// Reverse while the backing mask retracts. Both masks, the badge's geometry
+// driver and every row retain their exact value, including before the next frame.
+reveal.animate(true); reveal.tick(700); reveal.animate(false); reveal.tick(850);
+assert.equal(reveal.stage.get(), 0);
+const backingBefore = reveal.geometry.get(); const maskBefore = JSON.stringify(reveal.surfaces());
+reveal.animate(true);
+assert.equal(reveal.geometry.get(), backingBefore); assert.equal(JSON.stringify(reveal.surfaces()), maskBefore);
+assert.equal(reveal.stage.get(), 0);
+reveal.tick(1100); assert.equal(reveal.geometry.get(), 1); assert.equal(reveal.stage.get(), 1);
 // Execute actual touch handlers and idle callback, with a fake timer.
 for (const gesture of ['scrub', 'previous long hold', 'next long hold']) {
   for (const terminal of ['onTouchEnd', 'onTouchCancel']) {
@@ -161,26 +282,28 @@ assert.match(source, /dockTop.value = dockLayout.current.y \+ dockLayout.current
 for (const settled of [false, true]) for (const fullscreen of [false, true]) {
   const context = { controlsInteractive: settled, fullscreenAlbumMode: fullscreen };
   const attribute = name => evaluate(dock.attributes.properties.find(p => p.name?.text === name).initializer.expression.getText(ast), context);
-  assert.equal(attribute('pointerEvents'), settled || fullscreen ? 'auto' : 'none');
+  assert.equal(attribute('pointerEvents'), settled || fullscreen ? 'box-none' : 'none');
   assert.equal(attribute('accessibilityElementsHidden'), !settled && !fullscreen);
   assert.equal(attribute('importantForAccessibility'), !settled && !fullscreen ? 'no-hide-descendants' : 'auto');
 }
-assert.match(source, /controlsInteractive \|\| fullscreenAlbumMode \? "auto" : "none"/);
+assert.match(source, /controlsInteractive \|\| fullscreenAlbumMode \? "box-none" : "none"/);
 assert.match(source, /accessibilityElementsHidden=\{!controlsInteractive && !fullscreenAlbumMode\}/);
 assert.match(source, /importantForAccessibility=\{!controlsInteractive && !fullscreenAlbumMode \? 'no-hide-descendants'/);
 assert.match(source, /controlsTouchActive.current = false;/);
 assert.match(source, /controlsScrubActive.current = false;/);
 assert.equal((source.match(/<ArtworkBackground\s/g) || []).length, 1);
-assert.match(callback('lyricsBottomBlurOpacityStyle'), /translateY: -Math.max\(0, screenHeight - dockTop.value\) \* controlsOpacity.value/);
+assert.doesNotMatch(source, /lyricsBottomBlur|_stableColors7|rgba\(0,0,0,0\.85\)/);
 assert.match(source, /followControlsProgress=\{!isLandscape\}/);
 // A portrait/landscape switch cancels the attribution's prior choreography.
 const attributionSource = fs.readFileSync(path.join(root, 'components/lyrics/lyrics-attribution.tsx'), 'utf8');
 const attributionAst = ts.createSourceFile('attribution.tsx', attributionSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let attributionReaction;
 let attributionStyle;
+let attributionGlassStyle;
 function inspectAttribution(node) {
   if (ts.isCallExpression(node) && node.expression.getText(attributionAst) === 'useAnimatedReaction') attributionReaction = node.arguments[1].getText(attributionAst);
   if (ts.isVariableDeclaration(node) && node.name.getText(attributionAst) === 'positionStyle') attributionStyle = node.initializer.arguments[0].getText(attributionAst);
+  if (ts.isVariableDeclaration(node) && node.name.getText(attributionAst) === 'glassStyle') attributionGlassStyle = node.initializer.arguments[0].getText(attributionAst);
   ts.forEachChild(node, inspectAttribution);
 }
 inspectAttribution(attributionAst);
@@ -201,7 +324,38 @@ assert.equal(position.transform[1].translateY, -104, 'attribution follows the ex
 reactAttribution({ followControlsProgress: false, shown: false, offset: 0 }, { followControlsProgress: true });
 assert.equal(cancelled, 6);
 assert.equal(attributionContext.translateY.get(), 0, 'landscape clears stale portrait positioning');
-console.log('Controls motion checks passed: stages, four reversal times, stale completions, reduced motion, hold/release/cancel, clip geometry and structural layer guards. Native touch/Metal/VoiceOver are unverified.');
+// Exercise actual mask and attribution style callbacks across rapid reversals,
+// including a reversal while the empty backing mask retracts. Exact continuity
+// is checked at the request, then bounded at 1ms intervals with native easing.
+for (const initial of [0, 1]) for (const interruption of [16, 48, 150, 399, 700, 850]) {
+  const h = motionHarness(initial);
+  const badgeContext = { ...attributionContext, followControlsProgress: true, controlsProgress: h.geometry };
+  const badge = evaluate(attributionStyle, badgeContext);
+  const glass = evaluate(attributionGlassStyle, badgeContext);
+  const snapshot = () => ({ masks: h.surfaces(), badge: badge(), glass: glass(), rows: h.rows() });
+  h.animate(initial === 0); h.tick(interruption);
+  const before = JSON.stringify(snapshot());
+  h.animate(initial !== 0);
+  assert.equal(JSON.stringify(snapshot()), before, 'mask, badge, glass and rows never jump on reversal');
+  let previous = snapshot();
+  for (let elapsed = 0; elapsed < 1100; elapsed++) {
+    h.tick(1);
+    const current = snapshot();
+    const coordinates = state => [state.masks[0].height, state.masks[1].height,
+      state.masks[1].transform[0].translateY, state.masks[2].top, state.masks[3].top];
+    coordinates(current).forEach((value, index) => assert.ok(Math.abs(value - coordinates(previous)[index]) < 10,
+      'mask geometry changes continuously, including the first frame after reversal'));
+    assert.ok(Math.abs(current.badge.transform[1].translateY - previous.badge.transform[1].translateY) < 8);
+    assert.equal(current.badge.opacity, previous.badge.opacity);
+    assert.ok(Math.abs(current.glass.opacity - previous.glass.opacity) < .04);
+    current.rows.forEach((row, index) => {
+      assert.ok(Math.abs(row.transform[0].translateY - previous.rows[index].transform[0].translateY) < 1);
+      assert.ok(Math.abs(row.opacity - previous.rows[index].opacity) < .02);
+    });
+    previous = current;
+  }
+}
+console.log('Controls motion checks passed: expo-out stages, immediate interaction, backdrop hold, viewport row motion, reversals, reduced motion, hold/release/cancel, clip geometry and structural layer guards. Native touch/Metal/VoiceOver are unverified.');
 
 // Inspect the declared React hierarchy and execute the real web SafeAreaView
 // padding policy. Layout events below are synthetic, not Yoga/device captures.
@@ -216,6 +370,10 @@ const styleObject = declarations.styles.arguments[0];
 const style = name => evaluate(styleObject.properties.find(p => p.name.getText(ast) === name).initializer.getText(ast), { StyleSheet: { absoluteFill: {} } });
 const bottomStyle = style('bottomArea');
 assert.equal(bottomStyle.position, 'absolute');
+assert.equal(bottomStyle.overflow, 'visible');
+assert.equal(style('controlsWrap').overflow, 'visible');
+assert.equal(style('controlsCoverageClip').paddingBottom, 36);
+assert.equal(style('controlsCoverageClip').overflow, 'hidden', 'native bounds clip touch dispatch as well as pixels');
 assert.equal(style('screen').padding, undefined);
 const edges = evaluate(declarations._stableEdges8.getText(ast), {});
 assert.equal(edges.includes('bottom'), true);
@@ -248,18 +406,259 @@ for (const height of [667, 844]) for (const bottomInset of [0, 21, 34]) for (con
   assert.equal(evaluate(callback('lyricsEdgeMaskSolidStyle'), computed)().height +
     evaluate(callback('lyricsEdgeMaskFadeStyle'), computed)().height + 153, areaTop);
 }
-const dockComponent = dock.parent.children.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'PlaybackControlsDock');
+const clipElement = dock.parent.children.find(node => ts.isJsxElement(node) && node.openingElement.attributes.getText(ast).includes('styles.controlsCoverageClip'));
+assert.equal(clipElement.openingElement.tagName.getText(ast), 'Reanimated.View');
+assert.match(clipElement.openingElement.attributes.getText(ast), /pointerEvents="box-none"/);
+assert.doesNotMatch(source, /controlsCoverageMask/);
+const clipContent = clipElement.children.find(node => ts.isJsxElement(node) && node.openingElement.attributes.getText(ast).includes('controlsCoverageContentStyle'));
+assert.match(clipContent.openingElement.attributes.getText(ast), /pointerEvents="box-none"/);
+assert.match(clipContent.openingElement.attributes.getText(ast), /handleControlsDockLayout\(event.nativeEvent.layout.height\)/, 'measure the unshrunk content, never the moving clip height');
+const dockComponent = clipContent.children.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'PlaybackControlsDock');
+assert.match(source, /pointerEvents="box-none" style=\{\[styles.controlsRevealZone, fillTouchStyle\]\}/, 'reveal zone cannot capture uncovered lyrics');
+assert.equal(style('controlsRevealZone').top, undefined);
+assert.match(source, /controlsProgress=\{controlsStageProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
+assert.match(source, /controlsProgress=\{controlsProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.ok(ts.isJsxFragment(dockComponent.attributes.properties.find(p => p.name?.text === 'fullscreenActions').initializer.expression), 'portrait always supplies fullscreen actions');
 const controlsSource = fs.readFileSync(path.join(root, 'components/lyrics/playback-controls.tsx'), 'utf8');
 const controlsAst = ts.createSourceFile('controls.tsx', controlsSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let bottomSlotStyle;
+let controlStyles;
+let rowAccessHook;
+const timelineGestureCallbacks = {};
+const rowStyleCallbacks = {};
+const revealWindows = [];
 function inspectControls(node) {
+  if (ts.isFunctionDeclaration(node) && node.name?.text === 'useControlsRowAccess') rowAccessHook = node.getText(controlsAst);
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ['onTouchesDown', 'onBegin', 'onFinalize'].includes(node.expression.name.text)) {
+    timelineGestureCallbacks[node.expression.name.text] = node.arguments[0].getText(controlsAst);
+  }
+  if (ts.isVariableDeclaration(node)) {
+    const name = node.name.getText(controlsAst);
+    if (name === 'styles') controlStyles = node.initializer.arguments[0];
+    if (['timelineRevealStyle', 'transportRevealStyle', 'utilityRevealStyle'].includes(name)) {
+      rowStyleCallbacks[name] = node.initializer.arguments[0].getText(controlsAst);
+    }
+  }
+  if (ts.isCallExpression(node) && node.expression.getText(controlsAst) === 'controlsStage') {
+    revealWindows.push(node.arguments.slice(1, 3).map(argument => Number(argument.getText(controlsAst))));
+    assert.equal(node.arguments.length, 3, 'row translations are independent of backing geometry');
+  }
   if (ts.isVariableDeclaration(node) && node.name.getText(controlsAst) === 'bottomSlotStyle') bottomSlotStyle = node.initializer.arguments[0].getText(controlsAst);
   ts.forEachChild(node, inspectControls);
 }
 inspectControls(controlsAst);
+const createRowAccess = evaluate(rowAccessHook, {
+  controlsRowIsExposed,
+  useSharedValue: value => ({ value }),
+  useDerivedValue: callback => ({ get value() { return callback(); } }),
+  useAnimatedProps: callback => callback,
+});
+for (const name of ['timeline', 'transport', 'utility']) {
+  assert.match(controlsSource, new RegExp(`animatedProps=\\{${name}Access.animatedProps\\}`));
+  assert.match(controlsSource, new RegExp(`${name}Access.layout.value = \\{ top: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height \\}`));
+}
+assert.match(controlsSource, /interactionAllowed=\{timelineAccess.allowed\}/);
+assert.match(controlsSource, /interactionCoverage=\{controlsCoverage\}/);
+assert.match(controlsSource, /pointerEvents="box-none"\s+style=\{\[\s+styles.card/);
+assert.deepEqual(revealWindows, windows, 'production rows use the tested timeline, transport and utility windows');
+assert.match(controlsSource, /card: \{[\s\S]*?overflow: 'visible'/);
+// The utility slot may clip its fullscreen collapse, but the reveal transform
+// belongs to the slot itself. Its contents travel together outside that clip.
+assert.match(controlsSource, /styles.bottomSlot, bottomSlotStyle, utilityRevealStyle/);
+assert.doesNotMatch(callback('fillTouchStyle'), /controlsStageProgress/);
+assert.doesNotMatch(callback('lyricsEdgeMaskSolidStyle'), /controlsStageProgress/);
+assert.doesNotMatch(callback('lyricsEdgeMaskFadeStyle'), /controlsStageProgress/);
 for (const progress of [0, .25, .5, .75, 1]) {
   assert.equal(evaluate(bottomSlotStyle, { hasFullscreenActions: true, UTILITY_ROW_HEIGHT: 44, fullscreenAlbumProgress: { value: progress } })().height, 44, 'album morph never changes portrait dock slot height');
+}
+// Quantify viewport intersections using production row style callbacks and
+// synthetic measured row heights, including timeline font-height variation.
+// These are geometry regressions, not native Yoga or device captures.
+const controlStyle = name => evaluate(controlStyles.properties.find(property => property.name.getText(controlsAst) === name).initializer.getText(controlsAst), {});
+const card = controlStyle('card');
+const transportHeight = controlStyle('playButtonShell').height + controlStyle('controlsRow').paddingTop;
+const utilityHeight = 44;
+for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for (const timelineHeight of [38, 46]) {
+  const rowHeights = [timelineHeight, transportHeight, utilityHeight];
+  const contentHeight = card.paddingTop + rowHeights.reduce((sum, value) => sum + value, 0) + 2 * card.gap + card.paddingBottom;
+  // Same native safe-area/bottom:-25 dock placement covered above.
+  const dockTop = height - contentHeight + 15 - bottomInset;
+  const layoutTops = [card.paddingTop, card.paddingTop + timelineHeight + card.gap,
+    card.paddingTop + timelineHeight + 2 * card.gap + transportHeight];
+  for (const shown of [true, false]) {
+    const h = motionHarness(shown ? 0 : 1);
+    const rowStyles = ['timelineRevealStyle', 'transportRevealStyle', 'utilityRevealStyle'].map(name =>
+      evaluate(rowStyleCallbacks[name], { controlsStage, controlsProgress: h.stage }));
+    const viewportContext = { Math, screenHeight: height, dockTop: { value: dockTop }, controlsOpacity: h.geometry, controlsDockHeight: contentHeight };
+    const coverageForViewport = evaluate(callback('controlsCoverage'), viewportContext);
+    viewportContext.controlsCoverage = { get value() { return coverageForViewport(); } };
+    const clipForViewport = evaluate(callback('controlsCoverageClipStyle'), viewportContext);
+    const rowAccess = windows.map(([start, end], index) => {
+      const access = createRowAccess(h.stage, start, end, viewportContext.controlsCoverage);
+      access.layout.value = { top: layoutTops[index], height: rowHeights[index] };
+      return access;
+    });
+    const edgeForViewport = evaluate(callback('fillTouchStyle'), viewportContext);
+    const badgeForViewport = evaluate(attributionStyle, { ...attributionContext,
+      controlsOffset: Math.max(0, contentHeight - 12), controlsProgress: h.geometry, followControlsProgress: true });
+    h.animate(shown);
+    let previousTime = 0;
+    let previousOffsets = shown ? [36, 36, 36] : [0, 0, 0];
+    for (const time of [16, 32, 48, 80, 100, 150, 200, 281, 350, 420, 490, 560, 630, 699, 700]) {
+      h.tick(time - previousTime); previousTime = time;
+      const rows = rowStyles.map(style => style());
+      const offsets = rows.map(row => row.transform[0].translateY);
+      const badgeBottom = height - bottomInset - 10 + badgeForViewport().transform[1].translateY;
+      for (const badgeHeight of [24, 32]) {
+        assert.ok(badgeBottom <= height && badgeBottom - badgeHeight >= 0, 'attribution stays in the viewport throughout smooth motion');
+      }
+      rows.forEach((row, index) => {
+        const offset = offsets[index];
+        assert.ok(offset >= 0 && offset <= 36, 'actual wrapper offset never inherits the backing travel');
+        assert.ok(shown ? offset <= previousOffsets[index] : offset >= previousOffsets[index]);
+        const top = dockTop + layoutTops[index] + offset;
+        const bottom = top + rowHeights[index];
+        const edge = edgeForViewport().top;
+        const clipTop = dockTop + clipForViewport().top;
+        const viewportPixels = Math.max(0, Math.min(height, bottom) - Math.max(0, top, clipTop));
+        const access = rowAccess[index];
+        const props = access.animatedProps();
+        const exposed = row.opacity > 0 && viewportPixels > 0;
+        assert.equal(access.allowed.value, exposed, 'UI-thread eligibility matches actual rendered row intersection');
+        assert.equal(props.pointerEvents, exposed ? 'box-none' : 'none');
+        assert.equal(props.accessibilityElementsHidden, !exposed);
+        assert.equal(props.importantForAccessibility, exposed ? 'auto' : 'no-hide-descendants');
+        if (!exposed) {
+          assert.equal(h.interactive && props.pointerEvents !== 'none', false, 'fully hidden rows cannot receive touches');
+          assert.equal(h.interactive && !props.accessibilityElementsHidden, false, 'fully hidden rows cannot expose accessibility descendants');
+        } else if (shown) {
+          assert.equal(h.interactive && props.pointerEvents === 'box-none', true, 'visible rows become interactive without waiting for motion completion');
+        }
+        // Real clipping view excludes coordinates above its native bounds. All
+        // ancestors are box-none and both reveal/fill zones start at this edge.
+        for (const y of [clipTop - 1, clipTop - 16]) {
+          assert.equal(y >= clipTop && y < clipTop + clipForViewport().height, false, 'uncovered lyric coordinates fall outside the native dock hit bounds');
+          assert.ok(y < edge + 1e-9, 'the fill and reveal zone cannot intercept that lyric coordinate');
+        }
+
+        if (viewportPixels > 0 && row.opacity > 0) {
+          assert.ok(Math.max(top, clipTop) >= edge - 1e-9, 'every rendered control pixel is below the fully transparent lyric edge');
+        }
+        if (row.opacity > 0 && (!shown || time >= 200)) {
+          assert.ok(viewportPixels > 0, 'backdrop never evicts a staggered row during hide');
+          if (index < 2) assert.ok(Math.abs(viewportPixels - rowHeights[index]) < 1e-9);
+          if (row.opacity >= .5) assert.ok(viewportPixels >= rowHeights[index] / 2);
+        }
+        if (shown && time === 48 && index === 0) {
+          assert.ok(viewportPixels > 0, 'timeline appears within 48ms, not after a blank geometry animation');
+          assert.ok(offset > 14 && row.opacity > 0 && row.opacity < 1, 'first visible timeline retains a perceptible independent slide');
+        }
+        if (shown && time === 150 && index === 1) {
+          assert.ok(viewportPixels > 0 && offset > 25 && row.opacity > 0, 'transport is visible and interactive at the beginning of its own slide');
+        }
+      });
+      if (!shown && time === 100) {
+        assert.equal(offsets[0], 0); assert.equal(rows[0].opacity, 1);
+        assert.equal(offsets[1], 0); assert.equal(rows[1].opacity, 1);
+        assert.ok(offsets[2] > 0 && offsets[2] < 1);
+      }
+      if (shown && time === 350) {
+        assert.ok(offsets[0] < offsets[1] && offsets[1] < offsets[2]);
+        assert.ok(rows[0].opacity > rows[1].opacity && rows[1].opacity > rows[2].opacity);
+      }
+      if (!shown && time === 490) {
+        assert.equal(rows[2].opacity, 0);
+        assert.ok(rows[0].opacity > rows[1].opacity && rows[1].opacity > 0);
+        assert.ok(offsets[1] > 1 && offsets[1] < 36, 'transport reverse slide is visible while timeline remains above it in its own window');
+      }
+      if (!shown && time === 630) {
+        assert.equal(rows[1].opacity, 0); assert.equal(rows[2].opacity, 0);
+        assert.ok(rows[0].opacity > 0 && offsets[0] > 1 && offsets[0] < 36, 'timeline visibly finishes last');
+      }
+      previousOffsets = offsets;
+    }
+  }
+}
+// No JS-state round trip: the production row hook changes native props as its
+// measured rectangle, stage opacity and coverage intersection change on UI.
+const unmeasured = createRowAccess({ value: 1 }, 0, .6, undefined);
+assert.equal(unmeasured.allowed.value, false, 'unmeasured rows stay inert even at fully shown progress');
+unmeasured.layout.value = { top: 16, height: 38 };
+assert.equal(unmeasured.allowed.value, true);
+const inputHarness = motionHarness(0);
+const inputContext = { Math, screenHeight: 844, dockTop: { value: 624 }, controlsOpacity: inputHarness.geometry };
+const inputCoverage = evaluate(callback('controlsCoverage'), inputContext);
+const inputCoverageShared = { get value() { return inputCoverage(); } };
+const measuredRows = [{ top: 16, height: 38 }, { top: 64, height: 88 }, { top: 162, height: 44 }];
+const inputAccess = windows.map(([start, end], index) => {
+  const access = createRowAccess(inputHarness.stage, start, end, inputCoverageShared);
+  assert.equal(access.allowed.value, false, 'unmeasured rows start inert and inaccessible');
+  access.layout.value = measuredRows[index];
+  return access;
+});
+const timelineInput = inputAccess[0].allowed;
+let failures = 0, previews = 0, seeks = 0, cancellations = 0;
+const scrubActive = { value: false };
+const guardContext = {
+  interactionAllowed: timelineInput, interactionCoverage: inputCoverageShared, controlsTouchIsCovered, Math, trackWidth: 200,
+  isScrubbingShared: scrubActive, scrubProgress: { value: 0 }, trackScaleY: { value: 1 },
+  lastScrubJsCallAt: { value: 0 }, pendingSeekPositionMsShared: { value: null }, maxDuration: 100000,
+  onUserInteraction: () => {}, setIsScrubbing: () => {}, flushScrubPreview: () => previews++,
+  finishScrub: () => seeks++, cancelScrub: () => cancellations++,
+  runOnJS: fn => fn, withTiming: value => value,
+};
+const touchDown = evaluate(timelineGestureCallbacks.onTouchesDown, guardContext);
+const beginScrub = evaluate(timelineGestureCallbacks.onBegin, guardContext);
+const finalizeScrub = evaluate(timelineGestureCallbacks.onFinalize, guardContext);
+inputHarness.animate(true); inputHarness.tick(16);
+assert.equal(timelineInput.value, false, 'timeline is entirely masked at 16ms');
+touchDown({ allTouches: [{ absoluteY: 675 }] }, { fail: () => failures++ });
+beginScrub({ x: 100, absoluteY: 675 }); finalizeScrub({ x: 100 }, false);
+assert.equal(failures, 1); assert.equal(previews, 0); assert.equal(seeks, 0); assert.equal(cancellations, 0);
+assert.equal(scrubActive.value, false, 'invisible touch cannot enter scrubbing');
+inputHarness.tick(16);
+const trackTop = measuredRows[0].top + controlsStage(inputHarness.stage.get(), ...windows[0]).transform[0].translateY;
+assert.ok(trackTop + 18 < inputCoverage().top, 'the scrub track remains entirely clipped at 32ms even if its time labels start appearing');
+assert.equal(Math.max(0, Math.min(trackTop + 18, 220) - Math.max(trackTop, inputCoverage().top)), 0,
+  'no native hit-test coordinate intersects the hidden track');
+const hiddenTrackY = 624 + trackTop + 9;
+touchDown({ allTouches: [{ absoluteY: hiddenTrackY }] }, { fail: () => failures++ });
+beginScrub({ x: 100, absoluteY: hiddenTrackY });
+assert.equal(failures, 2); assert.equal(previews, 0); assert.equal(scrubActive.value, false);
+inputHarness.tick(118);
+assert.equal(timelineInput.value, true);
+touchDown({ allTouches: [{ absoluteY: 650 }] }, { fail: () => failures++ }); beginScrub({ x: 100, absoluteY: 650 });
+assert.equal(failures, 2); assert.equal(previews, 1); assert.equal(scrubActive.value, true);
+assert.equal(inputHarness.interactive, true, 'visible scrub accepts input before 700ms completion');
+// Losing eligibility cancels rather than committing an invisible seek.
+inputHarness.context.liveReducedMotion = true; inputHarness.animate(false);
+finalizeScrub({ x: 100 }, true);
+assert.equal(seeks, 0); assert.equal(cancellations, 1); assert.equal(scrubActive.value, false);
+for (const access of inputAccess) {
+  assert.equal(access.animatedProps().pointerEvents, 'none');
+  assert.equal(access.animatedProps().accessibilityElementsHidden, true);
+}
+inputHarness.animate(true);
+for (const access of inputAccess) {
+  assert.equal(access.allowed.value, true);
+  assert.equal(access.animatedProps().accessibilityElementsHidden, false);
+}
+// Eligibility tracks the rendered intersection every sampled millisecond across
+// rapid reversals and a reversal while only the empty backdrop is retracting.
+inputHarness.context.liveReducedMotion = false;
+for (const [shown, duration] of [[false, 75], [true, 20], [false, 850], [true, 200], [false, 1100]]) {
+  inputHarness.animate(shown);
+  for (let elapsed = 0; elapsed < duration; elapsed++) {
+    inputHarness.tick(1);
+    inputAccess.forEach((access, index) => {
+      const row = controlsStage(inputHarness.stage.get(), ...windows[index]);
+      const top = measuredRows[index].top + row.transform[0].translateY;
+      const pixels = Math.max(0, Math.min(top + measuredRows[index].height, 220) - Math.max(top, inputCoverage().top));
+      const expected = row.opacity > 0 && pixels > 0;
+      assert.equal(access.allowed.value, expected);
+      assert.equal(access.animatedProps().accessibilityElementsHidden, !expected);
+    });
+  }
 }
 console.log('Controls geometry checks passed: declared native ancestor hierarchy, actual web safe-area padding, measured dock top and fixed fullscreen slot. Native layout/compositing costs remain unmeasured.');
 require('./check-controls-lifecycle.cjs');
