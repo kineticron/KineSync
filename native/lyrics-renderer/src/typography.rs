@@ -203,6 +203,8 @@ impl Default for Fonts {
         let mut context = FontContext::new();
         #[cfg(target_os = "android")]
         crate::android_fonts::load(&mut context);
+        #[cfg(target_os = "ios")]
+        crate::ios_fonts::configure(&mut context);
         Self {
             context,
             ready: false,

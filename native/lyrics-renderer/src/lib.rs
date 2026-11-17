@@ -9,6 +9,8 @@ mod credits;
 pub mod ffi;
 pub mod gpu;
 mod interlude;
+#[cfg(any(target_os = "ios", test))]
+mod ios_fonts;
 pub mod live;
 pub mod motion;
 pub mod scene;
