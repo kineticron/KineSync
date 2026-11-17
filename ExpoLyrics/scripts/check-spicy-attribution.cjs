@@ -191,6 +191,12 @@ vm.runInNewContext(overlayCode, { exports: overlayModule.exports, require(name) 
     if (!previousOverlayDeps || deps.some((value, index) => value !== previousOverlayDeps[index])) callback();
     previousOverlayDeps = deps;
   }, useState: () => [expanded, value => { expanded = value; stateUpdates++; }] };
+  if (name === '@/components/lyrics/lyrics-glass-dialog') return {
+    LyricsGlassDialog: props => jsx('Modal', { ...props, transparent: true, visible: props.visible, animationType: 'fade', statusBarTranslucent: true, supportedOrientations: ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right'], onRequestClose: props.onClose, children: jsx('Pressable', { accessibilityLabel: props.closeLabel, onPress: props.onClose, style: [{}, { paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom), paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right) }], children: jsx('View', { accessibilityViewIsModal: true, onAccessibilityEscape: props.onClose, onPress: event => event.stopPropagation(), style: { flexShrink: 1 }, children: jsx('ScrollView', { style: { flexShrink: 1 }, children: props.children }) }) }) }),
+    LyricsDialogTitle: props => jsx('Text', props),
+    LyricsDialogAction: props => jsx('Pressable', { ...props, accessibilityRole: 'button', children: jsx('Text', { children: props.label }) }),
+    dialogStyles: { description: {}, title: {}, detailProvider: {}, close: {}, closeText: {}, disabled: {} },
+  };
   if (name === 'expo-blur') return { BlurView: 'BlurView' };
   if (name === 'expo-image') return { Image: 'Image' };
   if (name === 'react-native-safe-area-context') return { useSafeAreaInsets: () => insets };

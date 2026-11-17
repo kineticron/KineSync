@@ -174,8 +174,10 @@ async function checkVault() {
     '@/components/ui/promotional-backdrop': { PromotionalBackdrop: 'Backdrop' }, '@/components/lyrics/bridged-artwork-image': { BridgedArtworkImage: 'Artwork' },
     '@/components/lyrics/desktop-vault-catalog': { DesktopVaultCatalog: 'Desktop' }, '@/constants/design': { Design: {} },
     '@/hooks/use-vault-incoming-share': { useVaultIncomingShare: () => ({ resolvedSharedPayloads: [], clearSharedPayloads }) },
-    '@/lib/mobile-lyrics-vault': { readVaultCatalog: async () => catalog, saveMobileVaultLyrics: async entry => saved.push(entry) },
-    '@/lib/lyrics-ttml-import': {}, '@/lib/lyrics-ttml-export': {}, '@/lib/lyrics-policy': {}, '@/store/playback-store': { usePlaybackStore: useStore },
+    '@/lib/mobile-lyrics-vault': { readVaultCatalog: async () => catalog, saveMobileVaultLyrics: async entry => saved.push(entry), getMobileVaultEntry: async () => null },
+    '@/lib/mobile-lyrics-client': { fetchLrcRedExportLyricsForTrack: async () => null },
+    '@/components/lyrics/lyrics-glass-dialog': { LyricsGlassDialog: () => null, LyricsDialogTitle: () => null, LyricsDialogAction: () => null, dialogStyles: {} },
+    '@/lib/lyrics-ttml-import': {}, '@/lib/lyrics-ttml-export': {}, '@/lib/lyrics-policy': { isSpicyLyricsResponse: () => false, assertLyricsExportAllowed: () => {} }, '@/store/playback-store': { usePlaybackStore: useStore },
   }, h.globals);
   h.run(VaultScreen); await new Promise(setImmediate);
   let list = nodes(h.run(VaultScreen), 'FlashList')[0];

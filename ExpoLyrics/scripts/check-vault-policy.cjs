@@ -153,9 +153,29 @@ async function check(harness, native) {
   } finally { stop?.(); await tick(); harness.close(); }
 }
 
+async function checkContentAwareReplacement(harness) {
+  const { vault } = harness;
+  try {
+    const origin = { provider: "Spicy Lyrics", source: "spicy-lyrics-api", host: "api.spicylyrics.org", isrc: "US5TA1500050" };
+    await vault.saveMobileVaultLyrics({ track, lyrics, originalSource: "spicy-lyrics-line", metadata: { ...metadata(Date.now()), fetchOrigin: origin } });
+    await vault.saveMobileVaultLyrics({ track, lyrics, originalSource: "lrc-red-karaoke", metadata: { ...metadata(Date.now()), fetchOrigin: origin, attribution: { source: "lrc-red", provider: "lrc.red" } } });
+    let entry = (await vault.readVaultEntries())[0];
+    assert.equal(policy.isSpicyLyricsResponse(entry), true, "attribution relabel keeps Spicy provenance");
+    assert.equal(entry.metadata.fetchOrigin.isrc, "US5TA1500050");
+    await vault.saveMobileVaultLyrics({ track, lyrics, originalSource: "lrc-red-karaoke", metadata: { attribution: { source: "lrc-red", provider: "lrc.red" }, fetchOrigin: { source: "lrc-red", host: "lrc.red" } } });
+    entry = (await vault.readVaultEntries())[0];
+    assert.equal(policy.isSpicyLyricsResponse(entry), true, "mutable lrc.red metadata cannot clear Spicy provenance");
+    await vault.saveMobileVaultLyrics({ track, lyrics, originalSource: "lrc-red-karaoke", metadata: { attribution: { source: "lrc-red", provider: "lrc.red" }, independentContent: { source: "lrc-red", verified: true }, ttml: { content: "<tt>independent</tt>" } } });
+    entry = (await vault.readVaultEntries())[0];
+    assert.equal(policy.isSpicyLyricsResponse(entry), false, "explicit verified independent content may replace Spicy provenance");
+  } finally { harness.close(); }
+}
+
 async function main() {
   await check(loadMobileVault(), true);
   await check(loadWebVault(), false);
+  await checkContentAwareReplacement(loadMobileVault());
+  await checkContentAwareReplacement(loadWebVault());
   await checkRefreshSupersession(loadMobileVault());
   await checkRefreshSupersession(loadWebVault());
   await checkRecordingMatching(loadMobileVault());

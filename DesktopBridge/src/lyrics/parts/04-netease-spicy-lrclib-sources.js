@@ -306,10 +306,19 @@ async function fetchFromSpicyLyrics(
     }
 
     const fetchedAt = Date.now();
+    const spicyOrigin = spicyLyricsData.kinesyncSpicyOrigin || {
+      provider: "Spicy Lyrics",
+      source: "spicy-lyrics-api",
+      host: "api.spicylyrics.org",
+      url: `${SPICY_LYRICS_API_URL}/v1/lyrics/${spotifyTrackId}`,
+      spotifyTrackId,
+      isrc: String(spicyLyricsData?.ids?.isrc || "").trim(),
+    };
     const candidate = {
       lyrics,
       source: sourceLabel,
       metadata: {
+        fetchOrigin: { ...spicyOrigin },
         spicyApi: { fetchedAt, expiresAt: fetchedAt + 30 * 24 * 60 * 60 * 1000 },
         ...(songwriters.length ? { credits: { songwriters } } : {}),
         ...(spicyMetadata.attribution

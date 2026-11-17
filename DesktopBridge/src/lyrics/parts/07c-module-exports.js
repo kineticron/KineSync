@@ -2,6 +2,7 @@
 module.exports = {
   createLyricsService,
   fetchFromSpicyLyrics,
+  fetchLrcRedExportLyrics,
   getAvailableLyricsSources,
   getTemporarilyDisabledLyricsSources,
   normalizeLyricsSourceKey: normalizeSourceKey,

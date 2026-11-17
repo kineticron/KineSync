@@ -808,7 +808,17 @@ async function fetchSpicyLyricsByTrackId(trackId, publishableKey) {
     if (payload.Body.id && payload.Body.id !== trackId) {
       throw new Error("Spicy Lyrics returned lyrics for a different track.");
     }
-    return payload.Body;
+    return {
+      ...payload.Body,
+      kinesyncSpicyOrigin: {
+        provider: "Spicy Lyrics",
+        source: "spicy-lyrics-api",
+        host: "api.spicylyrics.org",
+        url: `${SPICY_LYRICS_API_URL}/v1/lyrics/${trackId}`,
+        spotifyTrackId: trackId,
+        isrc: String(payload.Body?.ids?.isrc || "").trim(),
+      },
+    };
   } finally {
     clearTimeout(timer);
   }

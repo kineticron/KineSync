@@ -434,6 +434,29 @@
       </div>
     </div>
 
+    <div id="protected-export-overlay" class="lyrics-dialog-overlay" hidden aria-hidden="true">
+      <div class="lyrics-dialog" role="dialog" aria-modal="true" aria-labelledby="protected-export-title">
+        <h2 id="protected-export-title" class="lyrics-dialog-title">Spicy lyrics</h2>
+        <p id="protected-export-message" class="lyrics-dialog-description">Spicy lyrics cannot be exported.</p>
+        <p id="protected-export-status" class="lyrics-dialog-description" hidden></p>
+        <div class="lyrics-dialog-actions">
+          <button type="button" id="protected-export-cancel" class="lyrics-dialog-button lyrics-dialog-button--ghost">Cancel</button>
+          <button type="button" id="protected-export-lrcred" class="lyrics-dialog-button lyrics-dialog-button--primary">Export from lrc.red instead</button>
+        </div>
+      </div>
+    </div>
+    <div id="lrcred-export-overlay" class="lyrics-dialog-overlay" hidden aria-hidden="true">
+      <div class="lyrics-dialog" role="dialog" aria-modal="true" aria-labelledby="lrcred-export-title">
+        <h2 id="lrcred-export-title" class="lyrics-dialog-title">Export from lrc.red</h2>
+        <p class="lyrics-dialog-description">This export comes from lrc.red, NOT Spicy Lyrics.</p>
+        <p class="lyrics-dialog-description">The file is lrc.red's version and may differ from the lyrics on screen.</p>
+        <p id="lrcred-export-status" class="lyrics-dialog-description" hidden></p>
+        <div class="lyrics-dialog-actions">
+          <button type="button" id="lrcred-export-cancel" class="lyrics-dialog-button lyrics-dialog-button--ghost">Cancel</button>
+          <button type="button" id="lrcred-export-confirm" class="lyrics-dialog-button lyrics-dialog-button--primary">Export lrc.red lyrics</button>
+        </div>
+      </div>
+    </div>
     <div
       id="vault-panel-overlay"
       class="vault-panel-overlay"
@@ -1411,11 +1434,13 @@
         const lines = Number(status.lyricsLines ?? latestLyricsLineCount ?? 0);
         latestLyricsLineCount = lines;
         latestLyricsExportRestricted = Boolean(status.lyricsExportRestricted ?? latestLyricsExportRestricted);
-        const enabled = lines > 0 && !latestLyricsExportRestricted;
+        const enabled = lines > 0;
         exportLyricsTtmlButton.disabled = !enabled;
         exportLyricsTtmlButton.title = enabled
-          ? "Save synced lyrics for the current track as a TTML file"
-          : latestLyricsExportRestricted ? "Spicy Lyrics community syncs cannot be exported" : "Load synced lyrics for the current track before exporting";
+          ? latestLyricsExportRestricted
+            ? "Spicy lyrics cannot be exported. Export from lrc.red instead."
+            : "Save synced lyrics for the current track as a TTML file"
+          : "Load synced lyrics for the current track before exporting";
         if (saveLyricsVaultButton) {
           saveLyricsVaultButton.disabled = lines <= 0;
           saveLyricsVaultButton.title = lines > 0
@@ -1537,6 +1562,107 @@
           });
         });
       }
+
+      const protectedExportOverlay = document.getElementById("protected-export-overlay");
+      const lrcredExportOverlay = document.getElementById("lrcred-export-overlay");
+      const protectedExportCancel = document.getElementById("protected-export-cancel");
+      const protectedExportLrcred = document.getElementById("protected-export-lrcred");
+      const protectedExportStatus = document.getElementById("protected-export-status");
+      const lrcredExportCancel = document.getElementById("lrcred-export-cancel");
+      const lrcredExportConfirm = document.getElementById("lrcred-export-confirm");
+      const lrcredExportStatus = document.getElementById("lrcred-export-status");
+      let protectedExportState = null;
+      let protectedExportRequestId = 0;
+      let protectedExportInFlight = 0;
+
+      const setProtectedExportStatus = (node, message = "", tone = "") => {
+        if (!node) return;
+        const text = String(message || "").trim();
+        node.hidden = !text;
+        node.textContent = text;
+        node.classList.remove("hint--ok", "hint--fail");
+        if (tone === "ok") node.classList.add("hint--ok");
+        if (tone === "fail") node.classList.add("hint--fail");
+      };
+      const closeProtectedExport = () => {
+        const inFlight = protectedExportInFlight;
+        protectedExportRequestId += 1;
+        protectedExportInFlight = 0;
+        protectedExportState = null;
+        if (inFlight) void window.bridgeLyrics?.cancelLrcRedExport?.(inFlight);
+        if (protectedExportOverlay) { protectedExportOverlay.hidden = true; protectedExportOverlay.setAttribute("aria-hidden", "true"); }
+        if (lrcredExportOverlay) { lrcredExportOverlay.hidden = true; lrcredExportOverlay.setAttribute("aria-hidden", "true"); }
+        setProtectedExportStatus(protectedExportStatus, "");
+        setProtectedExportStatus(lrcredExportStatus, "");
+        if (lrcredExportConfirm) lrcredExportConfirm.disabled = false;
+      };
+      const openProtectedExport = (state) => {
+        if (!protectedExportOverlay) return;
+        protectedExportRequestId += 1;
+        protectedExportInFlight = 0;
+        protectedExportState = { ...state };
+        setProtectedExportStatus(protectedExportStatus, "");
+        setProtectedExportStatus(lrcredExportStatus, "");
+        protectedExportOverlay.hidden = false;
+        protectedExportOverlay.setAttribute("aria-hidden", "false");
+        protectedExportLrcred?.focus();
+      };
+      protectedExportCancel?.addEventListener("click", closeProtectedExport);
+      lrcredExportCancel?.addEventListener("click", closeProtectedExport);
+      protectedExportLrcred?.addEventListener("click", () => {
+        if (!protectedExportOverlay || !lrcredExportOverlay) return;
+        protectedExportOverlay.hidden = true;
+        protectedExportOverlay.setAttribute("aria-hidden", "true");
+        lrcredExportOverlay.hidden = false;
+        lrcredExportOverlay.setAttribute("aria-hidden", "false");
+        lrcredExportConfirm?.focus();
+      });
+      lrcredExportConfirm?.addEventListener("click", () => {
+        const state = protectedExportState;
+        if (!state || !window.bridgeLyrics?.exportLrcRed) return;
+        const requestId = ++protectedExportRequestId;
+        protectedExportInFlight = requestId;
+        lrcredExportConfirm.disabled = true;
+        setProtectedExportStatus(lrcredExportStatus, "Fetching independent lrc.red lyrics...");
+        void window.bridgeLyrics.exportLrcRed({
+          vaultId: state.vaultId || "",
+          requestId,
+          expected: state.expected || {},
+        }).then(result => {
+          if (requestId !== protectedExportRequestId || protectedExportState !== state) return;
+          if (result?.canceled) { setProtectedExportStatus(lrcredExportStatus, ""); return; }
+          if (result?.ok) {
+            const filePath = String(result.filePath || "").trim();
+            protectedExportRequestId += 1;
+            protectedExportInFlight = 0;
+            protectedExportState = null;
+            if (protectedExportOverlay) { protectedExportOverlay.hidden = true; protectedExportOverlay.setAttribute("aria-hidden", "true"); }
+            if (lrcredExportOverlay) { lrcredExportOverlay.hidden = true; lrcredExportOverlay.setAttribute("aria-hidden", "true"); }
+            const message = filePath ? `Saved lrc.red lyrics to ${filePath}` : `Exported ${result.lineCount || 0} lrc.red lines`;
+            if (state.vaultId) setVaultBrowserStatus(message, "ok");
+            else setExportLyricsTtmlStatus(message, "ok");
+            return;
+          }
+          if (result?.noMatch) {
+            setProtectedExportStatus(lrcredExportStatus, "lrc.red doesn't have this song", "fail");
+            return;
+          }
+          setProtectedExportStatus(lrcredExportStatus, result?.error || "lrc.red export failed.", "fail");
+        }).catch(error => {
+          if (requestId !== protectedExportRequestId) return;
+          setProtectedExportStatus(lrcredExportStatus, error instanceof Error ? error.message : String(error), "fail");
+        }).finally(() => {
+          if (requestId === protectedExportRequestId) {
+            protectedExportInFlight = 0;
+            lrcredExportConfirm.disabled = false;
+          }
+        });
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key !== "Escape") return;
+        if (lrcredExportOverlay && !lrcredExportOverlay.hidden) { closeProtectedExport(); return; }
+        if (protectedExportOverlay && !protectedExportOverlay.hidden) closeProtectedExport();
+      });
 
       if (exportLyricsTtmlButton) {
         exportLyricsTtmlButton.addEventListener("click", () => {
