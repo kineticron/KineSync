@@ -78,7 +78,7 @@ const controlsEase = progress => {
 // Execute production scheduling. Complementary lyric/control masks guarantee
 // coverage without making the rows inherit the moving backdrop's translation.
 function motionHarness(initial) {
-  let now = 0, interactive = initial === 1;
+  let now = 0, interactive = initial === 1, visible = initial === 1;
   const completions = [];
   const makeProgress = () => ({
     current: initial, animation: null,
@@ -98,7 +98,7 @@ function motionHarness(initial) {
   const context = {
     ...common, controlsOpacity: geometry, controlsStageProgress: stage,
     liveReducedMotion: false, fullscreenAlbumModeRef: { current: false },
-    setControlsInteractive: next => { interactive = next; }, setControlsVisible: () => {},
+    setControlsInteractive: next => { interactive = next; }, setControlsVisible: next => { visible = next; },
     cancelAnimation: progress => { progress.current = progress.get(); progress.animation = null; },
     CONTROLS_EASE: controlsEase, ReanimatedEasing: { linear: 'linear' },
     withDelay: (delay, animation) => ({ ...animation, delay }),
@@ -128,6 +128,7 @@ function motionHarness(initial) {
   return {
     context, geometry, stage, completions, animate, rows, surfaces,
     get interactive() { return interactive; },
+    get visible() { return visible; },
     tick(ms) {
       for (let elapsed = 0; elapsed < ms; elapsed++) {
         now++;
@@ -414,7 +415,64 @@ const clipContent = clipElement.children.find(node => ts.isJsxElement(node) && n
 assert.match(clipContent.openingElement.attributes.getText(ast), /pointerEvents="box-none"/);
 assert.match(clipContent.openingElement.attributes.getText(ast), /handleControlsDockLayout\(event.nativeEvent.layout.height\)/, 'measure the unshrunk content, never the moving clip height');
 const dockComponent = clipContent.children.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'PlaybackControlsDock');
-assert.match(source, /pointerEvents="box-none" style=\{\[styles.controlsRevealZone, fillTouchStyle\]\}/, 'reveal zone cannot capture uncovered lyrics');
+// Resolve the actual JSX policy, including stale stored lyrics in the empty
+// player and an active track whose lyrics have not arrived yet.
+let revealOpening, revealPress;
+const lyricInteractions = [];
+function inspectReveal(node) {
+  if (ts.isJsxOpeningElement(node) && node.attributes.getText(ast).includes('styles.controlsRevealZone')) {
+    revealOpening = node;
+    revealPress = node.parent.children.find(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(ast) === 'Pressable');
+  }
+  if (ts.isJsxSelfClosingElement(node) && ['RustLyricsView', 'AmllLyricsView', 'SpicyLyricsView'].includes(node.tagName.getText(ast))) {
+    lyricInteractions.push(node.attributes.properties.find(property => property.name?.text === 'onUserInteraction').initializer.expression.getText(ast));
+  }
+  ts.forEachChild(node, inspectReveal);
+}
+inspectReveal(ast);
+assert.ok(lyricInteractions.length >= 3);
+assert.ok(lyricInteractions.every(expression => expression === 'handleControlsInteraction'));
+assert.ok(revealOpening && revealPress);
+const revealStyleExpression = revealOpening.attributes.properties.find(property => property.name?.text === 'style').initializer.expression.getText(ast);
+const revealPolicy = evaluate(`(showEmptyState, lyrics, fillTouchStyle, styles) => (${revealStyleExpression})`, {});
+const revealPressExpression = revealPress.attributes.properties.find(property => property.name?.text === 'onPress').initializer.expression.getText(ast);
+for (const height of [390, 667, 844]) for (const scenario of [
+  { empty: true, lyrics: [] }, { empty: true, lyrics: [{}] },
+  { empty: false, lyrics: [] }, { empty: false, lyrics: [{}] },
+]) {
+  const h = motionHarness(0);
+  const fill = evaluate(callback('fillTouchStyle'), { Math, screenHeight: height, dockTop: { value: height - 220 }, controlsOpacity: h.geometry });
+  const top = () => {
+    const resolved = Object.assign({}, ...revealPolicy(scenario.empty, scenario.lyrics, fill(), {
+      controlsRevealZone: style('controlsRevealZone'), controlsEmptyRevealZone: style('controlsEmptyRevealZone'),
+    }));
+    return typeof resolved.top === 'string' ? height * parseFloat(resolved.top) / 100 : resolved.top;
+  };
+  const hasLyrics = !scenario.empty && scenario.lyrics.length > 0;
+  assert.equal(top(), hasLyrics ? height : height * .75);
+  assert.equal(height * .9 >= top(), !hasLyrics, 'fully hidden empty player has a reveal target, lyrics retain their own touch target');
+  let reveals = 0;
+  const revealPressHandler = evaluate(revealPressExpression, { handleControlsInteraction: () => { reveals++; h.animate(true); } });
+  // Route a bottom tap to the empty target, or let a lyric interaction invoke
+  // the renderer callback without being swallowed by the overlay.
+  if (!hasLyrics) revealPressHandler();
+  else {
+    assert.ok(height * .9 < top());
+    const lyricInteraction = evaluate(lyricInteractions[0], { handleControlsInteraction: revealPressHandler });
+    lyricInteraction();
+  }
+  assert.equal(reveals, 1); assert.equal(h.visible, true); assert.equal(h.stage.get(), 0);
+  h.tick(48); h.animate(false); h.tick(75);
+  assert.equal(h.visible, false);
+  if (hasLyrics) assert.equal(top(), fill().top, 'reversed hide target cannot extend into uncovered lyrics');
+  else assert.equal(top(), height * .75);
+  revealPressHandler(); h.tick(700); h.animate(false); h.tick(850);
+  if (hasLyrics) assert.equal(top(), fill().top);
+  else assert.equal(top(), height * .75, 'empty target survives backing retraction and reversals');
+  revealPressHandler(); h.tick(1100);
+  assert.equal(h.visible, true); assert.equal(h.geometry.get(), 1);
+}
+
 assert.equal(style('controlsRevealZone').top, undefined);
 assert.match(source, /controlsProgress=\{controlsStageProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.match(source, /controlsProgress=\{controlsProgress\}\s+controlsCoverage=\{controlsCoverage\}/);

@@ -143,6 +143,22 @@ assert.equal(immediate.state.controlsVisible, true);
 assert.equal(immediate.state.controlsInteractive, true);
 immediate.unmount();
 
+// Hidden lyric interactions retain the renderer's action and reveal callback.
+// The screen's raw touch bookkeeping must not consume or pre-empt that action.
+const hiddenLyrics = mount();
+hiddenLyrics.tick(2500);
+assert.equal(hiddenLyrics.state.controlsVisible, false);
+hiddenLyrics.touch('onTouchStart');
+assert.equal(hiddenLyrics.state.controlsVisible, false, 'raw touch does not steal a hidden lyric interaction');
+hiddenLyrics.interact();
+assert.equal(hiddenLyrics.state.controlsVisible, true, 'the lyric renderer callback reveals controls');
+assert.equal(hiddenLyrics.state.controlsInteractive, true);
+hiddenLyrics.touch('onTouchEnd'); hiddenLyrics.tick(2500);
+assert.equal(hiddenLyrics.state.controlsVisible, false);
+hiddenLyrics.change({ liveReducedMotion: true }); hiddenLyrics.interact();
+assert.equal(hiddenLyrics.state.controlsVisible, true, 'hidden lyric interaction also reveals with reduced motion');
+hiddenLyrics.unmount();
+
 for (const landscape of [false, true]) for (const terminal of ['onTouchEnd', 'onTouchCancel']) {
   const player = mount('active', { isLandscape: landscape, landscapeArtControlsVisible: landscape });
   player.touch('onTouchStart');

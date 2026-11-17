@@ -1908,7 +1908,10 @@ export default function HomeScreen() {
         </Reanimated.View>
       )}
       {!fullscreenAlbumMode && !controlsVisible && (
-        <Reanimated.View pointerEvents="box-none" style={[styles.controlsRevealZone, fillTouchStyle]}>
+        <Reanimated.View pointerEvents="box-none" style={[
+          styles.controlsRevealZone,
+          !showEmptyState && lyrics.length > 0 ? fillTouchStyle : styles.controlsEmptyRevealZone,
+        ]}>
           <Pressable style={StyleSheet.absoluteFill}
             onPress={handleControlsInteraction} hitSlop={0}
             accessible={false} importantForAccessibility="no" />
@@ -2199,6 +2202,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 20,
+  },
+  controlsEmptyRevealZone: {
+    // No lyric content occupies this area. Keep a target after the fill retracts.
+    top: "75%",
   },
   lyricsAttributionLayer: {
     ...StyleSheet.absoluteFill,
