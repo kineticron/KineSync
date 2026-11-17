@@ -246,6 +246,68 @@ await check('5xx/reset errors use seeded 2/4/8/16/30 then 60-second cycles; no p
  for(const delay of [2000,4000,8000,16000,30000,60000,60000]){await h.identify();assert.equal(h.d.health.nextRetryAtWall-h.clock.wall,delay);const n=h.sockets.length;h.d.refresh();await h.clock.advance(delay-1);assert.equal(h.sockets.length,n);await h.clock.advance(1);assert.equal(h.sockets.length,n+1);}
  h.d.clear();assert.equal(h.clock.timers.size,0);
 });
+for (const mode of ['headers', 'body', 'unusable']) for (const resumed of [false, true]) await check(`review: registering ID churn cannot renew observation deadline (${mode}, ${resumed ? 'resume' : 'install'})`, async () => {
+ const h = setup(); const late = deferred();
+ try {
+  h.start();
+  if (resumed) {
+   await h.identify(); const before = h.samples.length;
+   h.d.setActivity('background'); h.d.setActivity('active'); h.d.setEnabled(true);
+   assert.equal(h.samples.length, before + 1, 'resume replays display cache');
+   assert.equal(h.d.health.observerConfirmed, false, 'display cache cannot confirm replacement registration');
+  }
+  h.response = mode === 'headers' ? () => late.promise : mode === 'body'
+   ? { status: 200, bodyPromise: late.promise } : { status: 200, body: {} };
+  const ws = await h.identify('rotating-0');
+  const started = h.clock.mono;
+  for (let id = 1; id <= 4; id++) {
+   await h.clock.advance(1000);
+   ws.event({ type: 'pong' });
+   ws.event({ headers: { 'spotify-connection-id': `rotating-${id}` } });
+   await flush();
+   assert.equal(h.d.health.phase, 'registering');
+   await allDisabled(h);
+  }
+  await h.clock.advance(999); assert.equal(h.d.health.phase, 'registering');
+  await h.clock.advance(1);
+  assert.equal(h.clock.mono - started, 5000);
+  assert.equal(h.d.health.phase, 'retryWait', 'ID churn cannot keep the restoring banner alive past the original deadline');
+  assert.equal(ws.readyState, 3); assert.equal(h.d.socket, null);
+  // Even a fetch/body that ignores abort cannot resurrect the retired attempt.
+  late.resolve(mode === 'headers' ? { status: 200, body: state('obsolete') }
+   : new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer);
+  await flush(); assert.equal(h.d.health.observerConfirmed, false);
+  h.response = { status: 200, body: state('recovered', uri, h.clock.wall) };
+  await h.clock.advance(2000); await h.identify('stable');
+  assert(h.d.health.controlsEnabled); assert.equal(h.d.currentTarget, 'recovered');
+  assert.equal(h.posts().length, 0, 'recovery never replays a transport command');
+ } finally { h.d.clear(); }
+});
+await check('review: late unusable registration success does not restart the first-state deadline', async () => {
+ const h = setup(), pending = deferred();
+ try {
+  h.response = () => pending.promise; h.start(); await h.identify();
+  await h.clock.advance(4000); pending.resolve({ status: 200, body: {} }); await flush();
+  assert.equal(h.d.health.phase, 'registering');
+  await h.clock.advance(1000); assert.equal(h.d.health.phase, 'retryWait');
+  assert.equal(h.posts().length, 0);
+ } finally { h.d.clear(); }
+});
+await check('review: registration churn recovery preserves latest 429 cooldown across resume and Retry', async () => {
+ const h = setup();
+ try {
+  h.response = () => new Promise(() => {}); h.start(); const ws = await h.identify('first');
+  await h.clock.advance(4000); h.response = { status: 429, headers: { 'retry-after': '30' } };
+  ws.event({ headers: { 'spotify-connection-id': 'rate-limited' } }); await flush();
+  assert.equal(h.d.health.phase, 'rateLimited'); const count = h.sockets.length;
+  h.d.setActivity('background'); h.d.setActivity('active'); h.d.setEnabled(true);
+  h.credentials('replacement'); h.d.refresh(true);
+  await h.clock.advance(29999); assert.equal(h.sockets.length, count);
+  await h.clock.advance(1); assert.equal(h.sockets.length, count + 1);
+  h.response = { status: 200, body: state() }; await h.identify('stable');
+  assert(h.d.health.controlsEnabled); assert.equal(h.posts().length, 0);
+ } finally { h.d.clear(); }
+});
 for(const phase of ['open','id','register','body','state'])await check(`bounded ${phase} phase; progress independent of close and fetch abort`,async()=>{
  const h=setup();if(phase==='register')h.response=()=>new Promise(()=>{});if(phase==='body')h.response={status:200,bodyPromise:new Promise(()=>{})};if(phase==='state')h.response={status:200,body:{}};
  h.start();const ws=h.sockets[0];if(phase!=='open')ws.open();if(!['open','id'].includes(phase))ws.event({headers:{'spotify-connection-id':'id'}});await flush();

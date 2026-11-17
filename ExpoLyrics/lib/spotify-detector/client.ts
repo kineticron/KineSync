@@ -777,7 +777,13 @@ export class SpotifyDetector {
           if (this.confirmation) this.runtime.clearTimeout(this.confirmation); this.confirmation = null;
           if (this.commandPending || this.commandPhase === 'awaitingConfirmation') this.commandPhase = 'outcomeUnknown';
           this.commandPending = null; for (const request of this.requests) request.abort();
-          this.connectionId = id; this.phaseStarted = this.runtime.mono(); this.transition('registering'); this.armPhaseDeadline(); void this.register(run, ws, sourceClockScope); }
+          // ID rotation supersedes the request, not the observation deadline.
+          // Otherwise a responsive Dealer can keep us registering indefinitely
+          // by replacing IDs before any registration proves usable state.
+          const enteringRegistration = this.phase !== 'registering';
+          this.connectionId = id; this.transition('registering');
+          if (enteringRegistration || !this.phaseDeadline) this.armPhaseDeadline();
+          void this.register(run, ws, sourceClockScope); }
         if (sampleFrom(decoded) || idleState(decoded)) this.dealerStateRevision++;
         const timing: TimingContext = { receipt, origin: 'dealer', connectionId: this.connectionId, generation: run };
         if (this.registered) this.emit(decoded, receivedAt, timing, sourceClockScope);
@@ -913,7 +919,8 @@ export class SpotifyDetector {
       const decoded = bytes.length ? decodeStateBody(bytes) : null;
       if (snapshot && !sampleFrom(decoded) && !idleState(decoded)) { this.retryObservation(); return; }
       this.registered = true;
-      if (!snapshot) { this.phaseStarted = this.runtime.mono(); this.armPhaseDeadline(); }
+      // A successful PUT alone is not progress. Keep the existing deadline
+      // until emit confirms a recognizable active or idle observation.
       if (!snapshot) this.callbacks.status('Spotify detector connected. Play music in the Spotify app.');
       // Apply any newer Dealer anchor first, so an HTTP response that was
       // generated earlier cannot undo a pause/seek received during registration.
