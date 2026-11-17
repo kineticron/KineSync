@@ -31,7 +31,7 @@ const helper = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'lib/controls-motion.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, helper);
-const { controlsStage, controlsRowIsExposed, controlsTouchIsCovered } = helper.exports;
+const { controlsShowEdge, controlsStage, controlsRowIsExposed, controlsTouchIsCovered } = helper.exports;
 const layout = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'constants/player-layout.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
@@ -103,10 +103,10 @@ function motionHarness(initial) {
     liveReducedMotion: false, fullscreenAlbumModeRef: { current: false },
     setControlsInteractive: next => { interactive = next; }, setControlsVisible: next => { visible = next; },
     cancelAnimation: progress => { progress.current = progress.get(); progress.animation = null; },
-    CONTROLS_EASE: controlsEase, ReanimatedEasing: { linear: 'linear' },
+    controlsShowEdge, CONTROLS_EASE: controlsEase, ReanimatedEasing: { linear: 'linear' },
     withDelay: (delay, animation) => ({ ...animation, delay }),
     withTiming: (target, options, completion) => {
-      assert.equal(options.duration, options.easing === 'linear' ? 700 : target === 1 ? 200 : 400);
+      assert.equal(options.duration, options.easing === 'linear' ? 700 : target === 1 ? 700 : 400);
       if (completion) completions.push(completion);
       return { target, duration: options.duration, completion, delay: 0, easing: options.easing === 'linear' ? value => value : options.easing };
     },
@@ -191,7 +191,7 @@ for (const initial of [0, 1]) for (const interruption of [1, 16, 50, 150, 399, 4
   }
 }
 // Both geometry and rows respond without a queued lead-in. Show geometry uses
-// 200ms to uncover the first row early, hide retains the full reverse stagger.
+// the row clock with a slight lead, hide retains the full reverse stagger.
 const reveal = motionHarness(0);
 reveal.animate(true);
 assert.equal(reveal.interactive, true); assert.equal(reveal.geometry.get(), 0);
@@ -202,6 +202,15 @@ reveal.tick(125); assert.ok(reveal.rows()[1].opacity > 0); assert.equal(reveal.r
 assert.equal(reveal.interactive, true, 'visible transport accepts input before finishing its reveal');
 reveal.tick(140); assert.ok(reveal.rows()[2].opacity > 0);
 reveal.tick(419); assert.equal(reveal.stage.get(), 1); assert.equal(reveal.geometry.get(), 1);
+for (const elapsed of [1, 140, 280, 420, 560, 699]) {
+  const h = motionHarness(0);
+  h.animate(true); h.tick(elapsed);
+  const lead = h.geometry.get() - h.stage.get();
+  assert.ok(lead > 0 && lead <= .021, 'edge leads row clock only slightly');
+  h.tick(700 - elapsed);
+  assert.equal(h.geometry.get(), 1);
+  assert.equal(h.stage.get(), 1);
+}
 reveal.animate(false); assert.equal(reveal.interactive, false);
 reveal.tick(100); assert.equal(reveal.geometry.get(), 1);
 assert.equal(reveal.rows()[0].transform[0].translateY, 0, 'timeline has not been pushed offscreen at 100ms');

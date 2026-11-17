@@ -1,5 +1,5 @@
 import MaskedView from "@react-native-masked-view/masked-view";
-import { controlsAppIsForeground } from '@/lib/controls-motion';
+import { controlsAppIsForeground, controlsShowEdge } from '@/lib/controls-motion';
 import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
@@ -792,7 +792,7 @@ export default function HomeScreen() {
       // moving lyric mask. Rows retain their own independent 36px transforms.
       // Hide holds the backdrop until the reverse stagger has finished.
       if (shown) {
-        controlsOpacity.value = withTiming(1, { duration: 200, easing: CONTROLS_EASE });
+        controlsOpacity.value = withTiming(1, { duration: 700, easing: controlsShowEdge });
       } else {
         const coverageHold = controlsStageProgress.get() > 0 ? 700 : 0;
         controlsOpacity.value = withDelay(coverageHold,
