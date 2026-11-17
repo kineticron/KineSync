@@ -850,3 +850,15 @@ for (const intrinsic of [180, 220, 244]) for (const inset of [0, 34]) for (const
 }
 console.log('Controls geometry checks passed: safe areas, Yoga minimum-padding clamp model, fullscreen entry/morph/return measurements and layout feedback. Native Yoga/compositing remain unverified.');
 require('./check-controls-lifecycle.cjs');
+
+let attributionLayer;
+function findAttributionLayer(node) {
+  if (ts.isJsxOpeningElement(node) && node.attributes.getText(ast).includes('styles.lyricsAttributionLayer')) attributionLayer = node;
+  ts.forEachChild(node, findAttributionLayer);
+}
+findAttributionLayer(ast);
+const attributionPointer = attributionLayer.attributes.properties.find(p => p.name?.text === 'pointerEvents').initializer.expression.getText(ast);
+for (const visible of [false, true]) {
+  assert.equal(evaluate(attributionPointer, { isLandscape: false, controlsVisible: visible, fullscreenAlbumMode: false, albumArtworkMorphing: false }), visible ? 'box-none' : 'none',
+    'attribution above zIndex 20 cannot intercept a hidden-controls reveal tap');
+}
