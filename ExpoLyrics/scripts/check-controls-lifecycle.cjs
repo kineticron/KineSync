@@ -21,7 +21,7 @@ const js = code => ts.transpileModule(code, { compilerOptions: { target: ts.Scri
 const evaluate = (code, context) => vm.runInNewContext(js(`(${code})`), context);
 const moduleContext = { exports: {} };
 vm.runInNewContext(js(fs.readFileSync(path.join(root, 'lib/controls-motion.ts'), 'utf8')), moduleContext);
-const { controlsAppIsForeground } = moduleContext.exports;
+const { controlsAppIsForeground, controlsShowEdge } = moduleContext.exports;
 const hookSource = source.slice(source.indexOf('  const clearControlsIdleTimer ='), source.indexOf('  const sendSeekToPlaybackSource ='));
 const screenHandler = name => screen.attributes.properties.find(p => p.name?.text === name).initializer.expression.getText(ast);
 const sameDeps = (a, b) => a && a.length === b.length && b.every((value, index) => Object.is(value, a[index]));
@@ -45,7 +45,7 @@ function mount(initialAppState = 'active', overrides = {}) {
     : true; // The prior candidate had no foreground guard.
   const progress = { current: 1, get() { return this.current; }, get value() { return this.current; }, set value(value) { this.current = value; } };
   const context = {
-    Math, controlsAppIsForeground,
+    Math, controlsAppIsForeground, controlsShowEdge,
     controlsForeground: ref(initialForeground),
     controlsTouchActive: ref(false), controlsScrubActive: ref(false),
     controlsOpacity: progress,
