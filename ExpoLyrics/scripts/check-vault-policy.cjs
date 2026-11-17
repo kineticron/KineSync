@@ -167,7 +167,8 @@ async function checkContentAwareReplacement(harness) {
     assert.equal(policy.isSpicyLyricsResponse(entry), true, "mutable lrc.red metadata cannot clear Spicy provenance");
     await vault.saveMobileVaultLyrics({ track, lyrics, originalSource: "lrc-red-karaoke", metadata: { attribution: { source: "lrc-red", provider: "lrc.red" }, independentContent: { source: "lrc-red", verified: true }, ttml: { content: "<tt>independent</tt>" } } });
     entry = (await vault.readVaultEntries())[0];
-    assert.equal(policy.isSpicyLyricsResponse(entry), false, "explicit verified independent content may replace Spicy provenance");
+    assert.equal(policy.isSpicyLyricsResponse(entry), true, "ordinary saves cannot clear Spicy provenance");
+    assert.equal(entry.metadata.fetchOrigin.isrc, "US5TA1500050", "ordinary saves retain the original Spicy ISRC");
   } finally { harness.close(); }
 }
 
