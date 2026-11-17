@@ -1610,6 +1610,7 @@
         protectedExportRequestId += 1;
         protectedExportInFlight = 0;
         protectedExportState = { ...state };
+        if (lrcredExportConfirm) lrcredExportConfirm.disabled = false;
         setProtectedExportStatus(protectedExportStatus, "");
         setProtectedExportStatus(lrcredExportStatus, "");
         protectedExportOverlay.hidden = false;
@@ -1645,6 +1646,7 @@
             protectedExportRequestId += 1;
             protectedExportInFlight = 0;
             protectedExportState = null;
+            if (lrcredExportConfirm) lrcredExportConfirm.disabled = false;
             if (protectedExportOverlay) { protectedExportOverlay.hidden = true; protectedExportOverlay.setAttribute("aria-hidden", "true"); }
             if (lrcredExportOverlay) { lrcredExportOverlay.hidden = true; lrcredExportOverlay.setAttribute("aria-hidden", "true"); }
             const message = filePath ? `Saved lrc.red lyrics to ${filePath}` : `Exported ${result.lineCount || 0} lrc.red lines`;
