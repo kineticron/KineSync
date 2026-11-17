@@ -119,7 +119,7 @@ Original source SHA-256 values:
 
 ## Rescue validation and review handoff
 
-Base is cc2d747 in the dedicated ios-kanji-fallback worktree. Candidate
+Original investigation base was cc2d747 in the dedicated ios-kanji-fallback worktree. Candidate
 63d4163 was absent from its object store. No other worktree was fetched or
 modified. No push, IPA build, simulator work, Metro or service change occurred.
 
@@ -146,8 +146,16 @@ Results:
   and incremental compilation off, was terminated with exit 143 to protect
   disk space. No tests ran. Only this task's disposable 396 MB target was
   removed afterward, restoring approximately 846 MB free space.
-- Clippy, full Rust tests and the final focused Rust regressions remain unrun.
-  No further build attempts were made after the user's stop instruction.
+- Clippy and Rust tests were not completed on rescue. The supervisor stopped
+  the rescue-only Cargo build because disk space was low. This was not a
+  general user ban on continuation or testing elsewhere.
+
+The supervisor subsequently reported exact-lab validation of cc04dec with
+Rust 1.97.0. All seven changed file SHA-256 values matched rescue at that
+revision. Focused `ios_fonts` tests passed 3/3, library tests passed 109 with
+16 ignored, and all-target Clippy with `-D warnings` passed. Independent review
+accepted the code for an experimental build and required this validation-record
+correction. These results do not establish iOS compilation or device behavior.
 
 On the isolated lab checkout with sufficient disk space, run the installed
 compatible toolchain or +1.97.0 if available:
@@ -176,5 +184,7 @@ Parley's run coordinates use parlance::NormalizedCoord, while Skrifa expects
 its own F2Dot14 type. The outline assertion now converts each run coordinate
 with `to_bits()` and Skrifa's `from_bits()`, once per run. This preserves the
 actual variation coordinates exactly rather than substituting default axes.
-The change affects test validation only. Lab compilation and tests need to be
-rerun. No additional build was attempted on rescue.
+The change affects test validation only. The subsequent exact-lab run passed
+the focused tests, library tests and all-target Clippy as recorded above.
+No additional build was attempted on rescue. Integration checks and final
+review remain required after rebasing onto the latest development branch.
