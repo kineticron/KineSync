@@ -1,6 +1,8 @@
 //! Offline fixture and timing model. Milliseconds, half-open active intervals.
 use std::ops::Range;
 
+#[cfg(any(target_os = "android", test))]
+mod android_fonts;
 pub mod appearance;
 mod auxiliary;
 mod credits;

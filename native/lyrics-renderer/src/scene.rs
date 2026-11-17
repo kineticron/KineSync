@@ -150,6 +150,10 @@ pub(crate) fn shape(
     words: &[crate::typography::WordRange],
     spacing: f32,
 ) -> parley::Layout<()> {
+    #[cfg(target_os = "android")]
+    let family = crate::android_fonts::family_stack(fonts, family);
+    #[cfg(target_os = "android")]
+    let family = family.as_str();
     let mut builder = layouts.ranged_builder(fonts, text, 1.0, true);
     builder.push_default(StyleProperty::FontFamily(FontFamily::Source(family.into())));
     builder.push_default(StyleProperty::FontSize(size));
@@ -935,11 +939,7 @@ impl TrackScene {
                 right: lead_right,
             });
         }
-        if missing_glyphs > 0 {
-            return Err(
-                format!("{missing_glyphs} missing glyphs (tofu); install Noto Sans CJK").into(),
-            );
-        }
+        // Keep drawable clusters and diagnostics when no installed face covers a glyph.
         let interludes = crate::interlude::slots(&lines);
         let resident = (0..cached.len()).collect();
         let max_row_height = cached.iter().map(|row| row.height).fold(0.0, f64::max);
@@ -1590,6 +1590,50 @@ mod lazy_tests {
             )
             .unwrap();
         fonts
+    }
+    #[test]
+    fn missing_clusters_preserve_available_glyphs_in_both_styles() {
+        for style in [Style::Spicy, Style::Amll] {
+            let text = "Latin 日本語 한글 العربية \u{10ffff}";
+            let mut lines = source(1);
+            lines[0].text = text.into();
+            let voice = lines[0].paint.as_mut().unwrap();
+            voice.text = text.into();
+            voice.words[0].text = text.into();
+            voice.words[0].graphemes = text.chars().map(|ch| ch.to_string()).collect();
+            lines[0].atoms[0].bytes = 0..text.len();
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let track = TrackScene::with_fonts_eager(
+                lines,
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+                true,
+                false,
+            )
+            .unwrap();
+            assert!(track.missing_glyphs > 0);
+            assert!(track.glyph_count > track.missing_glyphs);
+            let layout = track.cached[0].voices[0].layout.as_ref().unwrap();
+            let ids: Vec<_> = layout
+                .lines()
+                .flat_map(|line| {
+                    line.runs().flat_map(|run| {
+                        run.visual_clusters()
+                            .flat_map(|cluster| cluster.glyphs().map(|glyph| glyph.id))
+                    })
+                })
+                .collect();
+            assert!(ids.contains(&0));
+            assert!(ids.iter().any(|id| *id != 0));
+            assert!(track.cached[0].height > 0.0);
+        }
     }
     fn scheduling_lines(emphasized: bool) -> Vec<Line> {
         let mut lines = source(3);

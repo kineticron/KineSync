@@ -199,8 +199,12 @@ pub struct Fonts {
 }
 impl Default for Fonts {
     fn default() -> Self {
+        #[allow(unused_mut)]
+        let mut context = FontContext::new();
+        #[cfg(target_os = "android")]
+        crate::android_fonts::load(&mut context);
         Self {
-            context: FontContext::new(),
+            context,
             ready: false,
             faces: HashMap::new(),
         }
