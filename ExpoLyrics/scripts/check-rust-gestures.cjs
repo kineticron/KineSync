@@ -29,24 +29,35 @@ function fixture(overrides = {}) {
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
 // Both native drag and release must use the same layout bounds and point-to-
-// pixel conversion. The Rust motion tests exercise resistance and edge bounce.
+// pixel conversion. The Rust motion tests exercise resistance, edge bounce and
+// the near/far release decision.
 {
   const fs = require('node:fs');
   const path = require('node:path');
   const ffi = fs.readFileSync(path.join(__dirname, '../../native/lyrics-renderer/src/ffi.rs'), 'utf8');
   for (const [name, next, method, value] of [
     ['kr_scroll_by', 'kr_fling', 'drag', 'dy'],
-    ['kr_fling', 'kr_hit_test', 'fling', 'velocity'],
   ]) {
     const body = ffi.slice(ffi.indexOf('fn ' + name + '('), ffi.indexOf('fn ' + next + '('));
     assert.match(body, /TrackScene::max_scroll/);
     assert.ok(body.includes('engine.scroll.' + method + '(' + value + ' * scale, max_offset, viewport)'));
   }
-  const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
-  assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
+  const dragBody = ffi.slice(ffi.indexOf('fn kr_scroll_by('), ffi.indexOf('fn kr_fling('));
+  const flingBody = ffi.slice(ffi.indexOf('fn kr_fling('), ffi.indexOf('fn kr_hit_test(')).replace(/\s+/g, ' ');
+  assert.match(flingBody, /engine\s*\.\s*scroll\s*\.\s*release\(velocity \* scale, max_offset, viewport, target\)/, 'release owns follow recapture');
+  assert.match(flingBody, /engine\.following = resume/, 'release applies the recapture decision');
+  assert.doesNotMatch(dragBody, /\.release\(|scroll_target/, 'active drags never recapture follow');
+  assert.ok(dragBody.includes('engine.following = false'), 'active drags keep manual ownership');
   const swift = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
   assert.match(swift, /case \.ended:[\s\S]*?fling\(-Double\(pan\.velocity\(in: self\)\.y\) \/ 1000\.0\)/);
   assert.match(swift, /case \.cancelled, \.failed:\s*fling\(0\)/);
+  assert.match(swift, /private var following = true/);
+  assert.match(swift, /owner\?\.setFollowing\(following\)/, 'refresh replays the desired follow state');
+  assert.match(swift, /if result == 1 \{ DispatchQueue\.main\.async \{ completion\(true\) \} \}/);
+  const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
+  assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
+  assert.match(view, /nativeEvent\.state === 'follow'/, 'JS mirrors native follow recapture');
+  assert.match(view, /send\(view => view\.setFollowing\(followEnabled\)\);[\s\S]*?sendAnchor\(\)/, 'ready reasserts follow before the anchor');
 }
 
 

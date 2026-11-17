@@ -38,11 +38,14 @@ int32_t kr_resize(uint64_t handle, uint32_t width, uint32_t height, float scale)
 /* ABI 7: Skia-parity follow ownership, manual drag and row hit-testing. */
 int32_t kr_set_following(uint64_t handle, bool following);
 int32_t kr_scroll_by(uint64_t handle, double dy_logical_points);
-/* Finger-lift velocity in logical points per millisecond (iOS inertia). */
+/* Finger-lift velocity in logical points per millisecond (iOS inertia).
+   Returns 1 when the release re-engaged auto-follow near the active line,
+   0 when manual ownership continues. */
 int32_t kr_fling(uint64_t handle, double velocity_logical_points_per_ms);
 /* ABI10: x/y logical points. >=0 row, -1 miss, -2 footer seek, -3 maker, -4 uploader. */
 int32_t kr_hit_test(uint64_t handle, double x_logical_points, double y_logical_points);
-/* ABI 7: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error. */
+/* ABI 7: 0 present called (not scanout), 1 input, 2 no drawable, 3 GPU full, -1 error.
+   A missing layout after an anchor reports 2 so the owner retries readiness. */
 /* ABI9: resume_step_ms is one display interval on waking, zero otherwise. */
 int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms, double resume_step_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);

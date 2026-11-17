@@ -87,7 +87,11 @@ internal class RustOwner(
   private fun post(block: () -> Unit) = worker.post { if (permitted() && handle != 0L && !failed) block() }
   fun setFollowing(v: Boolean) = post { if (RustBridge.setFollowing(handle, v) < 0) failure() }
   fun scrollBy(dy: Double) { if (dy.isFinite()) post { if (RustBridge.scrollBy(handle, dy) < 0) failure() } }
-  fun fling(v: Double) { if (v.isFinite()) post { if (RustBridge.fling(handle, v) < 0) failure() } }
+  fun fling(v: Double) { if (v.isFinite()) post {
+    val result = RustBridge.fling(handle, v)
+    if (result < 0) failure()
+    else if (result == 1) emit(mapOf("state" to "follow", "message" to "Auto-follow resumed near the active line"))
+  } }
   fun hitTest(x: Double, y: Double, done: (Int) -> Unit) = worker.post {
     val idx = if (permitted() && handle != 0L && !failed) RustBridge.hitTest(handle, x, y) else -1
     main.post { done(idx) }

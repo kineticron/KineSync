@@ -158,11 +158,13 @@ private final class RustOwner: @unchecked Sendable {
       if kr_scroll_by(self.handle, dy) < 0 { self.failure() }
     }
   }
-  func fling(_ velocity: Double) {
+  func fling(_ velocity: Double, completion: @escaping @MainActor (Bool) -> Void) {
     guard velocity.isFinite else { return }
     queue.async {
       guard self.permitted(), self.handle != 0, !self.failed else { return }
-      if kr_fling(self.handle, velocity) < 0 { self.failure() }
+      let result = kr_fling(self.handle, velocity)
+      if result < 0 { self.failure(); return }
+      if result == 1 { DispatchQueue.main.async { completion(true) } }
     }
   }
   func hitTest(_ x: Double, _ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
@@ -342,6 +344,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var track = ""
   private var anchor: Anchor?
   private var enabled = true
+  // Desired follow ownership. Kept here so a handoff sent before the native
+  // owner exists is replayed when the owner is created or the track changes.
+  private var following = true
   private var foreground = UIApplication.shared.applicationState == .active
   private var busy = false
   private var dirty = true
@@ -484,6 +489,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     guard value.utf8.count <= 2_000_000,
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
     generation = identity.generation; sequence = 0; anchor = nil; animating = false
+    // A new song starts following again instead of inheriting the previous
+    // song's manual scroll ownership.
+    following = true
     failed = false; metal.isHidden = true
     track = value; markDirty()
     refresh(); lifecycle()
@@ -513,6 +521,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     lifecycle()
   }
   func setFollowing(_ value: Bool) {
+    following = value
     owner?.setFollowing(value)
     // A paused/settled surface still needs frames while the spring settles.
     markDirty()
@@ -526,7 +535,12 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   }
   func fling(_ velocity: Double) {
     guard velocity.isFinite else { return }
-    owner?.fling(velocity)
+    owner?.fling(velocity) { [weak self] resumed in
+      guard let self, resumed else { return }
+      self.following = true
+      self.onStatus(["state": "follow", "generation": self.generation,
+                     "message": "Auto-follow resumed near the active line"])
+    }
     markDirty()
     lifecycle()
   }
@@ -538,6 +552,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private func refresh() {
     guard window != nil, foreground, enabled, !failed else { return }
     owner?.update(track: track, anchor: anchor, size: bounds.size, scale: window?.screen.scale ?? UIScreen.main.scale)
+    owner?.setFollowing(following)
   }
   @objc private func background() { foreground = false; lifecycle() }
   @objc private func foregrounded() { foreground = true; markDirty(); refresh(); lifecycle() }

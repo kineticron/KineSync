@@ -345,6 +345,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.track_id = track_id;
             engine.settings = Some(settings);
             engine.credits = None;
+            reset_track_scroll(&mut engine.scroll, &mut engine.following);
             engine.timeline.replace(generation);
             engine.metrics.generation = generation;
             engine.metrics.animating = 0;
@@ -399,11 +400,17 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine
             .scroll
             .configure(style, f64::from(engine.scale), engine.lines.len());
-        engine.scroll.reset();
+        reset_track_scroll(&mut engine.scroll, &mut engine.following);
         engine.appearance.reset();
         engine.metrics.generation = generation;
         Ok(0)
     })
+}
+/// A new song starts a fresh follow owner. Manual scroll ownership belonged
+/// to the previous track and must not silence auto-scroll on the next one.
+fn reset_track_scroll(scroll: &mut FollowScroll, following: &mut bool) {
+    scroll.reset();
+    *following = true;
 }
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments, reason = "Narrow numeric C ABI")]
@@ -552,6 +559,7 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
 }
 /// Manual fling velocity in logical points per millisecond. Negative values
 /// move content up (finger swiped up); the native model owns deceleration.
+/// Returns 1 when the release re-engaged auto-follow, 0 when it stayed manual.
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
     with(handle, |engine| {
@@ -561,9 +569,18 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
         let scale = f64::from(engine.scale.max(0.001));
         let viewport = f64::from(engine.metrics.height);
-        engine.scroll.fling(velocity * scale, max_offset, viewport);
-        engine.following = false;
-        Ok(0)
+        // A release close to the active line hands ownership back to follow.
+        // A far release keeps manual ownership, and an active drag never
+        // reaches this path because `kr_scroll_by` only freezes follow.
+        let target = engine
+            .layout
+            .as_ref()
+            .map_or_else(|| engine.scroll.position(), |layout| {
+                layout.scroll_target(engine.metrics.position_ms)
+            });
+        let resume = engine.scroll.release(velocity * scale, max_offset, viewport, target);
+        engine.following = resume;
+        Ok(if resume { 1 } else { 0 })
     })
 }
 /// Logical surface point to row index or ABI10 footer target from the shared layout.
@@ -639,6 +656,13 @@ fn prepare_drawable<T>(
     Ok(None)
 }
 
+/// A missing layout after an anchor is transient readiness, not missing input.
+/// Report it like an unavailable drawable so the native owner retries instead
+/// of parking the display loop until an unrelated handshake arrives.
+fn missing_layout_status(anchored: bool) -> i32 {
+    if anchored { 2 } else { 1 }
+}
+
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_render(
@@ -678,7 +702,7 @@ pub extern "C" fn kr_render(
             return Ok(0);
         }
         let Some(layout) = &mut engine.layout else {
-            return Ok(1);
+            return Ok(missing_layout_status(engine.timeline.anchored));
         };
         if !engine.timeline.anchored {
             return Ok(1);
@@ -977,6 +1001,37 @@ mod tests {
         assert_eq!(receipt.as_array().unwrap().len(), 1);
         assert_eq!(receipt[0]["text"], layout.lines[0].text);
     }
+    #[test]
+    fn new_track_resets_manual_follow_ownership_and_snaps_to_its_target() {
+        use crate::typography::Style;
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let old = crate::motion::Command {
+            offset: 500.0,
+            interval: 800.0,
+            interlude: false,
+            first_visible: 0,
+            index: 1,
+            visible: 0..8,
+            scale: 3.0,
+            style: Style::Spicy,
+        };
+        scroll.sample(&old, 0.0, true);
+        scroll.drag(180.0, 2_000.0, 800.0);
+        let mut following = false;
+        reset_track_scroll(&mut scroll, &mut following);
+        assert!(following, "a new song must not inherit manual ownership");
+        let fresh = crate::motion::Command { offset: 900.0, ..old };
+        assert_eq!(scroll.sample(&fresh, 2_000.0, true), 900.0);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn missing_layout_after_an_anchor_requests_retry_not_a_parked_loop() {
+        assert_eq!(missing_layout_status(false), 1);
+        assert_eq!(missing_layout_status(true), 2);
+    }
+
     #[test]
     fn panic_containment_and_invalid_handles() {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);

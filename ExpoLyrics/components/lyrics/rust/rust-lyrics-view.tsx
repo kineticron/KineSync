@@ -174,10 +174,21 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   }, [active, sendAnchor]);
   const onStatus = useCallback(({ nativeEvent }: { nativeEvent: { state: string; message: string; generation: number } }) => {
     if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.generation !== revision.generation) return;
+    if (nativeEvent.state === 'follow') {
+      // The native release recaptured follow near the active line. Reflect it in
+      // the player's follow state without changing this renderer's status text.
+      latest.current.onAutoFollowChange?.(true);
+      return;
+    }
     setStatus(nativeEvent.message);
     setFailed(nativeEvent.state === 'error');
-    if (nativeEvent.state === 'ready') sendAnchor();
-  }, [revision.generation, sendAnchor, surfaceEpoch]);
+    if (nativeEvent.state === 'ready') {
+      // A handoff sent before the native owner existed is replayed by the owner
+      // now. Reasserting here covers a track that becomes ready afterwards.
+      send(view => view.setFollowing(followEnabled));
+      sendAnchor();
+    }
+  }, [followEnabled, revision.generation, send, sendAnchor, surfaceEpoch]);
   const onMetrics = useCallback(({ nativeEvent: value }: { nativeEvent: Metrics }) => {
     if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
     const now = performance.now();

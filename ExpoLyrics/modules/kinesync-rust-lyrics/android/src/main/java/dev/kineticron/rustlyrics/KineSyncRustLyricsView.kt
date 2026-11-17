@@ -36,6 +36,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var track = ""
   private var anchor: Anchor? = null
   private var enabled = true
+  // Desired follow ownership, replayed when the owner is created or the track changes.
+  private var following = true
   private var foreground = true
   private var attached = false
   private var busy = false
@@ -220,6 +222,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val id = try { JSONObject(value).getLong("generation") } catch (_: Exception) { return }
     if (id <= generation) return
     generation = id; sequence = 0; anchor = null; animating = false
+    following = true
     failed = false; textureView.alpha = 0f
     track = value; markDirty(); refresh(); lifecycle()
   }
@@ -247,7 +250,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
-  fun setFollowing(value: Boolean) { owner?.setFollowing(value); markDirty(); lifecycle() }
+  fun setFollowing(value: Boolean) { following = value; owner?.setFollowing(value); markDirty(); lifecycle() }
   fun scrollBy(dy: Double) {
     if (!dy.isFinite() || dy == 0.0) return
     owner?.scrollBy(dy); markDirty(); lifecycle()
@@ -264,6 +267,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val o = owner ?: return
     val d = density
     o.update(track, generation, anchor, width, height, d)
+    o.setFollowing(following)
   }
 
   private fun lifecycle() {
