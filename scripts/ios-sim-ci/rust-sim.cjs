@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const config = require('./config.json');
@@ -49,37 +50,48 @@ function inspectFonts(app, sourceRoot = path.resolve(__dirname, '../..')) {
   return files;
 }
 
-function inventory(library) {
+function rustTool(name) {
   const rustcArgs = [`+${config.rust.toolchain}`];
   const sysroot = execFileSync('rustc', [...rustcArgs, '--print', 'sysroot'], { encoding: 'utf8' }).trim();
   const version = execFileSync('rustc', [...rustcArgs, '-vV'], { encoding: 'utf8' });
   const host = version.match(/^host: (\S+)$/m)?.[1];
   if (!host || !path.isAbsolute(sysroot)) throw new Error('Invalid pinned Rust sysroot/host');
-  const reader = path.join(sysroot, 'lib/rustlib', host, 'bin/llvm-nm');
-  return execFileSync(reader, ['--extern-only', '--defined-only', library], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+  return path.join(sysroot, 'lib/rustlib', host, 'bin', name);
+}
+function inventory(library) {
+  return execFileSync(rustTool('llvm-nm'), ['--print-file-name', '--extern-only', '--defined-only', library], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
 }
 
 // The ABI is a constant return, so inspect the exact arm64 instruction stream
 // shipped in the cached simulator archive instead of trusting source text.
-function abiDisassembly(library) {
-  return execFileSync('xcrun', ['llvm-objdump', '-d', '--disassemble-symbols=_kr_abi_version', library], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+function abiDisassembly(library, nm = inventory(library)) {
+  const definitions = nm.split('\n').filter(line => /\bT\s+_kr_abi_version$/.test(line));
+  if (definitions.length !== 1 || !definitions[0].startsWith(`${library}:`)) throw new Error('Expected one archive ABI definition');
+  const member = definitions[0].slice(library.length + 1).split(':')[0];
+  if (!member || member.includes('/') || member.includes('\\')) throw new Error('Invalid ABI archive member');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kinesync-sim-abi-'));
+  try {
+    const object = path.join(temp, 'abi.o');
+    fs.writeFileSync(object, execFileSync(rustTool('llvm-ar'), ['p', library, member], { maxBuffer: 128 * 1024 * 1024 }));
+    return execFileSync(rustTool('llvm-objdump'), ['-d', '--disassemble-symbols=_kr_abi_version', object], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 
 function matchesAbi(disassembly, abi = config.rust.abi) {
-  const expected = `0x${abi.toString(16)}`;
-  const start = disassembly.search(/(?:^|\n)(?:[0-9a-f]+\s+)?<_kr_abi_version>:(?=\n)|(?:^|\n)_kr_abi_version:(?=\n)/);
-  if (start < 0) return false;
-  const rest = disassembly.slice(start + 1);
-  const end = rest.search(/\n(?:[0-9a-f]+\s+)?<_[^>]+>:/);
-  const body = end >= 0 ? rest.slice(0, end) : rest;
-  const immediate = body.match(/mov\s+w0,\s*#(0x[0-9a-f]+|\d+)/i);
-  return Boolean(immediate && (immediate[1].toLowerCase() === expected || Number(immediate[1]) === abi) && /\bret\b/.test(body));
+  const labels = [...disassembly.matchAll(/^(?:[0-9a-f]+\s+)?(?:<_kr_abi_version>|_kr_abi_version):\s*$/gm)];
+  if (labels.length !== 1) return false;
+  const body = disassembly.slice(labels[0].index + labels[0][0].length).split(/\n(?:[0-9a-f]+\s+)?(?:<[^>]+>|_[^:]+):/)[0];
+  const instructions = body.split('\n').map(line => line.replace(/;.*$/, '').trim()).filter(Boolean)
+    .map(line => line.replace(/^[0-9a-f]+:\s*(?:[0-9a-f]{2,8}\s+)*/, '').trim());
+  if (instructions.length !== 2 || instructions[1] !== 'ret') return false;
+  const immediate = instructions[0].match(/^mov\s+w0,\s*#(0x[0-9a-f]+|\d+)$/i);
+  return Boolean(immediate && Number(immediate[1]) === abi);
 }
 
 function verifyLibrary(checked) {
   const nm = inventory(checked.library);
   for (const symbol of symbols) if (!new RegExp(`\\b_${symbol}\\s*$`, 'm').test(nm)) throw new Error(`Static library missing ${symbol}`);
-  const disassembly = abiDisassembly(checked.library);
+  const disassembly = abiDisassembly(checked.library, nm);
   if (!matchesAbi(disassembly)) throw new Error(`Rust ABI is not ${config.rust.abi} in the simulator archive`);
   return { nm, disassembly };
 }
@@ -116,4 +128,4 @@ if (require.main === module) {
   else if (process.argv[2] === 'validate') validate();
   else throw new Error('Expected seal or validate');
 }
-module.exports = { symbols, inspect, inventory, inspectFonts, abiDisassembly, matchesAbi };
+module.exports = { symbols, inspect, inventory, inspectFonts, abiDisassembly, matchesAbi, rustTool };

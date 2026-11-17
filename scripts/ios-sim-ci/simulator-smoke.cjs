@@ -6,7 +6,7 @@ const { spawnSync } = require('node:child_process');
 const config = require('./config.json');
 
 const normalize = value => String(value).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, ' ').trim();
-const REQUIRED = ['KineSync', 'Start Setup'];
+const REQUIRED = config.onboarding.required;
 const EVIDENCE_TEXT = ['Skip', 'A modern, beautiful mobile app', 'syllable-synced lyrics', 'Spotify playback'];
 
 function matchOnboarding(text, settings = config.onboarding) {
@@ -18,7 +18,7 @@ function matchOnboarding(text, settings = config.onboarding) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', ...options });
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 120000, ...options });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status}): ${result.stderr || result.stdout}`);
   return result.stdout;
@@ -30,16 +30,29 @@ function metroListeners() {
     const result = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
     if (result.status === 0 && result.stdout.trim()) found.push({ port, output: result.stdout.trim() });
     else if (result.error) throw result.error;
+    else if (result.status !== 1) throw new Error(`Cannot inspect Metro port ${port}: ${result.stderr}`);
   }
   return found;
 }
 
+function selectSimulator(parsed, minimum = config.rust.iosDeploymentTarget) {
+  const versionCode = value => {
+    const parts = String(value).split('.').map(Number);
+    return (parts[0] << 16) + ((parts[1] || 0) << 8) + (parts[2] || 0);
+  };
+  const runtimes = parsed.runtimes.filter(runtime => runtime.isAvailable && /\.iOS-/.test(runtime.identifier) && versionCode(runtime.version) >= versionCode(minimum))
+    .sort((a, b) => versionCode(b.version) - versionCode(a.version));
+  for (const runtime of runtimes) {
+    const supported = runtime.supportedDeviceTypes?.map(type => typeof type === 'string' ? type : type.identifier);
+    const devices = parsed.devicetypes.filter(type => /^iPhone/.test(type.name) && (supported?.length
+      ? supported.includes(type.identifier)
+      : Number.isFinite(type.minRuntimeVersion) && Number.isFinite(type.maxRuntimeVersion) && versionCode(runtime.version) >= type.minRuntimeVersion && versionCode(runtime.version) <= type.maxRuntimeVersion));
+    if (devices.length) return { runtime: runtime.identifier, deviceType: devices[devices.length - 1].identifier };
+  }
+  throw new Error('No compatible available iPhone simulator runtime/device type');
+}
 function simulatorPair() {
-  const parsed = JSON.parse(run('xcrun', ['simctl', 'list', '-j']));
-  const runtimes = parsed.runtimes.filter(runtime => runtime.isAvailable && /ios/i.test(runtime.identifier));
-  const deviceTypes = parsed.devicetypes.filter(type => /^iPhone/.test(type.name));
-  if (!runtimes.length || !deviceTypes.length) throw new Error('No available iPhone simulator runtime/device type');
-  return { runtime: runtimes[0].identifier, deviceType: deviceTypes[0].identifier };
+  return selectSimulator(JSON.parse(run('xcrun', ['simctl', 'list', '-j'])));
 }
 
 async function main() {
@@ -67,10 +80,11 @@ async function main() {
     const started = Date.now();
     let last = null;
     for (let attempt = 1; attempt <= 18 && Date.now() - started < 90000; attempt += 1) {
-      await new Promise(resolve => setTimeout(resolve, attempt === 1 ? 5000 : 5000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
       const shot = path.join(evidence, `simulator-${String(attempt).padStart(2, '0')}.png`);
       run('xcrun', ['simctl', 'io', udid, 'screenshot', shot]);
-      const ocr = spawnSync('xcrun', ['swift', path.join(__dirname, 'ocr.swift'), shot], { encoding: 'utf8' });
+      const ocr = spawnSync('xcrun', ['swift', path.join(__dirname, 'ocr.swift'), shot], { encoding: 'utf8', timeout: 30000 });
+      if (ocr.error) throw ocr.error;
       if (ocr.status !== 0) throw new Error(`OCR failed: ${ocr.stderr || ocr.stdout}`);
       const text = JSON.parse(ocr.stdout).lines.join('\n');
       const match = matchOnboarding(text);
@@ -79,21 +93,28 @@ async function main() {
       fs.writeFileSync(path.join(evidence, 'ocr.json'), JSON.stringify(result, null, 2) + '\n');
       if (match.matched) break;
     }
-    const log = spawnSync('xcrun', ['simctl', 'spawn', udid, 'log', 'show', '--last', '5m', '--style', 'compact', '--predicate', `process == "KineSync"`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const log = spawnSync('xcrun', ['simctl', 'spawn', udid, 'log', 'show', '--last', '5m', '--style', 'compact', '--predicate', `process == "KineSync"`], { encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024 * 1024 });
     if (log.stdout) fs.writeFileSync(path.join(evidence, 'simulator-app.log'), log.stdout);
     if (!last?.matched) throw new Error(`No KineSync onboarding UI after bounded retries. Last OCR: ${JSON.stringify(last?.text || '')}`);
+    result.metro_listeners_after = metroListeners();
+    if (result.metro_listeners_after.length) throw new Error('Metro-like listener appeared during smoke');
     result.smoke_passed = true;
     result.proof = 'KineSync onboarding title and Start Setup rendered with no local Metro listener';
     result.limitation = 'Onboarding proves app startup with no local Metro listener. It does not prove Rust renderer presentation or network isolation.';
     fs.writeFileSync(path.join(evidence, 'smoke.json'), JSON.stringify(result, null, 2) + '\n');
     console.log(JSON.stringify({ passed: true, udid, attempts: result.attempts.length, proof: result.proof }));
+  } catch (error) {
+    result.smoke_passed = false;
+    result.error = error.message;
+    throw error;
   } finally {
-    spawnSync('xcrun', ['simctl', 'shutdown', udid], { encoding: 'utf8' });
-    spawnSync('xcrun', ['simctl', 'delete', udid], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(evidence, 'smoke.json'), JSON.stringify(result, null, 2) + '\n');
+    spawnSync('xcrun', ['simctl', 'shutdown', udid], { encoding: 'utf8', timeout: 15000 });
+    spawnSync('xcrun', ['simctl', 'delete', udid], { encoding: 'utf8', timeout: 15000 });
   }
 }
 
 if (require.main === module) {
   main().catch(error => { console.error(error.stack); process.exitCode = 1; });
 }
-module.exports = { matchOnboarding, normalize, metroListeners, REQUIRED, EVIDENCE_TEXT };
+module.exports = { matchOnboarding, normalize, metroListeners, REQUIRED, EVIDENCE_TEXT, selectSimulator };

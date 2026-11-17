@@ -136,6 +136,11 @@ jobs:
           [[ "$SIM_TARGET" == aarch64-apple-ios-sim ]]
           rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$SIM_TARGET" --component llvm-tools-preview
 
+      - name: Test actual Hermes bytecode and pinned Rust simulator archive tooling
+        env:
+          KINESYNC_SIM_NATIVE_TOOLS_TEST: '1'
+        run: node --test scripts/test/ios-sim-ci.test.cjs
+
       - name: Cache Rust registry and simulator target work on a prebuilt miss
         id: rust
         if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
@@ -381,7 +386,7 @@ jobs:
             "pods":{"outcome":"${{ steps.pods.outcome }}","hit":"${{ steps.pods.outputs.cache-hit }}","matched":"${{ steps.pods.outputs.cache-matched-key }}","verified":"${{ steps.verify_pods.outputs.cache-hit }}"},
             "derived":{"outcome":"${{ steps.derived.outcome }}","hit":"${{ steps.derived.outputs.cache-hit }}","matched":"${{ steps.derived.outputs.cache-matched-key }}","verified":"${{ steps.verify_derived.outputs.cache-hit }}"},
             "ccache":{"outcome":"${{ steps.ccache.outcome }}","hit":"${{ steps.ccache.outputs.cache-hit }}","matched":"${{ steps.ccache.outputs.cache-matched-key }}","verified":"${{ steps.verify_ccache.outputs.cache-hit }}"},
-            "rust":{"prebuilt_hit":"${{ steps.prebuilt.outputs.cache-hit }}","verified":"${{ steps.verify_prebuilt.outputs.cache-hit }}","enabled":"${{ steps.plan.outputs.rust-enabled }}"}}
+            "rust":{"outcome":"${{ steps.prebuilt.outcome }}","prebuilt_hit":"${{ steps.prebuilt.outputs.cache-hit }}","verified":"${{ steps.verify_prebuilt.outputs.cache-hit }}","enabled":"${{ steps.plan.outputs.rust-enabled }}"}}
         run: node scripts/ios-sim-ci/ci.cjs summary
 
       - name: Upload simulator evidence and screenshots

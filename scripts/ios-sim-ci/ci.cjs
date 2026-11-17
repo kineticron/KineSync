@@ -43,7 +43,7 @@ function resolvePaths(workspace, home, temp) {
     rustTarget: path.resolve(workspace, 'native/lyrics-renderer/target'), prebuilt: path.join(root, 'rust-simulator'),
     pods: path.resolve(workspace, 'ExpoLyrics/ios/Pods'),
     lock: path.resolve(workspace, 'ExpoLyrics/ios/Podfile.lock'),
-    cocoapods: path.resolve(home, 'Library/Caches/CocoaPods'),
+    cocoapods: path.join(root, 'CocoaPods'),
     evidence: path.resolve(temp, 'kinesync-ios-sim-evidence'), wrapper: path.resolve(temp, 'kinesync-ios-sim-compilers'),
     zip: path.resolve(workspace, 'ExpoLyrics/KineSync-simulator-arm64.app.zip'),
   };
@@ -101,12 +101,13 @@ function initialize(env = process.env) {
   if (!identity.sdk.startsWith('27.')) throw new Error(`Expected iPhoneSimulator 27 SDK, got ${identity.sdk}`);
   const preexisting = {};
   for (const [name, dir] of Object.entries(paths)) {
-    if (['zip', 'lock'].includes(name)) continue;
+    if (name === 'zip') continue;
+    if (name === 'lock') { preexisting[name] = fs.existsSync(dir); continue; }
     preexisting[name] = fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
   }
   if (preexisting.evidence) throw new Error('Refusing to mix evidence from multiple runs. A fresh runner temp directory is required.');
   for (const name of ['npm', 'derived', 'ccache', 'rustTarget', 'prebuilt', 'evidence', 'wrapper', 'cocoapods']) fs.mkdirSync(paths[name], { recursive: true });
-  if (mode !== 'normal' && ['npm', 'derived', 'ccache', 'rustTarget', 'prebuilt'].some(name => preexisting[name])) {
+  if (mode !== 'normal' && ['npm', 'derived', 'ccache', 'rustTarget', 'prebuilt', 'cocoapods', 'pods', 'lock'].some(name => preexisting[name])) {
     throw new Error('Controlled cold/warm run requires an empty owned cache root before restore on a fresh runner. Refusing to delete existing data.');
   }
   const branch = env.GITHUB_REF || 'local';
@@ -115,7 +116,7 @@ function initialize(env = process.env) {
   const vars = {
     CI_EVIDENCE_DIR: paths.evidence, DERIVED_DATA_PATH: paths.derived, CCACHE_DIR: paths.ccache,
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
-    npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
+    CP_CACHE_DIR: paths.cocoapods, npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
     EXPO_NO_METRO: '1', FORCE_BUNDLING: '1', SKIP_BUNDLING: '', SIMULATOR_SDK: config.sdk,
     RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
     IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_RELEASE_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_RELEASE_DEBUG: String(config.rust.debugInfo),
@@ -156,6 +157,14 @@ function buildArgs(ios, workspace, scheme, derived, wrapper) {
     'COMPILER_INDEX_STORE_ENABLE=NO', 'ENABLE_DEBUG_DYLIB=NO', 'STRIP_INSTALLED_PRODUCT=NO',
     'LD_GENERATE_MAP_FILE=YES', `LD_MAP_FILE_PATH=${path.join(derived, 'LinkMaps', '$(TARGET_NAME)-$(CURRENT_ARCH).txt')}`, `CC=${path.join(wrapper, 'clang')}`, `CXX=${path.join(wrapper, 'clang++')}`];
 }
+function targetSettingsArgs(args, project, target) {
+  const result = ['-project', project, '-target', target];
+  for (let index = 0; index < args.length; index += 1) {
+    if (['-workspace', '-scheme', '-destination', '-derivedDataPath'].includes(args[index])) { index += 1; continue; }
+    result.push(args[index]);
+  }
+  return [...result, '-showBuildSettings', '-json'];
+}
 function assertSimulatorSettings(settings, scheme) {
   const byTarget = new Map();
   for (const entry of settings) {
@@ -166,7 +175,11 @@ function assertSimulatorSettings(settings, scheme) {
     const values = byTarget.get(target);
     if (!values) throw new Error(`Missing build settings for ${target}`);
     if (values.CONFIGURATION !== config.configuration) throw new Error(`${target} configuration is not ${config.configuration}`);
-    if (values.SDKROOT !== config.sdk) throw new Error(`${target} SDKROOT is ${values.SDKROOT}, expected ${config.sdk}`);
+    const sdkRoot = String(values.SDKROOT || '').replace(/^"|"$/g, '');
+    const sdkIdentity = path.basename(sdkRoot).toLowerCase();
+    if (!(sdkRoot === config.sdk || (path.isAbsolute(sdkRoot) && /^iphonesimulator[0-9.]*\.sdk$/.test(sdkIdentity)))) throw new Error(`${target} SDKROOT is not a simulator SDK: ${sdkRoot}`);
+    if (values.SDK_NAME && !/^iphonesimulator[0-9.]+$/.test(values.SDK_NAME)) throw new Error(`${target} SDK_NAME is not a simulator SDK`);
+    if (values.EFFECTIVE_PLATFORM_NAME && values.EFFECTIVE_PLATFORM_NAME !== '-iphonesimulator') throw new Error(`${target} effective platform is not simulator`);
     if (values.PLATFORM_NAME !== config.sdk) throw new Error(`${target} PLATFORM_NAME is ${values.PLATFORM_NAME}`);
     if (!String(values.SUPPORTED_PLATFORMS || '').replaceAll('"', '').split(/\s+/).includes(config.sdk)) throw new Error(`${target} does not support ${config.sdk}`);
     if (!String(values.ARCHS || '').replaceAll('"', '').split(/\s+/).includes(config.arch)) throw new Error(`${target} ARCHS lacks ${config.arch}`);
@@ -187,7 +200,11 @@ function build() {
   if (!/react-native-xcode\.sh|Bundle React Native code and images/.test(projectSource)) throw new Error('Generated project has no React Native bundle phase for standalone JS');
   const args = buildArgs(ios, workspace, scheme, current.paths.derived, current.paths.wrapper);
   const settings = JSON.parse(run('xcodebuild', [...args, '-showBuildSettings', '-json'], { cwd: ios }));
-  assertSimulatorSettings(settings, scheme);
+  // Scheme settings need not include dependency targets. Query the widget
+  // explicitly without scheme-only destination/DerivedData options.
+  const widgetSettings = JSON.parse(run('xcodebuild', targetSettingsArgs(args, path.join(ios, project), 'KineSyncLyricsWidget'), { cwd: ios }));
+  writeJson(path.join(current.paths.evidence, 'build-settings.json'), [...settings, ...widgetSettings]);
+  assertSimulatorSettings([...settings, ...widgetSettings], scheme);
   const appSettings = settings.find(entry => entry.target === scheme && entry.buildSettings.WRAPPER_EXTENSION === 'app')?.buildSettings;
   if (!appSettings || appSettings.CONFIGURATION !== config.configuration || appSettings.ARCHS.trim() !== 'arm64') throw new Error('Unexpected app architecture/configuration');
   const app = path.join(appSettings.TARGET_BUILD_DIR, appSettings.FULL_PRODUCT_NAME);
@@ -204,21 +221,30 @@ function build() {
   fs.writeFileSync(path.join(evidence, 'ccache-stats.txt'), run('ccache', ['--show-stats', '--verbose']) + '\n');
   fs.writeFileSync(path.join(evidence, 'app-path.txt'), app + '\n');
 }
+function cacheEvidence(mode, cache, rustEnabled = config.rust.enabled) {
+  const required = ['npm', 'lock', 'pods', 'derived', 'ccache'];
+  return {
+    warmPass: mode !== 'warm' || (required.every(name => cache[name]?.outcome === 'success' && cache[name]?.hit === 'true') && (!rustEnabled || cache.rust?.prebuilt_hit === 'true')),
+    coldPass: mode !== 'cold' || (required.every(name => cache[name]?.outcome === 'skipped' && !cache[name]?.hit) && (!rustEnabled || (cache.rust?.outcome === 'skipped' && !cache.rust?.prebuilt_hit))),
+    verifyPass: mode === 'normal' || (required.every(name => cache[name]?.verified === 'true') && (!rustEnabled || cache.rust?.verified === 'true')),
+  };
+}
 function summary() {
   const current = state();
   const stagesFile = path.join(current.paths.evidence, 'stages.jsonl');
   const stages = fs.existsSync(stagesFile) ? read(stagesFile).trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   const cache = JSON.parse(process.env.CACHE_RESULTS || '{}');
   const required = ['npm', 'lock', 'pods', 'derived', 'ccache'];
-  const warmPass = current.mode !== 'warm' || (required.every(name => cache[name]?.hit === 'true') && (!config.rust.enabled || cache.rust?.prebuilt_hit === 'true'));
-  const coldPass = current.mode !== 'cold' || (required.every(name => !cache[name]?.hit) && (!config.rust.enabled || !cache.rust?.prebuilt_hit));
-  const verifyPass = current.mode === 'normal' || (required.every(name => cache[name]?.verified === 'true') && (!config.rust.enabled || cache.rust?.verified === 'true'));
+  const { warmPass, coldPass, verifyPass } = cacheEvidence(current.mode, cache);
+  const smokeFile = path.join(current.paths.evidence, 'simulator-smoke', 'smoke.json');
+  const smoke = fs.existsSync(smokeFile) ? json(smokeFile) : null;
   const result = { ...current, keys: fs.existsSync(path.join(current.paths.evidence, 'keys.json')) ? json(path.join(current.paths.evidence, 'keys.json')) : current.keys,
     stages, cache, job_status_before_summary: process.env.CI_JOB_STATUS, warm_exact_hits_pass: warmPass,
     cold_restores_skipped_pass: coldPass, controlled_cache_publication_pass: verifyPass,
     rust: { enabled: config.rust.enabled, target: config.rust.target, abi: config.rust.abi, action: config.rust.enabled ? (fs.existsSync(path.join(current.paths.evidence, 'rust-sim-manifest.json')) ? (cache.rust?.prebuilt_hit === 'true' ? 'verified-prebuilt' : 'built-and-validated') : 'not-completed') : 'disabled', source_config_hash: current.keys.rust },
-    elapsed_before_artifact_upload_ms: Date.now() - Date.parse(current.started_at),
-    note: 'Simulator Debug app is bundled, verified and smoke-tested without Metro. This is not a device build or a signed IPA.' };
+    smoke_passed: smoke?.smoke_passed === true,
+    elapsed_before_summary_ms: Date.now() - Date.parse(current.started_at),
+    note: smoke?.smoke_passed === true ? 'Onboarding smoke passed without a local Metro listener. Rust renderer runtime and network isolation are not verified.' : 'Onboarding smoke did not complete successfully. Inspect stages and smoke evidence.' };
   writeJson(path.join(current.paths.evidence, 'evidence.json'), result);
   const lines = ['## Simulator Debug CI evidence', '', `Commit: ${current.sha}`, `Mode: ${current.mode}, epoch: ${current.epoch}`,
     `Xcode: ${current.identity.xcode.replaceAll('\n', ', ')}, iPhoneSimulator ${current.identity.sdk}, arm64 only`,
@@ -226,7 +252,7 @@ function summary() {
     ...required.map(name => `| ${name} | ${cache[name]?.hit || 'skipped/miss'} | ${cache[name]?.verified || 'not measured'} |`),
     ...(config.rust.enabled ? [`| Rust simulator prebuilt | ${cache.rust?.prebuilt_hit || 'skipped/miss'} | ${cache.rust?.verified || 'not measured'} |`] : []),
     '', '| Stage | Seconds | Exit |', '| --- | ---: | ---: |', ...stages.map(s => `| ${s.stage} | ${(s.elapsed_ms / 1000).toFixed(3)} | ${s.exit_code ?? s.signal} |`),
-    '', 'Debug configuration is intentional: the app and Rust module are __DEV__/debugOnly gated.', 'Smoke test uses no local Metro listener and requires rendered onboarding text. Network isolation is not claimed.', ''];
+    '', 'Debug configuration is intentional: the app and Rust module are __DEV__/debugOnly gated.', `Onboarding smoke passed: ${result.smoke_passed}. Rust renderer runtime and network isolation are not verified.`, ''];
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
   if (!warmPass || !coldPass || !verifyPass) throw new Error('Controlled cache evidence failed. Inspect evidence.json, do not report a warm-cache pass.');
 }
@@ -259,4 +285,4 @@ function main(args) {
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.stack); process.exitCode = 1; }
 }
-module.exports = { digestInputs, rustIdentity, resolvePaths, cacheKeys, buildArgs, assertSimulatorSettings, config };
+module.exports = { digestInputs, rustIdentity, resolvePaths, cacheKeys, buildArgs, assertSimulatorSettings, cacheEvidence, targetSettingsArgs, config };

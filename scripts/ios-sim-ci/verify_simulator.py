@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -45,7 +46,7 @@ def macho_files(app):
 
 def check_plist(info, label, bundle_id, app, require_promotion=False):
     executable = info.get('CFBundleExecutable')
-    if not isinstance(executable, str) or not executable or '/' in executable:
+    if not isinstance(executable, str) or not executable or '/' in executable or executable in ('.', '..'):
         raise ValueError(f'{label}: invalid CFBundleExecutable')
     if info.get('CFBundleIdentifier') != bundle_id:
         raise ValueError(f'{label}: CFBundleIdentifier is {info.get("CFBundleIdentifier")!r}, expected {bundle_id!r}')
@@ -72,7 +73,7 @@ def inspect_macho(file, app):
         raise ValueError(f'Non-arm64 Mach-O slice in {file.relative_to(app)}: {archs}')
     for arch in archs:
         build = run('xcrun', 'vtool', '-show-build', '-arch', arch, str(file))
-        if 'platform IOSSIMULATOR' not in build:
+        if re.findall(r'^\s*platform\s+(\S+)\s*$', build, re.MULTILINE) != ['IOSSIMULATOR']:
             raise ValueError(f'{file.relative_to(app)} is not an IOSSIMULATOR slice')
     return {'path': str(file.relative_to(app)), 'architectures': archs, 'platform': 'IOSSIMULATOR'}
 
@@ -87,8 +88,7 @@ def js_bundles(app):
             data = file.read_bytes()
             if len(data) < 100_000:
                 raise ValueError(f'Embedded JS bundle is unexpectedly small: {file.relative_to(app)}')
-            text = data.decode('utf-8', 'replace')
-            missing = [marker for marker in MARKERS if marker not in text]
+            missing = [marker for marker in MARKERS if marker.encode('utf-8') not in data and marker.encode('utf-16le') not in data]
             if missing:
                 raise ValueError(f'Embedded JS bundle {file.relative_to(app)} lacks {missing}')
             found.append({'path': str(file.relative_to(app)), 'bytes': len(data), 'sha256': sha256(file), 'markers': MARKERS})
@@ -101,16 +101,23 @@ def verify(app, expected_bundle_id):
     app = Path(app).resolve()
     if not app.is_dir() or app.suffix != '.app':
         raise ValueError('Expected a .app directory')
+    for directory, dirs, files in os.walk(app):
+        for name in dirs + files:
+            file = Path(directory) / name
+            if file.is_symlink() and (not file.exists() or not file.resolve().is_relative_to(app)):
+                raise ValueError(f'Unsafe bundle symlink: {file.relative_to(app)}')
     info = plistlib.loads((app / 'Info.plist').read_bytes())
     binary = check_plist(info, 'main app', expected_bundle_id, app, require_promotion=True)
     extension = app / 'PlugIns' / EXTENSION
     if not extension.is_dir():
         raise ValueError(f'Missing embedded {EXTENSION}')
     extension_info = plistlib.loads((extension / 'Info.plist').read_bytes())
-    check_plist(extension_info, EXTENSION, f'{expected_bundle_id}.KineSyncLyricsWidget', extension)
+    extension_binary = check_plist(extension_info, EXTENSION, f'{expected_bundle_id}.KineSyncLyricsWidget', extension)
     machos = [inspect_macho(file, app) for file in macho_files(app)]
     if not any(entry['path'] == info['CFBundleExecutable'] for entry in machos):
         raise ValueError('Main app executable was not inspected as a Mach-O')
+    if not any(entry['path'] == str(extension_binary.relative_to(app)) for entry in machos):
+        raise ValueError('Widget executable was not inspected as a Mach-O')
     return {
         'app': str(app),
         'bundle_identifier': info['CFBundleIdentifier'],
