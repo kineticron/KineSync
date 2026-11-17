@@ -452,32 +452,25 @@ for (const height of [390, 667, 844]) for (const scenario of [
     }));
     return typeof resolved.top === 'string' ? height * parseFloat(resolved.top) / 100 : resolved.top;
   };
-  const hasLyrics = !scenario.empty && scenario.lyrics.length > 0;
-  assert.equal(top(), hasLyrics ? height : height * .75);
-  assert.equal(height * .9 >= top(), !hasLyrics, 'fully hidden empty player has a reveal target, lyrics retain their own touch target');
+  assert.equal(top(), height * .6);
   let reveals = 0;
+  let seeks = 0;
   const revealPressHandler = evaluate(revealPressExpression, { handleControlsInteraction: () => { reveals++; h.animate(true); } });
-  // Route a bottom tap to the empty target, or let a lyric interaction invoke
-  // the renderer callback without being swallowed by the overlay.
-  if (!hasLyrics) revealPressHandler();
-  else {
-    assert.ok(height * .9 < top());
-    const lyricInteraction = evaluate(lyricInteractions[0], { handleControlsInteraction: revealPressHandler });
-    lyricInteraction();
-  }
-  assert.equal(reveals, 1); assert.equal(h.visible, true); assert.equal(h.stage.get(), 0);
-  h.tick(48); h.animate(false); h.tick(75);
-  assert.equal(h.visible, false);
-  if (hasLyrics) assert.equal(top(), fill().top, 'reversed hide target cannot extend into uncovered lyrics');
-  else assert.equal(top(), height * .75);
-  revealPressHandler(); h.tick(700); h.animate(false); h.tick(850);
-  if (hasLyrics) assert.equal(top(), fill().top);
-  else assert.equal(top(), height * .75, 'empty target survives backing retraction and reversals');
+  const tap = y => {
+    if (y >= top()) revealPressHandler();
+    else seeks++;
+  };
+  for (const fraction of [.6, .6001, .9, 1]) tap(height * fraction);
+  assert.equal(reveals, 4);
+  assert.equal(seeks, 0);
+  tap(height * .5999);
+  assert.equal(seeks, 1);
+  assert.equal(reveals, 4);
   revealPressHandler(); h.tick(1100);
   assert.equal(h.visible, true); assert.equal(h.geometry.get(), 1);
 }
 
-assert.equal(style('controlsRevealZone').top, undefined);
+assert.equal(style('controlsRevealZone').top, '60%');
 assert.match(source, /controlsProgress=\{controlsStageProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.match(source, /controlsProgress=\{controlsProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.ok(ts.isJsxFragment(dockComponent.attributes.properties.find(p => p.name?.text === 'fullscreenActions').initializer.expression), 'portrait always supplies fullscreen actions');

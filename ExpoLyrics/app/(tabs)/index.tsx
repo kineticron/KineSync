@@ -1909,7 +1909,6 @@ export default function HomeScreen() {
       {!fullscreenAlbumMode && !controlsVisible && (
         <Reanimated.View pointerEvents="box-none" style={[
           styles.controlsRevealZone,
-          !showEmptyState && lyrics.length > 0 ? fillTouchStyle : styles.controlsEmptyRevealZone,
         ]}>
           <Pressable style={StyleSheet.absoluteFill}
             onPress={handleControlsInteraction} hitSlop={0}
@@ -2196,6 +2195,7 @@ const styles = StyleSheet.create({
     position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 5,
   },
   controlsRevealZone: {
+    top: "60%",
     position: "absolute",
     left: 0,
     right: 0,
