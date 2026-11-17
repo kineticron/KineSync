@@ -32,8 +32,9 @@ export function controlsTouchIsCovered(
     absoluteY < coverage.originY + coverage.bottom);
 }
 
-/** Keep the show edge slightly ahead of the row clock with the same finish. */
+/** Advance show slightly ahead of the row clock, retaining its exact finish. */
 export function controlsShowEdge(progress: number) {
   'worklet';
-  return progress + 0.08 * progress * (1 - progress);
+  const local = Math.max(0, Math.min(1, progress));
+  return local + 0.24 * local * (1 - local);
 }

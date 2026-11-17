@@ -784,7 +784,7 @@ export default function HomeScreen() {
     cancelAnimation(controlsOpacity);
     cancelAnimation(controlsStageProgress);
     const target = shown ? 1 : 0;
-    if (liveReducedMotion || fullscreenAlbumModeRef.current) {
+    if (liveReducedMotion) {
       controlsOpacity.value = target;
       controlsStageProgress.value = target;
     } else {
@@ -813,7 +813,7 @@ export default function HomeScreen() {
   }, [animateControls, controlsTarget]);
   useEffect(() => {
     animateControls(controlsTarget.get() > 0);
-  }, [animateControls, controlsTarget, fullscreenAlbumMode]);
+  }, [animateControls, controlsTarget]);
 
   useEffect(() => () => {
     controlsTouchActive.current = false;

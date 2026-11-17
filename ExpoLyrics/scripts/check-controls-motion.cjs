@@ -62,6 +62,7 @@ assert.equal(controlsStage(.2, ...windows[1]).opacity, 0);
 assert.equal(controlsStage(.4, ...windows[2]).opacity, 0);
 assert.match(source, /bezier\(0\.16, 1, 0\.3, 1\)/);
 assert.match(source, /const controlsStageProgress = useSharedValue\(1\)/);
+assert.doesNotMatch(source, /\[animateControls, controlsTarget, fullscreenAlbumMode\]/, 'presentation changes cannot restart an in-flight reveal or hide');
 assert.match(source, /clearControlsIdleTimer\(\);\s+cancelAnimation\(controlsOpacity\);\s+cancelAnimation\(controlsStageProgress\);/, 'unmount cancels both clocks');
 assert.match(source, /controlsProgress=\{controlsStageProgress\}/);
 assert.doesNotMatch(source, /controlsBackdropOffset/);
@@ -177,10 +178,9 @@ for (const initial of [0, 1]) for (const interruption of [1, 16, 50, 150, 399, 4
   assert.equal(h.geometry.get(), shown ? 1 : 0);
   assert.equal(h.stage.get(), shown ? 1 : 0);
   assert.equal(h.interactive, shown);
-  for (const policy of ['reduced motion', 'fullscreen']) {
+  {
     h.animate(!shown); h.tick(100);
-    if (policy === 'reduced motion') h.context.liveReducedMotion = true;
-    else h.context.fullscreenAlbumModeRef.current = true;
+    h.context.liveReducedMotion = true;
     h.animate(false);
     assert.equal(h.geometry.get(), 0); assert.equal(h.stage.get(), 0); assert.equal(h.interactive, false);
     h.animate(true);
@@ -191,8 +191,47 @@ for (const initial of [0, 1]) for (const interruption of [1, 16, 50, 150, 399, 4
     h.context.fullscreenAlbumModeRef.current = false;
   }
 }
+// Fullscreen must use the normal show trajectory from every prior visibility
+// state. Changing presentation alone cannot snap or change hide timing.
+for (const phase of ['hidden', 'shown', 'showing', 'hiding', 'backdrop']) {
+  const normal = motionHarness(phase === 'hidden' || phase === 'showing' ? 0 : 1);
+  const album = motionHarness(phase === 'hidden' || phase === 'showing' ? 0 : 1);
+  for (const h of [normal, album]) {
+    if (phase === 'showing') { h.animate(true); h.tick(150); }
+    if (phase === 'hiding' || phase === 'backdrop') { h.animate(false); h.tick(phase === 'backdrop' ? 850 : 150); }
+  }
+  const mode = {
+    fullscreenAlbumModeRef: album.context.fullscreenAlbumModeRef,
+    albumArtworkMorphingRef: { current: false },
+    usePlayerTourStore: { getState: () => ({ advance() {} }) },
+    setAlbumArtworkMorphing() {}, setScrubPreviewPositionMs() {}, setTopBarMounted() {},
+    setFullscreenAlbumMode: value => { album.context.fullscreenAlbumModeRef.current = value; },
+    showControls: () => album.animate(true),
+  };
+  const enter = evaluate(callback('handleShowFullscreenAlbum'), mode);
+  const leave = evaluate(callback('handleShowLyrics'), mode);
+  const before = [album.geometry.get(), album.stage.get()];
+  normal.animate(true); enter();
+  assert.deepEqual([album.geometry.get(), album.stage.get()], before, 'fullscreen entry starts at current pixels');
+  let previous = 0;
+  for (const time of [1, 16, 48, 150, 350, 560, 699, 700]) {
+    normal.tick(time - previous); album.tick(time - previous); previous = time;
+    assert.equal(album.geometry.get(), normal.geometry.get(), 'fullscreen edge follows normal show');
+    assert.equal(album.stage.get(), normal.stage.get(), 'fullscreen rows retain normal stagger');
+  }
+  // Exiting album mode partway through hide retains the same continuous hide.
+  normal.animate(false); album.animate(false);
+  normal.tick(150); album.tick(150);
+  const exit = [album.geometry.get(), album.stage.get()];
+  leave();
+  assert.deepEqual([album.geometry.get(), album.stage.get()], exit, 'presentation exit cannot snap controls');
+  normal.tick(950); album.tick(950);
+  assert.equal(album.geometry.get(), normal.geometry.get());
+  assert.equal(album.stage.get(), normal.stage.get());
+}
+
 // Both geometry and rows respond without a queued lead-in. Show geometry uses
-// the row clock with a slight lead, hide retains the full reverse stagger.
+// a modest lead across the whole stagger, hide retains the full reverse stagger.
 const reveal = motionHarness(0);
 reveal.animate(true);
 assert.equal(reveal.interactive, true); assert.equal(reveal.geometry.get(), 0);
@@ -207,7 +246,13 @@ for (const elapsed of [1, 140, 280, 420, 560, 699]) {
   const h = motionHarness(0);
   h.animate(true); h.tick(elapsed);
   const lead = h.geometry.get() - h.stage.get();
-  assert.ok(lead > 0 && lead <= .021, 'edge leads row clock only slightly');
+  assert.ok(lead > 0, 'show edge advances faster than the previous near-linear reveal');
+  assert.ok(h.geometry.get() < controlsEase(Math.min(1, elapsed / 200)), 'edge remains slower than the original 200ms reveal');
+  const progress = elapsed / 700;
+  const baseline = progress + .08 * progress * (1 - progress);
+  assert.equal(h.geometry.get(), progress + .24 * progress * (1 - progress));
+  assert.ok(h.geometry.get() > baseline && h.geometry.get() - baseline <= .040001, 'edge is only modestly faster than the near-linear baseline');
+  assert.ok(h.geometry.get() < 1, 'edge cannot complete before the final staggered row');
   h.tick(700 - elapsed);
   assert.equal(h.geometry.get(), 1);
   assert.equal(h.stage.get(), 1);
@@ -622,7 +667,7 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
           if (row.opacity >= .5) assert.ok(viewportPixels >= rowHeights[index] / 2);
         }
         if (shown && time === 48 && index === 0) {
-          assert.ok(h.geometry.get() > h.stage.get(), 'show edge slightly leads the unchanged row clock');
+          assert.ok(h.geometry.get() > h.stage.get(), 'show edge advances ahead of the unchanged row clock');
           assert.ok(offset > 14 && row.opacity > 0 && row.opacity < 1, 'first visible timeline retains a perceptible independent slide');
         }
         if (shown && time === 150 && index === 1) {
@@ -698,9 +743,9 @@ touchDown({ allTouches: [{ absoluteY: hiddenTrackY }] }, { fail: () => failures+
 beginScrub({ x: 100, absoluteY: hiddenTrackY });
 assert.equal(failures, 2); assert.equal(previews, 0); assert.equal(scrubActive.value, false);
 inputHarness.tick(118); // 150ms on the unchanged 700ms row clock.
-assert.equal(timelineInput.value, false, 'retimed show edge still masks the timeline at 150ms');
+assert.equal(timelineInput.value, false, 'modestly retimed edge still masks the timeline at 150ms');
 assert.ok(Math.abs(inputCoverage().top - 220 * (1 - controlsShowEdge(150 / 700))) < 1e-9);
-inputHarness.tick(500); // 650ms: the clip exposes the track before show finishes.
+inputHarness.tick(500); // 650ms: the clip exposes the scrub coordinate before show finishes.
 assert.ok(Math.abs(inputCoverage().top - 220 * (1 - controlsShowEdge(650 / 700))) < 1e-9);
 assert.ok(inputCoverage().top < 650 - 624, 'the scrub coordinate lies inside the visible clip');
 assert.equal(timelineInput.value, true);
@@ -785,7 +830,12 @@ for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset 
   };
   layoutFrame(220);
   h.animate(false); h.tick(1100); layoutFrame(220);
-  enter(); // Entry during a hidden dock snaps both reveal clocks to shown.
+  enter(); // Fullscreen entry reveals the hidden dock with the normal animation.
+  assert.equal(h.geometry.get(), 0); assert.equal(h.stage.get(), 0);
+  h.tick(150);
+  assert.equal(h.geometry.get(), controlsShowEdge(150 / 700));
+  assert.equal(h.stage.get(), 150 / 700);
+  h.tick(550);
   assert.equal(h.geometry.get(), 1); assert.equal(h.stage.get(), 1);
   layoutFrame(228); // First changed measurement arrives during the morph.
   finish(); layoutFrame(236); // Font/metadata change while fully in album mode.
