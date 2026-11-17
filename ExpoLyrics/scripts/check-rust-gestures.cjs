@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 require('./check-rust-scheduling.cjs');
 require('./check-rust-footer-empty.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
-const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
+const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP, nextFollowState, desiredFollow, clearFollowReset } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
   const calls = { follow: [], scroll: [], fling: [], press: [], long: [], auto: [], interaction: 0 };
@@ -42,10 +42,16 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
     assert.match(body, /TrackScene::max_scroll/);
     assert.ok(body.includes('engine.scroll.' + method + '(' + value + ' * scale, max_offset, viewport)'));
   }
-  const dragBody = ffi.slice(ffi.indexOf('fn kr_scroll_by('), ffi.indexOf('fn kr_fling('));
+  const dragBody = ffi.slice(ffi.indexOf('fn kr_scroll_by('), ffi.indexOf('/// Release recapture needs'));
   const flingBody = ffi.slice(ffi.indexOf('fn kr_fling('), ffi.indexOf('fn kr_hit_test(')).replace(/\s+/g, ' ');
   assert.match(flingBody, /engine\s*\.\s*scroll\s*\.\s*release\(velocity \* scale, max_offset, viewport, target\)/, 'release owns follow recapture');
   assert.match(flingBody, /engine\.following = resume/, 'release applies the recapture decision');
+  assert.match(flingBody, /release_target\([\s\S]*engine\.timeline\.position\(native_ms\)/, 'release projects the authoritative anchored time');
+  const targetHelper = ffi.slice(ffi.indexOf('fn release_target('), ffi.indexOf('/// Manual fling velocity'));
+  assert.match(targetHelper, /if !anchored \|\| layout_generation != timeline_generation/);
+  assert.match(targetHelper, /layout\.map\(\|layout\| layout\.scroll_target\(position_ms\)\)/);
+  assert.doesNotMatch(targetHelper, /engine\.scroll\.position\(\)/, 'no layout fallback must not use the current offset as target');
+  assert.match(flingBody, /fn kr_fling\(handle: u64, velocity: f64, native_ms: f64\)/, 'release carries its monotonic clock');
   assert.doesNotMatch(dragBody, /\.release\(|scroll_target/, 'active drags never recapture follow');
   assert.ok(dragBody.includes('engine.following = false'), 'active drags keep manual ownership');
   const swift = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
@@ -54,12 +60,60 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(swift, /private var following = true/);
   assert.match(swift, /owner\?\.setFollowing\(following\)/, 'refresh replays the desired follow state');
   assert.match(swift, /if result == 1 \{ DispatchQueue\.main\.async \{ completion\(true\) \} \}/);
+  assert.match(swift, /self\.session == releaseSession/);
+  assert.match(swift, /self\.generation == releaseGeneration/);
+  assert.match(swift, /self\.followEpoch == releaseEpoch/);
+  assert.match(swift, /"generation": releaseGeneration/);
+  assert.match(swift, /identity\.track_id != trackId/);
+  assert.match(swift, /followEpoch &\+= 1/);
+  assert.match(swift, /override func touchesBegan[\s\S]*?releasePending = false[\s\S]*?followEpoch &\+= 1/);
+  assert.match(swift, /if !value && releasePending \{ return \}/);
+  const guardSource = swift.match(/guard let self, resumed,([\s\S]*?)else \{ return \}/)[1];
+  const guardCondition = guardSource.split(',').map(part => part.trim()).filter(Boolean)
+    .map(part => part.replace(/self\./g, 'state.')).join(' && ');
+  const releaseStillValid = new Function('state', 'releaseSession', 'releaseGeneration', 'releaseEpoch',
+    `return !!(${guardCondition});`);
+  const releaseState = { session: 1, generation: 7, followEpoch: 4, failed: false };
+  assert.equal(releaseStillValid(releaseState, 1, 7, 4), true);
+  assert.equal(releaseStillValid({ ...releaseState, session: 2 }, 1, 7, 4), false, 'old session');
+  assert.equal(releaseStillValid({ ...releaseState, generation: 8 }, 1, 7, 4), false, 'old track generation');
+  assert.equal(releaseStillValid({ ...releaseState, followEpoch: 5 }, 1, 7, 4), false, 'later touch or follow command');
+  assert.equal(releaseStillValid({ ...releaseState, failed: true }, 1, 7, 4), false, 'failed surface');
+  const android = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/android/src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsView.kt'), 'utf8');
+  assert.match(android, /session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch/);
+  assert.match(android, /following = true\s*releasePending = false\s*followEpoch\+\+/);
+  assert.match(android, /nextTrackId != trackId/);
+  assert.match(android, /ACTION_DOWN[\s\S]*?releasePending = false[\s\S]*?followEpoch\+\+/);
+  assert.match(android, /if \(!value && releasePending\) return/);
   const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
   assert.match(view, /nativeEvent\.state === 'follow'/, 'JS mirrors native follow recapture');
-  assert.match(view, /send\(view => view\.setFollowing\(followEnabled\)\);[\s\S]*?sendAnchor\(\)/, 'ready reasserts follow before the anchor');
+  assert.match(view, /send\(view => view\.setFollowing\(followTarget\)\);\s*sendAnchor\(\)/, 'ready reasserts the track follow target before the anchor');
+  assert.match(view, /followTarget = desiredFollow\(follow\.current, followEnabled\)/);
+  assert.match(view, /follow\.current = nextFollowState\(follow\.current, trackId, followEnabled\)/);
 }
 
+
+// Track reset ownership runs the same helper the view uses. A stale parent
+// false from the previous song cannot suppress follow on the new track, and
+// same-track translation, credit or layout revisions keep manual ownership.
+{
+  let state = { trackId: 'track-a', resetPending: false };
+  assert.equal(desiredFollow(state, false), false, 'manual ownership stays manual within one track');
+  state = nextFollowState(state, 'track-b', false);
+  assert.equal(state.resetPending, true);
+  assert.equal(desiredFollow(state, false), true, 'new track wins over stale parent false');
+  state = nextFollowState(state, 'track-b', true);
+  assert.equal(state.resetPending, false, 'parent acknowledgement clears the reset window');
+  assert.equal(desiredFollow(state, true), true);
+  state = clearFollowReset(state);
+  assert.equal(desiredFollow(state, false), false, 'a real manual touch still owns the viewport');
+  state = nextFollowState(state, 'track-b', false);
+  assert.equal(desiredFollow(state, false), false, 'same-track revisions never reset follow');
+  state = nextFollowState(state, 'track-c', false);
+  assert.equal(state.resetPending, true);
+  assert.equal(desiredFollow(state, false), true);
+}
 
 (async () => {
   assert.equal(LONG_PRESS_MS, 540);

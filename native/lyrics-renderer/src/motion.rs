@@ -311,10 +311,21 @@ impl FollowScroll {
 
     /// End a manual scroll and decide whether follow should take ownership
     /// back. Only the release path may recapture, so an active drag never
-    /// pulls the viewport away from the finger. Returns true when the release
-    /// is within one third of the viewport from the active-line target.
-    pub fn release(&mut self, velocity: f64, max_offset: f64, viewport: f64, target: f64) -> bool {
+    /// pulls the viewport away from the finger. `target` is the active-line
+    /// target from a ready layout. Without a layout there is no trustworthy
+    /// target, so the release stays manual. Returns true only when the release
+    /// is within one third of the viewport from that target.
+    pub fn release(
+        &mut self,
+        velocity: f64,
+        max_offset: f64,
+        viewport: f64,
+        target: Option<f64>,
+    ) -> bool {
         self.fling(velocity, max_offset, viewport);
+        let Some(target) = target else {
+            return false;
+        };
         let threshold = self.viewport * FOLLOW_RELEASE_FRACTION;
         (self.position - target).abs() <= threshold
     }
@@ -977,27 +988,33 @@ mod tests {
     }
 
     #[test]
-    fn release_within_a_third_of_the_viewport_reengages_follow() {
-        for (distance, near) in [(0.0, true), (260.0, true), (300.0, false)] {
-            let mut scroll = FollowScroll::default();
-            scroll.configure(Style::Spicy, 3.0, 8);
-            let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
-            scroll.sample(&target, 0.0, true);
-            scroll.drag(-distance, 2_000.0, 800.0);
-            let released = scroll.position();
-            assert_eq!(scroll.release(0.0, 2_000.0, 800.0, target.offset), near);
-            if near {
-                // The resumed spring starts at the released offset, then eases
-                // toward the active line instead of snapping.
-                assert_eq!(scroll.sample(&target, 200.0, true), released);
-                let middle = scroll.sample(&target, 300.0, true);
-                assert!(middle > released && middle < target.offset);
-                assert_eq!(scroll.sample(&target, 1_500.0, true), target.offset);
-            } else {
-                // A far release stays manual and does not drift to the target.
-                assert_eq!(scroll.sample(&target, 200.0, false), released);
-                assert_eq!(scroll.sample(&target, 1_500.0, false), released);
-                assert!(!scroll.animating());
+    fn release_within_a_third_of_the_viewport_reengages_follow_for_both_styles() {
+        for style in [Style::Spicy, Style::Amll] {
+            for (distance, near) in [(0.0, true), (299.9, true), (300.0, true), (300.1, false)] {
+                let mut scroll = FollowScroll::default();
+                scroll.configure(style, 3.0, 8);
+                let target = command(style, 500.0, 800.0, 1, 0);
+                scroll.sample(&target, 0.0, true);
+                scroll.drag(-distance, 2_000.0, 900.0);
+                let released = scroll.position();
+                assert_eq!(
+                    scroll.release(0.0, 2_000.0, 900.0, Some(target.offset)),
+                    near,
+                    "{style:?} at the exact viewport-third boundary"
+                );
+                if near {
+                    // The resumed trajectory starts at the released offset, then
+                    // eases toward the active line instead of snapping.
+                    assert_eq!(scroll.sample(&target, 200.0, true), released);
+                    let middle = scroll.sample(&target, 300.0, true);
+                    assert!(middle > released && middle < target.offset);
+                    assert_eq!(scroll.sample(&target, 1_500.0, true), target.offset);
+                } else {
+                    // A far release stays manual and does not drift to the target.
+                    assert_eq!(scroll.sample(&target, 200.0, false), released);
+                    assert_eq!(scroll.sample(&target, 1_500.0, false), released);
+                    assert!(!scroll.animating());
+                }
             }
         }
     }
@@ -1018,8 +1035,24 @@ mod tests {
         assert_eq!(scroll.sample(&target, 100.0, false), held);
         assert_eq!(scroll.sample(&target, 200.0, false), held);
         assert!(scroll.dragging);
-        assert!(scroll.release(0.0, 2_000.0, 800.0, target.offset));
+        assert!(scroll.release(0.0, 2_000.0, 800.0, Some(target.offset)));
         assert!(!scroll.dragging);
+    }
+
+    #[test]
+    fn release_without_layout_stays_manual() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
+        scroll.sample(&target, 0.0, true);
+        scroll.drag(-40.0, 2_000.0, 800.0);
+        assert!(!scroll.release(0.0, 2_000.0, 800.0, None));
+        // The fling handoff still happened, but follow ownership did not move
+        // because no layout supplied an authoritative active-line target.
+        assert!(!scroll.dragging);
+        assert_eq!(scroll.sample(&target, 100.0, false), 460.0);
+        assert_eq!(scroll.sample(&target, 1_000.0, false), 460.0);
+        assert!(!scroll.animating());
     }
 
     #[test]

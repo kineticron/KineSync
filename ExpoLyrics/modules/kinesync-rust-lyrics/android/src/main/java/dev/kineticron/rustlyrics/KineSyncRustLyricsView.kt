@@ -34,10 +34,15 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var generation = 0L
   private var sequence = 0L
   private var track = ""
+  private var trackId = ""
   private var anchor: Anchor? = null
   private var enabled = true
   // Desired follow ownership, replayed when the owner is created or the track changes.
   private var following = true
+  // Invalidates an asynchronous release handoff after a newer touch, track or follow command.
+  private var followEpoch = 0L
+  // A queued JS touch-down false must not undo a release recapture.
+  private var releasePending = false
   private var foreground = true
   private var attached = false
   private var busy = false
@@ -108,6 +113,9 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       MotionEvent.ACTION_DOWN -> {
         velocity?.recycle(); velocity = VelocityTracker.obtain()
         downY = ev.y; lastY = ev.y; dragging = false
+        // Invalidate an in-flight release before queued JS ownership arrives.
+        releasePending = false
+        followEpoch++
       }
       MotionEvent.ACTION_MOVE -> {
         velocity?.addMovement(ev)
@@ -221,8 +229,16 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value.length > 2_000_000) return
     val id = try { JSONObject(value).getLong("generation") } catch (_: Exception) { return }
     if (id <= generation) return
+    val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
     generation = id; sequence = 0; anchor = null; animating = false
-    following = true
+    // Only a track identity change restores follow. Translation, credit and
+    // layout revisions keep the user's manual ownership.
+    if (nextTrackId != trackId) {
+      trackId = nextTrackId
+      following = true
+      releasePending = false
+      followEpoch++
+    }
     failed = false; textureView.alpha = 0f
     track = value; markDirty(); refresh(); lifecycle()
   }
@@ -250,12 +266,30 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
-  fun setFollowing(value: Boolean) { following = value; owner?.setFollowing(value); markDirty(); lifecycle() }
+  fun setFollowing(value: Boolean) {
+    if (!value && releasePending) return
+    if (value) releasePending = false
+    following = value; followEpoch++; owner?.setFollowing(value); markDirty(); lifecycle()
+  }
   fun scrollBy(dy: Double) {
     if (!dy.isFinite() || dy == 0.0) return
     owner?.scrollBy(dy); markDirty(); lifecycle()
   }
-  fun fling(v: Double) { if (!v.isFinite()) return; owner?.fling(v); markDirty(); lifecycle() }
+  fun fling(v: Double) {
+    if (!v.isFinite()) return
+    val releaseSession = session
+    val releaseGeneration = generation
+    val releaseEpoch = followEpoch
+    releasePending = true
+    owner?.fling(v, RustBridge.nowMs()) { resumed ->
+      if (resumed && session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && !failed) {
+        following = true
+        onStatus(mapOf("state" to "follow", "generation" to releaseGeneration,
+          "message" to "Auto-follow resumed near the active line"))
+      }
+    }
+    markDirty(); lifecycle()
+  }
   fun hitTest(x: Double, y: Double, promise: Promise) {
     if (!x.isFinite() || !y.isFinite()) return promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point", null)
     val o = owner ?: return promise.resolve(-1)

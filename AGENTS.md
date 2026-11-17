@@ -47,7 +47,7 @@ node scripts/release-version.js
 All commands above passed on rescue before this guide was committed. Host tests do not establish iOS build success or visual parity. Verify the custom IPA on device for native visual or touch changes.
 
 ABI changes must stay consistent across native/lyrics-renderer/src/ffi.rs, native/lyrics-renderer/include/KineSyncLyrics.h, ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift, and ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx.
-Current ABI is 10. When changing the ABI contract, bump the Rust return and tests, header contract, Swift guard, and JS guard together. Rebuild the development client. Do not bump for documentation-only changes.
+Current ABI is 11. When changing the ABI contract, bump the Rust return and tests, header contract, Swift guard, and JS guard together. Rebuild the development client. Do not bump for documentation-only changes.
 
 Never push main. This work belongs on rust-renderer-spike unless the user explicitly names another non-main branch.
 Make small per-item commits with author Kineticron <kineticrondev@gmail.com>. Do not add AI coauthor trailers.

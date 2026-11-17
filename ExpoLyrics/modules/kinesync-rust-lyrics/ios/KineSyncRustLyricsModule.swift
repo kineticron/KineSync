@@ -44,7 +44,7 @@ private struct Anchor: Decodable {
   let rate: Double
   let snap: Bool
 }
-private struct TrackIdentity: Decodable { let generation: UInt64 }
+private struct TrackIdentity: Decodable { let generation: UInt64; let track_id: String }
 
 // Only the serial queue touches Rust. Retirement is asynchronous and retains the
 // layer until the last bounded frame and surface destruction have completed.
@@ -158,11 +158,11 @@ private final class RustOwner: @unchecked Sendable {
       if kr_scroll_by(self.handle, dy) < 0 { self.failure() }
     }
   }
-  func fling(_ velocity: Double, completion: @escaping @MainActor (Bool) -> Void) {
-    guard velocity.isFinite else { return }
+  func fling(_ velocity: Double, nativeMs: Double, completion: @escaping @MainActor (Bool) -> Void) {
+    guard velocity.isFinite, nativeMs.isFinite, nativeMs >= 0 else { return }
     queue.async {
       guard self.permitted(), self.handle != 0, !self.failed else { return }
-      let result = kr_fling(self.handle, velocity)
+      let result = kr_fling(self.handle, velocity, nativeMs)
       if result < 0 { self.failure(); return }
       if result == 1 { DispatchQueue.main.async { completion(true) } }
     }
@@ -233,7 +233,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 10 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 11 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }
@@ -342,11 +342,18 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var generation: UInt64 = 0
   private var sequence: UInt64 = 0
   private var track = ""
+  private var trackId = ""
   private var anchor: Anchor?
   private var enabled = true
   // Desired follow ownership. Kept here so a handoff sent before the native
   // owner exists is replayed when the owner is created or the track changes.
   private var following = true
+  // Invalidates an asynchronous release handoff after a newer touch, track or
+  // follow command. A stale completion must never resume a later gesture.
+  private var followEpoch: UInt64 = 0
+  // A queued JS touch-down false must not undo a release recapture. It clears
+  // on a new touch, explicit follow true, or track identity change.
+  private var releasePending = false
   private var foreground = UIApplication.shared.applicationState == .active
   private var busy = false
   private var dirty = true
@@ -489,9 +496,14 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     guard value.utf8.count <= 2_000_000,
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
     generation = identity.generation; sequence = 0; anchor = nil; animating = false
-    // A new song starts following again instead of inheriting the previous
-    // song's manual scroll ownership.
-    following = true
+    // Only a track identity change restores follow. Translation, credit and
+    // layout revisions keep the user's manual ownership.
+    if identity.track_id != trackId {
+      trackId = identity.track_id
+      following = true
+      releasePending = false
+      followEpoch &+= 1
+    }
     failed = false; metal.isHidden = true
     track = value; markDirty()
     refresh(); lifecycle()
@@ -521,11 +533,21 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     lifecycle()
   }
   func setFollowing(_ value: Bool) {
+    if !value && releasePending { return }
+    if value { releasePending = false }
     following = value
+    followEpoch &+= 1
     owner?.setFollowing(value)
     // A paused/settled surface still needs frames while the spring settles.
     markDirty()
     lifecycle()
+  }
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+    // Invalidate an in-flight release before JS or the pan recognizer can
+    // deliver the next ownership command.
+    releasePending = false
+    followEpoch &+= 1
+    super.touchesBegan(touches, with: event)
   }
   func scrollBy(_ dy: Double) {
     guard dy.isFinite, dy != 0 else { return }
@@ -535,10 +557,18 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   }
   func fling(_ velocity: Double) {
     guard velocity.isFinite else { return }
-    owner?.fling(velocity) { [weak self] resumed in
-      guard let self, resumed else { return }
+    let releaseSession = session
+    let releaseGeneration = generation
+    let releaseEpoch = followEpoch
+    releasePending = true
+    owner?.fling(velocity, nativeMs: CACurrentMediaTime() * 1000) { [weak self] resumed in
+      guard let self, resumed,
+            self.session == releaseSession,
+            self.generation == releaseGeneration,
+            self.followEpoch == releaseEpoch,
+            !self.failed else { return }
       self.following = true
-      self.onStatus(["state": "follow", "generation": self.generation,
+      self.onStatus(["state": "follow", "generation": releaseGeneration,
                      "message": "Auto-follow resumed near the active line"])
     }
     markDirty()

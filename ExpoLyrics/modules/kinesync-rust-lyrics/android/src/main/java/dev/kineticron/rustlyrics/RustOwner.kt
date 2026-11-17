@@ -87,10 +87,10 @@ internal class RustOwner(
   private fun post(block: () -> Unit) = worker.post { if (permitted() && handle != 0L && !failed) block() }
   fun setFollowing(v: Boolean) = post { if (RustBridge.setFollowing(handle, v) < 0) failure() }
   fun scrollBy(dy: Double) { if (dy.isFinite()) post { if (RustBridge.scrollBy(handle, dy) < 0) failure() } }
-  fun fling(v: Double) { if (v.isFinite()) post {
-    val result = RustBridge.fling(handle, v)
+  fun fling(v: Double, nativeMs: Double, done: (Boolean) -> Unit) { if (v.isFinite() && nativeMs.isFinite() && nativeMs >= 0.0) post {
+    val result = RustBridge.fling(handle, v, nativeMs)
     if (result < 0) failure()
-    else if (result == 1) emit(mapOf("state" to "follow", "message" to "Auto-follow resumed near the active line"))
+    else if (result == 1) main.post { done(true) }
   } }
   fun hitTest(x: Double, y: Double, done: (Int) -> Unit) = worker.post {
     val idx = if (permitted() && handle != 0L && !failed) RustBridge.hitTest(handle, x, y) else -1
@@ -142,7 +142,7 @@ internal class RustOwner(
     if (u.width <= 0 || u.height <= 0) return
     val w = minOf(8192, u.width); val h = minOf(8192, u.height)
     if (handle == 0L) {
-      if (RustBridge.abiVersion() != 10) { failed = true; emit(mapOf("state" to "error", "message" to "Rust ABI mismatch")); return }
+      if (RustBridge.abiVersion() != 11) { failed = true; emit(mapOf("state" to "error", "message" to "Rust ABI mismatch")); return }
       val s = Surface(texture)
       surface = s
       handle = RustBridge.create(s, w, h, u.scale)

@@ -464,6 +464,15 @@ export default function HomeScreen() {
   const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
+  // Manual ownership belongs to one track. A new track identity restores
+  // follow in the parent so a stale false from the previous song cannot win.
+  const autoFollowTrackId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = currentTrack?.id ?? null;
+    if (autoFollowTrackId.current === id) return;
+    autoFollowTrackId.current = id;
+    setAutoFollowEnabled(true);
+  }, [currentTrack?.id]);
   const [controlsDockHeight, setControlsDockHeight] = useState(0);
   const [scrubPreviewPositionMs, setScrubPreviewPositionMs] = useState<
     number | null

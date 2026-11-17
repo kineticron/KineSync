@@ -75,7 +75,7 @@ FN(jint, setFollowing)(JNIEnv *, jobject, jlong p, jboolean following) {
   return kr_set_following(owner(p)->handle, following == JNI_TRUE);
 }
 FN(jint, scrollBy)(JNIEnv *, jobject, jlong p, jdouble dy) { return kr_scroll_by(owner(p)->handle, dy); }
-FN(jint, fling)(JNIEnv *, jobject, jlong p, jdouble velocity) { return kr_fling(owner(p)->handle, velocity); }
+FN(jint, fling)(JNIEnv *, jobject, jlong p, jdouble velocity, jdouble nativeMs) { return kr_fling(owner(p)->handle, velocity, nativeMs); }
 FN(jint, hitTest)(JNIEnv *, jobject, jlong p, jdouble x, jdouble y) { return kr_hit_test(owner(p)->handle, x, y); }
 
 FN(jint, render)(JNIEnv *, jobject, jlong p, jdouble target, jdouble sampled, jdouble resume) {
