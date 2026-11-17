@@ -71,18 +71,27 @@ const handlers = new Map();
 const playerHandlers = new Map();
 const events = [];
 let resets = 0;
+const layouts = [];
+const scheduledFrames = [];
+const lyricReplacements = [];
+let staticRenders = 0;
+let selectionUpdates = 0;
 const context = vm.createContext({
   autoFollowEnabled: true, sourceLines: [{}], tapToSeekEnabled: true,
   showTranslatedText: false, landscapeMode: false, staticLyricsMode: false,
+  fontScale: 1, selectedKeys: {},
   resumeAutoFollowSignal: 0, longPressTimer: 0, touchMoved: false,
   touchStartSourceIndex: -1, lastLyricEndTime: 1000, IDLE_ANIMATION_GRACE_MS: 750,
   player: { addEventListener: (name, handler) => playerHandlers.set(name, handler), resetScroll: () => resets++,
+    setLyricLines: (lines, position) => lyricReplacements.push({ lines, position }),
     getBottomLineElement: () => ({ addEventListener: (name, handler) => handlers.set(`credits-${name}`, handler) }) },
   playerElement: { addEventListener: (name, handler) => handlers.set(name, handler) },
   post: event => events.push(event), window: { clearTimeout() {}, setTimeout: () => 1 },
-  scheduleFrame() {}, getSourceIndexFromLineEvent: () => 0, getSourceIndexFromTarget: () => 0,
-  setPressedSourceIndex() {}, relayout: () => Promise.resolve(), toFiniteMs: (value, fallback) => value ?? fallback,
-  updatePlayerClass() {}, updateSelectionClasses() {},
+  scheduleFrame: grace => scheduledFrames.push(grace), getSourceIndexFromLineEvent: () => 0, getSourceIndexFromTarget: () => 0,
+  setPressedSourceIndex() {}, relayout: force => { layouts.push(force); return Promise.resolve(); }, toFiniteMs: (value, fallback) => value ?? fallback,
+  updatePlayerClass() {}, updateSelectionClasses: () => selectionUpdates++,
+  renderStaticLyrics: () => staticRenders++, convertLines: lines => lines,
+  getProjectedPosition: () => 1234,
 });
 const adapter = amll.slice(amll.indexOf('function setAutoFollow('), amll.indexOf('function playbackNeedsFrames('));
 const options = amll.slice(amll.indexOf('function applyOptions('), amll.indexOf('function sync('));
@@ -102,6 +111,25 @@ handlers.get('wheel')();
 context.applyOptions({ autoFollowEnabled: false, resumeAutoFollowSignal: 1, tapToSeekEnabled: true });
 assert.equal(context.autoFollowEnabled, true, 'AMLL explicit resume overrides manual follow');
 assert.equal(resets, 3);
+assert.equal(layouts.at(-1), undefined, 'explicit resume requests the real adapter relayout');
+assert.equal(scheduledFrames.at(-1), 1500, 'explicit resume wakes the return animation');
+assert.equal(selectionUpdates, 1, 'unchanged layout updates selection without replacing lyrics');
+assert.equal(context.fontScale, 1);
+assert.equal(Object.keys(context.selectedKeys).length, 0);
+
+const selectedKeys = { selected: true };
+context.applyOptions({ showTranslatedText: true, tapToSeekEnabled: true, fontScale: 1.25, selectedKeys });
+assert.equal(context.fontScale, 1.25);
+assert.equal(context.selectedKeys, selectedKeys);
+assert.equal(lyricReplacements.length, 1, 'translation changes exercise the synced lyrics branch');
+assert.equal(lyricReplacements[0].lines, context.sourceLines);
+assert.equal(lyricReplacements[0].position, 1234);
+assert.equal(layouts.at(-1), true);
+context.staticLyricsMode = true;
+context.applyOptions({ showTranslatedText: true, landscapeMode: true, tapToSeekEnabled: true });
+assert.equal(staticRenders, 1, 'static layout changes exercise the static lyrics branch');
+assert.equal(lyricReplacements.length, 1, 'static changes do not replace synced lyrics');
+assert.equal(resets, 3, 'layout branches do not manufacture a resume command');
 
 const follow = createRustLyricsFollow();
 follow.sync('old', true);
