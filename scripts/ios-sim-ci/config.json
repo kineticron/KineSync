@@ -8,9 +8,7 @@
   "onboarding": {
     "required": [
       "KineSync",
-      "A modern, beautiful mobile app",
-      "syllable-synced lyrics",
-      "Spotify playback"
+      "Start Setup"
     ],
     "forbidden": [
       "Development servers",

@@ -204,3 +204,150 @@ test('workflow shell blocks pass bash syntax checks', () => {
     assert.equal(result.status, 0, result.stderr);
   }
 });
+
+test('expanded Xcode SDK settings accept simulator paths and reject inconsistent identities', () => {
+  const settings = () => ['KineSync', 'KineSyncLyricsWidget'].map(TARGET_NAME => ({ buildSettings: {
+    TARGET_NAME, CONFIGURATION: 'Debug', SDKROOT: '/Applications/Xcode 27.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator27.0.sdk',
+    SDK_NAME: 'iphonesimulator27.0', PLATFORM_NAME: 'iphonesimulator', EFFECTIVE_PLATFORM_NAME: '-iphonesimulator', SUPPORTED_PLATFORMS: 'iphonesimulator', ARCHS: 'arm64',
+  } }));
+  assert.doesNotThrow(() => sim.assertSimulatorSettings(settings(), 'KineSync'));
+  for (const [key, value] of [['SDKROOT', '/SDKs/iPhoneOS27.0.sdk'], ['SDKROOT', '/tmp/iphonesimulator-fake.sdk'], ['SDK_NAME', 'iphoneos27.0'], ['PLATFORM_NAME', 'iphoneos'], ['EFFECTIVE_PLATFORM_NAME', '-iphoneos']]) {
+    const entries = settings(); entries[1].buildSettings[key] = value;
+    assert.throws(() => sim.assertSimulatorSettings(entries, 'KineSync'), /simulator|PLATFORM_NAME/);
+  }
+});
+
+test('simulator selection pairs supported devices with newest available iOS runtime', () => {
+  const { selectSimulator } = require('../ios-sim-ci/simulator-smoke.cjs');
+  const input = {
+    runtimes: [
+      { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-0', version: '26.0', isAvailable: true, supportedDeviceTypes: [{ identifier: 'new' }] },
+      { identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-0', version: '27.0', isAvailable: false, supportedDeviceTypes: [{ identifier: 'new' }] },
+      { identifier: 'com.apple.CoreSimulator.SimRuntime.watchOS-27-0', version: '27.0', isAvailable: true },
+    ],
+    devicetypes: [{ name: 'iPhone 4s', identifier: 'old' }, { name: 'iPhone 17', identifier: 'new', minRuntimeVersion: 26 << 16, maxRuntimeVersion: 0xffffffff }],
+  };
+  assert.equal(selectSimulator(input).deviceType, 'new');
+  delete input.runtimes[0].supportedDeviceTypes;
+  assert.equal(selectSimulator(input).deviceType, 'new');
+  input.devicetypes[1].minRuntimeVersion = 27 << 16;
+  assert.throws(() => selectSimulator(input), /No compatible/);
+});
+
+test('launcher lock and patched context cannot drift silently', () => {
+  const { assertVersion } = require('../ios-sim-ci/patch-dev-launcher.cjs');
+  assert.doesNotThrow(() => assertVersion('58.0.12', '58.0.12'));
+  assert.throws(() => assertVersion('58.0.13', '58.0.12'), /58.0.12/);
+  assert.throws(() => assertVersion('58.0.12', '58.0.13'), /58.0.12/);
+  assert.throws(() => patch(patch(EXPECTED).replace('loadLocalBundle()', 'different()')), /context mismatch/);
+  assert.throws(() => patch(EXPECTED + '\n' + EXPECTED), /context mismatch/);
+  assert.match(patch(EXPECTED), /#if targetEnvironment\(simulator\)/);
+});
+
+test('controlled cache evidence rejects partial hits, failed restores and absent publications', () => {
+  const cache = Object.fromEntries(['npm', 'lock', 'pods', 'derived', 'ccache'].map(key => [key, { outcome: 'success', hit: 'true', verified: 'true' }]));
+  cache.rust = { outcome: 'success', prebuilt_hit: 'true', verified: 'true' };
+  assert.deepEqual(sim.cacheEvidence('warm', cache), { warmPass: true, coldPass: true, verifyPass: true });
+  cache.pods.hit = 'false'; assert.equal(sim.cacheEvidence('warm', cache).warmPass, false);
+  cache.pods.hit = 'true'; cache.pods.outcome = 'failure'; assert.equal(sim.cacheEvidence('warm', cache).warmPass, false);
+  for (const entry of Object.values(cache)) { entry.outcome = 'skipped'; entry.hit = ''; entry.prebuilt_hit = ''; }
+  assert.equal(sim.cacheEvidence('cold', cache).coldPass, true);
+  cache.npm.outcome = 'failure'; assert.equal(sim.cacheEvidence('cold', cache).coldPass, false);
+  cache.npm.verified = ''; assert.equal(sim.cacheEvidence('cold', cache).verifyPass, false);
+});
+
+test('summary records failed smoke honestly even when the job failed before build', t => {
+  const root = temp(t);
+  put(root, 'state.json', JSON.stringify({ paths: { evidence: root }, mode: 'normal', keys: {}, identity: { xcode: 'Xcode 27', sdk: '27.0' }, started_at: new Date().toISOString() }));
+  execFileSync(process.execPath, [path.join(repo, 'scripts/ios-sim-ci/ci.cjs'), 'summary'], { env: { ...process.env, CI_EVIDENCE_DIR: root, CI_JOB_STATUS: 'failure', CACHE_RESULTS: '{}' } });
+  const report = JSON.parse(fs.readFileSync(path.join(root, 'evidence.json')));
+  assert.equal(report.smoke_passed, false);
+  assert.match(report.note, /did not complete/);
+  assert.equal(report.rust.action, 'not-completed');
+});
+
+test('link proof attributes render symbol to the exact validated archive bytes', t => {
+  const { linkedArchive } = require('../ios-sim-ci/link-proof.cjs');
+  const root = temp(t), expected = path.join(root, 'source.a'), linked = path.join(root, 'liblyrics_renderer.a');
+  fs.writeFileSync(expected, 'exact source'); fs.writeFileSync(linked, 'exact source');
+  const map = `[ 12] ${linked}(renderer.o)\n0x100000000 0x00000004 [ 12] _kr_render\n`;
+  assert.equal(linkedArchive(map, expected).path, linked);
+  assert.throws(() => linkedArchive(map.replace('[ 12] _kr_render', '[ 13] _kr_render'), expected), /attributed/);
+  fs.writeFileSync(linked, 'stale source'); assert.throws(() => linkedArchive(map, expected), /differs/);
+});
+
+test('ABI matcher rejects overwritten constants and adjacent symbol leakage', () => {
+  assert.equal(matchesAbi('_kr_abi_version:\n mov w0, #11\n mov w0, #10\n ret'), false);
+  assert.equal(matchesAbi('_kr_abi_version:\n mov w0, #10\n_other:\n mov w0, #11\n ret'), false);
+});
+
+test('real pinned Rust thin-LTO simulator archive exposes the expected ABI instruction stream', { skip: process.env.KINESYNC_SIM_NATIVE_TOOLS_TEST !== '1' }, t => {
+  const { abiDisassembly } = require('../ios-sim-ci/rust-sim.cjs');
+  const root = temp(t);
+  for (const abi of [11, 10]) {
+    const source = path.join(root, `abi${abi}.rs`), library = path.join(root, `libabi${abi}.a`);
+    fs.writeFileSync(source, `#[unsafe(no_mangle)] pub extern "C" fn kr_abi_version() -> u32 { ${abi} }`);
+    execFileSync('rustc', ['+1.97.0', '--crate-type', 'staticlib', '--target', 'aarch64-apple-ios-sim', '-C', 'opt-level=3', '-C', 'lto=thin', source, '-o', library], { timeout: 120000 });
+    const output = abiDisassembly(library);
+    assert.match(output, /file format mach-o arm64/);
+    assert.equal(matchesAbi(output), abi === 11, output);
+  }
+});
+
+test('actual locked Hermes bytecode retains ASCII and UTF-16 markers in the packaged bundle', { skip: process.env.KINESYNC_SIM_NATIVE_TOOLS_TEST !== '1' }, t => {
+  const { JS_MARKERS, missingJsMarkers } = require('../ios-sim-ci/link-proof.cjs');
+  const root = temp(t), app = fakeSimulatorApp(root), bin = fakeXcrun(root);
+  const compiler = process.env.KINESYNC_HERMESC || path.join(repo, 'ExpoLyrics/node_modules/hermes-compiler/hermesc', process.platform === 'darwin' ? 'osx-bin' : 'linux64-bin', 'hermesc');
+  const source = path.join(root, 'input.js'), output = path.join(app, 'main.jsbundle');
+  for (const unicode of [false, true]) {
+    fs.writeFileSync(source, `globalThis.proof = ${JSON.stringify(JS_MARKERS.map(marker => (unicode ? '語' : '') + marker + 'x'.repeat(60000)))};`);
+    execFileSync(compiler, ['-emit-binary', '-out', output, source]);
+    const bytes = fs.readFileSync(output);
+    assert.deepEqual(missingJsMarkers(bytes), []);
+    assert.equal(bytes.includes(Buffer.from(JS_MARKERS[1], unicode ? 'utf16le' : 'utf8')), true);
+    const result = spawnSync('python3', [path.join(repo, 'scripts/ios-sim-ci/verify_simulator.py'), '--app', app, '--bundle-id', 'dev.kineticron.KineSync'], { encoding: 'utf8', env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).js_bundles[0].sha256.length, 64);
+  }
+});
+
+test('verifier inspects nested frameworks and requires a Mach-O widget executable', t => {
+  const root = temp(t), app = fakeSimulatorApp(root), bin = fakeXcrun(root);
+  const run = () => spawnSync('python3', [path.join(repo, 'scripts/ios-sim-ci/verify_simulator.py'), '--app', app, '--bundle-id', 'dev.kineticron.KineSync'], { encoding: 'utf8', env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH } });
+  put(app, 'Frameworks/Nested.framework/Nested', Buffer.from('cffaedfe00000000', 'hex'));
+  assert.equal(JSON.parse(run().stdout).architectures.length, 3);
+  const xcrun = path.join(bin, 'xcrun');
+  fs.writeFileSync(xcrun, fs.readFileSync(xcrun, 'utf8').replace("process.env.TEST_PLATFORM || 'IOSSIMULATOR'", "args.at(-1).includes('Nested.framework') ? 'IOS' : 'IOSSIMULATOR'"));
+  assert.match(run().stderr, /Nested.*not an IOSSIMULATOR/);
+  fs.unlinkSync(path.join(app, 'Frameworks/Nested.framework/Nested'));
+  fs.writeFileSync(path.join(app, 'PlugIns/KineSyncLyricsWidget.appex/KineSyncLyricsWidget'), 'not Mach-O');
+  assert.match(run().stderr, /Widget executable was not inspected/);
+});
+
+test('source and build inputs invalidate simulator caches while device automation stays isolated', t => {
+  const root = temp(t); fixture(root);
+  const initial = sim.cacheKeys(root, identity, 'review', 'refs/heads/development');
+  put(root, 'scripts/ios-dev-ci/ci.cjs', 'unrelated device change');
+  assert.deepEqual(sim.cacheKeys(root, identity, 'review', 'refs/heads/development'), initial);
+  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'scripts/ios-sim-ci/patch-dev-launcher.cjs', '.github/workflows/ios-simulator-build.yml']) {
+    const before = sim.cacheKeys(root, identity, 'review', 'refs/heads/development');
+    put(root, file, `changed ${file}`);
+    const after = sim.cacheKeys(root, identity, 'review', 'refs/heads/development');
+    assert.notEqual(after.prebuilt, before.prebuilt, file);
+    assert.notEqual(after.derived, before.derived, file);
+  }
+  const before = sim.cacheKeys(root, identity, 'review', 'refs/heads/development');
+  put(root, 'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf', 'font bytes');
+  const after = sim.cacheKeys(root, identity, 'review', 'refs/heads/development');
+  assert.notEqual(after.lock, before.lock);
+  assert.notEqual(after.derived, before.derived);
+  assert.throws(() => sim.cacheKeys(root, identity, 'bad\ninput', 'refs/heads/development'), /cache epoch/);
+});
+
+test('widget settings are queried explicitly without scheme-only Xcode options', () => {
+  const build = sim.buildArgs('/ios', 'KineSync.xcworkspace', 'KineSync', '/derived', '/wrapper');
+  const widget = sim.targetSettingsArgs(build, '/ios/KineSync.xcodeproj', 'KineSyncLyricsWidget');
+  assert.deepEqual(widget.slice(0, 4), ['-project', '/ios/KineSync.xcodeproj', '-target', 'KineSyncLyricsWidget']);
+  for (const flag of ['-workspace', '-scheme', '-destination', '-derivedDataPath']) assert.ok(!widget.includes(flag));
+  for (const flag of ['Debug', 'iphonesimulator', 'ARCHS=arm64', 'SUPPORTED_PLATFORMS=iphonesimulator', 'SDKROOT=iphonesimulator', '-showBuildSettings', '-json']) assert.ok(widget.includes(flag));
+});

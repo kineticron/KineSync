@@ -2,11 +2,24 @@
 """Zip a simulator .app for Revyl and verify bytes, types and POSIX modes."""
 import hashlib
 import json
+import shutil
 import os
 from pathlib import Path
 import stat
 import sys
 import zipfile
+
+
+def stream_hash(source):
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: source.read(1024 * 1024), b''):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_hash(file):
+    with file.open('rb') as source:
+        return stream_hash(source)
 
 
 def package(app, archive, manifest):
@@ -25,10 +38,12 @@ def package(app, archive, manifest):
             raise ValueError(f'Unsupported file type: {file}')
         if is_dir:
             name += '/'
-        data = os.readlink(file).encode() if is_link else b'' if is_dir else file.read_bytes()
+        data = os.readlink(file).encode() if is_link else b''
+        if is_link and (not file.exists() or not file.resolve().is_relative_to(app.resolve())):
+            raise ValueError(f'Unsafe bundle symlink: {file}')
         entries.append({'path': name, 'mode': stat.S_IMODE(info.st_mode),
                         'type': 'symlink' if is_link else 'directory' if is_dir else 'file',
-                        'sha256': hashlib.sha256(data).hexdigest(), 'data': data})
+                        'sha256': file_hash(file) if not (is_link or is_dir) else hashlib.sha256(data).hexdigest(), 'source': file, 'data': data})
         if is_dir:
             for child in sorted(file.iterdir()):
                 visit(child, name + child.name)
@@ -42,7 +57,11 @@ def package(app, archive, manifest):
             kind = {'file': stat.S_IFREG, 'directory': stat.S_IFDIR, 'symlink': stat.S_IFLNK}[entry['type']]
             item.external_attr = ((kind | entry['mode']) << 16) | (0x10 if entry['type'] == 'directory' else 0)
             item.compress_type = zipfile.ZIP_DEFLATED
-            output.writestr(item, entry['data'], compresslevel=1)
+            if entry['type'] == 'file':
+                with entry['source'].open('rb') as source, output.open(item, 'w', force_zip64=True) as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+            else:
+                output.writestr(item, entry['data'], compresslevel=1)
     with zipfile.ZipFile(archive) as output:
         if output.testzip() is not None:
             raise ValueError('ZIP CRC failed')
@@ -56,14 +75,18 @@ def package(app, archive, manifest):
             kind = {'file': stat.S_IFREG, 'directory': stat.S_IFDIR, 'symlink': stat.S_IFLNK}[entry['type']]
             if stat.S_IFMT(mode) != kind:
                 raise ValueError(f'Type loss: {entry["path"]}')
-            if hashlib.sha256(output.read(item)).hexdigest() != entry['sha256']:
-                raise ValueError(f'Content change: {entry["path"]}')
+            with output.open(item) as source:
+                if stream_hash(source) != entry['sha256']:
+                    raise ValueError(f'Content change: {entry["path"]}')
     size = archive.stat().st_size
     if size > 5 * 1024 * 1024 * 1024:
         raise ValueError('Revyl 5 GiB artifact limit exceeded')
+    if sum(item.file_size for item in output.infolist()) > 8 * 1024 * 1024 * 1024:
+        raise ValueError('Revyl 8 GiB uncompressed workspace limit exceeded')
     for entry in entries:
         del entry['data']
-    result = {'zip': str(archive), 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+        del entry['source']
+    result = {'zip': str(archive), 'sha256': file_hash(archive),
               'bytes': size, 'entries': entries, 'app_root': app.name,
               'verification': 'ZIP CRC + source content/type/mode equality',
               'signing': 'unsigned', 'install_or_launch_tested_by_packager': False}
