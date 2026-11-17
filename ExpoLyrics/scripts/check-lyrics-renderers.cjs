@@ -108,6 +108,7 @@ function load(file) {
     if (name.startsWith('@/')) return load(name.slice(2) + '.ts');
     if (name.startsWith('.')) {
       const target = path.resolve(path.dirname(resolved), name);
+      if (fs.existsSync(target + '.js')) return require(target + '.js');
       return load(path.relative(root, target) + (fs.existsSync(target + '.tsx') ? '.tsx' : '.ts'));
     }
     return require(name);
@@ -587,6 +588,36 @@ for (const mobile of [false, true]) {
       assert.equal(words.at(-1).endTime, Math.round(block.Syllables.at(-1).EndTime * 1000));
     }
     assert.equal(JSON.stringify(context.payload), snapshot, 'parser keeps provider payload intact');
+  }
+  if (!mobile) continue;
+  // Modeled mobile BG tail and overlap, not a captured EXO payload. Provider access
+  // requires authorization. Keep independent source seconds through Rust paint.
+  const block = (text, start, end) => ({ StartTime: start, EndTime: end,
+    Syllables: text.map((Text, index) => ({ Text, IsPartOfWord: false,
+      StartTime: start + (end - start) * index / text.length,
+      EndTime: start + (end - start) * (index + 1) / text.length })) });
+  context.payload = { Type: 'Syllable', Content: [
+    { Type: 'Vocal', Lead: block(['main'], 1, 2),
+      Background: [block(['echo', 'tail'], 2, 4), block(['response'], 2.5, 3.5)] },
+    { Type: 'Vocal', Lead: block(['next'], 3, 5) },
+  ] };
+  const parsed = vm.runInContext('parseSpicyLyrics(payload, 5000)', context);
+  const { prepareRustTrack } = load('lib/rust-lyrics-preparation.ts');
+  const packet = JSON.parse(prepareRustTrack('modeled-bg-tail', 1, parsed, 'spicy'));
+  assert.equal(parsed[0].lineEndTime, 2000, 'lead interval stays separate');
+  assert.equal(layout.getBackgroundEndTime(parsed[0]), 4000, 'effective end includes all BGs');
+  assert.equal(packet.lines[0].end, 2000);
+  assert.equal(packet.lines[0].background_end, 4000);
+  assert.equal(packet.lines[1].start, 3000, 'overlapping main keeps its start');
+  assert.deepEqual(packet.lines[0].backgrounds.map(voice => [voice.start, voice.end]),
+    [[2000, 4000], [2500, 3500]]);
+  assert.deepEqual(packet.lines[0].backgrounds[0].words.map(word => [word.start, word.end]),
+    [[2000, 3000], [3000, 4000]], 'BG syllable clocks survive preparation');
+  for (const time of [1999, 2000, 2001, 2999, 3000, 3999, 4000, 2500]) {
+    const window = layout.getPlaybackWindowState(time, parsed);
+    assert.equal(window.focusLineIndex, time < 4000 ? 0 : 1, 'focus holds through BG tail and backward seek');
+    assert.equal(window.visualActiveLineStartIndex, time < 4000 ? 0 : 1);
+    assert.equal(window.visualActiveLineEndIndex, time < 3000 ? 0 : 1, 'next main activates during prior BG');
   }
 }
 console.log('Spicy parser-to-AMLL checks passed for desktop/mobile lead and background spacing.');

@@ -319,7 +319,6 @@ impl TrackScene {
             }
             let row = state.row(index);
             let line = &self.lines[index];
-            let singing = time >= line.start && time < line.end;
             // Skia's `active` is the whole presentation package, so a line whose
             // lead has ended keeps its reveal and glow while a background voice
             // is still singing.
@@ -331,7 +330,7 @@ impl TrackScene {
                 f64::from(self.width) + 64.0,
                 cached.height + 64.0,
             );
-            let detailed = (singing || row.is_some_and(|r| r.releasing))
+            let detailed = (active_row || row.is_some_and(|r| r.releasing))
                 && cached.timed_ready()
                 && row.is_some();
             if !detailed {

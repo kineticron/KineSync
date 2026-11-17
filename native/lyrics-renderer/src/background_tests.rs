@@ -311,6 +311,101 @@ fn duet_alignment_and_source_order_survive_overlapping_starts() {
     );
 }
 #[test]
+fn spicy_tail_keeps_reveal_through_lead_end_and_overlapping_next_main() {
+    // Modeled boundary case, not an EXO provider capture. Reuse the short
+    // synthetic voices and move the next main into the previous BG tail.
+    let mut item = case("spicy-speakers");
+    let next = &mut item["packet"]["lines"][1];
+    next["start"] = serde_json::json!(6500);
+    next["atoms"][0]["start"] = serde_json::json!(6500);
+    next["paint"]["start"] = serde_json::json!(6500);
+    next["paint"]["words"][0]["start"] = serde_json::json!(6500);
+    for effect in [Effect::Fill, Effect::Motion, Effect::Glow] {
+        for time in [4999.0, 5000.0, 5001.0, 6499.0, 6500.0, 7999.0, 8000.0] {
+            let packet = TrackPacket::parse(&serde_json::to_vec(&item["packet"]).unwrap()).unwrap();
+            let settings = packet.settings.clone().unwrap();
+            let mut track = TrackScene::with_fonts(
+                packet.into_lines(),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                &mut fonts(),
+            )
+            .unwrap();
+            track.prepare(time).unwrap();
+            let window = crate::window(&track.lines, time);
+            assert_eq!(window.focus, if time < 8000.0 { 0 } else { 1 });
+            assert_eq!(
+                window.active(),
+                Some(if time < 6500.0 {
+                    (0, 0)
+                } else if time < 8000.0 {
+                    (0, 1)
+                } else {
+                    (1, 1)
+                })
+            );
+            assert!(track.timed_ready(0));
+            let mut state = AppearanceState::default();
+            state.prepare(&track, time, 12000.0);
+            state.advance(&track, time, 12000.0, true, effect);
+            assert_eq!(state.row(0).unwrap().active, time < 8000.0);
+            assert_eq!(state.row(1).unwrap().active, time >= 6500.0);
+            let bg = &state.row(0).unwrap().voices[2].words[0];
+            assert_eq!((bg.spec().start, bg.spec().end), (4500.0, 8000.0));
+            assert!(bg.motion.gradient > -0.2);
+            let mut animated = vello::Scene::new();
+            let scroll = track.scroll_target(time);
+            track.frame_appearance(time, scroll, &[], &state, &mut animated, effect);
+            // Change only this BG's reveal. The actual encoded drawing must
+            // consume it after the lead ends, including a cold seek into overlap.
+            state.rows[0].as_mut().unwrap().voices[2].words[0]
+                .motion
+                .gradient = -0.2;
+            let mut unrevealed = vello::Scene::new();
+            track.frame_appearance(time, scroll, &[], &state, &mut unrevealed, effect);
+            if time < 8000.0 {
+                assert_ne!(
+                    animated.encoding().draw_data,
+                    unrevealed.encoding().draw_data,
+                    "BG reveal discarded at {time} in {effect:?}"
+                );
+            }
+            // At the effective end the row is inactive. Existing outgoing
+            // spring release may still retain its detailed geometry.
+        }
+        let packet = TrackPacket::parse(&serde_json::to_vec(&item["packet"]).unwrap()).unwrap();
+        let settings = packet.settings.clone().unwrap();
+        let mut track = TrackScene::with_fonts(
+            packet.into_lines(),
+            390,
+            640,
+            1.0,
+            Some(&settings),
+            &mut fonts(),
+        )
+        .unwrap();
+        let mut state = AppearanceState::default();
+        let mut previous = -0.2;
+        for (frame, time) in [4900.0, 5000.0, 5100.0, 6400.0, 6500.0, 6600.0, 7900.0]
+            .into_iter()
+            .enumerate()
+        {
+            track.prepare(time).unwrap();
+            let native_ms = 12000.0 + frame as f64 * 16.0;
+            state.prepare(&track, time, native_ms);
+            state.advance(&track, time, native_ms, true, effect);
+            let row = state.row(0).unwrap();
+            assert!(row.active);
+            let gradient = row.voices[2].words[0].motion.gradient;
+            assert!(gradient > previous, "BG clock stopped at {time}");
+            previous = gradient;
+            assert_eq!(state.row(1).unwrap().active, time >= 6500.0);
+        }
+    }
+}
+#[test]
 fn background_voices_fill_and_move_with_their_own_timings() {
     let (mut track, _, _) = tracks("spicy-speakers");
     // The lead ends at 5000 ms; the second background voice sings until 8000 ms.
