@@ -1,0 +1,394 @@
+# Simulator-only Revyl app build. Device workflows and caches are untouched.
+name: iOS simulator build
+
+on:
+  push:
+    branches: [development]
+    paths:
+      - '.github/workflows/ios-simulator-build.yml'
+      - 'scripts/ios-sim-ci/**'
+      - 'scripts/test/ios-sim-ci.test.cjs'
+      - 'ExpoLyrics/**'
+      - 'native/lyrics-renderer/**'
+      - 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+  workflow_dispatch:
+    inputs:
+      cache_mode:
+        description: 'normal, cold (skip managed restores and seed), or warm (require exact hits)'
+        type: choice
+        options: [normal, cold, warm]
+        default: normal
+      cache_epoch:
+        description: 'Same new alphanumeric/dash/underscore token for the controlled cold/warm pair'
+        type: string
+        default: routine
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CACHE_MODE: ${{ inputs.cache_mode || 'normal' }}
+  CACHE_EPOCH: ${{ inputs.cache_epoch || 'routine' }}
+
+jobs:
+  validate:
+    name: Validate simulator CI contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - run: |
+          set -euo pipefail
+          node --check scripts/ios-sim-ci/ci.cjs
+          node --check scripts/ios-sim-ci/prepare-app-config.cjs
+          node --check scripts/ios-sim-ci/patch-dev-launcher.cjs
+          node --check scripts/ios-sim-ci/rust-sim.cjs
+          node --check scripts/ios-sim-ci/link-proof.cjs
+          node --check scripts/ios-sim-ci/simulator-smoke.cjs
+          python3 -m py_compile scripts/ios-sim-ci/verify_simulator.py scripts/ios-sim-ci/package_app.py
+          node --test scripts/test/ios-sim-ci.test.cjs
+
+  ios-simulator-build:
+    name: Build and smoke-test arm64 simulator app
+    needs: validate
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          # npm has its own epoch-scoped cache below, so cold really skips its restore.
+
+      - name: Install compiler cache tool
+        run: |
+          set -euo pipefail
+          if ! command -v ccache >/dev/null 2>&1; then brew install ccache; fi
+
+      # CI-only app config. The tracked app.json and device builds stay unchanged.
+      - name: Enable embedded dev-client bundle for this simulator build
+        run: node scripts/ios-sim-ci/prepare-app-config.cjs
+
+      - name: Resolve absolute runner paths and simulator toolchain identity
+        id: plan
+        run: node scripts/ios-sim-ci/ci.cjs init
+
+      - name: Start dependency cache timing
+        run: node scripts/ios-sim-ci/ci.cjs mark dependency-cache-restore
+
+      - name: Restore npm download cache
+        id: npm
+        if: env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-npm }}
+          key: ${{ steps.plan.outputs.key-npm }}
+
+      - name: Finish dependency cache timing
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/ios-sim-ci/ci.cjs span dependency-cache-restore
+
+      - name: Install JS dependencies
+        run: node scripts/ios-sim-ci/ci.cjs time npm-ci npm --prefix ExpoLyrics ci
+
+      # Locked 58.0.12 launcher opens its menu even with an embedded bundle.
+      # The patch is node_modules-only and fails if the exact context changes.
+      - name: Patch pinned dev launcher for embedded auto-load
+        run: node scripts/ios-sim-ci/patch-dev-launcher.cjs
+
+      - name: Restore source-exact simulator Rust XCFramework
+        id: prebuilt
+        if: steps.plan.outputs.rust-enabled == 'true' && env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-prebuilt }}
+          key: ${{ steps.plan.outputs.key-prebuilt }}
+
+      - name: Setup pinned simulator Rust toolchain and archive reader
+        if: steps.plan.outputs.rust-enabled == 'true'
+        env:
+          TOOLCHAIN: ${{ steps.plan.outputs.rust-toolchain }}
+          SIM_TARGET: ${{ steps.plan.outputs.rust-target }}
+        run: |
+          set -euo pipefail
+          [[ "$SIM_TARGET" == aarch64-apple-ios-sim ]]
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --target "$SIM_TARGET" --component llvm-tools-preview
+
+      - name: Cache Rust registry and simulator target work on a prebuilt miss
+        id: rust
+        if: steps.plan.outputs.rust-enabled == 'true' && steps.prebuilt.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          prefix-key: ${{ steps.plan.outputs.rust-shared }}
+          workspaces: ${{ github.workspace }}/native/lyrics-renderer
+          cache-targets: true
+          cache-bin: false
+          cache-all-crates: true
+          lookup-only: ${{ env.CACHE_MODE == 'cold' }}
+
+      - name: Build or validate source-exact simulator Rust framework
+        env:
+          RUST_PREBUILT_HIT: ${{ steps.prebuilt.outputs.cache-hit }}
+        run: node scripts/ios-sim-ci/ci.cjs rust-prepare
+
+      - name: Generate iOS project only
+        working-directory: ExpoLyrics
+        run: node ../scripts/ios-sim-ci/ci.cjs time expo-prebuild npx --no-install expo prebuild --clean --platform ios --no-install
+
+      - name: Resolve generated native identity
+        id: native
+        run: node scripts/ios-sim-ci/ci.cjs keys
+
+      - name: Start native cache timing
+        run: node scripts/ios-sim-ci/ci.cjs mark native-cache-restore
+
+      - name: Restore generated Podfile.lock
+        id: lock
+        if: env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-lock }}
+          key: ${{ steps.native.outputs.key-lock }}
+
+      - name: Resolve Podfile.lock cache identity
+        id: locked
+        run: node scripts/ios-sim-ci/ci.cjs keys
+
+      - name: Restore Pods and CocoaPods downloads
+        id: pods
+        if: env.CACHE_MODE != 'cold' && steps.locked.outputs.has-lock == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ steps.plan.outputs.path-pods }}
+            ${{ steps.plan.outputs.path-cocoapods }}
+          key: ${{ steps.locked.outputs.key-pods }}
+
+      - name: Finish native cache timing
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/ios-sim-ci/ci.cjs span native-cache-restore
+
+      - name: Install locked Pods or resolve first lockfile
+        working-directory: ExpoLyrics/ios
+        run: |
+          set -euo pipefail
+          if [ -f Podfile.lock ]; then
+            node ../../scripts/ios-sim-ci/ci.cjs time pod-install pod install --deployment
+          else
+            node ../../scripts/ios-sim-ci/ci.cjs time pod-install pod install
+          fi
+
+      - name: Resolve final native dependency keys
+        id: final
+        run: node scripts/ios-sim-ci/ci.cjs keys
+
+      - name: Start compiler cache timing
+        run: node scripts/ios-sim-ci/ci.cjs mark compiler-cache-restore
+
+      - name: Restore Debug arm64 simulator DerivedData
+        id: derived
+        if: env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-derived }}
+          key: ${{ steps.final.outputs.key-derived }}
+
+      - name: Restore content-addressed C and C++ compiler cache
+        id: ccache
+        if: env.CACHE_MODE != 'cold'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-ccache }}
+          key: ${{ steps.final.outputs.key-ccache }}
+          restore-keys: ${{ steps.final.outputs.ccache-prefix }}
+
+      - name: Finish compiler cache timing
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+        run: node scripts/ios-sim-ci/ci.cjs span compiler-cache-restore
+
+      - name: Build and verify Debug arm64 iPhoneSimulator app
+        run: node scripts/ios-sim-ci/ci.cjs time build-and-verify node scripts/ios-sim-ci/ci.cjs build
+
+      - name: Package and verify simulator .app ZIP
+        run: node scripts/ios-sim-ci/ci.cjs package
+
+      - name: Smoke test rendered onboarding without a local Metro listener
+        run: |
+          set -euo pipefail
+          APP=$(tr -d '\r\n' < "${CI_EVIDENCE_DIR}/app-path.txt")
+          node scripts/ios-sim-ci/simulator-smoke.cjs "$APP" "dev.kineticron.KineSync" "${CI_EVIDENCE_DIR}/simulator-smoke"
+
+      - name: Start cache publication timing
+        run: node scripts/ios-sim-ci/ci.cjs mark cache-save-and-lookup
+
+      - name: Save npm cache
+        if: success() && steps.npm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-npm }}
+          key: ${{ steps.plan.outputs.key-npm }}
+
+      - name: Save lock cache
+        if: success() && steps.lock.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-lock }}
+          key: ${{ steps.native.outputs.key-lock }}
+
+      - name: Save pods cache
+        if: success() && steps.pods.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ steps.plan.outputs.path-pods }}
+            ${{ steps.plan.outputs.path-cocoapods }}
+          key: ${{ steps.final.outputs.key-pods }}
+
+      - name: Save derived cache
+        if: success() && steps.derived.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-derived }}
+          key: ${{ steps.final.outputs.key-derived }}
+
+      - name: Save ccache cache
+        if: success() && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-ccache }}
+          key: ${{ steps.final.outputs.key-ccache }}
+
+      - name: Save prebuilt cache
+        if: success() && steps.prebuilt.outputs.cache-hit != 'true' && steps.plan.outputs.rust-enabled == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-prebuilt }}
+          key: ${{ steps.plan.outputs.key-prebuilt }}
+
+      - name: Verify exact npm cache publication
+        id: verify_npm
+        if: success() && env.CACHE_MODE != 'normal'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-npm }}
+          key: ${{ steps.plan.outputs.key-npm }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Verify exact lock cache publication
+        id: verify_lock
+        if: success() && env.CACHE_MODE != 'normal'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-lock }}
+          key: ${{ steps.native.outputs.key-lock }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Verify exact pods cache publication
+        id: verify_pods
+        if: success() && env.CACHE_MODE != 'normal'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ steps.plan.outputs.path-pods }}
+            ${{ steps.plan.outputs.path-cocoapods }}
+          key: ${{ steps.final.outputs.key-pods }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Verify exact derived cache publication
+        id: verify_derived
+        if: success() && env.CACHE_MODE != 'normal'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-derived }}
+          key: ${{ steps.final.outputs.key-derived }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Verify exact ccache cache publication
+        id: verify_ccache
+        if: success() && env.CACHE_MODE != 'normal'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-ccache }}
+          key: ${{ steps.final.outputs.key-ccache }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Verify exact Rust simulator prebuilt publication
+        id: verify_prebuilt
+        if: success() && env.CACHE_MODE != 'normal' && steps.plan.outputs.rust-enabled == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.plan.outputs.path-prebuilt }}
+          key: ${{ steps.plan.outputs.key-prebuilt }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Finish cache publication timing
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ -f "$CI_EVIDENCE_DIR/cache-save-and-lookup.start" ]; then
+            node scripts/ios-sim-ci/ci.cjs span cache-save-and-lookup
+          fi
+
+      - name: Upload simulator app ZIP for Revyl
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: KineSync-simulator-arm64-app
+          path: ${{ steps.plan.outputs.path-zip }}
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Summarize stage timings and cache evidence
+        if: always() && steps.plan.outcome == 'success'
+        env:
+          CI_JOB_STATUS: ${{ job.status }}
+          CACHE_RESULTS: >-
+            {"npm":{"outcome":"${{ steps.npm.outcome }}","hit":"${{ steps.npm.outputs.cache-hit }}","matched":"${{ steps.npm.outputs.cache-matched-key }}","verified":"${{ steps.verify_npm.outputs.cache-hit }}"},
+            "lock":{"outcome":"${{ steps.lock.outcome }}","hit":"${{ steps.lock.outputs.cache-hit }}","matched":"${{ steps.lock.outputs.cache-matched-key }}","verified":"${{ steps.verify_lock.outputs.cache-hit }}"},
+            "pods":{"outcome":"${{ steps.pods.outcome }}","hit":"${{ steps.pods.outputs.cache-hit }}","matched":"${{ steps.pods.outputs.cache-matched-key }}","verified":"${{ steps.verify_pods.outputs.cache-hit }}"},
+            "derived":{"outcome":"${{ steps.derived.outcome }}","hit":"${{ steps.derived.outputs.cache-hit }}","matched":"${{ steps.derived.outputs.cache-matched-key }}","verified":"${{ steps.verify_derived.outputs.cache-hit }}"},
+            "ccache":{"outcome":"${{ steps.ccache.outcome }}","hit":"${{ steps.ccache.outputs.cache-hit }}","matched":"${{ steps.ccache.outputs.cache-matched-key }}","verified":"${{ steps.verify_ccache.outputs.cache-hit }}"},
+            "rust":{"prebuilt_hit":"${{ steps.prebuilt.outputs.cache-hit }}","verified":"${{ steps.verify_prebuilt.outputs.cache-hit }}","enabled":"${{ steps.plan.outputs.rust-enabled }}"}}
+        run: node scripts/ios-sim-ci/ci.cjs summary
+
+      - name: Upload simulator evidence and screenshots
+        if: always() && steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-simulator-ci-evidence
+          path: ${{ steps.plan.outputs.path-evidence }}
+          if-no-files-found: error
+          retention-days: 14
