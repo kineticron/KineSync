@@ -14,7 +14,15 @@ pub struct TrackPacket {
     /// footer). Optional so older packets keep parsing unchanged.
     #[serde(default)]
     pub credits: Option<Credits>,
+    #[serde(default)]
+    pub empty: Option<EmptyState>,
     pub lines: Vec<WireLine>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyState {
+    pub title: String,
+    pub subtitle: String,
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +87,14 @@ impl TrackPacket {
             || packet.generation == 0
             || packet.track_id.is_empty()
             || packet.track_id.len() > 1024
-            || packet.lines.is_empty()
+            || (packet.lines.is_empty() != packet.empty.is_some())
+            || packet.empty.as_ref().is_some_and(|e| {
+                e.title.is_empty()
+                    || e.title.len() > 2000
+                    || e.subtitle.len() > 2000
+                    || e.title.contains('\0')
+                    || e.subtitle.contains('\0')
+            })
             || packet.lines.len() > 2000
         {
             return Err("Invalid track identity or line count".into());
@@ -293,6 +308,23 @@ mod tests {
         assert!(!t.anchored);
         assert!(t.anchor(3, 1, 0.0, f64::NAN, 0.0, true, 1.0).is_err());
     }
+    #[test]
+    fn empty_packets_are_explicit_bounded_and_cannot_hide_timed_rows() {
+        let packet = br#"{"schema":6,"generation":1,"track_id":"empty","lines":[],"empty":{"title":"This song is an instrumental","subtitle":"Source: unavailable"}}"#;
+        let parsed = TrackPacket::parse(packet).unwrap();
+        assert!(parsed.lines.is_empty());
+        assert_eq!(parsed.empty.unwrap().title, "This song is an instrumental");
+        let no_state = br#"{"schema":6,"generation":1,"track_id":"empty","lines":[]}"#;
+        assert!(TrackPacket::parse(no_state).is_err());
+        let mut value: serde_json::Value = serde_json::from_slice(packet).unwrap();
+        value["lines"] =
+            serde_json::json!([{"start":0,"end":100,"atoms":[{"text":"a","start":0,"end":100}]}]);
+        assert!(TrackPacket::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        value["lines"] = serde_json::json!([]);
+        value["empty"]["subtitle"] = "x".repeat(2001).into();
+        assert!(TrackPacket::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
     #[test]
     fn live_korean_byte_ranges_and_invalid_payload() {
         let packet = br#"{"schema":6,"generation":1,"track_id":"live","lines":[{"start":0,"end":100,"atoms":[{"text":"a ","start":0,"end":40},{"text":"b","start":40,"end":100}]}]}"#;

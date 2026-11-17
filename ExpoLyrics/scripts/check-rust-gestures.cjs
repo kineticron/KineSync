@@ -3,6 +3,7 @@
  * list takeover that disables auto-follow until the next tap or resume. */
 const assert = require('node:assert/strict');
 require('./check-rust-scheduling.cjs');
+require('./check-rust-footer-empty.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
 

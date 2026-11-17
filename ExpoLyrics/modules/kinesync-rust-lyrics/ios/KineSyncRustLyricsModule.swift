@@ -449,6 +449,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
             self.failed = true; self.metal.isHidden = true
             self.link?.invalidate(); self.link = nil
           }
+          if event["state"] as? String == "ready" {
+            self.markDirty()
+            self.lifecycle()
+          }
           self.onStatus(event)
         }
       }

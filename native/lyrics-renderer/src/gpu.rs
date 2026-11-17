@@ -1029,7 +1029,7 @@ mod ownership_tests {
     use super::*;
     #[test]
     #[ignore = "requires a working Vulkan adapter; run explicitly for host pixel proof"]
-    fn credits_pixels_bypass_glow_and_blur() {
+    fn credits_pixels_bypass_glow_and_blur_and_static_empty_replaces_prior_frame() {
         let mut fonts = crate::typography::Fonts::default();
         fonts
             .register(
@@ -1087,6 +1087,47 @@ mod ownership_tests {
                 gpu.read_pixels().unwrap() == reference,
                 "footer must be pixel-identical with blur/glow enabled, without widening the band"
             );
+        }
+        for title in ["No synced lyrics yet", "This song is an instrumental"] {
+            for subtitle in [
+                "Loading best lyrics source on mobile...",
+                "Source: unavailable",
+            ] {
+                let empty = crate::credits::empty_scene(
+                    &crate::live::EmptyState {
+                        title: title.into(),
+                        subtitle: subtitle.into(),
+                    },
+                    390,
+                    256,
+                    1.0,
+                    &mut fonts,
+                );
+                assert!(!empty.encoding().draw_data.is_empty());
+                gpu.render_frame(&empty, (0.0, 256.0), true, false, false, false)
+                    .unwrap();
+                let pixels = gpu.read_pixels().unwrap();
+                assert_ne!(
+                    pixels, reference,
+                    "first static frame must replace credits without a timed row"
+                );
+                assert!(pixels.chunks_exact(4).any(|p| p[3] > 200));
+                // The idle frame is stable, including after prior animated content.
+                gpu.render_frame(&empty, (0.0, 256.0), true, false, false, false)
+                    .unwrap();
+                let repeated = gpu.read_pixels().unwrap();
+                let differences = repeated.iter().zip(&pixels).filter(|(a, b)| a != b).count();
+                let max_delta = repeated
+                    .iter()
+                    .zip(&pixels)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                assert!(
+                    repeated == pixels,
+                    "static text must remain stable: {differences} bytes, max delta {max_delta}"
+                );
+            }
         }
     }
 

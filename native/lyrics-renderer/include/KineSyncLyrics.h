@@ -23,7 +23,7 @@ typedef struct {
   uint32_t visible_changes;
 } KRMetrics;
 uint32_t kr_abi_version(void);
-/* ABI 10 adds footer hit targets. ABI9 added idle-frame scheduling metrics and a resume display step.
+/* ABI 10 adds footer hit targets and static empty packets. ABI9 added idle-frame scheduling metrics and a resume display step.
    Schema6 includes background voices. The ABI is the client compatibility gate. */
 /* Native owner retains CAMetalLayer (iOS) or acquired ANativeWindow (Android)
    until kr_destroy completes. Same ABI10 contract on both platforms. */

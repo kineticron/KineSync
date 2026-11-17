@@ -210,6 +210,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         failed = true; textureView.alpha = 0f
         Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
       }
+      if (event["state"] == "ready") { markDirty(); lifecycle() }
       onStatus(event)
     }
   }

@@ -62,13 +62,15 @@ struct Engine {
     fonts: crate::typography::Fonts,
     settings: Option<crate::typography::Settings>,
     credits: Option<crate::live::Credits>,
+    empty: Option<crate::live::EmptyState>,
+    empty_scene: Option<vello::Scene>,
+    overlay: vello::Scene,
     layout: Option<TrackScene>,
     layout_key: String,
     track_id: String,
     layout_cache: crate::scene::LayoutCache,
     surface: SurfaceRenderer,
     scene: vello::Scene,
-    overlay: vello::Scene,
     scale: f32,
     metrics: Metrics,
     scroll: FollowScroll,
@@ -180,12 +182,14 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     fonts: crate::typography::Fonts::default(),
                     settings: None,
                     credits: None,
+                    empty: None,
+                    empty_scene: None,
+                    overlay: vello::Scene::new(),
                     layout: None,
                     layout_key: String::new(),
                     track_id: String::new(),
                     layout_cache: crate::scene::LayoutCache::default(),
                     scene: vello::Scene::new(),
-                    overlay: vello::Scene::new(),
                     scale,
                     metrics: Metrics {
                         capabilities: surface.capabilities(),
@@ -324,7 +328,32 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         }) {
             return Err("ABI8 requires prepared voice metadata".into());
         }
+        let empty = packet.empty.clone();
         let lines = packet.into_lines();
+        if let Some(empty) = empty {
+            engine.empty_scene = Some(crate::credits::empty_scene(
+                &empty,
+                engine.metrics.width,
+                engine.metrics.height,
+                engine.scale,
+                &mut engine.fonts,
+            ));
+            engine.empty = Some(empty);
+            engine.layout = None;
+            engine.lines.clear();
+            engine.layout_key.clear();
+            engine.track_id = track_id;
+            engine.settings = Some(settings);
+            engine.credits = None;
+            engine.timeline.replace(generation);
+            engine.metrics.generation = generation;
+            engine.metrics.animating = 0;
+            engine.metrics.visible_changes = 0;
+            engine.metrics.next_cue_native_ms = -1.0;
+            return Ok(0);
+        }
+        engine.empty = None;
+        engine.empty_scene = None;
         let started = Instant::now();
         let key = crate::scene::LayoutCache::key_with_credits(
             &track_id,
@@ -480,6 +509,15 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         engine.layout_key = key;
         engine.layout = layout;
         engine.appearance.reset();
+        if let Some(empty) = &engine.empty {
+            engine.empty_scene = Some(crate::credits::empty_scene(
+                empty,
+                width,
+                height,
+                scale,
+                &mut engine.fonts,
+            ));
+        }
         engine.scale = scale;
         engine.metrics.width = width;
         engine.metrics.height = height;
@@ -619,6 +657,25 @@ pub extern "C" fn kr_render(
             || !(0.0..=1000.0).contains(&resume_step_ms)
         {
             return Err("Invalid native frame clock".into());
+        }
+        if let Some(scene) = &engine.empty_scene {
+            if !engine.surface.ready().map_err(|e| e.to_string())? {
+                return Ok(3);
+            }
+            let Some(frame) = engine.surface.acquire().map_err(|e| e.to_string())? else {
+                return Ok(2);
+            };
+            let (stats, present) = engine
+                .surface
+                .render(scene, (0.0, engine.metrics.height as f32), frame)
+                .map_err(|e| e.to_string())?;
+            engine.metrics.frames += 1;
+            engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
+            engine.metrics.cpu_blit_ms = present;
+            engine.metrics.target_native_ms = native_ms;
+            engine.metrics.animating = 0;
+            engine.metrics.next_cue_native_ms = -1.0;
+            return Ok(0);
         }
         let Some(layout) = &mut engine.layout else {
             return Ok(1);

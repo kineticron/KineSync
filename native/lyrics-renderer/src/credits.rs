@@ -255,3 +255,70 @@ pub(crate) fn valid(credits: &Credits) -> bool {
                     .is_none_or(|v| text(v) && !v.contains('\0'))
         })
 }
+
+/// Static Skia empty branch, shaped without a timed row or playback anchor.
+pub(crate) fn empty_scene(
+    empty: &crate::live::EmptyState,
+    width: u32,
+    height: u32,
+    scale: f32,
+    fonts: &mut Fonts,
+) -> Scene {
+    let dpr = f64::from(scale);
+    let mut context = LayoutContext::<()>::new();
+    let mut paragraphs = Vec::new();
+    let mut total = 0.0;
+    for (text, size, weight, alpha) in [
+        (&empty.title, 22.0, 700.0, 1.0),
+        (&empty.subtitle, 13.0, 600.0, ALPHA),
+    ] {
+        let mut builder = context.ranged_builder(&mut fonts.context, text, 1.0, true);
+        builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
+            "'SF Pro Display', sans-serif".into(),
+        )));
+        builder.push_default(StyleProperty::FontSize((size * dpr) as f32));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
+        if size == 13.0 {
+            builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(
+                (18.0 * dpr) as f32,
+            )));
+        }
+        let mut layout = builder.build(text);
+        layout.break_all_lines(Some((f64::from(width) - 56.0 * dpr).max(1.0) as f32));
+        layout.align(Alignment::Center, AlignmentOptions::default());
+        total += f64::from(layout.height());
+        paragraphs.push((layout, alpha));
+    }
+    let mut scene = Scene::new();
+    let mut y = (f64::from(height) - total) / 2.0;
+    for (layout, alpha) in paragraphs {
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    let run = gr.run();
+                    scene
+                        .draw_glyphs(run.font())
+                        .font_size(run.font_size())
+                        .normalized_coords(
+                            &run.normalized_coords()
+                                .iter()
+                                .map(|c| c.to_bits())
+                                .collect::<Vec<_>>(),
+                        )
+                        .transform(Affine::translate((28.0 * dpr, y)))
+                        .brush(Color::new([1.0, 1.0, 1.0, alpha as f32]))
+                        .draw(
+                            Fill::NonZero,
+                            gr.positioned_glyphs().map(|g| Glyph {
+                                id: g.id,
+                                x: g.x,
+                                y: g.y,
+                            }),
+                        );
+                }
+            }
+        }
+        y += f64::from(layout.height());
+    }
+    scene
+}

@@ -16,14 +16,15 @@ function invalidVoiceTiming(voice) {
   return false;
 }
 function buildRustTrack(trackId, generation, lines, prepared) {
-  if (!trackId || !lines.length) throw new Error('Waiting for current-track timed lyrics');
+  if (!trackId || (!lines.length && !prepared?.empty)) throw new Error('Waiting for current-track timed lyrics');
+  if (lines.length && prepared?.empty) throw new Error('Empty state requires no lyric rows');
   for (const line of lines) {
     if (!Number.isFinite(line.lineStartTime) || !Number.isFinite(line.lineEndTime) || line.lineEndTime <= line.lineStartTime || !line.syllables.length) throw new Error('Rust requires timed lyric lines');
     for (const atom of line.syllables) {
       if (!Number.isFinite(atom.startTime) || !Number.isFinite(atom.endTime) || atom.endTime < atom.startTime || !atom.text) throw new Error('Rust received invalid syllable timing');
     }
   }
-  const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), ...(prepared?.credits ? { credits: prepared.credits } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => {
+  const serialized = JSON.stringify({ schema: 6, ...(prepared ? { settings: prepared.settings } : {}), ...(prepared?.credits ? { credits: prepared.credits } : {}), ...(prepared?.empty ? { empty: prepared.empty } : {}), generation, track_id: trackId, lines: lines.map((line, lineIndex) => {
     const backgroundEnd = getBackgroundEnd(line);
     const backgrounds = prepared?.backgrounds?.[lineIndex] ?? [];
     if (backgrounds.some(invalidVoiceTiming)) throw new Error('Rust received invalid background vocal timing');
