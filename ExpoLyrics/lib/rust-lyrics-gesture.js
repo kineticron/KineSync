@@ -68,6 +68,8 @@ function createRustLyricsGesture({
   };
   // Skia `takeOwnership`: the viewport belongs to the user from touch-down, even
   // if the gesture ends as a tap. A tap re-enables follow in `release`.
+  // Ownership alone never starts escape grace. Native manual scroll-away
+  // samples own that deadline, independently of touches and later gestures.
   const takeOwnership = () => {
     setFollowing(false);
     onAutoFollowChange(false);

@@ -1139,6 +1139,26 @@ mod tests {
     }
 
     #[test]
+    fn touch_playback_and_geometry_never_start_escape_grace() {
+        for style in [Style::Spicy, Style::Amll] {
+            let mut scroll = FollowScroll::default();
+            scroll.configure(style, 1.0, 8);
+            let target = command(style, 500.0, 800.0, 1, 0);
+            scroll.sample(&target, 0.0, true);
+            for now in [999.0, 1_001.0] {
+                scroll.sample(&target, now, false);
+                assert!(!scroll.release(0.0, 2_000.0, 900.0, Some(500.0), now));
+                scroll.restore_manual(500.0, 2_000.0, 900.0);
+                assert_eq!(scroll.escape.until, 0.0);
+                scroll.note_manual_input(0.0, Some(500.0), now);
+                assert_eq!(scroll.escape.until, 0.0);
+                scroll.resume_follow();
+                assert_eq!(scroll.escape.until, 0.0);
+            }
+        }
+    }
+
+    #[test]
     fn escape_deadline_starts_once_and_return_overrides_it() {
         for style in [Style::Spicy, Style::Amll] {
             for now in [999.0, 1_000.0, 1_001.0] {

@@ -810,6 +810,7 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64, native_ms: f64) -> i32 {
         );
         engine.following = resume;
         if resume {
+            engine.scroll.resume_follow();
             engine.blur.restore();
         } else {
             engine.blur.sharp();

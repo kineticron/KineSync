@@ -32,7 +32,7 @@ function createLyricsScrollEscape() {
         }
         returning = false;
       } else if (input) {
-          returning = true;
+        returning = true;
         inputTarget = target;
       }
     },
@@ -41,6 +41,7 @@ function createLyricsScrollEscape() {
         Math.abs(target - inputTarget) <= 1 && Math.abs(offset - target) <= radius &&
         velocity * (offset - target) <= 0;
       returning = false;
+      if (resume) { graceUntil = 0; escaped = false; }
       return resume;
     },
     reset(value = offset) {

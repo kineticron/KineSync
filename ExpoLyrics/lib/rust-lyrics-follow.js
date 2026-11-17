@@ -24,6 +24,8 @@ function createRustLyricsFollow() {
     get epoch() { return epoch; },
     get desired() { return desired; },
     get resetPending() { return state.resetPending; },
+    // Follow epochs carry ownership only. They never start or extend grace.
+    // Native true commands cancel grace immediately, including explicit resume.
     issue(value, generation, gesture = false) {
       epoch += 1;
       if (!value) state = clearFollowReset(state);

@@ -125,6 +125,43 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.equal(LONG_PRESS_MS, 540);
   assert.equal(DRAG_SLOP, 4);
 
+  for (const stamp of [999, 1001]) {
+    const { createLyricsScrollEscape } = require('../lib/lyrics-scroll-escape');
+    const { createRustLyricsFollow } = require('../lib/rust-lyrics-follow');
+    const gate = createLyricsScrollEscape();
+    const follow = createRustLyricsFollow();
+    follow.sync('track', true);
+    let now = 0, offset = 500;
+    const { gesture } = fixture({
+      now: () => now,
+      hitTest: () => -1,
+      setFollowing: value => {
+        follow.issue(value, 1, true);
+        if (value) gate.reset(offset);
+      },
+      scrollBy: dy => { offset += dy; gate.move(offset, 500, now); },
+      fling: velocity => {
+        if (gate.release(500, 64, now, velocity)) follow.accept(follow.epoch, 1);
+      },
+    });
+    gate.begin(offset); gesture.grant(100);
+    assert.equal(gate.graceUntil, 0, 'touch ownership never starts grace');
+    gesture.move(-40); gesture.release();
+    assert.equal(gate.graceUntil, 1000);
+    now = stamp;
+    gate.begin(offset); gesture.grant(100); gesture.move(-20);
+    assert.equal(gate.graceUntil, 1000, 'later gesture ownership cannot restart grace');
+    gesture.move(40); // Intentional reversal to the active line.
+    // Termination releases with zero velocity, as the native cancellation path does.
+    gesture.terminate();
+    assert.equal(follow.desired, true, 'deliberate return wins even before grace expires');
+    follow.issue(true, 1); gate.reset(offset);
+    assert.equal(gate.graceUntil, 0, 'explicit resume cancels grace immediately');
+    follow.sync('next-track', false);
+    assert.equal(follow.desired, true);
+    assert.equal(gate.graceUntil, 0, 'track changes never start grace');
+  }
+
   // Touch-down takes ownership immediately, before the gesture is classified.
   {
     const { gesture, calls, timer } = fixture();
