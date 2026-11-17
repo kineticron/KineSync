@@ -157,7 +157,7 @@ assert.match(view, /createRustLyricsFollow/);
 assert.match(view, /follow\.current\.accept\(nativeEvent\.ownershipEpoch \?\? -1, revision\.generation\)/);
 assert.match(view, /follow\.current\.reconcile\(revision\.generation\)/);
 assert.match(view, /follow\.current\.reassert\(revision\.generation\)/);
-assert.match(view, /setFollowing\(command\.value, command\.epoch, command\.generation\)/);
+assert.match(view, /setFollowing\(command\.value, command\.epoch, command\.generation, command\.gesture\)/);
 assert.doesNotMatch(view, /setFollowing\(followTarget\)/, 'no render-captured follow command remains');
 assert.match(swift, /ownershipEpoch.*generation|"ownershipEpoch": self\.ownershipEpoch/s);
 assert.match(swift, /followCommandAllowed\(value, nextEpoch: nextEpoch, identity: UInt64\(commandGeneration\)\)/);

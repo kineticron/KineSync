@@ -90,7 +90,7 @@ internal class RustOwner(
   fun fling(v: Double, nativeMs: Double, done: (Boolean) -> Unit) { if (v.isFinite() && nativeMs.isFinite() && nativeMs >= 0.0) post {
     val result = RustBridge.fling(handle, v, nativeMs)
     if (result < 0) failure()
-    else if (result == 1) main.post { done(true) }
+    else { val resumed = result == 1; main.post { done(resumed) } }
   } }
   fun hitTest(x: Double, y: Double, done: (Int) -> Unit) = worker.post {
     val idx = if (permitted() && handle != 0L && !failed) RustBridge.hitTest(handle, x, y) else -1

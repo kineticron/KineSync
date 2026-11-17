@@ -6,6 +6,7 @@ require('./check-rust-scheduling.cjs');
 require('./check-rust-footer-empty.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
 require('./check-rust-follow-ownership.cjs');
+require('./check-rust-follow-wiring.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP, nextFollowState, desiredFollow, clearFollowReset } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
@@ -60,26 +61,28 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(swift, /case \.cancelled, \.failed:\s*fling\(0\)/);
   assert.match(swift, /private var following = true/);
   assert.match(swift, /owner\?\.setFollowing\(following\)/, 'refresh replays the desired follow state');
-  assert.match(swift, /if result == 1 \{ DispatchQueue\.main\.async \{ completion\(true\) \} \}/);
+  assert.match(swift, /let resumed = result == 1\s*DispatchQueue\.main\.async \{ completion\(resumed\) \}/);
   assert.match(swift, /self\.session == releaseSession/);
   assert.match(swift, /self\.generation == releaseGeneration/);
   assert.match(swift, /self\.followEpoch == releaseEpoch/);
-  assert.match(swift, /"generation": releaseGeneration/);
+  assert.match(swift, /self\.emitRecapturedFollow\(\)/);
   assert.match(swift, /identity\.track_id != trackId/);
   assert.match(swift, /followEpoch &\+= 1/);
   assert.match(swift, /override func touchesBegan[\s\S]*?releasePending = false[\s\S]*?followEpoch &\+= 1/);
   assert.match(swift, /guard value \|\| !self\.releasePending else \{ return false \}/);
-  const guardSource = swift.match(/guard let self, resumed,([\s\S]*?)else \{ return \}/)[1];
+  const flingSource = swift.slice(swift.lastIndexOf('  func fling('), swift.lastIndexOf('  func hitTest('));
+  const guardSource = flingSource.match(/guard let self,([\s\S]*?)else \{ return \}/)[1];
   const guardCondition = guardSource.split(',').map(part => part.trim()).filter(Boolean)
     .map(part => part.replace(/self\./g, 'state.')).join(' && ');
-  const releaseStillValid = new Function('state', 'releaseSession', 'releaseGeneration', 'releaseEpoch',
+  const releaseStillValid = new Function('state', 'releaseSession', 'releaseGeneration', 'releaseEpoch', 'serial',
     `return !!(${guardCondition});`);
-  const releaseState = { session: 1, generation: 7, followEpoch: 4, failed: false };
-  assert.equal(releaseStillValid(releaseState, 1, 7, 4), true);
-  assert.equal(releaseStillValid({ ...releaseState, session: 2 }, 1, 7, 4), false, 'old session');
-  assert.equal(releaseStillValid({ ...releaseState, generation: 8 }, 1, 7, 4), false, 'old track generation');
-  assert.equal(releaseStillValid({ ...releaseState, followEpoch: 5 }, 1, 7, 4), false, 'later touch or follow command');
-  assert.equal(releaseStillValid({ ...releaseState, failed: true }, 1, 7, 4), false, 'failed surface');
+  const releaseState = { session: 1, generation: 7, followEpoch: 4, releaseSerial: 3, failed: false };
+  assert.equal(releaseStillValid(releaseState, 1, 7, 4, 3), true);
+  assert.equal(releaseStillValid({ ...releaseState, session: 2 }, 1, 7, 4, 3), false, 'old session');
+  assert.equal(releaseStillValid({ ...releaseState, generation: 8 }, 1, 7, 4, 3), false, 'old track generation');
+  assert.equal(releaseStillValid({ ...releaseState, followEpoch: 5 }, 1, 7, 4, 3), false, 'later touch or follow command');
+  assert.equal(releaseStillValid({ ...releaseState, releaseSerial: 4 }, 1, 7, 4, 3), false, 'later release');
+  assert.equal(releaseStillValid({ ...releaseState, failed: true }, 1, 7, 4, 3), false, 'failed surface');
   const android = fs.readFileSync(path.join(__dirname, '../modules/kinesync-rust-lyrics/android/src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsView.kt'), 'utf8');
   assert.match(android, /session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch/);
   assert.match(android, /following = true\s*releasePending = false\s*followEpoch\+\+/);

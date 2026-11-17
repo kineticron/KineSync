@@ -24,11 +24,11 @@ function createRustLyricsFollow() {
     get epoch() { return epoch; },
     get desired() { return desired; },
     get resetPending() { return state.resetPending; },
-    issue(value, generation) {
+    issue(value, generation, gesture = false) {
       epoch += 1;
       if (!value) state = clearFollowReset(state);
       desired = value;
-      last = { value, epoch, generation };
+      last = { value, epoch, generation, gesture };
       return { ...last };
     },
     // Parent/effect reconciliation uses the latest local intent, not a render
@@ -48,7 +48,7 @@ function createRustLyricsFollow() {
       if (!last || ownershipEpoch !== epoch || generation !== last.generation) return false;
       desired = true;
       state = clearFollowReset(state);
-      last = { value: true, epoch, generation };
+      last = { value: true, epoch, generation, gesture: false };
       return true;
     },
   };

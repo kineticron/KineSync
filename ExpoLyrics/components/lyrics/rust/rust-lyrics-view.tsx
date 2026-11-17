@@ -11,7 +11,7 @@ import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
+type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
 type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
@@ -118,10 +118,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   followGeneration.current = revision.generation;
   const followSurface = useRef(surfaceEpoch);
   const sendFollow = useCallback((command: FollowCommand) => {
-    send(view => view.setFollowing(command.value, command.epoch, command.generation));
+    send(view => view.setFollowing(command.value, command.epoch, command.generation, command.gesture));
   }, [send]);
   const setFollow = useCallback((enabled: boolean) => {
-    sendFollow(follow.current.issue(enabled, followGeneration.current));
+    sendFollow(follow.current.issue(enabled, followGeneration.current, true));
   }, [follow, sendFollow]);
   const gesture = useMemo(() => createRustLyricsGesture({
     hitTest: (y, x) => native.current ? native.current.hitTest(x, y) : Promise.resolve(-1),

@@ -19,8 +19,8 @@ public final class KineSyncRustLyricsModule: Module {
         // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
         MainActor.assumeIsolated { view.setAnchor(value) }
       }
-      AsyncFunction("setFollowing") { (view: KineSyncRustLyricsView, value: Bool, epoch: Double, generation: Double) in
-        MainActor.assumeIsolated { view.setFollowing(value, epoch: epoch, generation: generation) }
+      AsyncFunction("setFollowing") { (view: KineSyncRustLyricsView, value: Bool, epoch: Double, generation: Double, gesture: Bool) in
+        MainActor.assumeIsolated { view.setFollowing(value, epoch: epoch, generation: generation, gesture: gesture) }
       }
       AsyncFunction("scrollBy") { (view: KineSyncRustLyricsView, dy: Double) in
         MainActor.assumeIsolated { view.scrollBy(dy) }
@@ -164,7 +164,8 @@ private final class RustOwner: @unchecked Sendable {
       guard self.permitted(), self.handle != 0, !self.failed else { return }
       let result = kr_fling(self.handle, velocity, nativeMs)
       if result < 0 { self.failure(); return }
-      if result == 1 { DispatchQueue.main.async { completion(true) } }
+      let resumed = result == 1
+      DispatchQueue.main.async { completion(resumed) }
     }
   }
   func hitTest(_ x: Double, _ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
@@ -354,6 +355,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   // A queued JS touch-down false must not undo a release recapture. It clears
   // on a new touch, explicit follow true, or track identity change.
   private var releasePending = false
+  private var releaseRecaptured = false
+  private var releaseOwnershipKnown = false
+  private var gestureOwnershipApplied = false
+  private var releaseSerial: UInt64 = 0
   // JS ownership epochs order touches, parent changes and track resets. Native
   // rejects true commands from an older epoch and while a newer touch is active.
   private var ownershipEpoch: UInt64 = 0
@@ -502,6 +507,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
     generation = identity.generation; sequence = 0; anchor = nil; animating = false
     ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
+    releasePending = false; releaseRecaptured = false; releaseOwnershipKnown = false; gestureOwnershipApplied = false
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if identity.track_id != trackId {
@@ -538,20 +544,47 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     if value { markDirty(); refresh() }
     lifecycle()
   }
-  func setFollowing(_ value: Bool, epoch: Double, generation commandGeneration: Double) {
+  func setFollowing(_ value: Bool, epoch: Double, generation commandGeneration: Double, gesture: Bool) {
     guard epoch.isFinite, epoch >= 0, commandGeneration.isFinite, commandGeneration >= 0,
           UInt64(commandGeneration) == generation else { return }
     let nextEpoch = UInt64(epoch)
+    // A delayed touch-down false belongs to the release gesture even when the
+    // near recapture already won physical ownership. Record its epoch without
+    // undoing the recapture, then re-announce the recapture at that epoch so JS
+    // can accept the current gesture instead of rejecting an older event.
+    if lateGestureOwnershipAllowed(value, gesture: gesture, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) {
+      ownershipEpoch = nextEpoch
+      releaseOwnershipKnown = true
+      gestureOwnershipApplied = true
+      if releaseRecaptured {
+        releasePending = false
+        emitRecapturedFollow()
+      }
+      return
+    }
     guard followCommandAllowed(value, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) else { return }
     ownershipEpoch = nextEpoch
     if value { ownershipFloor = max(ownershipFloor, nextEpoch) }
     releasePending = false
+    releaseRecaptured = false
+    releaseOwnershipKnown = false
+    if gesture { gestureOwnershipApplied = true }
     following = value
     followEpoch &+= 1
     owner?.setFollowing(value)
     // A paused/settled surface still needs frames while the spring settles.
     markDirty()
     lifecycle()
+  }
+  private func lateGestureOwnershipAllowed(_ value: Bool, gesture: Bool, nextEpoch: UInt64, identity: UInt64) -> Bool {
+    guard identity == self.generation, nextEpoch > self.ownershipEpoch else { return false }
+    guard !value, gesture, self.releasePending else { return false }
+    return true
+  }
+  private func emitRecapturedFollow() {
+    onStatus(["state": "follow", "generation": generation,
+              "ownershipEpoch": ownershipEpoch,
+              "message": "Auto-follow resumed near the active line"])
   }
   // A true from before a newer touch, or while that touch owns the viewport,
   // must not reclaim follow even when its JS callback is delayed.
@@ -565,6 +598,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   // JS false command still records the epoch and keeps command ordering intact.
   private func takeOwnership() {
     releasePending = false
+    releaseRecaptured = false
     following = false
     followEpoch &+= 1
     owner?.setFollowing(false)
@@ -575,6 +609,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     // Invalidate an in-flight release before JS or the pan recognizer can
     // deliver the next ownership command.
     releasePending = false
+    releaseRecaptured = false
+    releaseOwnershipKnown = false
+    gestureOwnershipApplied = false
     touchActive = true
     ownershipFloor = max(ownershipFloor, ownershipEpoch &+ 1)
     followEpoch &+= 1
@@ -599,17 +636,28 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     let releaseSession = session
     let releaseGeneration = generation
     let releaseEpoch = followEpoch
+    releaseSerial &+= 1
+    let serial = releaseSerial
     releasePending = true
+    releaseRecaptured = false
+    releaseOwnershipKnown = gestureOwnershipApplied
     owner?.fling(velocity, nativeMs: CACurrentMediaTime() * 1000) { [weak self] resumed in
-      guard let self, resumed,
+      guard let self,
             self.session == releaseSession,
             self.generation == releaseGeneration,
             self.followEpoch == releaseEpoch,
+            self.releaseSerial == serial,
             !self.failed else { return }
-      self.following = true
-      self.onStatus(["state": "follow", "generation": releaseGeneration,
-                     "ownershipEpoch": self.ownershipEpoch,
-                     "message": "Auto-follow resumed near the active line"])
+      if resumed {
+        self.following = true
+        self.releaseRecaptured = true
+        if self.releaseOwnershipKnown { self.releasePending = false }
+        self.emitRecapturedFollow()
+      } else {
+        self.releasePending = false
+        self.releaseRecaptured = false
+        self.releaseOwnershipKnown = false
+      }
     }
     markDirty()
     lifecycle()

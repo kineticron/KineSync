@@ -43,6 +43,10 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var followEpoch = 0L
   // A queued JS touch-down false must not undo a release recapture.
   private var releasePending = false
+  private var releaseRecaptured = false
+  private var releaseOwnershipKnown = false
+  private var gestureOwnershipApplied = false
+  private var releaseSerial = 0L
   // JS ownership epochs order touches, parent changes and track resets. Native
   // rejects true commands from an older epoch and while a newer touch is active.
   private var ownershipEpoch = 0L
@@ -120,6 +124,9 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         downY = ev.y; lastY = ev.y; dragging = false
         // Invalidate an in-flight release before queued JS ownership arrives.
         releasePending = false
+        releaseRecaptured = false
+        releaseOwnershipKnown = false
+        gestureOwnershipApplied = false
         touchActive = true
         ownershipFloor = maxOf(ownershipFloor, ownershipEpoch + 1)
         followEpoch++
@@ -241,6 +248,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
     generation = id; sequence = 0; anchor = null; animating = false
     ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
+    releasePending = false; releaseRecaptured = false; releaseOwnershipKnown = false; gestureOwnershipApplied = false
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if (nextTrackId != trackId) {
@@ -276,15 +284,42 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
-  fun setFollowing(value: Boolean, epoch: Double, commandGeneration: Double) {
+  fun setFollowing(value: Boolean, epoch: Double, commandGeneration: Double, gesture: Boolean) {
     if (!epoch.isFinite() || epoch < 0 || !commandGeneration.isFinite() || commandGeneration < 0) return
     if (commandGeneration.toLong() != generation) return
     val nextEpoch = epoch.toLong()
+    // A delayed touch-down false belongs to the release gesture even when the
+    // near recapture already won physical ownership. Record its epoch without
+    // undoing the recapture, then re-announce the recapture at that epoch so JS
+    // can accept the current gesture instead of rejecting an older event.
+    if (lateGestureOwnershipAllowed(value, gesture, nextEpoch)) {
+      ownershipEpoch = nextEpoch
+      releaseOwnershipKnown = true
+      gestureOwnershipApplied = true
+      if (releaseRecaptured) {
+        releasePending = false
+        emitRecapturedFollow()
+      }
+      return
+    }
     if (!followCommandAllowed(value, nextEpoch)) return
     ownershipEpoch = nextEpoch
     if (value) ownershipFloor = maxOf(ownershipFloor, nextEpoch)
     releasePending = false
+    releaseRecaptured = false
+    releaseOwnershipKnown = false
+    if (gesture) gestureOwnershipApplied = true
     following = value; followEpoch++; owner?.setFollowing(value); markDirty(); lifecycle()
+  }
+  private fun lateGestureOwnershipAllowed(value: Boolean, gesture: Boolean, nextEpoch: Long): Boolean {
+    if (nextEpoch <= ownershipEpoch) return false
+    if (value || !gesture || !releasePending) return false
+    return true
+  }
+  private fun emitRecapturedFollow() {
+    onStatus(mapOf("state" to "follow", "generation" to generation,
+      "ownershipEpoch" to ownershipEpoch,
+      "message" to "Auto-follow resumed near the active line"))
   }
   // A true from before a newer touch, or while that touch owns the viewport,
   // must not reclaim follow even when its JS callback is delayed.
@@ -298,6 +333,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   // JS false command still records the epoch and keeps command ordering intact.
   private fun takeOwnership() {
     releasePending = false
+    releaseRecaptured = false
     following = false
     followEpoch++
     owner?.setFollowing(false)
@@ -312,13 +348,23 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val releaseSession = session
     val releaseGeneration = generation
     val releaseEpoch = followEpoch
+    releaseSerial++
+    val serial = releaseSerial
     releasePending = true
+    releaseRecaptured = false
+    releaseOwnershipKnown = gestureOwnershipApplied
     owner?.fling(v, RustBridge.nowMs()) { resumed ->
-      if (resumed && session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && !failed) {
-        following = true
-        onStatus(mapOf("state" to "follow", "generation" to releaseGeneration,
-          "ownershipEpoch" to ownershipEpoch,
-          "message" to "Auto-follow resumed near the active line"))
+      if (session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && releaseSerial == serial && !failed) {
+        if (resumed) {
+          following = true
+          releaseRecaptured = true
+          if (releaseOwnershipKnown) releasePending = false
+          emitRecapturedFollow()
+        } else {
+          releasePending = false
+          releaseRecaptured = false
+          releaseOwnershipKnown = false
+        }
       }
     }
     markDirty(); lifecycle()
