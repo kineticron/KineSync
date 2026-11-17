@@ -44,16 +44,12 @@ function nativeHarness(generation) {
     touchActive: false,
     releasePending: false,
     releaseRecaptured: false,
-    releaseOwnershipKnown: false,
-    gestureOwnershipApplied: false,
     following: true,
   };
 }
 function beginTouch(native) {
   native.releasePending = false;
   native.releaseRecaptured = false;
-  native.releaseOwnershipKnown = false;
-  native.gestureOwnershipApplied = false;
   native.touchActive = true;
   native.ownershipFloor = Math.max(native.ownershipFloor, native.ownershipEpoch + 1);
 }
@@ -61,7 +57,6 @@ function endTouch(native) { native.touchActive = false; }
 function startRelease(native) {
   native.releasePending = true;
   native.releaseRecaptured = false;
-  native.releaseOwnershipKnown = native.gestureOwnershipApplied;
   native.following = false;
 }
 function eventFor(native) {
@@ -72,13 +67,7 @@ function apply(native, command) {
     && kotlinLate(native, command.value, command.gesture, command.epoch);
   if (late) {
     native.ownershipEpoch = command.epoch;
-    native.releaseOwnershipKnown = true;
-    native.gestureOwnershipApplied = true;
-    if (native.releaseRecaptured) {
-      native.releasePending = false;
-      return eventFor(native);
-    }
-    return null;
+    return native.releaseRecaptured ? eventFor(native) : null;
   }
   if (!physicalAllowed(native, command.value, command.gesture, command.epoch, command.generation)
     || !kotlinPhysical(native, command.value, command.gesture, command.epoch)) return false;
@@ -86,8 +75,6 @@ function apply(native, command) {
   if (command.value) native.ownershipFloor = Math.max(native.ownershipFloor, command.epoch);
   native.releasePending = false;
   native.releaseRecaptured = false;
-  native.releaseOwnershipKnown = false;
-  if (command.gesture) native.gestureOwnershipApplied = true;
   native.following = command.value;
   return true;
 }
@@ -95,12 +82,10 @@ function finishRelease(native, resumed) {
   if (resumed) {
     native.following = true;
     native.releaseRecaptured = true;
-    if (native.releaseOwnershipKnown) native.releasePending = false;
     return eventFor(native);
   }
   native.releasePending = false;
   native.releaseRecaptured = false;
-  native.releaseOwnershipKnown = false;
   return null;
 }
 
@@ -210,7 +195,7 @@ for (const style of ['spicy', 'amll']) {
     assert.equal(current.ownershipEpoch, delayedFalse.epoch);
     wiring.follow(current.ownershipEpoch);
     assert.equal(parentFollow, true, 're-announced current gesture epoch is accepted');
-    assert.equal(wiring.native.releasePending, false);
+    assert.equal(wiring.native.releasePending, true, 'recapture remains reopenable for later late grants');
   }
 
   // The same near event is emitted before JS runs its grant at all. The grant's
@@ -229,7 +214,39 @@ for (const style of ['spicy', 'amll']) {
     assert.equal(current.ownershipEpoch, delayedFalse.epoch);
     wiring.follow(current.ownershipEpoch);
     assert.equal(parentFollow, true, 'late JS grant catches up to the recaptured gesture');
-    assert.equal(wiring.native.releasePending, false);
+    assert.equal(wiring.native.releasePending, true, 'recapture remains reopenable for later late grants');
+  }
+
+  // Two-touch handoff: A near completes while JS is blocked, B starts, then a
+  // delayed A grant false arrives during B. A tagged boolean cannot carry this.
+  // B near must later re-announce at the delayed B grant epoch, not disable.
+  {
+    const wiring = createWiring(style);
+    baseline(wiring);
+    beginTouch(wiring.native); endTouch(wiring.native);
+    startRelease(wiring.native); finishRelease(wiring.native, true);
+
+    beginTouch(wiring.native);
+    wiring.grant();
+    const delayedA = wiring.commands.pop();
+    assert.equal(delayedA.value, false);
+    assert.equal(apply(wiring.native, delayedA), true, 'delayed A grant takes manual ownership during B');
+    assert.equal(wiring.native.ownershipEpoch, delayedA.epoch);
+
+    endTouch(wiring.native); startRelease(wiring.native);
+    const bNear = finishRelease(wiring.native, true);
+    wiring.follow(bNear.ownershipEpoch);
+    assert.equal(parentFollow, true);
+
+    wiring.grant();
+    const delayedB = wiring.commands.pop();
+    assert.ok(delayedB.epoch > delayedA.epoch);
+    const bAck = apply(wiring.native, delayedB);
+    assert.equal(bAck.ownershipEpoch, delayedB.epoch, 'late B grant re-announces at the B epoch');
+    wiring.follow(bAck.ownershipEpoch);
+    assert.equal(parentFollow, true);
+    assert.equal(wiring.native.following, true);
+    assert.equal(wiring.native.ownershipEpoch, delayedB.epoch);
   }
 
   // Far release is not a recapture. The delayed false stays authoritative.

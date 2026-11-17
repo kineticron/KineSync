@@ -16,7 +16,7 @@ const swiftEnd = swift.indexOf('  // Native drag starts ownership', swiftStart);
 assert.ok(swiftStart >= 0 && swiftEnd > swiftStart, 'Swift follow guard must exist');
 const conditions = [...swift.slice(swiftStart, swiftEnd).matchAll(/guard (.+?) else \{ return false \}/g)]
   .flatMap(match => match[1].split(',').map(condition => condition.trim().replace(/self\./g, 'state.')));
-assert.equal(conditions.length, 4, 'Swift guard keeps identity, epoch, active-touch and release-pending conditions');
+assert.equal(conditions.length, 3, 'Swift guard keeps identity, epoch and active-touch conditions');
 const nativeAllowed = new Function('state', 'value', 'nextEpoch', 'identity',
   `return !!(${conditions.map(condition => `(${condition})`).join(' && ')});`);
 

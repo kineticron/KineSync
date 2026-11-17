@@ -356,8 +356,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   // on a new touch, explicit follow true, or track identity change.
   private var releasePending = false
   private var releaseRecaptured = false
-  private var releaseOwnershipKnown = false
-  private var gestureOwnershipApplied = false
   private var releaseSerial: UInt64 = 0
   // JS ownership epochs order touches, parent changes and track resets. Native
   // rejects true commands from an older epoch and while a newer touch is active.
@@ -507,7 +505,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
     generation = identity.generation; sequence = 0; anchor = nil; animating = false
     ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
-    releasePending = false; releaseRecaptured = false; releaseOwnershipKnown = false; gestureOwnershipApplied = false
+    releasePending = false; releaseRecaptured = false
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if identity.track_id != trackId {
@@ -554,12 +552,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     // can accept the current gesture instead of rejecting an older event.
     if lateGestureOwnershipAllowed(value, gesture: gesture, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) {
       ownershipEpoch = nextEpoch
-      releaseOwnershipKnown = true
-      gestureOwnershipApplied = true
-      if releaseRecaptured {
-        releasePending = false
-        emitRecapturedFollow()
-      }
+      if releaseRecaptured { emitRecapturedFollow() }
       return
     }
     guard followCommandAllowed(value, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) else { return }
@@ -567,8 +560,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     if value { ownershipFloor = max(ownershipFloor, nextEpoch) }
     releasePending = false
     releaseRecaptured = false
-    releaseOwnershipKnown = false
-    if gesture { gestureOwnershipApplied = true }
     following = value
     followEpoch &+= 1
     owner?.setFollowing(value)
@@ -591,7 +582,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private func followCommandAllowed(_ value: Bool, nextEpoch: UInt64, identity: UInt64) -> Bool {
     guard identity == self.generation, nextEpoch > self.ownershipEpoch else { return false }
     guard !value || (!self.touchActive && nextEpoch > self.ownershipFloor) else { return false }
-    guard value || !self.releasePending else { return false }
     return true
   }
   // Native drag starts ownership without consuming a JS epoch. The following
@@ -610,8 +600,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     // deliver the next ownership command.
     releasePending = false
     releaseRecaptured = false
-    releaseOwnershipKnown = false
-    gestureOwnershipApplied = false
     touchActive = true
     ownershipFloor = max(ownershipFloor, ownershipEpoch &+ 1)
     followEpoch &+= 1
@@ -640,7 +628,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     let serial = releaseSerial
     releasePending = true
     releaseRecaptured = false
-    releaseOwnershipKnown = gestureOwnershipApplied
     owner?.fling(velocity, nativeMs: CACurrentMediaTime() * 1000) { [weak self] resumed in
       guard let self,
             self.session == releaseSession,
@@ -651,12 +638,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       if resumed {
         self.following = true
         self.releaseRecaptured = true
-        if self.releaseOwnershipKnown { self.releasePending = false }
         self.emitRecapturedFollow()
       } else {
         self.releasePending = false
         self.releaseRecaptured = false
-        self.releaseOwnershipKnown = false
       }
     }
     markDirty()

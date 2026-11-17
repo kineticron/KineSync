@@ -44,8 +44,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   // A queued JS touch-down false must not undo a release recapture.
   private var releasePending = false
   private var releaseRecaptured = false
-  private var releaseOwnershipKnown = false
-  private var gestureOwnershipApplied = false
   private var releaseSerial = 0L
   // JS ownership epochs order touches, parent changes and track resets. Native
   // rejects true commands from an older epoch and while a newer touch is active.
@@ -125,8 +123,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         // Invalidate an in-flight release before queued JS ownership arrives.
         releasePending = false
         releaseRecaptured = false
-        releaseOwnershipKnown = false
-        gestureOwnershipApplied = false
         touchActive = true
         ownershipFloor = maxOf(ownershipFloor, ownershipEpoch + 1)
         followEpoch++
@@ -248,7 +244,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
     generation = id; sequence = 0; anchor = null; animating = false
     ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
-    releasePending = false; releaseRecaptured = false; releaseOwnershipKnown = false; gestureOwnershipApplied = false
+    releasePending = false; releaseRecaptured = false
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if (nextTrackId != trackId) {
@@ -294,12 +290,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     // can accept the current gesture instead of rejecting an older event.
     if (lateGestureOwnershipAllowed(value, gesture, nextEpoch)) {
       ownershipEpoch = nextEpoch
-      releaseOwnershipKnown = true
-      gestureOwnershipApplied = true
-      if (releaseRecaptured) {
-        releasePending = false
-        emitRecapturedFollow()
-      }
+      if (releaseRecaptured) emitRecapturedFollow()
       return
     }
     if (!followCommandAllowed(value, nextEpoch)) return
@@ -307,8 +298,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) ownershipFloor = maxOf(ownershipFloor, nextEpoch)
     releasePending = false
     releaseRecaptured = false
-    releaseOwnershipKnown = false
-    if (gesture) gestureOwnershipApplied = true
     following = value; followEpoch++; owner?.setFollowing(value); markDirty(); lifecycle()
   }
   private fun lateGestureOwnershipAllowed(value: Boolean, gesture: Boolean, nextEpoch: Long): Boolean {
@@ -326,7 +315,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun followCommandAllowed(value: Boolean, nextEpoch: Long): Boolean {
     if (nextEpoch <= ownershipEpoch) return false
     if (value && (touchActive || nextEpoch <= ownershipFloor)) return false
-    if (!value && releasePending) return false
     return true
   }
   // Native drag starts ownership without consuming a JS epoch. The following
@@ -352,18 +340,15 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val serial = releaseSerial
     releasePending = true
     releaseRecaptured = false
-    releaseOwnershipKnown = gestureOwnershipApplied
     owner?.fling(v, RustBridge.nowMs()) { resumed ->
       if (session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && releaseSerial == serial && !failed) {
         if (resumed) {
           following = true
           releaseRecaptured = true
-          if (releaseOwnershipKnown) releasePending = false
           emitRecapturedFollow()
         } else {
           releasePending = false
           releaseRecaptured = false
-          releaseOwnershipKnown = false
         }
       }
     }

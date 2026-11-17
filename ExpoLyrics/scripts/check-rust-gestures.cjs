@@ -69,7 +69,7 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(swift, /identity\.track_id != trackId/);
   assert.match(swift, /followEpoch &\+= 1/);
   assert.match(swift, /override func touchesBegan[\s\S]*?releasePending = false[\s\S]*?followEpoch &\+= 1/);
-  assert.match(swift, /guard value \|\| !self\.releasePending else \{ return false \}/);
+  assert.match(swift, /private func lateGestureOwnershipAllowed/);
   const flingSource = swift.slice(swift.lastIndexOf('  func fling('), swift.lastIndexOf('  func hitTest('));
   const guardSource = flingSource.match(/guard let self,([\s\S]*?)else \{ return \}/)[1];
   const guardCondition = guardSource.split(',').map(part => part.trim()).filter(Boolean)
@@ -88,7 +88,7 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(android, /following = true\s*releasePending = false\s*followEpoch\+\+/);
   assert.match(android, /nextTrackId != trackId/);
   assert.match(android, /ACTION_DOWN[\s\S]*?releasePending = false[\s\S]*?followEpoch\+\+/);
-  assert.match(android, /if \(!value && releasePending\) return false/);
+  assert.match(android, /private fun lateGestureOwnershipAllowed/);
   const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
   assert.match(view, /nativeEvent\.state === 'follow'/, 'JS mirrors native follow recapture');
