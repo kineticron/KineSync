@@ -344,6 +344,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       artworkUrl: resolvePacketArtworkUrl(previousArtwork, packet),
       durationMs: packet.durationMs,
       spotifyTrackId: packet.spotifyTrackId,
+      isrc: packet.isrc,
     };
 
     const trackChanged = prev.currentTrack?.id !== incomingTrack.id;
@@ -376,7 +377,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       prev.currentTrack?.album !== incomingTrack.album ||
       prev.currentTrack?.artworkUrl !== incomingTrack.artworkUrl ||
       prev.currentTrack?.durationMs !== incomingTrack.durationMs ||
-      prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId;
+      prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId ||
+      prev.currentTrack?.isrc !== incomingTrack.isrc;
     const stationaryDuplicate =
       !metadataChanged &&
       !playStateChanged &&

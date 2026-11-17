@@ -16,6 +16,7 @@ export type PlaybackPacket = {
   type: "playback";
   trackId: string;
   spotifyTrackId?: string;
+  isrc?: string;
   title: string;
   artist: string;
   album?: string;
@@ -99,6 +100,7 @@ export type Track = {
   artworkUrl?: string;
   durationMs: number;
   spotifyTrackId?: string;
+  isrc?: string;
 };
 
 export type LyricsTranslationMetadata = {
@@ -198,6 +200,8 @@ export type LyricsMetadata = {
     preservedTranslations?: Array<{ index: number; text?: string; backgroundText?: string }>;
   };
   instrumental?: boolean;
+  /** Plain provider text with no timing. It must never reach a timed renderer. */
+  untimed?: boolean;
   credits?: LyricsCreditsMetadata;
   attribution?: LyricsAttributionMetadata;
   translation?: LyricsTranslationMetadata;

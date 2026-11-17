@@ -48,8 +48,12 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   onCreditsTimestampPress?: (position: number) => void;
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
 }) {
-  const lyrics = usePlaybackStore(state => state.lyrics);
+  const rawLyrics = usePlaybackStore(state => state.lyrics);
   const metadata = usePlaybackStore(state => state.lyricsMetadata);
+  const untimed = Boolean(metadata?.untimed);
+  // The Rust surface is a timed renderer. Plain text stays in the packet for
+  // other consumers but must never reach this payload.
+  const lyrics = useMemo(() => untimed ? [] : rawLyrics, [rawLyrics, untimed]);
   const credits = useMemo(() => {
     const songwriters = metadata?.credits?.songwriters?.filter(name => typeof name === 'string' && name.length > 0) ?? [];
     const a = metadata?.attribution;
@@ -66,9 +70,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const lyricsSource = usePlaybackStore(state => state.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore(state => state.lyricsStatusMessage);
   const empty = useMemo(() => lyrics.length ? null : {
-    title: metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet',
-    subtitle: lyricsStatusMessage || `Source: ${lyricsSource || 'unavailable'}`,
-  }, [lyrics.length, metadata?.instrumental, lyricsStatusMessage, lyricsSource]);
+    title: untimed ? 'Plain lyrics available' : metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet',
+    subtitle: untimed ? 'Timed lyrics are unavailable for this recording.' : lyricsStatusMessage || `Source: ${lyricsSource || 'unavailable'}`,
+  }, [lyrics.length, metadata?.instrumental, lyricsStatusMessage, lyricsSource, untimed]);
   const showRustDebugOverlay = usePlaybackStore(state => state.showRustDebugOverlay);
   const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => state.lyricsStyle);

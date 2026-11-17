@@ -118,6 +118,10 @@ function filterLikelyQqRankedCandidates(
   getSongArtist,
   getSongInterval,
 ) {
+  const { recordingIdentityMatches } = require("./lyricsRecordingIdentity");
+  const strict = ranked.filter(candidate => recordingIdentityMatches(track,
+    getSongTitle(candidate.song), getSongArtist(candidate.song), getQqCandidateDurationMs(getSongInterval, candidate.song)));
+  if (strict.length) return strict;
   return filterLikelySameTrackCandidates(track, ranked, {
     getTitle: (candidate) => getSongTitle(candidate.song),
     getArtist: (candidate) => getSongArtist(candidate.song),
@@ -148,11 +152,14 @@ function extractLegacySearchSongs(xmlText) {
       content.match(/<singername>([\s\S]*?)<\/singername>/)?.[1] || "";
     const albumRaw =
       content.match(/<albumname>([\s\S]*?)<\/albumname>/)?.[1] || "";
+    const intervalRaw =
+      content.match(/<interval>([\s\S]*?)<\/interval>/)?.[1] || "";
     songs.push({
       songid: songId,
       songname: normalizeLegacyXmlText(nameRaw),
       singername: normalizeLegacyXmlText(singerRaw),
       albumname: normalizeLegacyXmlText(albumRaw),
+      interval: Number(intervalRaw || 0),
     });
   }
   return songs;
@@ -224,15 +231,12 @@ async function fetchFromQQLegacyDownload(track) {
   let best = null;
   let bestScore = -1;
 
-  const likelyLegacyCandidates = filterLikelySameTrackCandidates(
+  const likelyLegacyCandidates = filterLikelyQqRankedCandidates(
     track,
     ranked,
-    {
-      getTitle: (candidate) => candidate.song.songname || "",
-      getArtist: (candidate) => candidate.song.singername || "",
-      getDurationMs: () => 0,
-      getScore: (candidate) => candidate.score,
-    },
+    (song) => song.songname || "",
+    (song) => song.singername || "",
+    (song) => Number(song.interval || 0),
   )
     .map((candidate) => ({
       ...candidate,

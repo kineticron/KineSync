@@ -65,6 +65,9 @@ function mergeLyricsMetadata(...metadataList) {
     if (metadata.instrumental) {
       merged.instrumental = true;
     }
+    if (metadata.untimed) {
+      merged.untimed = true;
+    }
     if (metadata.credits && typeof metadata.credits === "object") {
       merged.credits = {
         ...(merged.credits || {}),
@@ -475,6 +478,7 @@ async function finalizeFetchedLyricsResult(result) {
   if (!result) {
     return null;
   }
+  if (result.metadata?.untimed) return result;
 
   if (result.lyrics?.length) {
     mergeCensorshipSyllablesInLyrics(result.lyrics);
@@ -492,6 +496,9 @@ async function finalizeFetchedLyricsResult(result) {
 
 function getLyricsTimingTier(sourceLabel) {
   const source = String(sourceLabel || "").toLowerCase();
+  if (source.includes("plain") || source.includes("untimed")) {
+    return 0;
+  }
   if (source.includes("spicy-lyrics-static")) {
     return 0;
   }
@@ -606,6 +613,9 @@ function getSourcePriorityBucket(sourceLabel) {
   if (source.includes("spicy-lyrics-static")) {
     return 180;
   }
+  if (source.includes("lrclib-plain")) {
+    return 40;
+  }
   if (source.includes("lrclib")) {
     return 320;
   }
@@ -646,6 +656,7 @@ function spicyLyricsFailFeaturedVariantCheck(track, result) {
       source: "spicy",
       spicyDeclaredTitles: result?.metadata?.spicyVariantTitles,
       qqReferenceFingerprint: result?.metadata?.qqReferenceFingerprint,
+      candidateIdentity: result?.metadata?.fetchOrigin,
     })
   );
 }
@@ -653,6 +664,7 @@ function spicyLyricsFailFeaturedVariantCheck(track, result) {
 function isValidLyricsCandidate(track, candidate) {
   if (!candidate?.lyrics?.length || spicyLyricsFailFeaturedVariantCheck(track, candidate)) return false;
   if (String(candidate.source || "").includes("local-vault")) return true;
+  if (candidate.metadata?.untimed || String(candidate.source || "").toLowerCase().includes("plain")) return true;
   if (isSpicyStaticSource(candidate.source)) return true;
   return candidate.lyrics.every(line =>
     Number.isFinite(line?.lineStartTime) && Number.isFinite(line?.lineEndTime) &&

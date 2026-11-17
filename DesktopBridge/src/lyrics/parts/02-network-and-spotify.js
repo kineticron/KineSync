@@ -1051,6 +1051,7 @@ async function resolveSpotifyCatalogTrackById(spotifyTrackId, accessToken) {
     artist: formatSpotifyWebApiTrackArtists(webTrack),
     album: String(webTrack?.album?.name || "").trim(),
     durationMs: Number(webTrack?.duration_ms || 0),
+    isrc: String(webTrack?.external_ids?.isrc || "").replace(/[-\s]/g, "").toUpperCase(),
   };
   spotifyCatalogByIdCache.set(safeId, {
     cachedAt: Date.now(),

@@ -90,8 +90,15 @@ async function fetchFromLrcRed(track) {
         let recording = null;
         try { recording = await fetchJson(`https://lrc.red/s/${candidate.isrc}.json`, { headers: lrcRedHeaders }); }
         catch { /* JSON is optional metadata; TTML remains the source of truth. */ }
+        const { recordingIdentityMatches, artistIdentityMatches } = require("./lyricsRecordingIdentity");
+        const identityMatch = recordingIdentityMatches(matchTrack, {
+          isrc: candidate.isrc,
+          title: candidate.title || recording?.title,
+          artist: candidate.artist || recording?.artist,
+          durationMs: Number(candidate.durationMs || (Number(recording?.duration) * 1000)),
+        });
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
-        if (recording?.title && !versionMatches(recording.title)) return null;
+        if (!identityMatch && recording?.title && !versionMatches(recording.title)) return null;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
         if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
@@ -99,11 +106,16 @@ async function fetchFromLrcRed(track) {
         const parsed = parseTtmlToLyrics(content);
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
-        if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || !isLikelySameTrack(
+        const textIdentityMatch = recordingIdentityMatches(matchTrack, {
+          title: ttmlTrack.title || track.title,
+          artist: ttmlTrack.artist || candidate.artist || matchTrack.artist,
+          durationMs: Number(track.durationMs || candidate.durationMs || 0),
+        });
+        if (ttmlTrack.title && (!versionMatches(ttmlTrack.title) || (identityMatch ? !textIdentityMatch : !isLikelySameTrack(
           { ...matchTrack, title: stripRemaster(track.title) }, stripRemaster(ttmlTrack.title),
           ttmlTrack.artist || candidate.artist || matchTrack.artist,
-        ))) return null;
-        if (ttmlTrack.artist && !artistNamesLookRelated(matchTrack.artist, ttmlTrack.artist)) return null;
+        )))) return null;
+        if (ttmlTrack.artist && (identityMatch ? !artistIdentityMatches(matchTrack.artist, ttmlTrack.artist) : !artistNamesLookRelated(matchTrack.artist, ttmlTrack.artist))) return null;
         const trackDuration = Number(track.durationMs) || Number(candidate.durationMs) || 0;
         if (trackDuration && parsed.durationMs > trackDuration + 10000) return null;
         const result = {

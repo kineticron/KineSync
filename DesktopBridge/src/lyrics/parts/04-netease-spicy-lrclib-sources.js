@@ -222,11 +222,18 @@ async function fetchFromSpicyLyrics(
       track,
       spicyMetadata.titles,
     );
+    const { authoritativeIdentityMatch } = require("./lyricsRecordingIdentity");
+    const spicyIdentity = {
+      isrc: String(spicyLyricsData?.ids?.isrc || "").trim(),
+      spotifyTrackId,
+    };
+    const identityMatched = authoritativeIdentityMatch(track, spicyIdentity);
     const variantStartedAt = Date.now();
     if (
       featuredVariantLyricsMismatch(track, lyrics, {
         source: "spicy",
         spicyDeclaredTitles: spicyMetadata.titles,
+        candidateIdentity: spicyIdentity,
       })
     ) {
       profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
@@ -258,6 +265,7 @@ async function fetchFromSpicyLyrics(
     });
     let qqReferenceFingerprint = "";
     if (
+      !identityMatched &&
       shouldUseQqFingerprintForSpicyVariantCheck(track) &&
       declaredTitleMatch !== true
     ) {
@@ -477,6 +485,8 @@ async function fetchFromLrcLib(track) {
     }
   }
 
+  for (const title of titleVariants) queryVariants.push({ q: title });
+
   const candidates = [];
   const seenCandidates = new Set();
   let lastError = null;
@@ -484,7 +494,10 @@ async function fetchFromLrcLib(track) {
   let sawNotFoundResponse = false;
 
   for (const endpoint of endpoints) {
-    for (const params of queryVariants) {
+    for (const query of queryVariants) {
+      if (endpoint.mode === "get" && (!query.track_name || !query.artist_name)) continue;
+      const params = endpoint.mode === "get" && track.durationMs > 0
+        ? { ...query, duration: track.durationMs / 1000 } : query;
       try {
         const payload = await fetchJsonWithRetry(
           endpoint.url,
@@ -534,47 +547,35 @@ async function fetchFromLrcLib(track) {
     throw lastError || new Error("Failed to reach LrcLib API");
   }
 
-  const ranked = candidates
-    .map((item) => ({
-      item,
-      score: scoreCandidate(
-        track,
-        item?.trackName || item?.name || "",
-        item?.artistName || "",
-      ),
-    }))
-    .sort((a, b) => b.score - a.score);
+  const { recordingIdentityMatches } = require("./lyricsRecordingIdentity");
+  const candidateDurationMs = (item) => Number(item?.durationMs || Number(item?.duration) * 1000);
+  // Strong identity wins before scoring. The legacy scored path remains as a
+  // fallback so this narrow fix cannot regress catalogs that omit duration.
+  const identityMatches = candidates.filter(item => recordingIdentityMatches(
+    track, item?.trackName || item?.name, item?.artistName, candidateDurationMs(item),
+  )).map(item => ({
+    item,
+    delta: Math.abs(Number(track.durationMs || 0) - candidateDurationMs(item)),
+  })).sort((a, b) => Number(!a.item.syncedLyrics) - Number(!b.item.syncedLyrics) ||
+    a.delta - b.delta || Number(a.item.id) - Number(b.item.id));
 
-  if (!ranked.length) {
-    return null;
-  }
-
+  const ranked = candidates.map((item) => ({
+    item,
+    score: scoreCandidate(track, item?.trackName || item?.name || "", item?.artistName || ""),
+  })).sort((a, b) => b.score - a.score);
   const lrclibMinScore = Math.max(3.5, MATCH_ACCEPTANCE_THRESHOLD - 1);
-  const likelyLrcLibCandidates = ranked
-    .filter(
-      (candidate) =>
-        candidate.score >= lrclibMinScore &&
-        isLikelySameTrack(
-          track,
-          candidate.item?.trackName || candidate.item?.name || "",
-          candidate.item?.artistName || "",
-          (() => {
-            const raw = Number(
-              candidate.item?.durationMs || candidate.item?.duration || 0,
-            );
-            if (!Number.isFinite(raw) || raw <= 0) {
-              return 0;
-            }
-            return raw < 10_000 ? raw * 1000 : raw;
-          })(),
-        ),
-    )
-    .slice(0, 8);
+  const scoredFallback = ranked.filter((candidate) =>
+    candidate.score >= lrclibMinScore &&
+    isLikelySameTrack(track, candidate.item?.trackName || candidate.item?.name || "",
+      candidate.item?.artistName || "", candidateDurationMs(candidate.item)),
+  ).slice(0, 8);
 
-  for (const candidate of likelyLrcLibCandidates) {
+  const likelyLrcLibCandidates = identityMatches.length ? identityMatches : scoredFallback;
+  for (const entry of likelyLrcLibCandidates) {
+    const item = entry.item || entry;
     if (
-      candidate.item?.instrumental === true ||
-      String(candidate.item?.instrumental || "").toLowerCase() === "true"
+      item?.instrumental === true ||
+      String(item?.instrumental || "").toLowerCase() === "true"
     ) {
       return {
         lyrics: [],
@@ -582,12 +583,26 @@ async function fetchFromLrcLib(track) {
         metadata: { instrumental: true },
       };
     }
-    if (!candidate.item?.syncedLyrics) {
+    if (!item?.syncedLyrics) {
       continue;
     }
-    const lyrics = parseLrc(candidate.item.syncedLyrics);
+    const lyrics = parseLrc(item.syncedLyrics);
     if (lyrics.length) {
-      return { lyrics, source: "lrclib-fallback" };
+      return { lyrics, source: "lrclib-fallback", metadata: { matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
+    }
+  }
+  // Plain lyrics are a last-resort candidate. They stay untimed so callers can
+  // keep looking for a timed result and never pass them to a timed renderer.
+  for (const entry of likelyLrcLibCandidates) {
+    const item = entry.item || entry;
+    const plain = String(item?.plainLyrics || "").trim();
+    if (!plain) continue;
+    const lines = plain.split(/\r?\n/).map(text => text.trim()).filter(Boolean)
+      .map(text => ({ lineStartTime: 0, lineEndTime: 0,
+        syllables: [{ text, startTime: 0, endTime: 0 }] }));
+    if (lines.length) {
+      return { lyrics: lines, source: "lrclib-plain", metadata: { untimed: true,
+        matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
     }
   }
   return null;

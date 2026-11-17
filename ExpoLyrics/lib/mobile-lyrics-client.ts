@@ -181,6 +181,7 @@ function toMobileTrack(track: Track) {
     album,
     durationMs,
     spotifyTrackId,
+    isrc: track.isrc,
   };
 }
 
