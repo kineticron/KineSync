@@ -59,7 +59,7 @@ const mocks = {
   'react-native-gesture-handler': { GestureDetector: Primitive, Gesture: { Pan: () => {
     gesture = {};
     const builder = { minDistance: () => builder, enabled: value => { gesture.enabled = value; return builder; } };
-    for (const name of ['onBegin', 'onUpdate', 'onFinalize']) builder[name] = (cb) => {
+    for (const name of ['onTouchesDown', 'onBegin', 'onUpdate', 'onFinalize']) builder[name] = (cb) => {
       gesture[name] = worklet(cb); return builder;
     };
     return builder;
@@ -78,6 +78,24 @@ const mocks = {
     runOnJS: (cb) => (...args) => jsQueue.push(() => (cb.remote ?? cb)(...args)),
   },
 };
+// Dispatch a native-shaped touch-down and state-manager failure before starting
+// a scrub. Failed or disabled gestures must not run begin/update callbacks.
+function beginGesture(event) {
+  if (!gesture.enabled) return false;
+  let failed = false;
+  const touch = { id: 0, x: event.x, y: event.y ?? event.absoluteY,
+    absoluteX: event.absoluteX ?? 0, absoluteY: event.absoluteY };
+  gesture.onTouchesDown({ allTouches: [touch], changedTouches: [touch], numberOfTouches: 1 }, {
+    fail: () => { failed = true; },
+  });
+  if (failed) {
+    gesture.onFinalize(event, false);
+    return false;
+  }
+  gesture.onBegin(event);
+  return true;
+}
+
 function load(relative) {
   const filename = path.resolve(root, relative);
   if (cache.has(filename)) return cache.get(filename).exports;
@@ -134,9 +152,11 @@ assert.equal(listeners.size + appListeners.size, 0, 'unfocused/unmounted timelin
 
 const { PlaybackTimeline } = load('components/lyrics/playback-controls.tsx');
 let sought = null, preview = null;
+const interactionAllowed = { value: true };
+const interactionCoverage = { value: { originY: 0, top: 0, bottom: 100 } };
 styles.length = 0;
 renderToStaticMarkup(React.createElement(PlaybackTimeline, {
-  durationMs: 100000, onSeek: (value) => {
+  durationMs: 100000, interactionAllowed, interactionCoverage, onSeek: (value) => {
     sought = value;
     // Match the real host's synchronous optimistic seek anchor.
     update({ anchorPositionMs: value, anchorMonotonicMs: 3000, isPlaying: false });
@@ -145,8 +165,21 @@ renderToStaticMarkup(React.createElement(PlaybackTimeline, {
 const stopGestureClock = focusEffects.pop()();
 let gestureTime = 0;
 ui.Date = { now: () => gestureTime };
+// Exercise the production-transformed guards rather than just accepting the
+// new chain method. An invisible native touch must not queue previews or seeks.
+interactionAllowed.value = false;
+assert.equal(beginGesture({ x: .1, absoluteY: 50 }), false);
+gesture.onBegin({ x: .1, absoluteY: 50 }); // Even a queued native begin is guarded.
+assert.equal(jsQueue.length, 0);
+assert.equal(preview, null); assert.equal(sought, null);
+interactionAllowed.value = true;
+interactionCoverage.value = { originY: 0, top: 80, bottom: 100 };
+assert.equal(beginGesture({ x: .1, absoluteY: 50 }), false, 'a touch outside the backing coverage fails even if the row has visible pixels');
+gesture.onBegin({ x: .1, absoluteY: 50 });
+assert.equal(jsQueue.length, 0); assert.equal(preview, null); assert.equal(sought, null);
+interactionCoverage.value = { originY: 0, top: 0, bottom: 100 };
 // The initial test track is 1px wide; coordinates are normalized ratios.
-gesture.onBegin({ x: 0.1 });
+assert.equal(beginGesture({ x: 0.1, absoluteY: 50 }), true);
 assert.equal(styles[1]().transform[0].scaleX, 0.1, 'thumb follows input before JS begins the scrub');
 assert.ok(!('width' in styles[1]()), 'scrubbing never animates a layout width');
 flushJS();
@@ -167,10 +200,16 @@ assert.equal(preview, null);
 update({ anchorPositionMs: 90100 });
 assert.equal(styles[1]().transform[0].scaleX, 0.901, 'accepted seeks immediately resume following playback without a 1.2s hold');
 sought = null;
-gesture.onBegin({ x: 0.2 });
+assert.equal(beginGesture({ x: 0.2, absoluteY: 50 }), true);
 gesture.onFinalize({ x: 0.3 }, false);
 flushJS();
 assert.equal(sought, null, 'cancelled gestures do not seek');
+assert.equal(beginGesture({ x: .2, absoluteY: 50 }), true); flushJS();
+interactionAllowed.value = false;
+gesture.onFinalize({ x: .3, absoluteY: 50 }, true); flushJS();
+assert.equal(sought, null, 'losing row eligibility cancels a native success instead of seeking invisibly');
+assert.equal(preview, null);
+interactionAllowed.value = true;
 stopGestureClock();
 // Exercise production-transformed disabled timeline callbacks as well as the
 // native gesture gate. A stale queued finalization must never submit a seek.
@@ -181,6 +220,7 @@ renderToStaticMarkup(React.createElement(PlaybackTimeline, {
 }));
 const stopDisabledClock = focusEffects.pop()();
 assert.equal(gesture.enabled, false, 'unavailable playback disables the native seek gesture');
+assert.equal(beginGesture({ x: .9, absoluteY: 50 }), false, 'disabled native gesture never dispatches begin');
 gesture.onFinalize({ x: 0.9 }, true); flushJS();
 assert.equal(sought, null, 'queued accessibility/gesture finalization cannot submit disabled seek');
 assert.equal(preview, null);
