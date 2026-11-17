@@ -630,15 +630,35 @@ test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/disc
   assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
 });
 
-test('Rust lyric surface extends under the complete dock and keeps the dock gradient', () => {
+test('Rust lyric surface keeps a full-size viewport, soft moving edge and real dock background', () => {
   const player = fs.readFileSync(path.join(repo, 'ExpoLyrics/app/(tabs)/index.tsx'), 'utf8');
-  // Skia parity: the surface is no longer measured against the controls dock.
-  assert.match(player, /top: insets\.top \+ TOP_BAR_CONTENT_HEIGHT \+ LYRICS_WRAP_MARGIN_TOP,\s*bottom: 0,\s*overflow: "hidden" as const,/);
+  // The renderer viewport stays pinned to the full lyric area. No moving height
+  // and no dock-measured surface returns, so the native view never resizes.
+  assert.match(player, /style=\{\[styles\.lyricsWrap, lyricsViewportStyle\]\}/);
+  assert.ok(!player.includes('foregroundClipStyle'));
   assert.ok(!player.includes('rustLyricsViewport'));
   assert.ok(!player.includes('setRustDockBounds'));
   assert.ok(!player.includes('rustDockBounds'));
-  // The bottom gradient is a renderer-agnostic dock fade, not a Skia-only branch.
-  assert.match(player, /\{\/\* ponytail: LinearGradient replaces BlurView[\s\S]*?<Reanimated\.View\s+pointerEvents="none"/);
+  assert.doesNotMatch(player, /bottom: 0,\s*overflow: "hidden" as const/);
+  // The moving edge is an alpha mask. The opaque band and the transparent
+  // gradient fade meet at the dock edge so glyphs never end on a hard cut.
+  // Android must use software mask rendering to redraw an animated mask.
+  assert.match(player, /<MaskedView[\s\S]*?androidRenderingMode="software"[\s\S]*?maskElement=/);
+  assert.match(player, /const lyricsEdgeMaskSolidStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?LYRICS_EDGE_FADE_HEIGHT \* Math\.max\(0, Math\.min\(1, controlsOpacity\.value\)\)[\s\S]*?height: Math\.max\(0, edge - fade\)/);
+  assert.match(player, /const lyricsEdgeMaskFadeStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?transform: \[\{ translateY: Math\.max\(0, edge - fade\) \}\],[\s\S]*?height: fade/);
+  // The fade scales with controlsOpacity, so the hidden end state is fully opaque.
+  assert.match(player, /LYRICS_EDGE_FADE_HEIGHT \* Math\.max\(0, Math\.min\(1, controlsOpacity\.value\)\)/);
+  assert.match(player, /colors=\{_stableMaskColors9\}/);
+  assert.match(player, /_stableMaskColors9 = \["rgba\(0,0,0,1\)", "rgba\(0,0,0,0\)"\]/);
+  assert.match(player, /LYRICS_EDGE_FADE_HEIGHT,/);
+  // The real animated artwork background remains mounted behind the lyrics.
+  assert.equal((player.match(/<ArtworkBackground\s/g) || []).length, 1);
+  assert.match(player, /<ArtworkBackground[\s\S]*?uri=\{resolvedArtworkUrl\}[\s\S]*?playing=\{isPlaying && !showEmptyState\}/);
+  // The dock gradient is a renderer-agnostic fade inside the masked edge. Its
+  // opacity includes controlsOpacity, so hidden controls leave no dock tint.
+  assert.match(player, /\{\/\* Keep the existing fade inside the same masked edge as the lyrics\. \*\/\}[\s\S]*?<Reanimated\.View\s+pointerEvents="none"/);
+  assert.match(player, /const lyricsBottomBlurOpacityStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?transform: \[\{ translateY: -Math\.max\(0, screenHeight - dockTop\.value\) \* controlsOpacity\.value \}\][\s\S]*?opacity:\s*controlsOpacity\.value \*[\s\S]*?modeOpacity \*[\s\S]*?lyricsRestoreOpacity\.value/);
+  assert.match(player, /height: Math\.max\(0, controlsDockHeight \+ 58\)/);
   assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));

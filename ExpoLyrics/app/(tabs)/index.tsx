@@ -1,3 +1,4 @@
+import MaskedView from "@react-native-masked-view/masked-view";
 import { controlsAppIsForeground } from '@/lib/controls-motion';
 import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
@@ -60,6 +61,7 @@ import {
   LANDSCAPE_FONT_SCALE,
   LANDSCAPE_LEFT_PANE_PADDING,
   LANDSCAPE_LYRICS_PADDING,
+  LYRICS_EDGE_FADE_HEIGHT,
   LYRICS_WRAP_MARGIN_TOP,
   TOP_BAR_ARTWORK_SIZE,
   TOP_BAR_ARTWORK_TOP,
@@ -1262,10 +1264,29 @@ export default function HomeScreen() {
   );
 
   const lyricTop = insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP;
-  const foregroundClipStyle = useAnimatedStyle(() => ({
-    height: Math.max(0, screenHeight - lyricTop -
-      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value),
-  }));
+  // The native renderer viewport stays full size. A masked band travels with
+  // the dock so the last visible line fades out instead of slab-clipping.
+  const lyricsEdgeMaskSolidStyle = useAnimatedStyle(() => {
+    const edge = screenHeight - lyricTop -
+      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value;
+    const fade = Math.min(
+      Math.max(0, edge),
+      LYRICS_EDGE_FADE_HEIGHT * Math.max(0, Math.min(1, controlsOpacity.value)),
+    );
+    return { height: Math.max(0, edge - fade) };
+  });
+  const lyricsEdgeMaskFadeStyle = useAnimatedStyle(() => {
+    const edge = screenHeight - lyricTop -
+      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value;
+    const fade = Math.min(
+      Math.max(0, edge),
+      LYRICS_EDGE_FADE_HEIGHT * Math.max(0, Math.min(1, controlsOpacity.value)),
+    );
+    return {
+      transform: [{ translateY: Math.max(0, edge - fade) }],
+      height: fade,
+    };
+  });
   const fillTouchStyle = useAnimatedStyle(() => ({
     top: screenHeight - Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value,
   }));
@@ -1278,7 +1299,7 @@ export default function HomeScreen() {
       Extrapolation.CLAMP,
     );
     return {
-      // Anchor the gradient to the moving clip edge without moving the lyrics.
+      // Anchor the gradient to the moving masked edge without moving the lyrics.
       transform: [{ translateY: -Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value }],
       opacity:
         controlsOpacity.value *
@@ -1753,8 +1774,38 @@ export default function HomeScreen() {
             fullscreenAlbumMode || albumArtworkMorphing ? "none" : "auto"
           }
           collapsable={false}
-          style={[styles.lyricsWrap, lyricsViewportStyle, foregroundClipStyle]}
+          style={[styles.lyricsWrap, lyricsViewportStyle]}
         >
+          {/* The mask animates with the dock, so Android must redraw the mask
+              bitmap each frame instead of caching a hardware layer. */}
+          <MaskedView
+            pointerEvents="box-none"
+            style={StyleSheet.absoluteFill}
+            androidRenderingMode="software"
+            maskElement={
+              <View
+                pointerEvents="none"
+                accessible={false}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                style={StyleSheet.absoluteFill}
+                collapsable={false}
+              >
+                <Reanimated.View
+                  style={[styles.lyricsEdgeMaskSolid, lyricsEdgeMaskSolidStyle]}
+                />
+                <Reanimated.View
+                  style={[styles.lyricsEdgeMaskFade, lyricsEdgeMaskFadeStyle]}
+                >
+                  <LinearGradient
+                    pointerEvents="none"
+                    colors={_stableMaskColors9}
+                    style={StyleSheet.absoluteFill}
+                  />
+                </Reanimated.View>
+              </View>
+            }
+          >
           <View style={{ position: 'absolute', left: 0, right: 0, top: 0, height: Math.max(0, screenHeight - lyricTop) }}>
           <Reanimated.View
             entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
@@ -1831,7 +1882,7 @@ export default function HomeScreen() {
               )}
             </Reanimated.View>
           </Reanimated.View>
-          {/* Keep the existing fade inside the same moving clip as the lyrics. */}
+          {/* Keep the existing fade inside the same masked edge as the lyrics. */}
           <Reanimated.View
             pointerEvents="none"
             style={[
@@ -1847,6 +1898,7 @@ export default function HomeScreen() {
             />
           </Reanimated.View>
           </View>
+          </MaskedView>
         </Reanimated.View>
       )}
 
@@ -2176,6 +2228,19 @@ const styles = StyleSheet.create({
     position: "relative",
     backgroundColor: "transparent",
   },
+  lyricsEdgeMaskSolid: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    backgroundColor: "#000000",
+  },
+  lyricsEdgeMaskFade: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+  },
 });
 
 // Static native props retain their identity across renders.
@@ -2193,3 +2258,4 @@ const _stableEdges5 = ["top", "left", "right"] as const;
 const _stableEdges6 = ["top", "left", "right"] as const;
 const _stableColors7 = ["transparent", "rgba(0,0,0,0.85)"] as const;
 const _stableEdges8 = ["bottom", "left", "right"] as const;
+const _stableMaskColors9 = ["rgba(0,0,0,1)", "rgba(0,0,0,0)"] as const;

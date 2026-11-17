@@ -4,6 +4,8 @@ export const TOP_BAR_PADDING_BOTTOM = 10;
 export const TOP_BAR_CONTENT_HEIGHT =
   TOP_BAR_ARTWORK_TOP + TOP_BAR_ARTWORK_SIZE + TOP_BAR_PADDING_BOTTOM;
 export const LYRICS_WRAP_MARGIN_TOP = 10;
+/** Height of the transparent fade that keeps lyric glyphs off a hard clip edge. */
+export const LYRICS_EDGE_FADE_HEIGHT = 56;
 
 export const LANDSCAPE_FONT_SCALE = 0.9;
 export const LANDSCAPE_LEFT_PANE_PADDING = 12;

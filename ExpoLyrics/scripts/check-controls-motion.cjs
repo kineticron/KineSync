@@ -29,6 +29,11 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'lib/contr
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, helper);
 const { controlsStage } = helper.exports;
+const layout = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'constants/player-layout.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, layout);
+const { LYRICS_EDGE_FADE_HEIGHT } = layout.exports;
 const windows = [[0, .70], [.15, .85], [.30, 1]];
 for (const progress of [-1, 0, .125, .375, .625, .9975, 1, 2]) {
   const stages = windows.map(([a, b]) => controlsStage(progress, a, b));
@@ -123,16 +128,29 @@ for (const gesture of ['scrub', 'previous long hold', 'next long hold']) {
     assert.equal(hidden, 1, `${gesture} re-arms after ${terminal}`);
   }
 }
-// The changing wrapper is a clip, never the native renderer's viewport.
-assert.match(source, /collapsable=\{false\}\s+style=\{\[styles.lyricsWrap, lyricsViewportStyle, foregroundClipStyle\]\}/);
+// The renderer viewport stays full size. Only the soft alpha mask moves.
+assert.match(source, /collapsable=\{false\}\s+style=\{\[styles.lyricsWrap, lyricsViewportStyle\]\}/);
 assert.match(source, /position: 'absolute', left: 0, right: 0, top: 0, height: Math.max\(0, screenHeight - lyricTop\)/);
-assert.doesNotMatch(callback('foregroundClipStyle'), /translate|scale/);
+assert.match(source, /<MaskedView[\s\S]*?androidRenderingMode="software"[\s\S]*?maskElement=/);
+assert.ok(!source.includes('foregroundClipStyle'));
+assert.doesNotMatch(callback('lyricsEdgeMaskSolidStyle'), /translate|scale/);
 for (const height of [667, 844, 390]) for (const top of [60, 110]) for (const dockTop of [height - 180, height - 260]) {
   for (const p of [0, .125, .375, .625, .9975, 1]) {
-    const context = { screenHeight: height, lyricTop: top, dockTop: { value: dockTop }, controlsOpacity: { value: p }, Math };
-    const clip = evaluate(callback('foregroundClipStyle'), context)();
+    const context = { screenHeight: height, lyricTop: top, dockTop: { value: dockTop }, controlsOpacity: { value: p }, LYRICS_EDGE_FADE_HEIGHT, Math };
+    const solid = evaluate(callback('lyricsEdgeMaskSolidStyle'), context)();
+    const fade = evaluate(callback('lyricsEdgeMaskFadeStyle'), context)();
     const fill = evaluate(callback('fillTouchStyle'), context)();
-    assert.equal(clip.height + top, fill.top, 'touch blocker and clip meet at every frame');
+    const edge = fill.top - top;
+    const expectedFade = Math.min(edge, LYRICS_EDGE_FADE_HEIGHT * p);
+    assert.ok(edge >= 0 && edge <= height - top, 'the mask edge stays inside the lyric area');
+    assert.equal(solid.height, Math.max(0, edge - expectedFade));
+    assert.equal(fade.height, expectedFade);
+    assert.equal(solid.height + fade.height, edge, 'opaque mask and soft fade meet exactly at the moving edge');
+    assert.equal(fade.transform[0].translateY, solid.height, 'the soft fade starts where the opaque mask ends');
+    if (p === 0) {
+      assert.equal(fade.height, 0, 'hidden controls leave no fade at the bottom of the lyric area');
+      assert.equal(solid.height, edge, 'hidden controls keep the full lyric area opaque');
+    }
     const child = evaluate(fixedChildStyle, context);
     assert.equal(child.height, height - top);
     assert.equal(child.top, 0);
@@ -225,9 +243,10 @@ for (const height of [667, 844]) for (const bottomInset of [0, 21, 34]) for (con
   onLayout(safeArea)({ nativeEvent: { layout: { y: areaTop } } });
   onLayout(dock)({ nativeEvent: { layout: { y: resolved.paddingTop, height: contentHeight } } });
   assert.equal(geometryContext.dockTop.value, height - contentHeight + 15 - bottomInset, 'measured top already includes bottom safe area and bottom:-25');
-  const computed = { screenHeight: height, lyricTop: 153, dockTop: geometryContext.dockTop, controlsOpacity: { value: 1 }, Math };
+  const computed = { screenHeight: height, lyricTop: 153, dockTop: geometryContext.dockTop, controlsOpacity: { value: 1 }, LYRICS_EDGE_FADE_HEIGHT, Math };
   assert.equal(evaluate(callback('fillTouchStyle'), computed)().top, areaTop);
-  assert.equal(evaluate(callback('foregroundClipStyle'), computed)().height + 153, areaTop);
+  assert.equal(evaluate(callback('lyricsEdgeMaskSolidStyle'), computed)().height +
+    evaluate(callback('lyricsEdgeMaskFadeStyle'), computed)().height + 153, areaTop);
 }
 const dockComponent = dock.parent.children.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'PlaybackControlsDock');
 assert.ok(ts.isJsxFragment(dockComponent.attributes.properties.find(p => p.name?.text === 'fullscreenActions').initializer.expression), 'portrait always supplies fullscreen actions');
