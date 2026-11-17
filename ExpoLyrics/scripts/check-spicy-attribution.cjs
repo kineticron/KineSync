@@ -165,7 +165,7 @@ for (const link of nativeLinks) {
 assert.deepEqual(opened, [profiles.Maker.url, profiles.Uploader.url]);
 for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
   context.metadata = { spicyApi: { fetchedAt: 1, expiresAt: 2 }, attribution: { source: 'official', provider } };
-  vm.runInContext(nativeJs, context);
+  vm.runInContext(`(() => { ${nativeJs} })()`, context);
   const content = descendants(context.result);
   assert.ok(content.some(node => node.children?.includes('Provided By: ')), 'Native official provider credit is rendered without opening the popup');
   assert.ok(content.some(node => node.children?.includes(provider)));
