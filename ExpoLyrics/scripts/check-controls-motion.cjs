@@ -125,7 +125,7 @@ function motionHarness(initial) {
     assert.ok(Math.abs(153 + solid.height + fade.height - fill.top) < 1e-9);
     const contentOffset = content.marginTop ?? content.transform?.[0].translateY;
     assert.ok(Math.abs(clip.top + contentOffset) < 1e-9, 'clip movement never translates the rows');
-    const clipHeight = clip.height ?? 220 + contentOffset + 36;
+    const clipHeight = clip.height ?? Math.max(36, 220 + (content.marginTop ?? 0) + 36);
     assert.ok(Math.abs(clipHeight + clip.marginBottom - 220) < 1e-9, 'clip bounds never resize the measured dock');
     rows().forEach(row => assert.ok(row.transform[0].translateY >= 0 && row.transform[0].translateY <= 36));
   };
@@ -599,7 +599,7 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
         // Real clipping view excludes coordinates above its native bounds. All
         // ancestors are box-none and both reveal/fill zones start at this edge.
         for (const y of [clipTop - 1, clipTop - 16]) {
-          assert.equal(y >= clipTop && y < clipTop + contentHeight + 36 - clipForViewport().top, false, 'uncovered lyric coordinates fall outside the native dock hit bounds');
+          assert.equal(y >= clipTop && y < clipTop + contentHeight + 36, false, 'uncovered lyric coordinates fall outside the native dock hit bounds');
           assert.ok(y < edge + 1e-9, 'the fill and reveal zone cannot intercept that lyric coordinate');
         }
 
@@ -749,8 +749,8 @@ for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset 
   const clip = evaluate(callback('controlsCoverageClipStyle'), context);
   const content = evaluate(callback('controlsCoverageContentStyle'), context);
   const layoutEvent = opening => evaluate(opening.attributes.properties.find(p => p.name?.text === 'onLayout').initializer.expression.getText(ast), context);
-  // Native bottom positioning uses the intrinsic content, negative margin,
-  // clip padding and outer margin together, including safe-area padding.
+  // Model Yoga's minimum padding height, including any negative layout margin.
+  // Transforms affect pixel positions but never the parent's occupied height.
   const layoutFrame = (intrinsic, height = context.screenHeight) => {
     context.screenHeight = height;
     for (let frame = 0; frame < 4; frame++) {
@@ -758,13 +758,14 @@ for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset 
       assert.equal(bounds.height, undefined, `${scenario}: clipping cannot impose an at-most height on intrinsic content`);
       measure(intrinsic);
       assert.equal(context.controlsDockHeight, intrinsic, `${scenario}: measurements survive fullscreen and morph`);
-      const clipHeight = intrinsic + inner.marginTop + 36;
+      const clipHeight = Math.max(36, intrinsic + (inner.marginTop ?? 0) + 36);
       const occupied = clipHeight + bounds.marginBottom;
       assert.ok(Math.abs(occupied - intrinsic) < 1e-9, 'hide/show cannot change bottom-anchored layout height');
       layoutEvent(safeArea)({ nativeEvent: { layout: { y: height + 25 - occupied - 10 - bottomInset } } });
       layoutEvent(dock)({ nativeEvent: { layout: { y: 0 } } });
       assert.ok(Math.abs(context.dockTop.value - (height - intrinsic + 15 - bottomInset)) < 1e-9);
-      assert.ok(Math.abs(bounds.top + inner.marginTop) < 1e-9, 'rows remain stationary as the native clip moves');
+      const contentOffset = (inner.marginTop ?? 0) + (inner.transform?.[0].translateY ?? 0);
+      assert.ok(Math.abs(bounds.top + contentOffset) < 1e-9, 'rows remain stationary as the native clip moves');
     }
   };
   layoutFrame(220);
@@ -786,5 +787,57 @@ for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset 
   enter(); context.controlsDockHeight = 0; layoutFrame(180, 390);
   finish(); layoutFrame(244, 844); leave(); layoutFrame(244); finish();
 }
-console.log('Controls geometry checks passed: safe areas, native clip algebra, fullscreen entry/morph/return measurements and layout feedback. Native Yoga/compositing remain unverified.');
+// Regression for Yoga's min-padding clamp reported by the reviewer. Use the
+// production styles with offsets on both sides of intrinsic height, including
+// the hidden safe-area-34 offset H + 19 and the reported H=220, offset=300.
+// This models that sizing rule, not the complete Yoga implementation.
+for (const intrinsic of [180, 220, 244]) for (const inset of [0, 34]) for (const measured of [0, 100, 300]) {
+  const viewport = 844, padding = style('controlsCoverageClip').paddingBottom;
+  const expectedTop = viewport - intrinsic + 15 - inset;
+  const context = {
+    Math, controlsDockHeight: measured, screenHeight: viewport,
+    dockTop: { value: expectedTop }, controlsOpacity: { value: 0 },
+  };
+  const productionCoverage = evaluate(callback('controlsCoverage'), context);
+  const sharedCoverage = { value: { top: 0 } };
+  context.controlsCoverage = sharedCoverage;
+  const clip = evaluate(callback('controlsCoverageClipStyle'), context);
+  const content = evaluate(callback('controlsCoverageContentStyle'), context);
+  const frame = offset => {
+    sharedCoverage.value = { originY: context.dockTop.value, top: offset,
+      bottom: viewport - context.dockTop.value };
+    const bounds = clip(), inner = content();
+    const nativeHeight = Math.max(padding, intrinsic + (inner.marginTop ?? 0) + padding);
+    const occupied = nativeHeight + bounds.marginBottom;
+    const outerTop = viewport + 25 - occupied - 10 - inset;
+    assert.ok(Math.abs(outerTop - expectedTop) < 1e-9,
+      `Yoga padding clamp cannot move outer top: H=${intrinsic}, offset=${offset}, inset=${inset}, measured=${measured}`);
+    assert.equal(nativeHeight, intrinsic + padding, 'native clip size is independent of coverage and stale measurement');
+    const contentOffset = (inner.marginTop ?? 0) + (inner.transform?.[0].translateY ?? 0);
+    assert.ok(Math.abs(bounds.top + contentOffset) < 1e-9, 'counter-translation preserves row pixel positions');
+    assert.equal(bounds.top, offset, 'native hit bounds begin at the actual coverage edge');
+    // Return the native layout event to the production coverage calculation.
+    context.dockTop.value = outerTop;
+    return { top: outerTop + bounds.top, bottom: outerTop + bounds.top + nativeHeight };
+  };
+  for (const offset of [0, intrinsic - .01, intrinsic, intrinsic + .01, intrinsic + 19, intrinsic + 80]) frame(offset);
+  for (const progress of [0, .05, .3, .8, 1, .7, .2, 0, 1]) {
+    context.controlsOpacity.value = progress;
+    for (let feedback = 0; feedback < 8; feedback++) {
+      const coverage = productionCoverage();
+      const native = frame(coverage.top);
+      assert.ok(Math.abs(native.top - (viewport - (viewport - expectedTop) * progress)) < 1e-9,
+        'hide/show feedback preserves alignment with the lyric mask');
+      if (progress === 0) {
+        assert.ok(Math.abs(native.top - viewport) < 1e-9, 'fully hidden clip has no in-viewport hit bounds');
+        assert.equal(controlsTouchIsCovered(viewport - 1, coverage), false, 'hidden scrubber cannot intercept the last screen pixel');
+      }
+      if (progress === 1) {
+        assert.equal(native.top, expectedTop);
+        assert.equal(controlsTouchIsCovered(expectedTop + 20, coverage), true, 'shown timeline hit targets remain covered');
+      }
+    }
+  }
+}
+console.log('Controls geometry checks passed: safe areas, Yoga minimum-padding clamp model, fullscreen entry/morph/return measurements and layout feedback. Native Yoga/compositing remain unverified.');
 require('./check-controls-lifecycle.cjs');

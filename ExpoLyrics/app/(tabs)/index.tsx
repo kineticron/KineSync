@@ -1312,14 +1312,14 @@ export default function HomeScreen() {
     const offset = controlsCoverage.value.top;
     return {
       top: offset,
-      marginBottom: offset - 36,
+      marginBottom: -36,
     };
   });
   const controlsCoverageContentStyle = useAnimatedStyle(() => ({
     flexShrink: 0,
-    // Keep intrinsic measurement independent of the moving clip. A fixed clip
-    // height constrains this child's auto height even with flexShrink disabled.
-    marginTop: -controlsCoverage.value.top,
+    // Translate pixels only. Negative layout margins would let Yoga's minimum
+    // padding height change the dock's occupied height once offset exceeds it.
+    transform: [{ translateY: -controlsCoverage.value.top }],
   }));
 
   const fullscreenMenuButtonAnimatedStyle = useAnimatedStyle(() => ({
@@ -2221,8 +2221,8 @@ const styles = StyleSheet.create({
     zIndex: 6,
   },
   controlsCoverageClip: {
-    // Negative content margin trims native clip bounds without constraining
-    // intrinsic content height. The opposite outer margin keeps dock placement.
+    // Natural height stays content + reserve at every offset. Move the clip
+    // below the viewport instead of shrinking its layout around the content.
     overflow: "hidden",
     paddingBottom: 36,
   },
