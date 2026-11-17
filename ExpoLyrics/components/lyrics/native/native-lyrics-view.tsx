@@ -399,7 +399,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const noteManualScroll = (event: { nativeEvent: { contentOffset: { y: number } } }) => {
     manualOffset.current = event.nativeEvent.contentOffset.y;
     if (!manualDrag.current) return;
-    escape.current.move(manualOffset.current, manualTarget(), performance.now());
+    escape.current.move(manualOffset.current, manualTarget(), performance.now(), true, following.current);
     if (following.current && escape.current.graceUntil > 0) takeOwnership();
   };
   const endManualScroll = (event: { nativeEvent: { velocity?: { y: number }; contentOffset?: { y: number } } }) => {

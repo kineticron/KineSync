@@ -494,7 +494,7 @@ function createDotRuntimeLine(
 function renderSyncedLyrics() {
   if (!scrollRoot || !scrollViewport) return;
   const previousOffset = scrollViewport.scrollTop;
-  destroyLyricsLayout();
+  destroyLyricsLayout(true);
   scrollRoot.replaceChildren();
   runtimeLines = [];
   sourceElements = new Map();
@@ -566,7 +566,7 @@ function renderSyncedLyrics() {
 
   resetSpicyAnimatorState();
   resetLyricsScroll();
-  initLyricsLayout(scrollViewport, virtualContainer, runtimeLines, sourceLines as LyricLine[], scheduleFrame);
+  initLyricsLayout(scrollViewport, virtualContainer, runtimeLines, sourceLines as LyricLine[], scheduleFrame, true);
   animationCues = [...new Set(runtimeLines.flatMap((line) =>
     [line.StartTime, line.EndTime, line.EndTime - 500]))].sort((a, b) => a - b);
   if (!autoFollowEnabled) scrollViewport.scrollTop = previousOffset;
@@ -736,6 +736,7 @@ function computeActiveSource(position: number) {
 }
 
 function setLyrics(message: IncomingMessage) {
+  releaseLyricsUserScroll(false);
   pendingClockReset = true;
   sourceLines = Array.isArray(message.lines) ? message.lines : [];
   staticLyricsMode = message.timingMode === "static";

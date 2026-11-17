@@ -15,7 +15,7 @@ function createLyricsScrollEscape() {
       returning = false;
       inputTarget = NaN;
     },
-    move(value, target, now, input = true) {
+    move(value, target, now, input = true, following = true) {
       const delta = value - offset;
       const previous = offset;
       offset = value;
@@ -26,7 +26,7 @@ function createLyricsScrollEscape() {
       if (Math.abs(delta) < 0.5) return;
       const toward = delta * (target - previous) > 0 && Math.abs(value - target) < Math.abs(previous - target);
       if (!toward) {
-        if (input && !escaped) {
+        if (input && following && !escaped) {
           graceUntil = now + ESCAPE_GRACE_MS;
           escaped = true;
         }

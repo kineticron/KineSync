@@ -37,6 +37,7 @@ let lastUserOffset = 0;
 let wheelInput = false;
 let inputPending = false;
 let wasFollowing = true;
+let followEnabled = true;
 let lastPosition = 0;
 let dots: SpicyRuntimeLine[] = [];
 let visibleDot: HTMLElement | null = null;
@@ -95,7 +96,7 @@ export function getVisibleLyricsLines() {
   return visibleLines;
 }
 
-export function destroyLyricsLayout() {
+export function destroyLyricsLayout(preserveEscape = false) {
   restoreNativeScroll?.();
   restoreNativeScroll = null;
   observer?.disconnect();
@@ -114,7 +115,7 @@ export function destroyLyricsLayout() {
   onLayoutChange = () => {};
   userScrollingUntil = 0;
   userTouching = false;
-  escape.reset();
+  if (!preserveEscape) escape.reset();
   inputPending = false;
   wheelInput = false;
   returnRequested = false;
@@ -141,10 +142,12 @@ export function initLyricsLayout(
   lines: SpicyRuntimeLine[],
   source: LyricLine[],
   onChange: () => void = () => {},
+  preserveEscape = false,
 ) {
-  destroyLyricsLayout();
+  destroyLyricsLayout(preserveEscape);
   viewport = scrollElement;
-  escape.reset(scrollElement.scrollTop);
+  if (preserveEscape) escape.begin(scrollElement.scrollTop);
+  else escape.reset(scrollElement.scrollTop);
   returnRequested = false;
   activeScrollTarget = NaN;
   lastUserOffset = scrollElement.scrollTop;
@@ -277,7 +280,7 @@ export function noteLyricsViewportScroll() {
     const offset = viewport?.scrollTop ?? lastUserOffset;
     const now = performance.now();
     const away = Math.abs(offset - activeScrollTarget) > Math.abs(lastUserOffset - activeScrollTarget);
-    escape.move(offset, activeScrollTarget, now, inputPending);
+    escape.move(offset, activeScrollTarget, now, inputPending, followEnabled);
     if (away) returnRequested = false;
     if (wheelInput && !userTouching) {
       returnRequested = escape.release(activeScrollTarget, 64, now);
@@ -327,6 +330,7 @@ export function scrollToActiveLine(
   force: boolean,
   onAutoFollowChange: (enabled: boolean) => void,
 ) {
+  followEnabled = autoFollow;
   if (!viewport || !container || !lyrics.length) return;
   const now = performance.now();
   const state = getLyricsPlaybackState(position);

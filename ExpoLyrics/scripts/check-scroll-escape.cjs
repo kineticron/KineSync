@@ -224,3 +224,12 @@ assert.equal(context.autoFollowEnabled, false);
 handlers.get('kinesync-return')();
 assert.equal(context.autoFollowEnabled, true, 'AMLL return event resumes immediately');
 assert.equal(resets, 4, 'AMLL return cancels native inertia and grace');
+
+{
+  const gate = createLyricsScrollEscape();
+  gate.begin(500);
+  gate.move(540, 500, 999, true, false);
+  assert.equal(gate.graceUntil, 0, 'already-manual ownership never starts a deadline after a rebuild');
+  gate.move(500, 500, 1001, true, false);
+  assert.equal(gate.release(500, 64, 1001), true, 'manual ownership still permits deliberate return');
+}

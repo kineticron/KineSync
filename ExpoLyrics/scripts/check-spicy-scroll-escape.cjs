@@ -56,6 +56,10 @@ for (const boundary of [999, 1001]) {
   viewport.scrollTop = 620;
   input.noteUserScroll(); host.noteLyricsViewportScroll(); frame();
   assert.equal(gate.graceUntil, 1000, 'later scrolling does not restart grace');
+  host.initLyricsLayout(viewport, content, [], source, () => {}, true);
+  assert.equal(gate.graceUntil, 1000, 'same-track layout rebuild preserves the deadline');
+  frame();
+  host.setLyricsUserTouching(true);
   viewport.scrollTop = 500;
   input.noteUserScroll(); host.noteLyricsViewportScroll();
   host.setLyricsUserTouching(false); frame();

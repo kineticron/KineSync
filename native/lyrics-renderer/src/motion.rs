@@ -170,7 +170,8 @@ impl FollowScroll {
     }
 
     pub fn reset(&mut self) {
-        self.escape = EscapeGrace::default();
+        self.escape.returning = false;
+        self.escape.input_target = None;
         self.position = 0.0;
         self.target = 0.0;
         self.command_offset = 0.0;
@@ -1136,6 +1137,22 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn same_track_rebuild_keeps_the_original_escape_deadline() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 1.0, 8);
+        let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
+        scroll.sample(&target, 0.0, true);
+        scroll.note_manual_input(40.0, Some(500.0), 0.0);
+        scroll.drag(40.0, 2_000.0, 900.0);
+        scroll.reset();
+        scroll.restore_manual(540.0, 2_000.0, 900.0);
+        scroll.note_manual_input(20.0, Some(500.0), 1_001.0);
+        assert_eq!(scroll.escape.until, 1_000.0);
+        scroll.resume_follow();
+        assert_eq!(scroll.escape.until, 0.0);
     }
 
     #[test]

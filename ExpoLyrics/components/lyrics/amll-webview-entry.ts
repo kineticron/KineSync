@@ -626,7 +626,8 @@ playerElement.addEventListener(
 // Core drag/inertia updates need frames even while playback is paused.
 playerElement.addEventListener('kinesync-scroll', () => scheduleFrame(IDLE_ANIMATION_GRACE_MS));
 playerElement.addEventListener('kinesync-input', (event) => {
-  const detail = (event as CustomEvent<{ offset: number; setTarget: (value: number) => void }>).detail;
+  const detail = (event as CustomEvent<{ offset: number; setFollowing: (value: boolean) => void; setTarget: (value: number) => void }>).detail;
+  detail.setFollowing(autoFollowEnabled);
   const index = sourceIndexByAmllLine.indexOf(activeSourceIndex);
   const row = getLineWrappers()[index];
   const host = playerElement.getBoundingClientRect();
