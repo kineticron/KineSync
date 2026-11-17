@@ -1,0 +1,262 @@
+// Simulator-only dev-client CI. This never reuses the device cache namespace.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { spawnSync, execFileSync } = require('node:child_process');
+const config = require('./config.json');
+const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+const read = file => fs.readFileSync(file, 'utf8');
+const json = file => JSON.parse(read(file));
+const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+const run = (command, args, options = {}) => execFileSync(command, args, { encoding: 'utf8', ...options }).trim();
+
+function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evidence', '.git', 'node_modules'])) {
+  const entries = [];
+  function visit(relative) {
+    if (relative === path.join('ExpoLyrics', 'modules', 'kinesync-rust-lyrics', 'ios', 'Frameworks')) return;
+    const file = path.join(root, relative);
+    if (!fs.existsSync(file)) { entries.push([relative, 'missing']); return; }
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink()) { entries.push([relative, 'symlink', fs.readlinkSync(file)]); return; }
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(file).sort()) {
+        if (!ignored.has(name)) visit(path.join(relative, name));
+      }
+    } else { entries.push([relative, stat.mode & 0o777, hash(fs.readFileSync(file))]); }
+  }
+  inputs.forEach(visit);
+  return hash(JSON.stringify(entries));
+}
+function rustIdentity(root, identity, buildConfig = config) {
+  const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
+    'native/lyrics-renderer/src', 'native/lyrics-renderer/vendor', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
+    'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
+    'scripts/ios-sim-ci', '.github/workflows/ios-simulator-build.yml',
+    'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);
+  return hash(JSON.stringify({ source, rust: buildConfig.rust, xcode: identity.xcode, sdk: identity.sdk, arch: buildConfig.arch, configuration: buildConfig.configuration }));
+}
+function resolvePaths(workspace, home, temp) {
+  for (const input of [workspace, home, temp]) if (!path.isAbsolute(input)) throw new Error('runner paths must be absolute');
+  const root = path.resolve(workspace, '..', 'kinesync-ios-sim-cache-v1');
+  return {
+    root, npm: path.join(root, 'npm'), derived: path.join(root, 'DerivedData'), ccache: path.join(root, 'ccache'),
+    rustTarget: path.resolve(workspace, 'native/lyrics-renderer/target'), prebuilt: path.join(root, 'rust-simulator'),
+    pods: path.resolve(workspace, 'ExpoLyrics/ios/Pods'),
+    lock: path.resolve(workspace, 'ExpoLyrics/ios/Podfile.lock'),
+    cocoapods: path.resolve(home, 'Library/Caches/CocoaPods'),
+    evidence: path.resolve(temp, 'kinesync-ios-sim-evidence'), wrapper: path.resolve(temp, 'kinesync-ios-sim-compilers'),
+    zip: path.resolve(workspace, 'ExpoLyrics/KineSync-simulator-arm64.app.zip'),
+  };
+}
+function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
+  if (!/^[a-zA-Z0-9_-]{1,40}$/.test(epoch)) throw new Error('cache epoch must be 1..40 alphanumeric, dash or underscore characters');
+  const env = hash(JSON.stringify({ identity, configuration: buildConfig.configuration, sdk: buildConfig.sdk, arch: buildConfig.arch, destination: buildConfig.destination })).slice(0, 24);
+  const native = digestInputs(root, ['ExpoLyrics/package.json', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json',
+    'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins', 'ExpoLyrics/modules', 'ExpoLyrics/ios/Podfile',
+    'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf']);
+  const rust = rustIdentity(root, identity, buildConfig);
+  const lock = path.join(root, 'ExpoLyrics/ios/Podfile.lock');
+  const podHash = fs.existsSync(lock) ? hash(fs.readFileSync(lock)) : null;
+  const prefix = `ios-sim-v${buildConfig.schema}-${hash(branch).slice(0, 12)}-${epoch}-${env}`;
+  return {
+    npm: `${prefix}-npm-${digestInputs(root, ['ExpoLyrics/package-lock.json'])}`,
+    lock: `${prefix}-lock-${native}`,
+    pods: podHash ? `${prefix}-pods-${podHash}` : '',
+    derived: podHash ? `${prefix}-derived-${hash(native + podHash + (buildConfig.rust.enabled ? rust : 'rust-disabled'))}` : '',
+    ccache: podHash ? `${prefix}-ccache-${hash(native + podHash)}` : '',
+    ccachePrefix: `${prefix}-ccache-`,
+    prebuilt: `${prefix}-rust-simulator-${rust}`,
+    rustShared: `${prefix}-cargo-${hash(JSON.stringify({ rust: buildConfig.rust, scripts: digestInputs(root, ['scripts/ios-sim-ci', '.github/workflows/ios-simulator-build.yml']) }))}`,
+    native, rust, podHash,
+  };
+}
+function output(values, file = process.env.GITHUB_OUTPUT) {
+  if (!file) throw new Error('GITHUB_OUTPUT missing');
+  for (const [key, value] of Object.entries(values)) {
+    if (/[\r\n]/.test(String(value))) throw new Error(`multiline output: ${key}`);
+    fs.appendFileSync(file, `${key}=${value}\n`);
+  }
+}
+function statePath() { return path.join(process.env.CI_EVIDENCE_DIR, 'state.json'); }
+function state() { return json(statePath()); }
+function stage(name, command, args, env = process.env) {
+  const started = Date.now();
+  const result = spawnSync(command, args, { stdio: 'inherit', env });
+  const record = { stage: name, started_at: new Date(started).toISOString(), elapsed_ms: Date.now() - started, exit_code: result.status, signal: result.signal, error: result.error?.message };
+  fs.appendFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'stages.jsonl'), JSON.stringify(record) + '\n');
+  if (result.error || result.status !== 0) throw new Error(`${name} failed: ${result.error?.message || result.signal || result.status}`);
+}
+function initialize(env = process.env) {
+  const paths = resolvePaths(env.GITHUB_WORKSPACE, env.HOME, env.RUNNER_TEMP);
+  const mode = env.CACHE_MODE || 'normal';
+  if (!['cold', 'warm', 'normal'].includes(mode)) throw new Error('invalid cache mode');
+  const epoch = env.CACHE_EPOCH || 'routine';
+  const identity = {
+    xcode: run('xcodebuild', ['-version']), sdk: run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-version']),
+    sdkBuild: run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-build-version']),
+    developer: run('xcode-select', ['-p']), runner: env.RUNNER_OS, runnerArch: env.RUNNER_ARCH,
+    node: process.version, pod: run('pod', ['--version']), ruby: run('ruby', ['--version']),
+    ccache: run('ccache', ['--version']).split('\n')[0],
+  };
+  if (!identity.sdk.startsWith('27.')) throw new Error(`Expected iPhoneSimulator 27 SDK, got ${identity.sdk}`);
+  const preexisting = {};
+  for (const [name, dir] of Object.entries(paths)) {
+    if (['zip', 'lock'].includes(name)) continue;
+    preexisting[name] = fs.existsSync(dir) && fs.readdirSync(dir).length > 0;
+  }
+  if (preexisting.evidence) throw new Error('Refusing to mix evidence from multiple runs. A fresh runner temp directory is required.');
+  for (const name of ['npm', 'derived', 'ccache', 'rustTarget', 'prebuilt', 'evidence', 'wrapper', 'cocoapods']) fs.mkdirSync(paths[name], { recursive: true });
+  if (mode !== 'normal' && ['npm', 'derived', 'ccache', 'rustTarget', 'prebuilt'].some(name => preexisting[name])) {
+    throw new Error('Controlled cold/warm run requires an empty owned cache root before restore on a fresh runner. Refusing to delete existing data.');
+  }
+  const branch = env.GITHUB_REF || 'local';
+  const keys = cacheKeys(env.GITHUB_WORKSPACE, identity, epoch, branch);
+  writeJson(path.join(paths.evidence, 'state.json'), { schema: 1, sha: env.GITHUB_SHA, run_id: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, ref: branch, mode, epoch, identity, config, paths, preexisting, keys, started_at: new Date().toISOString() });
+  const vars = {
+    CI_EVIDENCE_DIR: paths.evidence, DERIVED_DATA_PATH: paths.derived, CCACHE_DIR: paths.ccache,
+    CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
+    npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
+    EXPO_NO_METRO: '1', FORCE_BUNDLING: '1', SKIP_BUNDLING: '', SIMULATOR_SDK: config.sdk,
+    RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
+    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_RELEASE_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_RELEASE_DEBUG: String(config.rust.debugInfo),
+    CARGO_PROFILE_RELEASE_LTO: config.rust.lto, CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: String(config.rust.debugAssertions),
+    RUST_SIM_PREBUILT_DIR: paths.prebuilt, RUST_SIM_KEY: keys.prebuilt, CARGO_BUILD_TARGET: config.rust.target, CARGO_TARGET_DIR: paths.rustTarget,
+  };
+  output(vars, env.GITHUB_ENV);
+  output({ ...Object.fromEntries(Object.entries(paths).map(([key, value]) => [`path-${key}`, value])),
+    'key-npm': keys.npm, 'key-prebuilt': keys.prebuilt, 'rust-shared': keys.rustShared,
+    'rust-enabled': String(config.rust.enabled), 'rust-toolchain': config.rust.toolchain, 'rust-target': config.rust.target });
+  const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
+  for (const [name, compiler] of [['clang', 'clang'], ['clang++', 'clang++']]) {
+    const binary = run('xcrun', ['--sdk', config.sdk, '-f', compiler]);
+    const file = path.join(paths.wrapper, name);
+    fs.writeFileSync(file, `#!/bin/sh\nexec ccache ${shellQuote(binary)} "$@"\n`, { mode: 0o755 });
+    fs.chmodSync(file, 0o755);
+  }
+}
+function keysAfterPrebuild() {
+  const current = state();
+  const ios = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/ios');
+  const projects = fs.readdirSync(ios).filter(name => name.endsWith('.xcodeproj'));
+  if (projects.length !== 1) throw new Error('Expected one generated app project');
+  const keys = cacheKeys(process.env.GITHUB_WORKSPACE, current.identity, current.epoch, current.ref);
+  const file = path.join(current.paths.evidence, 'keys.json');
+  const previous = fs.existsSync(file) ? json(file) : null;
+  if (previous?.podHash && keys.podHash !== previous.podHash) throw new Error('Podfile.lock changed after its restore identity was selected');
+  writeJson(file, keys);
+  if (keys.podHash) fs.copyFileSync(current.paths.lock, path.join(current.paths.evidence, 'Podfile.lock'));
+  output({ 'key-lock': keys.lock, 'key-pods': keys.pods, 'key-derived': keys.derived, 'key-ccache': keys.ccache, 'ccache-prefix': keys.ccachePrefix, 'has-lock': String(Boolean(keys.podHash)) });
+}
+function buildArgs(ios, workspace, scheme, derived, wrapper) {
+  return ['-workspace', path.join(ios, workspace), '-scheme', scheme, '-configuration', config.configuration, '-sdk', config.sdk,
+    '-destination', config.destination, '-derivedDataPath', derived,
+    'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=YES', `SUPPORTED_PLATFORMS=${config.sdk}`, `SDKROOT=${config.sdk}`,
+    'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=',
+    'PROVISIONING_PROFILE_SPECIFIER=', 'PROVISIONING_PROFILE=', 'EXPANDED_CODE_SIGN_IDENTITY=',
+    'COMPILER_INDEX_STORE_ENABLE=NO', 'ENABLE_DEBUG_DYLIB=NO', 'STRIP_INSTALLED_PRODUCT=NO',
+    'LD_GENERATE_MAP_FILE=YES', `LD_MAP_FILE_PATH=${path.join(derived, 'LinkMaps', '$(TARGET_NAME)-$(CURRENT_ARCH).txt')}`, `CC=${path.join(wrapper, 'clang')}`, `CXX=${path.join(wrapper, 'clang++')}`];
+}
+function assertSimulatorSettings(settings, scheme) {
+  const byTarget = new Map();
+  for (const entry of settings) {
+    const values = entry.buildSettings;
+    if (values.TARGET_NAME && !byTarget.has(values.TARGET_NAME)) byTarget.set(values.TARGET_NAME, values);
+  }
+  for (const target of [scheme, 'KineSyncLyricsWidget']) {
+    const values = byTarget.get(target);
+    if (!values) throw new Error(`Missing build settings for ${target}`);
+    if (values.CONFIGURATION !== config.configuration) throw new Error(`${target} configuration is not ${config.configuration}`);
+    if (values.SDKROOT !== config.sdk) throw new Error(`${target} SDKROOT is ${values.SDKROOT}, expected ${config.sdk}`);
+    if (values.PLATFORM_NAME !== config.sdk) throw new Error(`${target} PLATFORM_NAME is ${values.PLATFORM_NAME}`);
+    if (!String(values.SUPPORTED_PLATFORMS || '').replaceAll('"', '').split(/\s+/).includes(config.sdk)) throw new Error(`${target} does not support ${config.sdk}`);
+    if (!String(values.ARCHS || '').replaceAll('"', '').split(/\s+/).includes(config.arch)) throw new Error(`${target} ARCHS lacks ${config.arch}`);
+  }
+}
+function build() {
+  const current = state();
+  const ios = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/ios');
+  const workspaces = fs.readdirSync(ios).filter(name => name.endsWith('.xcworkspace'));
+  if (workspaces.length !== 1) throw new Error('Expected one generated workspace');
+  const workspace = workspaces[0];
+  const list = JSON.parse(run('xcodebuild', ['-workspace', path.join(ios, workspace), '-list', '-json'], { cwd: ios }));
+  const project = fs.readdirSync(ios).find(name => name.endsWith('.xcodeproj'));
+  const scheme = project && path.basename(project, '.xcodeproj');
+  if (!scheme || !list.workspace.schemes.includes(scheme)) throw new Error('Generated app scheme not found');
+  const projectFile = path.join(ios, project, 'project.pbxproj');
+  const projectSource = read(projectFile);
+  if (!/react-native-xcode\.sh|Bundle React Native code and images/.test(projectSource)) throw new Error('Generated project has no React Native bundle phase for standalone JS');
+  const args = buildArgs(ios, workspace, scheme, current.paths.derived, current.paths.wrapper);
+  const settings = JSON.parse(run('xcodebuild', [...args, '-showBuildSettings', '-json'], { cwd: ios }));
+  assertSimulatorSettings(settings, scheme);
+  const appSettings = settings.find(entry => entry.target === scheme && entry.buildSettings.WRAPPER_EXTENSION === 'app')?.buildSettings;
+  if (!appSettings || appSettings.CONFIGURATION !== config.configuration || appSettings.ARCHS.trim() !== 'arm64') throw new Error('Unexpected app architecture/configuration');
+  const app = path.join(appSettings.TARGET_BUILD_DIR, appSettings.FULL_PRODUCT_NAME);
+  if (!app.startsWith(current.paths.derived + path.sep) || !app.endsWith('.app')) throw new Error('App must be in owned DerivedData');
+  run('ccache', ['--zero-stats']);
+  fs.mkdirSync(path.join(current.paths.derived, 'LinkMaps'), { recursive: true });
+  stage('xcodebuild', 'xcodebuild', [...args, 'build'], { ...process.env, FORCE_BUNDLING: '1', SKIP_BUNDLING: '', RCT_NO_LAUNCH_PACKAGER: '1', EXPO_NO_METRO: '1' });
+  if (!fs.existsSync(app)) throw new Error(`Expected built app missing: ${app}`);
+  const evidence = current.paths.evidence;
+  stage('verify-simulator-app', 'python3', [path.join(__dirname, 'verify_simulator.py'), '--app', app, '--bundle-id', config.expectedBundleIdentifier, '--evidence', path.join(evidence, 'built-simulator.json')]);
+  if (config.rust.enabled) require('./link-proof.cjs').prove({ app, executable: appSettings.EXECUTABLE_NAME, linkMap: path.join(current.paths.derived, 'LinkMaps', `${scheme}-arm64.txt`), ios, evidence });
+  const verified = json(path.join(evidence, 'built-simulator.json'));
+  writeJson(path.join(evidence, 'built-app.json'), { app, configuration: appSettings.CONFIGURATION, platform: verified.platform, architectures: verified.architectures, bundle_identifier: verified.bundle_identifier, executable: verified.executable, js_bundles: verified.js_bundles });
+  fs.writeFileSync(path.join(evidence, 'ccache-stats.txt'), run('ccache', ['--show-stats', '--verbose']) + '\n');
+  fs.writeFileSync(path.join(evidence, 'app-path.txt'), app + '\n');
+}
+function summary() {
+  const current = state();
+  const stagesFile = path.join(current.paths.evidence, 'stages.jsonl');
+  const stages = fs.existsSync(stagesFile) ? read(stagesFile).trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+  const cache = JSON.parse(process.env.CACHE_RESULTS || '{}');
+  const required = ['npm', 'lock', 'pods', 'derived', 'ccache'];
+  const warmPass = current.mode !== 'warm' || (required.every(name => cache[name]?.hit === 'true') && (!config.rust.enabled || cache.rust?.prebuilt_hit === 'true'));
+  const coldPass = current.mode !== 'cold' || (required.every(name => !cache[name]?.hit) && (!config.rust.enabled || !cache.rust?.prebuilt_hit));
+  const verifyPass = current.mode === 'normal' || (required.every(name => cache[name]?.verified === 'true') && (!config.rust.enabled || cache.rust?.verified === 'true'));
+  const result = { ...current, keys: fs.existsSync(path.join(current.paths.evidence, 'keys.json')) ? json(path.join(current.paths.evidence, 'keys.json')) : current.keys,
+    stages, cache, job_status_before_summary: process.env.CI_JOB_STATUS, warm_exact_hits_pass: warmPass,
+    cold_restores_skipped_pass: coldPass, controlled_cache_publication_pass: verifyPass,
+    rust: { enabled: config.rust.enabled, target: config.rust.target, abi: config.rust.abi, action: config.rust.enabled ? (fs.existsSync(path.join(current.paths.evidence, 'rust-sim-manifest.json')) ? (cache.rust?.prebuilt_hit === 'true' ? 'verified-prebuilt' : 'built-and-validated') : 'not-completed') : 'disabled', source_config_hash: current.keys.rust },
+    elapsed_before_artifact_upload_ms: Date.now() - Date.parse(current.started_at),
+    note: 'Simulator Debug app is bundled, verified and smoke-tested without Metro. This is not a device build or a signed IPA.' };
+  writeJson(path.join(current.paths.evidence, 'evidence.json'), result);
+  const lines = ['## Simulator Debug CI evidence', '', `Commit: ${current.sha}`, `Mode: ${current.mode}, epoch: ${current.epoch}`,
+    `Xcode: ${current.identity.xcode.replaceAll('\n', ', ')}, iPhoneSimulator ${current.identity.sdk}, arm64 only`,
+    '', '| Cache | Exact restore | Server lookup |', '| --- | --- | --- |',
+    ...required.map(name => `| ${name} | ${cache[name]?.hit || 'skipped/miss'} | ${cache[name]?.verified || 'not measured'} |`),
+    ...(config.rust.enabled ? [`| Rust simulator prebuilt | ${cache.rust?.prebuilt_hit || 'skipped/miss'} | ${cache.rust?.verified || 'not measured'} |`] : []),
+    '', '| Stage | Seconds | Exit |', '| --- | ---: | ---: |', ...stages.map(s => `| ${s.stage} | ${(s.elapsed_ms / 1000).toFixed(3)} | ${s.exit_code ?? s.signal} |`),
+    '', 'Debug configuration is intentional: the app and Rust module are __DEV__/debugOnly gated.', 'Smoke test uses no local Metro listener and requires rendered onboarding text. Network isolation is not claimed.', ''];
+  if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
+  if (!warmPass || !coldPass || !verifyPass) throw new Error('Controlled cache evidence failed. Inspect evidence.json, do not report a warm-cache pass.');
+}
+function main(args) {
+  switch (args[0]) {
+    case 'init': return initialize();
+    case 'keys': return keysAfterPrebuild();
+    case 'time': return stage(args[1], args[2], args.slice(3));
+    case 'mark': return fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, `${args[1]}.start`), String(Date.now()));
+    case 'span': {
+      const file = path.join(process.env.CI_EVIDENCE_DIR, `${args[1]}.start`);
+      if (!fs.existsSync(file)) return console.log(`Stage not started: ${args[1]}`);
+      const start = Number(read(file));
+      return fs.appendFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'stages.jsonl'), JSON.stringify({ stage: args[1], elapsed_ms: Date.now() - start, exit_code: process.env.CI_JOB_STATUS === 'failure' ? 1 : 0, note: 'Actions stage span includes orchestration overhead' }) + '\n');
+    }
+    case 'rust-prepare':
+      if (!config.rust.enabled) throw new Error('Rust simulator integration must be enabled');
+      if (process.env.RUST_PREBUILT_HIT !== 'true') stage('cargo-simulator-and-xcframework', 'bash', [path.join(__dirname, 'build-rust-sim.sh')]);
+      return stage('validate-rust-simulator-framework', 'node', [path.join(__dirname, 'rust-sim.cjs'), 'validate']);
+    case 'build': return build();
+    case 'package': {
+      const current = state();
+      const app = read(path.join(current.paths.evidence, 'app-path.txt')).trim();
+      return stage('package-and-verify-app-zip', 'python3', [path.join(__dirname, 'package_app.py'), app, current.paths.zip, path.join(current.paths.evidence, 'app-zip-manifest.json')]);
+    }
+    case 'summary': return summary();
+    default: throw new Error('Expected init, keys, time, mark, span, rust-prepare, build, package, summary');
+  }
+}
+if (require.main === module) {
+  try { main(process.argv.slice(2)); } catch (error) { console.error(error.stack); process.exitCode = 1; }
+}
+module.exports = { digestInputs, rustIdentity, resolvePaths, cacheKeys, buildArgs, assertSimulatorSettings, config };

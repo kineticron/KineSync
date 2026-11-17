@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "configuration": "Debug",
+  "sdk": "iphonesimulator",
+  "arch": "arm64",
+  "destination": "generic/platform=iOS Simulator",
+  "expectedBundleIdentifier": "dev.kineticron.KineSync",
+  "onboarding": {
+    "required": [
+      "KineSync",
+      "A modern, beautiful mobile app",
+      "syllable-synced lyrics",
+      "Spotify playback"
+    ],
+    "forbidden": [
+      "Development servers",
+      "No development servers",
+      "Load embedded bundle",
+      "Unable to connect to Metro",
+      "Could not connect to development server",
+      "Failed to load bundle"
+    ]
+  },
+  "rust": {
+    "enabled": true,
+    "toolchain": "1.97.0",
+    "target": "aarch64-apple-ios-sim",
+    "abi": 11,
+    "profile": "release",
+    "features": [],
+    "framework": "KineSyncLyrics.xcframework",
+    "rustflags": "",
+    "optLevel": 3,
+    "debugInfo": 0,
+    "iosDeploymentTarget": "16.4",
+    "lto": "thin",
+    "debugAssertions": false
+  }
+}
