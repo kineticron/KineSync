@@ -74,6 +74,14 @@ for (const file of ['amll-webview-entry.ts', 'spicy-webview-entry.ts']) {
   const uploaderOnly = new Element('div');
   context.appendCreditsContent(uploaderOnly, [], { uploader: attribution.uploader });
   assert.ok(descendants(uploaderOnly).some(node => node.textContent === 'Uploaded By: '));
+  for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
+    const officialFooter = new Element('div');
+    context.appendCreditsContent(officialFooter, [], { source: 'official', provider });
+    const content = descendants(officialFooter);
+    assert.ok(content.some(node => node.textContent === 'Provided By: '), `${file} keeps official provider credits without a tap`);
+    assert.ok(content.some(node => node.textContent === provider));
+    assert.equal(content.filter(node => node instanceof Anchor).length, 0);
+  }
 }
 
 // Render the native footer with lightweight host elements and exercise its actual handlers.
@@ -155,6 +163,28 @@ for (const link of nativeLinks) {
   assert.ok(stopped);
 }
 assert.deepEqual(opened, [profiles.Maker.url, profiles.Uploader.url]);
+for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
+  context.metadata = { spicyApi: { fetchedAt: 1, expiresAt: 2 }, attribution: { source: 'official', provider } };
+  vm.runInContext(nativeJs, context);
+  const content = descendants(context.result);
+  assert.ok(content.some(node => node.children?.includes('Provided By: ')), 'Native official provider credit is rendered without opening the popup');
+  assert.ok(content.some(node => node.children?.includes(provider)));
+  assert.equal(content.filter(node => node.props?.accessibilityRole === 'link').length, 0);
+}
+
+// Exercise the unchanged Rust JS credit packet independently of popup visibility.
+const rustSource = read('components/lyrics/rust/rust-lyrics-view.tsx');
+const rustCredits = rustSource.slice(rustSource.indexOf('const credits = useMemo('), rustSource.indexOf('const lyricsStatusMessage ='));
+const rustCreditsJs = ts.transpileModule(`${rustCredits}\nresult = credits;`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+for (const value of [attribution, ...['Apple Music', 'Spotify', 'Unknown'].map(provider => ({ source: 'official', provider }))]) {
+  const packet = vm.createContext({ metadata: { attribution: value }, useMemo: callback => callback(), result: null });
+  vm.runInContext(rustCreditsJs, packet);
+  assert.equal(packet.result.attribution.provider, value.provider, 'Rust keeps provider credit independently of community status');
+  if (value.community) {
+    assert.equal(packet.result.attribution.maker_url, profiles.Maker.url);
+    assert.equal(packet.result.attribution.uploader_url, profiles.Uploader.url);
+  }
+}
 
 // Exercise the persistent overlay with real component handlers and shared progress.
 let expanded = false;
@@ -186,6 +216,7 @@ const overlayCode = ts.transpileModule(read('components/lyrics/lyrics-attributio
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2020 },
 }).outputText;
 vm.runInNewContext(overlayCode, { exports: overlayModule.exports, require(name) {
+  if (name === '@/lib/lyrics-policy') return require('../lib/lyrics-policy');
   if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
   if (name === 'react') return { memo: component => component, useEffect(callback, deps) {
     if (!previousOverlayDeps || deps.some((value, index) => value !== previousOverlayDeps[index])) callback();
@@ -337,6 +368,41 @@ for (const provider of ['Apple Music', 'Spotify']) {
   assert.ok(!compact.some(node => node.props?.accessibilityRole === 'link'));
   assert.ok(!compact.some(node => node.tag === 'Image'), 'Commercial provider labels do not gain contributor pictures');
 }
+for (const allCredits of [false, true]) {
+  for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
+    const official = { source: 'official', provider };
+    for (const provenance of [
+      { spicyApi: { fetchedAt: 1, expiresAt: 2 } },
+      { fetchOrigin: { host: 'api.spicylyrics.org' } },
+      { vault: { originalSource: 'spicy-lyrics' } },
+    ]) {
+      assert.equal(renderOverlay({ ...overlayProps, allCredits, metadata: { ...provenance, attribution: official } }), null,
+        `Spicy-origin ${provider} has no popup with allCredits=${allCredits}`);
+      assert.equal(sharedCursor, 4, 'Hidden popup still calls every shared-value hook');
+    }
+  }
+  for (const communityAttribution of [
+    { ...attribution, provider: 'Community provider', community: true },
+    { source: 'spicy_lyrics', provider: 'Legacy' },
+    { source: 'spl', provider: 'Legacy' },
+    { source: 'unknown', provider: 'Spicy Lyrics' },
+  ]) {
+    assert.ok(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: communityAttribution } }),
+      'Explicit community status and legacy community labels retain the popup');
+  }
+  assert.equal(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: { ...attribution, community: false } } }), null,
+    'Explicit non-community status overrides legacy source and provider labels');
+  for (const provider of ['Apple Music', 'Spotify']) {
+    assert.ok(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: { source: provider, provider } } }),
+      'Non-Spicy provider popup behavior is unchanged');
+    assert.equal(renderOverlay({ ...overlayProps, allCredits, isSpicyResponse: true, metadata: { attribution: { source: provider, provider } } }), null,
+      'Caller source provenance hides old official Spicy responses with no metadata provenance');
+  }
+}
+assert.ok(renderOverlay({ ...overlayProps, allCredits: true, metadata: { credits: { songwriters: ['Writer'] } } }),
+  'Desktop songwriter-only popup remains available');
+assert.equal(renderOverlay({ ...overlayProps, allCredits: true, metadata: { spicyApi: { fetchedAt: 1, expiresAt: 2 }, credits: { songwriters: ['Writer'] } } }), null,
+  'Desktop songwriter fallback cannot restore a non-community Spicy popup');
 reducedMotion = true;
 renderOverlay(overlayProps);
 assert.equal(sharedValues[0].get(), 0);
@@ -357,6 +423,10 @@ const controlCallbacks = {};
 function inspectPlayer(node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(playerAst) === 'styles') playerStyles = node.initializer.arguments[0];
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(playerAst) === 'LyricsAttribution') attributionParent = node.parent;
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(playerAst) === 'LyricsAttribution') {
+    assert.ok(node.attributes.properties.some(property => ts.isJsxAttribute(property) && property.name.getText(playerAst) === 'isSpicyResponse' && !property.initializer),
+      'The Spicy-only caller passes its source provenance to the shared popup');
+  }
   if (ts.isVariableDeclaration(node) && ['showControls', 'hideControls'].includes(node.name.getText(playerAst))) controlCallbacks[node.name.getText(playerAst)] = node.initializer.arguments[0].getText(playerAst);
   ts.forEachChild(node, inspectPlayer);
 }

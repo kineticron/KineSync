@@ -2003,7 +2003,7 @@ export default function HomeScreen() {
       {!tour.active && lyrics.length > 0 && !showEmptyState && isSpicyLyricsResponse({ source: lyricsSource, metadata: lyricsMetadata }) ? (
         <Reanimated.View pointerEvents={fullscreenAlbumMode && !albumArtworkMorphing ? 'none' : 'box-none'}
           style={[styles.lyricsAttributionLayer, !isLandscape && lyricsChromeOpacityStyle]}>
-          <LyricsAttribution metadata={lyricsMetadata} trackId={currentTrack?.id}
+          <LyricsAttribution metadata={lyricsMetadata} isSpicyResponse trackId={currentTrack?.id}
             followControlsProgress={!isLandscape} controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
             controlsHeight={isLandscape ? 0 : controlsDockHeight}
             bottomInset={insets.bottom} onInteraction={handleControlsInteraction} />

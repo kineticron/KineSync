@@ -4,10 +4,12 @@ import { memo, useEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import Animated, { cancelAnimation, Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog } from '@/components/lyrics/lyrics-glass-dialog';
-import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
+import { isSpicyLyricsResponse } from '@/lib/lyrics-policy';
+import type { LyricsMetadata, LyricsAttributionMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
 type Props = {
   metadata: LyricsMetadata;
+  isSpicyResponse?: boolean;
   allCredits?: boolean;
   trackId?: string;
   followControlsProgress?: boolean;
@@ -48,13 +50,15 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 }
 
 // Mounted outside both lyric renderers, so attribution never scrolls away.
-export const LyricsAttribution = memo(function LyricsAttribution({ metadata, allCredits = false, trackId, followControlsProgress = false, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
+export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isSpicyResponse = false, allCredits = false, trackId, followControlsProgress = false, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
   const { width: viewportWidth } = useWindowDimensions();
   const badgeRef = useAnimatedRef<View>();
-  const attribution = metadata.attribution ?? (allCredits && metadata.credits?.songwriters?.length ? { source: '', provider: '' } : undefined);
-  const community = attribution?.provider === 'Spicy Lyrics';
+  const attribution: LyricsAttributionMetadata | undefined = metadata.attribution ?? (allCredits && metadata.credits?.songwriters?.length ? { source: '', provider: '' } : undefined);
+  // Explicit community metadata wins over labels retained by older caches.
+  const community = attribution?.community ?? (attribution?.source === 'spicy_lyrics' || attribution?.source === 'spl' || attribution?.provider === 'Spicy Lyrics');
+  const spicyResponse = isSpicyResponse || isSpicyLyricsResponse({ metadata }) || attribution?.provider === 'Spicy Lyrics';
   const providerUrl = allCredits ? attribution?.url?.trim() : undefined;
   const providerLinked = Boolean(providerUrl && /^https:\/\//i.test(providerUrl));
   useEffect(() => { setExpanded(false); }, [trackId, attribution?.source, attribution?.provider]);
@@ -115,7 +119,7 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, all
     ],
   }));
   const glassStyle = useAnimatedStyle(() => ({ opacity: controlsProgress.get() * (followControlsProgress ? 1 : chromeReady.get()) }));
-  if (!attribution) return null;
+  if (!attribution || (spicyResponse && !community)) return null;
 
   return <>
     <View pointerEvents="box-none" style={[styles.anchor, { bottom: bottomInset + 10 }]}>
