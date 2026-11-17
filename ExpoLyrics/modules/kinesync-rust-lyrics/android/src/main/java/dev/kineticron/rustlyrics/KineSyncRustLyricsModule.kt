@@ -19,7 +19,7 @@ class KineSyncRustLyricsModule : Module() {
       AsyncFunction("setFollowing") { view: KineSyncRustLyricsView, value: Boolean -> view.setFollowing(value) }.runOnQueue(Queues.MAIN)
       AsyncFunction("scrollBy") { view: KineSyncRustLyricsView, dy: Double -> view.scrollBy(dy) }.runOnQueue(Queues.MAIN)
       AsyncFunction("fling") { view: KineSyncRustLyricsView, velocity: Double -> view.fling(velocity) }.runOnQueue(Queues.MAIN)
-      AsyncFunction("hitTest") { view: KineSyncRustLyricsView, y: Double, promise: Promise -> view.hitTest(y, promise) }.runOnQueue(Queues.MAIN)
+      AsyncFunction("hitTest") { view: KineSyncRustLyricsView, x: Double, y: Double, promise: Promise -> view.hitTest(x, y, promise) }.runOnQueue(Queues.MAIN)
     }
   }
 }

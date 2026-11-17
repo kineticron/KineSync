@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
+import { AppState, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore } from '@/store/playback-store';
 import { anchorChanged, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
@@ -10,7 +10,7 @@ import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(y: number): Promise<number> };
+type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
 type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
@@ -29,7 +29,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') return { api: null, view: null, error: 'Rust native surfaces require iOS or Android' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 9) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 10) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -41,9 +41,10 @@ function generation() {
 }
 
 /** Development-only selection in the actual player, using its current track/store anchors. */
-export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction }: {
+export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction }: {
   active: boolean; previewPositionMs?: number | null; tapToSeekEnabled: boolean; autoFollowEnabled?: boolean; resumeAutoFollowSignal?: number;
   onLinePress?: (line: LyricLine) => void; onLineLongPress?: (line: LyricLine) => void;
+  onCreditsTimestampPress?: (position: number) => void;
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
 }) {
   const lyrics = usePlaybackStore(state => state.lyrics);
@@ -54,8 +55,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     const attribution = a ? {
       ...(a.provider ? { provider: a.provider } : {}),
       ...(a.community ? { community: true } : {}),
-      ...(a.maker?.username ? { maker: a.maker.username } : {}),
-      ...(a.uploader?.username ? { uploader: a.uploader.username } : {}),
+      ...(a.maker?.username ? { maker: a.maker.username, ...(a.maker.url ? { maker_url: a.maker.url } : {}) } : {}),
+      ...(a.uploader?.username ? { uploader: a.uploader.username, ...(a.uploader.url ? { uploader_url: a.uploader.url } : {}) } : {}),
     } : null;
     const hasAttribution = attribution && Object.keys(attribution).length > 0;
     if (!songwriters.length && !hasAttribution) return null;
@@ -89,8 +90,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const [metrics, setMetrics] = useState<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
-  const latest = useRef({ tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics });
-  latest.current = { tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, lyrics };
+  const latest = useRef({ tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics });
+  latest.current = { tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics };
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -106,12 +107,20 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     void run(view).catch(commandFailed);
   }, [commandFailed]);
   const gesture = useMemo(() => createRustLyricsGesture({
-    hitTest: y => native.current ? native.current.hitTest(y) : Promise.resolve(-1),
+    hitTest: (y, x) => native.current ? native.current.hitTest(x, y) : Promise.resolve(-1),
     // UIKit pan recognizer drives drag/fling directly on the native owner.
     scrollBy: () => {},
     fling: () => {},
     setFollowing: following => send(view => view.setFollowing(following)),
     tapEnabled: () => latest.current.tapToSeekEnabled,
+    onFooterPress: target => {
+      const value = latest.current;
+      if (target === -2) value.onCreditsTimestampPress?.(Math.max(0, ...value.lyrics.map(line => line.lineEndTime)));
+      else {
+        const profile = target === -3 ? value.metadata?.attribution?.maker : value.metadata?.attribution?.uploader;
+        if (profile?.url && /^https:\/\//i.test(profile.url)) void Linking.openURL(profile.url).catch(() => {});
+      }
+    },
     onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },
     onLineLongPress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLineLongPress?.(line); },
     onAutoFollowChange: enabled => latest.current.onAutoFollowChange?.(enabled),
@@ -120,7 +129,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: event => gesture.grant(event.nativeEvent.locationY),
+    onPanResponderGrant: event => gesture.grant(event.nativeEvent.locationY, event.nativeEvent.locationX),
     onPanResponderMove: (_event, state) => gesture.move(state.dy),
     onPanResponderRelease: () => gesture.release(),
     onPanResponderTerminate: () => gesture.terminate(),

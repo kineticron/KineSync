@@ -13,7 +13,7 @@ internal object RustBridge {
   external fun setFollowing(owner: Long, following: Boolean): Int
   external fun scrollBy(owner: Long, dyLogical: Double): Int
   external fun fling(owner: Long, velocityLogicalPerMs: Double): Int
-  external fun hitTest(owner: Long, yLogical: Double): Int
+  external fun hitTest(owner: Long, xLogical: Double, yLogical: Double): Int
   external fun render(owner: Long, targetMs: Double, sampledMs: Double, resumeStepMs: Double): Int
   external fun metrics(owner: Long): DoubleArray?
   external fun copyLayout(owner: Long): ByteArray?

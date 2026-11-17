@@ -35,6 +35,7 @@ pub(crate) struct Footer {
     pub(crate) height: f64,
     x: f64,
     width: f64,
+    profiles: Vec<(Rect, i32)>,
 }
 
 /// Visible credit lines in Skia order, plus the byte length of the bold
@@ -98,6 +99,7 @@ pub(crate) fn build(
     let mut layouts = LayoutContext::<()>::new();
     let mut scene = Scene::new();
     let mut cursor = 0.0;
+    let mut profiles = Vec::new();
     for (text, bold) in rows {
         let mut builder = layouts.ranged_builder(&mut fonts.context, &text, 1.0, true);
         builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
@@ -148,6 +150,24 @@ pub(crate) fn build(
                 }
             }
         }
+        let profile = if text.starts_with("Made By: ") {
+            -3
+        } else if text.starts_with("Uploaded By: ") {
+            -4
+        } else {
+            0
+        };
+        if profile != 0 {
+            profiles.push((
+                Rect::new(
+                    0.0,
+                    cursor,
+                    block_width,
+                    cursor + f64::from(layout.height()),
+                ),
+                profile,
+            ));
+        }
         cursor += f64::from(layout.height());
     }
     let inset = MARGIN_TOP * dpr + PADDING_TOP * dpr;
@@ -158,11 +178,31 @@ pub(crate) fn build(
         height: cursor,
         x,
         width: block_width,
+        profiles,
     })
 }
 
 impl Footer {
-    /// Draw at `y` (surface px). Returns the protected band contribution.
+    pub(crate) fn hit_test(&self, x: f64, local_y: f64, scale: f64) -> i32 {
+        let point = vello::kurbo::Point::new(x - self.x, local_y);
+        if let Some((_, target)) = self.profiles.iter().find(|(rect, _)| rect.contains(point)) {
+            return *target;
+        }
+        if Rect::new(
+            -PADDING_HORIZONTAL * scale,
+            -PADDING_TOP * scale,
+            self.width + PADDING_HORIZONTAL * scale,
+            self.height + PADDING_BOTTOM * scale,
+        )
+        .contains(point)
+        {
+            -2
+        } else {
+            -1
+        }
+    }
+
+    /// Draw ordinary RGBA at `y` (surface px). Returns visible text bounds.
     pub(crate) fn draw(
         &self,
         scene: &mut Scene,
@@ -202,6 +242,12 @@ pub(crate) fn valid(credits: &Credits) -> bool {
                 .as_deref()
                 .is_none_or(|v| text(v) && !v.contains('\0'))
                 && a.maker
+                    .as_deref()
+                    .is_none_or(|v| text(v) && !v.contains('\0'))
+                && a.maker_url
+                    .as_deref()
+                    .is_none_or(|v| text(v) && !v.contains('\0'))
+                && a.uploader_url
                     .as_deref()
                     .is_none_or(|v| text(v) && !v.contains('\0'))
                 && a.uploader

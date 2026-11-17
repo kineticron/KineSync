@@ -1444,6 +1444,7 @@ export default function HomeScreen() {
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                 />
               ) : lyricsStyle === "amll" ? (
@@ -1687,6 +1688,7 @@ export default function HomeScreen() {
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
                   onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                 />
               ) : lyricsStyle === "amll" ? (

@@ -28,8 +28,8 @@ public final class KineSyncRustLyricsModule: Module {
       AsyncFunction("fling") { (view: KineSyncRustLyricsView, velocity: Double) in
         MainActor.assumeIsolated { view.fling(velocity) }
       }
-      AsyncFunction("hitTest") { (view: KineSyncRustLyricsView, y: Double, promise: Promise) in
-        MainActor.assumeIsolated { view.hitTest(y, promise) }
+      AsyncFunction("hitTest") { (view: KineSyncRustLyricsView, x: Double, y: Double, promise: Promise) in
+        MainActor.assumeIsolated { view.hitTest(x, y, promise) }
       }
     }
   }
@@ -161,10 +161,10 @@ private final class RustOwner: @unchecked Sendable {
       if kr_fling(self.handle, velocity) < 0 { self.failure() }
     }
   }
-  func hitTest(_ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
+  func hitTest(_ x: Double, _ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
     queue.async {
       var index: Int32 = -1
-      if self.permitted(), self.handle != 0, !self.failed { index = kr_hit_test(self.handle, y) }
+      if self.permitted(), self.handle != 0, !self.failed { index = kr_hit_test(self.handle, x, y) }
       DispatchQueue.main.async { completion(index) }
     }
   }
@@ -223,7 +223,7 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 9 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard kr_abi_version() == 10 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }
@@ -514,10 +514,10 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     markDirty()
     lifecycle()
   }
-  func hitTest(_ y: Double, _ promise: Promise) {
-    guard y.isFinite else { promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point"); return }
+  func hitTest(_ x: Double, _ y: Double, _ promise: Promise) {
+    guard x.isFinite, y.isFinite else { promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point"); return }
     guard let owner else { promise.resolve(Int32(-1)); return }
-    owner.hitTest(y) { index in promise.resolve(index) }
+    owner.hitTest(x, y) { index in promise.resolve(index) }
   }
   private func refresh() {
     guard window != nil, foreground, enabled, !failed else { return }

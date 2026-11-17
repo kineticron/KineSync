@@ -35,6 +35,10 @@ pub struct Attribution {
     pub maker: Option<String>,
     #[serde(default)]
     pub uploader: Option<String>,
+    #[serde(default)]
+    pub maker_url: Option<String>,
+    #[serde(default)]
+    pub uploader_url: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

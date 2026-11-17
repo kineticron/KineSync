@@ -1027,6 +1027,18 @@ impl TrackScene {
     /// The pre-ABI7 fixture path keeps its historical center anchor.
     /// Single placement rule for the credits footer, shared by both draw paths:
     /// below the final lyric row at its current measured height.
+    pub(crate) fn footer_hit(&self, x: f64, y: f64, scroll: f64, time: f64) -> i32 {
+        self.footer.as_ref().map_or(-1, |footer| {
+            let top = self.footer_y(
+                footer,
+                self.scroll_anchor(),
+                scroll,
+                self.interlude_shift(time).1,
+            );
+            footer.hit_test(x, y - top, f64::from(self.scale))
+        })
+    }
+
     pub(crate) fn footer_y(
         &self,
         footer: &crate::credits::Footer,
@@ -2369,6 +2381,7 @@ mod lazy_tests {
                 community: true,
                 maker: Some("maker".into()),
                 uploader: Some("uploader".into()),
+                ..Default::default()
             }),
         };
         let mut fonts = fonts();
@@ -2412,6 +2425,7 @@ mod lazy_tests {
                 community: true,
                 maker: None,
                 uploader: Some("uploader".into()),
+                ..Default::default()
             }),
         };
         let mut fonts = fonts();

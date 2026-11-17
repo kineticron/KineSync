@@ -117,7 +117,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    9
+    10
 }
 /// # Safety
 /// `layer` is a CAMetalLayer on iOS or ANativeWindow on Android.
@@ -526,10 +526,10 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
         Ok(0)
     })
 }
-/// Logical surface point to source line index, or -1 outside every row.
+/// Logical surface point to row index or ABI10 footer target from the shared layout.
 #[unsafe(no_mangle)]
-pub extern "C" fn kr_hit_test(handle: u64, y: f64) -> i32 {
-    if !y.is_finite() {
+pub extern "C" fn kr_hit_test(handle: u64, x: f64, y: f64) -> i32 {
+    if !x.is_finite() || !y.is_finite() {
         error("Invalid hit-test point");
         return -1;
     }
@@ -537,6 +537,15 @@ pub extern "C" fn kr_hit_test(handle: u64, y: f64) -> i32 {
         let Some(layout) = engine.layout.as_ref() else {
             return Ok(-1);
         };
+        let footer = layout.footer_hit(
+            x * f64::from(engine.scale),
+            y * f64::from(engine.scale),
+            engine.scroll.position(),
+            engine.metrics.position_ms,
+        );
+        if footer != -1 {
+            return Ok(footer);
+        }
         Ok(layout
             .hit_test(
                 y * f64::from(engine.scale),
@@ -754,8 +763,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v9_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 9);
+    fn abi_v10_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 10);
         assert_eq!(std::mem::size_of::<Metrics>(), 168);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
@@ -914,7 +923,7 @@ mod tests {
         assert_eq!(kr_destroy(u64::MAX), 0);
         assert_eq!(kr_set_following(u64::MAX, false), -1);
         assert_eq!(kr_scroll_by(u64::MAX, 10.0), -1);
-        assert_eq!(kr_hit_test(u64::MAX, 10.0), -1);
+        assert_eq!(kr_hit_test(u64::MAX, 10.0, 10.0), -1);
         let mut message = [0i8; 256];
         // SAFETY: stack output buffer has the advertised capacity.
         unsafe {

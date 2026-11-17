@@ -252,10 +252,10 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     owner?.scrollBy(dy); markDirty(); lifecycle()
   }
   fun fling(v: Double) { if (!v.isFinite()) return; owner?.fling(v); markDirty(); lifecycle() }
-  fun hitTest(y: Double, promise: Promise) {
-    if (!y.isFinite()) return promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point", null)
+  fun hitTest(x: Double, y: Double, promise: Promise) {
+    if (!x.isFinite() || !y.isFinite()) return promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point", null)
     val o = owner ?: return promise.resolve(-1)
-    o.hitTest(y) { promise.resolve(it) }
+    o.hitTest(x, y) { promise.resolve(it) }
   }
 
   private fun refresh() {

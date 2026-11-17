@@ -5,11 +5,12 @@ const DRAG_SLOP = 4;
 
 /**
  * @param {{
- *   hitTest: (y: number) => number | Promise<number>,
+ *   hitTest: (y: number, x: number) => number | Promise<number>,
  *   scrollBy: (dy: number) => void,
  *   fling: (velocity: number) => void,
  *   setFollowing: (following: boolean) => void,
  *   tapEnabled: () => boolean,
+ *   onFooterPress?: (target: number) => void,
  *   onLinePress: (index: number) => void,
  *   onLineLongPress: (index: number) => void,
  *   onAutoFollowChange: (enabled: boolean) => void,
@@ -26,6 +27,7 @@ function createRustLyricsGesture({
   setFollowing = () => {},
   tapEnabled,
   onLinePress,
+  onFooterPress = () => {},
   onLineLongPress,
   onAutoFollowChange,
   onUserInteraction,
@@ -47,13 +49,13 @@ function createRustLyricsGesture({
     onUserInteraction();
   };
   return {
-    grant(y) {
+    grant(y, x = 0) {
       cancel(active);
       token += 1;
       const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, lastTime: now(), velocity: 0, timer: null, hit: null };
       active = current;
       takeOwnership();
-      current.hit = Promise.resolve(hitTest(y))
+      current.hit = Promise.resolve(hitTest(y, x))
         .then((index) => {
           if (Number.isInteger(index)) current.index = index;
           return current.index;
@@ -106,13 +108,19 @@ function createRustLyricsGesture({
       // press when it lands instead of dropping the seek. A tap outside every
       // row never restores follow (Skia only presses actual rows).
       const press = (index) => {
-        if (current.token !== token || index < 0) return;
+        if (current.token !== token || index === -1) return;
+        if (index <= -2 && index >= -4) {
+          onUserInteraction();
+          onFooterPress(index);
+          return;
+        }
+        if (index < 0) return;
         setFollowing(true);
         onAutoFollowChange(true);
         onUserInteraction();
         if (tapEnabled()) onLinePress(index);
       };
-      if (current.index >= 0) press(current.index);
+      if (current.index !== -1) press(current.index);
       else void current.hit.then(press);
     },
     terminate() {
