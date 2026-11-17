@@ -106,15 +106,18 @@ mod tests {
             for run in line.runs() {
                 let data = run.font();
                 let font = FontRef::from_index(data.data.as_ref(), data.index).unwrap();
+                // Parley and Skrifa use distinct F2Dot14 coordinate types.
+                // Preserve the run's exact bits, including variable axis values.
+                let coords: Vec<_> = run
+                    .normalized_coords()
+                    .iter()
+                    .map(|coord| skrifa::instance::NormalizedCoord::from_bits(coord.to_bits()))
+                    .collect();
                 indexes.push(data.index);
                 for cluster in run.visual_clusters() {
                     for glyph in cluster.glyphs() {
                         assert!(
-                            drawable(
-                                &font,
-                                skrifa::GlyphId::new(glyph.id),
-                                run.normalized_coords()
-                            ),
+                            drawable(&font, skrifa::GlyphId::new(glyph.id), &coords),
                             "missing/undrawable glyph {} in {text:?}, weight {weight}, face {}",
                             glyph.id,
                             data.index

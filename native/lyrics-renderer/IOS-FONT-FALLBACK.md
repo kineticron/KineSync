@@ -167,3 +167,14 @@ A later rebuilt development IPA and physical phone check must reproduce the
 reported song and verify Japanese, Chinese and Korean samples, preferably on
 an English-only device without downloaded Chinese fonts as well as one with
 Chinese preferred languages. Host checks do not establish device success.
+
+## Lab compile correction
+
+The Rust 1.97.0 lab run of fe5516e failed with E0308 at
+`src/ios_fonts.rs:116`, recorded in exact-lab `/tmp/kanji-test.log`.
+Parley's run coordinates use parlance::NormalizedCoord, while Skrifa expects
+its own F2Dot14 type. The outline assertion now converts each run coordinate
+with `to_bits()` and Skrifa's `from_bits()`, once per run. This preserves the
+actual variation coordinates exactly rather than substituting default axes.
+The change affects test validation only. Lab compilation and tests need to be
+rerun. No additional build was attempted on rescue.
