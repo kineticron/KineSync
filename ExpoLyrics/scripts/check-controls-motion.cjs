@@ -697,7 +697,12 @@ const hiddenTrackY = 624 + trackTop + 9;
 touchDown({ allTouches: [{ absoluteY: hiddenTrackY }] }, { fail: () => failures++ });
 beginScrub({ x: 100, absoluteY: hiddenTrackY });
 assert.equal(failures, 2); assert.equal(previews, 0); assert.equal(scrubActive.value, false);
-inputHarness.tick(118);
+inputHarness.tick(118); // 150ms on the unchanged 700ms row clock.
+assert.equal(timelineInput.value, false, 'retimed show edge still masks the timeline at 150ms');
+assert.ok(Math.abs(inputCoverage().top - 220 * (1 - controlsShowEdge(150 / 700))) < 1e-9);
+inputHarness.tick(500); // 650ms: the clip exposes the track before show finishes.
+assert.ok(Math.abs(inputCoverage().top - 220 * (1 - controlsShowEdge(650 / 700))) < 1e-9);
+assert.ok(inputCoverage().top < 650 - 624, 'the scrub coordinate lies inside the visible clip');
 assert.equal(timelineInput.value, true);
 touchDown({ allTouches: [{ absoluteY: 650 }] }, { fail: () => failures++ }); beginScrub({ x: 100, absoluteY: 650 });
 assert.equal(failures, 2); assert.equal(previews, 1); assert.equal(scrubActive.value, true);
