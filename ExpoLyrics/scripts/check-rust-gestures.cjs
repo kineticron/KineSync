@@ -4,6 +4,7 @@
 const assert = require('node:assert/strict');
 require('./check-rust-scheduling.cjs');
 require('./check-rust-footer-empty.cjs');
+require('./check-rust-credits-switch.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP } = require('../lib/rust-lyrics-gesture.js');
 

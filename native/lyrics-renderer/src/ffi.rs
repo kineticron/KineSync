@@ -346,6 +346,8 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.settings = Some(settings);
             engine.credits = None;
             engine.timeline.replace(generation);
+            engine.scroll.reset();
+            engine.appearance.reset();
             engine.metrics.generation = generation;
             engine.metrics.animating = 0;
             engine.metrics.visible_changes = 0;
@@ -365,7 +367,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             credits.as_ref(),
         )
         .map_err(|e| e.to_string())?;
-        let layout = if let Some(cached) = engine.layout_cache.take(&key) {
+        let mut layout = if let Some(cached) = engine.layout_cache.take(&key) {
             cached
         } else {
             TrackScene::with_fonts_credits(
@@ -379,6 +381,14 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             )
             .map_err(|e| e.to_string())?
         };
+        replace_track_scroll(
+            &mut engine.scroll,
+            engine.layout.as_ref(),
+            &mut layout,
+            engine.track_id == track_id,
+            engine.following,
+            engine.metrics.position_ms,
+        )?;
         engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
         engine.lines = lines;
         engine.track_id = track_id;
@@ -392,18 +402,85 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         engine.layout_key = key;
         engine.layout = Some(layout);
         engine.timeline.replace(generation);
-        let style = engine
-            .settings
-            .as_ref()
-            .map_or(crate::typography::Style::Spicy, |settings| settings.style);
-        engine
-            .scroll
-            .configure(style, f64::from(engine.scale), engine.lines.len());
-        engine.scroll.reset();
         engine.appearance.reset();
         engine.metrics.generation = generation;
         Ok(0)
     })
+}
+
+/// Scene replacement resets animation history, not same-track manual ownership.
+pub(crate) fn replace_track_scroll(
+    scroll: &mut FollowScroll,
+    previous: Option<&TrackScene>,
+    next: &mut TrackScene,
+    same_track: bool,
+    following: bool,
+    time: f64,
+) -> Result<(), String> {
+    // Cached variants must not retain an anchor from an earlier activation.
+    next.clear_manual_anchor();
+    let pending_snap = same_track && scroll.explicit_snap_pending();
+    let manual = previous
+        .filter(|old| {
+            same_track
+                && !following
+                && old.lines.len() == next.lines.len()
+                && old.lines.iter().zip(&next.lines).all(|(a, b)| {
+                    a.text == b.text
+                        && a.start == b.start
+                        && a.end == b.end
+                        && a.background_end == b.background_end
+                })
+        })
+        .map(|old| next.remap_manual_scroll(old, scroll.position(), time))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    scroll.configure(
+        next.style().unwrap_or(crate::typography::Style::Spicy),
+        f64::from(next.scale),
+        next.lines.len(),
+    );
+    scroll.reset();
+    if let Some(position) = manual {
+        scroll.restore_manual(position, next.max_scroll(), f64::from(next.height));
+    }
+    if pending_snap {
+        scroll.snap_next();
+    }
+    Ok(())
+}
+
+pub(crate) fn resize_track_scroll(
+    scroll: &mut FollowScroll,
+    previous: &TrackScene,
+    next: &mut TrackScene,
+    following: bool,
+    time: f64,
+    ratio: f64,
+) -> Result<(), String> {
+    next.clear_manual_anchor();
+    let manual = if following {
+        None
+    } else {
+        Some(
+            next.remap_manual_scroll(previous, scroll.position(), time)
+                .map_err(|e| e.to_string())?,
+        )
+    };
+    scroll.remap(
+        previous.scroll_target(time),
+        next.scroll_target(time),
+        ratio,
+    );
+    scroll.configure(
+        next.style().unwrap_or(crate::typography::Style::Spicy),
+        f64::from(next.scale),
+        next.lines.len(),
+    );
+    if let Some(position) = manual {
+        scroll.relocate_manual(position, next.max_scroll(), f64::from(next.height));
+    }
+    Ok(())
 }
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments, reason = "Narrow numeric C ABI")]
@@ -446,10 +523,6 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         }
         let started = Instant::now();
         let position = engine.metrics.position_ms;
-        let old_target = engine
-            .layout
-            .as_ref()
-            .map(|layout| layout.scroll_target(position));
         let key = engine
             .settings
             .as_ref()
@@ -467,7 +540,7 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             .transpose()
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
-        let layout = if engine.lines.is_empty() {
+        let mut layout = if engine.lines.is_empty() {
             None
         } else if let Some(cached) = engine.layout_cache.take(&key) {
             Some(cached)
@@ -489,17 +562,15 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
             .surface
             .resize(width, height, scale)
             .map_err(|e| e.to_string())?;
-        if let (Some(old_target), Some(layout)) = (old_target, &layout) {
-            engine.scroll.remap(
-                old_target,
-                layout.scroll_target(position),
+        if let (Some(previous), Some(layout)) = (engine.layout.as_ref(), &mut layout) {
+            resize_track_scroll(
+                &mut engine.scroll,
+                previous,
+                layout,
+                engine.following,
+                position,
                 f64::from(scale / engine.scale),
-            );
-            engine.scroll.configure(
-                layout.style().unwrap_or(crate::typography::Style::Spicy),
-                f64::from(scale),
-                layout.lines.len(),
-            );
+            )?;
         }
         if let Some(old) = engine.layout.take() {
             engine
@@ -531,6 +602,9 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
 pub extern "C" fn kr_set_following(handle: u64, following: bool) -> i32 {
     with(handle, |engine| {
         engine.following = following;
+        if following && let Some(layout) = &mut engine.layout {
+            layout.clear_manual_anchor();
+        }
         Ok(0)
     })
 }
@@ -543,6 +617,9 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
             return Err("Invalid scroll delta".into());
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
+        if let Some(layout) = &mut engine.layout {
+            layout.clear_manual_anchor();
+        }
         let scale = f64::from(engine.scale.max(0.001));
         let viewport = f64::from(engine.metrics.height);
         engine.scroll.drag(dy * scale, max_offset, viewport);
@@ -559,6 +636,9 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
             return Err("Invalid fling velocity".into());
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
+        if let Some(layout) = &mut engine.layout {
+            layout.clear_manual_anchor();
+        }
         let scale = f64::from(engine.scale.max(0.001));
         let viewport = f64::from(engine.metrics.height);
         engine.scroll.fling(velocity * scale, max_offset, viewport);
@@ -600,6 +680,7 @@ struct PreparedDrawable<T> {
     drawable: T,
     native_ms: f64,
     preparation_ms: f64,
+    manual_scroll: Option<f64>,
 }
 
 /// Never shape with a drawable held. A stall crossing a geometry boundary
@@ -607,7 +688,7 @@ struct PreparedDrawable<T> {
 fn prepare_drawable<T>(
     layout: &mut TrackScene,
     timeline: &Timeline,
-    manual_scroll: Option<f64>,
+    mut manual_scroll: Option<f64>,
     mut clock: impl FnMut() -> f64,
     mut acquire: impl FnMut() -> Result<Option<T>, String>,
 ) -> Result<Option<PreparedDrawable<T>>, String> {
@@ -617,7 +698,11 @@ fn prepare_drawable<T>(
         let started = Instant::now();
         layout.prepare(position).map_err(|e| e.to_string())?;
         if let Some(scroll) = manual_scroll {
-            layout.prepare_viewport(scroll).map_err(|e| e.to_string())?;
+            manual_scroll = Some(
+                layout
+                    .prepare_manual_viewport(scroll)
+                    .map_err(|e| e.to_string())?,
+            );
         }
         preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
         let key = layout.preparation_key(position);
@@ -630,6 +715,7 @@ fn prepare_drawable<T>(
                 drawable,
                 native_ms,
                 preparation_ms,
+                manual_scroll: manual_scroll.filter(|_| layout.has_manual_anchor()),
             }));
         }
         drop(drawable);
@@ -637,6 +723,37 @@ fn prepare_drawable<T>(
     // No drawable for a fully prepared current frame. The native owner's
     // existing bounded unavailable-drawable retry supplies another fresh clock.
     Ok(None)
+}
+
+#[cfg(test)]
+pub(crate) fn manual_frame_for_test(
+    layout: &mut TrackScene,
+    scroll: &mut FollowScroll,
+    time: f64,
+    native_ms: f64,
+) -> f64 {
+    let mut timeline = Timeline::default();
+    timeline.replace(1);
+    timeline
+        .anchor(1, 1, time, native_ms, native_ms, false, 1.0)
+        .unwrap();
+    let prepared = prepare_drawable(
+        layout,
+        &timeline,
+        Some(scroll.position()),
+        || native_ms,
+        || Ok(Some(())),
+    )
+    .unwrap()
+    .unwrap();
+    if let Some(offset) = prepared.manual_scroll {
+        scroll.relocate_manual(offset, layout.max_scroll(), f64::from(layout.height));
+    }
+    scroll.sample(
+        &layout.scroll_command(time, scroll.position()),
+        native_ms,
+        false,
+    )
 }
 
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
@@ -708,6 +825,11 @@ pub extern "C" fn kr_render(
             return Ok(2);
         };
         let frame = prepared.drawable;
+        if let Some(scroll) = prepared.manual_scroll {
+            engine
+                .scroll
+                .relocate_manual(scroll, layout.max_scroll(), f64::from(layout.height));
+        }
         let native_ms = prepared.native_ms;
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);

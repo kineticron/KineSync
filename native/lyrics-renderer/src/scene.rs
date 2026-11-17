@@ -133,6 +133,13 @@ pub struct TrackScene {
     pub detailed_preparations: usize,
     pub(crate) footer: Option<crate::credits::Footer>,
     prepared_signature: Option<(usize, usize, usize, usize)>,
+    manual_anchor: Option<ManualAnchor>,
+}
+
+#[derive(Clone, Copy)]
+struct ManualAnchor {
+    row: usize,
+    fraction: f64,
 }
 
 #[allow(
@@ -427,6 +434,7 @@ impl TrackScene {
             detailed_preparations: 0,
             footer,
             prepared_signature: None,
+            manual_anchor: None,
         })
     }
 
@@ -967,6 +975,7 @@ impl TrackScene {
             detailed_preparations: 0,
             footer: None,
             prepared_signature: None,
+            manual_anchor: None,
         })
     }
 
@@ -1197,6 +1206,65 @@ impl TrackScene {
             .partition_point(|top| *top <= scroll)
             .saturating_sub(1)
             .min(self.lines.len() - 1)
+    }
+
+    /// Keep a manual viewport on the same row across style geometry changes.
+    /// The final interval ends at the footer scroll limit, so a visible footer
+    /// stays visible even when AMLL and Spicy have different row heights.
+    pub(crate) fn remap_manual_scroll(
+        &mut self,
+        previous: &Self,
+        scroll: f64,
+        time: f64,
+    ) -> Result<f64, Error> {
+        self.prepare(time)?;
+        let scroll = scroll.clamp(0.0, previous.max_scroll());
+        let row = previous.first_visible(scroll);
+        let old_top = previous.prefix[row];
+        let old_end = previous
+            .prefix
+            .get(row + 1)
+            .copied()
+            .unwrap_or_else(|| previous.max_scroll());
+        let fraction = if old_end > old_top {
+            ((scroll - old_top) / (old_end - old_top)).clamp(0.0, 1.0)
+        } else {
+            f64::from(row + 1 == previous.lines.len())
+        };
+        self.manual_anchor = previous
+            .manual_anchor
+            .or(Some(ManualAnchor { row, fraction }));
+        self.prepare_manual_viewport(scroll)
+    }
+
+    fn manual_anchor_offset(&self, anchor: ManualAnchor) -> f64 {
+        let top = self.prefix[anchor.row];
+        let end = self
+            .prefix
+            .get(anchor.row + 1)
+            .copied()
+            .unwrap_or_else(|| self.max_scroll());
+        (top + anchor.fraction * (end - top)).clamp(0.0, self.max_scroll())
+    }
+
+    /// Resolve again after each render-order preparation pass. Measuring rows
+    /// before the anchor can change its pixel offset without changing ownership.
+    pub(crate) fn prepare_manual_viewport(&mut self, scroll: f64) -> Result<f64, Error> {
+        let offset = self
+            .manual_anchor
+            .map_or(scroll, |a| self.manual_anchor_offset(a));
+        self.prepare_viewport(offset)?;
+        Ok(self
+            .manual_anchor
+            .map_or(scroll, |a| self.manual_anchor_offset(a)))
+    }
+
+    pub(crate) fn clear_manual_anchor(&mut self) {
+        self.manual_anchor = None;
+    }
+
+    pub(crate) fn has_manual_anchor(&self) -> bool {
+        self.manual_anchor.is_some()
     }
 
     /// Rows that can be drawn near `scroll`, including the interlude overscan.

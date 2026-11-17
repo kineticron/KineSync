@@ -113,6 +113,7 @@ pub struct FollowScroll {
     has_command: bool,
     /// First sample after load/track/seek teleports to the new target.
     armed: bool,
+    explicit_snap: bool,
     /// Spicy viewport tween.
     from: f64,
     start_ms: Option<f64>,
@@ -160,6 +161,7 @@ impl FollowScroll {
         self.command_offset = 0.0;
         self.has_command = false;
         self.armed = true;
+        self.explicit_snap = false;
         self.from = 0.0;
         self.start_ms = None;
         self.duration_ms = 0.0;
@@ -186,6 +188,7 @@ impl FollowScroll {
     /// Explicit seek/track replacement: the next sample teleports.
     pub fn snap_next(&mut self) {
         self.armed = true;
+        self.explicit_snap = true;
         self.start_ms = None;
         self.segments.clear();
         self.timeline = 0.0;
@@ -194,6 +197,30 @@ impl FollowScroll {
 
     pub fn position(&self) -> f64 {
         self.position
+    }
+
+    pub(crate) fn explicit_snap_pending(&self) -> bool {
+        self.explicit_snap
+    }
+
+    /// Restore a mapped manual viewport after replacing same-track geometry.
+    /// Ownership stays manual, but old-layout momentum must not cross layouts.
+    pub(crate) fn restore_manual(&mut self, position: f64, max: f64, viewport: f64) {
+        self.position = position.clamp(0.0, max);
+        self.armed = false;
+        self.freeze();
+        self.max_offset = max;
+        self.viewport = viewport;
+        self.drag_raw = self.position;
+    }
+
+    /// Geometry may settle over several lazy preparation passes. Relocate the
+    /// same logical manual anchor without consuming an explicit seek snap.
+    pub(crate) fn relocate_manual(&mut self, position: f64, max: f64, viewport: f64) {
+        self.position = position.clamp(0.0, max);
+        self.max_offset = max;
+        self.viewport = viewport;
+        self.drag_raw = self.position;
     }
 
     pub fn animating(&self) -> bool {
@@ -575,6 +602,7 @@ impl FollowScroll {
             self.last_ms = None;
             self.has_command = true;
             self.armed = false;
+            self.explicit_snap = false;
             self.animating = false;
             return self.position;
         }
