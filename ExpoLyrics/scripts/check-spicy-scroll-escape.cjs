@@ -41,33 +41,48 @@ for (const boundary of [999, 1001]) {
   host.initLyricsLayout(viewport, content, [], source);
   let following = true;
   const changes = [];
+  const ast = ts.createSourceFile('spicy.ts', entry, ts.ScriptTarget.Latest, true);
+  let scrollCallback;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'scrollViewport?.addEventListener' && node.arguments[0]?.text === 'scroll') scrollCallback = node.arguments[1].getText(ast);
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(scrollCallback, 'exercise the actual WebView viewport scroll handler');
+  const onViewportScroll = vm.runInNewContext(ts.transpileModule(`(${scrollCallback})`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText, {
+    noteLyricsViewportScroll: host.noteLyricsViewportScroll,
+    setAutoFollow: value => { following = value; changes.push(value); }, scheduleFrame() {},
+  });
   const frame = () => host.scrollToActiveLine(500, following, false, value => { following = value; changes.push(value); });
   frame();
   assert.equal(gate.graceUntil, 0, 'layout and programmatic placement start no timer');
   host.setLyricsUserTouching(true);
   assert.equal(gate.graceUntil, 0, 'ordinary touch starts no timer');
   viewport.scrollTop = 600;
-  input.noteUserScroll(); host.noteLyricsViewportScroll(); frame();
+  input.noteUserScroll(); onViewportScroll(); frame();
   assert.equal(following, false);
   assert.equal(gate.graceUntil, 1000);
+  assert.equal(changes.filter(value => !value).length, 1, 'escape deactivates once, on the viewport input sample');
   host.setLyricsUserTouching(false);
   now = boundary;
   host.setLyricsUserTouching(true);
   viewport.scrollTop = 620;
-  input.noteUserScroll(); host.noteLyricsViewportScroll(); frame();
+  input.noteUserScroll(); onViewportScroll(); frame();
   assert.equal(gate.graceUntil, 1000, 'later scrolling does not restart grace');
   host.initLyricsLayout(viewport, content, [], source, () => {}, true);
   assert.equal(gate.graceUntil, 1000, 'same-track layout rebuild preserves the deadline');
   frame();
   host.setLyricsUserTouching(true);
   viewport.scrollTop = 500;
-  input.noteUserScroll(); host.noteLyricsViewportScroll();
+  input.noteUserScroll(); onViewportScroll();
   host.setLyricsUserTouching(false); frame();
   assert.equal(changes.at(-1), true, 'deliberate return overrides grace');
   assert.equal(gate.graceUntil, 0);
   host.setLyricsUserTouching(true);
   viewport.scrollTop = 700;
-  input.noteUserScroll(); host.noteLyricsViewportScroll(); frame();
+  input.noteUserScroll(); onViewportScroll(); frame();
   host.releaseLyricsUserScroll(true, true);
   assert.equal(gate.graceUntil, 0, 'resume cancels grace immediately');
   host.initLyricsLayout(viewport, content, [], source);

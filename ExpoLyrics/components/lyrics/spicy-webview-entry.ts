@@ -908,7 +908,7 @@ scrollViewport?.addEventListener("wheel", () => {
 }, { passive: true });
 // Scroll also wakes a paused renderer during touch momentum/programmatic seeks.
 scrollViewport?.addEventListener("scroll", () => {
-  noteLyricsViewportScroll();
+  if (noteLyricsViewportScroll()) setAutoFollow(false);
   scheduleFrame();
 }, { passive: true });
 

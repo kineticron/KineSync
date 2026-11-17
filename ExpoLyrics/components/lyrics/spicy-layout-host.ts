@@ -276,6 +276,7 @@ export function setLyricsUserTouching(touching: boolean, cancelled = false) {
 
 /** Momentum keeps ownership until 700ms after the last native scroll event. */
 export function noteLyricsViewportScroll() {
+  const previousDeadline = escape.graceUntil;
   if (!animation && (userTouching || performance.now() < userScrollingUntil)) {
     const offset = viewport?.scrollTop ?? lastUserOffset;
     const now = performance.now();
@@ -291,6 +292,7 @@ export function noteLyricsViewportScroll() {
     lastUserOffset = offset;
     userScrollingUntil = performance.now() + 700;
   }
+  return previousDeadline === 0 && escape.graceUntil > 0;
 }
 
 export function releaseLyricsUserScroll(cancelMomentum = true, smoothReturn = false) {
