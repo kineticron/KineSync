@@ -357,6 +357,18 @@ fn spicy_tail_keeps_reveal_through_lead_end_and_overlapping_next_main() {
             assert!(bg.motion.gradient > -0.2);
             let mut animated = vello::Scene::new();
             let scroll = track.scroll_target(time);
+            let command = track.scroll_command(time, scroll);
+            assert_eq!(
+                command.index,
+                if time < 8000.0 { 0 } else { 1 },
+                "live scroll focus must hold the BG row through its effective end"
+            );
+            assert_eq!(command.offset, scroll);
+            assert_eq!(
+                crate::auto_scroll_range(&window),
+                window.active(),
+                "scroll range must include both independently active rows"
+            );
             track.frame_appearance(time, scroll, &[], &state, &mut animated, effect);
             // Change only this BG's reveal. The actual encoded drawing must
             // consume it after the lead ends, including a cold seek into overlap.
