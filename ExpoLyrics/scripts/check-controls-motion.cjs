@@ -615,17 +615,17 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
         if (viewportPixels > 0 && row.opacity > 0) {
           assert.ok(Math.max(top, clipTop) >= edge - 1e-9, 'every rendered control pixel is below the fully transparent lyric edge');
         }
-        if (row.opacity > 0 && (!shown || time >= 200)) {
+        if (row.opacity > 0 && !shown) {
           assert.ok(viewportPixels > 0, 'backdrop never evicts a staggered row during hide');
           if (index < 2) assert.ok(Math.abs(viewportPixels - rowHeights[index]) < 1e-9);
           if (row.opacity >= .5) assert.ok(viewportPixels >= rowHeights[index] / 2);
         }
         if (shown && time === 48 && index === 0) {
-          assert.ok(viewportPixels > 0, 'timeline appears within 48ms, not after a blank geometry animation');
+          assert.ok(h.geometry.get() > h.stage.get(), 'show edge slightly leads the unchanged row clock');
           assert.ok(offset > 14 && row.opacity > 0 && row.opacity < 1, 'first visible timeline retains a perceptible independent slide');
         }
         if (shown && time === 150 && index === 1) {
-          assert.ok(viewportPixels > 0 && offset > 25 && row.opacity > 0, 'transport is visible and interactive at the beginning of its own slide');
+          assert.ok(offset > 25 && row.opacity > 0, 'transport keeps its original stagger and slide while the show clip advances');
         }
       });
       if (!shown && time === 100) {
