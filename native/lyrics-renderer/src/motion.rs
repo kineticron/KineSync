@@ -28,6 +28,15 @@ const RUBBER_BAND: f64 = 0.55;
 /// Fraction of the viewport around the active-line target that still belongs
 /// to auto-follow when a manual scroll ends.
 pub const FOLLOW_RELEASE_FRACTION: f64 = 1.0 / 3.0;
+pub const ESCAPE_GRACE_MS: f64 = 2_500.0;
+
+#[derive(Default, Debug)]
+struct EscapeGrace {
+    until: f64,
+    away: bool,
+    returning: bool,
+    input_target: Option<f64>,
+}
 
 /// Native Spicy viewport tween duration (`spicyScrollDuration`).
 pub fn spicy_duration(interval: f64, interlude: bool, distance: f64) -> f64 {
@@ -142,6 +151,7 @@ pub struct FollowScroll {
     fling_last_ms: Option<f64>,
     settling: bool,
     settle_velocity: f64,
+    escape: EscapeGrace,
 }
 
 impl FollowScroll {
@@ -160,6 +170,8 @@ impl FollowScroll {
     }
 
     pub fn reset(&mut self) {
+        self.escape.returning = false;
+        self.escape.input_target = None;
         self.position = 0.0;
         self.target = 0.0;
         self.command_offset = 0.0;
@@ -201,6 +213,39 @@ impl FollowScroll {
 
     pub fn position(&self) -> f64 {
         self.position
+    }
+
+    /// Touch input alone can authorize a return. Targets moving with playback,
+    /// release, inertia and rebound never create return intent.
+    pub(crate) fn note_manual_input(&mut self, dy: f64, target: Option<f64>, now: f64) {
+        if !self.dragging {
+            self.escape.away = false;
+            self.escape.returning = false;
+        }
+        let Some(target) = target else {
+            self.escape.returning = false;
+            return;
+        };
+        if dy.abs() < 0.5 * self.scale.max(1.0) {
+            return;
+        }
+        let toward = dy * (target - self.position) > 0.0
+            && (self.position + dy - target).abs() < (self.position - target).abs();
+        if toward {
+            self.escape.away = false;
+            self.escape.returning = now >= self.escape.until;
+            self.escape.input_target = Some(target);
+        } else {
+            if !self.escape.away {
+                self.escape.until = now + ESCAPE_GRACE_MS;
+            }
+            self.escape.away = true;
+            self.escape.returning = false;
+        }
+    }
+
+    pub(crate) fn resume_follow(&mut self) {
+        self.escape = EscapeGrace::default();
     }
 
     pub(crate) fn explicit_snap_pending(&self) -> bool {
@@ -340,21 +385,30 @@ impl FollowScroll {
     /// back. Only the release path may recapture, so an active drag never
     /// pulls the viewport away from the finger. `target` is the active-line
     /// target from a ready layout. Without a layout there is no trustworthy
-    /// target, so the release stays manual. Returns true only when the release
-    /// is within one third of the viewport from that target.
+    /// target, so the release stays manual. A near release also requires a
+    /// deliberate return input after escape grace, with no away velocity.
     pub fn release(
         &mut self,
         velocity: f64,
         max_offset: f64,
         viewport: f64,
         target: Option<f64>,
+        now: f64,
     ) -> bool {
+        let returning = self.escape.returning && now >= self.escape.until;
+        self.escape.returning = false;
         self.fling(velocity, max_offset, viewport);
         let Some(target) = target else {
             return false;
         };
         let threshold = self.viewport * FOLLOW_RELEASE_FRACTION;
-        (self.position - target).abs() <= threshold
+        returning
+            && self
+                .escape
+                .input_target
+                .is_some_and(|input| (input - target).abs() <= 1.0)
+            && (self.position - target).abs() <= threshold
+            && velocity * (self.position - target) <= 0.0
     }
 
     /// Start an iOS fling after the finger lifts. `velocity` is surface pixels
@@ -1016,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn release_within_a_third_of_the_viewport_reengages_follow_for_both_styles() {
+    fn deliberate_return_after_grace_reengages_within_a_third_for_both_styles() {
         for style in [Style::Spicy, Style::Amll] {
             for (distance, near) in [(0.0, true), (299.9, true), (300.0, true), (300.1, false)] {
                 for direction in [-1.0, 1.0] {
@@ -1024,10 +1078,14 @@ mod tests {
                     scroll.configure(style, 3.0, 8);
                     let target = command(style, 500.0, 800.0, 1, 0);
                     scroll.sample(&target, 0.0, true);
-                    scroll.drag(direction * distance, 2_000.0, 900.0);
+                    let escape = direction * (distance + 10.0);
+                    scroll.note_manual_input(escape, Some(target.offset), 0.0);
+                    scroll.drag(escape, 2_000.0, 900.0);
+                    scroll.note_manual_input(-direction * 10.0, Some(target.offset), 2_600.0);
+                    scroll.drag(-direction * 10.0, 2_000.0, 900.0);
                     let released = scroll.position();
                     assert_eq!(
-                        scroll.release(0.0, 2_000.0, 900.0, Some(target.offset)),
+                        scroll.release(0.0, 2_000.0, 900.0, Some(target.offset), 2_700.0),
                         near,
                         "{style:?} at the exact viewport-third boundary"
                     );
@@ -1084,6 +1142,36 @@ mod tests {
     }
 
     #[test]
+    fn escape_release_and_playback_cannot_forge_a_return() {
+        for style in [Style::Spicy, Style::Amll] {
+            for direction in [-1.0, 1.0] {
+                for now in [100.0, 3_000.0] {
+                    let mut scroll = FollowScroll::default();
+                    scroll.configure(style, 1.0, 8);
+                    let target = command(style, 500.0, 800.0, 1, 0);
+                    scroll.sample(&target, 0.0, true);
+                    scroll.note_manual_input(direction * 40.0, Some(500.0), 0.0);
+                    scroll.drag(direction * 40.0, 2_000.0, 900.0);
+                    let held = scroll.position();
+                    assert_eq!(scroll.sample(&target, now, false), held);
+                    assert!(!scroll.release(0.0, 2_000.0, 900.0, Some(500.0), now));
+                    scroll.note_manual_input(-direction * 10.0, Some(500.0), 3_100.0);
+                    scroll.drag(-direction * 10.0, 2_000.0, 900.0);
+                    // Playback advances the active target after the last input.
+                    let moved_target = scroll.position();
+                    assert!(!scroll.release(0.0, 2_000.0, 900.0, Some(moved_target), 3_200.0));
+                    scroll.note_manual_input(-direction * 10.0, Some(500.0), 3_300.0);
+                    scroll.drag(-direction * 10.0, 2_000.0, 900.0);
+                    assert!(!scroll.release(direction, 2_000.0, 900.0, Some(500.0), 3_400.0));
+                    scroll.note_manual_input(-direction * 10.0, Some(500.0), 3_500.0);
+                    scroll.drag(-direction * 10.0, 2_000.0, 900.0);
+                    assert!(scroll.release(0.0, 2_000.0, 900.0, Some(500.0), 3_600.0));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn active_drag_keeps_manual_ownership_until_release() {
         let mut scroll = FollowScroll::default();
         scroll.configure(Style::Spicy, 3.0, 8);
@@ -1099,7 +1187,7 @@ mod tests {
         assert_eq!(scroll.sample(&target, 100.0, false), held);
         assert_eq!(scroll.sample(&target, 200.0, false), held);
         assert!(scroll.dragging);
-        assert!(scroll.release(0.0, 2_000.0, 800.0, Some(target.offset)));
+        assert!(!scroll.release(0.0, 2_000.0, 800.0, Some(target.offset), 3_000.0));
         assert!(!scroll.dragging);
     }
 
@@ -1110,7 +1198,7 @@ mod tests {
         let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
         scroll.sample(&target, 0.0, true);
         scroll.drag(-40.0, 2_000.0, 800.0);
-        assert!(!scroll.release(0.0, 2_000.0, 800.0, None));
+        assert!(!scroll.release(0.0, 2_000.0, 800.0, None, 3_000.0));
         // The fling handoff still happened, but follow ownership did not move
         // because no layout supplied an authoritative active-line target.
         assert!(!scroll.dragging);

@@ -11,6 +11,7 @@ import {
 import { LANDSCAPE_ACTIVE_LINE_TOP_OFFSET } from "../../constants/player-layout";
 import type { LyricLine } from "../../types/bridge";
 import type { SpicyRuntimeLine } from "./spicy-upstream-runtime";
+import { createLyricsScrollEscape } from "../../lib/lyrics-scroll-escape";
 
 let viewport: HTMLElement | null = null;
 let container: HTMLElement | null = null;
@@ -28,6 +29,12 @@ let restoreNativeScroll: (() => void) | null = null;
 let smoothReturnPending = false;
 let userScrollingUntil = 0;
 let userTouching = false;
+const escape = createLyricsScrollEscape();
+let activeScrollTarget = NaN;
+let returnRequested = false;
+let returnTarget = NaN;
+let lastUserOffset = 0;
+let wheelInput = false;
 let graceUntil = 0;
 let wasFollowing = true;
 let lastPosition = 0;
@@ -107,6 +114,9 @@ export function destroyLyricsLayout() {
   onLayoutChange = () => {};
   userScrollingUntil = 0;
   userTouching = false;
+  escape.reset();
+  returnRequested = false;
+  activeScrollTarget = NaN;
   resetLyricsScroll();
 }
 
@@ -132,6 +142,10 @@ export function initLyricsLayout(
 ) {
   destroyLyricsLayout();
   viewport = scrollElement;
+  escape.reset(scrollElement.scrollTop);
+  returnRequested = false;
+  activeScrollTarget = NaN;
+  lastUserOffset = scrollElement.scrollTop;
   container = content;
   lyrics = source;
   backgrounds = getBackgroundActiveLines(source);
@@ -228,7 +242,13 @@ export function lyricScrollEasing(progress: number) {
   return bezier((low + high) / 2, 0.88, 1);
 }
 
-export function noteLyricsUserScroll() {
+export function noteLyricsUserScroll(wheel = false) {
+  wheelInput = wheel;
+  if (wheel && viewport) {
+    escape.begin(viewport.scrollTop);
+    lastUserOffset = viewport.scrollTop;
+    returnRequested = false;
+  }
   smoothReturnPending = false;
   restoreNativeScroll?.();
   restoreNativeScroll = null;
@@ -236,7 +256,15 @@ export function noteLyricsUserScroll() {
   userScrollingUntil = performance.now() + 700;
 }
 
-export function setLyricsUserTouching(touching: boolean) {
+export function setLyricsUserTouching(touching: boolean, cancelled = false) {
+  if (touching && viewport) {
+    escape.begin(viewport.scrollTop);
+    lastUserOffset = viewport.scrollTop;
+    returnRequested = false;
+  } else if (userTouching) {
+    returnRequested = !cancelled && escape.release(activeScrollTarget, 64, performance.now());
+    returnTarget = activeScrollTarget;
+  }
   userTouching = touching;
   noteLyricsUserScroll();
 }
@@ -244,11 +272,24 @@ export function setLyricsUserTouching(touching: boolean) {
 /** Momentum keeps ownership until 700ms after the last native scroll event. */
 export function noteLyricsViewportScroll() {
   if (!animation && (userTouching || performance.now() < userScrollingUntil)) {
+    const offset = viewport?.scrollTop ?? lastUserOffset;
+    const now = performance.now();
+    const away = Math.abs(offset - activeScrollTarget) > Math.abs(lastUserOffset - activeScrollTarget);
+    escape.move(offset, activeScrollTarget, now, userTouching || wheelInput);
+    if (away) returnRequested = false;
+    if (wheelInput && !userTouching) {
+      returnRequested = escape.release(activeScrollTarget, 64, now);
+      returnTarget = activeScrollTarget;
+    }
+    wheelInput = false;
+    lastUserOffset = offset;
     userScrollingUntil = performance.now() + 700;
   }
 }
 
 export function releaseLyricsUserScroll(cancelMomentum = true, smoothReturn = false) {
+  escape.reset(viewport?.scrollTop ?? 0);
+  returnRequested = false;
   smoothReturnPending = smoothReturn;
   if (cancelMomentum && viewport) {
     restoreNativeScroll?.();
@@ -341,11 +382,15 @@ export function scrollToActiveLine(
       creditsActive: true, hasCredits: true, activeLineTopOffset: topOffset,
     }) ?? target;
   }
+  activeScrollTarget = target;
+  const requestedReturn = returnRequested;
+  returnRequested = false;
   const userScrolling = userTouching || now < userScrollingUntil;
   if (userScrolling) {
     if (autoFollow && now >= graceUntil && Math.abs(viewport.scrollTop - target) > 120) {
       onAutoFollowChange(false);
-    } else if (!autoFollow && Math.abs(viewport.scrollTop - target) <= 64) {
+    } else if (!autoFollow && !userTouching && requestedReturn && Math.abs(target - returnTarget) <= 1 && Math.abs(viewport.scrollTop - target) <= 64) {
+      releaseLyricsUserScroll(true, true);
       onAutoFollowChange(true);
     }
     // Remember that the current scroll position now belongs to the user so a

@@ -587,8 +587,15 @@ pub(crate) fn resize_track_scroll(
 fn reset_track_scroll(scroll: &mut FollowScroll, following: &mut bool, track_changed: bool) {
     scroll.reset();
     if track_changed {
+        scroll.resume_follow();
         *following = true;
     }
+}
+
+// Internal monotonic input clock. No cross-language clock or ABI change.
+fn gesture_clock_ms() -> f64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments, reason = "Narrow numeric C ABI")]
@@ -711,6 +718,7 @@ pub extern "C" fn kr_set_following(handle: u64, following: bool) -> i32 {
     with(handle, |engine| {
         engine.following = following;
         if following {
+            engine.scroll.resume_follow();
             if let Some(layout) = &mut engine.layout {
                 layout.clear_manual_anchor();
             }
@@ -735,6 +743,16 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
         }
         let scale = f64::from(engine.scale.max(0.001));
         let viewport = f64::from(engine.metrics.height);
+        let target = release_target(
+            engine.layout.as_ref(),
+            engine.timeline.anchored,
+            engine.metrics.generation,
+            engine.timeline.generation,
+            engine.metrics.position_ms,
+        );
+        engine
+            .scroll
+            .note_manual_input(dy * scale, target, gesture_clock_ms());
         engine.scroll.drag(dy * scale, max_offset, viewport);
         engine.following = false;
         engine.blur.sharp();
@@ -783,9 +801,13 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64, native_ms: f64) -> i32 {
             engine.timeline.generation,
             engine.timeline.position(native_ms),
         );
-        let resume = engine
-            .scroll
-            .release(velocity * scale, max_offset, viewport, target);
+        let resume = engine.scroll.release(
+            velocity * scale,
+            max_offset,
+            viewport,
+            target,
+            gesture_clock_ms(),
+        );
         engine.following = resume;
         if resume {
             engine.blur.restore();
@@ -1274,6 +1296,7 @@ mod tests {
             style: Style::Spicy,
         };
         scroll.sample(&old, 0.0, true);
+        scroll.note_manual_input(180.0, Some(old.offset), 0.0);
         scroll.drag(180.0, 2_000.0, 800.0);
         let mut following = false;
         reset_track_scroll(&mut scroll, &mut following, true);
@@ -1284,6 +1307,10 @@ mod tests {
         };
         assert_eq!(scroll.sample(&fresh, 2_000.0, true), 900.0);
         assert!(!scroll.animating());
+        // The fresh song must not inherit the previous song's grace deadline.
+        scroll.note_manual_input(-20.0, Some(880.0), 100.0);
+        scroll.drag(-20.0, 2_000.0, 800.0);
+        assert!(scroll.release(0.0, 2_000.0, 800.0, Some(880.0), 100.0));
     }
 
     #[test]

@@ -8,6 +8,7 @@ require('./check-rust-credits-switch.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
 require('./check-rust-follow-ownership.cjs');
 require('./check-rust-follow-wiring.cjs');
+require('./check-scroll-escape.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP, nextFollowState, desiredFollow, clearFollowReset } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
@@ -47,7 +48,7 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   }
   const dragBody = ffi.slice(ffi.indexOf('fn kr_scroll_by('), ffi.indexOf('/// Release recapture needs'));
   const flingBody = ffi.slice(ffi.indexOf('fn kr_fling('), ffi.indexOf('fn kr_hit_test(')).replace(/\s+/g, ' ');
-  assert.match(flingBody, /engine\s*\.\s*scroll\s*\.\s*release\(velocity \* scale, max_offset, viewport, target\)/, 'release owns follow recapture');
+  assert.match(flingBody, /engine\s*\.\s*scroll\s*\.\s*release\(\s*velocity \* scale,\s*max_offset,\s*viewport,\s*target,\s*gesture_clock_ms\(\),?\s*\)/, 'release owns follow recapture using the internal monotonic grace clock');
   assert.match(flingBody, /engine\.following = resume/, 'release applies the recapture decision');
   assert.match(flingBody, /release_target\([\s\S]*engine\.timeline\.position\(native_ms\)/, 'release projects the authoritative anchored time');
   const targetHelper = ffi.slice(ffi.indexOf('fn release_target('), ffi.indexOf('/// Manual fling velocity'));

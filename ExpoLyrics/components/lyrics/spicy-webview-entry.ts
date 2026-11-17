@@ -882,6 +882,7 @@ function noteUserScroll() {
   touchMoved = true;
   window.clearTimeout(longPressTimer);
   if (staticLyricsMode) return;
+  setAutoFollow(false);
   noteLyricsUserScroll();
   scheduleFrame();
 }
@@ -894,10 +895,16 @@ function endLyricsTouch() {
   scheduleFrame();
 }
 scrollViewport?.addEventListener("touchend", endLyricsTouch, { passive: true });
-scrollViewport?.addEventListener("touchcancel", endLyricsTouch, { passive: true });
+scrollViewport?.addEventListener("touchcancel", () => {
+  window.clearTimeout(longPressTimer);
+  touchStartIndex = -1;
+  setLyricsUserTouching(false, true);
+  scheduleFrame();
+}, { passive: true });
 scrollViewport?.addEventListener("wheel", () => {
   ignoreTouchUntilNextStart = false;
   noteUserScroll();
+  noteLyricsUserScroll(true);
 }, { passive: true });
 // Scroll also wakes a paused renderer during touch momentum/programmatic seeks.
 scrollViewport?.addEventListener("scroll", () => {

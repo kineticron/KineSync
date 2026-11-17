@@ -50,6 +50,8 @@ send('touchstart', 200); frame(); const heldOffset = engine.offset; frame(); fra
 assert.equal(engine.offset, heldOffset, 'new touch immediately cancels the previous fling');
 send('touchcancel', 200); assert.equal(frames.size, 0);
 now += 1000; assert.equal(engine.canResumeAutoAlign, false, 'manual scrolling waits for the Auto button');
+now += 3000;
+assert.equal(engine.canResumeAutoAlign, false, 'escape grace expiry never enables upstream timed recapture');
 const focus = new context.FocusController();
 const flags = { isAutoAlignSuspended: false, hasBottomContent: false, canDisplayInterlude: false };
 focus.resolve({ scrollToIndex: 2 }, 10, flags);
