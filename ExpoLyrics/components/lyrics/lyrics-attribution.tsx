@@ -1,9 +1,9 @@
 import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
-import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
-import Animated, { Easing, FadeIn, ReduceMotion, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import Animated, { Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog } from '@/components/lyrics/lyrics-glass-dialog';
 import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
 type Props = {
@@ -50,7 +50,6 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 export const LyricsAttribution = memo(function LyricsAttribution({ metadata, allCredits = false, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
-  const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const badgeRef = useAnimatedRef<View>();
   const attribution = metadata.attribution ?? (allCredits && metadata.credits?.songwriters?.length ? { source: '', provider: '' } : undefined);
@@ -123,32 +122,18 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, all
         </Pressable>
       </Animated.View>
     </View>
-    <Modal transparent visible={expanded} animationType="fade" statusBarTranslucent
-      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
-      onRequestClose={() => setExpanded(false)}>
-      <Pressable accessibilityLabel="Close lyrics attribution" style={[styles.scrim, {
-        paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
-        paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
-      }]} onPress={() => setExpanded(false)}>
-        <Animated.View entering={FadeIn.duration(200).reduceMotion(ReduceMotion.System)} style={styles.dialog}>
-          <Pressable style={styles.dialogBody} onPress={event => event.stopPropagation()} accessibilityViewIsModal onAccessibilityEscape={() => setExpanded(false)}>
-            <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
-            <ScrollView style={styles.detailsScroll} contentContainerStyle={styles.details}>
-              <Text accessibilityRole="header" style={styles.title}>Lyrics attribution</Text>
-              <Text style={[styles.detailProvider, providerLinked && styles.link]} accessibilityRole={providerLinked ? 'link' : undefined}
-                onPress={providerLinked ? event => { event.stopPropagation(); void Linking.openURL(providerUrl!).catch(() => {}); } : undefined}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>
-              {community || allCredits ? <>
-                <Profile label="Uploader:" profile={attribution.uploader} link />
-                <Profile label="Maker:" profile={attribution.maker} link />
-              </> : null}
-              {metadata.credits?.songwriters?.length ? <Text style={styles.description}>Written by {metadata.credits.songwriters.join(', ')}</Text> : null}
-              {community ? <Text style={styles.description}>Community lyrics sync provided by Spicy Lyrics. Contributor names link to their profiles.</Text> : null}
-              <Pressable accessibilityRole="button" onPress={() => setExpanded(false)} style={styles.close}><Text style={styles.closeText}>Done</Text></Pressable>
-            </ScrollView>
-          </Pressable>
-        </Animated.View>
-      </Pressable>
-    </Modal>
+    <LyricsGlassDialog visible={expanded} onClose={() => setExpanded(false)} closeLabel="Close lyrics attribution">
+      <LyricsDialogTitle>Lyrics attribution</LyricsDialogTitle>
+      <Text style={[styles.detailProvider, providerLinked && styles.link]} accessibilityRole={providerLinked ? 'link' : undefined}
+        onPress={providerLinked ? event => { event.stopPropagation(); void Linking.openURL(providerUrl!).catch(() => {}); } : undefined}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>
+      {community || allCredits ? <>
+        <Profile label="Uploader:" profile={attribution.uploader} link />
+        <Profile label="Maker:" profile={attribution.maker} link />
+      </> : null}
+      {metadata.credits?.songwriters?.length ? <Text style={styles.description}>Written by {metadata.credits.songwriters.join(', ')}</Text> : null}
+      {community ? <Text style={styles.description}>Community lyrics sync provided by Spicy Lyrics. Contributor names link to their profiles.</Text> : null}
+      <LyricsDialogAction label="Done" onPress={() => setExpanded(false)} />
+    </LyricsGlassDialog>
   </>;
 });
 

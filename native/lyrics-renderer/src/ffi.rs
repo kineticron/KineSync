@@ -120,7 +120,7 @@ fn dimensions(width: u32, height: u32, scale: f32) -> Result<(), String> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_abi_version() -> u32 {
-    10
+    11
 }
 /// # Safety
 /// `layer` is a CAMetalLayer on iOS or ANativeWindow on Android.
@@ -314,6 +314,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         }
         let generation = packet.generation;
         let track_id = packet.track_id.clone();
+        let track_changed = track_id != engine.track_id;
         let credits = packet.credits.clone();
         let settings = packet
             .settings
@@ -345,8 +346,8 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.track_id = track_id;
             engine.settings = Some(settings);
             engine.credits = None;
+            reset_track_scroll(&mut engine.scroll, &mut engine.following, track_changed);
             engine.timeline.replace(generation);
-            engine.scroll.reset();
             engine.appearance.reset();
             engine.metrics.generation = generation;
             engine.metrics.animating = 0;
@@ -381,6 +382,9 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             )
             .map_err(|e| e.to_string())?
         };
+        if track_changed {
+            reset_track_scroll(&mut engine.scroll, &mut engine.following, true);
+        }
         replace_track_scroll(
             &mut engine.scroll,
             engine.layout.as_ref(),
@@ -481,6 +485,15 @@ pub(crate) fn resize_track_scroll(
         scroll.relocate_manual(position, next.max_scroll(), f64::from(next.height));
     }
     Ok(())
+}
+
+/// A new song starts a fresh follow owner. Same-track packet revisions for
+/// translation, credits or layout keep the user's manual ownership.
+fn reset_track_scroll(scroll: &mut FollowScroll, following: &mut bool, track_changed: bool) {
+    scroll.reset();
+    if track_changed {
+        *following = true;
+    }
 }
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments, reason = "Narrow numeric C ABI")]
@@ -627,13 +640,31 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
         Ok(0)
     })
 }
+/// Release recapture needs an anchored timeline whose generation matches the
+/// prepared layout. Without both, the current offset is not an active target.
+fn release_target(
+    layout: Option<&TrackScene>,
+    anchored: bool,
+    layout_generation: u64,
+    timeline_generation: u64,
+    position_ms: f64,
+) -> Option<f64> {
+    if !anchored || layout_generation != timeline_generation {
+        return None;
+    }
+    layout.map(|layout| layout.scroll_target(position_ms))
+}
+
 /// Manual fling velocity in logical points per millisecond. Negative values
 /// move content up (finger swiped up); the native model owns deceleration.
+/// `native_ms` is the release monotonic clock, so an anchor accepted after the
+/// last rendered frame still classifies the current song time. Returns 1 when
+/// the release re-engaged auto-follow, 0 when it stayed manual.
 #[unsafe(no_mangle)]
-pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
+pub extern "C" fn kr_fling(handle: u64, velocity: f64, native_ms: f64) -> i32 {
     with(handle, |engine| {
-        if !velocity.is_finite() {
-            return Err("Invalid fling velocity".into());
+        if !velocity.is_finite() || !native_ms.is_finite() || native_ms < 0.0 {
+            return Err("Invalid fling release".into());
         }
         let max_offset = engine.layout.as_ref().map_or(0.0, TrackScene::max_scroll);
         if let Some(layout) = &mut engine.layout {
@@ -641,9 +672,21 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64) -> i32 {
         }
         let scale = f64::from(engine.scale.max(0.001));
         let viewport = f64::from(engine.metrics.height);
-        engine.scroll.fling(velocity * scale, max_offset, viewport);
-        engine.following = false;
-        Ok(0)
+        // A release close to the active line hands ownership back to follow.
+        // A far release keeps manual ownership, and an active drag never
+        // reaches this path because `kr_scroll_by` only freezes follow.
+        let target = release_target(
+            engine.layout.as_ref(),
+            engine.timeline.anchored,
+            engine.metrics.generation,
+            engine.timeline.generation,
+            engine.timeline.position(native_ms),
+        );
+        let resume = engine
+            .scroll
+            .release(velocity * scale, max_offset, viewport, target);
+        engine.following = resume;
+        Ok(if resume { 1 } else { 0 })
     })
 }
 /// Logical surface point to row index or ABI10 footer target from the shared layout.
@@ -756,6 +799,13 @@ pub(crate) fn manual_frame_for_test(
     )
 }
 
+/// A missing layout after an anchor is transient readiness, not missing input.
+/// Report it like an unavailable drawable so the native owner retries instead
+/// of parking the display loop until an unrelated handshake arrives.
+fn missing_layout_status(anchored: bool) -> i32 {
+    if anchored { 2 } else { 1 }
+}
+
 /// Returns 0 after present call, 1 awaiting input, 2 no drawable, 3 GPU capacity, -1 failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_render(
@@ -795,7 +845,7 @@ pub extern "C" fn kr_render(
             return Ok(0);
         }
         let Some(layout) = &mut engine.layout else {
-            return Ok(1);
+            return Ok(missing_layout_status(engine.timeline.anchored));
         };
         if !engine.timeline.anchored {
             return Ok(1);
@@ -946,8 +996,8 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 mod tests {
     use super::*;
     #[test]
-    fn abi_v10_metrics_layout_matches_header() {
-        assert_eq!(kr_abi_version(), 10);
+    fn abi_v11_metrics_layout_matches_header() {
+        assert_eq!(kr_abi_version(), 11);
         assert_eq!(std::mem::size_of::<Metrics>(), 168);
         assert_eq!(std::mem::offset_of!(Metrics, capabilities), 80);
         assert_eq!(std::mem::offset_of!(Metrics, animating), 84);
@@ -1099,6 +1149,104 @@ mod tests {
         assert_eq!(receipt.as_array().unwrap().len(), 1);
         assert_eq!(receipt[0]["text"], layout.lines[0].text);
     }
+    #[test]
+    fn new_track_resets_manual_follow_ownership_and_snaps_to_its_target() {
+        use crate::typography::Style;
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let old = crate::motion::Command {
+            offset: 500.0,
+            interval: 800.0,
+            interlude: false,
+            first_visible: 0,
+            index: 1,
+            visible: 0..8,
+            scale: 3.0,
+            style: Style::Spicy,
+        };
+        scroll.sample(&old, 0.0, true);
+        scroll.drag(180.0, 2_000.0, 800.0);
+        let mut following = false;
+        reset_track_scroll(&mut scroll, &mut following, true);
+        assert!(following, "a new song must not inherit manual ownership");
+        let fresh = crate::motion::Command {
+            offset: 900.0,
+            ..old
+        };
+        assert_eq!(scroll.sample(&fresh, 2_000.0, true), 900.0);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn same_track_revision_keeps_manual_follow_ownership() {
+        use crate::typography::Style;
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Amll, 3.0, 8);
+        let mut following = false;
+        reset_track_scroll(&mut scroll, &mut following, false);
+        assert!(
+            !following,
+            "translation, credits and layout revisions must keep manual ownership"
+        );
+    }
+
+    #[test]
+    fn release_target_requires_ready_layout_anchor_and_matching_generation() {
+        let track = preparation_track();
+        let position = track.lines[0].start + 1.0;
+        assert!(release_target(None, true, 1, 1, position).is_none());
+        assert!(release_target(Some(&track), false, 1, 1, position).is_none());
+        assert!(release_target(Some(&track), true, 1, 2, position).is_none());
+        assert_eq!(
+            release_target(Some(&track), true, 1, 1, position),
+            Some(track.scroll_target(position))
+        );
+    }
+
+    #[test]
+    fn release_target_projects_the_current_anchor_and_rejects_an_old_song() {
+        let track = preparation_track();
+        let mut timeline = Timeline::default();
+        assert!(timeline.replace(1));
+        assert!(timeline.anchor(1, 1, 1_000.0, 0.0, 0.0, true, 1.0).unwrap());
+        let projected = timeline.position(500.0);
+        assert_eq!(
+            release_target(
+                Some(&track),
+                timeline.anchored,
+                1,
+                timeline.generation,
+                projected
+            ),
+            Some(track.scroll_target(projected)),
+            "a seek accepted before the next frame uses the projected anchor"
+        );
+        // A new track before the next frame leaves the timeline unanchored and
+        // rejects an anchor from the old song, so release cannot recapture.
+        assert!(timeline.replace(2));
+        assert!(
+            !timeline
+                .anchor(1, 2, 9_000.0, 500.0, 500.0, true, 1.0)
+                .unwrap()
+        );
+        assert!(
+            release_target(
+                Some(&track),
+                timeline.anchored,
+                2,
+                timeline.generation,
+                1_500.0
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn missing_layout_after_an_anchor_requests_retry_not_a_parked_loop() {
+        assert_eq!(missing_layout_status(false), 1);
+        assert_eq!(missing_layout_status(true), 2);
+    }
+
     #[test]
     fn panic_containment_and_invalid_handles() {
         assert_eq!(boundary(-7, || panic!("test panic")), -7);

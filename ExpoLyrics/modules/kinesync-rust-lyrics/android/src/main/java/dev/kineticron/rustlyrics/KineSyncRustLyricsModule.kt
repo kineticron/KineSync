@@ -16,7 +16,7 @@ class KineSyncRustLyricsModule : Module() {
       Prop("active") { view: KineSyncRustLyricsView, value: Boolean -> view.setActive(value) }
       AsyncFunction("copyLayout") { view: KineSyncRustLyricsView, promise: Promise -> view.copyLayout(promise) }.runOnQueue(Queues.MAIN)
       AsyncFunction("setAnchor") { view: KineSyncRustLyricsView, value: String -> view.setAnchor(value) }.runOnQueue(Queues.MAIN)
-      AsyncFunction("setFollowing") { view: KineSyncRustLyricsView, value: Boolean -> view.setFollowing(value) }.runOnQueue(Queues.MAIN)
+      AsyncFunction("setFollowing") { view: KineSyncRustLyricsView, value: Boolean, epoch: Double, generation: Double, gesture: Boolean -> view.setFollowing(value, epoch, generation, gesture) }.runOnQueue(Queues.MAIN)
       AsyncFunction("scrollBy") { view: KineSyncRustLyricsView, dy: Double -> view.scrollBy(dy) }.runOnQueue(Queues.MAIN)
       AsyncFunction("fling") { view: KineSyncRustLyricsView, velocity: Double -> view.fling(velocity) }.runOnQueue(Queues.MAIN)
       AsyncFunction("hitTest") { view: KineSyncRustLyricsView, x: Double, y: Double, promise: Promise -> view.hitTest(x, y, promise) }.runOnQueue(Queues.MAIN)

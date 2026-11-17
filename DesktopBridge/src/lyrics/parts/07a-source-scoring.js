@@ -56,6 +56,9 @@ function mergeLyricsMetadata(...metadataList) {
     if (metadata.spicyApi && typeof metadata.spicyApi === "object") {
       merged.spicyApi = { ...metadata.spicyApi };
     }
+    if (metadata.fetchOrigin && typeof metadata.fetchOrigin === "object") {
+      merged.fetchOrigin = { ...metadata.fetchOrigin };
+    }
     if (metadata.ttml && typeof metadata.ttml === "object") {
       merged.ttml = { ...metadata.ttml };
     }

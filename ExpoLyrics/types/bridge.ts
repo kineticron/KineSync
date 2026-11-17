@@ -170,7 +170,17 @@ export type LyricsAttributionMetadata = {
 };
 
 export type LyricsMetadata = {
-  spicyApi?: { fetchedAt: number; expiresAt: number };
+  spicyApi?: { fetchedAt: number; expiresAt: number; [key: string]: unknown };
+  /** Network boundary provenance stamped only for responses fetched from api.spicylyrics.org. */
+  fetchOrigin?: {
+    provider?: string;
+    source?: string;
+    host?: string;
+    url?: string;
+    spotifyTrackId?: string;
+    isrc?: string;
+    [key: string]: unknown;
+  };
   /** Original imported XML, retained for lossless TTML export. */
   ttml?: {
     content: string;

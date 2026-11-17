@@ -4,6 +4,31 @@ const LONG_PRESS_MS = 540;
 const DRAG_SLOP = 4;
 
 /**
+ * Follow ownership is keyed by track identity. A new song starts following
+ * even when the parent still carries the previous song's manual false. Same
+ * track revisions (translation, credits, layout) never reset ownership.
+ * @param {{ trackId: string, resetPending: boolean }} state
+ * @param {string} trackId
+ * @param {boolean} followEnabled
+ */
+function nextFollowState(state, trackId, followEnabled) {
+  if (state.trackId !== trackId) return { trackId, resetPending: true };
+  if (state.resetPending && followEnabled) return { ...state, resetPending: false };
+  return state;
+}
+
+/** The follow value to send for this render. A pending track reset wins over a
+ * stale parent false until the parent acknowledges the new track. */
+function desiredFollow(state, followEnabled) {
+  return state.resetPending ? true : followEnabled;
+}
+
+/** A real touch or explicit follow false ends the new-track reset window. */
+function clearFollowReset(state) {
+  return state.resetPending ? { ...state, resetPending: false } : state;
+}
+
+/**
  * @param {{
  *   hitTest: (y: number, x: number) => number | Promise<number>,
  *   scrollBy: (dy: number) => void,
@@ -142,4 +167,4 @@ function createRustLyricsGesture({
   };
 }
 
-module.exports = { LONG_PRESS_MS, DRAG_SLOP, createRustLyricsGesture };
+module.exports = { LONG_PRESS_MS, DRAG_SLOP, createRustLyricsGesture, nextFollowState, desiredFollow, clearFollowReset };

@@ -13,10 +13,12 @@ import { BridgedArtworkImage } from '@/components/lyrics/bridged-artwork-image';
 import { DesktopVaultCatalog } from '@/components/lyrics/desktop-vault-catalog';
 import { Design } from '@/constants/design';
 import { useVaultIncomingShare } from '@/hooks/use-vault-incoming-share';
-import { deleteMobileVaultEntry, readVaultCatalog, getMobileVaultEntry, renameMobileVaultEntry, saveMobileVaultLyrics, type MobileVaultSummary } from '@/lib/mobile-lyrics-vault';
+import { deleteMobileVaultEntry, readVaultCatalog, getMobileVaultEntry, renameMobileVaultEntry, saveMobileVaultLyrics, type MobileVaultEntry, type MobileVaultSummary } from '@/lib/mobile-lyrics-vault';
+import { fetchLrcRedExportLyricsForTrack } from '@/lib/mobile-lyrics-client';
+import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog, dialogStyles } from '@/components/lyrics/lyrics-glass-dialog';
 import { extractTtmlMetadata, parseTtmlToLyrics } from '@/lib/lyrics-ttml-import';
 import { buildDefaultTtmlFilename, lyricsToTtml } from '@/lib/lyrics-ttml-export';
-import { assertLyricsExportAllowed } from '@/lib/lyrics-policy';
+import { assertLyricsExportAllowed, isSpicyLyricsResponse } from '@/lib/lyrics-policy';
 import { usePlaybackStore } from '@/store/playback-store';
 import type { LyricLine, LyricsMetadata } from '@/types/bridge';
 
@@ -36,7 +38,12 @@ export default function VaultScreen() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [restrictedExport, setRestrictedExport] = useState<{ entry: MobileVaultSummary; full: MobileVaultEntry } | null>(null);
+  const [restrictedConfirm, setRestrictedConfirm] = useState(false);
+  const [lrcRedMessage, setLrcRedMessage] = useState('');
+  const [lrcRedBusy, setLrcRedBusy] = useState(false);
   const handled = useRef('');
+  const restrictedRequest = useRef(0);
   const { resolvedSharedPayloads, clearSharedPayloads, error } = useVaultIncomingShare();
   const canSaveCurrent = usePlaybackStore(s => Boolean(s.currentTrack && s.lyrics.length));
   const reload = useCallback(async () => {
@@ -108,9 +115,15 @@ export default function VaultScreen() {
         </View>
         <View style={styles.songActions}>
           <Button accessibilityLabel={`Edit ${entry.track.title}`} disabled={busy || Boolean(draft)} style={[styles.songAction, (busy || Boolean(draft)) && styles.disabled]} onPress={() => { setEditing(entry.vaultId); setTitle(entry.track.title); setArtist(entry.track.artist); }}><Ionicons name="create-outline" size={17} color={Design.text} /><Text style={styles.actionText}>Edit</Text></Button>
-          <Button accessibilityLabel={entry.exportRestricted ? 'Spicy Lyrics export unavailable' : `Export ${entry.track.title}`} disabled={busy || entry.exportRestricted} style={[styles.songAction, (busy || entry.exportRestricted) && styles.disabled]} onPress={() => void run(async () => {
+          <Button accessibilityLabel={entry.exportRestricted ? `Export ${entry.track.title} from lrc.red` : `Export ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => void run(async () => {
             const full = await getMobileVaultEntry(entry.vaultId);
             if (!full) throw new Error("These lyrics are no longer available. Refresh your vault.");
+            if (isSpicyLyricsResponse(full)) {
+              setLrcRedMessage('');
+              setRestrictedConfirm(false);
+              setRestrictedExport({ entry, full });
+              return;
+            }
             assertLyricsExportAllowed(full);
             const file = new File(Paths.cache, buildDefaultTtmlFilename(full.track));
             file.create({ overwrite: true });
@@ -120,6 +133,48 @@ export default function VaultScreen() {
           <Button accessibilityLabel={`Delete ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => Alert.alert('Delete saved lyrics?', `${entry.track.title} will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => void run(async () => { await deleteMobileVaultEntry(entry.vaultId); }) }])}><Ionicons name="trash-outline" size={17} color="#FF93A4" /><Text style={_stableStyle3}>Delete</Text></Button>
         </View>
       </View>, [busy, draft, run]);
+
+  const closeRestrictedExport = () => {
+    restrictedRequest.current += 1;
+    setRestrictedExport(null);
+    setRestrictedConfirm(false);
+    setLrcRedMessage('');
+    setLrcRedBusy(false);
+  };
+  const exportIndependentLrcRed = async () => {
+    const bound = restrictedExport;
+    if (!bound || lrcRedBusy) return;
+    const requestId = ++restrictedRequest.current;
+    setLrcRedBusy(true);
+    setLrcRedMessage('');
+    try {
+      const isrc = String(bound.full.metadata?.fetchOrigin?.isrc || '').trim();
+      const independent = await fetchLrcRedExportLyricsForTrack(bound.full.track, isrc);
+      if (requestId !== restrictedRequest.current) return;
+      if (!independent?.lyrics?.length) {
+        setLrcRedMessage("lrc.red doesn't have this song");
+        return;
+      }
+      const latest = await getMobileVaultEntry(bound.entry.vaultId);
+      const sameTrack = latest && latest.track.title === bound.full.track.title &&
+        latest.track.artist === bound.full.track.artist &&
+        Number(latest.track.durationMs || 0) === Number(bound.full.track.durationMs || 0) &&
+        String(latest.track.spotifyTrackId || '') === String(bound.full.track.spotifyTrackId || '') &&
+        String(latest.metadata?.fetchOrigin?.isrc || '') === String(bound.full.metadata?.fetchOrigin?.isrc || '');
+      if (!sameTrack) throw new Error('The saved song changed before export. Try again.');
+      if (requestId !== restrictedRequest.current) return;
+      const file = new File(Paths.cache, buildDefaultTtmlFilename(bound.full.track));
+      file.create({ overwrite: true });
+      file.write(lyricsToTtml({ lyrics: independent.lyrics, ...bound.full.track, source: independent.source, metadata: independent.metadata }));
+      if (requestId !== restrictedRequest.current) return;
+      await shareAsync(file.uri, { mimeType: 'application/ttml+xml', UTI: 'public.xml' });
+      if (requestId === restrictedRequest.current) closeRestrictedExport();
+    } catch (error) {
+      if (requestId === restrictedRequest.current) setLrcRedMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (requestId === restrictedRequest.current) setLrcRedBusy(false);
+    }
+  };
 
   return <View style={styles.screen}>
     <PromotionalBackdrop />
@@ -209,6 +264,20 @@ export default function VaultScreen() {
         <Text style={styles.emptyText}>{entries.length ? 'Try a different song name or artist.' : 'Import a lyrics file or save your current song to start your collection.'}</Text>
       </View>} />
       </KeyboardAvoidingView>
+      <LyricsGlassDialog visible={Boolean(restrictedExport) && !restrictedConfirm} onClose={closeRestrictedExport} closeLabel="Close Spicy lyrics export notice">
+        <LyricsDialogTitle>Spicy lyrics</LyricsDialogTitle>
+        <Text style={dialogStyles.description}>Spicy lyrics cannot be exported.</Text>
+        <LyricsDialogAction label="Export from lrc.red instead" onPress={() => setRestrictedConfirm(true)} />
+        <LyricsDialogAction label="Cancel" onPress={closeRestrictedExport} />
+      </LyricsGlassDialog>
+      <LyricsGlassDialog visible={Boolean(restrictedExport) && restrictedConfirm} onClose={closeRestrictedExport} closeLabel="Cancel lrc.red export">
+        <LyricsDialogTitle>Export from lrc.red</LyricsDialogTitle>
+        <Text style={dialogStyles.description}>This export comes from lrc.red, NOT Spicy Lyrics.</Text>
+        <Text style={dialogStyles.description}>The file is lrc.red's version and may differ from the lyrics on screen.</Text>
+        {!!lrcRedMessage && <Text accessibilityRole="alert" style={dialogStyles.description}>{lrcRedMessage}</Text>}
+        <LyricsDialogAction label={lrcRedBusy ? 'Fetching lrc.red...' : 'Export lrc.red lyrics'} disabled={lrcRedBusy} onPress={() => void exportIndependentLrcRed()} />
+        <LyricsDialogAction label="Cancel" onPress={closeRestrictedExport} />
+      </LyricsGlassDialog>
     </SafeAreaView>
   </View>;
 }

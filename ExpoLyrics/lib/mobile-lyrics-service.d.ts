@@ -28,6 +28,8 @@ export type SpotifyCatalogTrack = {
 
 export function fetchFromSpicyLyrics(track: MobileLyricsTrack, options: { spicyLyricsPublishableKey: string }): Promise<MobileLyricsPacket | null>;
 
+export function fetchLrcRedExportLyrics(track: MobileLyricsTrack): Promise<MobileLyricsPacket | null>;
+
 export type MobileLyricsSourcePreference =
   | "auto"
   | "local-vault"

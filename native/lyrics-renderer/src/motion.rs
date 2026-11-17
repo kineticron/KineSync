@@ -25,6 +25,10 @@ const FLING_MIN_VELOCITY: f64 = 0.02;
 /// Rubber-band stiffness from `UIScrollView` (`0.55`).
 const RUBBER_BAND: f64 = 0.55;
 
+/// Fraction of the viewport around the active-line target that still belongs
+/// to auto-follow when a manual scroll ends.
+pub const FOLLOW_RELEASE_FRACTION: f64 = 1.0 / 3.0;
+
 /// Native Spicy viewport tween duration (`spicyScrollDuration`).
 pub fn spicy_duration(interval: f64, interlude: bool, distance: f64) -> f64 {
     if interlude {
@@ -330,6 +334,27 @@ impl FollowScroll {
         self.adjust.fill(0.0);
         self.last_visible = 0..0;
         self.animating = false;
+    }
+
+    /// End a manual scroll and decide whether follow should take ownership
+    /// back. Only the release path may recapture, so an active drag never
+    /// pulls the viewport away from the finger. `target` is the active-line
+    /// target from a ready layout. Without a layout there is no trustworthy
+    /// target, so the release stays manual. Returns true only when the release
+    /// is within one third of the viewport from that target.
+    pub fn release(
+        &mut self,
+        velocity: f64,
+        max_offset: f64,
+        viewport: f64,
+        target: Option<f64>,
+    ) -> bool {
+        self.fling(velocity, max_offset, viewport);
+        let Some(target) = target else {
+            return false;
+        };
+        let threshold = self.viewport * FOLLOW_RELEASE_FRACTION;
+        (self.position - target).abs() <= threshold
     }
 
     /// Start an iOS fling after the finger lifts. `velocity` is surface pixels
@@ -987,6 +1012,125 @@ mod tests {
         scroll.snap_next();
         let seek = command(Style::Amll, 1_200.0, 800.0, 2, 1);
         assert_eq!(scroll.sample(&seek, 1_000.0, true), 1_200.0);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn release_within_a_third_of_the_viewport_reengages_follow_for_both_styles() {
+        for style in [Style::Spicy, Style::Amll] {
+            for (distance, near) in [(0.0, true), (299.9, true), (300.0, true), (300.1, false)] {
+                for direction in [-1.0, 1.0] {
+                    let mut scroll = FollowScroll::default();
+                    scroll.configure(style, 3.0, 8);
+                    let target = command(style, 500.0, 800.0, 1, 0);
+                    scroll.sample(&target, 0.0, true);
+                    scroll.drag(direction * distance, 2_000.0, 900.0);
+                    let released = scroll.position();
+                    assert_eq!(
+                        scroll.release(0.0, 2_000.0, 900.0, Some(target.offset)),
+                        near,
+                        "{style:?} at the exact viewport-third boundary"
+                    );
+                    if near {
+                        // The resumed trajectory starts at the released offset, then
+                        // eases toward the active line instead of snapping.
+                        assert_eq!(scroll.sample(&target, 200.0, true), released);
+                        // Sample display frames rather than skipping straight to
+                        // the endpoint. AMLL caps each display step at 64 ms, as
+                        // does the reference's stepSimpleScroll.
+                        for frame in 1..=120 {
+                            let now = 200.0 + f64::from(frame) * 1000.0 / 60.0;
+                            let position = scroll.sample(&target, now, true);
+                            if distance == 0.0 {
+                                assert_eq!(position, target.offset);
+                            } else if frame == 1 || frame == 6 {
+                                let remaining = (target.offset - position).abs();
+                                assert!(
+                                    remaining > 0.0 && remaining < distance,
+                                    "{style:?}, distance {distance}, direction {direction}, \
+                                 frame {frame}: released {released}, position {position}, \
+                                 target {}",
+                                    target.offset
+                                );
+                                if style == Style::Amll {
+                                    // Reference sampleTrajectory, starting at rest:
+                                    // interval 800 gives stiffness 170, mass 0.9.
+                                    let omega = (170.0_f64 / 0.9).sqrt();
+                                    let elapsed = (now - 200.0) / 1000.0;
+                                    let expected = distance
+                                        * (1.0 + omega * elapsed)
+                                        * (-omega * elapsed).exp();
+                                    assert!((remaining - expected).abs() < 1e-9);
+                                }
+                                println!(
+                                    "{style:?} distance={distance} direction={direction} \
+                                 elapsed={}ms released={released} position={position} target={}",
+                                    now - 200.0,
+                                    target.offset
+                                );
+                            }
+                        }
+                        assert_eq!(scroll.position(), target.offset);
+                        assert!(!scroll.animating(), "{style:?} must eventually go idle");
+                    } else {
+                        // A far release stays manual and does not drift to the target.
+                        assert_eq!(scroll.sample(&target, 200.0, false), released);
+                        assert_eq!(scroll.sample(&target, 1_500.0, false), released);
+                        assert!(!scroll.animating());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn active_drag_keeps_manual_ownership_until_release() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
+        scroll.sample(&target, 0.0, true);
+        for _ in 0..40 {
+            scroll.drag(-1.0, 2_000.0, 800.0);
+            assert!(scroll.dragging, "the finger still owns the viewport");
+        }
+        // Sampling manual frames never retargets, even when the finger is close
+        // to the active line. Only release may hand ownership back.
+        let held = scroll.position();
+        assert_eq!(scroll.sample(&target, 100.0, false), held);
+        assert_eq!(scroll.sample(&target, 200.0, false), held);
+        assert!(scroll.dragging);
+        assert!(scroll.release(0.0, 2_000.0, 800.0, Some(target.offset)));
+        assert!(!scroll.dragging);
+    }
+
+    #[test]
+    fn release_without_layout_stays_manual() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 3.0, 8);
+        let target = command(Style::Spicy, 500.0, 800.0, 1, 0);
+        scroll.sample(&target, 0.0, true);
+        scroll.drag(-40.0, 2_000.0, 800.0);
+        assert!(!scroll.release(0.0, 2_000.0, 800.0, None));
+        // The fling handoff still happened, but follow ownership did not move
+        // because no layout supplied an authoritative active-line target.
+        assert!(!scroll.dragging);
+        assert_eq!(scroll.sample(&target, 100.0, false), 460.0);
+        assert_eq!(scroll.sample(&target, 1_000.0, false), 460.0);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn late_follow_enable_after_manual_frames_still_snaps_to_layout_target() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Amll, 3.0, 8);
+        scroll.reset();
+        // A new song can render before the first layout/follow handshake lands.
+        let target = command(Style::Amll, 720.0, 800.0, 3, 1);
+        assert_eq!(scroll.sample(&target, 0.0, false), 0.0);
+        assert_eq!(scroll.sample(&target, 16.0, false), 0.0);
+        // The first followed frame after layout readiness still teleports to
+        // the authoritative target instead of animating from the old song.
+        assert_eq!(scroll.sample(&target, 32.0, true), 720.0);
         assert!(!scroll.animating());
     }
 

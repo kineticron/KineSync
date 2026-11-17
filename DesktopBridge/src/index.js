@@ -12,6 +12,7 @@ const { createBridgeRelayClient } = require("./bridgeRelayClient");
 const { createHostedRelayServer } = require("./relayServer");
 const { createNgrokRelayManager } = require("./ngrokRelayManager");
 const { createLyricsService } = require("./lyrics");
+const { createExportRequestRegistry } = require("./exportRequestRegistry");
 const { createPlaybackController } = require("./playbackController");
 const { createSpotifyDetector } = require("./spotifyDetector");
 const { createSpotifyAuth } = require("./spotifyAuth");
@@ -641,10 +642,122 @@ app.whenReady().then(() => {
       return ngrokRelayManager.stop();
     });
 
+  ipcMain.handle("bridge:lyrics:export-identity", async () => {
+    if (!latestSnapshot?.trackId) return { ok: false, error: "No current track is available." };
+    return { ok: true, trackId: latestSnapshot.trackId, spotifyTrackId: latestSnapshot.spotifyTrackId || "",
+      title: latestSnapshot.title || "", artist: latestSnapshot.artist || "",
+      durationMs: Number(latestSnapshot.durationMs || 0),
+      isrc: String(latestLyricsPacket?.metadata?.fetchOrigin?.isrc || "").trim() };
+  });
+
+  const exportRequests = createExportRequestRegistry();
+  ipcMain.handle("bridge:lyrics:export-lrc-red:cancel", async (_event, { requestId } = {}) => {
+    exportRequests.cancel(requestId);
+    return { ok: true };
+  });
+
+  ipcMain.handle("bridge:lyrics:export-lrc-red", async (_event, { vaultId = "", requestId = 0, expected = {} } = {}) => {
+    if (Number(requestId)) exportRequests.activate(requestId);
+    let track;
+    let metadata = {};
+    if (vaultId) {
+      const store = getLyricsVaultStore();
+      const entry = store?.getEntry?.(vaultId);
+      if (!entry?.manifest) return { ok: false, error: "Vault entry not found." };
+      track = { ...entry.manifest, savedAt: Number(entry.manifest.savedAt || entry.savedAt || 0) };
+      metadata = entry.metadata || {};
+    } else {
+      if (!latestSnapshot?.trackId) return { ok: false, error: "No current track is available." };
+      track = latestSnapshot;
+      metadata = latestLyricsPacket?.metadata || {};
+    }
+    const trackId = String(track.trackId || track.spotifyTrackId || "").trim();
+    const expectedTrackId = String(expected.trackId || expected.spotifyTrackId || "").trim();
+    if (expectedTrackId && expectedTrackId !== trackId) {
+      return { ok: false, error: "The selected track changed before export. Try again." };
+    }
+    for (const key of ["title", "artist"]) {
+      if (expected[key] != null && String(expected[key]) !== String(track[key] || "")) {
+        return { ok: false, error: "The selected track changed before export. Try again." };
+      }
+    }
+    if (expected.durationMs != null && Number(expected.durationMs) !== Number(track.durationMs || 0)) {
+      return { ok: false, error: "The selected track changed before export. Try again." };
+    }
+    const confirmed = { trackId, title: String(track.title || ""), artist: String(track.artist || ""), durationMs: Number(track.durationMs || 0), isrc: String(expected.isrc || metadata?.fetchOrigin?.isrc || "").trim(), savedAt: Number(track.savedAt || 0) };
+    const readBound = () => {
+      if (vaultId) {
+        const entry = getLyricsVaultStore()?.getEntry?.(vaultId);
+        return entry?.manifest ? { track: entry.manifest, metadata: entry.metadata || {}, savedAt: Number(entry.manifest.savedAt || entry.savedAt || 0) } : null;
+      }
+      return latestSnapshot?.trackId ? { track: latestSnapshot, metadata: latestLyricsPacket?.metadata || {}, savedAt: 0 } : null;
+    };
+    const boundUnchanged = () => {
+      const current = readBound();
+      if (!current) return false;
+      const currentTrackId = String(current.track.trackId || current.track.spotifyTrackId || "").trim();
+      return currentTrackId === confirmed.trackId &&
+        String(current.track.title || "") === confirmed.title &&
+        String(current.track.artist || "") === confirmed.artist &&
+        Number(current.track.durationMs || 0) === confirmed.durationMs &&
+        String(current.metadata?.fetchOrigin?.isrc || "") === confirmed.isrc &&
+        (!vaultId || Number(current.savedAt || 0) === confirmed.savedAt);
+    };
+    const isrc = confirmed.isrc;
+    let independent;
+    try {
+      independent = await require("./lyrics").fetchLrcRedExportLyrics({
+        title: track.title, artist: track.artist, album: track.album,
+        durationMs: Number(track.durationMs || 0), spotifyTrackId: track.spotifyTrackId, isrc,
+      });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    if (!exportRequests.isCurrent(requestId)) return { ok: false, canceled: true };
+    if (!boundUnchanged()) return { ok: false, error: "The selected track changed before export. Try again." };
+    if (!independent?.lyrics?.length) {
+      return { ok: false, noMatch: true, error: "lrc.red doesn't have this song" };
+    }
+    // Protected fallback exports independent TTML only, never JSON.
+    const exportFormat = "ttml";
+    let body;
+    try {
+      body = exportFormat === "json"
+        ? JSON.stringify({ title: track.title || "", artist: track.artist || "", album: track.album || "",
+          durationMs: Number(track.durationMs || 0), spotifyTrackId: track.spotifyTrackId || "",
+          sourceLabel: independent.source || "lrc-red", lyrics: independent.lyrics }, null, 2)
+        : lyricsToTtml({ lyrics: independent.lyrics, title: track.title || "", artist: track.artist || "",
+          album: track.album || "", source: independent.source || "lrc-red", metadata: independent.metadata,
+          durationMs: Number(track.durationMs || 0) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+    const baseFilename = buildDefaultTtmlFilename({ title: track.title || "", artist: track.artist || "" });
+    const defaultPath = exportFormat === "json" ? baseFilename.replace(/\.ttml$/i, ".json") : baseFilename;
+    const saveResult = mainWindow.isDestroyed()
+      ? { canceled: true }
+      : await dialog.showSaveDialog(mainWindow, {
+          title: exportFormat === "json" ? "Export lrc.red lyrics as JSON" : "Export lrc.red lyrics as TTML",
+          defaultPath,
+          filters: exportFormat === "json"
+            ? [{ name: "JSON lyrics", extensions: ["json"] }, { name: "All files", extensions: ["*"] }]
+            : [{ name: "TTML lyrics", extensions: ["ttml", "xml"] }, { name: "All files", extensions: ["*"] }],
+        });
+    if (saveResult.canceled || !saveResult.filePath) return { ok: false, canceled: true };
+    if (!boundUnchanged()) return { ok: false, error: "The selected track changed before export. Try again." };
+    if (!exportRequests.isCurrent(requestId)) return { ok: false, canceled: true };
+    try {
+      await fs.promises.writeFile(saveResult.filePath, body, "utf8");
+      return { ok: true, filePath: saveResult.filePath, format: exportFormat, lineCount: independent.lyrics.length, source: independent.source };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
   ipcMain.handle("bridge:lyrics:export-ttml", async () => {
     try {
       require("./lyricsPolicy").assertLyricsExportAllowed(latestLyricsPacket || {});
-    } catch (error) { return { ok: false, error: error.message }; }
+    } catch (error) { return { ok: false, exportRestricted: true, error: error.message }; }
     const lyrics = Array.isArray(latestLyricsPacket?.lyrics)
       ? latestLyricsPacket.lyrics
       : [];
@@ -862,7 +975,7 @@ app.whenReady().then(() => {
 
       try {
         require("./lyricsPolicy").assertLyricsExportAllowed({ ...entry.manifest, metadata: entry.metadata });
-      } catch (error) { return { ok: false, error: error.message }; }
+      } catch (error) { return { ok: false, exportRestricted: true, error: error.message }; }
 
       const exportFormat = String(format || "ttml").toLowerCase() === "json"
         ? "json"
@@ -1586,6 +1699,9 @@ app.whenReady().then(() => {
       ipcMain.removeHandler("bridge:lyrics:vault:import");
       ipcMain.removeHandler("bridge:lyrics:vault:list");
       ipcMain.removeHandler("bridge:lyrics:vault:export");
+      ipcMain.removeHandler("bridge:lyrics:export-lrc-red");
+      ipcMain.removeHandler("bridge:lyrics:export-lrc-red:cancel");
+      ipcMain.removeHandler("bridge:lyrics:export-identity");
       ipcMain.removeHandler("bridge:lyrics:vault:open-folder");
       ipcMain.removeHandler("ngrok:authenticate");
       ipcMain.removeHandler("ngrok:relay:start");

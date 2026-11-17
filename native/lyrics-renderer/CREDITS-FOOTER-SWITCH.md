@@ -4,7 +4,7 @@ Worktree: `C:/Users/rawes/.t3/worktrees/KineSync/t3-e78e4fce`
 
 Branch: `t3/fix-credits-footer-switch`
 
-Base: `a02c9f868af5495b818197770a5a241762c3ab06`, fetched from origin/development before editing. Later harness commits were deliberately left for the parent to combine. No push was made.
+Original base: `a02c9f868af5495b818197770a5a241762c3ab06`, fetched from origin/development before editing. The formatted footer fix was committed as `053f666`. On authorized resumption, origin/development at `046ae3f16663e1cf96c019b62e44ee972235305f` was integrated locally, including harness `747f2dc`. No push was made.
 
 ## Exact fixture and preceding sequence
 
@@ -32,6 +32,8 @@ Before this fix, `kr_set_track` always configured and reset `FollowScroll`, sett
 Same-track matching text and row timing now preserve a logical row and fraction, with the final interval mapped through the footer scroll limit. Render-order preparation resolves this anchor again after lazy measurement. Mapped values are clamped to the new scene. Explicit seek snaps survive until follow resumes. New track resets retain their prior behavior. Changed count, reordered or unrelated text, and empty layouts do not reuse old row indices.
 
 Manual input clears the logical anchor. Ordinary rubber-band and fling frames bypass relocation. Cached scene activation clears stale anchors, including resize activation. Automatic following continues to use its existing targets. The Skia reference, Android touch handlers and ABI remain unchanged.
+
+Integration retained development's ABI11, ordered follow epochs, near-release recapture, new-track follow reset and missing-layout retries. The `ffi.rs` conflict was resolved by applying development's new-track ownership reset before scene replacement only when track identity changes. Same-track manual mapping is therefore not erased by a second unconditional reset. Empty packets retain development's ownership reset. Upstream follow, release and readiness tests remain intact.
 
 ## Reproduction and verification
 
@@ -61,6 +63,12 @@ The native tests use real bundled fonts and scenes. They assert the whole footer
 
 Initial RA-WINDOWS results: Expo `npm run typecheck`, full `npm test`, gesture checks, JS fixture checks and the fixed narrow host check passed. System Cargo 1.84.1 is standalone and reports `no such command: +1.97.0`. Rustup is unavailable. On resumption, temporary 1.97 components were unpacked only into this worktree's ignored target directory. The matching compiler DLL enabled rustfmt 1.97, which formatted only changed Rust files. No toolchain installation or default configuration change was made.
 
-The parent ran the actual WIP crate library tests on rescue. The initial long fixture failed because nested emphasis timestamps were not shifted with their words. After correcting those timestamps, the parent reported 97 passed, 0 failed and 16 ignored in `/tmp/footer-fix-lib.log`. Exact committed revision checks, formatting and independent final review remain with the parent.
+The parent ran the actual WIP crate library tests on rescue. The initial long fixture failed because nested emphasis timestamps were not shifted with their words. After correcting those timestamps, the parent reported 97 passed, 0 failed and 16 ignored in `/tmp/footer-fix-lib.log`.
+
+Integrated RA-WINDOWS checks with isolated Rust 1.97: formatting and all-target clippy with warnings denied passed. All six credits-switch regressions passed. The full library run had 105 passed, 1 failed and 16 ignored. The remaining failure is the unchanged `android_fonts::tests::discovers_partition_configs_and_survives_partial_failure`, whose POSIX absolute `/custom/fallback.otf` assumption is not valid for Windows paths. Running the full suite with only that test excluded passed 105 library tests and all ten integration tests, plus doc tests. Exact committed Linux checks and independent final review remain with the supervisor.
+
+Integrated Expo typecheck, full npm test, gesture and follow-wiring checks, the JS fixture check, repository check and release-version check passed. The repository Node suite was attempted on Windows and has existing POSIX tooling, line-ending and symlink environment failures. Those checks require Linux verification and were not weakened.
+
+The integrated Android x86_64 release Rust archive compiled with Rust 1.97 and installed NDK 27.1.12297006. Normal-entry Expo Android prebuild succeeded. The isolated Gradle development APK build uses Java 22, x86_64, the repository short-object-path init script and an ignored fonts init script. The latter supplies the exact real bundled fonts instead of Windows text placeholders for tracked iOS font symlinks. No fixture entry or app installation is used. APK outcome and hashes are reported separately at handoff. Dependencies were copied into this worktree before Gradle to prevent writes through a shared dependency junction.
 
 No new physical or emulator visual reproduction was performed. No FTL, billing, API, main or tag changes were made. Emulator 5556 and its apps were untouched. Emulator 5558 and the sole normal-entry Metro belong to the drag investigation and were not reused. No Metro was started or stopped by this investigation. Generated probes, binaries, formatter files and logs remain outside the commit under the ignored target directory.

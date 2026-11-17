@@ -127,6 +127,8 @@ function pickVaultPersistedMetadata(metadata) {
   const persisted = {};
   if (metadata.attribution) persisted.attribution = JSON.parse(JSON.stringify(metadata.attribution));
   if (metadata.spicyApi) persisted.spicyApi = { ...metadata.spicyApi };
+  if (metadata.fetchOrigin) persisted.fetchOrigin = JSON.parse(JSON.stringify(metadata.fetchOrigin));
+  if (metadata.independentContent) persisted.independentContent = JSON.parse(JSON.stringify(metadata.independentContent));
   if (metadata.instrumental) {
     persisted.instrumental = true;
   }
@@ -160,6 +162,13 @@ function pickVaultPersistedMetadata(metadata) {
 function mergeVaultPersistedMetadata(existingMetadata, incomingMetadata) {
   const incoming = pickVaultPersistedMetadata(incomingMetadata);
   const existing = pickVaultPersistedMetadata(existingMetadata);
+  // Spicy provenance is sticky through relabel and rehydration.
+  const existingSpicy = Boolean(existing.spicyApi) || String(existing.fetchOrigin?.host || "").includes("spicylyrics") || String(existing.fetchOrigin?.source || "").includes("spicy");
+  if (existingSpicy) {
+    incoming.fetchOrigin = { ...(incoming.fetchOrigin || {}), ...existing.fetchOrigin };
+    if (existing.spicyApi && !incoming.spicyApi) incoming.spicyApi = { ...existing.spicyApi };
+    if (existing.ttml && !incoming.ttml) incoming.ttml = { ...existing.ttml };
+  }
   if (incoming.credits?.songwriters?.length) {
     return incoming;
   }
@@ -626,6 +635,19 @@ function createLyricsVaultStore({ userDataPath }) {
         }
       }
       db.prepare("INSERT INTO vault_migrations VALUES (?)").run("spicy-policy-v1");
+    });
+  } catch (error) { db.close(); throw error; }
+  // Recompute stale export flags after provenance policy changes. A new
+  // migration name is required because spicy-policy-v1 is already applied.
+  try {
+    transaction(() => {
+      if (db.prepare("SELECT 1 FROM vault_migrations WHERE name = ?").get("spicy-export-v2")) return;
+      for (const row of db.prepare("SELECT vault_id, manifest, catalog FROM vault_entries").all()) {
+        const manifest = JSON.parse(row.manifest);
+        const catalog = { ...JSON.parse(row.catalog), exportRestricted: isSpicyCommunityLyrics(manifest) };
+        db.prepare("UPDATE vault_entries SET catalog = ? WHERE vault_id = ?").run(JSON.stringify(catalog), row.vault_id);
+      }
+      db.prepare("INSERT INTO vault_migrations VALUES (?)").run("spicy-export-v2");
     });
   } catch (error) { db.close(); throw error; }
   let refreshTimer;

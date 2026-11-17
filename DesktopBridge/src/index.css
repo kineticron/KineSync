@@ -835,6 +835,70 @@ body.has-artwork-backdrop .backdrop-tint {
   color: var(--error);
 }
 
+.lyrics-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: vault-overlay-in 0.2s ease;
+}
+.lyrics-dialog-overlay[hidden] { display: none !important; }
+.lyrics-dialog {
+  width: min(380px, 100%);
+  max-height: 80%;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(24, 24, 30, 0.18);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  animation: vault-panel-in 0.2s ease;
+}
+.lyrics-dialog-title {
+  margin: 0;
+  color: #fff;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.lyrics-dialog-description {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  line-height: 20px;
+}
+.lyrics-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+.lyrics-dialog-button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lyrics-dialog-button--ghost { background: transparent; }
+.lyrics-dialog-button--primary { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.18); }
+.lyrics-dialog-button:hover { background: rgba(255, 255, 255, 0.16); }
+.lyrics-dialog-button:disabled { opacity: 0.45; cursor: default; }
 body.vault-panel-open {
   overflow: hidden;
 }

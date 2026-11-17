@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(kinesync_rust_lyrics CXX)
 
 # The Rust staticlib is produced by cargo-ndk into jniLibs/<abi>/liblyrics_renderer.a
-# before Gradle runs. It exports the same C ABI as iOS (ABI10).
+# before Gradle runs. It exports the same C ABI as iOS (ABI11).
 add_library(lyrics_renderer STATIC IMPORTED)
 set_target_properties(lyrics_renderer PROPERTIES
   IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liblyrics_renderer.a)

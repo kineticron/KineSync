@@ -16,18 +16,20 @@ let gesture;
 let seek = [];
 const opened = [];
 const jsx = (type, props) => ({ type, props: props || {} });
-const { createRustLyricsGesture } = require('../lib/rust-lyrics-gesture.js');
+const gestureModule = require('../lib/rust-lyrics-gesture.js');
+const { createRustLyricsGesture } = gestureModule;
 const imports = {
   react: { memo: f => f, useMemo: f => f(), useCallback: f => f, useRef: current => ({ current }), useState: current => [current, () => {}], useEffect: () => {} },
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Platform: { OS: 'ios' }, AppState: {},
     StyleSheet: { create: x => x }, useWindowDimensions: () => ({ width: 390, height: 640 }),
     Linking: { openURL: url => { opened.push(url); return Promise.resolve(); } }, PanResponder: { create: handlers => ({ panHandlers: handlers }) } },
-  'expo-modules-core': { requireOptionalNativeModule: () => ({ abiVersion: () => 10, monotonicMs: () => 1000 }), requireNativeViewManager: () => 'NativeView' },
+  'expo-modules-core': { requireOptionalNativeModule: () => ({ abiVersion: () => 11, monotonicMs: () => 1000 }), requireNativeViewManager: () => 'NativeView' },
   '@/store/playback-store': { usePlaybackStore: select => select(state) },
   '@/lib/rust-lyrics-protocol': require('../lib/rust-lyrics-protocol.js'),
   '@/lib/rust-lyrics-preparation': prepared.exports,
-  '@/lib/rust-lyrics-gesture': { createRustLyricsGesture: options => {
+  '@/lib/rust-lyrics-follow': require('../lib/rust-lyrics-follow.js'),
+  '@/lib/rust-lyrics-gesture': { ...gestureModule, createRustLyricsGesture: options => {
     gesture = createRustLyricsGesture({ ...options, setTimer: () => 1, clearTimer: () => {} }); return gesture;
   } },
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },

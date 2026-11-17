@@ -1,5 +1,9 @@
 export const LONG_PRESS_MS: number;
 export const DRAG_SLOP: number;
+export type FollowState = { trackId: string; resetPending: boolean };
+export function nextFollowState(state: FollowState, trackId: string, followEnabled: boolean): FollowState;
+export function desiredFollow(state: FollowState, followEnabled: boolean): boolean;
+export function clearFollowReset(state: FollowState): FollowState;
 export type RustLyricsGesture = {
   grant(y: number, x?: number): void;
   move(dy: number): void;

@@ -27,11 +27,40 @@ function getTrackMetadataSignature(track: Track | null | undefined) {
   ].join("\u0000");
 }
 
-function isCurrentTrackRequest(requestId: number, signature: string) {
-  return (
-    requestId === latestLyricsRequestId &&
-    getTrackMetadataSignature(usePlaybackStore.getState().currentTrack) === signature
-  );
+function hasUsableTrackMetadata(value: unknown) {
+  const normalized = normalizeSignatureText(value);
+  return Boolean(normalized) && !/^(?:unknown(?: track| artist| album)?|spotify[-_ ]connect:?)$/.test(normalized);
+}
+
+function isMetadataEnrichmentValue(before: unknown, after: unknown) {
+  return normalizeSignatureText(before) === normalizeSignatureText(after) ||
+    (!hasUsableTrackMetadata(before) && hasUsableTrackMetadata(after));
+}
+
+function isSpotifyIdentityEnrichment(before: unknown, after: unknown) {
+  const beforeId = String(before || "").trim();
+  const afterId = String(after || "").trim();
+  return beforeId === afterId ||
+    (!hasUsableTrackMetadata(beforeId) && hasUsableTrackMetadata(afterId));
+}
+
+function isSameRecordingOrEnrichment(
+  requestedTrack: Track | null | undefined,
+  currentTrack: Track | null | undefined,
+) {
+  if (!requestedTrack || !currentTrack || requestedTrack.id !== currentTrack.id) return false;
+  if (normalizeSignatureText(requestedTrack.title) !== normalizeSignatureText(currentTrack.title) ||
+    normalizeSignatureText(requestedTrack.artist) !== normalizeSignatureText(currentTrack.artist)) return false;
+  if (!isMetadataEnrichmentValue(requestedTrack.album, currentTrack.album) ||
+    !isSpotifyIdentityEnrichment(requestedTrack.spotifyTrackId, currentTrack.spotifyTrackId)) return false;
+  const beforeDuration = Math.max(0, Math.round(Number(requestedTrack.durationMs || 0)));
+  const currentDuration = Math.max(0, Math.round(Number(currentTrack.durationMs || 0)));
+  return beforeDuration === currentDuration || (beforeDuration === 0 && currentDuration > 0);
+}
+
+function isCurrentTrackRequest(requestId: number, requestedTrack: Track) {
+  return requestId === latestLyricsRequestId &&
+    isSameRecordingOrEnrichment(requestedTrack, usePlaybackStore.getState().currentTrack);
 }
 export type LyricsSourcePreference =
   | "auto"
@@ -128,21 +157,33 @@ export async function refreshLyricsForCurrentTrack(
   const requestId = latestLyricsRequestId + 1;
   latestLyricsRequestId = requestId;
   const activeSignature = getTrackMetadataSignature(currentTrack);
+  const applyCurrentPacket = (packet: LyricsPacket) => {
+    const state = usePlaybackStore.getState();
+    if (isCurrentTrackRequest(requestId, currentTrack)) {
+      applyMobileLyricsPacket(packet);
+      return;
+    }
+    if (
+      requestId === latestLyricsRequestId &&
+      state.connectionStatus !== "connected" &&
+      state.currentTrack?.id === currentTrack.id &&
+      getTrackMetadataSignature(state.currentTrack) !== activeSignature &&
+      !isSameRecordingOrEnrichment(currentTrack, state.currentTrack)
+    ) {
+      // Meaningful same-ID metadata changes may be a different recording.
+      // Keep the displayed packet guarded and start a newly owned request.
+      void refreshLyricsForCurrentTrack(preferredSource, { force });
+    }
+  };
   try {
     const packet = await fetchMobileLyricsForTrack(currentTrack, {
       preferredSource,
       force,
-      onSyncedLyrics: (progressPacket) => {
-        if (isCurrentTrackRequest(requestId, activeSignature)) {
-          applyMobileLyricsPacket(progressPacket);
-        }
-      },
+      onSyncedLyrics: applyCurrentPacket,
     });
-    if (isCurrentTrackRequest(requestId, activeSignature)) {
-      applyMobileLyricsPacket(packet);
-    }
+    applyCurrentPacket(packet);
   } catch (error) {
-    if (!isCurrentTrackRequest(requestId, activeSignature)) {
+    if (!isCurrentTrackRequest(requestId, currentTrack)) {
       return;
     }
     setLyricsStatusMessage(
@@ -186,25 +227,24 @@ export function requestImmediateTranslationForCurrentSource() {
 
   const requestId = latestLyricsRequestId + 1;
   latestLyricsRequestId = requestId;
-  const activeSignature = getTrackMetadataSignature(currentTrack);
   setLyricsStatusMessage("Translating on-screen lyrics on mobile...");
   beginTranslationRequest();
   void fetchMobileLyricsForTrack(currentTrack, {
     preferredSource: inferCurrentSourcePreference(lyricsSource),
     immediateTranslation: true,
     onSyncedLyrics: (packet) => {
-      if (isCurrentTrackRequest(requestId, activeSignature)) {
+      if (isCurrentTrackRequest(requestId, currentTrack)) {
         applyMobileLyricsPacket(packet);
       }
     },
   })
     .then((packet) => {
-      if (isCurrentTrackRequest(requestId, activeSignature)) {
+      if (isCurrentTrackRequest(requestId, currentTrack)) {
         applyMobileLyricsPacket(packet);
       }
     })
     .catch((error) => {
-      if (isCurrentTrackRequest(requestId, activeSignature)) {
+      if (isCurrentTrackRequest(requestId, currentTrack)) {
         usePlaybackStore
           .getState()
           .setLyricsStatusMessage(error instanceof Error ? error.message : String(error));

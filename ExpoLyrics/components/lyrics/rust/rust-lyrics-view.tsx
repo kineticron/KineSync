@@ -4,20 +4,21 @@ import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modu
 import { usePlaybackStore } from '@/store/playback-store';
 import { anchorChanged, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
 import { createRustLyricsGesture } from '@/lib/rust-lyrics-gesture';
+import { createRustLyricsFollow, type FollowCommand } from '@/lib/rust-lyrics-follow';
 import type { LyricLine } from '@/types/bridge';
 
 import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
+type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
 type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
   cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
   uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
   busyCallbacksInWindow: number; missedIntervalsInWindow: number; missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentCallRate: number; windowSeconds: number;
   gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
-  onStatus(event: { nativeEvent: { state: string; message: string; generation: number } }): void;
+  onStatus(event: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }): void;
   onMetrics(event: { nativeEvent: Metrics }): void };
 // A view can be torn down while a command is in flight during a track switch.
 // Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
@@ -29,7 +30,7 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') return { api: null, view: null, error: 'Rust native surfaces require iOS or Android' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 10) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 11) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
@@ -110,12 +111,24 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (!view || !mounted.current) return;
     void run(view).catch(commandFailed);
   }, [commandFailed]);
+  const followEnabled = autoFollowEnabled ?? true;
+  const follow = useRef(createRustLyricsFollow());
+  follow.current.sync(trackId, followEnabled);
+  const followGeneration = useRef(revision.generation);
+  followGeneration.current = revision.generation;
+  const followSurface = useRef(surfaceEpoch);
+  const sendFollow = useCallback((command: FollowCommand) => {
+    send(view => view.setFollowing(command.value, command.epoch, command.generation, command.gesture));
+  }, [send]);
+  const setFollow = useCallback((enabled: boolean) => {
+    sendFollow(follow.current.issue(enabled, followGeneration.current, true));
+  }, [follow, sendFollow]);
   const gesture = useMemo(() => createRustLyricsGesture({
     hitTest: (y, x) => native.current ? native.current.hitTest(x, y) : Promise.resolve(-1),
     // UIKit pan recognizer drives drag/fling directly on the native owner.
     scrollBy: () => {},
     fling: () => {},
-    setFollowing: following => send(view => view.setFollowing(following)),
+    setFollowing: setFollow,
     tapEnabled: () => latest.current.tapToSeekEnabled,
     onFooterPress: target => {
       const value = latest.current;
@@ -129,7 +142,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     onLineLongPress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLineLongPress?.(line); },
     onAutoFollowChange: enabled => latest.current.onAutoFollowChange?.(enabled),
     onUserInteraction: () => latest.current.onUserInteraction?.(),
-  }), [send]);
+  }), [setFollow]);
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
@@ -142,13 +155,18 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     onShouldBlockNativeResponder: () => Platform.OS !== 'android',
   }), [gesture]);
   useEffect(() => () => gesture.terminate(), [gesture]);
-  const followEnabled = autoFollowEnabled ?? true;
   useEffect(() => {
     if (!api || !native.current) return;
-    send(view => view.setFollowing(followEnabled));
+    const recreated = followSurface.current !== surfaceEpoch;
+    followSurface.current = surfaceEpoch;
+    const command = recreated ? follow.current.reassert(revision.generation) : follow.current.reconcile(revision.generation);
+    if (command) sendFollow(command);
+    // A stale parent false from the previous song must not undo the fresh
+    // track reset. Ask the player to acknowledge follow once for this track.
+    if (follow.current.resetPending && !followEnabled) latest.current.onAutoFollowChange?.(true);
     // `resumeAutoFollowSignal` re-asserts the same value after the player's
     // explicit resume gesture; the number itself carries no state.
-  }, [followEnabled, resumeAutoFollowSignal, revision.generation, send, surfaceEpoch]);
+  }, [followEnabled, resumeAutoFollowSignal, revision.generation, sendFollow, surfaceEpoch, trackId]);
   const sendAnchor = useCallback(() => {
     if (!api || !native.current || payload.error || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
     const state = usePlaybackStore.getState();
@@ -172,12 +190,26 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     const appState = AppState.addEventListener('change', state => { if (state === 'active') sendAnchor(); });
     return () => { unsubscribe(); appState.remove(); };
   }, [active, sendAnchor]);
-  const onStatus = useCallback(({ nativeEvent }: { nativeEvent: { state: string; message: string; generation: number } }) => {
+  const onStatus = useCallback(({ nativeEvent }: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }) => {
     if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.generation !== revision.generation) return;
+    if (nativeEvent.state === 'follow') {
+      // The native release recaptured follow near the active line. Only the
+      // exact latest ownership epoch may move parent state. A delayed release
+      // from an earlier touch on the same song is ignored after a newer touch.
+      if (!follow.current.accept(nativeEvent.ownershipEpoch ?? -1, revision.generation)) return;
+      latest.current.onAutoFollowChange?.(true);
+      return;
+    }
     setStatus(nativeEvent.message);
     setFailed(nativeEvent.state === 'error');
-    if (nativeEvent.state === 'ready') sendAnchor();
-  }, [revision.generation, sendAnchor, surfaceEpoch]);
+    if (nativeEvent.state === 'ready') {
+      // A handoff sent before the native owner existed is replayed by the owner
+      // now. Reassert the current intent rather than a render-captured value.
+      const command = follow.current.reassert(revision.generation);
+      sendFollow(command);
+      sendAnchor();
+    }
+  }, [follow, revision.generation, sendFollow, sendAnchor, surfaceEpoch]);
   const onMetrics = useCallback(({ nativeEvent: value }: { nativeEvent: Metrics }) => {
     if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
     const now = performance.now();
