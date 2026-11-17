@@ -4,3 +4,8 @@ export function controlsStage(progress: number, start: number, end: number) {
   const opacity = Math.max(0, Math.min(1, (progress - start) / (end - start)));
   return { opacity, transform: [{ translateY: 8 * (1 - opacity) }] };
 }
+
+/** Unknown initial lifecycle state must not strand the idle policy. */
+export function controlsAppIsForeground(state: string | null) {
+  return state !== 'background' && state !== 'inactive';
+}

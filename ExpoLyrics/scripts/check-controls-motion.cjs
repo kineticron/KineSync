@@ -93,7 +93,7 @@ for (const gesture of ['scrub', 'previous long hold', 'next long hold']) {
   for (const terminal of ['onTouchEnd', 'onTouchCancel']) {
     let pending = null, hidden = 0;
     const context = {
-      controlsTouchActive: { current: false }, controlsScrubActive: { current: false }, controlsIdleTimerRef: { current: null },
+      controlsForeground: { current: true }, controlsTouchActive: { current: false }, controlsScrubActive: { current: false }, controlsIdleTimerRef: { current: null },
       isLandscapeRef: { current: false }, tourAutoHideDemo: false,
       fullscreenAlbumModeRef: { current: false }, autoHidePlaybackControlsRef: { current: true },
       CONTROLS_IDLE_TIMEOUT_MS: 2500,
@@ -106,7 +106,7 @@ for (const gesture of ['scrub', 'previous long hold', 'next long hold']) {
     handler('onTouchStart')();
     if (gesture === 'scrub') {
       context.controlsScrubActive.current = true;
-      handler('onTouchCancel')();
+      handler('onTouchCancel')({ nativeEvent: { touches: [] } });
       assert.equal(pending, null, 'native recognizer cancellation must not end active scrubbing');
       handler('onTouchStart')();
     }
@@ -184,3 +184,63 @@ reactAttribution({ followControlsProgress: false, shown: false, offset: 0 }, { f
 assert.equal(cancelled, 6);
 assert.equal(attributionContext.translateY.get(), 0, 'landscape clears stale portrait positioning');
 console.log('Controls motion checks passed: stages, four reversal times, stale completions, reduced motion, hold/release/cancel, clip geometry and structural layer guards. Native touch/Metal/VoiceOver are unverified.');
+
+// Inspect the declared React hierarchy and execute the real web SafeAreaView
+// padding policy. Layout events below are synthetic, not Yoga/device captures.
+const ancestors = [];
+for (let node = dock.parent.parent; node; node = node.parent) {
+  if (ts.isJsxElement(node)) ancestors.push(node.openingElement);
+}
+assert.deepEqual(ancestors.map(node => node.tagName.getText(ast)), ['SafeAreaView', 'View']);
+assert.ok(ancestors[1].attributes.getText(ast).includes('style={styles.screen}'));
+const safeArea = ancestors[0];
+const styleObject = declarations.styles.arguments[0];
+const style = name => evaluate(styleObject.properties.find(p => p.name.getText(ast) === name).initializer.getText(ast), { StyleSheet: { absoluteFill: {} } });
+const bottomStyle = style('bottomArea');
+assert.equal(bottomStyle.position, 'absolute');
+assert.equal(style('screen').padding, undefined);
+const edges = evaluate(declarations._stableEdges8.getText(ast), {});
+assert.equal(edges.includes('bottom'), true);
+assert.equal(edges.includes('top'), false);
+const flatten = value => Array.isArray(value) ? Object.assign({}, ...value.map(flatten)) : value;
+let safeInsets;
+const safeModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'node_modules/react-native-safe-area-context/src/SafeAreaView.web.tsx'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+}).outputText, { exports: safeModule.exports, require(name) {
+  if (name === 'react') return { forwardRef: callback => callback, useMemo: callback => callback() };
+  if (name === 'react/jsx-runtime') return { jsx: (tag, props) => ({ tag, props }) };
+  if (name === 'react-native') return { StyleSheet: { flatten }, View: 'View' };
+  if (name === './SafeAreaContext') return { useSafeAreaInsets: () => safeInsets };
+  throw Error(`Unexpected SafeAreaView import ${name}`);
+} });
+const onLayout = opening => evaluate(opening.attributes.properties.find(p => p.name?.text === 'onLayout').initializer.expression.getText(ast), geometryContext);
+const geometryContext = { dockLayout: { current: { y: 0, childY: 0 } }, dockTop: { value: 0 }, handleControlsDockLayout: () => {} };
+for (const height of [667, 844]) for (const bottomInset of [0, 21, 34]) for (const contentHeight of [180, 240]) {
+  safeInsets = { top: 59, bottom: bottomInset, left: 0, right: 0 };
+  const resolved = flatten(safeModule.exports.SafeAreaView({ style: bottomStyle, edges }, null).props.style);
+  assert.equal(resolved.paddingBottom, 10 + bottomInset);
+  const areaHeight = contentHeight + resolved.paddingTop + resolved.paddingBottom;
+  const areaTop = height - resolved.bottom - areaHeight;
+  onLayout(safeArea)({ nativeEvent: { layout: { y: areaTop } } });
+  onLayout(dock)({ nativeEvent: { layout: { y: resolved.paddingTop, height: contentHeight } } });
+  assert.equal(geometryContext.dockTop.value, height - contentHeight + 15 - bottomInset, 'measured top already includes bottom safe area and bottom:-25');
+  const computed = { screenHeight: height, lyricTop: 153, dockTop: geometryContext.dockTop, controlsOpacity: { value: 1 }, Math };
+  assert.equal(evaluate(callback('fillTouchStyle'), computed)().top, areaTop);
+  assert.equal(evaluate(callback('foregroundClipStyle'), computed)().height + 153, areaTop);
+}
+const dockComponent = dock.parent.children.find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'PlaybackControlsDock');
+assert.ok(ts.isJsxFragment(dockComponent.attributes.properties.find(p => p.name?.text === 'fullscreenActions').initializer.expression), 'portrait always supplies fullscreen actions');
+const controlsSource = fs.readFileSync(path.join(root, 'components/lyrics/playback-controls.tsx'), 'utf8');
+const controlsAst = ts.createSourceFile('controls.tsx', controlsSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let bottomSlotStyle;
+function inspectControls(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(controlsAst) === 'bottomSlotStyle') bottomSlotStyle = node.initializer.arguments[0].getText(controlsAst);
+  ts.forEachChild(node, inspectControls);
+}
+inspectControls(controlsAst);
+for (const progress of [0, .25, .5, .75, 1]) {
+  assert.equal(evaluate(bottomSlotStyle, { hasFullscreenActions: true, UTILITY_ROW_HEIGHT: 44, fullscreenAlbumProgress: { value: progress } })().height, 44, 'album morph never changes portrait dock slot height');
+}
+console.log('Controls geometry checks passed: declared native ancestor hierarchy, actual web safe-area padding, measured dock top and fixed fullscreen slot. Native layout/compositing costs remain unmeasured.');
+require('./check-controls-lifecycle.cjs');

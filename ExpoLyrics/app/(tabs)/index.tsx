@@ -1,3 +1,4 @@
+import { controlsAppIsForeground } from '@/lib/controls-motion';
 import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
@@ -525,6 +526,9 @@ export default function HomeScreen() {
   const controlsIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const controlsForeground = useRef(controlsAppIsForeground(AppState.currentState));
+  const scheduleControlsHideRef = useRef<() => void>(() => {});
+  const showControlsRef = useRef<() => void>(() => {});
   const autoHidePlaybackControlsRef = useRef(autoHidePlaybackControls);
   const fullscreenAlbumModeRef = useRef(fullscreenAlbumMode);
   const albumArtworkMorphingRef = useRef(albumArtworkMorphing);
@@ -753,11 +757,18 @@ export default function HomeScreen() {
   }, [fullscreenAlbumMode, fullscreenAlbumProgress, isLandscape]);
 
   const clearControlsIdleTimer = useCallback(() => {
-    if (controlsIdleTimerRef.current) {
+    if (controlsIdleTimerRef.current !== null) {
       clearTimeout(controlsIdleTimerRef.current);
       controlsIdleTimerRef.current = null;
     }
   }, []);
+
+  const resetControlsInteraction = useCallback(() => {
+    controlsTouchActive.current = false;
+    controlsScrubActive.current = false;
+    setScrubPreviewPositionMs(null);
+    clearControlsIdleTimer();
+  }, [clearControlsIdleTimer]);
 
   const finishControlsTransition = useCallback((generation: number, shown: boolean) => {
     if (controlsGeneration.current === generation) setControlsInteractive(shown);
@@ -794,23 +805,26 @@ export default function HomeScreen() {
     controlsGeneration.current++;
     controlsTouchActive.current = false;
     controlsScrubActive.current = false;
+    clearControlsIdleTimer();
     cancelAnimation(controlsOpacity);
-  }, [controlsOpacity]);
+  }, [clearControlsIdleTimer, controlsOpacity]);
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
-    if (controlsTouchActive.current || controlsScrubActive.current) return;
+    if (!controlsForeground.current || controlsTouchActive.current || controlsScrubActive.current) return;
 
     if (isLandscapeRef.current && !tourAutoHideDemo) {
       if (!landscapeArtControlsVisibleRef.current) {
         return;
       }
-      controlsIdleTimerRef.current = setTimeout(() => {
+      const timer = setTimeout(() => {
+        if (controlsIdleTimerRef.current !== timer) return;
         controlsIdleTimerRef.current = null;
-        if (isLandscapeRef.current && !controlsTouchActive.current && !controlsScrubActive.current) {
+        if (controlsForeground.current && isLandscapeRef.current && !controlsTouchActive.current && !controlsScrubActive.current) {
           setLandscapeArtControlsVisible(false);
         }
       }, CONTROLS_IDLE_TIMEOUT_MS);
+      controlsIdleTimerRef.current = timer;
       return;
     }
 
@@ -822,9 +836,10 @@ export default function HomeScreen() {
       return;
     }
 
-    controlsIdleTimerRef.current = setTimeout(() => {
+    const timer = setTimeout(() => {
+      if (controlsIdleTimerRef.current !== timer) return;
       controlsIdleTimerRef.current = null;
-      if (controlsTouchActive.current || controlsScrubActive.current) return;
+      if (!controlsForeground.current || controlsTouchActive.current || controlsScrubActive.current) return;
       if (
         fullscreenAlbumModeRef.current ||
         !autoHidePlaybackControlsRef.current
@@ -834,23 +849,29 @@ export default function HomeScreen() {
       }
       hideControls();
     }, CONTROLS_IDLE_TIMEOUT_MS);
+    controlsIdleTimerRef.current = timer;
   }, [clearControlsIdleTimer, hideControls, showControls, tourAutoHideDemo]);
 
+  scheduleControlsHideRef.current = scheduleControlsHide;
+  showControlsRef.current = showControls;
+
+  // Keep Gesture.Pan and press callbacks stable when motion policy changes.
   const handleControlsInteraction = useCallback(() => {
     if (isLandscapeRef.current && !tourAutoHideDemo) {
-      scheduleControlsHide();
+      scheduleControlsHideRef.current();
       return;
     }
-    if (!controlsVisible) {
-      showControls();
-    }
-    scheduleControlsHide();
-  }, [controlsVisible, scheduleControlsHide, showControls, tourAutoHideDemo]);
+    if (controlsTarget.get() === 0) showControlsRef.current();
+    scheduleControlsHideRef.current();
+  }, [controlsTarget, tourAutoHideDemo]);
+
+  // Interaction ownership survives timer-policy and callback identity changes.
+  // Only entering a different presentation invalidates its current gesture.
+  useEffect(() => {
+    resetControlsInteraction();
+  }, [fullscreenAlbumMode, isLandscape, tour.active, resetControlsInteraction]);
 
   useEffect(() => {
-    controlsTouchActive.current = false;
-    controlsScrubActive.current = false;
-    setScrubPreviewPositionMs(null);
     clearControlsIdleTimer();
 
     if (isLandscape && !tourAutoHideDemo) {
@@ -875,6 +896,7 @@ export default function HomeScreen() {
     landscapeArtControlsVisible,
     scheduleControlsHide,
     showControls,
+    tour.active,
     tourAutoHideDemo,
   ]);
 
@@ -885,14 +907,14 @@ export default function HomeScreen() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', state => {
-      setScrubPreviewPositionMs(null);
-      controlsTouchActive.current = false;
-      controlsScrubActive.current = false;
-      clearControlsIdleTimer();
-      if (state === 'active') scheduleControlsHide();
+      const foreground = controlsAppIsForeground(state);
+      if (controlsForeground.current === foreground) return;
+      controlsForeground.current = foreground;
+      resetControlsInteraction();
+      if (controlsForeground.current) scheduleControlsHideRef.current();
     });
-    return () => { subscription.remove(); controlsTouchActive.current = false; clearControlsIdleTimer(); };
-  }, [clearControlsIdleTimer, scheduleControlsHide]);
+    return () => subscription.remove();
+  }, [resetControlsInteraction]);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
       if (nativePlaybackUnavailable('seek')) return;
@@ -1407,7 +1429,10 @@ export default function HomeScreen() {
         controlsTouchActive.current = event.nativeEvent.touches.length > 0;
         if (!controlsTouchActive.current) scheduleControlsHide();
       }}
-      onTouchCancel={() => { controlsTouchActive.current = false; scheduleControlsHide(); }}
+      onTouchCancel={event => {
+        controlsTouchActive.current = event.nativeEvent.touches.length > 0;
+        if (!controlsTouchActive.current) scheduleControlsHide();
+      }}
     >
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
