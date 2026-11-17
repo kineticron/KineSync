@@ -1310,17 +1310,16 @@ export default function HomeScreen() {
   }));
   const controlsCoverageClipStyle = useAnimatedStyle(() => {
     const offset = controlsCoverage.value.top;
-    const height = Math.max(0, controlsDockHeight + 36 - offset);
     return {
       top: offset,
-      height: controlsDockHeight > 0 ? height : undefined,
-      paddingBottom: controlsDockHeight > 0 ? 0 : 36,
-      marginBottom: controlsDockHeight > 0 ? controlsDockHeight - height : offset - 36,
+      marginBottom: offset - 36,
     };
   });
   const controlsCoverageContentStyle = useAnimatedStyle(() => ({
     flexShrink: 0,
-    transform: [{ translateY: -controlsCoverage.value.top }],
+    // Keep intrinsic measurement independent of the moving clip. A fixed clip
+    // height constrains this child's auto height even with flexShrink disabled.
+    marginTop: -controlsCoverage.value.top,
   }));
 
   const fullscreenMenuButtonAnimatedStyle = useAnimatedStyle(() => ({
@@ -1437,9 +1436,9 @@ export default function HomeScreen() {
   }));
 
   const handleControlsDockLayout = useCallback((height: number) => {
-    if (fullscreenAlbumModeRef.current || albumArtworkMorphingRef.current) {
-      return;
-    }
+    // The portrait utility slot has constant height through the album morph.
+    // Keep the intrinsic measurement current, including first layout in album
+    // mode and font/safe-area changes that may not emit another layout later.
     setControlsDockHeight(height);
   }, []);
 
@@ -2222,8 +2221,8 @@ const styles = StyleSheet.create({
     zIndex: 6,
   },
   controlsCoverageClip: {
-    // Real native bounds clip pixels and touch dispatch. Height plus bottom
-    // margin stays equal to the original dock height throughout the motion.
+    // Negative content margin trims native clip bounds without constraining
+    // intrinsic content height. The opposite outer margin keeps dock placement.
     overflow: "hidden",
     paddingBottom: 36,
   },

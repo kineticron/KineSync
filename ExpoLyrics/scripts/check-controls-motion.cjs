@@ -3,8 +3,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'app/(tabs)/index.tsx'), 'utf8');
+const source = process.env.CONTROLS_LAYOUT_BASELINE
+  ? execFileSync('git', ['show', `${process.env.CONTROLS_LAYOUT_BASELINE}:ExpoLyrics/app/(tabs)/index.tsx`], { encoding: 'utf8' })
+  : fs.readFileSync(path.join(root, 'app/(tabs)/index.tsx'), 'utf8');
 const ast = ts.createSourceFile('index.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const declarations = {};
 let dock;
@@ -120,9 +123,10 @@ function motionHarness(initial) {
     const [solid, fade, fill, clip, content] = surfaces();
     assert.ok(Math.abs(624 + clip.top - fill.top) < 1e-9, 'control pixels start exactly where lyrics become fully transparent');
     assert.ok(Math.abs(153 + solid.height + fade.height - fill.top) < 1e-9);
-    assert.ok(Math.abs(clip.top + content.transform[0].translateY) < 1e-9, 'clip movement never translates the rows');
-    assert.ok(Math.abs(clip.height + clip.marginBottom - 220) < 1e-9, 'clip bounds never resize the measured dock');
-    assert.equal(clip.paddingBottom, 0, 'measured clip can shrink below the initial measurement reserve');
+    const contentOffset = content.marginTop ?? content.transform?.[0].translateY;
+    assert.ok(Math.abs(clip.top + contentOffset) < 1e-9, 'clip movement never translates the rows');
+    const clipHeight = clip.height ?? 220 + contentOffset + 36;
+    assert.ok(Math.abs(clipHeight + clip.marginBottom - 220) < 1e-9, 'clip bounds never resize the measured dock');
     rows().forEach(row => assert.ok(row.transform[0].translateY >= 0 && row.transform[0].translateY <= 36));
   };
   return {
@@ -595,7 +599,7 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
         // Real clipping view excludes coordinates above its native bounds. All
         // ancestors are box-none and both reveal/fill zones start at this edge.
         for (const y of [clipTop - 1, clipTop - 16]) {
-          assert.equal(y >= clipTop && y < clipTop + clipForViewport().height, false, 'uncovered lyric coordinates fall outside the native dock hit bounds');
+          assert.equal(y >= clipTop && y < clipTop + contentHeight + 36 - clipForViewport().top, false, 'uncovered lyric coordinates fall outside the native dock hit bounds');
           assert.ok(y < edge + 1e-9, 'the fill and reveal zone cannot intercept that lyric coordinate');
         }
 
@@ -718,5 +722,69 @@ for (const [shown, duration] of [[false, 75], [true, 20], [false, 850], [true, 2
     });
   }
 }
-console.log('Controls geometry checks passed: declared native ancestor hierarchy, actual web safe-area padding, measured dock top and fixed fullscreen slot. Native layout/compositing costs remain unmeasured.');
+// Execute the production mode handlers, measurement policy and clip worklets.
+// Intrinsic row sizes and native layout events are supplied, not UIKit/Yoga.
+// Unlike the viewport-only checks above, feed layout back into the next frame
+// and deliver size changes while the old policy would discard measurements.
+for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset of [0, 21, 34]) {
+  const h = motionHarness(1);
+  const context = {
+    Math, screenHeight: 844, controlsDockHeight: 0,
+    controlsOpacity: h.geometry, dockTop: { value: 844 },
+    dockLayout: { current: { y: 844, childY: 0 } },
+    fullscreenAlbumModeRef: { current: false }, albumArtworkMorphingRef: { current: false },
+    setControlsDockHeight: value => { context.controlsDockHeight = value; },
+    setFullscreenAlbumMode: value => { context.fullscreenAlbumModeRef.current = value; },
+    setAlbumArtworkMorphing: value => { context.albumArtworkMorphingRef.current = value; },
+    setScrubPreviewPositionMs: () => {}, setTopBarMounted: () => {},
+    usePlayerTourStore: { getState: () => ({ advance() {} }) },
+    showControls: () => { h.context.fullscreenAlbumModeRef.current = true; h.animate(true); },
+  };
+  const measure = evaluate(callback('handleControlsDockLayout'), context);
+  const enter = evaluate(callback('handleShowFullscreenAlbum'), context);
+  const leave = evaluate(callback('handleShowLyrics'), context);
+  const finish = evaluate(callback('finishLyricsModeTransition'), context);
+  const coverage = evaluate(callback('controlsCoverage'), context);
+  context.controlsCoverage = { get value() { return coverage(); } };
+  const clip = evaluate(callback('controlsCoverageClipStyle'), context);
+  const content = evaluate(callback('controlsCoverageContentStyle'), context);
+  const layoutEvent = opening => evaluate(opening.attributes.properties.find(p => p.name?.text === 'onLayout').initializer.expression.getText(ast), context);
+  // Native bottom positioning uses the intrinsic content, negative margin,
+  // clip padding and outer margin together, including safe-area padding.
+  const layoutFrame = (intrinsic, height = context.screenHeight) => {
+    context.screenHeight = height;
+    for (let frame = 0; frame < 4; frame++) {
+      const bounds = clip(), inner = content();
+      assert.equal(bounds.height, undefined, `${scenario}: clipping cannot impose an at-most height on intrinsic content`);
+      measure(intrinsic);
+      assert.equal(context.controlsDockHeight, intrinsic, `${scenario}: measurements survive fullscreen and morph`);
+      const clipHeight = intrinsic + inner.marginTop + 36;
+      const occupied = clipHeight + bounds.marginBottom;
+      assert.ok(Math.abs(occupied - intrinsic) < 1e-9, 'hide/show cannot change bottom-anchored layout height');
+      layoutEvent(safeArea)({ nativeEvent: { layout: { y: height + 25 - occupied - 10 - bottomInset } } });
+      layoutEvent(dock)({ nativeEvent: { layout: { y: 0 } } });
+      assert.ok(Math.abs(context.dockTop.value - (height - intrinsic + 15 - bottomInset)) < 1e-9);
+      assert.ok(Math.abs(bounds.top + inner.marginTop) < 1e-9, 'rows remain stationary as the native clip moves');
+    }
+  };
+  layoutFrame(220);
+  h.animate(false); h.tick(1100); layoutFrame(220);
+  enter(); // Entry during a hidden dock snaps both reveal clocks to shown.
+  assert.equal(h.geometry.get(), 1); assert.equal(h.stage.get(), 1);
+  layoutFrame(228); // First changed measurement arrives during the morph.
+  finish(); layoutFrame(236); // Font/metadata change while fully in album mode.
+  assert.equal(context.fullscreenAlbumModeRef.current, true);
+  const rowTop = context.dockTop.value + 16;
+  assert.ok(rowTop >= 0 && rowTop + 38 + 10 + transportHeight < 844 - bottomInset,
+    'fullscreen timeline and transport remain above the safe area');
+  leave(); layoutFrame(224); finish();
+  h.context.fullscreenAlbumModeRef.current = false;
+  h.animate(false); h.tick(850); layoutFrame(224);
+  h.animate(true); h.tick(700); layoutFrame(224);
+  // Rotation remounts portrait controls after landscape, potentially in album
+  // mode before a normal-mode measurement has ever been accepted.
+  enter(); context.controlsDockHeight = 0; layoutFrame(180, 390);
+  finish(); layoutFrame(244, 844); leave(); layoutFrame(244); finish();
+}
+console.log('Controls geometry checks passed: safe areas, native clip algebra, fullscreen entry/morph/return measurements and layout feedback. Native Yoga/compositing remain unverified.');
 require('./check-controls-lifecycle.cjs');
