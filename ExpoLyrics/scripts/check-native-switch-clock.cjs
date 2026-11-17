@@ -215,7 +215,7 @@ function scenario({ initialPacket, development = false } = {}) {
     '@react-native-async-storage/async-storage': { getItem: async () => null, setItem: async () => {} },
   };
   function resolveFile(target) {
-    return [target, `${target}.ts`, `${target}.tsx`, `${target}.native.ts`, `${target}.native.tsx`].find(filename => fs.existsSync(filename) && fs.statSync(filename).isFile());
+    return [target, `${target}.js`, `${target}.ts`, `${target}.tsx`, `${target}.native.ts`, `${target}.native.tsx`].find(filename => fs.existsSync(filename) && fs.statSync(filename).isFile());
   }
   function load(filename) {
     filename = resolveFile(filename);

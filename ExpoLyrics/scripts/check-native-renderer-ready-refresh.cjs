@@ -108,6 +108,7 @@ const react = {
     } },
 };
 const modules = {
+  '@/lib/lyrics-scroll-escape': require('../lib/lyrics-scroll-escape'),
   react,
   '@/lib/fast-lyric-loading': { useFastLyricLoading: () => true },
   'expo-blur': { BlurTargetView: 'BlurTargetView' },
