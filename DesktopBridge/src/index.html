@@ -1220,9 +1220,9 @@
           jsonButton.textContent = "JSON";
 
           if (entry.exportRestricted) {
-            ttmlButton.disabled = true;
-            jsonButton.disabled = true;
-            ttmlButton.title = jsonButton.title = "Spicy Lyrics community syncs cannot be exported";
+            ttmlButton.dataset.exportRestricted = "1";
+            jsonButton.dataset.exportRestricted = "1";
+            ttmlButton.title = jsonButton.title = "Spicy lyrics cannot be exported. Export from lrc.red instead.";
           }
 
           actions.append(ttmlButton, jsonButton);
@@ -1281,6 +1281,11 @@
           const result = await window.bridgeLyrics.exportVaultEntry(vaultId, format);
           if (result?.canceled) {
             setVaultBrowserStatus("");
+            return;
+          }
+          if (result?.exportRestricted) {
+            setVaultBrowserStatus("");
+            openProtectedExport({ vaultId, expected: {} });
             return;
           }
           if (result?.ok) {
@@ -1385,6 +1390,10 @@
           const row = button.closest(".vault-entry");
           const vaultId = row?.dataset?.vaultId || "";
           const format = button.dataset.exportFormat || "ttml";
+          if (button.dataset.exportRestricted === "1") {
+            openProtectedExport({ vaultId, expected: {} });
+            return;
+          }
           void exportVaultEntryFromRow(vaultId, format);
         });
       }
@@ -1666,6 +1675,13 @@
 
       if (exportLyricsTtmlButton) {
         exportLyricsTtmlButton.addEventListener("click", () => {
+          if (latestLyricsExportRestricted) {
+            setExportLyricsTtmlStatus("");
+            void window.bridgeLyrics.exportIdentity()
+              .then(identity => openProtectedExport({ expected: identity || {} }))
+              .catch(() => openProtectedExport({ expected: {} }));
+            return;
+          }
           setExportLyricsTtmlStatus("Preparing TTML export...");
           exportLyricsTtmlButton.disabled = true;
           void window.bridgeLyrics
@@ -1673,6 +1689,13 @@
             .then((result) => {
               if (result?.canceled) {
                 setExportLyricsTtmlStatus("");
+                return;
+              }
+              if (result?.exportRestricted) {
+                setExportLyricsTtmlStatus("");
+                void window.bridgeLyrics.exportIdentity()
+                  .then(identity => openProtectedExport({ expected: identity || {} }))
+                  .catch(() => openProtectedExport({ expected: {} }));
                 return;
               }
               if (result?.ok) {

@@ -657,6 +657,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("bridge:lyrics:export-lrc-red", async (_event, { vaultId = "", requestId = 0, expected = {} } = {}) => {
+    if (Number(requestId)) exportRequests.activate(requestId);
     let track;
     let metadata = {};
     if (vaultId) {
@@ -713,6 +714,7 @@ app.whenReady().then(() => {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     if (!exportRequests.isCurrent(requestId)) return { ok: false, canceled: true };
+    if (!boundUnchanged()) return { ok: false, error: "The selected track changed before export. Try again." };
     if (!independent?.lyrics?.length) {
       return { ok: false, noMatch: true, error: "lrc.red doesn't have this song" };
     }
@@ -742,6 +744,7 @@ app.whenReady().then(() => {
             : [{ name: "TTML lyrics", extensions: ["ttml", "xml"] }, { name: "All files", extensions: ["*"] }],
         });
     if (saveResult.canceled || !saveResult.filePath) return { ok: false, canceled: true };
+    if (!boundUnchanged()) return { ok: false, error: "The selected track changed before export. Try again." };
     if (!exportRequests.isCurrent(requestId)) return { ok: false, canceled: true };
     try {
       await fs.promises.writeFile(saveResult.filePath, body, "utf8");
