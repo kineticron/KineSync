@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { Image } from 'expo-image';
-import { memo, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import Reanimated, {
   FadeIn,
@@ -20,6 +20,8 @@ import {
   ICON_BUTTON_PRESS_SCALE,
 } from "@/lib/icon-button-press-animation";
 import type { LyricsTimingMode } from "@/lib/lyrics-timing";
+
+import { fitLandscapeArtwork } from "@/constants/player-layout";
 
 type HorizontalPlayerPanelProps = {
   title: string;
@@ -52,6 +54,9 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
   controlsOverlay,
   utilityRow,
 }: HorizontalPlayerPanelProps) {
+  const [panelHeight, setPanelHeight] = useState<number | null>(null);
+  const [metadataHeight, setMetadataHeight] = useState(100);
+  const coverSize = panelHeight === null ? artworkSize : fitLandscapeArtwork(artworkSize, panelHeight, metadataHeight);
   const menuScale = useSharedValue(1);
   const menuAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: menuScale.value }],
@@ -63,11 +68,11 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
   }));
 
   return (
-    <View style={[styles.box, { width: artworkSize }]}>
+    <View style={[styles.box, { width: artworkSize }]} onLayout={event => setPanelHeight(event.nativeEvent.layout.height)}>
       <Pressable
         style={[
           styles.artworkPressable,
-          { width: artworkSize, height: artworkSize },
+          { width: coverSize, height: coverSize },
         ]}
         onPress={onArtworkPress}
         accessibilityRole="button"
@@ -105,7 +110,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
         ) : null}
       </Pressable>
 
-      <View style={styles.metaSection}>
+      <View style={styles.metaSection} onLayout={event => setMetadataHeight(event.nativeEvent.layout.height)}>
         <MarqueeText style={styles.title}>{title}</MarqueeText>
         <MarqueeText style={styles.artist}>{artist}</MarqueeText>
 
@@ -160,9 +165,14 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
 const styles = StyleSheet.create({
   box: {
     alignSelf: "center",
+    flex: 1,
+    justifyContent: "center",
+    paddingVertical: 12,
     gap: 8,
   },
   artworkPressable: {
+    alignSelf: "center",
+    flexShrink: 0,
     borderRadius: 18,
     overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.08)",
@@ -191,6 +201,7 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   metaSection: {
+    flexShrink: 0,
     gap: 4,
     width: "100%",
   },
