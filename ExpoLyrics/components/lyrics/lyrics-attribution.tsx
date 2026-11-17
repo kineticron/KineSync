@@ -2,7 +2,7 @@ import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
-import Animated, { Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import Animated, { cancelAnimation, Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog } from '@/components/lyrics/lyrics-glass-dialog';
 import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
@@ -10,6 +10,7 @@ type Props = {
   metadata: LyricsMetadata;
   allCredits?: boolean;
   trackId?: string;
+  followControlsProgress?: boolean;
   controlsProgress: SharedValue<number>;
   controlsTarget: SharedValue<number>;
   controlsVisible: boolean;
@@ -47,7 +48,7 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 }
 
 // Mounted outside both lyric renderers, so attribution never scrolls away.
-export const LyricsAttribution = memo(function LyricsAttribution({ metadata, allCredits = false, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
+export const LyricsAttribution = memo(function LyricsAttribution({ metadata, allCredits = false, trackId, followControlsProgress = false, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
   const { width: viewportWidth } = useWindowDimensions();
@@ -63,8 +64,18 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, all
   const opacity = useSharedValue(1);
   const chromeReady = useSharedValue(controlsVisible ? 1 : 0);
   useAnimatedReaction(
-    () => ({ shown: controlsTarget.get() > 0, offset: controlsOffset, viewportWidth, reducedMotion }),
+    () => ({ shown: controlsTarget.get() > 0, offset: controlsOffset, viewportWidth, reducedMotion, followControlsProgress }),
     (current, previous) => {
+      if (current.followControlsProgress || (previous && current.followControlsProgress !== previous.followControlsProgress)) {
+        cancelAnimation(translateX);
+        cancelAnimation(translateY);
+        cancelAnimation(opacity);
+        translateX.set(0);
+        translateY.set(current.shown ? -current.offset : 0);
+        opacity.set(1);
+        chromeReady.set(current.shown ? 1 : 0);
+        return;
+      }
       if (!previous || current.reducedMotion || current.offset === 0 || current.offset !== previous.offset || current.viewportWidth !== previous.viewportWidth) {
         translateX.set(0);
         translateY.set(current.shown ? -current.offset : 0);
@@ -97,13 +108,13 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, all
     },
   );
   const positionStyle = useAnimatedStyle(() => ({
-    opacity: Math.max(0, Math.min(1, opacity.get())),
+    opacity: followControlsProgress ? 1 : Math.max(0, Math.min(1, opacity.get())),
     transform: [
-      { translateX: Math.max(0, Math.min(viewportWidth + 24, translateX.get())) },
-      { translateY: Math.max(-controlsOffset, Math.min(0, translateY.get())) },
+      { translateX: followControlsProgress ? 0 : Math.max(0, Math.min(viewportWidth + 24, translateX.get())) },
+      { translateY: followControlsProgress ? -controlsOffset * controlsProgress.get() : Math.max(-controlsOffset, Math.min(0, translateY.get())) },
     ],
   }));
-  const glassStyle = useAnimatedStyle(() => ({ opacity: controlsProgress.get() * chromeReady.get() }));
+  const glassStyle = useAnimatedStyle(() => ({ opacity: controlsProgress.get() * (followControlsProgress ? 1 : chromeReady.get()) }));
   if (!attribution) return null;
 
   return <>

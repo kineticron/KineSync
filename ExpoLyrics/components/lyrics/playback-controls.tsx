@@ -1,3 +1,4 @@
+import { controlsStage } from '@/lib/controls-motion';
 import { usePlaybackStore } from '@/store/playback-store';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import {
@@ -86,6 +87,7 @@ type PlaybackControlsProps = {
   fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
+  controlsProgress?: SharedValue<number>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -274,11 +276,15 @@ export const PlaybackControls = memo(function PlaybackControls({
   fullscreenActions,
   controlsModeTransitioning = false,
   fullscreenAlbumProgress,
+  controlsProgress,
   layout = 'default',
   previewPlayback,
   tourStep,
   previewTranslated,
 }: PlaybackControlsProps) {
+  const timelineRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0, 0.70));
+  const transportRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.15, 0.85));
+  const utilityRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.30, 1));
   const liveTranslated = usePlaybackStore(s => hasLyricsTranslation(s.lyrics));
   const translated = previewTranslated ?? liveTranslated;
   const isOverlay = layout === 'overlay';
@@ -491,6 +497,7 @@ onPressIn={onUserInteraction}
         styles.card,
         isOverlay && styles.cardOverlay,
       ]}>
+      <Reanimated.View style={[{ gap: isOverlay ? 2 : 10 }, timelineRevealStyle]}>
       <PlaybackTimeline
         controlsDisabled={controlsDisabled || seekDisabled}
         previewPlayback={previewPlayback}
@@ -501,7 +508,8 @@ onPressIn={onUserInteraction}
         compact={isOverlay}
       />
 
-      <View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay]}>
+      </Reanimated.View>
+      <Reanimated.View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay, transportRevealStyle]}>
         <TransportButton
           disabled={controlsDisabled || previousDisabled}
           accessibilityLabel="Previous track"
@@ -568,11 +576,11 @@ onPressIn={onUserInteraction}
             color="#FFFFFF"
           />
         </TransportButton>
-      </View>
+      </Reanimated.View>
 
       {!isOverlay ? (
         <Reanimated.View
-          style={[!fullscreenActions && styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle]}>
+          style={[!fullscreenActions && styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle, utilityRevealStyle]}>
           <Reanimated.View
             pointerEvents={controlsModeTransitioning || fullscreenAlbumMode ? 'none' : 'auto'}
             accessibilityElementsHidden={fullscreenAlbumMode}

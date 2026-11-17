@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AccessibilityInfo,
   Alert,
   AppState,
   Platform,
@@ -31,6 +32,8 @@ import {
   Text,
 } from "react-native";
 import Reanimated, {
+  cancelAnimation,
+  useReducedMotion,
   useSharedValue,
   withTiming,
   useAnimatedStyle,
@@ -105,6 +108,7 @@ import { DEMO_LYRICS } from "@/components/onboarding/renderer-preview";
 import { PlayerTourOverlay } from "@/components/onboarding/player-tour-overlay";
 import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 const LYRICS_PLAYBACK_WAKE_LOCK_TAG = "kinesync-lyrics-playback";
+const CONTROLS_EASE = ReanimatedEasing.bezier(0.16, 1, 0.3, 1);
 const CONTROLS_IDLE_TIMEOUT_MS = 2500;
 const PLAYER_MODE_TRANSITION_MS = 420;
 const PLAYER_MODE_EASE = ReanimatedEasing.out(ReanimatedEasing.cubic);
@@ -306,6 +310,7 @@ type PlaybackControlsDockProps = {
   fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
+  controlsProgress?: SharedValue<number>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -342,6 +347,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   fullscreenActions,
   controlsModeTransitioning,
   fullscreenAlbumProgress,
+  controlsProgress,
   layout,
   previewPlayback,
   tourStep,
@@ -381,6 +387,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       fullscreenActions={fullscreenActions}
       controlsModeTransitioning={controlsModeTransitioning}
       fullscreenAlbumProgress={fullscreenAlbumProgress}
+      controlsProgress={controlsProgress}
       layout={layout}
     />
   );
@@ -477,8 +484,10 @@ export default function HomeScreen() {
   const [scrubPreviewPositionMs, setScrubPreviewPositionMs] = useState<
     number | null
   >(null);
+  const controlsScrubActive = useRef(false);
   const handleScrubPreview = useCallback((positionMs: number | null) => {
       if (nativePlaybackUnavailable('seek') && positionMs !== null) return;
+    controlsScrubActive.current = positionMs !== null;
     setScrubPreviewPositionMs(positionMs);
   }, []);
   const activeLineIndex = useRef(-1);
@@ -501,7 +510,18 @@ export default function HomeScreen() {
   const lyricsRestoreOpacity = useSharedValue(1);
   const controlsOpacity = useSharedValue(1);
   const controlsTarget = useSharedValue(1);
-  const controlsTranslateY = useSharedValue(0);
+  const reducedMotion = useReducedMotion();
+  const [liveReducedMotion, setLiveReducedMotion] = useState(reducedMotion);
+  const controlsGeneration = useRef(0);
+  const [controlsInteractive, setControlsInteractive] = useState(true);
+  const controlsTouchActive = useRef(false);
+  const dockTop = useSharedValue(windowDimensions.height);
+  const dockLayout = useRef({ y: windowDimensions.height, childY: 0 });
+  const [screenHeight, setScreenHeight] = useState(windowDimensions.height);
+  useEffect(() => {
+    const listener = AccessibilityInfo.addEventListener('reduceMotionChanged', setLiveReducedMotion);
+    return () => listener.remove();
+  }, []);
   const controlsIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -739,34 +759,47 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const finishControlsTransition = useCallback((generation: number, shown: boolean) => {
+    if (controlsGeneration.current === generation) setControlsInteractive(shown);
+  }, []);
+  const animateControls = useCallback((shown: boolean) => {
+    const generation = ++controlsGeneration.current;
+    setControlsInteractive(false);
+    cancelAnimation(controlsOpacity);
+    const target = shown ? 1 : 0;
+    if (liveReducedMotion || fullscreenAlbumModeRef.current || controlsOpacity.get() === target) {
+      controlsOpacity.value = target;
+      finishControlsTransition(generation, shown);
+    } else {
+      controlsOpacity.value = withTiming(target, { duration: 400, easing: CONTROLS_EASE }, finished => {
+        if (finished) runOnJS(finishControlsTransition)(generation, shown);
+      });
+    }
+    setControlsVisible(shown);
+  }, [controlsOpacity, finishControlsTransition, liveReducedMotion]);
   const hideControls = useCallback(() => {
     controlsTarget.set(0);
-    controlsOpacity.value = withTiming(0, {
-      duration: 240,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    controlsTranslateY.value = withTiming(44, {
-      duration: 260,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    setControlsVisible(false);
-  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
-
+    animateControls(false);
+  }, [animateControls, controlsTarget]);
   const showControls = useCallback(() => {
+    const alreadyShown = controlsTarget.get() === 1;
     controlsTarget.set(1);
-    controlsOpacity.value = withTiming(1, {
-      duration: 220,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    controlsTranslateY.value = withTiming(0, {
-      duration: 240,
-      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
-    });
-    setControlsVisible(true);
-  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
+    if (!alreadyShown) animateControls(true);
+  }, [animateControls, controlsTarget]);
+  useEffect(() => {
+    animateControls(controlsTarget.get() > 0);
+  }, [animateControls, controlsTarget, fullscreenAlbumMode]);
+
+  useEffect(() => () => {
+    controlsGeneration.current++;
+    controlsTouchActive.current = false;
+    controlsScrubActive.current = false;
+    cancelAnimation(controlsOpacity);
+  }, [controlsOpacity]);
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
+    if (controlsTouchActive.current || controlsScrubActive.current) return;
 
     if (isLandscapeRef.current && !tourAutoHideDemo) {
       if (!landscapeArtControlsVisibleRef.current) {
@@ -774,7 +807,7 @@ export default function HomeScreen() {
       }
       controlsIdleTimerRef.current = setTimeout(() => {
         controlsIdleTimerRef.current = null;
-        if (isLandscapeRef.current) {
+        if (isLandscapeRef.current && !controlsTouchActive.current && !controlsScrubActive.current) {
           setLandscapeArtControlsVisible(false);
         }
       }, CONTROLS_IDLE_TIMEOUT_MS);
@@ -791,6 +824,7 @@ export default function HomeScreen() {
 
     controlsIdleTimerRef.current = setTimeout(() => {
       controlsIdleTimerRef.current = null;
+      if (controlsTouchActive.current || controlsScrubActive.current) return;
       if (
         fullscreenAlbumModeRef.current ||
         !autoHidePlaybackControlsRef.current
@@ -814,6 +848,9 @@ export default function HomeScreen() {
   }, [controlsVisible, scheduleControlsHide, showControls, tourAutoHideDemo]);
 
   useEffect(() => {
+    controlsTouchActive.current = false;
+    controlsScrubActive.current = false;
+    setScrubPreviewPositionMs(null);
     clearControlsIdleTimer();
 
     if (isLandscape && !tourAutoHideDemo) {
@@ -842,9 +879,20 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', () => setScrubPreviewPositionMs(null));
-    return () => subscription.remove();
-  }, []);
+    if (scrubPreviewPositionMs === null) scheduleControlsHide();
+    else clearControlsIdleTimer();
+  }, [clearControlsIdleTimer, scheduleControlsHide, scrubPreviewPositionMs]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      setScrubPreviewPositionMs(null);
+      controlsTouchActive.current = false;
+      controlsScrubActive.current = false;
+      clearControlsIdleTimer();
+      if (state === 'active') scheduleControlsHide();
+    });
+    return () => { subscription.remove(); controlsTouchActive.current = false; clearControlsIdleTimer(); };
+  }, [clearControlsIdleTimer, scheduleControlsHide]);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
       if (nativePlaybackUnavailable('seek')) return;
@@ -1191,12 +1239,14 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
-  const controlsStyle = useAnimatedStyle(() => {
-    return {
-      opacity: controlsOpacity.value,
-      transform: [{ translateY: controlsTranslateY.value }],
-    };
-  });
+  const lyricTop = insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP;
+  const foregroundClipStyle = useAnimatedStyle(() => ({
+    height: Math.max(0, screenHeight - lyricTop -
+      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value),
+  }));
+  const fillTouchStyle = useAnimatedStyle(() => ({
+    top: screenHeight - Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value,
+  }));
 
   const lyricsBottomBlurOpacityStyle = useAnimatedStyle(() => {
     const modeOpacity = interpolate(
@@ -1206,6 +1256,8 @@ export default function HomeScreen() {
       Extrapolation.CLAMP,
     );
     return {
+      // Anchor the gradient to the moving clip edge without moving the lyrics.
+      transform: [{ translateY: -Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value }],
       opacity:
         controlsOpacity.value *
         modeOpacity *
@@ -1293,19 +1345,17 @@ export default function HomeScreen() {
     topBarTrackPress,
   ]);
 
-  // Skia parity: the lyric surface owns the whole area under the top bar, so
-  // rows keep rendering below the controls dock (bottom padding lives in the
-  // renderer) instead of being clipped above it. The dock gradient fades them.
+  // The fixed child retains the full renderer viewport while its parent clips.
   const lyricsViewportStyle = useMemo(
     () => ({
       position: "absolute" as const,
       left: 0,
       right: 0,
       top: insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP,
-      bottom: 0,
+      height: Math.max(0, screenHeight - insets.top - TOP_BAR_CONTENT_HEIGHT - LYRICS_WRAP_MARGIN_TOP),
       overflow: "hidden" as const,
     }),
-    [insets.top],
+    [insets.top, screenHeight],
   );
 
   const lyricsChromeOpacityStyle = useAnimatedStyle(() => {
@@ -1349,7 +1399,16 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={styles.screen}
+      onLayout={event => setScreenHeight(event.nativeEvent.layout.height)}
+      onTouchStart={() => { controlsTouchActive.current = true; clearControlsIdleTimer(); }}
+      onTouchEnd={event => {
+        controlsTouchActive.current = event.nativeEvent.touches.length > 0;
+        if (!controlsTouchActive.current) scheduleControlsHide();
+      }}
+      onTouchCancel={() => { controlsTouchActive.current = false; scheduleControlsHide(); }}
+    >
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
       ) : null}
@@ -1668,8 +1727,10 @@ export default function HomeScreen() {
           pointerEvents={
             fullscreenAlbumMode || albumArtworkMorphing ? "none" : "auto"
           }
-          style={[styles.lyricsWrap, lyricsViewportStyle]}
+          collapsable={false}
+          style={[styles.lyricsWrap, lyricsViewportStyle, foregroundClipStyle]}
         >
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, height: Math.max(0, screenHeight - lyricTop) }}>
           <Reanimated.View
             entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
               PLAYER_MODE_EASE,
@@ -1745,7 +1806,7 @@ export default function HomeScreen() {
               )}
             </Reanimated.View>
           </Reanimated.View>
-          {/* ponytail: LinearGradient replaces BlurView — same fade, no GPU blur cost */}
+          {/* Keep the existing fade inside the same moving clip as the lyrics. */}
           <Reanimated.View
             pointerEvents="none"
             style={[
@@ -1760,30 +1821,47 @@ export default function HomeScreen() {
               style={styles.lyricsBottomBlur}
             />
           </Reanimated.View>
+          </View>
         </Reanimated.View>
       )}
 
+      {!fullscreenAlbumMode && (
+        <Reanimated.View style={[styles.fillTouchBlocker, fillTouchStyle]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={handleControlsInteraction}
+            accessible={false} importantForAccessibility="no" />
+        </Reanimated.View>
+      )}
       {!fullscreenAlbumMode && !controlsVisible && (
         <Pressable
           style={styles.controlsRevealZone}
           onPress={handleControlsInteraction}
           hitSlop={0}
+          accessible={false}
+          importantForAccessibility="no"
         />
       )}
 
       <SafeAreaView
         edges={_stableEdges8}
         style={styles.bottomArea}
+        onLayout={event => {
+          dockLayout.current.y = event.nativeEvent.layout.y;
+          dockTop.value = dockLayout.current.y + dockLayout.current.childY;
+        }}
         pointerEvents={
-          controlsVisible || fullscreenAlbumMode ? "box-none" : "none"
+          controlsInteractive || fullscreenAlbumMode ? "box-none" : "none"
         }
       >
         <Reanimated.View
           pointerEvents={
-            controlsVisible || fullscreenAlbumMode ? "auto" : "none"
+            controlsInteractive || fullscreenAlbumMode ? "auto" : "none"
           }
-          style={[styles.controlsWrap, controlsStyle]}
+          accessibilityElementsHidden={!controlsInteractive && !fullscreenAlbumMode}
+          importantForAccessibility={!controlsInteractive && !fullscreenAlbumMode ? 'no-hide-descendants' : 'auto'}
+          style={styles.controlsWrap}
           onLayout={(event) => {
+            dockLayout.current.childY = event.nativeEvent.layout.y;
+            dockTop.value = dockLayout.current.y + dockLayout.current.childY;
             handleControlsDockLayout(event.nativeEvent.layout.height);
           }}
         >
@@ -1798,6 +1876,7 @@ export default function HomeScreen() {
                     previewTranslated={tour.active ? tour.translated : undefined}
             isPlaying={isPlaying}
             durationMs={currentTrack?.durationMs ?? 0}
+            controlsProgress={controlsOpacity}
             shareSelectionCount={selectedLineKeys.size}
             shareSelectionMode={selectedLineKeys.size > 0}
             shareBusy={shareBusy}
@@ -1848,7 +1927,7 @@ export default function HomeScreen() {
         <Reanimated.View pointerEvents={fullscreenAlbumMode && !albumArtworkMorphing ? 'none' : 'box-none'}
           style={[styles.lyricsAttributionLayer, !isLandscape && lyricsChromeOpacityStyle]}>
           <LyricsAttribution metadata={lyricsMetadata} trackId={currentTrack?.id}
-            controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
+            followControlsProgress={!isLandscape} controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
             controlsHeight={isLandscape ? 0 : controlsDockHeight}
             bottomInset={insets.bottom} onInteraction={handleControlsInteraction} />
         </Reanimated.View>
@@ -2042,6 +2121,9 @@ const styles = StyleSheet.create({
   },
   lyricsBottomBlur: {
     ...StyleSheet.absoluteFill,
+  },
+  fillTouchBlocker: {
+    position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 5,
   },
   controlsRevealZone: {
     position: "absolute",

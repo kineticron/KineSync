@@ -364,8 +364,7 @@ inspectPlayer(playerAst);
 for (const [name, target] of [['showControls', 1], ['hideControls', 0]]) {
   const events = [];
   vm.runInNewContext(`(${controlCallbacks[name]})()`, {
-    controlsTarget: { set: value => events.push(['target', value]) },
-    setControlsVisible: () => events.push(['react']), controlsOpacity: {}, controlsTranslateY: {},
+    animateControls: () => events.push(['react']), controlsTarget: { get: () => 0, set: value => events.push(['target', value]) },
     withTiming: () => {}, ReanimatedEasing: { out: value => value, cubic: 'cubic' },
   });
   assert.deepEqual(events[0], ['target', target], 'Shared target is sent before the controls React update');
