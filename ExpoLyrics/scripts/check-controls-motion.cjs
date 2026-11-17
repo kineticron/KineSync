@@ -457,7 +457,7 @@ for (const height of [390, 667, 844]) for (const scenario of [
   const fill = evaluate(callback('fillTouchStyle'), { Math, screenHeight: height, dockTop: { value: height - 220 }, controlsOpacity: h.geometry });
   const top = () => {
     const resolved = Object.assign({}, ...revealPolicy(scenario.empty, scenario.lyrics, fill(), {
-      controlsRevealZone: style('controlsRevealZone'), controlsEmptyRevealZone: style('controlsEmptyRevealZone'),
+      controlsRevealZone: style('controlsRevealZone'),
     }));
     return typeof resolved.top === 'string' ? height * parseFloat(resolved.top) / 100 : resolved.top;
   };
@@ -480,6 +480,13 @@ for (const height of [390, 667, 844]) for (const scenario of [
 }
 
 assert.equal(style('controlsRevealZone').top, '60%');
+assert.equal(style('controlsRevealZone').zIndex, 20);
+for (const edge of ['bottom', 'left', 'right']) assert.equal(style('controlsRevealZone')[edge], 0);
+const termination = revealPress.attributes.properties.find(p => p.name?.text === 'onResponderTerminationRequest');
+assert.equal(evaluate(termination.initializer.expression.getText(ast), {})(), false,
+  'a reveal press cannot transfer to an underlying renderer');
+assert.equal(revealPressExpression, 'handleControlsInteraction', 'reveal has no seek or selection callback');
+
 assert.match(source, /controlsProgress=\{controlsStageProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.match(source, /controlsProgress=\{controlsProgress\}\s+controlsCoverage=\{controlsCoverage\}/);
 assert.ok(ts.isJsxFragment(dockComponent.attributes.properties.find(p => p.name?.text === 'fullscreenActions').initializer.expression), 'portrait always supplies fullscreen actions');
