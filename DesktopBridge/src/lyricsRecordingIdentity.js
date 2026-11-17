@@ -59,9 +59,9 @@ function translatedTitleBase(value) {
   if (!match) return title;
   const inner = match[2].trim();
   if (VERSION_HINT_PATTERN.test(inner) || FEATURING_PATTERN.test(inner)) return title;
-  // Only an explicit translation or English alias suffix may be removed. A
-  // semantic subtitle such as Intro, Outro or a named part stays significant.
-  const explicitTranslation = /\b(?:english|translation|translated|romanized|romanization|pinyin|romaji|from|of|the|to|in|on|and)\b/i.test(inner);
+  // Only explicit translation markers or a cross-script alternate may be
+  // removed. Generic English words such as the or in are part of the title.
+  const explicitTranslation = /\b(?:english|translation|translated|romanization|romanized|pinyin|romaji)\b/i.test(inner);
   const latin = /^[a-z][a-z\s'’.,!?-]+$/i.test(inner);
   const words = inner.split(/\s+/).filter(Boolean);
   const hanBase = /\p{Script=Han}/u.test(match[1]);

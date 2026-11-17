@@ -225,6 +225,28 @@ test("semantic part subtitles survive title normalization", () => {
   assert.equal(identity.recordingIdentityMatches(intro, outro), false);
 });
 
+test("ordinary English subtitles are not treated as translations", () => {
+  const titles = [
+    "Home (The Beginning)",
+    "Home (The End)",
+    "Home (In Flames)",
+    "Home (In Chains)",
+  ];
+  for (const title of titles) {
+    assert.notEqual(identity.titleKey(title), "home", `${title} keeps its subtitle`);
+  }
+  const tracks = titles.map(title => ({ title, artist: "Artist", durationMs: 200000 }));
+  for (const left of tracks) {
+    for (const right of tracks) {
+      assert.equal(
+        identity.recordingIdentityMatches(left, right),
+        left.title === right.title,
+        `${left.title} versus ${right.title}`,
+      );
+    }
+  }
+});
+
 const conflictTrack = {
   spotifyTrackId: "1QV6tiMFM6fSOKOGLMHYYg",
   title: "Hello",
@@ -284,5 +306,39 @@ for (const mobile of [false, true]) {
     assert.equal(result?.metadata?.untimed, undefined);
     assert.equal(result?.lyrics?.[0]?.lineStartTime, 0);
     assert.equal(result?.lyrics?.[0]?.lineEndTime, 0);
+  });
+}
+
+for (const mobile of [false, true]) {
+  const platform = mobile ? "mobile" : "desktop";
+
+  test(`${platform}: lrc.red search rejects a conflicting ISRC after direct 404`, async () => {
+    const calls = [];
+    const context = load(async url => {
+      const value = String(url);
+      calls.push(value);
+      if (value.includes("/s/HKE022272921.json")) return json({}, 404);
+      if (value.includes("/s/HKE022272921.ttml")) return new Response("missing", { status: 404 });
+      if (value.includes("api.deezer.com/search")) return json({ data: [] });
+      if (value.includes("lrc.red/search.json")) {
+        return json({
+          hits: [{
+            isrc: "US5TA1500050",
+            title: "八方来财",
+            artist: "SKAI ISYOURGOD",
+            duration: 173.037,
+          }],
+        });
+      }
+      if (value.includes("/s/US5TA1500050")) {
+        throw new Error("conflicting ISRC must not be fetched");
+      }
+      return json({}, 404);
+    }, mobile);
+    context.track = { ...target, trackId: "target" };
+    const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+    assert.equal(result, null);
+    assert.ok(calls.some(url => url.includes("/s/HKE022272921.json")));
+    assert.ok(!calls.some(url => url.includes("/s/US5TA1500050")));
   });
 }
