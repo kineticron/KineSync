@@ -54,3 +54,4 @@ Make small per-item commits with author Kineticron <kineticrondev@gmail.com>. Do
 Documentation must contain no em dashes or semicolons.
 Do not stop Metro, cancel CI, change build inputs, or restart services for docs-only work.
 Use .agents/skills/renderer-parity-fix/SKILL.md for parity work and .agents/skills/verify-changes/SKILL.md to choose checks.
+read docs/REPO_MAP.md and open only listed files for your subsystem. don't scan the whole repo
