@@ -24,6 +24,9 @@ const spoofVariants = [
   { name: "fetchOrigin.source=lrc-red", fetchOrigin: { source: "lrc-red" } },
   { name: "fetchOrigin.host=lrc.red", fetchOrigin: { host: "lrc.red" } },
 ];
+const independentContentSpoof = { independentContent: { source: "lrc-red", verified: true, isrc: "ZZZZZ0000000" } };
+const independentTrack = { id: "track-independent", title: "Independent Song", artist: "Independent Artist", album: "Independent Album", durationMs: 180000, spotifyTrackId: "4uLU6hMCjMI75M1A2tKUQC" };
+const independentMetadata = { attribution: { source: "lrc-red", provider: "lrc.red" }, independentContent: { source: "lrc-red", verified: true, isrc: "ZZZZZ0000000" } };
 const spicyMetadata = (overrides = {}) => ({
   fetchOrigin: {
     provider: "Spicy Lyrics",
@@ -183,6 +186,29 @@ for (const spoof of spoofVariants) {
   });
 }
 
+test("desktop vault keeps Spicy restriction and ISRC against an independentContent marker spoof", t => {
+  const store = tmpVault(t);
+  store.save({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "spicy-lyrics-line", metadata: spicyMetadata() });
+  store.save({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "lrc-red-line", metadata: independentContentSpoof });
+  const entry = store.getEntry(`spotify_${track.spotifyTrackId}`);
+  assert.deepEqual({
+    exportRestricted: store.listEntries().find(item => item.vaultId === `spotify_${track.spotifyTrackId}`).exportRestricted,
+    isrc: entry.manifest.metadata.fetchOrigin?.isrc,
+  }, { exportRestricted: true, isrc: ISRC }, "no metadata marker may replace persisted Spicy origin");
+  assert.throws(() => desktopPolicy.assertLyricsExportAllowed(entry.manifest), /cannot be exported/);
+});
+
+test("desktop vault keeps a separate genuinely new lrc.red entry exportable", t => {
+  const store = tmpVault(t);
+  store.save({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "spicy-lyrics-line", metadata: spicyMetadata() });
+  store.save({ track: independentTrack, lyrics, sourceLabel: "local-vault-line", originalSource: "lrc-red-line", metadata: independentMetadata });
+  const [spicyEntry, lrcRedEntry] = store.listEntries().sort((left, right) => left.vaultId.localeCompare(right.vaultId));
+  assert.equal(spicyEntry.exportRestricted, true);
+  assert.equal(lrcRedEntry.exportRestricted, false);
+  const saved = store.getEntry(`spotify_${independentTrack.spotifyTrackId}`);
+  desktopPolicy.assertLyricsExportAllowed(saved.manifest);
+});
+
 test("desktop vault merge preserves unrelated-origin Spicy provenance", t => {
   const store = tmpVault(t);
   store.save({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "spicy-lyrics-line", metadata: spicyMetadata() });
@@ -217,6 +243,32 @@ for (const kind of ["native", "web"]) {
       assert.throws(() => mobilePolicy.assertLyricsExportAllowed(entry), /cannot be exported/);
     });
   }
+
+  test(`mobile ${kind} vault keeps Spicy restriction and ISRC against an independentContent marker spoof`, async () => {
+    const { api } = loadMobileVault(kind);
+    await api.saveMobileVaultLyrics({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "spicy-lyrics-line", metadata: spicyMetadata() });
+    await api.saveMobileVaultLyrics({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "lrc-red-line", metadata: independentContentSpoof });
+    const catalog = await api.readVaultCatalog();
+    const [entry] = await api.readVaultEntries();
+    assert.deepEqual({
+      exportRestricted: catalog.find(item => item.vaultId === entry.vaultId).exportRestricted,
+      isrc: entry.metadata?.fetchOrigin?.isrc,
+    }, { exportRestricted: true, isrc: ISRC }, "no metadata marker may replace persisted Spicy origin");
+    assert.throws(() => mobilePolicy.assertLyricsExportAllowed(entry), /cannot be exported/);
+  });
+
+  test(`mobile ${kind} vault keeps a separate genuinely new lrc.red entry exportable`, async () => {
+    const { api } = loadMobileVault(kind);
+    await api.saveMobileVaultLyrics({ track, lyrics, sourceLabel: "local-vault-line", originalSource: "spicy-lyrics-line", metadata: spicyMetadata() });
+    await api.saveMobileVaultLyrics({ track: independentTrack, lyrics, sourceLabel: "local-vault-line", originalSource: "lrc-red-line", metadata: independentMetadata });
+    const catalog = await api.readVaultCatalog();
+    const independent = catalog.find(item => item.track.spotifyTrackId === independentTrack.spotifyTrackId);
+    const spicy = catalog.find(item => item.track.spotifyTrackId === track.spotifyTrackId);
+    assert.equal(spicy.exportRestricted, true);
+    assert.equal(independent.exportRestricted, false);
+    const saved = await api.getMobileVaultEntry(independent.vaultId);
+    mobilePolicy.assertLyricsExportAllowed(saved);
+  });
 
   test(`mobile ${kind} vault merge preserves unrelated-origin Spicy provenance`, async () => {
     const { api } = loadMobileVault(kind);
