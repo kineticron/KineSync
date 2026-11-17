@@ -157,6 +157,7 @@ for (const initial of [0, 1]) for (const interruption of [1, 16, 50, 150, 399, 4
   const shown = initial === 0;
   h.animate(shown);
   assert.equal(h.interactive, shown, 'show enables touch/accessibility immediately, hide disables immediately');
+  assert.equal(h.stage.animation.delay, shown ? 60 : 0, 'only show rows receive the short edge lead-in');
   h.tick(interruption);
   const before = [h.geometry.get(), h.stage.get()];
   const rowsBefore = h.rows();
@@ -213,12 +214,14 @@ for (const phase of ['hidden', 'shown', 'showing', 'hiding', 'backdrop']) {
   const leave = evaluate(callback('handleShowLyrics'), mode);
   const before = [album.geometry.get(), album.stage.get()];
   normal.animate(true); enter();
+  assert.equal(album.stage.animation.delay, 60, 'fullscreen entry uses the same show-only delay');
   assert.deepEqual([album.geometry.get(), album.stage.get()], before, 'fullscreen entry starts at current pixels');
   let previous = 0;
-  for (const time of [1, 16, 48, 150, 350, 560, 699, 700]) {
+  for (const time of [1, 16, 48, 60, 61, 150, 350, 560, 699, 700, 759, 760]) {
     normal.tick(time - previous); album.tick(time - previous); previous = time;
     assert.equal(album.geometry.get(), normal.geometry.get(), 'fullscreen edge follows normal show');
     assert.equal(album.stage.get(), normal.stage.get(), 'fullscreen rows retain normal stagger');
+    if (phase === 'hidden' && time <= 60) assert.equal(album.stage.get(), 0, 'fullscreen rows remain still through the show delay');
   }
   // Exiting album mode partway through hide retains the same continuous hide.
   normal.animate(false); album.animate(false);
@@ -231,27 +234,50 @@ for (const phase of ['hidden', 'shown', 'showing', 'hiding', 'backdrop']) {
   assert.equal(album.stage.get(), normal.stage.get());
 }
 
-// Both geometry and rows respond without a queued lead-in. Show geometry uses
-// an early expo-out clearance, hide retains the full reverse stagger.
+// Cancel a show while its row animation is still pending. Passing the former
+// deadline must never reveal stale rows in either presentation.
+for (const fullscreen of [false, true]) {
+  const h = motionHarness(0);
+  h.context.fullscreenAlbumModeRef.current = fullscreen;
+  h.animate(true); h.tick(30);
+  assert.equal(h.stage.get(), 0);
+  assert.ok(h.geometry.get() > 0, 'edge starts immediately during the row delay');
+  const edge = h.geometry.get();
+  h.animate(false);
+  assert.equal(h.stage.get(), 0);
+  assert.equal(h.geometry.get(), edge, 'reversing during the delay cannot jump the edge');
+  assert.equal(h.stage.animation.delay, 0, 'hide has no show delay');
+  for (const wait of [30, 1, 200, 700]) {
+    h.tick(wait);
+    assert.equal(h.stage.get(), 0, 'cancelled pending show cannot reveal rows later');
+    assert.equal(h.visible, false);
+  }
+  assert.equal(h.geometry.get(), 0);
+}
+
+// The show edge begins immediately and rows follow 60ms later. Hide retains
+// the original reverse stagger without that show-only lead-in.
 const reveal = motionHarness(0);
 reveal.animate(true);
 assert.equal(reveal.interactive, true); assert.equal(reveal.geometry.get(), 0);
 reveal.tick(16); assert.ok(reveal.geometry.get() > 0 && reveal.geometry.get() < 1);
-assert.ok(reveal.rows()[0].opacity > 0);
+assert.equal(reveal.rows()[0].opacity, 0);
 assert.equal(reveal.rows()[1].opacity, 0); assert.equal(reveal.rows()[2].opacity, 0);
-reveal.tick(125); assert.ok(reveal.rows()[1].opacity > 0); assert.equal(reveal.rows()[2].opacity, 0);
+reveal.tick(44); assert.equal(reveal.stage.get(), 0, 'rows stay still through the 60ms edge lead-in');
+reveal.tick(1); assert.ok(reveal.rows()[0].opacity > 0, 'first row starts sliding immediately after the lead-in');
+reveal.tick(140); assert.ok(reveal.rows()[1].opacity > 0); assert.equal(reveal.rows()[2].opacity, 0);
 assert.equal(reveal.interactive, true, 'visible transport accepts input before finishing its reveal');
 reveal.tick(140); assert.ok(reveal.rows()[2].opacity > 0);
 reveal.tick(419); assert.equal(reveal.stage.get(), 1); assert.equal(reveal.geometry.get(), 1);
-for (const elapsed of [1, 16, 32, 48, 64, 80, 100, 140, 199, 200, 280, 420, 560, 699]) {
+for (const elapsed of [1, 16, 32, 48, 60, 61, 64, 80, 100, 140, 199, 200, 280, 420, 560, 699]) {
   const h = motionHarness(0);
   h.animate(true); h.tick(elapsed);
   assert.equal(h.geometry.get(), controlsStage(Math.min(1, elapsed / 200), 0, 1).opacity,
     'show edge uses custom expo-out across 200ms');
-  assert.equal(h.stage.get(), elapsed / 700, 'row timing and stagger delays remain unchanged');
+  assert.equal(h.stage.get(), Math.max(0, elapsed - 60) / 700, '700ms row stagger starts after the 60ms show-only delay');
   if (elapsed < 200) assert.ok(h.geometry.get() < 1);
   else assert.equal(h.geometry.get(), 1, 'clip clears before rows complete their slides');
-  h.tick(700 - elapsed);
+  h.tick(760 - elapsed);
   assert.equal(h.geometry.get(), 1);
   assert.equal(h.stage.get(), 1);
 }
@@ -620,7 +646,7 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
     h.animate(shown);
     let previousTime = 0;
     let previousOffsets = shown ? [36, 36, 36] : [0, 0, 0];
-    for (const time of [16, 32, 48, 80, 100, 140, 150, 200, 280, 281, 350, 420, 490, 560, 630, 699, 700]) {
+    for (const time of [16, 32, 48, 60, 61, 80, 100, 108, 140, 150, 200, 210, 280, 281, 340, 341, 350, 420, 490, 560, 630, 699, 700, 759, 760]) {
       h.tick(time - previousTime); previousTime = time;
       const rows = rowStyles.map(style => style());
       const offsets = rows.map(row => row.transform[0].translateY);
@@ -665,25 +691,25 @@ for (const height of [390, 667, 844]) for (const bottomInset of [0, 21, 34]) for
           if (index < 2) assert.ok(Math.abs(viewportPixels - rowHeights[index]) < 1e-9);
           if (row.opacity >= .5) assert.ok(viewportPixels >= rowHeights[index] / 2);
         }
-        if (shown && time === 48 && index === 0) {
+        if (shown && time === 108 && index === 0) {
           assert.ok(viewportPixels >= rowHeights[index] / 2,
             'at least half the timeline is exposed while its early slide is visible');
           assert.ok(h.geometry.get() > h.stage.get(), 'show edge advances ahead of the unchanged row clock');
           assert.ok(offset > 14 && row.opacity > 0 && row.opacity < 1, 'first visible timeline retains a perceptible independent slide');
         }
-        if (shown && ((index === 1 && time === 140) || (index === 2 && time === 280))) {
+        if (shown && ((index === 1 && time === 200) || (index === 2 && time === 340))) {
           assert.equal(offset, 36, 'later staggered rows have not started their slide');
           assert.equal(row.opacity, 0);
           assert.ok(clipTop <= dockTop + layoutTops[index],
             'edge has already cleared each later row before its visible slide begins');
         }
-        if (shown && ((index === 0 && time === 80) || (index === 1 && time === 150) || (index === 2 && time === 281))) {
+        if (shown && ((index === 0 && time === 140) || (index === 1 && time === 210) || (index === 2 && time === 341))) {
           assert.ok(clipTop <= top, 'the actual clip has cleared this row while it is sliding');
           assert.ok(viewportPixels > 0, 'each row has visible pixels during its slide');
           assert.ok(offset > (index === 0 ? 9 : index === 1 ? 25 : 35),
             'clearance occurs before the row slide has settled');
         }
-        if (shown && time === 150 && index === 1) {
+        if (shown && time === 210 && index === 1) {
           assert.ok(offset > 25 && row.opacity > 0, 'transport keeps its original stagger and slide while the show clip advances');
         }
       });
@@ -755,7 +781,7 @@ const hiddenTrackY = 624 + trackTop + 9;
 touchDown({ allTouches: [{ absoluteY: hiddenTrackY }] }, { fail: () => failures++ });
 beginScrub({ x: 100, absoluteY: hiddenTrackY });
 assert.equal(failures, 2); assert.equal(previews, 0); assert.equal(scrubActive.value, false);
-inputHarness.tick(118); // 150ms on the unchanged 700ms row clock.
+inputHarness.tick(118); // 150ms elapsed, 90ms into the unchanged 700ms row clock.
 assert.equal(timelineInput.value, true, 'early show clearance exposes timeline input at 150ms');
 assert.ok(Math.abs(inputCoverage().top - 220 * (1 - controlsShowEdge(150 / 200))) < 1e-9);
 assert.ok(inputCoverage().top < 650 - 624, 'the scrub coordinate lies inside the visible clip');
@@ -845,8 +871,8 @@ for (const scenario of ['normal', 'restoring', 'empty']) for (const bottomInset 
   assert.equal(h.geometry.get(), 0); assert.equal(h.stage.get(), 0);
   h.tick(150);
   assert.equal(h.geometry.get(), controlsShowEdge(150 / 200));
-  assert.equal(h.stage.get(), 150 / 700);
-  h.tick(550);
+  assert.equal(h.stage.get(), 90 / 700);
+  h.tick(610);
   assert.equal(h.geometry.get(), 1); assert.equal(h.stage.get(), 1);
   layoutFrame(228); // First changed measurement arrives during the morph.
   finish(); layoutFrame(236); // Font/metadata change while fully in album mode.

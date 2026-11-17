@@ -799,7 +799,9 @@ export default function HomeScreen() {
         controlsOpacity.value = withDelay(coverageHold,
           withTiming(0, { duration: 400, easing: CONTROLS_EASE }));
       }
-      controlsStageProgress.value = withTiming(target, { duration: 700, easing: ReanimatedEasing.linear });
+      const rowAnimation = withTiming(target, { duration: 700, easing: ReanimatedEasing.linear });
+      // Let the show edge lead slightly without changing the stagger or hide.
+      controlsStageProgress.value = shown ? withDelay(60, rowAnimation) : rowAnimation;
     }
     setControlsVisible(shown);
   }, [controlsOpacity, controlsStageProgress, liveReducedMotion]);
