@@ -59,6 +59,23 @@ The mobile app declares AGPL-3.0-only in its package metadata. The complete
 license text is included in [LICENSE](LICENSE). Other dependencies retain
 the license files and copyright notices distributed with their packages.
 
+## Noto Sans CJK SC fallback font
+
+The iOS Rust lyric module bundles the full official Noto Sans CJK SC Regular
+and Bold OpenType files from
+[`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk), path
+`Sans/OTF/SimplifiedChinese/` on `main`. They are used only when the platform
+Japanese, Chinese and Korean system fonts cannot draw a cluster. The files are
+licensed under the SIL Open Font License 1.1. The complete license is in
+`modules/kinesync-rust-lyrics/ios/Fonts/NotoSansCJK-LICENSE.txt`.
+
+Recorded SHA-256 values:
+
+- `NotoSansCJKsc-Regular.otf`: `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b`
+- `NotoSansCJKsc-Bold.otf`: `b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a`
+
+No Android bundle is added because Android exposes its own system CJK fonts.
+
 ## Experimental native lyric renderers
 
 `components/lyrics/native/reference-motion.ts` and the native word/line/scroll

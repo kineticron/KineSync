@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -553,7 +554,10 @@ test('SourceMap v3 source collection accepts flat and nested Metro sections and 
 });
 
 test('native frame source contract uses display targets, one draw and asynchronous retirement', () => {
-  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
+  // Normalize Windows CRLF once so body slicing and closing-brace extraction
+  // operate on the same LF layout as the reviewed checkout.
+  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8')
+    .replace(/\r\n/g, '\n');
   const predicate = swift.match(/guard (dirty \|\| animating) else/)[1];
   const needsFrame = new Function('dirty', 'animating', `return ${predicate}`);
   // ABI 9: playback alone no longer arms continuous drawing. Settled playback
@@ -717,8 +721,26 @@ test('local pod font resources match CocoaPods descendant inventory and resolve 
   const declaration = spec.match(/s\.resource_bundles\s*=\s*\{\s*'KineSyncLyricsFonts'\s*=>\s*\[([^\]]+)\]/);
   assert.ok(declaration, 'expected an explicit font resource bundle');
   const resources = [...declaration[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
-  const names = ['SF-Pro-Display-Regular.otf', 'SF-Pro-Display-Bold.otf'];
-  assert.deepEqual(resources, names.map(name => 'Fonts/' + name));
+  const fonts = [
+    // The two SF faces remain relative symlinks to the tracked app assets.
+    { name: 'SF-Pro-Display-Regular.otf', symlink: true },
+    { name: 'SF-Pro-Display-Bold.otf', symlink: true },
+    // The bundled CJK fallback and its license are new regular files in the pod.
+    {
+      name: 'NotoSansCJKsc-Regular.otf',
+      symlink: false,
+      bytes: 16_437_364,
+      sha256: '2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b',
+    },
+    {
+      name: 'NotoSansCJKsc-Bold.otf',
+      symlink: false,
+      bytes: 17_002_248,
+      sha256: 'b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a',
+    },
+    { name: 'NotoSansCJK-LICENSE.txt', symlink: false, license: true },
+  ];
+  assert.deepEqual(resources, fonts.map(font => 'Fonts/' + font.name));
   // CocoaPods 1.16.2 Sandbox::PathList enumerates descendants first, then
   // matches patterns against that inventory (not unrestricted Dir.glob).
   // File symlinks are entries; symlink directories need not be traversed.
@@ -736,22 +758,41 @@ test('local pod font resources match CocoaPods descendant inventory and resolve 
   // relative to the local pod, not the process cwd or the rescue host path.
   const checkout = path.join(temp(t), 'checkout with spaces');
   for (const [i, resource] of resources.entries()) {
-    const name = names[i];
+    const font = fonts[i];
     assert.ok(inventory.has(resource), `CocoaPods cannot select ${resource}`);
-    const original = '../../../assets/fonts/' + name;
-    assert.ok(fs.existsSync(path.resolve(pod, original)), 'original asset exists');
-    assert.ok(!inventory.has(original), 'original escaping pattern matches nothing');
-    const link = path.join(pod, resource);
-    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'reuse assets without copying binaries');
-    const target = fs.readlinkSync(link);
-    assert.ok(!path.isAbsolute(target));
-    const asset = path.join(repo, 'ExpoLyrics/assets/fonts', name);
-    assert.equal(fs.realpathSync(link), fs.realpathSync(asset));
-    put(checkout, 'ExpoLyrics/assets/fonts/' + name, fs.readFileSync(asset));
-    const relocated = path.join(checkout, relativePod, resource);
-    fs.mkdirSync(path.dirname(relocated), { recursive: true });
-    fs.symlinkSync(target, relocated);
-    assert.deepEqual(fs.readFileSync(relocated), fs.readFileSync(asset));
+    const file = path.join(pod, resource);
+    if (font.symlink) {
+      const original = '../../../assets/fonts/' + font.name;
+      assert.ok(fs.existsSync(path.resolve(pod, original)), 'original asset exists');
+      assert.ok(!inventory.has(original), 'original escaping pattern matches nothing');
+      assert.ok(fs.lstatSync(file).isSymbolicLink(), 'reuse assets without copying binaries');
+      const target = fs.readlinkSync(file);
+      assert.ok(!path.isAbsolute(target));
+      const asset = path.join(repo, 'ExpoLyrics/assets/fonts', font.name);
+      assert.equal(fs.realpathSync(file), fs.realpathSync(asset));
+      put(checkout, 'ExpoLyrics/assets/fonts/' + font.name, fs.readFileSync(asset));
+      const relocated = path.join(checkout, relativePod, resource);
+      fs.mkdirSync(path.dirname(relocated), { recursive: true });
+      fs.symlinkSync(target, relocated);
+      assert.deepEqual(fs.readFileSync(relocated), fs.readFileSync(asset));
+    } else {
+      // New bundled files must stay inside the pod as regular tracked files.
+      assert.ok(path.dirname(resource) === 'Fonts', `${resource} must stay in the pod Fonts directory`);
+      assert.ok(fs.lstatSync(file).isFile(), `${resource} must be a regular file`);
+      assert.ok(!fs.lstatSync(file).isSymbolicLink(), `${resource} must not be a symlink`);
+      const bytes = fs.readFileSync(file);
+      if (font.sha256) {
+        assert.equal(bytes.length, font.bytes, `${resource} byte size`);
+        assert.equal(
+          crypto.createHash('sha256').update(bytes).digest('hex'),
+          font.sha256,
+          `${resource} digest`
+        );
+        assert.equal(bytes.subarray(0, 4).toString('latin1'), 'OTTO', `${resource} CFF signature`);
+      } else {
+        assert.match(bytes.toString('utf8'), /SIL OPEN FONT LICENSE Version 1\.1/);
+      }
+    }
   }
 });
 

@@ -16,7 +16,13 @@ Pod::Spec.new do |s|
   s.source_files = '*.swift'
   # CocoaPods PathList matches only descendants of this local pod root; ../
   # patterns match nothing. These file symlinks reuse the tracked app assets.
-  s.resource_bundles = { 'KineSyncLyricsFonts' => ['Fonts/SF-Pro-Display-Regular.otf', 'Fonts/SF-Pro-Display-Bold.otf'] }
+  s.resource_bundles = { 'KineSyncLyricsFonts' => [
+    'Fonts/SF-Pro-Display-Regular.otf',
+    'Fonts/SF-Pro-Display-Bold.otf',
+    'Fonts/NotoSansCJKsc-Regular.otf',
+    'Fonts/NotoSansCJKsc-Bold.otf',
+    'Fonts/NotoSansCJK-LICENSE.txt',
+  ] }
   # Produced by the reviewed device-only CI step BEFORE prebuild/pod install.
   s.vendored_frameworks = 'Frameworks/KineSyncLyrics.xcframework'
   s.pod_target_xcconfig = { 'OTHER_LDFLAGS' => '$(inherited) -Wl,-u,_kr_abi_version' }

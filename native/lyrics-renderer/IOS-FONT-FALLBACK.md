@@ -44,45 +44,93 @@ Primary sources:
 `ios_fonts::configure` extends the existing default Han and Hangul fallback
 lists with candidate family IDs already discovered by Fontique through
 CoreText. Existing platform selections remain first. IDs are deduplicated.
-The Han additions are Hiragino Sans, Hiragino Kaku Gothic ProN, installed
-PingFang/Heiti variants and Apple SD Gothic Neo. Hangul adds Apple SD Gothic
-Neo. Missing families are skipped. An empty candidate result leaves the
-existing fallback unchanged. Fontique already excludes hvgl-only faces.
+The Han additions are Japanese Hiragino, the bundled Noto Sans CJK SC, Chinese
+Hiragino variants, installed PingFang/Heiti variants, Songti, Kaiti, Yuanti,
+Lantinghei and Apple SD Gothic Neo. Hangul adds Apple SD Gothic Neo. Missing
+families are skipped. An empty candidate result leaves the existing fallback
+unchanged. Fontique already excludes hvgl-only faces.
+
+Song observation: the reported Spicy payload for 八方來財 by 攬佬 SKAI ISYOURGOD
+(Spotify track `7jm2PueKmv4EOHfdbdXMKT`, ISRC `HKE022272921`) contains only
+BMP Han, kana and Hangul. It has no Extension B codepoint. The visible tofu
+positions are consistent with Simplified-only characters. 摆 U+6446,
+长 U+957F, 揽 U+63FD, 诚 U+8BDA and 钱 U+94B1 are not the traditional or
+Japanese forms. PingFang is hvgl and excluded. Heiti is not guaranteed to be
+installed. This supports a coverage gap in the earlier candidate list, but the
+reporting device font tables were not captured, so it is not a proof of the
+installed families or of per-character outlines. The same positions appear in
+the main and background voices. Korean background text is intended and is not
+a defect.
+
+The bundled fallback is the full official Noto Sans CJK SC Regular and Bold
+OpenType CFF collection from
+[`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk), path
+`Sans/OTF/SimplifiedChinese/` on `main`. No characters are subsetted. The
+source paths are:
+
+- `NotoSansCJKsc-Regular.otf`, 16,437,364 bytes, SHA-256 `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b`
+- `NotoSansCJKsc-Bold.otf`, 17,002,248 bytes, SHA-256 `b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a`
+
+The files are under the SIL Open Font License 1.1. The complete license is
+checked in as `ExpoLyrics/modules/kinesync-rust-lyrics/ios/Fonts/NotoSansCJK-LICENSE.txt`
+and is listed in the ExpoLyrics third-party notices. FontTools inspection on
+the checked-in files reports family `Noto Sans CJK SC`, weights 400 and 700,
+CFF outlines, no hvgl table, and full coverage of all 210 unique song
+characters, the Japanese samples and the Korean samples. That is outline table
+evidence, not a Parley or device run.
+
+Candidates follow the Japanese families so Japanese clusters keep Japanese
+glyph forms. The bundled Noto comes before the other Chinese families but
+after platform and Japanese choices. Platform fallback therefore remains
+preferred where it can draw. Android already discovers its full system CJK
+partition through the shared `android_fonts` path and needs no bundled font or
+candidate change.
 
 Fontique's query implementation tries subsequent families when a cluster is
 not covered and adds the default Han list to script/locale queries, including
 common punctuation. The regression includes an existing first fallback that
 lacks Han coverage to verify that subsequent candidates are reached.
 
-There are no new paths, font downloads, bundled production fonts, unsafe code,
-global caches, ABI changes or Android changes. Initialization performs at most
-two platform fallback queries, nine candidate-name lookups and small list
-allocations per new renderer font context. It adds no font-file reads or
-outline walks. Ordinary shaping lazily loads the selected faces through
-Fontique's existing source cache and preserves TTC indexes. Cloned contexts
-retain the configured lists. Mutation remains within each owned FontContext,
-with the existing Fontique synchronization for shared system discovery.
-Phone startup time and memory have not been measured.
+The podspec adds both OTF files and the license to the existing
+`KineSyncLyricsFonts` resource bundle. `KineSyncRustLyricsModule.swift` registers both
+faces with `CTFontManagerRegisterFontsForURL` in process scope on the Rust
+worker before `kr_create`. Fontique's CoreText scan then discovers the family
+before the first font context is built. Already-registered errors are accepted
+so a remount does not fail. Missing bundle files fail the renderer with an
+explicit status instead of silently drawing tofu. The registration is
+idempotent and adds no per-frame work or network access.
 
-This fixes the absent supplementary Han fallback when a usable Hiragino font
-is present. It does not implement hvgl rendering. Hiragino has Japanese
-coverage, not complete Chinese coverage, and can give Chinese text Japanese
-glyph forms. Apple lists some Chinese fonts as downloadable. If no compatible
-installed face covers a character, tofu remains possible. No universal offline
-Chinese coverage is claimed. Achieving that requires a native CoreText outline
-rendering path, explicit font download handling, or a bundled CJK fallback.
-The iOS test deliberately fails on uncovered Chinese samples rather than
-skipping them. Actual Japanese and Korean availability and outlines also need
-device validation, even though Apple lists relevant system fonts.
+Size tradeoff: the two uncompressed OTF files add 33,439,612 bytes before any
+app packaging or compression. This is the cost of guaranteed broad Simplified
+coverage with real 400 and 700 outlines. A subset would be smaller but is not
+used. App download size, installed size and startup memory have not been
+measured. The fonts are loaded lazily by Fontique only when a cluster reaches
+the family.
+
+This does not implement hvgl rendering. It does not replace platform
+Japanese or Korean choices. Hiragino can still give Japanese forms where it
+covers shared Han, and the bundled Simplified forms are used only after the
+platform fallback list and the two Japanese families. The host regression proves the
+bundled tables and fallback order. Device time to first frame and visual
+glyph-form acceptance still need a rebuilt IPA and physical phone check.
 
 ## Regression and fixture
 
 `src/ios_fonts.rs` has host tests for the actual production fallback
 configuration, an initially missing Han fallback, preservation of a first
 family without Han coverage, duplicate suppression and missing candidates.
-The test aliases the licensed Noto fixture to production candidate family
-names through Fontique metadata overrides. These aliases are explicitly not
-evidence of Apple font availability.
+The test aliases the licensed small CJK fixture to the Japanese and Korean
+candidate family names through Fontique metadata overrides. These aliases are
+explicitly not evidence of Apple font availability.
+
+A separate regression registers the two real checked-in Noto Sans CJK SC
+faces, keeps the Japanese and Korean aliases ahead of them, and shapes the
+actual sanitized main and background corpus at weights 400 and 700. It
+requires every glyph to be nonzero and drawable, requires the five
+Simplified-only forms to resolve to `Noto Sans CJK SC`, requires weight 700 to
+use the Noto Bold subfamily, and requires Japanese and Korean samples to stay
+on their earlier families. The fixture is not substituted for the bundled
+font in that test.
 
 The CJK regression shapes `革命道中君夢中愛`, `汉语爱漢語愛` and `한국어` at
 weights 400 and 700. Every shaped glyph must be nonzero and must successfully
@@ -90,6 +138,14 @@ draw a nonempty outline through Skrifa using the run's normalized coordinates.
 Bold must use TTC face 1, regular face 0. A synthetic unsupported-outline test
 keeps the real CJK cmap but hides CFF, proving that nonzero IDs alone fail the
 outline check. A synthetic hvgl-tagged variant verifies Fontique's scan gate.
+
+Additional tests pin the actual song corpus. `SONG_MAIN` is the sanitized set
+of unique main-voice Han. `SONG_BACKGROUND` is 揽佬 plus the intended Korean
+and Chinese background set. One host test proves the corpus is entirely BMP
+and contains the reported Simplified-only forms. Another pins the candidate
+order so Japanese remains ahead of Chinese. The target-only iOS test shapes
+both corpus voices at 400 and 700 with real CoreText discovery and requires a
+drawable outline for every glyph.
 
 `ios_system_fallback_shapes_drawable_cjk` is compiled only for iOS and calls
 the production `Fonts::default()` plus bundled SF Pro registration. It uses

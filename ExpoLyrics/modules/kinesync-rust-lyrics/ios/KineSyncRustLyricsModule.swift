@@ -1,3 +1,4 @@
+import CoreText
 import ExpoModulesCore
 import QuartzCore
 import UIKit
@@ -71,15 +72,36 @@ private final class RustOwner: @unchecked Sendable {
   private var scale: CGFloat = 1
   private var lastMetrics = 0.0
   // Bundle bytes are cached once, loaded on the worker, never resolved via Metro per frame.
-  private static let fontBytes: (Data, Data)? = {
+  private static let fontBundle: Bundle? = {
     let url = [Bundle.main, Bundle(for: KineSyncRustLyricsModule.self)].compactMap { $0.url(forResource: "KineSyncLyricsFonts", withExtension: "bundle") }.first
-    guard let url,
-          let bundle = Bundle(url: url),
+    return url.flatMap { Bundle(url: $0) }
+  }()
+  private static let fontBytes: (Data, Data)? = {
+    guard let bundle = fontBundle,
           let regular = bundle.url(forResource: "SF-Pro-Display-Regular", withExtension: "otf"),
           let bold = bundle.url(forResource: "SF-Pro-Display-Bold", withExtension: "otf"),
           let regularData = try? Data(contentsOf: regular), let boldData = try? Data(contentsOf: bold) else { return nil }
     return (regularData, boldData)
   }()
+  // Register the bundled Simplified Chinese fallback before Fontique's CoreText
+  // scan runs in kr_create. The fonts are process scoped and already loaded from
+  // KineSyncLyricsFonts.bundle, so this adds no per-frame work or network access.
+  private static func registerBundledCJKFonts() -> Bool {
+    guard let bundle = fontBundle else { return false }
+    var ready = true
+    for name in ["NotoSansCJKsc-Regular", "NotoSansCJKsc-Bold"] {
+      guard let url = bundle.url(forResource: name, withExtension: "otf") else {
+        ready = false
+        continue
+      }
+      var error: Unmanaged<CFError>?
+      if CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) { continue }
+      // A second renderer owner can find these fonts already registered.
+      if let error = error?.takeRetainedValue(), CFErrorGetCode(error) == 105 { continue }
+      ready = false
+    }
+    return ready
+  }
   private func installFonts() -> Bool {
     guard let (regular, bold) = Self.fontBytes else {
       failed = true; emit(["state": "error", "message": "Bundled Rust lyric fonts unavailable; rebuild with KineSyncLyricsFonts.bundle"]); return false
@@ -235,6 +257,11 @@ private final class RustOwner: @unchecked Sendable {
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
       guard kr_abi_version() == 11 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
+      guard Self.registerBundledCJKFonts() else {
+        self.failed = true
+        self.emit(["state": "error", "message": "Bundled CJK lyric font unavailable; rebuild with KineSyncLyricsFonts.bundle"])
+        return
+      }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
       if !self.installFonts() { return }

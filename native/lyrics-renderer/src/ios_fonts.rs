@@ -1,15 +1,38 @@
-//! Supplement CoreText's single-family fallback with drawable iOS system families.
+//! Supplement CoreText's single-family fallback with drawable iOS families,
+//! including a bundled full Noto Sans CJK SC fallback registered by the shim.
 use parley::{FontContext, fontique::FallbackKey};
 
 // Fontique already discovers these through CoreText URLs, including TTC indexes.
 // Names are candidates, never promises that downloadable fonts are installed.
+// This list alone is not proof that the reporting device can draw the song.
 const JAPANESE: &[&str] = &["Hiragino Sans", "Hiragino Kaku Gothic ProN"];
+// Simplified-only Han (for example 摆 U+6446, 长 U+957F, 揽 U+63FD, 诚 U+8BDA
+// and 钱 U+94B1) is absent from the Japanese faces above. PingFang is hvgl,
+// which Fontique intentionally excludes because Skrifa cannot draw it. The
+// remaining names are bundled Noto plus Chinese candidates listed by Apple.
+// Whether a family is installed and drawable is decided at runtime by CoreText
+// and Fontique, not by this list. They stay after the Japanese faces so Japanese clusters keep
+// Japanese forms, and after the platform list so an existing CoreText choice
+// still wins.
 const CHINESE: &[&str] = &[
+    // Bundled full Noto Sans CJK SC Regular and Bold. Swift registers both
+    // process scoped before kr_create so Fontique discovers them here.
+    "Noto Sans CJK SC",
+    "Hiragino Sans GB",
+    "Hiragino Sans CNS",
     "PingFang SC",
     "PingFang TC",
     "PingFang HK",
     "Heiti SC",
     "Heiti TC",
+    "Songti SC",
+    "Songti TC",
+    "Kaiti SC",
+    "Kaiti TC",
+    "Yuanti SC",
+    "Yuanti TC",
+    "Lantinghei SC",
+    "Lantinghei TC",
 ];
 const KOREAN: &[&str] = &["Apple SD Gothic Neo"];
 
@@ -76,7 +99,45 @@ fn drawable(
 mod tests {
     use super::*;
     use parley::fontique::{Collection, CollectionOptions, FontInfoOverride, Script};
-    use skrifa::FontRef;
+    use skrifa::{FontRef, MetadataProvider, string::StringId};
+
+    // Sanitized unique CJK, Hangul and kana from every syllable in the reported
+    // Spicy payload. The song contains no Extension B codepoints.
+    const SONG_MAIN: &str = "一万三上下不东丢两为之乐九了事些交人从仔仙们价会你佬供做先八六兴冠几出切利到勤包北千升南即友可台右合吉后吗哼啊喜嗯四回因多大天太奖好如妈宗家对小少尾左应开张彩情意憋我手才找把拜挂接摆摸收散斋方旨旺明易是朋条来标桌欢步气水河海清滚灯炉点牌物玉白百的皇盲直码示社祥程等紫结给聊聚胆能脖艺花若莫菜蕹虔表袖西诚说谓财运这道那酬里钱长阳阴难非面顶顺颁风馈香高鹏黄黑";
+    const SONG_BACKGROUND: &str =
+        "揽佬가공그까꾸꿈나는니떤레록리멍무봐상시아앉어얼에요을이일종집토하할";
+
+    #[test]
+    fn actual_song_corpus_is_bmp_and_exercises_simplified_only_han() {
+        let all = || SONG_MAIN.chars().chain(SONG_BACKGROUND.chars());
+        assert!(all().all(|ch| ch as u32 <= 0xFFFF));
+        // These are the reported tofu characters and their neighbors. They are
+        // Simplified forms, not the traditional or Japanese forms in Hiragino.
+        for ch in ['摆', '长', '揽', '诚', '钱'] {
+            assert!(all().any(|value| value == ch));
+        }
+        assert!(
+            SONG_BACKGROUND
+                .chars()
+                .any(|ch| ('\u{AC00}'..='\u{D7A3}').contains(&ch))
+        );
+    }
+
+    #[test]
+    fn chinese_outline_candidates_follow_japanese_and_are_deduplicated() {
+        assert!(CHINESE.contains(&"Songti SC"));
+        assert!(CHINESE.contains(&"Hiragino Sans GB"));
+        // Japanese faces must stay ahead of Chinese faces so Japanese clusters
+        // keep Japanese glyph forms when both families cover them.
+        assert!(JAPANESE.iter().all(|name| !CHINESE.contains(name)));
+        for names in [JAPANESE, CHINESE, KOREAN] {
+            let mut sorted = names.to_vec();
+            sorted.sort_unstable();
+            let count = sorted.len();
+            sorted.dedup();
+            assert_eq!(sorted.len(), count, "duplicate candidate in {names:?}");
+        }
+    }
 
     fn isolated() -> FontContext {
         FontContext {
@@ -132,6 +193,133 @@ mod tests {
             "empty or incomplete shaping for {text:?}"
         );
         indexes
+    }
+
+    /// Embedded family, subfamily, fixture-byte identity and face index for
+    /// every shaped run. The aliased fixture keeps its embedded test name, so
+    /// preference checks must compare the selected bytes or index as well.
+    fn shaped_face_names(
+        context: &mut FontContext,
+        text: &str,
+        weight: f32,
+    ) -> Vec<(String, String, bool, u32)> {
+        let layout = crate::scene::shape(
+            text,
+            context,
+            &mut parley::LayoutContext::new(),
+            32.0,
+            40.0,
+            weight,
+            "'SF Pro Display', sans-serif",
+            &[],
+            0.0,
+        );
+        let fixture = include_bytes!("../tests/fonts/cjk-subset.ttc").as_slice();
+        let mut faces = Vec::new();
+        for line in layout.lines() {
+            for run in line.runs() {
+                let data = run.font();
+                let font = FontRef::from_index(data.data.as_ref(), data.index).unwrap();
+                let name = |id| {
+                    font.localized_strings(id)
+                        .english_or_first()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                };
+                faces.push((
+                    name(StringId::FAMILY_NAME),
+                    name(StringId::SUBFAMILY_NAME),
+                    data.data.as_ref() == fixture,
+                    data.index,
+                ));
+            }
+        }
+        faces
+    }
+
+    fn register_sf_pro(context: &mut FontContext) {
+        for bytes in [
+            include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf")
+                .as_slice(),
+            include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf").as_slice(),
+        ] {
+            context
+                .collection
+                .register_fonts(bytes.to_vec().into(), None);
+        }
+    }
+
+    #[test]
+    fn bundled_noto_sc_draws_actual_song_and_keeps_jp_kr_preferred() {
+        let mut context = isolated();
+        // Alias the test collection to the production Japanese and Korean
+        // candidates. These faces intentionally lack Simplified-only Han.
+        for family in ["Hiragino Sans", "Apple SD Gothic Neo"] {
+            context.collection.register_fonts(
+                include_bytes!("../tests/fonts/cjk-subset.ttc")
+                    .as_slice()
+                    .to_vec()
+                    .into(),
+                Some(FontInfoOverride {
+                    family_name: Some(family),
+                    ..Default::default()
+                }),
+            );
+        }
+        register_sf_pro(&mut context);
+        for style in ["Regular", "Bold"] {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../ExpoLyrics/modules/kinesync-rust-lyrics/ios/Fonts/NotoSansCJKsc-",
+            );
+            let bytes = std::fs::read(format!("{path}{style}.otf"))
+                .expect("bundled Noto Sans CJK SC face is checked in");
+            assert!(
+                !context
+                    .collection
+                    .register_fonts(bytes.into(), None)
+                    .is_empty(),
+                "bundled {style} face must register"
+            );
+        }
+        let primary = context.collection.family_id("SF Pro Display").unwrap();
+        let han = Script::from_bytes(*b"Hani");
+        context.collection.set_fallbacks(han, [primary].into_iter());
+        configure(&mut context);
+        for weight in [400.0, 700.0] {
+            let simplified = shaped_face_names(&mut context, "摆长揽诚钱", weight);
+            assert!(
+                simplified
+                    .iter()
+                    .any(|(family, _, _, _)| family == "Noto Sans CJK SC"),
+                "Simplified-only Han must reach bundled Noto at {weight}: {simplified:?}"
+            );
+            if weight == 700.0 {
+                assert!(
+                    simplified.iter().any(|(family, style, _, _)| {
+                        family == "Noto Sans CJK SC" && style == "Bold"
+                    }),
+                    "weight 700 must use the bundled Noto Bold face: {simplified:?}"
+                );
+            }
+            assert_shaped_outlines(&mut context, SONG_MAIN, weight);
+            assert_shaped_outlines(&mut context, SONG_BACKGROUND, weight);
+            // Japanese and Korean must stay on the earlier preferred families.
+            let japanese = shaped_face_names(&mut context, "革命道中君夢中愛", weight);
+            assert!(
+                japanese
+                    .iter()
+                    .all(|(_, _, fixture, index)| *fixture && *index <= 1),
+                "Japanese must stay on the earlier fixture faces: {japanese:?}"
+            );
+            let korean = shaped_face_names(&mut context, "한국어", weight);
+            assert!(
+                korean
+                    .iter()
+                    .all(|(_, _, fixture, index)| *fixture && *index <= 1),
+                "Korean must stay on the earlier fixture faces: {korean:?}"
+            );
+        }
     }
 
     #[test]
@@ -294,7 +482,16 @@ mod tests {
         for weight in [400.0, 700.0] {
             // Chinese is intentionally required here: failures expose an
             // installation/coverage limit rather than silently skipping it.
-            for text in ["革命道中君夢中愛", "汉语爱漢語愛", "한국어"] {
+            // The reported song corpus is split into its main and intended
+            // Korean plus Chinese background voices. Both must draw every
+            // glyph at the actual Spicy weights.
+            for text in [
+                "革命道中君夢中愛",
+                "汉语爱漢語愛",
+                "한국어",
+                SONG_MAIN,
+                SONG_BACKGROUND,
+            ] {
                 assert_shaped_outlines(&mut fonts.context, text, weight);
             }
         }
