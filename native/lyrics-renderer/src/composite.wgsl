@@ -4,6 +4,7 @@
 @group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(4) var<uniform> band: vec4<f32>;
 @group(0) @binding(5) var overlay: texture_2d<f32>;
+@group(0) @binding(6) var<uniform> blur: vec4<f32>;
 fn linear(c: vec3<f32>) -> vec3<f32> {
     return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
@@ -23,7 +24,10 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
     if any(gid.xy >= size) { return; }
     let d = max(max(band.x - f32(gid.y), f32(gid.y) - band.y), 0.0);
     let flags=u32(band.z);
-    let strength = clamp(d / (60.0 * band.w), 0.0, 1.0) * f32(flags & 1u);
+    // Manual scrolling lowers blur.x to zero while leaving the protected band
+    // and the glow path untouched. The two blur bases are still sampled only
+    // when strength is positive.
+    let strength = clamp(d / (60.0 * band.w), 0.0, 1.0) * f32(flags & 1u) * clamp(blur.x, 0.0, 1.0);
     let far_weight = clamp((d - 160.0 * band.w) / (60.0 * band.w), 0.0, 1.0);
     let c = textureLoad(sharp, gid.xy, 0);
     var color = vec4<f32>(linear(c.rgb) * c.a, c.a);

@@ -22,6 +22,14 @@ sharp straight-sRGB RGBA8 texture; a half-resolution linear-premultiplied
 RGBA16Float box and separable compute filters produce near/far blur;
 a GPU compositor preserves the complete active and next-line band and applies
 progressive blur elsewhere. No CPU pixel blur or JS frame work is involved.
+Manual scroll ownership sets the compositor blur strength to zero so every
+visible line stays sharp, including inertia. Re-engaging auto-follow eases the
+strength back to one over 220 ms with smoothstep. The protected band, glyph
+emission and glow math are unchanged. Blur settling is part of
+`metrics.animating`, so both native display loops keep requesting frames while
+playback and scrolling are paused. A new track resets the ramp immediately and
+a new drag cancels a settling restore. This is shared Rust state for iOS and
+Android. Device validation is still required for the visual ramp.
 Surface presentation converts once to the platform's advertised alpha/color
 contract. The final copy writes premultiplied encoded sRGB to supported unorm
 surfaces without blending. Locked Metal HAL mislabels its actual premultiplied

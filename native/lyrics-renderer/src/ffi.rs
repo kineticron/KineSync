@@ -77,6 +77,96 @@ struct Engine {
     appearance: crate::appearance::AppearanceState,
     /// Skia `following`: manual touch owns the viewport until explicitly resumed.
     following: bool,
+    /// Inactive-line blur strength. Manual ownership makes every line sharp.
+    /// Re-engaging follow eases this back to one so blur cannot snap on.
+    blur: BlurRamp,
+}
+
+/// Blur restoration is deliberately one-way and time based. Manual ownership
+/// takes effect on the next frame, while a re-engaged follow ramps over a short
+/// interval that keeps the default blur continuous.
+const BLUR_RESTORE_MS: f64 = 220.0;
+
+#[derive(Clone, Copy, Debug)]
+struct BlurRamp {
+    value: f32,
+    from: f32,
+    start_ms: f64,
+    target: f32,
+    /// The next actual render frame anchors the tween. A command path can run
+    /// long after the last rendered frame, so using its timestamp here would
+    /// skip the whole ramp after an idle manual view.
+    pending_start: bool,
+}
+
+impl Default for BlurRamp {
+    fn default() -> Self {
+        Self {
+            value: 1.0,
+            from: 1.0,
+            start_ms: 0.0,
+            target: 1.0,
+            pending_start: false,
+        }
+    }
+}
+
+impl BlurRamp {
+    /// A new song never inherits the previous song's sharp manual viewport.
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Manual drag, inertia or an explicit follow cancel removes blur now.
+    fn sharp(&mut self) {
+        self.value = 0.0;
+        self.from = 0.0;
+        self.start_ms = 0.0;
+        self.target = 0.0;
+        self.pending_start = false;
+    }
+
+    /// Start or continue a smooth return to the default blur. Calling this
+    /// again during the same ramp must not restart it. The first render after
+    /// this call keeps the sharp frame and anchors the 220 ms tween to its own
+    /// clock rather than to a stale command timestamp.
+    fn restore(&mut self) {
+        if self.target < 1.0 {
+            self.from = self.value;
+            self.start_ms = 0.0;
+            self.target = 1.0;
+            self.pending_start = true;
+        }
+    }
+
+    /// Returns true while a restore still needs another frame. The native
+    /// owners keep scheduling on this even when playback and scrolling pause.
+    fn advance(&mut self, now_ms: f64) -> bool {
+        if self.target <= 0.0 {
+            self.value = 0.0;
+            self.pending_start = false;
+            return false;
+        }
+        if self.value >= 1.0 {
+            self.value = 1.0;
+            self.pending_start = false;
+            return false;
+        }
+        if self.pending_start {
+            self.start_ms = now_ms.max(0.0);
+            self.pending_start = false;
+            return true;
+        }
+        let progress = ((now_ms - self.start_ms) / BLUR_RESTORE_MS).clamp(0.0, 1.0);
+        let eased = progress * progress * (3.0 - 2.0 * progress);
+        self.value = (f64::from(self.from) + (1.0 - f64::from(self.from)) * eased) as f32;
+        if progress >= 1.0 {
+            self.value = 1.0;
+            false
+        } else {
+            true
+        }
+    }
 }
 static ENGINES: OnceLock<Mutex<HashMap<u64, Engine>>> = OnceLock::new();
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -177,6 +267,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     scroll: FollowScroll::default(),
                     appearance: crate::appearance::AppearanceState::default(),
                     following: true,
+                    blur: BlurRamp::default(),
                     timeline: Timeline::default(),
                     lines: Vec::new(),
                     fonts: crate::typography::Fonts::default(),
@@ -347,6 +438,9 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.settings = Some(settings);
             engine.credits = None;
             reset_track_scroll(&mut engine.scroll, &mut engine.following, track_changed);
+            if track_changed {
+                engine.blur.reset();
+            }
             engine.timeline.replace(generation);
             engine.appearance.reset();
             engine.metrics.generation = generation;
@@ -384,6 +478,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
         };
         if track_changed {
             reset_track_scroll(&mut engine.scroll, &mut engine.following, true);
+            engine.blur.reset();
         }
         replace_track_scroll(
             &mut engine.scroll,
@@ -615,8 +710,13 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
 pub extern "C" fn kr_set_following(handle: u64, following: bool) -> i32 {
     with(handle, |engine| {
         engine.following = following;
-        if following && let Some(layout) = &mut engine.layout {
-            layout.clear_manual_anchor();
+        if following {
+            if let Some(layout) = &mut engine.layout {
+                layout.clear_manual_anchor();
+            }
+            engine.blur.restore();
+        } else {
+            engine.blur.sharp();
         }
         Ok(0)
     })
@@ -637,6 +737,7 @@ pub extern "C" fn kr_scroll_by(handle: u64, dy: f64) -> i32 {
         let viewport = f64::from(engine.metrics.height);
         engine.scroll.drag(dy * scale, max_offset, viewport);
         engine.following = false;
+        engine.blur.sharp();
         Ok(0)
     })
 }
@@ -686,6 +787,11 @@ pub extern "C" fn kr_fling(handle: u64, velocity: f64, native_ms: f64) -> i32 {
             .scroll
             .release(velocity * scale, max_offset, viewport, target);
         engine.following = resume;
+        if resume {
+            engine.blur.restore();
+        } else {
+            engine.blur.sharp();
+        }
         Ok(if resume { 1 } else { 0 })
     })
 }
@@ -892,6 +998,8 @@ pub extern "C" fn kr_render(
         // here would clear the spring history every frame.
         let command = layout.scroll_command(position, engine.scroll.position());
         let scroll = engine.scroll.sample(&command, native_ms, engine.following);
+        let blur_animating = engine.blur.advance(native_ms);
+        let blur = engine.blur.value;
         let effect = crate::appearance::LIVE_EFFECT;
         engine.appearance.prepare(layout, position, native_ms);
         engine
@@ -914,7 +1022,7 @@ pub extern "C" fn kr_render(
             engine.scroll.animating(),
             engine.timeline.playing && engine.timeline.rate > 0.0,
         );
-        engine.metrics.animating = u32::from(schedule.continuous);
+        engine.metrics.animating = u32::from(schedule.continuous || blur_animating);
         engine.metrics.visible_changes = u32::from(schedule.visible_changes);
         engine.metrics.next_cue_native_ms = crate::scheduling::native_cue(
             position,
@@ -927,12 +1035,13 @@ pub extern "C" fn kr_render(
             prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
         let (stats, present) = engine
             .surface
-            .render_overlay(
+            .render_overlay_scaled(
                 &engine.scene,
                 &engine.overlay,
                 band,
                 frame,
                 crate::appearance::LIVE_EFFECT.glow(),
+                blur,
             )
             .map_err(|e| e.to_string())?;
         engine.metrics.frames += 1;
@@ -1188,6 +1297,81 @@ mod tests {
             !following,
             "translation, credits and layout revisions must keep manual ownership"
         );
+    }
+
+    #[test]
+    fn manual_scroll_sharpens_and_follow_reengage_restores_blur_smoothly() {
+        let mut blur = BlurRamp::default();
+        assert_eq!(blur.value, 1.0);
+        // Drag entry and inertia both keep every line sharp.
+        blur.sharp();
+        assert_eq!(blur.value, 0.0);
+        assert!(!blur.advance(1_000.0));
+        // A near-active release starts a tween rather than snapping blur on.
+        // The first render remains sharp and anchors the tween.
+        blur.restore();
+        assert!(blur.advance(1_000.0));
+        assert_eq!(blur.value, 0.0);
+        let quarter = {
+            blur.advance(1_055.0);
+            blur.value
+        };
+        assert!(quarter > 0.0 && quarter < 1.0, "quarter value {quarter}");
+        let half = {
+            blur.advance(1_110.0);
+            blur.value
+        };
+        assert!(half > quarter && half < 1.0, "half value {half}");
+        assert!(blur.advance(1_219.0));
+        assert!(!blur.advance(1_220.0));
+        assert_eq!(blur.value, 1.0);
+        // Repeated follow reconciliation during the ramp must not restart it.
+        blur.sharp();
+        blur.restore();
+        blur.restore();
+        assert!(blur.advance(2_000.0));
+        blur.advance(2_110.0);
+        assert!(blur.value > 0.0);
+    }
+
+    #[test]
+    fn cancel_and_track_change_do_not_leave_stale_manual_blur() {
+        let mut blur = BlurRamp::default();
+        blur.sharp();
+        blur.restore();
+        assert!(blur.advance(4_000.0));
+        blur.advance(4_100.0);
+        assert!(blur.value > 0.0 && blur.value < 1.0);
+        // A new drag during restoration cancels it and returns to sharp.
+        blur.sharp();
+        assert_eq!(blur.value, 0.0);
+        assert!(!blur.advance(4_150.0));
+        // A new track restores the default blur immediately.
+        blur.reset();
+        assert_eq!(blur.value, 1.0);
+        assert!(!blur.advance(4_200.0));
+        // An explicit follow cancel while already sharp stays inert.
+        blur.sharp();
+        blur.sharp();
+        assert_eq!(blur.value, 0.0);
+    }
+
+    #[test]
+    fn blur_restore_keeps_animating_while_playback_and_scroll_are_paused() {
+        let mut blur = BlurRamp::default();
+        blur.sharp();
+        // The view was manual and paused long after its last frame.
+        blur.restore();
+        // The first actual frame after the idle gap is still sharp and only
+        // anchors the tween, so a stale timestamp cannot skip the ramp.
+        assert!(blur.advance(69_000.0));
+        assert_eq!(blur.value, 0.0);
+        // The render loop must keep requesting frames only because of blur.
+        assert!(blur.advance(69_030.0));
+        assert!(blur.value > 0.0 && blur.value < 1.0);
+        assert!(blur.advance(69_219.0));
+        assert!(!blur.advance(69_220.0));
+        assert_eq!(blur.value, 1.0);
     }
 
     #[test]

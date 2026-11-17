@@ -64,6 +64,7 @@ struct Filter {
     composite: ComputePipeline,
     composite_group: BindGroup,
     band: Buffer,
+    blur: Buffer,
     // Textures retained for the lifetime of the bind groups, avoiding per-frame allocation.
     _textures: Vec<Texture>,
 }
@@ -262,6 +263,7 @@ impl Filter {
             })
             .collect();
         let band = uniform(device, "protected active and next band", [0.0; 4]);
+        let blur = uniform(device, "inactive line blur strength", [1.0, 0.0, 0.0, 0.0]);
         let composite_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("composite inputs"),
             layout: &composite.get_bind_group_layout(0),
@@ -275,6 +277,10 @@ impl Filter {
                     binding: 4,
                     resource: band.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: blur.as_entire_binding(),
+                },
             ],
         });
         Self {
@@ -286,6 +292,7 @@ impl Filter {
             composite,
             composite_group,
             band,
+            blur,
             _textures: textures,
         }
     }
@@ -515,7 +522,15 @@ impl Gpu {
         appearance: bool,
         glow: bool,
     ) -> Result<FrameStats, Error> {
-        self.render_frame_with_overlay(scene, None, protection, blur, profile, appearance, glow)
+        self.render_frame_with_overlay(
+            scene,
+            None,
+            protection,
+            if blur { 1.0 } else { 0.0 },
+            profile,
+            appearance,
+            glow,
+        )
     }
     #[allow(
         clippy::too_many_arguments,
@@ -526,7 +541,7 @@ impl Gpu {
         scene: &Scene,
         overlay: Option<&Scene>,
         protection: (f32, f32),
-        blur: bool,
+        blur: f32,
         profile: bool,
         appearance: bool,
         glow: bool,
@@ -566,13 +581,16 @@ impl Gpu {
         let values = [
             protection.0,
             protection.1,
-            if blur { 1.0 } else { 0.0 }
+            if blur > 0.0 { 1.0 } else { 0.0 }
                 + if appearance { 2.0 } else { 0.0 }
                 + if glow { 4.0 } else { 0.0 },
             self.scale,
         ];
         let band: [u8; 16] = std::array::from_fn(|i| values[i / 4].to_le_bytes()[i % 4]);
         self.queue.write_buffer(&self.filter.band, 0, &band);
+        let blur_strength = blur.clamp(0.0, 1.0).to_le_bytes();
+        self.queue
+            .write_buffer(&self.filter.blur, 0, &blur_strength);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.filter.encode(
             &mut encoder,
@@ -582,7 +600,7 @@ impl Gpu {
                 self.height,
                 protection,
                 self.scale,
-                blur,
+                blur > 0.0,
                 appearance && glow,
             ),
         );
@@ -862,7 +880,7 @@ impl SurfaceRenderer {
         band: (f32, f32),
         frame: SurfaceTexture,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, None, band, frame, false, false)
+        self.render_surface(scene, None, band, frame, false, false, 1.0)
     }
     pub fn render_appearance(
         &mut self,
@@ -871,17 +889,22 @@ impl SurfaceRenderer {
         frame: SurfaceTexture,
         glow: bool,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, None, band, frame, true, glow)
+        self.render_surface(scene, None, band, frame, true, glow, 1.0)
     }
-    pub(crate) fn render_overlay(
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Explicit render pass configuration"
+    )]
+    pub(crate) fn render_overlay_scaled(
         &mut self,
         scene: &Scene,
         overlay: &Scene,
         band: (f32, f32),
         frame: SurfaceTexture,
         glow: bool,
+        blur: f32,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, Some(overlay), band, frame, true, glow)
+        self.render_surface(scene, Some(overlay), band, frame, true, glow, blur)
     }
     #[allow(
         clippy::too_many_arguments,
@@ -895,12 +918,13 @@ impl SurfaceRenderer {
         frame: SurfaceTexture,
         appearance: bool,
         glow: bool,
+        blur: f32,
     ) -> Result<(FrameStats, f64), Error> {
         // All shared texture accesses and Vello pool reuse are ordered on one
         // queue. wgpu retains submitted resources. No GPU wait in live render.
         let stats = self
             .gpu
-            .render_frame_with_overlay(scene, overlay, band, true, false, appearance, glow)?;
+            .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
@@ -1080,7 +1104,7 @@ mod ownership_tests {
                 &Scene::new(),
                 Some(&overlay),
                 band,
-                true,
+                1.0,
                 false,
                 true,
                 true,

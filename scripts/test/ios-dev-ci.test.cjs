@@ -595,7 +595,7 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(pending.pendingUpdate.generation, 9999);
   for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentCallRate']) assert.ok(swift.includes(`metrics["${name}"]`), name);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
-  assert.match(gpu, /render_frame_with_overlay\(scene, overlay, band, true, false, appearance, glow\)/);
+  assert.match(gpu, /render_frame_with_overlay\(scene, overlay, band, blur, false, appearance, glow\)/);
   assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
   assert.match(gpu, /device.poll\(PollType::Poll\)/);
   assert.match(gpu, /on_submitted_work_done/);
