@@ -97,7 +97,8 @@ for (const style of ['amll', 'spicy']) for (const list of ['flash', 'flat']) for
     const cell = host.props.CellRendererComponent({ index: 0 });
     cell.props.onLayout({ nativeEvent: { layout: { y: 500 } } });
   }
-  const target = style === 'amll' ? 428 : 500;
+  // FlashList positions include the host's 150px first-item offset.
+  const target = (list === 'flash' ? 650 : 500) - (style === 'amll' ? 72 : 0);
   const scroll = y => host.props.onScroll({ nativeEvent: { contentOffset: { y } } });
   const end = () => host.props.onScrollEndDrag({ nativeEvent: { velocity: { y: 0 } } });
   host.props.onTouchStart?.();
