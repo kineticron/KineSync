@@ -882,7 +882,6 @@ function noteUserScroll() {
   touchMoved = true;
   window.clearTimeout(longPressTimer);
   if (staticLyricsMode) return;
-  setAutoFollow(false);
   noteLyricsUserScroll();
   scheduleFrame();
 }

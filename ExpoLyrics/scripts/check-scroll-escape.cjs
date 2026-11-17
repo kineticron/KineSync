@@ -1,5 +1,6 @@
 // Behavioral coverage for the input gate and the actual JS reference handlers.
 const assert = require('node:assert/strict');
+require('./check-spicy-scroll-escape.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -51,8 +52,7 @@ for (const stamp of [999, 1000, 1001]) {
   assert.equal(gate.graceUntil, 0, 'programmatic movement starts no timer');
 }
 
-// These renderers deliberately have no automatic near-active recapture path.
-// Exercise real begin/row/resume handlers rather than inventing one for parity.
+// Exercise actual Skia drag, scroll, release, row and resume handlers.
 const find = (node, type) => {
   if (!node || typeof node !== 'object') return null;
   if (node.type === type) return node;
@@ -67,7 +67,12 @@ for (const style of ['amll', 'spicy']) for (const list of ['flash', 'flat']) {
   const changes = [];
   const h = harness(style, list);
   h.render({ onAutoFollowChange: value => changes.push(value) });
+  const scrollHost = find(h.treeSnapshot(), list === 'flash' ? 'FlashList' : 'FlatList');
+  if (list === 'flat') scrollHost.props.CellRendererComponent({ index: 0 }).props.onLayout({ nativeEvent: { layout: { y: 500 } } });
+  scrollHost.props.onScroll({ nativeEvent: { contentOffset: { y: 500 } } });
   h.drag();
+  scrollHost.props.onScroll({ nativeEvent: { contentOffset: { y: 900 } } });
+  scrollHost.props.onScrollEndDrag({ nativeEvent: {} });
   const manualCommands = h.commands.length;
   h.cue(5000);
   h.content();
@@ -80,6 +85,36 @@ for (const style of ['amll', 'spicy']) for (const list of ['flash', 'flat']) {
   h.render({ autoFollowEnabled: false });
   h.render({ autoFollowEnabled: true, resumeAutoFollowSignal: 1 });
   assert.ok(h.commands.length > manualCommands, 'explicit reference resume still issues a follow command');
+}
+
+for (const style of ['amll', 'spicy']) for (const list of ['flash', 'flat']) for (const stamp of [999, 1001]) {
+  const changes = [];
+  let now = 0;
+  const h = harness(style, list, { clock: { now: () => now } });
+  h.render({ onAutoFollowChange: value => changes.push(value) });
+  const host = find(h.treeSnapshot(), list === 'flash' ? 'FlashList' : 'FlatList');
+  if (list === 'flat') {
+    const cell = host.props.CellRendererComponent({ index: 0 });
+    cell.props.onLayout({ nativeEvent: { layout: { y: 500 } } });
+  }
+  const target = style === 'amll' ? 428 : 500;
+  const scroll = y => host.props.onScroll({ nativeEvent: { contentOffset: { y } } });
+  const end = () => host.props.onScrollEndDrag({ nativeEvent: { velocity: { y: 0 } } });
+  host.props.onTouchStart?.();
+  assert.equal(changes.length, 0, 'ordinary touches leave follow enabled');
+  scroll(target); // Programmatic arrival cannot escape.
+  assert.equal(changes.length, 0);
+  host.props.onScrollBeginDrag(); scroll(target + 100); end();
+  assert.equal(changes.at(-1), false);
+  const count = changes.length;
+  now = stamp;
+  host.props.onScrollBeginDrag(); scroll(target + 120);
+  assert.equal(changes.length, count, 'later scroll gestures never deactivate again');
+  scroll(target); end();
+  assert.equal(changes.at(-1), true, 'deliberate return resumes without waiting for grace');
+  h.render({ autoFollowEnabled: false });
+  h.render({ autoFollowEnabled: true, resumeAutoFollowSignal: 1 });
+  assert.ok(h.commands.length > 0, 'explicit resume commands the active line immediately');
 }
 
 // Run the real AMLL adapter touch/wheel/line/credits and options handlers.
@@ -114,6 +149,8 @@ const adapter = amll.slice(amll.indexOf('function setAutoFollow('), amll.indexOf
 const options = amll.slice(amll.indexOf('function applyOptions('), amll.indexOf('function sync('));
 vm.runInContext(ts.transpileModule(adapter + options, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, context);
 handlers.get('touchmove')();
+assert.equal(context.autoFollowEnabled, true, 'touchmove without a scroll-away does not deactivate follow');
+handlers.get('kinesync-escape')();
 assert.equal(context.autoFollowEnabled, false);
 handlers.get('touchend')();
 handlers.get('kinesync-scroll')();
@@ -121,10 +158,12 @@ assert.equal(context.autoFollowEnabled, false, 'AMLL touch release and momentum 
 playerHandlers.get('line-click')({ type: 'line-click', preventDefault() {} });
 assert.equal(context.autoFollowEnabled, true, 'AMLL deliberate line tap still resumes');
 handlers.get('wheel')();
+handlers.get('kinesync-escape')();
 assert.equal(context.autoFollowEnabled, false);
 handlers.get('credits-click')();
 assert.equal(context.autoFollowEnabled, true, 'AMLL credits command still resumes');
 handlers.get('wheel')();
+handlers.get('kinesync-escape')();
 context.applyOptions({ autoFollowEnabled: false, resumeAutoFollowSignal: 1, tapToSeekEnabled: true });
 assert.equal(context.autoFollowEnabled, true, 'AMLL explicit resume overrides manual follow');
 assert.equal(resets, 3);
@@ -179,3 +218,9 @@ trackContext.currentTrack = { id: 'new' };
 vm.runInContext(resetCode, trackContext);
 assert.equal(parentFollowing, true, 'new song resets even a manual false in the real parent effect');
 console.log('Scroll escape and reference ownership behavioral checks passed.');
+
+handlers.get('kinesync-escape')();
+assert.equal(context.autoFollowEnabled, false);
+handlers.get('kinesync-return')();
+assert.equal(context.autoFollowEnabled, true, 'AMLL return event resumes immediately');
+assert.equal(resets, 4, 'AMLL return cancels native inertia and grace');

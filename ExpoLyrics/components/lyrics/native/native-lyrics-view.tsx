@@ -1,3 +1,4 @@
+import { createLyricsScrollEscape } from '@/lib/lyrics-scroll-escape';
 import type { BatchedMotion } from './batched-amll-motion';
 import { composeSimpleRegistry, createSimpleScrollState, type SimpleScrollState } from './simple-amll-motion';
 import { useFastLyricLoading } from '@/lib/fast-lyric-loading';
@@ -205,6 +206,17 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     batch: simpleScroll ? motionBatch : undefined, batchRows,
     simple: simpleScroll ? simpleState : undefined }), [actualScrollOffset, batchRows, motionBatch, motionRegistry, renderedScrollResidual, scrollCommand, scrollResidual, simpleScroll, simpleState, style]);
   const following = useRef(autoFollowEnabled);
+  const escape = useRef(createLyricsScrollEscape());
+  const manualDrag = useRef(false);
+  const manualOffset = useRef(0);
+  const cellLayouts = useRef<Record<number, number>>({});
+  const escapeTrack = useRef(liveTrackId);
+  if (escapeTrack.current !== liveTrackId) {
+    escapeTrack.current = liveTrackId;
+    escape.current.reset();
+    manualDrag.current = false;
+    following.current = true;
+  }
   const pendingScroll = useRef<{ index: number; animated: boolean } | null>(null);
   const lastScrollTarget = useRef('');
   const activeIndex = useRef(-2);
@@ -249,7 +261,7 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   const scrollTo = useCallback((index: number, animated: boolean) => {
     const currentRows = latestRows.current;
     index = nativeFollowIndex(currentRows, index, currentPosition.current);
-    if (!following.current || !active || staticLyrics || index < 0 || index >= currentRows.length) return;
+    if (manualDrag.current || !following.current || !active || staticLyrics || index < 0 || index >= currentRows.length) return;
     // A new semantic cue/seek or explicit follow request ends the one-update
     // translation guard so later estimated-layout measurements can correct it.
     translationOnlyLayout.current = false;
@@ -335,6 +347,11 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   useEffect(() => {
     const previous = followControl.current;
     if (previous.enabled !== autoFollowEnabled || previous.signal !== resumeAutoFollowSignal) following.current = autoFollowEnabled;
+    if (previous.signal !== resumeAutoFollowSignal || (!previous.enabled && autoFollowEnabled)) {
+      escape.current.reset(manualOffset.current);
+      manualDrag.current = false;
+      following.current = true;
+    }
     followControl.current = { enabled: autoFollowEnabled, signal: resumeAutoFollowSignal };
     lastScrollTarget.current = '';
     const currentLyrics = latestLyrics.current;
@@ -355,10 +372,54 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
   }, [onAutoFollowChange, onUserInteraction, scrollCommand]);
   const press = useCallback((row: NativeLyricRow) => {
     following.current = true;
+    escape.current.reset(manualOffset.current);
     onAutoFollowChange?.(true);
     onUserInteraction?.();
     onLinePress?.(row.line);
   }, [onAutoFollowChange, onLinePress, onUserInteraction]);
+  const manualTarget = () => {
+    const current = getPlaybackWindowState(currentPosition.current, latestLyrics.current, latestBackgrounds.current, latestTiming.current);
+    const range = getAutoScrollTargetRange(current, currentPosition.current, latestLyrics.current);
+    if (!range) return NaN;
+    const index = nativeFollowIndex(latestRows.current, range.startIndex, currentPosition.current);
+    const y = list === 'flash' ? flashRef.current?.getLayout(index)?.y : cellLayouts.current[index];
+    const anchor = style === 'amll' ? viewportHeight * 0.08 + 8 : landscapeMode ? 32 : 0;
+    return y === undefined ? NaN : Math.max(0, y + (list === 'flash' ? flashRef.current?.getFirstItemOffset() ?? 0 : 0) - anchor);
+  };
+  const beginManualScroll = (event?: { nativeEvent: { contentOffset: { y: number } } }) => {
+    if (event) manualOffset.current = event.nativeEvent.contentOffset.y;
+    manualDrag.current = true;
+    escape.current.begin(manualOffset.current);
+    const command = { ...scrollState.current, offset: manualOffset.current,
+      serial: scrollState.current.serial + 1, instant: true, snap: false };
+    scrollState.current = command;
+    scrollCommand.value = command;
+    onUserInteraction?.();
+  };
+  const noteManualScroll = (event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    manualOffset.current = event.nativeEvent.contentOffset.y;
+    if (!manualDrag.current) return;
+    escape.current.move(manualOffset.current, manualTarget(), performance.now());
+    if (following.current && escape.current.graceUntil > 0) takeOwnership();
+  };
+  const endManualScroll = (event: { nativeEvent: { velocity?: { y: number }; contentOffset?: { y: number } } }) => {
+    if (manualDrag.current && event.nativeEvent.contentOffset) noteManualScroll({ nativeEvent: { contentOffset: event.nativeEvent.contentOffset } });
+    manualDrag.current = false;
+    if (!escape.current.release(manualTarget(), 64, performance.now(), event.nativeEvent.velocity?.y ?? 0)) return;
+    following.current = true;
+    onAutoFollowChange?.(true);
+    lastScrollTarget.current = '';
+    const current = getPlaybackWindowState(currentPosition.current, latestLyrics.current, latestBackgrounds.current, latestTiming.current);
+    const range = getAutoScrollTargetRange(current, currentPosition.current, latestLyrics.current);
+    if (range) scrollTo(range.startIndex, true);
+  };
+  const FlatCell = useCallback((props: React.ComponentProps<typeof View> & { index: number }) => {
+    const Cell = style === 'amll' && !staticLyrics ? AmllLayoutCell : View;
+    return <Cell {...props} onLayout={event => {
+      cellLayouts.current[props.index] = event.nativeEvent.layout.y;
+      props.onLayout?.(event);
+    }} />;
+  }, [style, staticLyrics]);
   const longPress = useCallback((row: NativeLyricRow) => { onUserInteraction?.(); onLineLongPress?.(row.line); }, [onLineLongPress, onUserInteraction]);
   // Canvas presentation stays on the UI clock; background flow is permanent.
   const experimentalWindow = reveal === 'canvas' ? undefined : window;
@@ -467,13 +528,15 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
           drawDistance={420} renderScrollComponent={ReferenceScrollView} maintainVisibleContentPosition={maintainVisibleContentPosition} contentContainerStyle={contentStyle}
           onLoad={onContentSizeChange}
           onCommitLayoutEffect={onContentSizeChange}
-          ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={takeOwnership}
-          onTouchStart={takeOwnership} onContentSizeChange={onContentSizeChange} />
+          ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={beginManualScroll}
+          onScroll={noteManualScroll} onScrollEndDrag={endManualScroll} scrollEventThrottle={16}
+          onTouchStart={onUserInteraction} onTouchCancel={() => { manualDrag.current = false; escape.current.begin(manualOffset.current); }} onContentSizeChange={onContentSizeChange} />
       : <FlatList ref={flatRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} contentContainerStyle={contentStyle}
-          CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
+          CellRendererComponent={FlatCell}
           extraData={renderItem}
-          ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={takeOwnership}
-          onTouchStart={takeOwnership} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
+          ListFooterComponent={footer} showsVerticalScrollIndicator={false} onScrollBeginDrag={beginManualScroll}
+          onScroll={noteManualScroll} onScrollEndDrag={endManualScroll} scrollEventThrottle={16}
+          onTouchStart={onUserInteraction} onTouchCancel={() => { manualDrag.current = false; escape.current.begin(manualOffset.current); }} onScrollToIndexFailed={retryFlatScroll} onContentSizeChange={onContentSizeChange}
           initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} removeClippedSubviews={false} />}</ReferenceScrollContext.Provider></NativeLyricsFontContext.Provider>;
   const renderedContent = __DEV__ ? <LyricsArrivalContext.Provider value={traceContext}><LyricsArrivalCommit>{content}</LyricsArrivalCommit></LyricsArrivalContext.Provider> : content;
   return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>

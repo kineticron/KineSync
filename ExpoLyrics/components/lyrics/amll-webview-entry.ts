@@ -619,13 +619,26 @@ playerElement.addEventListener(
   () => {
     touchMoved = true;
     window.clearTimeout(longPressTimer);
-    setAutoFollow(false);
   },
   { passive: true },
 );
 
 // Core drag/inertia updates need frames even while playback is paused.
 playerElement.addEventListener('kinesync-scroll', () => scheduleFrame(IDLE_ANIMATION_GRACE_MS));
+playerElement.addEventListener('kinesync-input', (event) => {
+  const detail = (event as CustomEvent<{ offset: number; setTarget: (value: number) => void }>).detail;
+  const index = sourceIndexByAmllLine.indexOf(activeSourceIndex);
+  const row = getLineWrappers()[index];
+  const host = playerElement.getBoundingClientRect();
+  const top = row?.getBoundingClientRect().top;
+  detail.setTarget(top === undefined ? NaN : detail.offset + top - host.top - host.height * 0.08);
+});
+playerElement.addEventListener('kinesync-escape', () => setAutoFollow(false));
+playerElement.addEventListener('kinesync-return', () => {
+  setAutoFollow(true);
+  player.resetScroll();
+  void relayout(true);
+});
 playerElement.addEventListener('touchcancel', () => {
   window.clearTimeout(longPressTimer);
   touchStartSourceIndex = -1;
@@ -643,7 +656,7 @@ playerElement.addEventListener(
 playerElement.addEventListener(
   "wheel",
   () => {
-    setAutoFollow(false);
+    scheduleFrame(IDLE_ANIMATION_GRACE_MS);
   },
   { passive: true },
 );

@@ -52,6 +52,27 @@ send('touchcancel', 200); assert.equal(frames.size, 0);
 now += 1000; assert.equal(engine.canResumeAutoAlign, false, 'manual scrolling waits for the Auto button');
 now += 3000;
 assert.equal(engine.canResumeAutoAlign, false, 'escape grace expiry never enables upstream timed recapture');
+for (const elapsed of [999, 1001]) {
+  engine.resetScroll();
+  assert.equal(engine.escapeUntil, 0, 'resume/track reset cancels grace');
+  send('touchstart', 400);
+  assert.equal(engine.escapeUntil, 0, 'ordinary touch starts no grace');
+  now += 16; send('touchmove', 300);
+  const deadline = now + 1000;
+  assert.equal(engine.escapeUntil, deadline, 'first manual away sample starts one second grace');
+  send('touchend', 300); frame();
+  now = deadline - 1000 + elapsed;
+  send('touchstart', 300); now += 1; send('touchmove', 280);
+  assert.equal(engine.escapeUntil, deadline, 'later manual gestures cannot extend grace');
+  // Return toward the active anchor while retaining the real input handlers.
+  engine.escapeTarget = engine.offset - 40;
+  send('touchmove', 320); send('touchend', 320); frame();
+  assert.equal(engine.returnRequested, true, 'deliberate return is accepted on both sides of one second');
+  engine.resetScroll();
+  assert.equal(engine.escapeUntil, 0);
+  frame();
+  assert.equal(engine.escapeUntil, 0, 'programmatic frames start no timer');
+}
 const focus = new context.FocusController();
 const flags = { isAutoAlignSuspended: false, hasBottomContent: false, canDisplayInterlude: false };
 focus.resolve({ scrollToIndex: 2 }, 10, flags);
