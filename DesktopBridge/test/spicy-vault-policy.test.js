@@ -131,7 +131,7 @@ test('an on-screen expired copy is cleared and refreshed once, without an empty-
   assert.equal(context.latestLyricsPacket.lyrics.length, 0);
 });
 
-test('vault replacement keeps Spicy origin through relabel and drops it only for fresh independent lrc.red content', t => {
+test('vault replacement keeps Spicy origin and ISRC through relabel and ordinary saves', t => {
   const { store } = fixture(t);
   const saved = store.save({ track, lyrics, originalSource: 'spicy-lyrics-line', metadata: {
     ...metadata(Date.now()), fetchOrigin: { provider: 'Spicy Lyrics', host: 'api.spicylyrics.org', isrc: 'US5TA1500050' },
@@ -151,7 +151,8 @@ test('vault replacement keeps Spicy origin through relabel and drops it only for
     attribution: { source: 'lrc-red', provider: 'lrc.red' }, ttml: { content: '<tt>independent</tt>' },
     independentContent: { source: 'lrc-red', verified: true },
   } });
-  const independent = store.listEntries()[0];
-  assert.equal(independent.exportRestricted, false, 'fresh independent lrc.red content replaces Spicy provenance');
-  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin, undefined);
+  const ordinarySave = store.listEntries()[0];
+  assert.equal(ordinarySave.exportRestricted, true, 'ordinary saves must keep Spicy provenance sticky');
+  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin.isrc, 'US5TA1500050');
+  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin.host, 'api.spicylyrics.org');
 });
