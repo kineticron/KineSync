@@ -14,6 +14,52 @@ if (!fs.existsSync(header)) errs.push("header path unresolved " + header);
 const view = fs.readFileSync(path.join(d, "src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsView.kt"), "utf8");
 const owner = fs.readFileSync(path.join(d, "src/main/java/dev/kineticron/rustlyrics/RustOwner.kt"), "utf8");
 if (/textureView\.visibility\s*=/.test(view)) errs.push("TextureView must stay VISIBLE; use alpha");
+// Settings must hide the retained texture even when a worker frame arrives late.
+const viewMethod = (name) => view.match(new RegExp("\\bfun " + name + "\\([\\s\\S]*?\\n  \\}"))?.[0] || "";
+const presentation = viewMethod("updatePresentationVisibility");
+const alphaWrites = view.match(/textureView\.alpha\s*=/g) || [];
+if (alphaWrites.length !== 1 || !/textureView\.alpha = if \(presentable\) 1f else 0f/.test(presentation)) {
+  errs.push("all texture alpha writes must use the centralized presentation gate");
+}
+for (const name of ["lifecycle", "onDetachedFromWindow", "onSurfaceTextureAvailable", "onSurfaceTextureDestroyed"]) {
+  if (!/updatePresentationVisibility\(\)/.test(viewMethod(name))) errs.push(name + " must update texture presentation");
+}
+for (const name of ["setActive", "onWindowVisibilityChanged", "onAttachedToWindow"]) {
+  if (!/lifecycle\(\)/.test(viewMethod(name))) errs.push(name + " must apply the presentation lifecycle");
+}
+for (const name of ["onSurfaceTextureAvailable", "onSurfaceTextureDestroyed"]) {
+  if (!/displayedGeneration = -1L/.test(viewMethod(name))) errs.push(name + " must invalidate the presented generation");
+}
+if (!/private var displayedGeneration = -1L/.test(view)) errs.push("a new view must start without presented content");
+const frame = viewMethod("onFrame");
+if (!/session != epoch/.test(frame) || !/frameRevision != requestedRevision \|\| r\.generation != generation/.test(frame) ||
+    !/displayedGeneration = r\.generation/.test(frame) ||
+    frame.lastIndexOf("lifecycle()") < frame.indexOf("displayedGeneration = r.generation")) {
+  errs.push("frame completion must validate its session and revision, then apply the presentation lifecycle");
+}
+// Exercise the actual Kotlin Boolean expression, which also uses valid JS syntax.
+const gate = presentation.match(/val presentable = ([\s\S]*?)\n    textureView\.alpha/);
+if (!gate) {
+  errs.push("missing texture presentation predicate");
+} else {
+  const fields = ["attached", "foreground", "enabled", "failed", "surfaceWaiting", "owner", "displayedGeneration", "generation"];
+  const presentable = new Function(...fields, "return (" + gate[1] + ");");
+  const state = { attached: true, foreground: true, enabled: true, failed: false, surfaceWaiting: false,
+    owner: {}, displayedGeneration: 7, generation: 7 };
+  const expectPresentation = (label, patch, expected) => {
+    const sample = { ...state, ...patch };
+    if (presentable(...fields.map((key) => sample[key])) !== expected) errs.push("texture presentation: " + label);
+  };
+  expectPresentation("current content", {}, true);
+  expectPresentation("inactive retained content", { enabled: false }, false);
+  expectPresentation("late current frame while inactive", { enabled: false, displayedGeneration: 7 }, false);
+  expectPresentation("reactivation with current content", { enabled: true }, true);
+  expectPresentation("reactivation with stale content", { enabled: true, generation: 8 }, false);
+  expectPresentation("new surface without a frame", { displayedGeneration: -1, generation: 0 }, false);
+  for (const patch of [{ attached: false }, { foreground: false }, { failed: true }, { surfaceWaiting: true }, { owner: null }]) {
+    expectPresentation("late frame while " + JSON.stringify(patch), { ...patch, displayedGeneration: 7 }, false);
+  }
+}
 if (!/override fun onLayout/.test(view)) errs.push("view must lay out its TextureView");
 if (!/onSurfaceTextureDestroyed[\s\S]*?removeFrameCallback/.test(view)) errs.push("destroy must cancel Choreographer");
 if (!/onDetachedFromWindow[\s\S]*?velocity\?\.recycle/.test(view)) errs.push("detach must recycle VelocityTracker");

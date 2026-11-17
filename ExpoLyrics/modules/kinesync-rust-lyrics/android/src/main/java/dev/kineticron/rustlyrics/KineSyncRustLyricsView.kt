@@ -58,7 +58,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var retryCount = 0
   private var retryBlocked = false
   private var retryWork: Runnable? = null
-  private var displayedGeneration = 0L
+  private var displayedGeneration = -1L
   private var surfaceWaiting = false
   private var failed = false
   private var animating = false
@@ -102,7 +102,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     clipChildren = true
     setBackgroundColor(Color.TRANSPARENT)
     textureView.isOpaque = false
-    textureView.alpha = 0f
+    updatePresentationVisibility()
     textureView.surfaceTextureListener = this
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
   }
@@ -171,6 +171,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
     attached = false
+    updatePresentationVisibility()
     velocity?.recycle(); velocity = null; dragging = false
     Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
     cancelRetry(); cancelCue()
@@ -193,7 +194,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     texture = st
     session++
     val epoch = session
-    failed = false; textureView.alpha = 0f; markDirty()
+    displayedGeneration = -1L
+    failed = false; updatePresentationVisibility(); markDirty()
     owner = RustOwner(context, st) { event -> handleEvent(event, epoch) }
     refresh(); lifecycle()
   }
@@ -205,6 +207,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (o != null) { o.dispose(); owner = null } else st.release()
     texture = null
     session++; busy = false; animating = false
+    displayedGeneration = -1L
+    updatePresentationVisibility()
     // Owner releases the texture after kr_destroy, so the view must not.
     return false
   }
@@ -229,7 +233,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       onMetrics(m)
     } else {
       if (event["state"] == "error") {
-        failed = true; textureView.alpha = 0f
+        failed = true; updatePresentationVisibility()
         Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
       }
       if (event["state"] == "ready") { markDirty(); lifecycle() }
@@ -253,7 +257,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       releasePending = false
       followEpoch++
     }
-    failed = false; textureView.alpha = 0f
+    failed = false; updatePresentationVisibility()
     track = value; markDirty(); refresh(); lifecycle()
   }
   fun copyLayout(promise: Promise) {
@@ -266,7 +270,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       Anchor(j.getLong("generation"), j.getLong("sequence"), j.getDouble("positionMs"), j.getDouble("nativeMs"),
         j.getBoolean("playing"), j.getDouble("rate"), j.getBoolean("snap"))
     } catch (_: Exception) {
-      failed = true; textureView.alpha = 0f; lifecycle()
+      failed = true; updatePresentationVisibility(); lifecycle()
       onStatus(mapOf("state" to "error", "generation" to generation, "message" to "Invalid Rust playback anchor"))
       return
     }
@@ -368,7 +372,16 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     o.setFollowing(following)
   }
 
+  // Alpha preserves the TextureView surface while inactive. Every presentation,
+  // including a late worker completion, must pass the current lifecycle gate.
+  private fun updatePresentationVisibility() {
+    val presentable = attached && foreground && enabled && !failed && !surfaceWaiting &&
+      owner != null && displayedGeneration == generation
+    textureView.alpha = if (presentable) 1f else 0f
+  }
+
   private fun lifecycle() {
+    updatePresentationVisibility()
     val visible = attached && foreground && enabled && !failed && width > 0 && height > 0 && owner != null
     owner?.setVisible(visible)
     if (!visible) { cancelRetry(); cancelCue(); resumePending = false }
@@ -467,7 +480,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       0 -> {
         nextCueNativeMs = r.nextCueMs
         retryCount = 0
-        textureView.alpha = 1f
         if (surfaceWaiting || displayedGeneration != r.generation) {
           surfaceWaiting = false; displayedGeneration = r.generation
           onStatus(mapOf("state" to "presented", "generation" to r.generation, "message" to "Rust submitted a present call for the current track"))
@@ -485,7 +497,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun scheduleRetry(revision: Long, epoch: Long) {
     dirty = true
     if (retryCount >= retryDelays.size) {
-      retryBlocked = true; surfaceWaiting = true; textureView.alpha = 0f
+      retryBlocked = true; surfaceWaiting = true; updatePresentationVisibility()
       onStatus(mapOf("state" to "waiting", "generation" to generation,
         "message" to "Rust surface unavailable after bounded retries. Resume, seek, resize or recreate to retry."))
       return
