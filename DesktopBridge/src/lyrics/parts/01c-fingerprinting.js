@@ -337,12 +337,15 @@ function spicyFeaturedVariantLyricsMismatch(
  * or credits reference a different feat lineup (e.g. mashup with Dashaun Wesley).
  */
 function featuredVariantLyricsMismatch(track, lyrics, options = {}) {
-  const { authoritativeIdentityMatch } = require("./lyricsRecordingIdentity");
-  // A verified same-recording ID outranks featured/title text differences.
-  // Conflicting IDs still reject because authoritativeIdentityMatch is false.
-  if (authoritativeIdentityMatch(track, options?.candidateIdentity || options?.fetchOrigin || {})) {
-    return false;
-  }
+  const { compareAuthoritativeIdentity } = require("./lyricsRecordingIdentity");
+  // A verified same-recording ID outranks text differences. An explicit ID
+  // conflict is a hard mismatch and must not fall through to heuristics.
+  const authoritative = compareAuthoritativeIdentity(
+    track,
+    options?.candidateIdentity || options?.fetchOrigin || {},
+  );
+  if (authoritative === true) return false;
+  if (authoritative === false) return true;
   if (String(options?.source || "").toLowerCase() === "spicy") {
     return spicyFeaturedVariantLyricsMismatch(
       track,

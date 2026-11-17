@@ -222,12 +222,26 @@ async function fetchFromSpicyLyrics(
       track,
       spicyMetadata.titles,
     );
-    const { authoritativeIdentityMatch } = require("./lyricsRecordingIdentity");
+    const { compareAuthoritativeIdentity } = require("./lyricsRecordingIdentity");
     const spicyIdentity = {
       isrc: String(spicyLyricsData?.ids?.isrc || "").trim(),
       spotifyTrackId,
     };
-    const identityMatched = authoritativeIdentityMatch(track, spicyIdentity);
+    const identityComparison = compareAuthoritativeIdentity(track, spicyIdentity);
+    const identityMatched = identityComparison === true;
+    if (identityComparison === false) {
+      profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
+        spotifyTrackId,
+        declaredTitleMatch,
+        mismatch: true,
+        identityConflict: true,
+      });
+      lastNoMatchError = createSourceStageNoMatchError(
+        "spicy",
+        "identity-conflict",
+      );
+      continue;
+    }
     const variantStartedAt = Date.now();
     if (
       featuredVariantLyricsMismatch(track, lyrics, {

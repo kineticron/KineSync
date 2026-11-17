@@ -2355,10 +2355,13 @@ function spicyFeaturedVariantLyricsMismatch(
  * or credits reference a different feat lineup (e.g. mashup with Dashaun Wesley).
  */
 function featuredVariantLyricsMismatch(track, lyrics, options = {}) {
-  const { authoritativeIdentityMatch } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
-  if (authoritativeIdentityMatch(track, options?.candidateIdentity || options?.fetchOrigin || {})) {
-    return false;
-  }
+  const { compareAuthoritativeIdentity } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const authoritative = compareAuthoritativeIdentity(
+    track,
+    options?.candidateIdentity || options?.fetchOrigin || {},
+  );
+  if (authoritative === true) return false;
+  if (authoritative === false) return true;
   if (String(options?.source || "").toLowerCase() === "spicy") {
     return spicyFeaturedVariantLyricsMismatch(
       track,
@@ -8341,12 +8344,26 @@ async function fetchFromSpicyLyrics(
       track,
       spicyMetadata.titles,
     );
-    const { authoritativeIdentityMatch } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+    const { compareAuthoritativeIdentity } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
     const spicyIdentity = {
       isrc: String(spicyLyricsData?.ids?.isrc || "").trim(),
       spotifyTrackId,
     };
-    const identityMatched = authoritativeIdentityMatch(track, spicyIdentity);
+    const identityComparison = compareAuthoritativeIdentity(track, spicyIdentity);
+    const identityMatched = identityComparison === true;
+    if (identityComparison === false) {
+      profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
+        spotifyTrackId,
+        declaredTitleMatch,
+        mismatch: true,
+        identityConflict: true,
+      });
+      lastNoMatchError = createSourceStageNoMatchError(
+        "spicy",
+        "identity-conflict",
+      );
+      continue;
+    }
     const variantStartedAt = Date.now();
     if (
       featuredVariantLyricsMismatch(track, lyrics, {

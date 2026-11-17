@@ -9,6 +9,7 @@ import type { LyricLine } from '@/types/bridge';
 
 import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
+import { selectTimedLyricLines, shouldHideTimedRenderer } from '@/lib/lyrics-timing';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
 type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
@@ -50,10 +51,14 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
 }) {
   const rawLyrics = usePlaybackStore(state => state.lyrics);
   const metadata = usePlaybackStore(state => state.lyricsMetadata);
-  const untimed = Boolean(metadata?.untimed);
+  const lyricsSource = usePlaybackStore(state => state.lyricsSource);
   // The Rust surface is a timed renderer. Plain text stays in the packet for
-  // other consumers but must never reach this payload.
-  const lyrics = useMemo(() => untimed ? [] : rawLyrics, [rawLyrics, untimed]);
+  // other consumers but must never reach this payload, even when an older
+  // provider result lacks the untimed flag.
+  const timedLyrics = useMemo(() => selectTimedLyricLines(rawLyrics), [rawLyrics]);
+  const untimed = shouldHideTimedRenderer(rawLyrics, lyricsSource, metadata?.untimed) ||
+    (rawLyrics.length > 0 && !timedLyrics.length);
+  const lyrics = useMemo(() => untimed ? [] : timedLyrics, [timedLyrics, untimed]);
   const credits = useMemo(() => {
     const songwriters = metadata?.credits?.songwriters?.filter(name => typeof name === 'string' && name.length > 0) ?? [];
     const a = metadata?.attribution;
@@ -67,7 +72,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (!songwriters.length && !hasAttribution) return null;
     return { ...(songwriters.length ? { songwriters } : {}), ...(hasAttribution ? { attribution } : {}) };
   }, [metadata]);
-  const lyricsSource = usePlaybackStore(state => state.lyricsSource);
   const lyricsStatusMessage = usePlaybackStore(state => state.lyricsStatusMessage);
   const empty = useMemo(() => lyrics.length ? null : {
     title: untimed ? 'Plain lyrics available' : metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet',

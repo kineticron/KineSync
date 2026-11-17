@@ -36,6 +36,34 @@ function hasMeaningfulTiming(lyrics: LyricLine[]) {
   });
 }
 
+/** A timed renderer must hide plain data even when no untimed flag exists. */
+export function shouldHideTimedRenderer(
+  lyrics: LyricLine[],
+  lyricsSource: string,
+  untimed?: boolean,
+) {
+  return Boolean(untimed) || detectLyricsTimingMode(lyrics, lyricsSource) === "static";
+}
+
+/** Keep only rows the Rust protocol can safely serialize. */
+export function selectTimedLyricLines(lyrics: LyricLine[]) {
+  return lyrics.filter((line) => {
+    const lineStart = Number(line.lineStartTime);
+    const lineEnd = Number(line.lineEndTime);
+    if (!Number.isFinite(lineStart) || !Number.isFinite(lineEnd) || lineEnd <= lineStart) {
+      return false;
+    }
+    if (!Array.isArray(line.syllables) || !line.syllables.length) {
+      return false;
+    }
+    return line.syllables.every((syllable) => {
+      const start = Number(syllable.startTime);
+      const end = Number(syllable.endTime);
+      return Number.isFinite(start) && Number.isFinite(end) && end >= start && Boolean(syllable.text);
+    });
+  });
+}
+
 export function detectLyricsTimingMode(
   lyrics: LyricLine[],
   lyricsSource: string,

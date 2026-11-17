@@ -94,6 +94,10 @@ const preparation = buildSync({ entryPoints: [path.join(app, 'lib/rust-lyrics-pr
   tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
 const prepared = { exports: {} };
 vm.runInNewContext(preparation, { module: prepared, exports: prepared.exports, require, Intl });
+const timingSource = buildSync({ entryPoints: [path.join(app, 'lib/lyrics-timing.ts')], bundle: true, platform: 'node', format: 'cjs', write: false,
+  tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
+const timing = { exports: {} };
+vm.runInNewContext(timingSource, { module: timing, exports: timing.exports, require, Intl });
 const compiled = transformSync(fs.readFileSync(path.join(app, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
 const jsx = (type, props) => ({ type, props: props || {} });
 const gestureModule = require('../lib/rust-lyrics-gesture.js');
@@ -114,6 +118,7 @@ const imports = {
   '@/lib/rust-lyrics-follow': followModule,
   '@/lib/rust-lyrics-gesture': gestureModule,
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },
+  '@/lib/lyrics-timing': timing.exports,
 };
 const mod = { exports: {} };
 vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: id => { assert.ok(imports[id], id); return imports[id]; }, __DEV__: true, performance, console });

@@ -10,6 +10,10 @@ const preparation = buildSync({ entryPoints: [path.join(app, 'lib/rust-lyrics-pr
   tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
 const prepared = { exports: {} };
 vm.runInNewContext(preparation, { module: prepared, exports: prepared.exports, require, Intl });
+const timingSource = buildSync({ entryPoints: [path.join(app, 'lib/lyrics-timing.ts')], bundle: true, platform: 'node', format: 'cjs', write: false,
+  tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
+const timing = { exports: {} };
+vm.runInNewContext(timingSource, { module: timing, exports: timing.exports, require, Intl });
 const compiled = transformSync(fs.readFileSync(path.join(app, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
 let state;
 let gesture;
@@ -33,6 +37,7 @@ const imports = {
     gesture = createRustLyricsGesture({ ...options, setTimer: () => 1, clearTimer: () => {} }); return gesture;
   } },
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },
+  '@/lib/lyrics-timing': timing.exports,
 };
 const mod = { exports: {} };
 vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: id => { assert.ok(imports[id], id); return imports[id]; }, __DEV__: true, performance, console });
@@ -43,7 +48,19 @@ function nodes(node) {
 }
 const line = { lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'Word', startTime: 0, endTime: 1000 }] };
 const initial = { currentTrack: { id: 'fixture' }, lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '', lyricsStyle: 'spicy', showTranslatedText: true, showRustDebugOverlay: false };
+const staticLine = { lineStartTime: 0, lineEndTime: 0, syllables: [{ text: 'Plain text', startTime: 0, endTime: 0 }] };
+const partialLine = { lineStartTime: 0, lineEndTime: 4000, syllables: [{ text: 'First', startTime: 0, endTime: 4000 }] };
 const render = () => nodes(mod.exports.RustLyricsView({ active: true, tapToSeekEnabled: false, onCreditsTimestampPress: position => seek.push(position) }));
+assert.equal(timing.exports.shouldHideTimedRenderer([staticLine], 'spicy-lyrics-static', undefined), true, 'zero timing hides without an untimed flag');
+assert.equal(timing.exports.shouldHideTimedRenderer([partialLine, staticLine], 'spicy-lyrics-syllable', undefined), false, 'one valid line keeps partial timing usable');
+assert.equal(timing.exports.selectTimedLyricLines([partialLine, staticLine]).length, 1, 'invalid rows are filtered from partial timing');
+state = { ...initial, lyrics: [staticLine], lyricsSource: 'spicy-lyrics-static' };
+const staticPacket = JSON.parse(render().find(n => n.type === 'NativeView').props.trackJson);
+assert.equal(staticPacket.lines.length, 0, 'static Spicy text must not enter the Rust payload');
+assert.equal(staticPacket.empty.title, 'Plain lyrics available');
+state = { ...initial, lyrics: [partialLine, staticLine], lyricsSource: 'spicy-lyrics-syllable' };
+const partialPacket = JSON.parse(render().find(n => n.type === 'NativeView').props.trackJson);
+assert.ok(partialPacket.lines.length > 0, 'partial timed data remains renderable');
 let previousGeneration = 0;
 for (const debug of [false, true]) {
   for (const snapshot of [

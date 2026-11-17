@@ -197,3 +197,92 @@ for (const mobile of [false, true]) {
     assert.equal(accepted[0].song.singername, "SKAI ISYOURGOD");
   });
 }
+
+test("artist identity requires exact normalized aliases, not token subsets", () => {
+  const base = { title: "Song", artist: "John", durationMs: 200000 };
+  assert.equal(identity.recordingIdentityMatches(base, { ...base, artist: "John Legend" }), false);
+  assert.equal(identity.recordingIdentityMatches(
+    { ...base, artist: "Alpha" },
+    { ...base, artist: "Alpha Tribute Band" },
+  ), false);
+  assert.equal(identity.recordingIdentityMatches(
+    { ...base, artist: "John Legend" },
+    { ...base, artist: "John Legend feat. Guest" },
+  ), true);
+  assert.equal(identity.recordingIdentityMatches(target, {
+    title: "八方来财", artist: "SKAI ISYOURGOD", durationMs: 173000,
+  }), true);
+});
+
+test("semantic part subtitles survive title normalization", () => {
+  assert.equal(identity.titleKey("Home (Intro)"), "homeintro");
+  assert.equal(identity.titleKey("Home (Outro)"), "homeoutro");
+  assert.notEqual(identity.titleKey("Home (Intro)"), identity.titleKey("Home (Outro)"));
+  assert.equal(identity.titleKey("Song (English Title)"), "song");
+  const intro = { title: "Home (Intro)", artist: "Artist", durationMs: 200000 };
+  const outro = { title: "Home (Outro)", artist: "Artist", durationMs: 200000 };
+  assert.equal(identity.recordingIdentityMatches(intro, intro), true);
+  assert.equal(identity.recordingIdentityMatches(intro, outro), false);
+});
+
+const conflictTrack = {
+  spotifyTrackId: "1QV6tiMFM6fSOKOGLMHYYg",
+  title: "Hello",
+  artist: "Artist",
+  durationMs: 4000,
+  isrc: "HKE022272921",
+};
+const conflictBody = {
+  id: "1QV6tiMFM6fSOKOGLMHYYg",
+  ids: { isrc: "US5TA1500050" },
+  source: "spicy_lyrics",
+  Type: "Syllable",
+  StartTime: 1,
+  EndTime: 4,
+  Content: [{
+    Type: "Vocal",
+    Lead: {
+      StartTime: 1,
+      EndTime: 4,
+      Syllables: [{ Text: "Wrong recording", StartTime: 1, EndTime: 4, IsPartOfWord: false }],
+    },
+  }],
+};
+const staticBody = {
+  id: "1QV6tiMFM6fSOKOGLMHYYg",
+  source: "spicy_lyrics",
+  Type: "Static",
+  Lines: [{ Text: "Plain text" }],
+};
+
+for (const mobile of [false, true]) {
+  const platform = mobile ? "mobile" : "desktop";
+
+  test(`${platform}: Spicy rejects conflicting provider ISRC with the same Spotify ID`, async () => {
+    const context = load(async () => json({ Body: conflictBody, Status: 200 }), mobile);
+    context.track = conflictTrack;
+    await assert.rejects(
+      () => vm.runInContext(
+        'fetchFromSpicyLyrics(track, { spicyLyricsPublishableKey: "sl_pk_test_client" })',
+        context,
+      ),
+      error => {
+        assert.match(String(error.sourceFailureReason || ""), /spicy:identity-conflict-no-match/);
+        return true;
+      },
+    );
+  });
+
+  test(`${platform}: Spicy Static stays untimed without a metadata flag`, async () => {
+    const context = load(async () => json({ Body: staticBody, Status: 200 }), mobile);
+    context.track = { ...conflictTrack, isrc: undefined };
+    const result = await vm.runInContext(
+      'fetchFromSpicyLyrics(track, { spicyLyricsPublishableKey: "sl_pk_test_client" })',
+      context,
+    );
+    assert.equal(result?.source, "spicy-lyrics-static");
+    assert.equal(result?.metadata?.untimed, undefined);
+    assert.equal(result?.lyrics?.[0]?.lineStartTime, 0);
+    assert.equal(result?.lyrics?.[0]?.lineEndTime, 0);
+  });
+}

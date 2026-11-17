@@ -36,10 +36,10 @@ function removeNoiseBrackets(value) {
   return String(value || "").replace(/\([^)]*\)|\[[^\]]*\]|\{[^}]*\}/g, segment => {
     const inner = bracketInner(segment);
     if (!inner) return " ";
-    if (VERSION_HINT_PATTERN.test(inner) && !FEATURING_PATTERN.test(inner)) {
-      return ` ${inner} `;
-    }
-    return " ";
+    if (FEATURING_PATTERN.test(inner)) return " ";
+    // Keep meaningful part or mix subtitles such as Home (Intro). Version
+    // hints stay visible so versionKey can compare them explicitly.
+    return ` ${inner} `;
   });
 }
 
@@ -56,14 +56,16 @@ function stripFeaturing(value) {
 function translatedTitleBase(value) {
   const title = String(value || "").normalize("NFKC").trim();
   const match = title.match(/^(.+?)\s*\(([^)]+)\)$/);
-  if (!match || !/\p{Script=Han}/u.test(match[1])) return title;
+  if (!match) return title;
   const inner = match[2].trim();
   if (VERSION_HINT_PATTERN.test(inner) || FEATURING_PATTERN.test(inner)) return title;
-  // A bare artist name in brackets remains significant. Translation-style
-  // Latin suffixes are the common cross-catalog alias.
+  // Only an explicit translation or English alias suffix may be removed. A
+  // semantic subtitle such as Intro, Outro or a named part stays significant.
+  const explicitTranslation = /\b(?:english|translation|translated|romanized|romanization|pinyin|romaji|from|of|the|to|in|on|and)\b/i.test(inner);
   const latin = /^[a-z][a-z\s'’.,!?-]+$/i.test(inner);
   const words = inner.split(/\s+/).filter(Boolean);
-  return latin && (words.length >= 2 || /\b(?:from|of|the|to|in|on|and|pinyin|romanized|romaji|translation|english)\b/i.test(inner))
+  const hanBase = /\p{Script=Han}/u.test(match[1]);
+  return latin && (explicitTranslation || (hanBase && words.length >= 2))
     ? match[1].trim()
     : title;
 }
@@ -151,31 +153,14 @@ function artistAliases(value) {
   return aliases;
 }
 
-function artistTokens(value) {
-  return foldCatalogText(value)
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/)
-    .filter(token => token.length >= 2);
-}
-
 function artistIdentityMatches(trackArtist, candidateArtist) {
   const wanted = artistAliases(trackArtist);
   const actual = artistAliases(candidateArtist);
   for (const left of wanted) {
-    for (const right of actual) {
-      if (!left || !right) continue;
-      if (left === right) return true;
-      const leftTokens = artistTokens(left);
-      const rightTokens = artistTokens(right);
-      if (!leftTokens.length || !rightTokens.length) continue;
-      const shared = leftTokens.filter(token => rightTokens.includes(token));
-      if (!shared.length) continue;
-      const shorter = leftTokens.length <= rightTokens.length ? leftTokens : rightTokens;
-      const subset = shared.length === shorter.length;
-      const sharedIsDistinctive = shared.some(token => token.length >= 3 || /\p{Script=Han}/u.test(token));
-      if (subset && sharedIsDistinctive) return true;
-      if (shared.length >= 2 && shared.length / Math.max(leftTokens.length, rightTokens.length) >= 0.6) return true;
-    }
+    if (!left) continue;
+    // Only exact normalized identities or explicit bilingual aliases match.
+    // Substring or token subsets would accept John for John Legend.
+    if (actual.has(left)) return true;
   }
   return false;
 }
