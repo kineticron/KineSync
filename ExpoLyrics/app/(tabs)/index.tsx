@@ -792,7 +792,8 @@ export default function HomeScreen() {
       // moving lyric mask. Rows retain their own independent 36px transforms.
       // Hide holds the backdrop until the reverse stagger has finished.
       if (shown) {
-        controlsOpacity.value = withTiming(1, { duration: 700, easing: controlsShowEdge });
+        // Clear the rows before their expo-out slide settles behind the clip.
+        controlsOpacity.value = withTiming(1, { duration: 200, easing: controlsShowEdge });
       } else {
         const coverageHold = controlsStageProgress.get() > 0 ? 700 : 0;
         controlsOpacity.value = withDelay(coverageHold,

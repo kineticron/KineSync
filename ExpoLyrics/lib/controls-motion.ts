@@ -32,9 +32,8 @@ export function controlsTouchIsCovered(
     absoluteY < coverage.originY + coverage.bottom);
 }
 
-/** Advance show slightly ahead of the row clock, retaining its exact finish. */
+/** Clear the dock early with expo-out so the stagger remains visible. */
 export function controlsShowEdge(progress: number) {
   'worklet';
-  const local = Math.max(0, Math.min(1, progress));
-  return local + 0.24 * local * (1 - local);
+  return controlsStage(progress, 0, 1).opacity;
 }
