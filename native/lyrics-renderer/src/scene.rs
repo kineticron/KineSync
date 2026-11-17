@@ -313,7 +313,7 @@ impl TrackScene {
     }
 
     /// Track layout plus the optional Skia footer. Credits are part of the
-    /// prepared content (scroll extent, auto-scroll target and blur band), so
+    /// prepared content (scroll extent and auto-scroll target), so
     /// they are built with the same fonts in the same layout pass.
     pub(crate) fn with_fonts_credits(
         lines: Vec<Line>,
@@ -1022,11 +1022,26 @@ impl TrackScene {
         self.frame_at(time, self.scroll_target(time), scene)
     }
 
-    /// Skia native `scrollTo` anchor: AMLL lands at 8% of the list plus 8 pt,
-    /// landscape Spicy at 32 pt, portrait Spicy directly below the top bar.
-    /// The pre-ABI7 fixture path keeps its historical center anchor.
-    /// Single placement rule for the credits footer, shared by both draw paths:
-    /// below the final lyric row at its current measured height.
+    /// Ordinary attribution pixels bypass lyric emission and shared blur.
+    pub(crate) fn frame_overlay(&self, time: f64, scroll: f64, scene: &mut Scene) {
+        scene.reset();
+        if let Some(footer) = &self.footer {
+            let y = self.footer_y(
+                footer,
+                self.scroll_anchor(),
+                scroll,
+                self.interlude_shift(time).1,
+            );
+            footer.draw(
+                scene,
+                y,
+                self.width,
+                f64::from(self.height),
+                f64::from(self.scale),
+            );
+        }
+    }
+
     pub(crate) fn footer_hit(&self, x: f64, y: f64, scroll: f64, time: f64) -> i32 {
         self.footer.as_ref().map_or(-1, |footer| {
             let top = self.footer_y(
@@ -1039,6 +1054,7 @@ impl TrackScene {
         })
     }
 
+    /// Placement shared by drawing and hit-testing, below the measured final row.
     pub(crate) fn footer_y(
         &self,
         footer: &crate::credits::Footer,
@@ -1049,6 +1065,7 @@ impl TrackScene {
         anchor + self.content_bottom() + footer.inset - scroll + extra
     }
 
+    /// Skia scroll anchor in surface pixels. Legacy fixtures retain their center anchor.
     pub(crate) fn scroll_anchor(&self) -> f64 {
         let scale = f64::from(self.scale);
         match self.settings.as_ref() {
@@ -1408,19 +1425,8 @@ impl TrackScene {
         let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
         let last = active.map_or(first, |(_, end)| end);
         let next = (last.max(first) + 1).min(self.lines.len() - 1);
-        let mut band_top = position(first) - 10.0 * scale;
-        let mut band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
-        if let Some(footer) = &self.footer {
-            let y = self.footer_y(footer, anchor, scroll, interlude_row.map_or(0.0, |_| extra));
-            if let Some((top, bottom)) =
-                footer.draw(scene, y, self.width, f64::from(self.height), scale)
-            {
-                // Skia ignores attribution when deciding whether to blur
-                // (`hasAttribution`), so keep the footer outside the band.
-                band_top = band_top.min(top);
-                band_bottom = band_bottom.max(bottom);
-            }
-        }
+        let band_top = position(first) - 10.0 * scale;
+        let band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
         (band_top as f32, band_bottom as f32)
     }
 }
@@ -2364,6 +2370,73 @@ mod lazy_tests {
                 );
                 assert!(state.row(0).unwrap().bright < 1.0);
             }
+        }
+    }
+
+    #[test]
+    fn credits_do_not_enter_lyric_emission_or_expand_protected_band() {
+        use crate::appearance::{AppearanceState, Effect};
+        for style in [Style::Spicy, Style::Amll] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let credits = crate::live::Credits {
+                songwriters: vec!["Writer".into()],
+                attribution: Some(crate::live::Attribution {
+                    maker: Some("maker".into()),
+                    uploader: Some("uploader".into()),
+                    ..Default::default()
+                }),
+            };
+            let mut track = TrackScene::with_fonts_credits(
+                source(6),
+                390,
+                640,
+                1.0,
+                Some(&settings),
+                Some(&credits),
+                &mut fonts(),
+            )
+            .unwrap();
+            track.prepare(1000.0).unwrap();
+            track.prepare_viewport(track.max_scroll()).unwrap();
+            let mut state = AppearanceState::default();
+            state.prepare(&track, 1000.0, 1000.0);
+            state.advance(&track, 1000.0, 1000.0, true, Effect::Glow);
+            let scroll = track.max_scroll();
+            let top = track.footer_y(
+                track.footer.as_ref().unwrap(),
+                track.scroll_anchor(),
+                scroll,
+                track.interlude_shift(1000.0).1,
+            );
+            assert!(top > 0.0 && top < 640.0);
+            let mut overlay = Scene::new();
+            track.frame_overlay(1000.0, scroll, &mut overlay);
+            assert!(!overlay.encoding().draw_data.is_empty());
+            // Both the baseline and live RGB-emission paths must exclude credits.
+            for effect in [Effect::Baseline, Effect::Glow] {
+                let mut with = Scene::new();
+                let band = track.frame_appearance(1000.0, scroll, &[], &state, &mut with, effect);
+                let footer = track.footer.take();
+                let mut without = Scene::new();
+                let expected =
+                    track.frame_appearance(1000.0, scroll, &[], &state, &mut without, effect);
+                assert_eq!(band, expected, "footer must not protect intervening rows");
+                assert_eq!(
+                    with.encoding().draw_data,
+                    without.encoding().draw_data,
+                    "footer must not emit into glow channels"
+                );
+                track.footer = footer;
+            }
+            // Geometry uses the same placement, including the interlude insertion.
+            assert_eq!(track.footer_hit(0.0, top, scroll, 1000.0), -2);
+            assert_eq!(track.footer_hit(30.0, top + 19.0, scroll, 1000.0), -3);
+            assert_eq!(track.footer_hit(30.0, top + 37.0, scroll, 1000.0), -4);
+            assert_eq!(track.footer_hit(389.0, top + 19.0, scroll, 1000.0), -1);
         }
     }
 

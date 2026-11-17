@@ -68,6 +68,7 @@ struct Engine {
     layout_cache: crate::scene::LayoutCache,
     surface: SurfaceRenderer,
     scene: vello::Scene,
+    overlay: vello::Scene,
     scale: f32,
     metrics: Metrics,
     scroll: FollowScroll,
@@ -184,6 +185,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     track_id: String::new(),
                     layout_cache: crate::scene::LayoutCache::default(),
                     scene: vello::Scene::new(),
+                    overlay: vello::Scene::new(),
                     scale,
                     metrics: Metrics {
                         capabilities: surface.capabilities(),
@@ -674,6 +676,7 @@ pub extern "C" fn kr_render(
             &mut engine.scene,
             effect,
         );
+        layout.frame_overlay(position, scroll, &mut engine.overlay);
         let schedule = layout.frame_schedule(
             position,
             scroll,
@@ -695,8 +698,9 @@ pub extern "C" fn kr_render(
             prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
         let (stats, present) = engine
             .surface
-            .render_appearance(
+            .render_overlay(
                 &engine.scene,
+                &engine.overlay,
                 band,
                 frame,
                 crate::appearance::LIVE_EFFECT.glow(),

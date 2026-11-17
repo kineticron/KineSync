@@ -3,6 +3,7 @@
 @group(0) @binding(2) var far: texture_2d<f32>;
 @group(0) @binding(3) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(4) var<uniform> band: vec4<f32>;
+@group(0) @binding(5) var overlay: texture_2d<f32>;
 fn linear(c: vec3<f32>) -> vec3<f32> {
     return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
@@ -41,6 +42,10 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         color=vec4<f32>(alpha);
     }
+    // Attribution is ordinary RGBA, outside the lyric emission and blur passes.
+    let footer = textureLoad(overlay, gid.xy, 0);
+    let foreground = vec4<f32>(linear(footer.rgb) * footer.a, footer.a);
+    color = foreground + color * (1.0 - foreground.a);
     let edge = min(f32(gid.y), f32(size.y - 1u - gid.y));
     // Fade alpha AND RGB together: no arbitrary left-edge background sample.
     textureStore(output, gid.xy, color * clamp(edge / 30.0, 0.0, 1.0));

@@ -75,6 +75,8 @@ pub struct Gpu {
     renderer: Renderer,
     sharp: Texture,
     sharp_view: TextureView,
+    overlay: Texture,
+    overlay_view: TextureView,
     target: Texture,
     target_view: TextureView,
     filter: Filter,
@@ -159,6 +161,7 @@ impl Filter {
     fn new(
         device: &Device,
         sharp: &Texture,
+        overlay: &Texture,
         target: &Texture,
         width: u32,
         height: u32,
@@ -267,6 +270,7 @@ impl Filter {
                 view_entry(1, &views[2]),
                 view_entry(2, &views[4]),
                 view_entry(3, &target_view),
+                view_entry(5, &overlay.create_view(&Default::default())),
                 BindGroupEntry {
                     binding: 4,
                     resource: band.as_entire_binding(),
@@ -398,7 +402,9 @@ impl Gpu {
         )?;
         let sharp = texture(&device, width, height, "vello-sharp");
         let target = texture(&device, width, height, "final-composite");
-        let filter = Filter::new(&device, &sharp, &target, width, height, scale);
+        let overlay = texture(&device, width, height, "unfiltered-footer");
+        let overlay_view = overlay.create_view(&Default::default());
+        let filter = Filter::new(&device, &sharp, &overlay, &target, width, height, scale);
         let sharp_view = sharp.create_view(&Default::default());
         let target_view = target.create_view(&Default::default());
         let timestamps = timestamp_supported.then(|| Timestamps {
@@ -435,6 +441,8 @@ impl Gpu {
             renderer,
             sharp,
             sharp_view,
+            overlay,
+            overlay_view,
             target,
             target_view,
             filter,
@@ -465,10 +473,13 @@ impl Gpu {
         self.sharp = texture(&self.device, width, height, "resized-sharp");
         self.target = texture(&self.device, width, height, "resized-composite");
         self.sharp_view = self.sharp.create_view(&Default::default());
+        self.overlay = texture(&self.device, width, height, "resized-footer");
+        self.overlay_view = self.overlay.create_view(&Default::default());
         self.target_view = self.target.create_view(&Default::default());
         self.filter = Filter::new(
             &self.device,
             &self.sharp,
+            &self.overlay,
             &self.target,
             width,
             height,
@@ -504,6 +515,22 @@ impl Gpu {
         appearance: bool,
         glow: bool,
     ) -> Result<FrameStats, Error> {
+        self.render_frame_with_overlay(scene, None, protection, blur, profile, appearance, glow)
+    }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Explicit render pass configuration"
+    )]
+    fn render_frame_with_overlay(
+        &mut self,
+        scene: &Scene,
+        overlay: Option<&Scene>,
+        protection: (f32, f32),
+        blur: bool,
+        profile: bool,
+        appearance: bool,
+        glow: bool,
+    ) -> Result<FrameStats, Error> {
         self.check_error()?;
         let start = Instant::now();
         let timestamps = self.timestamps.as_ref().filter(|_| profile);
@@ -517,6 +544,18 @@ impl Gpu {
             &self.queue,
             scene,
             &self.sharp_view,
+            &RenderParams {
+                base_color: Color::TRANSPARENT,
+                width: self.width,
+                height: self.height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )?;
+        self.renderer.render_to_texture(
+            &self.device,
+            &self.queue,
+            overlay.unwrap_or(&Scene::new()),
+            &self.overlay_view,
             &RenderParams {
                 base_color: Color::TRANSPARENT,
                 width: self.width,
@@ -820,7 +859,7 @@ impl SurfaceRenderer {
         band: (f32, f32),
         frame: SurfaceTexture,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, band, frame, false, false)
+        self.render_surface(scene, None, band, frame, false, false)
     }
     pub fn render_appearance(
         &mut self,
@@ -829,11 +868,26 @@ impl SurfaceRenderer {
         frame: SurfaceTexture,
         glow: bool,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, band, frame, true, glow)
+        self.render_surface(scene, None, band, frame, true, glow)
     }
+    pub(crate) fn render_overlay(
+        &mut self,
+        scene: &Scene,
+        overlay: &Scene,
+        band: (f32, f32),
+        frame: SurfaceTexture,
+        glow: bool,
+    ) -> Result<(FrameStats, f64), Error> {
+        self.render_surface(scene, Some(overlay), band, frame, true, glow)
+    }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Explicit render pass configuration"
+    )]
     fn render_surface(
         &mut self,
         scene: &Scene,
+        overlay: Option<&Scene>,
         band: (f32, f32),
         frame: SurfaceTexture,
         appearance: bool,
@@ -843,7 +897,7 @@ impl SurfaceRenderer {
         // queue. wgpu retains submitted resources. No GPU wait in live render.
         let stats = self
             .gpu
-            .render_frame(scene, band, true, false, appearance, glow)?;
+            .render_frame_with_overlay(scene, overlay, band, true, false, appearance, glow)?;
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
@@ -973,6 +1027,69 @@ impl SurfaceBlit {
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
+    #[test]
+    #[ignore = "requires a working Vulkan adapter; run explicitly for host pixel proof"]
+    fn credits_pixels_bypass_glow_and_blur() {
+        let mut fonts = crate::typography::Fonts::default();
+        fonts
+            .register(
+                &std::fs::read(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf"
+                ))
+                .unwrap(),
+                &std::fs::read(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let settings = crate::typography::Settings {
+            style: crate::typography::Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let footer = crate::credits::build(
+            &crate::live::Credits {
+                songwriters: vec!["Writer".into()],
+                ..Default::default()
+            },
+            &settings,
+            390,
+            1.0,
+            &mut fonts,
+        )
+        .unwrap();
+        let mut overlay = Scene::new();
+        footer.draw(&mut overlay, 70.0, 390, 256.0, 1.0);
+        let mut gpu = pollster::block_on(Gpu::new(390, 256)).unwrap();
+        gpu.render_frame(&overlay, (0.0, 256.0), false, false, false, false)
+            .unwrap();
+        let reference = gpu.read_pixels().unwrap();
+        assert!(reference.chunks_exact(4).any(|p| p[3] > 100));
+        assert!(
+            reference.chunks_exact(4).all(|p| p[3] <= 144),
+            "Skia credits alpha is 0.56"
+        );
+        for band in [(0.0, 20.0), (60.0, 120.0)] {
+            gpu.render_frame_with_overlay(
+                &Scene::new(),
+                Some(&overlay),
+                band,
+                true,
+                false,
+                true,
+                true,
+            )
+            .unwrap();
+            assert!(
+                gpu.read_pixels().unwrap() == reference,
+                "footer must be pixel-identical with blur/glow enabled, without widening the band"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "requires a working Vulkan adapter; run explicitly for host proxy proof"]
     fn real_gpu_two_frames_keep_texture_and_buffer_ownership_ordered() {
