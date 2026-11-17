@@ -342,3 +342,53 @@ for (const mobile of [false, true]) {
     assert.ok(!calls.some(url => url.includes("/s/US5TA1500050")));
   });
 }
+
+for (const mobile of [false, true]) {
+  const platform = mobile ? "mobile" : "desktop";
+
+  test(`${platform}: lrc.red catalog rejects a conflicting ISRC after direct 404`, async () => {
+    const calls = [];
+    let catalogCandidate = null;
+    const context = load(async url => {
+      const value = String(url);
+      calls.push(value);
+      if (value.includes("/s/HKE022272921.json")) return json({}, 404);
+      if (value.includes("/s/HKE022272921.ttml")) return new Response("missing", { status: 404 });
+      if (value.includes("api.deezer.com/search")) {
+        catalogCandidate = {
+          isrc: "US5TA1500050",
+          title: "Example Song",
+          artist: { name: "Example Artist" },
+          duration: 10,
+        };
+        return json({ data: [catalogCandidate] });
+      }
+      if (value.includes("lrc.red/search.json")) return json({ hits: [] });
+      if (value.includes("/s/US5TA1500050.json")) {
+        return json({ title: "Example Song", artist: "Example Artist", duration: 10 });
+      }
+      if (value.includes("/s/US5TA1500050.ttml")) {
+        throw new Error("conflicting catalog ISRC TTML must not be fetched");
+      }
+      return json({}, 404);
+    }, mobile);
+    context.track = {
+      title: "Example Song",
+      artist: "Example Artist",
+      durationMs: 10000,
+      isrc: "HKE022272921",
+      trackId: "target",
+    };
+    const result = await vm.runInContext("fetchFromLrcRed(track)", context);
+    assert.equal(result, null);
+    assert.ok(calls.some(url => url.includes("api.deezer.com/search")));
+    assert.ok(calls.some(url => url.includes("/s/HKE022272921.json")));
+    assert.notEqual(catalogCandidate, null);
+    assert.equal(catalogCandidate.isrc, "US5TA1500050");
+    assert.equal(catalogCandidate.title, "Example Song");
+    assert.equal(catalogCandidate.artist.name, "Example Artist");
+    assert.equal(catalogCandidate.duration, 10);
+    assert.ok(calls.some(url => url.includes("/s/US5TA1500050.json")));
+    assert.ok(!calls.some(url => url.includes("/s/US5TA1500050.ttml")));
+  });
+}

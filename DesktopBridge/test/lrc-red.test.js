@@ -401,17 +401,18 @@ for (const mobile of [false, true]) {
     assert(calls.some(url => url.includes("search.json")));
   });
 
-  test(`${platform}: retries catalog after a stale direct ISRC and rejects recording duration mismatch`, async () => {
+  test(`${platform}: rejects catalog ISRC conflict after a stale direct ISRC`, async () => {
     const context = load(async url => {
       if (url.includes("api.deezer.com")) return Response.json({ data: [
         { isrc, title: track.title, artist: { name: track.artist }, duration: 10 },
       ] });
+      if (url.includes("search.json")) return Response.json({ hits: [] });
       if (url.includes("USAAA2600001")) return Response.json({ sync: "word", duration: 14 });
       return url.endsWith(".json") ? Response.json({ sync: "word", duration: 10 }) : new Response(wordTtml);
     }, mobile);
     context.track.isrc = "USAAA2600001";
     const result = await vm.runInContext("fetchFromLrcRed(track)", context);
-    assert.equal(result.metadata.attribution.url, `https://lrc.red/s/${isrc}`);
+    assert.equal(result, null);
   });
 
   test(`${platform}: priority holds in both arrival orders without promoting line lyrics over karaoke`, () => {

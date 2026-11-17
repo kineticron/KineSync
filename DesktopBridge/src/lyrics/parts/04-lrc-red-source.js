@@ -78,7 +78,7 @@ async function fetchFromLrcRed(track) {
       .map(hit => ({ ...hit, durationMs: Number(hit.duration || 0) * 1000 }))
       .filter(hit => validIsrc(hit.isrc) && matches(hit))).slice(0, 3);
   }
-  async function tryCandidates(candidates, { rejectIdentityConflict = false } = {}) {
+  async function tryCandidates(candidates) {
     const errors = [];
     // Fetch bounded candidates concurrently, consuming results in ranked order.
     const candidatePromises = candidates.filter((candidate) => {
@@ -91,7 +91,7 @@ async function fetchFromLrcRed(track) {
         try { recording = await fetchJson(`https://lrc.red/s/${candidate.isrc}.json`, { headers: lrcRedHeaders }); }
         catch { /* JSON is optional metadata; TTML remains the source of truth. */ }
         const { recordingIdentityMatches, artistIdentityMatches, compareAuthoritativeIdentity } = require("./lyricsRecordingIdentity");
-        if (rejectIdentityConflict && compareAuthoritativeIdentity(matchTrack, { isrc: candidate.isrc }) === false) return null;
+        if (compareAuthoritativeIdentity(matchTrack, { isrc: candidate.isrc }) === false) return null;
         const identityMatch = recordingIdentityMatches(matchTrack, {
           isrc: candidate.isrc,
           title: candidate.title || recording?.title,
@@ -154,7 +154,7 @@ async function fetchFromLrcRed(track) {
     } catch (error) { lastError = error; }
   }
   try {
-    if (await tryCandidates(await searchFallback(), { rejectIdentityConflict: true })) return bestResult;
+    if (await tryCandidates(await searchFallback())) return bestResult;
   } catch (error) { lastError = error; }
   if (bestResult) return bestResult;
   if (lastError) throw lastError;
