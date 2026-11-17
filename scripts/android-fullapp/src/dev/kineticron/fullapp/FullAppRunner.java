@@ -103,10 +103,47 @@ public final class FullAppRunner extends Instrumentation {
     if (bitmap == null) throw new IOException("No screenshot for current display geometry");
     W = bitmap.getWidth(); H = bitmap.getHeight(); bitmap.recycle();
   }
-  private boolean targetedTap(String kind, String fixture) throws IOException {
+  private boolean orient(int rotation) throws IOException {
+    // Device rotation is a request, not proof that an app orientation lock yielded.
+    boolean landscape = rotation == UiAutomation.ROTATION_FREEZE_90;
+    if (!ui.setRotation(rotation)) {
+      log("SETUP_ORIENTATION_REJECTED requested=" + (landscape ? "landscape" : "portrait"));
+      return false;
+    }
+    for (int i = 0; i < 16; i++) {
+      sleep(500); refreshSize();
+      if (landscape ? W > H : H > W) {
+        log("ORIENTATION requested=" + (landscape ? "landscape" : "portrait") + " actual=" + W + "x" + H);
+        return true;
+      }
+    }
+    log("SETUP_ORIENTATION_MISMATCH requested=" + (landscape ? "landscape" : "portrait") + " display=" + W + "x" + H);
+    return false;
+  }
+  private boolean targetedTap(String kind, String fixture, boolean landscape) throws IOException {
     String request = kind + "-" + android.os.SystemClock.elapsedRealtime();
     String marker = "KSFX TARGET request=" + request + " ";
+    String windowMarker = "KSFX WINDOW request=" + request + " ";
     launch("expolyrics://?fx=probe-" + kind + "&request=" + request);
+    if (!waitFor(windowMarker, 0, 20)) {
+      log("SETUP_APP_WINDOW_MISSING fixture=" + fixture + " request=" + request);
+      save("target-" + request + ".txt", "SETUP app window unverified\n" + rn());
+      return false;
+    }
+    Matcher window = Pattern.compile(Pattern.quote(windowMarker) + "windowWidth=([0-9.]+) windowHeight=([0-9.]+) canvasWidth=([0-9.]+) canvasHeight=([0-9.]+)").matcher(rn());
+    if (!window.find()) return false;
+    double windowWidth = Double.parseDouble(window.group(1)), windowHeight = Double.parseDouble(window.group(2));
+    double canvasWidth = Double.parseDouble(window.group(3)), canvasHeight = Double.parseDouble(window.group(4));
+    // Sampled by the probe after this fixture, not inferred from display rotation.
+    boolean appOrientationOk = Double.isFinite(windowWidth) && Double.isFinite(windowHeight)
+      && windowWidth > 0 && windowHeight > 0
+      && (landscape ? windowWidth > windowHeight : windowHeight > windowWidth)
+      && Double.isFinite(canvasWidth) && Double.isFinite(canvasHeight) && canvasWidth > 0 && canvasHeight > 0;
+    if (!appOrientationOk) {
+      log("SETUP_APP_ORIENTATION_MISMATCH fixture=" + fixture + " requested=" + (landscape ? "landscape" : "portrait") + " window=" + window.group());
+      save("target-" + request + ".txt", "SETUP failure, not renderer evidence\n" + window.group() + "\n" + rn());
+      return false;
+    }
     if (!waitFor(marker, 0, 20)) {
       save("target-" + request + ".txt", rn());
       return false;
@@ -181,8 +218,8 @@ public final class FullAppRunner extends Instrumentation {
         step("rotation-" + s, true, "90/270/0 screenshots captured; check lyrics visible+layout");
       }
       ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
-      boolean portraitAck = fx("orientation-portrait"); refreshSize();
-      step("orientation-portrait", portraitAck && H > W, "portrait ACK=" + portraitAck + " actual=" + W + "x" + H);
+      boolean portraitOk = orient(UiAutomation.ROTATION_FREEZE_0);
+      step("orientation-portrait", portraitOk, "SETUP display-only portrait request, measured=" + W + "x" + H + ", app window checked separately at each tap probe");
       // HOME / resume
       for (String s : new String[] { "spicy", "amll" }) {
         fx(s); shell("input keyevent KEYCODE_HOME"); sleep(3000); shot("30-home-" + s);
@@ -213,30 +250,26 @@ public final class FullAppRunner extends Instrumentation {
       // Seek and footer links in portrait and landscape. Targets come from the
       // real native hit-test within the measured canvas, never a tap grid.
       for (int rotation : new int[] { UiAutomation.ROTATION_FREEZE_0, UiAutomation.ROTATION_FREEZE_90 }) {
-        if (rotation == UiAutomation.ROTATION_FREEZE_90) {
-          // Explicit app lock overrides any orientation preference left by settings.
-          launch("expolyrics://?fx=orientation-landscape"); sleep(3500);
-        } else { fx("orientation-portrait"); }
-        ui.setRotation(rotation); sleep(2000); refreshSize();
-        String orientation = W > H ? "landscape" : "portrait";
-        boolean orientationOk = rotation == UiAutomation.ROTATION_FREEZE_0 ? H > W : W > H;
+        boolean orientationOk = orient(rotation);
+        String orientation = rotation == UiAutomation.ROTATION_FREEZE_90 ? "landscape" : "portrait";
         for (String s : new String[] { "spicy", "amll" }) {
           boolean ack = fx(s) && fx("pause");
           shot("50-preseek-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("seek", s);
+          boolean ok = orientationOk && ack && targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90);
           shot("50-postseek-" + orientation + "-" + s);
-          step("seek-tap-" + orientation + "-" + s, ok, "native target + exact seek request and store anchor required, orientationOk=" + orientationOk);
+          step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
         }
         for (String s : new String[] { "credits", "credits-amll" }) {
           boolean ack = fx(s);
           shot("60-credits-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("link", s);
+          boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
           shot("60-credits-after-" + orientation + "-" + s);
-          step("credits-link-" + orientation + "-" + s, ok, "native maker target + exact fixture LINK_OPEN required, orientationOk=" + orientationOk);
+          step("credits-link-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native maker target + exact fixture LINK_OPEN required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
         }
       }
       ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
-      fx("orientation-portrait"); refreshSize();
+      boolean settingsDisplayPortrait = orient(UiAutomation.ROTATION_FREEZE_0);
+      log("SETUP settings portrait displayOnly=" + settingsDisplayPortrait + ", app window unverified, settings steps remain evidence-only");
       // settings renderer switch
       fx("spicy");
       int[] menu = findDesc("Open player menu"); log("MENU " + (menu == null ? "not found" : menu[0] + "," + menu[1]));

@@ -7,15 +7,16 @@ or runs automatically. Use a disposable test app and device when executing later
 
 ## Sources and preserved fixtures
 
-`src/dev/kineticron/fullapp/FullAppRunner.java` is the reviewed patched runner,
-unchanged from its supplied scratch source. The JS entry changes only relative
-imports to work from its repository fixture location. The supplied originals are
+`src/dev/kineticron/fullapp/FullAppRunner.java` and the JS entry derive from the
+reviewed patched scratch sources. Imports are relocated, the unavailable
+orientation dependency is removed, and the runner checks device rotation and
+post-fixture app-window evidence before seek/link taps. The supplied originals are
 preserved in `fixtures/original/` for comparison, not used as runnable entries.
 The mock check compares seed values, lyrics, credits and fixture state definitions
 with the original. It also checks measured targets, pixel conversion, exact seeks
 with store state, matching links, stale tracks, orientation and failure gates.
 
-Reviewed scratch SHA256 values before import relocation:
+Reviewed scratch SHA256 values before import relocation and the orientation fix:
 
 ```text
 FullAppRunner.java       82487444b8a01e8e037b97e9a191f02d9a090a0e706af9190cfc447d1fc9cbbc
@@ -28,6 +29,20 @@ request acknowledgements, checks portrait and landscape geometry, recycles
 screenshots and treats missing interaction evidence as a failure. The patched JS
 wraps the real native view, forwards its commands, adds target probes and verifies
 seek store anchors and fixture link URLs. Original fixture content is retained.
+The import check verifies lockfile package presence and local source paths, not
+complete Metro resolution. Offline Android bundling is a separate validation.
+
+The runner requires `UiAutomation.setRotation` to accept each interaction setup
+request. After each fixture, the JS probe reports app-window and canvas dimensions.
+Seek/link taps require the requested app-window aspect and a nonempty canvas,
+so display dimensions alone cannot pass a letterboxed portrait app as landscape.
+Canvas aspect need not match the window, since landscape uses a lyric panel.
+An app or tour orientation lock must yield for these tests to proceed. Rejection,
+missing window evidence or an aspect mismatch is a setup failure, not evidence of
+a renderer defect. Setup and interaction failures share the hard-failure list,
+so inspect the `SETUP_` logs and per-request evidence to distinguish them.
+The portrait request before settings is logged as display-only and does not
+establish app-window orientation or settings success.
 
 ## Build the runner
 
@@ -122,8 +137,9 @@ assert success. The credits probe samples a grid of native hit-test coordinates,
 so `TARGET_MISSING` does not exhaustively establish that a link is absent. The
 AMLL fixture tests a same-track style transition, not fresh AMLL playback.
 No physical test, installation, billing or API configuration change was
-performed. Full app compilation, Metro bundling and Gradle init integration were
-not run because this isolated checkout has no installed Expo dependencies or
-generated Android app project.
+performed. After installing locked dependencies locally with scripts disabled,
+the offline Android fixture bundle, app typecheck and app test suite passed.
+Full app compilation and Gradle init integration remain unverified because this
+checkout has no generated Android app project. No Metro HTTP listener was started.
 
 See [VALIDATION.md](VALIDATION.md) for the exact host results and blockers.

@@ -48,6 +48,8 @@ async function probe(kind, request) {
   const state = store.getState();
   const track = state.currentTrack.id;
   const bounds = await new Promise(resolve => current.box.current.measureInWindow((x, y, width, height) => resolve({ x, y, width, height })));
+  const window = RN.Dimensions.get('window');
+  log('WINDOW request=' + request + ' windowWidth=' + window.width + ' windowHeight=' + window.height + ' canvasWidth=' + bounds.width + ' canvasHeight=' + bounds.height);
   // Hit-test logical coordinates inside the measured canvas. Screen taps use
   // physical pixels, including the current orientation and window offset.
   for (let y = 12; y < bounds.height - 12; y += 12) {
@@ -115,12 +117,6 @@ function apply(fx) {
 }
 function handle(url) {
   if (!url) return;
-  if (/[?&]fx=orientation-(portrait|landscape)(?:&|$)/.test(url) && ready) {
-    const orientation = require('expo-screen-orientation');
-    const landscape = url.includes('orientation-landscape');
-    void orientation.lockAsync(landscape ? orientation.OrientationLock.LANDSCAPE_LEFT : orientation.OrientationLock.PORTRAIT_UP).then(() => log('ACK fx=orientation-' + (landscape ? 'landscape' : 'portrait') + ' ')).catch(error => log('ORIENTATION_ERROR ' + error));
-    return;
-  }
   const probeMatch = /[?&]fx=probe-(seek|link)(?:&|$)/.exec(url);
   if (probeMatch && ready) { const request = /[?&]request=([a-zA-Z0-9-]+)/.exec(url); if (request) void probe(probeMatch[1], request[1]).catch(error => log('PROBE_ERROR ' + error)); return; }
   const m = /[?&]fx=([^&]+)/.exec(url); if (!m) return;

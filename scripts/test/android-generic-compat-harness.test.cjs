@@ -8,9 +8,32 @@ const runner = path.resolve(__dirname, '../android-fullapp/src/dev/kineticron/fu
 const original = path.resolve(__dirname, '../android-fullapp/fixtures/original/fullapp-test-entry.js');
 const sourceText = file => fs.readFileSync(file, 'utf8').replaceAll('\r\n', '\n');
 const sha256 = source => createHash('sha256').update(source).digest('hex');
-assert.equal(sha256(sourceText(runner)), '82487444b8a01e8e037b97e9a191f02d9a090a0e706af9190cfc447d1fc9cbbc');
-assert.equal(sha256(sourceText(entry).replaceAll("require('../../", "require('./")),
-  'fc7c6cec546ebbebb7ecf94d5b9a69c7227e2f672d28032108084e8f19a01cd2');
+assert.equal(sha256(sourceText(original)), 'e6af4abde57b82148fb392991ae7624cb4de0d0f0578aaba509a37347d942276');
+assert.equal(sha256(sourceText(path.join(path.dirname(original), 'FullAppRunner.java'))),
+  '9f412de8eb114a40965aec16f08c1d3934a02b8b80cb7b9885166372d2cb06b5');
+// VM mocks cannot establish Metro resolvability. Check lockfile package presence for static imports,
+// including imports in branches that a mock run never executes, against the lock.
+const app = path.resolve(__dirname, '../../ExpoLyrics');
+const lockfile = JSON.parse(fs.readFileSync(path.join(app, 'package-lock.json'), 'utf8'));
+function validateImports(source) {
+  for (const [, specifier] of source.matchAll(/\brequire\(['"]([^'"]+)['"]\)/g)) {
+    let name = specifier;
+    if (specifier.startsWith('.')) {
+      const absolute = path.resolve(path.dirname(entry), specifier);
+      const relative = path.relative(app, absolute).replaceAll('\\', '/');
+      if (relative.startsWith('node_modules/')) name = relative.slice('node_modules/'.length);
+      else {
+        assert.ok(['', '.js', '.ts', '.tsx', '/index.js', '/index.ts'].some(ext => fs.existsSync(absolute + ext)),
+          `Missing local fixture import: ${specifier}`);
+        continue;
+      }
+    }
+    const packageName = name.startsWith('@') ? name.split('/').slice(0, 2).join('/') : name.split('/')[0];
+    assert.ok(lockfile.packages[`node_modules/${packageName}`], `Fixture dependency not locked: ${packageName}`);
+  }
+}
+validateImports(sourceText(entry));
+assert.throws(() => validateImports("require('expo-screen-orientation')"), /Fixture dependency not locked/);
 // Preserve all seed values, lyric definitions, metadata and fixture state transitions.
 const fixtureDefinitions = source => source.slice(source.indexOf('const seed ='), source.indexOf('function handle(url)'))
   .replace('  armed = null;\n', '').replaceAll("require('../../", "require('./");
@@ -18,7 +41,6 @@ assert.equal(fixtureDefinitions(sourceText(entry)), fixtureDefinitions(sourceTex
 const logs = [];
 let state = {};
 let rootGetter;
-let lock;
 const store = {
   getState: () => state,
   setState: value => { state = { ...state, ...value }; },
@@ -35,6 +57,7 @@ const react = {
 };
 const rn = {
   View: 'View', PixelRatio: { get: () => 3 },
+  Dimensions: { get: () => ({ width: 800, height: 300 }) },
   LogBox: { ignoreAllLogs() {} },
   Linking: { openURL() {}, addEventListener() {}, getInitialURL: () => Promise.resolve(null) },
   AppRegistry: { registerComponent: (_name, getter) => { rootGetter = getter; } },
@@ -52,7 +75,6 @@ const context = vm.createContext({ console: { info: line => logs.push(line) }, s
     if (name === '../../store/playback-store') return { usePlaybackStore: store, startPlaybackClock() {} };
     if (name === '../../lib/bridge-client') return { bridgeClient: bridge };
     if (name === '../../lib/onboarding-demo-lyrics') return { DEMO_LYRICS: demo };
-    if (name === 'expo-screen-orientation') return { OrientationLock: { PORTRAIT_UP: 1, LANDSCAPE_LEFT: 3 }, lockAsync: value => { lock = value; return Promise.resolve(); } };
     if (name === 'expo-router/entry') { rn.AppRegistry.registerComponent('app', () => () => null); return {}; }
     throw new Error('Unexpected import ' + name);
   },
@@ -71,6 +93,7 @@ const context = vm.createContext({ console: { info: line => logs.push(line) }, s
   assert.equal(ref.current, native, 'real commands remain forwarded');
   vm.runInContext("apply('spicy'); apply('pause')", context);
   await vm.runInContext("probe('seek', 'seek-1')", context);
+  assert.ok(logs.includes('KSFX WINDOW request=seek-1 windowWidth=800 windowHeight=300 canvasWidth=500 canvasHeight=250'));
   assert.ok(logs.some(line => line === 'KSFX TARGET request=seek-1 x=1350 y=126 expected=10000 url='), 'uses measured landscape origin, native hit index and pixel ratio');
   bridge.seekTo(5000);
   assert.ok(!logs.some(line => line.includes('SEEK_OK')));
@@ -91,20 +114,26 @@ const context = vm.createContext({ console: { info: line => logs.push(line) }, s
   store.setState({ currentTrack: { id: 'different-track' } });
   await rn.Linking.openURL('https://example.com/maker');
   assert.ok(!logs.some(line => line.includes('LINK_OK request=link-stale')));
-  vm.runInContext("handle('expolyrics://?fx=orientation-portrait')", context);
-  await Promise.resolve();
-  assert.equal(lock, 1);
-  vm.runInContext("handle('expolyrics://?fx=orientation-landscape')", context);
-  await Promise.resolve();
-  assert.equal(lock, 3);
+  // A rotated display must not be substituted for a letterboxed app's window.
+  rn.Dimensions.get = () => ({ width: 300, height: 800 });
+  await vm.runInContext("probe('link', 'portrait-window')", context);
+  assert.ok(logs.includes('KSFX WINDOW request=portrait-window windowWidth=300 windowHeight=800 canvasWidth=500 canvasHeight=250'));
   rendered.children[0].props.ref(null);
   await vm.runInContext("probe('seek', 'missing')", context);
   assert.ok(logs.includes('KSFX TARGET_MISSING request=missing'));
   const java = fs.readFileSync(runner, 'utf8');
-  assert.ok(java.includes('targetedTap("seek", s)') && java.includes('targetedTap("link", s)'));
+  assert.ok(java.includes('targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90)')
+    && java.includes('targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90)'));
   assert.ok(java.includes('W = bitmap.getWidth(); H = bitmap.getHeight()'));
   assert.ok(java.includes('expected != -3 || !url.equals("https://example.com/maker")'));
   assert.ok(!java.includes('new double[] { 0.62') && !java.includes('no LINK_OPEN from grid taps'));
   assert.ok(java.includes('name.startsWith("seek-tap-")') && java.includes('name.startsWith("credits-link-")'));
-  console.log('Harness checks passed: measured targets, pixel conversion, exact seek with store state, exact link, stale track rejection, orientation, missing surface and runner failure gates. Java device execution remains unverified.');
+  assert.ok(!java.includes('fx=orientation-') && !java.includes('fx("orientation-'));
+  assert.ok(java.includes('if (!ui.setRotation(rotation))') && java.includes('SETUP_ORIENTATION_REJECTED'));
+  assert.ok(java.includes('landscape ? W > H : H > W') && java.includes('boolean orientationOk = orient(rotation)'));
+  assert.ok(java.includes('boolean ok = orientationOk && ack && targetedTap("seek", s,')
+    && java.includes('boolean ok = orientationOk && ack && targetedTap("link", s,'));
+  assert.ok(java.includes('landscape ? windowWidth > windowHeight : windowHeight > windowWidth'));
+  assert.ok(java.includes('SETUP_APP_ORIENTATION_MISMATCH') && java.indexOf('if (!appOrientationOk)') < java.indexOf('shell("input tap "'));
+  console.log('Harness checks passed: locked imports, preserved fixtures, measured targets, pixel conversion, exact seek with store state, exact link, stale track rejection, orientation failure gates and missing surface. Java device execution remains unverified.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

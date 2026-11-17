@@ -1,4 +1,8 @@
-# Packaging validation
+# Packaging and orientation-fix validation
+
+The initial results below describe packaging commit `d66a046`. The follow-up
+section records the current orientation dependency fix and supersedes the earlier
+source hashes, source-comparison description and dependency-related blockers.
 
 Base: `a02c9f868af5495b818197770a5a241762c3ab06`, matching the local
 `origin/development` ref. Work was confined to this isolated worktree on
@@ -60,3 +64,66 @@ installation, visual parity, native interaction or device cleanup was verified.
 Rotation, lifecycle and settings steps are evidence-only, not success assertions.
 The credits probe samples a grid, so `TARGET_MISSING` is not exhaustive. The AMLL
 fixture covers a same-track style transition, not fresh AMLL playback.
+
+## Orientation dependency fix
+
+Removed the fixture's static `expo-screen-orientation` import and JS orientation
+deep-link handler. No package manifest, lockfile or production dependency changed.
+The runner now checks rotation acceptance and polls display geometry. For every
+seek/link fixture it additionally requires request-scoped app-window dimensions
+with the requested aspect and finite positive canvas dimensions before tapping.
+Window evidence is emitted before target scanning, even if no target is found.
+It cannot infer app-window orientation from the rotated display alone.
+
+An app or tour orientation lock must yield for the interaction setup to pass.
+Rejected rotation, missing window evidence and orientation mismatches are setup
+failures. They enter the same hard-failure list as interaction failures, so inspect
+`SETUP_` logs and request evidence before attributing failure to a renderer.
+The final portrait request before settings is display-only and explicitly leaves
+app-window orientation unverified. Settings and rotation screenshot steps remain
+evidence-only. Credits sampling and same-track AMLL fixture limitations still apply.
+
+The two original source fixtures remain hash-checked and unchanged. Runtime seed,
+lyrics, credits and state definitions still match the original. The runnable
+sources now differ from the reviewed scratch hashes listed in the README.
+The import regression scans all static requires for lockfile package presence
+and local source paths, and demonstrates rejection of the previously missing
+module. It does not establish complete Metro resolution. The VM also checks
+window evidence for landscape and a letterboxed portrait app independently from
+canvas dimensions. Runner source checks guard rotation acceptance and app-window
+aspect gates, but do not execute Android instrumentation behavior.
+
+Dependencies were installed only in this worktree with
+`npm ci --ignore-scripts --no-audit --no-fund`. It added 1014 ignored packages and
+reported engine warnings under Node 23.7.0. No other worktree or device was used.
+
+| Follow-up check | Result |
+| --- | --- |
+| Updated harness mock and fixture/import checks | Passed |
+| Runner Java compile, D8, APK packaging and alignment | Passed with the same three Java 8 warnings |
+| Offline Android Metro fixture bundle after final source edits | Passed, 2300 modules and 33 assets |
+| `npm run typecheck` from ExpoLyrics | Passed |
+| `npm test` from ExpoLyrics | Passed |
+| Repository Node suite | 19 passed, same 10 existing iOS CI failures listed above |
+| Repository and release-version checks | Passed, version 1.3.0 |
+| Fixture syntax, documentation links and punctuation, diff checks | Passed |
+
+Exact offline bundle command, from `ExpoLyrics`:
+
+```sh
+node node_modules/expo/bin/cli export:embed --entry-file scripts/fixtures/fullapp-test-entry.js --platform android --dev false --minify false --max-workers 2 --bundle-output ../scripts/android-fullapp/evidence/host-fix/fullapp.android.bundle --assets-dest ../scripts/android-fullapp/evidence/host-fix/assets
+```
+
+Expo logs say `Starting Metro Bundler`, but this export path uses
+`mockServer: isExporting` and does not bind an HTTP listener. The drag thread's
+sole normal-entry Metro and its reserved devices were not touched.
+
+The rebuilt unsigned runner SHA256 is:
+
+```text
+270b8e9d2c1073cccf2468879ddd789e104446c623405a4d1bc6238b79d4e260
+```
+
+All generated packages, bundle assets and logs remain ignored. Signing, full app
+compilation, Gradle init integration and physical behavior remain unverified.
+No physical test, device command, billing change or push was performed.
