@@ -162,11 +162,9 @@ function pickVaultPersistedMetadata(metadata) {
 function mergeVaultPersistedMetadata(existingMetadata, incomingMetadata) {
   const incoming = pickVaultPersistedMetadata(incomingMetadata);
   const existing = pickVaultPersistedMetadata(existingMetadata);
-  // Spicy provenance is sticky through relabel and rehydration. Only content
-  // independently fetched from lrc.red may reset it.
+  // Spicy provenance is sticky through relabel and rehydration.
   const existingSpicy = Boolean(existing.spicyApi) || String(existing.fetchOrigin?.host || "").includes("spicylyrics") || String(existing.fetchOrigin?.source || "").includes("spicy");
-  const incomingTrustedLrcRed = existingSpicy && !incoming.spicyApi && incoming.independentContent?.source === "lrc-red" && incoming.independentContent?.verified === true;
-  if (existingSpicy && !incomingTrustedLrcRed) {
+  if (existingSpicy) {
     incoming.fetchOrigin = { ...(incoming.fetchOrigin || {}), ...existing.fetchOrigin };
     if (existing.spicyApi && !incoming.spicyApi) incoming.spicyApi = { ...existing.spicyApi };
     if (existing.ttml && !incoming.ttml) incoming.ttml = { ...existing.ttml };

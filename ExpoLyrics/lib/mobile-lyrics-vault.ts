@@ -306,8 +306,7 @@ export async function saveMobileVaultLyrics({ track, lyrics, sourceLabel = "loca
     const savedAt = Date.now();
     const vaultId = existing[0]?.vault_id || `${normalizeText(track.title).replace(/\s+/g, "-")}-${savedAt.toString(36)}-${(++nextId).toString(36)}`;
     const existingSpicy = Boolean(existingMetadata?.spicyApi) || String(existingMetadata?.fetchOrigin?.host || "").includes("spicylyrics") || String(existingMetadata?.fetchOrigin?.source || "").includes("spicy");
-    const incomingTrustedLrcRed = existingSpicy && !metadata?.spicyApi && metadata?.independentContent?.source === "lrc-red" && metadata?.independentContent?.verified === true;
-    const effectiveMetadata = existingSpicy && !incomingTrustedLrcRed
+    const effectiveMetadata = existingSpicy
       ? { ...metadata, fetchOrigin: { ...(metadata?.fetchOrigin || {}), ...existingMetadata.fetchOrigin }, spicyApi: metadata?.spicyApi || existingMetadata.spicyApi, ttml: metadata?.ttml || existingMetadata.ttml }
       : metadata;
     const entry: MobileVaultEntry = { vaultId, savedAt, track: safeTrack, lyrics: safeLyrics, sourceLabel, originalSource, metadata: withSpicyFreshness({ metadata: effectiveMetadata, sourceLabel, originalSource }) };
