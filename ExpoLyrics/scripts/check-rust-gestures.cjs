@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 require('./check-rust-scheduling.cjs');
 require('./check-rust-footer-empty.cjs');
 require('../modules/kinesync-rust-lyrics/android/check-jni-contract.cjs');
+require('./check-rust-follow-ownership.cjs');
 const { createRustLyricsGesture, LONG_PRESS_MS, DRAG_SLOP, nextFollowState, desiredFollow, clearFollowReset } = require('../lib/rust-lyrics-gesture.js');
 
 function fixture(overrides = {}) {
@@ -67,7 +68,7 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(swift, /identity\.track_id != trackId/);
   assert.match(swift, /followEpoch &\+= 1/);
   assert.match(swift, /override func touchesBegan[\s\S]*?releasePending = false[\s\S]*?followEpoch &\+= 1/);
-  assert.match(swift, /if !value && releasePending \{ return \}/);
+  assert.match(swift, /guard value \|\| !self\.releasePending else \{ return false \}/);
   const guardSource = swift.match(/guard let self, resumed,([\s\S]*?)else \{ return \}/)[1];
   const guardCondition = guardSource.split(',').map(part => part.trim()).filter(Boolean)
     .map(part => part.replace(/self\./g, 'state.')).join(' && ');
@@ -84,13 +85,13 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   assert.match(android, /following = true\s*releasePending = false\s*followEpoch\+\+/);
   assert.match(android, /nextTrackId != trackId/);
   assert.match(android, /ACTION_DOWN[\s\S]*?releasePending = false[\s\S]*?followEpoch\+\+/);
-  assert.match(android, /if \(!value && releasePending\) return/);
+  assert.match(android, /if \(!value && releasePending\) return false/);
   const view = fs.readFileSync(path.join(__dirname, '../components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.match(view, /onShouldBlockNativeResponder: \(\) => Platform\.OS !== 'android'/);
   assert.match(view, /nativeEvent\.state === 'follow'/, 'JS mirrors native follow recapture');
-  assert.match(view, /send\(view => view\.setFollowing\(followTarget\)\);\s*sendAnchor\(\)/, 'ready reasserts the track follow target before the anchor');
-  assert.match(view, /followTarget = desiredFollow\(follow\.current, followEnabled\)/);
-  assert.match(view, /follow\.current = nextFollowState\(follow\.current, trackId, followEnabled\)/);
+  assert.match(view, /follow\.current\.accept\(nativeEvent\.ownershipEpoch \?\? -1, revision\.generation\)/, 'stale release events are rejected by ownership epoch');
+  assert.match(view, /follow\.current\.reassert\(revision\.generation\);\s*sendFollow\(command\);\s*sendAnchor\(\)/, 'ready reasserts the current follow intent before the anchor');
+  assert.match(view, /follow\.current\.sync\(trackId, followEnabled\)/);
 }
 
 

@@ -28,6 +28,7 @@ const imports = {
   '@/store/playback-store': { usePlaybackStore: select => select(state) },
   '@/lib/rust-lyrics-protocol': require('../lib/rust-lyrics-protocol.js'),
   '@/lib/rust-lyrics-preparation': prepared.exports,
+  '@/lib/rust-lyrics-follow': require('../lib/rust-lyrics-follow.js'),
   '@/lib/rust-lyrics-gesture': { ...gestureModule, createRustLyricsGesture: options => {
     gesture = createRustLyricsGesture({ ...options, setTimer: () => 1, clearTimer: () => {} }); return gesture;
   } },

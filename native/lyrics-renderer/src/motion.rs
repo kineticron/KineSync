@@ -991,29 +991,65 @@ mod tests {
     fn release_within_a_third_of_the_viewport_reengages_follow_for_both_styles() {
         for style in [Style::Spicy, Style::Amll] {
             for (distance, near) in [(0.0, true), (299.9, true), (300.0, true), (300.1, false)] {
-                let mut scroll = FollowScroll::default();
-                scroll.configure(style, 3.0, 8);
-                let target = command(style, 500.0, 800.0, 1, 0);
-                scroll.sample(&target, 0.0, true);
-                scroll.drag(-distance, 2_000.0, 900.0);
-                let released = scroll.position();
-                assert_eq!(
-                    scroll.release(0.0, 2_000.0, 900.0, Some(target.offset)),
-                    near,
-                    "{style:?} at the exact viewport-third boundary"
-                );
-                if near {
-                    // The resumed trajectory starts at the released offset, then
-                    // eases toward the active line instead of snapping.
-                    assert_eq!(scroll.sample(&target, 200.0, true), released);
-                    let middle = scroll.sample(&target, 300.0, true);
-                    assert!(middle > released && middle < target.offset);
-                    assert_eq!(scroll.sample(&target, 1_500.0, true), target.offset);
-                } else {
-                    // A far release stays manual and does not drift to the target.
-                    assert_eq!(scroll.sample(&target, 200.0, false), released);
-                    assert_eq!(scroll.sample(&target, 1_500.0, false), released);
-                    assert!(!scroll.animating());
+                for direction in [-1.0, 1.0] {
+                    let mut scroll = FollowScroll::default();
+                    scroll.configure(style, 3.0, 8);
+                    let target = command(style, 500.0, 800.0, 1, 0);
+                    scroll.sample(&target, 0.0, true);
+                    scroll.drag(direction * distance, 2_000.0, 900.0);
+                    let released = scroll.position();
+                    assert_eq!(
+                        scroll.release(0.0, 2_000.0, 900.0, Some(target.offset)),
+                        near,
+                        "{style:?} at the exact viewport-third boundary"
+                    );
+                    if near {
+                        // The resumed trajectory starts at the released offset, then
+                        // eases toward the active line instead of snapping.
+                        assert_eq!(scroll.sample(&target, 200.0, true), released);
+                        // Sample display frames rather than skipping straight to
+                        // the endpoint. AMLL caps each display step at 64 ms, as
+                        // does the reference's stepSimpleScroll.
+                        for frame in 1..=120 {
+                            let now = 200.0 + f64::from(frame) * 1000.0 / 60.0;
+                            let position = scroll.sample(&target, now, true);
+                            if distance == 0.0 {
+                                assert_eq!(position, target.offset);
+                            } else if frame == 1 || frame == 6 {
+                                let remaining = (target.offset - position).abs();
+                                assert!(
+                                    remaining > 0.0 && remaining < distance,
+                                    "{style:?}, distance {distance}, direction {direction}, \
+                                 frame {frame}: released {released}, position {position}, \
+                                 target {}",
+                                    target.offset
+                                );
+                                if style == Style::Amll {
+                                    // Reference sampleTrajectory, starting at rest:
+                                    // interval 800 gives stiffness 170, mass 0.9.
+                                    let omega = (170.0_f64 / 0.9).sqrt();
+                                    let elapsed = (now - 200.0) / 1000.0;
+                                    let expected = distance
+                                        * (1.0 + omega * elapsed)
+                                        * (-omega * elapsed).exp();
+                                    assert!((remaining - expected).abs() < 1e-9);
+                                }
+                                println!(
+                                    "{style:?} distance={distance} direction={direction} \
+                                 elapsed={}ms released={released} position={position} target={}",
+                                    now - 200.0,
+                                    target.offset
+                                );
+                            }
+                        }
+                        assert_eq!(scroll.position(), target.offset);
+                        assert!(!scroll.animating(), "{style:?} must eventually go idle");
+                    } else {
+                        // A far release stays manual and does not drift to the target.
+                        assert_eq!(scroll.sample(&target, 200.0, false), released);
+                        assert_eq!(scroll.sample(&target, 1_500.0, false), released);
+                        assert!(!scroll.animating());
+                    }
                 }
             }
         }

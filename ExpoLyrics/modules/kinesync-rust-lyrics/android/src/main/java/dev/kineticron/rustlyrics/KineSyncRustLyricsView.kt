@@ -43,6 +43,11 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var followEpoch = 0L
   // A queued JS touch-down false must not undo a release recapture.
   private var releasePending = false
+  // JS ownership epochs order touches, parent changes and track resets. Native
+  // rejects true commands from an older epoch and while a newer touch is active.
+  private var ownershipEpoch = 0L
+  private var ownershipFloor = 0L
+  private var touchActive = false
   private var foreground = true
   private var attached = false
   private var busy = false
@@ -115,12 +120,14 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         downY = ev.y; lastY = ev.y; dragging = false
         // Invalidate an in-flight release before queued JS ownership arrives.
         releasePending = false
+        touchActive = true
+        ownershipFloor = maxOf(ownershipFloor, ownershipEpoch + 1)
         followEpoch++
       }
       MotionEvent.ACTION_MOVE -> {
         velocity?.addMovement(ev)
         if (!dragging && kotlin.math.abs(ev.y - downY) > slop) {
-          dragging = true; setFollowing(false)
+          dragging = true; takeOwnership()
           parent?.requestDisallowInterceptTouchEvent(true)
         }
         if (dragging) {
@@ -131,6 +138,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       }
       MotionEvent.ACTION_UP -> {
         velocity?.addMovement(ev)
+        touchActive = false
         if (dragging) {
           velocity?.computeCurrentVelocity(1000, maxFling)
           fling(-(velocity?.yVelocity ?: 0f) / density.toDouble() / 1000.0)
@@ -138,6 +146,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         velocity?.recycle(); velocity = null; dragging = false
       }
       MotionEvent.ACTION_CANCEL -> {
+        touchActive = false
         if (dragging) fling(0.0)
         velocity?.recycle(); velocity = null; dragging = false
       }
@@ -231,6 +240,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (id <= generation) return
     val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
     generation = id; sequence = 0; anchor = null; animating = false
+    ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if (nextTrackId != trackId) {
@@ -266,10 +276,32 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
-  fun setFollowing(value: Boolean) {
-    if (!value && releasePending) return
-    if (value) releasePending = false
+  fun setFollowing(value: Boolean, epoch: Double, commandGeneration: Double) {
+    if (!epoch.isFinite() || epoch < 0 || !commandGeneration.isFinite() || commandGeneration < 0) return
+    if (commandGeneration.toLong() != generation) return
+    val nextEpoch = epoch.toLong()
+    if (!followCommandAllowed(value, nextEpoch)) return
+    ownershipEpoch = nextEpoch
+    if (value) ownershipFloor = maxOf(ownershipFloor, nextEpoch)
+    releasePending = false
     following = value; followEpoch++; owner?.setFollowing(value); markDirty(); lifecycle()
+  }
+  // A true from before a newer touch, or while that touch owns the viewport,
+  // must not reclaim follow even when its JS callback is delayed.
+  private fun followCommandAllowed(value: Boolean, nextEpoch: Long): Boolean {
+    if (nextEpoch <= ownershipEpoch) return false
+    if (value && (touchActive || nextEpoch <= ownershipFloor)) return false
+    if (!value && releasePending) return false
+    return true
+  }
+  // Native drag starts ownership without consuming a JS epoch. The following
+  // JS false command still records the epoch and keeps command ordering intact.
+  private fun takeOwnership() {
+    releasePending = false
+    following = false
+    followEpoch++
+    owner?.setFollowing(false)
+    markDirty(); lifecycle()
   }
   fun scrollBy(dy: Double) {
     if (!dy.isFinite() || dy == 0.0) return
@@ -285,6 +317,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       if (resumed && session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && !failed) {
         following = true
         onStatus(mapOf("state" to "follow", "generation" to releaseGeneration,
+          "ownershipEpoch" to ownershipEpoch,
           "message" to "Auto-follow resumed near the active line"))
       }
     }
