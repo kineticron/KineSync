@@ -28,12 +28,12 @@ const RUBBER_BAND: f64 = 0.55;
 /// Fraction of the viewport around the active-line target that still belongs
 /// to auto-follow when a manual scroll ends.
 pub const FOLLOW_RELEASE_FRACTION: f64 = 1.0 / 3.0;
-pub const ESCAPE_GRACE_MS: f64 = 2_500.0;
+pub const ESCAPE_GRACE_MS: f64 = 1_000.0;
 
 #[derive(Default, Debug)]
 struct EscapeGrace {
     until: f64,
-    away: bool,
+    escaped: bool,
     returning: bool,
     input_target: Option<f64>,
 }
@@ -170,8 +170,7 @@ impl FollowScroll {
     }
 
     pub fn reset(&mut self) {
-        self.escape.returning = false;
-        self.escape.input_target = None;
+        self.escape = EscapeGrace::default();
         self.position = 0.0;
         self.target = 0.0;
         self.command_offset = 0.0;
@@ -219,7 +218,6 @@ impl FollowScroll {
     /// release, inertia and rebound never create return intent.
     pub(crate) fn note_manual_input(&mut self, dy: f64, target: Option<f64>, now: f64) {
         if !self.dragging {
-            self.escape.away = false;
             self.escape.returning = false;
         }
         let Some(target) = target else {
@@ -232,14 +230,13 @@ impl FollowScroll {
         let toward = dy * (target - self.position) > 0.0
             && (self.position + dy - target).abs() < (self.position - target).abs();
         if toward {
-            self.escape.away = false;
-            self.escape.returning = now >= self.escape.until;
+            self.escape.returning = true;
             self.escape.input_target = Some(target);
         } else {
-            if !self.escape.away {
+            if !self.escape.escaped {
                 self.escape.until = now + ESCAPE_GRACE_MS;
+                self.escape.escaped = true;
             }
-            self.escape.away = true;
             self.escape.returning = false;
         }
     }
@@ -386,16 +383,16 @@ impl FollowScroll {
     /// pulls the viewport away from the finger. `target` is the active-line
     /// target from a ready layout. Without a layout there is no trustworthy
     /// target, so the release stays manual. A near release also requires a
-    /// deliberate return input after escape grace, with no away velocity.
+    /// deliberate return input, including during escape grace, with no away velocity.
     pub fn release(
         &mut self,
         velocity: f64,
         max_offset: f64,
         viewport: f64,
         target: Option<f64>,
-        now: f64,
+        _now: f64,
     ) -> bool {
-        let returning = self.escape.returning && now >= self.escape.until;
+        let returning = self.escape.returning;
         self.escape.returning = false;
         self.fling(velocity, max_offset, viewport);
         let Some(target) = target else {
@@ -1137,6 +1134,33 @@ mod tests {
                         assert!(!scroll.animating());
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn escape_deadline_starts_once_and_return_overrides_it() {
+        for style in [Style::Spicy, Style::Amll] {
+            for now in [999.0, 1_000.0, 1_001.0] {
+                let mut scroll = FollowScroll::default();
+                scroll.configure(style, 1.0, 8);
+                let target = command(style, 500.0, 800.0, 1, 0);
+                scroll.sample(&target, 0.0, true);
+                assert_eq!(scroll.escape.until, 0.0);
+                scroll.note_manual_input(40.0, Some(500.0), 0.0);
+                scroll.drag(40.0, 2_000.0, 900.0);
+                assert_eq!(scroll.escape.until, 1_000.0);
+                assert!(!scroll.release(0.0, 2_000.0, 900.0, Some(500.0), now));
+                scroll.note_manual_input(20.0, Some(500.0), now);
+                scroll.drag(20.0, 2_000.0, 900.0);
+                assert_eq!(scroll.escape.until, 1_000.0);
+                scroll.note_manual_input(-60.0, Some(500.0), now);
+                scroll.drag(-60.0, 2_000.0, 900.0);
+                assert!(scroll.release(0.0, 2_000.0, 900.0, Some(500.0), now));
+                scroll.resume_follow();
+                assert_eq!(scroll.escape.until, 0.0);
+                scroll.reset();
+                assert_eq!(scroll.escape.until, 0.0);
             }
         }
     }

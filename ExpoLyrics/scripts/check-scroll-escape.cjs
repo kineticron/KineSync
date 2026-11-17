@@ -28,10 +28,27 @@ for (const direction of [-1, 1]) {
   gate.begin(500);
   gate.move(500 + direction * 40, 500, 4000);
   gate.move(500 + direction * 20, 500, 6499);
-  assert.equal(gate.release(500, 300, 6500), false, 'input before grace cannot be released later to gain permission');
+  assert.equal(gate.release(500, 300, 6500), true, 'deliberate return overrides grace');
   gate.reset(500 + direction * 40);
   gate.move(500, 500, 6501);
   assert.equal(gate.release(500, 300, 6501), true, 'a fresh track clears the old escape deadline');
+}
+
+for (const stamp of [999, 1000, 1001]) {
+  const gate = createLyricsScrollEscape();
+  gate.begin(500);
+  assert.equal(gate.graceUntil, 0, 'touch alone starts no timer');
+  gate.move(540, 500, 0);
+  assert.equal(gate.graceUntil, 1000);
+  gate.begin(540);
+  gate.move(560, 500, stamp);
+  assert.equal(gate.graceUntil, 1000, 'later gestures never extend grace');
+  gate.move(500, 500, stamp);
+  assert.equal(gate.release(500, 300, stamp), true, 'return overrides grace on both sides of boundary');
+  gate.reset(500);
+  assert.equal(gate.graceUntil, 0, 'resume and track reset clear grace');
+  gate.move(540, 500, stamp, false);
+  assert.equal(gate.graceUntil, 0, 'programmatic movement starts no timer');
 }
 
 // These renderers deliberately have no automatic near-active recapture path.
