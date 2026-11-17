@@ -22,7 +22,10 @@ export function patchAmllScroll(source) {
       this.inputOffset = value;
       if (Math.abs(value - previous) < 0.5) return;
       const toward = (value - previous) * (this.escapeTarget - previous) > 0 && Math.abs(value - this.escapeTarget) < Math.abs(previous - this.escapeTarget);
-      if (!toward && this.escapeAllowed && !this.escapeUntil) this.escapeUntil = performance.now() + 1000;
+      if (!toward && this.escapeAllowed && !this.escapeUntil) {
+        this.escapeUntil = performance.now() + 1000;
+        this.hooks.onEscape?.();
+      }
       this.escapeReturning = toward;
       this.returnTarget = this.escapeTarget;
     }
@@ -38,7 +41,7 @@ export function patchAmllScroll(source) {
         this.hooks.onScrollUpdate(isContinuous);
       });
     }`],
-    ['onTouchStart = (evt) => {', 'onTouchStart = (evt) => {\n\t\tif (!evt.touches.length) return;\n\t\tthis.touchActive = true;\n\t\tthis.inputOffset = this.offset;\n\t\tthis.escapeReturning = false;\n\t\tthis.hooks.onInput?.(this.offset);'],
+    ['onTouchStart = (evt) => {', 'onTouchStart = (evt) => {\n\t\tif (!evt.touches.length) return;\n\t\tthis.touchActive = true;\n\t\tthis.returnRequested = false;\n\t\tthis.inputSample = false;\n\t\tthis.inputOffset = this.offset;\n\t\tthis.escapeReturning = false;\n\t\tthis.hooks.onInput?.(this.offset);'],
     ['onTouchMove = (evt) => {', 'onTouchMove = (evt) => {\n\t\tif (!this.touchActive || !evt.touches.length) return;\n\t\tthis.inputSample = true;'],
     ['onTouchCancel = (_evt) => {', 'onTouchCancel = (_evt) => {\n\t\tthis.touchActive = false;\n\t\tthis.escapeReturning = false;\n\t\tthis.inputSample = false;'],
     ['onTouchEnd = (evt) => {', `onTouchEnd = (evt) => {
@@ -65,7 +68,7 @@ export function patchAmllScroll(source) {
     ['resetScroll(targetOffset = 0) {', 'resetScroll(targetOffset = 0) {\n\t\tthis.touchActive = false;\n\t\tthis.escapeUntil = 0;\n\t\tthis.escapeTarget = targetOffset;\n\t\tthis.returnTarget = targetOffset;\n\t\tthis.inputOffset = targetOffset;\n\t\tthis.escapeReturning = false;\n\t\tthis.returnRequested = false;\n\t\tthis.inputSample = false;\n\t\tthis.ignoreWheelUntil = performance.now() + 120;'],
     ['clearTimers() {', 'clearTimers() {\n\t\tif (this.layoutRafId) cancelAnimationFrame(this.layoutRafId);\n\t\tthis.layoutRafId = 0;'],
     ['onPageHide = () => {\n\t\tthis.isPageVisible = false;', 'onPageHide = () => {\n\t\tthis.scrollEngine.resetScroll(this.scrollEngine.offset);\n\t\tthis.isPageVisible = false;'],
-    ['onScrollUpdate: (isContinuous) => {', 'onInput: (offset) => { this.element.dispatchEvent(new CustomEvent("kinesync-input", { detail: { offset, setFollowing: (value) => { this.scrollEngine.escapeAllowed = value; }, setTarget: (value) => { this.scrollEngine.escapeTarget = value; } } })); },\n\t\t\tonScrollUpdate: (isContinuous) => {\n\t\t\t\tthis.element.dispatchEvent(new Event("kinesync-scroll"));\n\t\t\t\tif (this.scrollEngine.returnRequested) this.element.dispatchEvent(new Event("kinesync-return"));\n\t\t\t\telse if (this.scrollEngine.escapeUntil) this.element.dispatchEvent(new Event("kinesync-escape"));'],
+    ['onScrollUpdate: (isContinuous) => {', 'onEscape: () => { this.element.dispatchEvent(new Event("kinesync-escape")); },\n\t\t\tonInput: (offset) => { this.element.dispatchEvent(new CustomEvent("kinesync-input", { detail: { offset, setFollowing: (value) => { this.scrollEngine.escapeAllowed = value; }, setTarget: (value) => { this.scrollEngine.escapeTarget = value; } } })); },\n\t\t\tonScrollUpdate: (isContinuous) => {\n\t\t\t\tthis.element.dispatchEvent(new Event("kinesync-scroll"));\n\t\t\t\tif (this.scrollEngine.returnRequested) this.element.dispatchEvent(new Event("kinesync-return"));\n\t\t\t\telse if (this.scrollEngine.escapeUntil) this.element.dispatchEvent(new Event("kinesync-escape"));'],
   ];
   for (const [original, replacement] of replacements) {
     if (source.split(original).length !== 2) throw new Error('AMLL scroll patch no longer matches upstream. Review its gesture lifecycle.');

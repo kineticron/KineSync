@@ -10,7 +10,7 @@ const region = name => {
   assert.ok(start >= 0, `AMLL region exists: ${name}`);
   return source.slice(start, source.indexOf('//#endregion', start));
 };
-let now = 0, nextId = 0, layouts = 0;
+let now = 0, nextId = 0, layouts = 0, escapes = 0;
 const frames = new Map(), events = new Map(), timers = new Map();
 const context = vm.createContext({
   performance: { now: () => now },
@@ -26,6 +26,7 @@ const context = vm.createContext({
 });
 vm.runInContext(region('src/lyric-player/base/scroll.ts') + '\n' + region('src/lyric-player/base/focus.ts'), context);
 const engine = new context.ScrollInteractionEngine({ addEventListener: (type, handler) => events.set(type, handler) }, {
+  onEscape: () => escapes++,
   onInteractionStart() {}, onScrollUpdate: () => layouts++,
 });
 engine.updateBoundary(-10000, 10000);
@@ -57,17 +58,23 @@ for (const elapsed of [999, 1001]) {
   assert.equal(engine.escapeUntil, 0, 'resume/track reset cancels grace');
   send('touchstart', 400);
   assert.equal(engine.escapeUntil, 0, 'ordinary touch starts no grace');
+  const previousEscapes = escapes;
   now += 16; send('touchmove', 300);
   const deadline = now + 1000;
   assert.equal(engine.escapeUntil, deadline, 'first manual away sample starts one second grace');
+  assert.equal(escapes, previousEscapes + 1, 'deactivation happens on the same input sample, before RAF');
   send('touchend', 300); frame();
   now = deadline - 1000 + elapsed;
   send('touchstart', 300); now += 1; send('touchmove', 280);
   assert.equal(engine.escapeUntil, deadline, 'later manual gestures cannot extend grace');
+  assert.equal(escapes, previousEscapes + 1, 'escaped gestures never deactivate again');
   // Return toward the active anchor while retaining the real input handlers.
   engine.escapeTarget = engine.offset - 40;
   send('touchmove', 320); send('touchend', 320); frame();
   assert.equal(engine.returnRequested, true, 'deliberate return is accepted on both sides of one second');
+  send('touchstart', 320);
+  assert.equal(engine.returnRequested, false, 'new touch invalidates an older queued return');
+  send('touchcancel', 320);
   engine.resetScroll();
   assert.equal(engine.escapeUntil, 0);
   frame();
