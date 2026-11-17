@@ -29,6 +29,8 @@ icu_segmenter = { version = "=2.4.0", default-features = false, features = ["com
 # Temporary Mali workgroup-index safety fix. See vendor/vello_shaders/KINESYNC-PATCH.md.
 [patch.crates-io]
 vello_shaders = { path = "vendor/vello_shaders" }
+# iOS UIView-backed CAMetalLayer setters must run on main.
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 [dev-dependencies]
 vello_shaders = "=0.12.0"

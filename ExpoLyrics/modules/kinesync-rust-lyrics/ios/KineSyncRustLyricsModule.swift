@@ -48,6 +48,9 @@ private struct TrackIdentity: Decodable { let generation: UInt64 }
 
 // Only the serial queue touches Rust. Retirement is asynchronous and retains the
 // layer until the last bounded frame and surface destruction have completed.
+// HAL configuration synchronously dispatches only CAMetalLayer setters to main.
+// Main must never wait for this worker. Never hold gate across a Rust call,
+// because main lifecycle callbacks also take gate. GPU waits stay on worker.
 private final class RustOwner: @unchecked Sendable {
   // Shared serialization also orders old-owner retirement before a rapid remount
   // can create/configure another wgpu surface on the same retained layer.
@@ -109,6 +112,7 @@ private final class RustOwner: @unchecked Sendable {
   private var inputScheduled = false
 
   init(layer: CAMetalLayer, report: @escaping @MainActor ([String: Any]) -> Void) {
+    assert(Thread.isMainThread, "RustOwner must be created on main")
     self.layer = layer
     self.report = report
   }
@@ -205,6 +209,10 @@ private final class RustOwner: @unchecked Sendable {
     }
   }
   private func applyUpdate(track: String, anchor: Anchor?, size: CGSize, scale: CGFloat, forceSnap: Bool) {
+    #if DEBUG
+    dispatchPrecondition(condition: .onQueue(queue))
+    assert(!Thread.isMainThread, "GPU creation and resize must stay on worker")
+    #endif
     guard self.permitted() else { return }
     let identity = track.data(using: .utf8).flatMap { try? JSONDecoder().decode(TrackIdentity.self, from: $0) }
     if self.failed {
@@ -249,6 +257,10 @@ private final class RustOwner: @unchecked Sendable {
   }
   func draw(targetMs: Double, resumeStepMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
     queue.async {
+      #if DEBUG
+      dispatchPrecondition(condition: .onQueue(self.queue))
+      assert(!Thread.isMainThread, "GPU acquire and Outdated recovery must stay on worker")
+      #endif
       var result: Int32 = 1
       var animating = false
       var nextCue = -1.0

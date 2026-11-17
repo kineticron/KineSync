@@ -745,6 +745,9 @@ fn transparent_alpha_for_platform(
 }
 
 /// A retained platform surface. Caller keeps its platform layer alive through Drop.
+/// On iOS all three configure paths use the patched HAL's main-thread layer
+/// setters. Keep full configure calls on the worker: wgpu-core waits for GPU
+/// completion before entering the HAL. Main must never wait for this worker.
 pub struct SurfaceRenderer {
     surface: Surface<'static>,
     gpu: Gpu,
