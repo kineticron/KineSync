@@ -8,6 +8,7 @@ const config = require('./config.json');
 const normalize = value => String(value).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, ' ').trim();
 const REQUIRED = config.onboarding.required;
 const EVIDENCE_TEXT = ['Skip', 'A modern, beautiful mobile app', 'syllable-synced lyrics', 'Spotify playback'];
+const BOOT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function matchOnboarding(text, settings = config.onboarding) {
   const normalized = normalize(text);
@@ -17,10 +18,20 @@ function matchOnboarding(text, settings = config.onboarding) {
   return { matched: missing.length === 0 && evidence.length > 0 && forbidden.length === 0, missing, evidence, forbidden };
 }
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 120000, ...options });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status}): ${result.stderr || result.stdout}`);
+function run(command, args, { timeout = 120000, stage = args[0] === 'simctl' ? `simctl ${args[1]}` : command, ...options } = {}) {
+  const started = Date.now();
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout, ...options });
+  if (result.error || result.status !== 0) {
+    const timedOut = result.error?.code === 'ETIMEDOUT';
+    const reason = timedOut ? `timed out after ${timeout} ms` : result.error?.message || `failed (${result.signal || result.status})`;
+    const error = new Error(`${stage}: ${command} ${args.join(' ')} ${reason}`, { cause: result.error });
+    error.commandFailure = {
+      stage, command, args, timeout_ms: timeout, timed_out: timedOut, elapsed_ms: Date.now() - started,
+      exit_code: result.status, signal: result.signal, error_code: result.error?.code || null,
+      stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+    };
+    throw error;
+  }
   return result.stdout;
 }
 
@@ -60,16 +71,18 @@ async function main() {
   const bundleId = process.argv[3] || config.expectedBundleIdentifier;
   const evidence = path.resolve(process.argv[4] || process.env.CI_EVIDENCE_DIR || 'simulator-smoke-evidence');
   fs.mkdirSync(evidence, { recursive: true });
-  if (!fs.existsSync(app) || !app.endsWith('.app')) throw new Error(`Missing .app: ${app}`);
-  const listeners = metroListeners();
-  if (listeners.length) throw new Error(`Metro-like listener present before smoke: ${JSON.stringify(listeners)}`);
-  const pair = simulatorPair();
   const name = `KineSync Revyl CI ${process.env.GITHUB_RUN_ID || Date.now()}`;
-  const udid = run('xcrun', ['simctl', 'create', name, pair.deviceType, pair.runtime]).trim();
-  const result = { app, bundleId, name, udid, runtime: pair.runtime, deviceType: pair.deviceType, attempts: [], metro_listeners: listeners };
+  const result = { app, bundleId, name, attempts: [] };
   try {
+    if (!fs.existsSync(app) || !app.endsWith('.app')) throw new Error(`Missing .app: ${app}`);
+    result.metro_listeners = metroListeners();
+    if (result.metro_listeners.length) throw new Error(`Metro-like listener present before smoke: ${JSON.stringify(result.metro_listeners)}`);
+    const pair = simulatorPair();
+    Object.assign(result, pair);
+    const udid = run('xcrun', ['simctl', 'create', name, pair.deviceType, pair.runtime]).trim();
+    result.udid = udid;
     run('xcrun', ['simctl', 'boot', udid]);
-    run('xcrun', ['simctl', 'bootstatus', udid, '-b']);
+    run('xcrun', ['simctl', 'bootstatus', udid, '-b'], { timeout: BOOT_TIMEOUT_MS, killSignal: 'SIGKILL' });
     spawnSync('xcrun', ['simctl', 'uninstall', udid, bundleId], { encoding: 'utf8' });
     run('xcrun', ['simctl', 'install', udid, app]);
     const childEnv = { ...process.env, SIMCTL_CHILD_RCT_METRO_PORT: '65534', SIMCTL_CHILD_EXPO_PUBLIC_BRIDGE_WS_URL: '',
@@ -83,12 +96,10 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 5000));
       const shot = path.join(evidence, `simulator-${String(attempt).padStart(2, '0')}.png`);
       run('xcrun', ['simctl', 'io', udid, 'screenshot', shot]);
-      const ocr = spawnSync('xcrun', ['swift', path.join(__dirname, 'ocr.swift'), shot], { encoding: 'utf8', timeout: 30000 });
-      if (ocr.error) throw ocr.error;
-      if (ocr.status !== 0) throw new Error(`OCR failed: ${ocr.stderr || ocr.stdout}`);
-      const text = JSON.parse(ocr.stdout).lines.join('\n');
+      const ocr = JSON.parse(run('xcrun', ['swift', path.join(__dirname, 'ocr.swift'), shot], { stage: 'ocr', timeout: 30000 }));
+      const text = ocr.lines.join('\n');
       const match = matchOnboarding(text);
-      last = { attempt, screenshot: shot, text, ocr: JSON.parse(ocr.stdout), ...match };
+      last = { attempt, screenshot: shot, text, ocr, ...match };
       result.attempts.push(last);
       fs.writeFileSync(path.join(evidence, 'ocr.json'), JSON.stringify(result, null, 2) + '\n');
       if (match.matched) break;
@@ -101,17 +112,19 @@ async function main() {
     result.smoke_passed = true;
     result.proof = 'KineSync onboarding title and Start Setup rendered with no local Metro listener';
     result.limitation = 'Onboarding proves app startup with no local Metro listener. It does not prove Rust renderer presentation or network isolation.';
-    fs.writeFileSync(path.join(evidence, 'smoke.json'), JSON.stringify(result, null, 2) + '\n');
-    console.log(JSON.stringify({ passed: true, udid, attempts: result.attempts.length, proof: result.proof }));
   } catch (error) {
     result.smoke_passed = false;
     result.error = error.message;
+    if (error.commandFailure) result.command_failure = error.commandFailure;
     throw error;
   } finally {
     fs.writeFileSync(path.join(evidence, 'smoke.json'), JSON.stringify(result, null, 2) + '\n');
-    spawnSync('xcrun', ['simctl', 'shutdown', udid], { encoding: 'utf8', timeout: 15000 });
-    spawnSync('xcrun', ['simctl', 'delete', udid], { encoding: 'utf8', timeout: 15000 });
+    if (result.udid) {
+      spawnSync('xcrun', ['simctl', 'shutdown', result.udid], { encoding: 'utf8', timeout: 15000 });
+      spawnSync('xcrun', ['simctl', 'delete', result.udid], { encoding: 'utf8', timeout: 15000 });
+    }
   }
+  console.log(JSON.stringify({ passed: true, udid: result.udid, attempts: result.attempts.length, proof: result.proof }));
 }
 
 if (require.main === module) {

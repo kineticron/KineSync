@@ -116,6 +116,63 @@ test('onboarding matcher requires app-specific setup UI and rejects launcher tex
   assert.equal(matchOnboarding('Development servers\nStart Setup\nSkip').matched, false);
 });
 
+test('smoke persists boot timeout diagnostics and stops before install', t => {
+  const root = temp(t);
+  const app = path.join(root, 'KineSync.app');
+  const evidence = path.join(root, 'evidence');
+  const commands = path.join(root, 'commands.txt');
+  const preload = path.join(root, 'mock-smoke-commands.cjs');
+  fs.mkdirSync(app);
+  put(root, path.basename(preload), String.raw`
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+require('node:child_process').spawnSync = (command, args, options) => {
+  const success = { status: 0, stdout: '', stderr: '' };
+  if (command === 'lsof') return { ...success, status: 1 };
+  assert.equal(command, 'xcrun');
+  assert.equal(args[0], 'simctl');
+  fs.appendFileSync(process.env.SMOKE_TEST_COMMANDS, args[1] + '\n');
+  switch (args[1]) {
+    case 'list':
+      return { ...success, stdout: JSON.stringify({
+        runtimes: [{ identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-27-2', version: '27.2', isAvailable: true, supportedDeviceTypes: ['test-iphone'] }],
+        devicetypes: [{ identifier: 'test-iphone', name: 'iPhone Test' }],
+      }) };
+    case 'create': return { ...success, stdout: 'test-udid\n' };
+    case 'boot':
+    case 'shutdown':
+    case 'delete': return success;
+    case 'bootstatus':
+      assert.equal(options.timeout, 300000);
+      assert.equal(options.killSignal, 'SIGKILL');
+      return {
+        error: Object.assign(new Error('spawnSync xcrun ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+        status: null, signal: 'SIGKILL', stdout: 'Waiting for SpringBoard\n', stderr: 'Boot still in progress\n',
+      };
+    default: throw new Error('Unexpected smoke command: ' + args.join(' '));
+  }
+};
+`);
+  const smoke = path.join(repo, 'scripts/ios-sim-ci/simulator-smoke.cjs');
+  const run = spawnSync(process.execPath, ['--require', preload, smoke, app, simConfig.expectedBundleIdentifier, evidence], {
+    encoding: 'utf8', env: { ...process.env, SMOKE_TEST_COMMANDS: commands },
+  });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /simctl bootstatus test-udid -b timed out after 300000 ms/);
+  const result = JSON.parse(fs.readFileSync(path.join(evidence, 'smoke.json'), 'utf8'));
+  assert.equal(result.smoke_passed, false);
+  assert.deepEqual(result.attempts, []);
+  assert.deepEqual(result.metro_listeners, []);
+  const { elapsed_ms, ...failure } = result.command_failure;
+  assert.ok(Number.isInteger(elapsed_ms) && elapsed_ms >= 0);
+  assert.deepEqual(failure, {
+    stage: 'simctl bootstatus', command: 'xcrun', args: ['simctl', 'bootstatus', 'test-udid', '-b'],
+    timeout_ms: 300000, timed_out: true, exit_code: null, signal: 'SIGKILL', error_code: 'ETIMEDOUT',
+    stdout: 'Waiting for SpringBoard\n', stderr: 'Boot still in progress\n',
+  });
+  assert.deepEqual(fs.readFileSync(commands, 'utf8').trim().split('\n'), ['list', 'create', 'boot', 'bootstatus', 'shutdown', 'delete']);
+});
+
 test('Rust ABI instruction matcher accepts ABI 11 and rejects other constants', () => {
   assert.equal(matchesAbi('_kr_abi_version:\n  mov w0, #0xb\n  ret'), true);
   assert.equal(matchesAbi('0000 <_kr_abi_version>:\n  0: mov w0, #0xb\n  4: ret'), true);
