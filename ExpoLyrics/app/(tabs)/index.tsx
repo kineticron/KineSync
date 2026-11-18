@@ -1765,7 +1765,7 @@ export default function HomeScreen() {
           <MaskedView
             pointerEvents="box-none"
             style={StyleSheet.absoluteFill}
-            androidRenderingMode="software"
+            androidRenderingMode="hardware"
             maskElement={
               <View
                 pointerEvents="none"
