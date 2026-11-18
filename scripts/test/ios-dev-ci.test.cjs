@@ -654,8 +654,9 @@ test('Rust lyric surface keeps a full-size viewport, soft moving edge and real d
   assert.doesNotMatch(player, /bottom: 0,\s*overflow: "hidden" as const/);
   // The moving edge is an alpha mask. The opaque band and the transparent
   // gradient fade meet at the dock edge so glyphs never end on a hard cut.
-  // Android must use software mask rendering to redraw an animated mask.
-  assert.match(player, /<MaskedView[\s\S]*?androidRenderingMode="software"[\s\S]*?maskElement=/);
+  // Android's native TextureView requires hardware composition.
+  assert.match(player, /<MaskedView\b[^<>]*\bandroidRenderingMode="hardware"\s+maskElement=/);
+  assert.doesNotMatch(player, /\bandroidRenderingMode\s*=\s*\{?\s*["']software["']/);
   assert.match(player, /const lyricsEdgeMaskSolidStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?LYRICS_EDGE_FADE_HEIGHT \* Math\.max\(0, Math\.min\(1, controlsOpacity\.value\)\)[\s\S]*?height: Math\.max\(0, edge - fade\)/);
   assert.match(player, /const lyricsEdgeMaskFadeStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?transform: \[\{ translateY: Math\.max\(0, edge - fade\) \}\],[\s\S]*?height: fade/);
   // The fade scales with controlsOpacity, so the hidden end state is fully opaque.
