@@ -196,9 +196,10 @@ try {
     return { ok: responseStatus === 200, status: responseStatus,
       arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(snapshot)).buffer };
   };
-  let mono = 0, pendingRenewal;
+  let mono = 0, pendingRenewal, captureId;
   const detector = new SpotifyDetector({ sample: s => samples.push(s), status: s => statuses.push(s),
-    sessionNeeded() {
+    sessionNeeded(id) {
+      captureId = id;
       needs++;
       if (needs === 1) return; // Initial capture exercises unverified and untrusted messages below.
       assert.equal(pendingRenewal, undefined, 'only one browser renewal is pending');
@@ -209,7 +210,7 @@ try {
     setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
     setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
   });
-  const capture = e => detector.capture(JSON.stringify(e), 'https://open.spotify.com/');
+  const capture = e => detector.capture(JSON.stringify(e), 'https://open.spotify.com/', captureId);
   const finishRenewal = () => {
     assert(pendingRenewal, 'replacement session was requested from the browser');
     assert.equal(detector.health.phase, 'renewingSession');
@@ -237,7 +238,7 @@ try {
   };
   detector.setEnabled(true);
   assert.equal(needs, 1);
-  assert.equal(detector.capture(JSON.stringify({ type: 'credentials', token: 'secret', authenticated: true }), 'https://open.spotify.com.evil.test/'), false);
+  assert.equal(detector.capture(JSON.stringify({ type: 'credentials', token: 'secret', authenticated: true }), 'https://open.spotify.com.evil.test/', captureId), false);
   capture({ type: 'credentials', token: 'anonymous' });
   capture({ type: 'observerEndpoint', url: `https://guc3-spclient.spotify.com/connect-state/v1/devices/hobs_${'b'.repeat(35)}` });
   capture({ type: 'socket', url: 'wss://dealer.spotify.com/?access_token=browser-token' });

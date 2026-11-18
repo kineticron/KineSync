@@ -58,19 +58,21 @@ function reset() {
 function publish(sample) { const packet = api.detectorPacket(sample); store.getState().ingestPacket(packet, 'mobile'); return packet; }
 function position() { const s = store.getState(); return s.anchorPositionMs + (s.isPlaying ? Math.max(0, mono - s.anchorMonotonicMs) : 0); }
 async function connect(sample) {
-  let bootstrapCount = 0, pendingBootstrap;
+  let pendingBootstrap, captureId;
   const detector = new api.SpotifyDetector({ sample, ready() {}, status() {}, authenticated() {},
-    sessionNeeded() {
+    sessionNeeded(id) {
       assert.equal(pendingBootstrap, undefined, 'only one browser bootstrap is pending');
-      pendingBootstrap = ++bootstrapCount;
+      pendingBootstrap = captureId = id;
     },
   });
-  const capture = value => detector.capture(JSON.stringify(value), 'https://open.spotify.com');
+  const capture = value => detector.capture(JSON.stringify(value), 'https://open.spotify.com', captureId);
   const connection = {
     detector, socket: null,
     async register(id) {
       assert(pendingBootstrap, 'the browser must be asked to bootstrap before registration');
-      assert.equal(detector.health.phase, 'renewingSession');
+      if (connection.socket?.readyState === 1 && connection.socket === detector.socket) {
+        assert(detector.health.observerConfirmed, 'healthy observer remains verified through renewal');
+      } else assert.equal(detector.health.phase, 'renewingSession');
       const token = `synthetic-test-credential-${pendingBootstrap}`;
       const clientToken = `synthetic-client-${pendingBootstrap}`;
       pendingBootstrap = undefined;

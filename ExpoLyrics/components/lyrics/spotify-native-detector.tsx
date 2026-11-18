@@ -26,8 +26,8 @@ import { emitNativeClockDiagnostic, nativeClockCaptureActive, NATIVE_CLOCK_HTTP_
 
 const PLAYER_URL = 'https://open.spotify.com/';
 
-const CAPTURE_SCRIPT = `${bootstrap}\n${spotifyAuthProbeScript}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}\n${NATIVE_CLOCK_HTTP_TRACE_SCRIPT}`;
-const CONTROL_SCRIPT = `${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
+const CAPTURE_SCRIPT = `${bootstrap}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}\n${NATIVE_CLOCK_HTTP_TRACE_SCRIPT}`;
+const CONTROL_SCRIPT = `${spotifyAuthProbeScript}\n${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
 const USER_AGENT = Platform.OS === 'android'
   ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
   : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
@@ -39,7 +39,6 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const loggedOut = useSpotifySessionStore(s => s.loggedOut);
   const bootstrapAllowed = useSpotifyConnectionStore(s => !['rateLimited', 'offline', 'suspended', 'retryWait', 'denied'].includes(s.health.phase));
   const [browserOpen, setBrowserOpen] = useState(false);
-  const [sessionNeeded, setSessionNeeded] = useState(true);
   const [browserGeneration, setBrowserGeneration] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
   const [status, setStatus] = useState('Connecting your Spotify session…');
@@ -47,6 +46,8 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const mounted = useRef(false);
   const documentUrl = useRef(PLAYER_URL);
   const browserRun = useRef(0);
+  const warmDocument = useRef<number | null>(null);
+  const captureRequest = useRef<{ id: number; warm: boolean } | null>(null);
   const lastSample = useRef<Sample | null>(null);
   const lyricsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enriched = useRef(new Map<string, TrackMetadata>());
@@ -54,13 +55,13 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const metadataPending = useRef('');
   const metadataAttempts = useRef(new Map<string, number>());
   const diagnostics = useRef({ samples: 0, sourceTimestampMs: 0, receivedAtMs: 0, device: '', status: '' });
-  const callbacks = useRef({ sample: (_s: Sample) => {}, status: (_s: string) => {}, sessionNeeded: () => {}, authenticated: (_token: string, _expires: number) => {}, ready: () => {} });
+  const callbacks = useRef({ sample: (_s: Sample) => {}, status: (_s: string) => {}, sessionNeeded: (_id: number) => {}, sessionFinished: (_id: number) => {}, authenticated: (_token: string, _expires: number) => {} });
   const detectorRef = useRef<SpotifyDetector | null>(null);
   if (!detectorRef.current) detectorRef.current = new SpotifyDetector({
     health: health => useSpotifyConnectionStore.setState({ health }),
     sample: s => callbacks.current.sample(s), status: s => callbacks.current.status(s),
-    sessionNeeded: () => callbacks.current.sessionNeeded(), authenticated: (t, e) => callbacks.current.authenticated(t, e),
-    ready: () => callbacks.current.ready(),
+    sessionNeeded: id => callbacks.current.sessionNeeded(id), sessionFinished: id => callbacks.current.sessionFinished(id), authenticated: (t, e) => callbacks.current.authenticated(t, e),
+    ready: () => {},
   });
   const detector = detectorRef.current;
   const canIngest = useCallback(() => AppState.currentState !== 'background' && mounted.current && !usePlayerTourStore.getState().active && !usePlayerTourStore.getState().pending && !useSpotifySessionStore.getState().loggedOut &&
@@ -134,8 +135,15 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     }
   };
   const publishRef = useRef(publish); publishRef.current = publish;
+  const remount = useCallback(() => {
+    metadataAttempts.current.clear();
+    warmDocument.current = null;
+    if (captureRequest.current) captureRequest.current.warm = false;
+    browserRun.current++; setBrowserGeneration(browserRun.current);
+    documentUrl.current = PLAYER_URL;
+    setLoggingOut(false);
+  }, []);
   callbacks.current = {
-    ready: () => { if (canIngest()) setSessionNeeded(false); },
     sample: s => {
       if (!canIngest()) return;
       lastSample.current = s;
@@ -150,19 +158,29 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (__DEV__) console.debug('[Spotify detector]', s);
       }
     },
-    sessionNeeded: () => { if (mounted.current && !useSpotifySessionStore.getState().loggedOut) { browserRun.current++; setBrowserGeneration(browserRun.current); setSessionNeeded(true); } },
+    sessionNeeded: id => {
+      if (!mounted.current || useSpotifySessionStore.getState().loggedOut) return;
+      const warm = warmDocument.current === browserRun.current && web.current !== null;
+      captureRequest.current = { id, warm };
+      if (!warm) { remount(); return; }
+      web.current?.injectJavaScript(`(function () {
+        if (location.origin !== 'https://open.spotify.com') return;
+        if (window.__startDetectorCapture) window.__startDetectorCapture(${id});
+        else window.ReactNativeWebView.postMessage(JSON.stringify({type:'session', state:'unavailable', captureId:${id}}));
+      })(); true;`);
+    },
+    sessionFinished: id => {
+      const request = captureRequest.current;
+      if (request?.id !== id) return;
+      captureRequest.current = null;
+      web.current?.injectJavaScript(`window.__cancelDetectorCapture && window.__cancelDetectorCapture(${request.warm ? id : 0}); true;`);
+    },
     authenticated: (token, expiresAt) => {
       if (!canIngest()) return;
       useSpotifySessionStore.getState().setSignedIn(true);
       void saveMobileLyricsSettings({ spotifyWebToken: token, spotifyWebTokenExpiresAt: expiresAt });
     },
   };
-  const remount = useCallback(() => {
-    metadataAttempts.current.clear();
-    browserRun.current++; setBrowserGeneration(browserRun.current);
-    documentUrl.current = PLAYER_URL;
-    setSessionNeeded(true); setLoggingOut(false);
-  }, []);
   const openBrowser = useCallback(() => {
     if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') detector.beginSignIn();
     if (!useSpotifySessionStore.getState().signedIn) { router.push({ pathname: '/explore', params: { action: 'login' } }); return; }
@@ -240,9 +258,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     return () => { sub.remove(); unsubscribeNetwork(); detector.setEnabled(false); };
   }, [detector, mobile, loggedOut]);
 
-  const showWebView = loggingOut || (!loggedOut && bootstrapAllowed && (browserOpen || (mobile && sessionNeeded)));
+  const showWebView = loggingOut || (!loggedOut && bootstrapAllowed && (browserOpen || mobile));
   useEffect(() => {
     if (!showWebView) {
+      warmDocument.current = null;
       browserRun.current++; setBrowserGeneration(browserRun.current);
     }
   }, [showWebView]);
@@ -265,6 +284,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       injectedJavaScriptBeforeContentLoaded={CAPTURE_SCRIPT} injectedJavaScript={CAPTURE_SCRIPT}
       onNavigationStateChange={e => { if (run === browserRun.current) documentUrl.current = e.url; }}
       onShouldStartLoadWithRequest={e => run === browserRun.current && isAllowedSpotifyWebViewNavigation(e.url, e.isTopFrame)}
+      onLoadStart={() => { if (run === browserRun.current) warmDocument.current = null; }}
       onLoadEnd={() => {
         if (run !== browserRun.current) return;
         if (loggingOut) { setLoggingOut(false); return; }
@@ -288,7 +308,18 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
           } catch { /* Ignore malformed diagnostic messages; existing parser remains authoritative. */ }
         }
         if (!canIngest()) return;
-        detector.capture(e.nativeEvent.data, origin);
+        try {
+          const message = JSON.parse(e.nativeEvent.data);
+          if (message.type === 'notice' && message.message === 'Network capture installed.') warmDocument.current = run;
+          const request = captureRequest.current;
+          if (request && (request.warm ? message.captureId === request.id : message.captureId === undefined)) {
+            if (request.warm && message.type === 'session' && message.state === 'unavailable') {
+              remount();
+              return;
+            }
+            detector.capture(e.nativeEvent.data, origin, request.id);
+          }
+        } catch { /* Ignore malformed capture messages. */ }
         const event = parseBrowserEvent(e.nativeEvent.data);
         if (event?.type === 'signedIn') useSpotifySessionStore.getState().setSignedIn(event.signedIn);
         if (event?.type === 'ready') {

@@ -49,7 +49,7 @@ class Detector {
   setReachability() {}
   constructor(callbacks) { this.callbacks = callbacks; instance = this; }
   setEnabled(value) { this.enabled = value; }
-  capture(raw) { captures.push(raw); return true; }
+  capture(raw, origin, id) { captures.push({ raw, origin, id }); return true; }
   refresh() {}
   async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
   async control(command) { commands.push(command); if (controlError) throw controlError; }
@@ -109,22 +109,38 @@ assert.equal(web.props.userAgent.includes('Chrome/'), platform === 'android');
 assert.equal(web.props.injectedJavaScriptBeforeContentLoaded.includes('android-observer'), platform === 'android');
 if (platform === 'android') assert.equal(tree.props.style[1].opacity, 0.01, 'Chromium bootstrap stays in the viewport');
 assert.equal(instance.enabled, true);
-// Renewal deliberately remounts a document, even if sessionNeeded is already
-// true. It does not depend on restarting an exhausted window.__probeToken.
+// A document with no installed capture hook still takes the cold path.
 const oldDocument = web;
-instance.callbacks.sessionNeeded(); render(); web = find(tree);
-assert.notEqual(web.key, oldDocument.key, 'renewal changes the actual WebView key');
-const secondDocument = web;
-instance.callbacks.sessionNeeded(); render(); web = find(tree);
-assert.notEqual(web.key, secondDocument.key, 'already-needed renewal still gets a fresh document');
+instance.callbacks.sessionNeeded(1); render(); web = find(tree);
+assert.notEqual(web.key, oldDocument.key, 'cold capture changes the actual WebView key');
 const beforeOldDocument = captures.length;
 oldDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
-secondDocument.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
 assert.equal(captures.length, beforeOldDocument, 'obsolete document callbacks cannot capture credentials');
-web.props.onMessage({ nativeEvent: { data: '{"type":"notice"}', url: 'https://open.spotify.com/' } });
-assert.equal(captures.length, beforeOldDocument + 1, 'only the newly mounted document can capture');
+const message = (view, value) => view.props.onMessage({
+  nativeEvent: { data: JSON.stringify(value), url: 'https://open.spotify.com/' },
+});
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };
-web.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'playback', positionMs: 9999 }), url: 'https://open.spotify.com/' } });
+message(web, { type: 'notice', message: 'Network capture installed.' });
+assert.equal(captures.at(-1).id, 1, 'the newly mounted document delivers the cold capture');
+instance.callbacks.sessionFinished(1);
+const warmKey = web.key;
+instance.callbacks.sessionNeeded(2); render(); web = find(tree);
+assert.equal(web.key, warmKey, 'warm renewal keeps the loaded document');
+assert.match(injected.at(-1), /__startDetectorCapture\(2\)/);
+const beforeWarm = captures.length;
+message(web, { type: 'credentials', captureId: 1, token: 'obsolete' });
+message(web, { type: 'credentials', token: 'untagged' });
+assert.equal(captures.length, beforeWarm, 'warm acquisition accepts only its own capture ID');
+message(web, { type: 'credentials', captureId: 2, token: 'fresh' });
+assert.equal(captures.at(-1).id, 2);
+instance.callbacks.sessionFinished(2);
+assert.match(injected.at(-1), /__cancelDetectorCapture\(2\)/);
+instance.callbacks.sessionNeeded(3);
+message(web, { type: 'session', state: 'unavailable', captureId: 3 });
+render(); web = find(tree);
+assert.notEqual(web.key, warmKey, 'failed warm probe falls back to a new document');
+instance.callbacks.sessionFinished(3);
+message(web, { type: 'playback', positionMs: 9999 });
 assert.equal(packets.length, 0, 'browser playback is never mixed with native detector timing');
 const receipt = Object.freeze({ wallMs: Date.now(), monotonicMs: performance.now() });
 const evidence = developmentTiming.developmentTimingAnchor({ playerPath: '$.player_state', serverPath: '$',
@@ -136,7 +152,8 @@ const firstSample = { uri: 'spotify:track:test', title: 'Test', artist: 'Artist'
 instance.callbacks.sample(firstSample);
 for (let n = 0; n < 10; n++) await Promise.resolve();
 instance.callbacks.ready();
-render(); assert.equal(tree, null, 'usable native state unmounts the closed browser');
+render(); assert(find(tree), 'a verified foreground session keeps its capture page warm');
+assert.equal(tree.props.pointerEvents, 'none');
 assert.equal(packets.length, 2, 'sample and asynchronous metadata publication');
 for (let n = 0; n < 10; n++) await Promise.resolve();
 assert.equal(publishedSamples.at(-1).developmentTiming, evidence, 'actual metadata publication preserves anchor');
@@ -157,8 +174,7 @@ assert.deepEqual(JSON.parse(timingShares.at(-1).message), { active: false, recor
 alerts.at(-1)[2][2].onPress();
 assert.deepEqual(timingCalls, ['start', 'clear']);
 ref.current.togglePlayPause();
-assert.equal(commands.at(-1).type, 'toggle', 'controls target native device while browser is unmounted');
-assert.equal(find(tree), null);
+assert.equal(commands.at(-1).type, 'toggle', 'controls target the native device with the warm browser hidden');
 const alertsBeforeFailure = alerts.length;
 controlError = new SpotifyPlaybackUnavailableError('No device');
 ref.current.togglePlayPause(); await Promise.resolve();
@@ -229,5 +245,5 @@ for (const hook of hooks) hook?.cleanup?.();
 assert.equal(listeners.size, 0); assert.equal(actions, null);
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 4000 });
 assert.equal(packets.length, packetsAfterReplay, 'unmounted detector cannot write playback');
-console.log(`Native detector lifecycle checks passed (${platform}): shared login, browser unmount, single state source, native controls, tour/background cleanup and logout.`);
+console.log(`Native detector lifecycle checks passed (${platform}): shared login, warm capture, single state source, native controls, tour/background cleanup and logout.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
