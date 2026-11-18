@@ -318,7 +318,7 @@ public final class FullAppRunner extends Instrumentation {
       for (int i = 0; opened && i < 20 && !settingsIdentity; i++) {
         AccessibilityNodeInfo window = ui.getRootInActiveWindow();
         settingsIdentity = findVisibleLabel(window, "Settings", false) != null
-          && (findVisibleLabel(window, "Playback source", false) != null
+          && (findVisibleLabel(window, "PLAYBACK SOURCE", false) != null
             || findVisibleLabel(window, "Playback source", true) != null);
         if (!settingsIdentity) sleep(500);
       }
@@ -336,7 +336,7 @@ public final class FullAppRunner extends Instrumentation {
       save(prefix + "-raw-return-native.txt",
         "positivePlayerIdentity=" + returned + " nativeWindowTargetTapBeforeReseed=" + rawReturnTarget
         + "\n" + returnTree + "\n" + rn());
-      boolean afterAck = returned && fx(style);
+      boolean afterAck = rawReturnTarget && fx(style);
       boolean afterTarget = afterAck && targetedTap("seek", style, false);
       shot(prefix + "-AFTER-RESEEDED");
       boolean setup = nativeTarget && settingsIdentity && returned && rawReturnTarget && afterTarget;
@@ -414,6 +414,30 @@ public final class FullAppRunner extends Instrumentation {
       shot("00-launch");
       if (!up) throw new IOException("Embedded fixture bootstrap failed; no UI scenarios executed");
       settingsRouteEvidence();
+      // Seek and footer links in portrait and landscape. Targets come from the
+      // real native hit-test within the measured canvas, never a tap grid.
+      for (int rotation : new int[] { UiAutomation.ROTATION_FREEZE_0, UiAutomation.ROTATION_FREEZE_90 }) {
+        boolean orientationOk = orient(rotation);
+        String orientation = rotation == UiAutomation.ROTATION_FREEZE_90 ? "landscape" : "portrait";
+        for (String s : new String[] { "spicy", "amll" }) {
+          boolean ack = fx(s) && fx("pause");
+          shot("50-preseek-" + orientation + "-" + s);
+          boolean ok = orientationOk && ack && targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90);
+          shot("50-postseek-" + orientation + "-" + s);
+          step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
+        }
+        for (String s : new String[] { "credits", "credits-amll" }) {
+          // A footer tap keeps manual follow ownership on the shared credits track.
+          // Stage AMLL on a different fixture track so its credits get fresh follow.
+          boolean ack = (!s.equals("credits-amll") || fx("amll")) && fx(s);
+          shot("60-credits-" + orientation + "-" + s);
+          boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
+          shot("60-credits-after-" + orientation + "-" + s);
+          step("credits-link-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native maker target + exact fixture LINK_OPEN required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
+        }
+      }
+      // Return to portrait before capturing the broad fixture states.
+      orient(UiAutomation.ROTATION_FREEZE_0);
       // fixture states
       String[] states = { "spicy", "amll", "cjk", "cjk-amll", "loading", "instrumental", "nolyrics" };
       for (String s : states) { boolean a = fx(s); shot("10-" + s); step("state-" + s, a, "fixture ack=" + a + "; screenshot 10-" + s + ".png needs visual review"); }
@@ -454,26 +478,6 @@ public final class FullAppRunner extends Instrumentation {
         shell("input swipe " + cx + " " + (int)(H*0.30) + " " + cx + " " + (int)(H*0.85) + " 80"); sleep(2500); shot("40-fling-back-" + s);
         sleep(7000); shot("40-autofollow-return-" + s);
         step("swipe-fling-return-" + s, true, "manual scroll, fling, reverse fling, autofollow after 7s");
-      }
-      // Seek and footer links in portrait and landscape. Targets come from the
-      // real native hit-test within the measured canvas, never a tap grid.
-      for (int rotation : new int[] { UiAutomation.ROTATION_FREEZE_0, UiAutomation.ROTATION_FREEZE_90 }) {
-        boolean orientationOk = orient(rotation);
-        String orientation = rotation == UiAutomation.ROTATION_FREEZE_90 ? "landscape" : "portrait";
-        for (String s : new String[] { "spicy", "amll" }) {
-          boolean ack = fx(s) && fx("pause");
-          shot("50-preseek-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90);
-          shot("50-postseek-" + orientation + "-" + s);
-          step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
-        }
-        for (String s : new String[] { "credits", "credits-amll" }) {
-          boolean ack = fx(s);
-          shot("60-credits-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
-          shot("60-credits-after-" + orientation + "-" + s);
-          step("credits-link-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native maker target + exact fixture LINK_OPEN required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
-        }
       }
       ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
       boolean settingsDisplayPortrait = orient(UiAutomation.ROTATION_FREEZE_0);
