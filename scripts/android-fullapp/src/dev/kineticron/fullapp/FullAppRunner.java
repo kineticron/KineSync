@@ -328,7 +328,7 @@ public final class FullAppRunner extends Instrumentation {
       for (int i = 0; opened && i < 20 && !settingsIdentity; i++) {
         AccessibilityNodeInfo window = ui.getRootInActiveWindow();
         settingsIdentity = findVisibleLabel(window, "Settings", false) != null
-          && (findVisibleLabel(window, "Playback source", false) != null
+          && (findVisibleLabel(window, "PLAYBACK SOURCE", false) != null
             || findVisibleLabel(window, "Playback source", true) != null);
         if (!settingsIdentity) sleep(500);
       }
@@ -346,7 +346,7 @@ public final class FullAppRunner extends Instrumentation {
       save(prefix + "-raw-return-native.txt",
         "positivePlayerIdentity=" + returned + " nativeWindowTargetTapBeforeReseed=" + rawReturnTarget
         + "\n" + returnTree + "\n" + rn());
-      boolean afterAck = returned && fx(style);
+      boolean afterAck = rawReturnTarget && fx(style);
       boolean afterTarget = afterAck && targetedTap("seek", style, false);
       shot(prefix + "-AFTER-RESEEDED");
       boolean setup = nativeTarget && settingsIdentity && returned && rawReturnTarget && afterTarget;
@@ -418,7 +418,9 @@ public final class FullAppRunner extends Instrumentation {
       step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
     }
     for (String s : new String[] { "credits", "credits-amll" }) {
-      boolean ack = fx(s);
+      // A footer tap keeps manual follow ownership on the shared credits track.
+      // Stage AMLL on a different fixture track so its credits get fresh follow.
+      boolean ack = (!s.equals("credits-amll") || fx("amll")) && fx(s);
       shot("60-credits-" + orientation + "-" + s);
       boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
       shot("60-credits-after-" + orientation + "-" + s);
