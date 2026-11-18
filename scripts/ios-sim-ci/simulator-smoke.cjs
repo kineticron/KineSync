@@ -11,6 +11,7 @@ const REQUIRED = config.onboarding.required;
 const EVIDENCE_TEXT = ['Skip', 'A modern, beautiful mobile app', 'syllable-synced lyrics', 'Spotify playback'];
 const BOOT_TIMEOUT_MS = 5 * 60 * 1000;
 const OCR_COMPILE_TIMEOUT_MS = 3 * 60 * 1000;
+const SCREENSHOT_TIMEOUT_MS = 30000;
 const OCR_TIMEOUT_MS = 30000;
 
 function matchOnboarding(text, settings = config.onboarding) {
@@ -69,6 +70,25 @@ function simulatorPair() {
   return selectSimulator(JSON.parse(run('xcrun', ['simctl', 'list', '-j'])));
 }
 
+function captureScreenshot(udid, shot, result) {
+  const capture = file => {
+    const options = { stage: 'simctl screenshot', timeout: SCREENSHOT_TIMEOUT_MS, killSignal: 'SIGKILL' };
+    if (fs.existsSync(file)) throw new Error(`${options.stage}: refusing to reuse ${file}`);
+    run('xcrun', ['simctl', 'io', udid, 'screenshot', file], options);
+    const info = fs.statSync(file, { throwIfNoEntry: false });
+    if (!info?.isFile() || info.size === 0) throw new Error(`${options.stage}: missing or empty capture ${file}`);
+    return file;
+  };
+  try {
+    return capture(shot);
+  } catch (error) {
+    if (!error.commandFailure?.timed_out) throw error;
+    (result.screenshot_timeouts ??= []).push(error.commandFailure);
+  }
+  // A timed-out capture can leave a partial file. Only OCR a fresh, successful capture.
+  return capture(shot.replace(/\.png$/, '-retry.png'));
+}
+
 async function main() {
   const app = path.resolve(process.argv[2] || '');
   const bundleId = process.argv[3] || config.expectedBundleIdentifier;
@@ -103,8 +123,7 @@ async function main() {
     let last = null;
     for (let attempt = 1; attempt <= 18 && Date.now() - started < 90000; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 5000));
-      const shot = path.join(evidence, `simulator-${String(attempt).padStart(2, '0')}.png`);
-      run('xcrun', ['simctl', 'io', udid, 'screenshot', shot]);
+      const shot = captureScreenshot(udid, path.join(evidence, `simulator-${String(attempt).padStart(2, '0')}.png`), result);
       const ocr = JSON.parse(run(ocrExecutable, [shot], { stage: 'ocr', timeout: OCR_TIMEOUT_MS, killSignal: 'SIGKILL' }));
       const text = ocr.lines.join('\n');
       const match = matchOnboarding(text);

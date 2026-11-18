@@ -136,6 +136,8 @@ const failure = process.env.SMOKE_TEST_FAILURE;
 const setTimeout = global.setTimeout;
 global.setTimeout = (callback, delay, ...args) => setTimeout(callback, delay === 5000 ? 0 : delay, ...args);
 let executable;
+let screenshot;
+let captures = 0;
 let images = 0;
 require('node:child_process').spawnSync = (command, args, options) => {
   const success = { status: 0, stdout: '', stderr: '' };
@@ -146,7 +148,7 @@ require('node:child_process').spawnSync = (command, args, options) => {
     assert.equal(options.killSignal, 'SIGKILL');
     images += 1;
     assert.equal(args.length, 1);
-    assert.equal(path.basename(args[0]), 'simulator-' + String(images).padStart(2, '0') + '.png');
+    assert.deepEqual(args, [screenshot]);
     if (failure === 'ocr-timeout') return timeout();
     if (failure === 'ocr-vision-error') return {
       status: 5, signal: null, stdout: JSON.stringify({ lines: ['KineSync', 'Start Setup', 'Skip'] }),
@@ -181,10 +183,22 @@ require('node:child_process').spawnSync = (command, args, options) => {
     case 'boot':
     case 'uninstall':
     case 'install':
-    case 'io':
     case 'spawn':
     case 'shutdown':
     case 'delete': return success;
+    case 'io':
+      assert.equal(args[3], 'screenshot');
+      assert.equal(options.timeout, 30000);
+      assert.equal(options.killSignal, 'SIGKILL');
+      captures += 1;
+      if (failure === 'screenshot-timeout' || (failure === 'screenshot-retry' && captures === 1)) {
+        if (failure === 'screenshot-retry') fs.writeFileSync(args[4], 'partial screenshot');
+        return timeout('', 'Defaulting to display: LCD\n');
+      }
+      if (failure === 'screenshot-missing') return success;
+      screenshot = args[4];
+      fs.writeFileSync(screenshot, 'mock screenshot');
+      return success;
     case 'launch': return { ...success, stdout: 'dev.kineticron.KineSync: 59092\n' };
     case 'bootstatus':
       assert.equal(options.timeout, 300000);
@@ -248,6 +262,46 @@ test('compiled OCR timeout fails after launch and preserves failure diagnostics'
   assert.equal(result.command_failure.timed_out, true);
   assert.deepEqual(commands, ['swiftc', 'list', 'create', 'boot', 'bootstatus', 'uninstall', 'install', 'launch', 'io', 'ocr', 'shutdown', 'delete']);
   assert.equal(fs.existsSync(path.dirname(result.command_failure.command)), false);
+});
+
+test('screenshot timeout retries once and fails closed when capture stays stuck', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'screenshot-timeout');
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /simctl screenshot: .* timed out after 30000 ms/);
+  assert.equal(result.smoke_passed, false);
+  assert.deepEqual(result.attempts, []);
+  assert.equal(result.screenshot_timeouts.length, 1);
+  const first = result.screenshot_timeouts[0];
+  const last = result.command_failure;
+  assert.equal(path.basename(first.args[4]), 'simulator-01.png');
+  assert.equal(path.basename(last.args[4]), 'simulator-01-retry.png');
+  for (const failure of [first, last]) {
+    assert.equal(failure.stage, 'simctl screenshot');
+    assert.equal(failure.timeout_ms, 30000);
+    assert.equal(failure.timed_out, true);
+    assert.equal(failure.signal, 'SIGKILL');
+    assert.equal(failure.stderr, 'Defaulting to display: LCD\n');
+  }
+  assert.deepEqual(commands.slice(commands.indexOf('launch')), ['launch', 'io', 'io', 'shutdown', 'delete']);
+});
+
+test('screenshot retry sends only the successful fresh capture to OCR', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'screenshot-retry');
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(result.smoke_passed, true);
+  assert.equal(result.screenshot_timeouts.length, 1);
+  assert.deepEqual(result.attempts.map(attempt => path.basename(attempt.screenshot)), ['simulator-01-retry.png', 'simulator-02.png']);
+  assert.deepEqual(result.attempts.map(attempt => attempt.matched), [false, true]);
+  assert.deepEqual(commands.slice(commands.indexOf('launch')), ['launch', 'io', 'io', 'ocr', 'io', 'ocr', 'spawn', 'shutdown', 'delete']);
+});
+
+test('successful screenshot command without an output file fails before OCR', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'screenshot-missing');
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(result.error, /simctl screenshot: missing or empty capture .*simulator-01\.png/);
+  assert.equal(result.smoke_passed, false);
+  assert.deepEqual(result.attempts, []);
+  assert.deepEqual(commands.slice(commands.indexOf('launch')), ['launch', 'io', 'shutdown', 'delete']);
 });
 
 test('Vision failure preserves stderr and rejects even matching OCR stdout', t => {
