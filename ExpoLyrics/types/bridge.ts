@@ -230,7 +230,7 @@ export type LyricLine = {
   lineEndTime: number;
   syllables: LyricSyllable[];
   backgroundSyllables?: LyricSyllable[];
-  /** Exact Spicy Background[] blocks for the WebView renderer. */
+  /** Exact Spicy Background[] blocks with independent vocal timing. */
   spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
   /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
   spicyLyricsStartTime?: number;

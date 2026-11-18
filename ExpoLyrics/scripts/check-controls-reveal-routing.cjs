@@ -26,7 +26,7 @@ const find = (node, type) => {
   return null;
 };
 module.exports = (async () => {
-  for (const backend of ['rust', 'amll-webview', 'spicy-webview', 'amll-skia', 'spicy-skia']) for (const empty of [false, true]) {
+  for (const backend of ['rust', 'amll-skia', 'spicy-skia']) for (const empty of [false, true]) {
     let reveals = 0, seeks = 0, selections = 0, hits = 0, hold;
     const interaction = () => { reveals++; };
     const reveal = evaluate(revealExpression, { handleControlsInteraction: interaction });
@@ -43,7 +43,7 @@ module.exports = (async () => {
       });
       tap = async fraction => { gesture.grant(0, 0, fraction * 1000); await Promise.resolve(); await Promise.resolve(); gesture.release(); await Promise.resolve(); };
       longPress = async fraction => { gesture.grant(0, 0, fraction * 1000); stamp += 540; await Promise.resolve(); await Promise.resolve(); hold?.(); gesture.release(); };
-    } else if (backend.endsWith('skia')) {
+    } else {
       const h = harness(backend.split('-')[0], 'flash');
       h.render({ tapToSeekEnabled: true, onUserInteraction: interaction, onLinePress: () => seeks++, onLineLongPress: () => selections++ });
       const list = find(h.treeSnapshot(), 'FlashList');
@@ -51,17 +51,6 @@ module.exports = (async () => {
       const handlers = list.props.renderItem({ item: row }).props;
       tap = () => { hits++; if (!empty) handlers.onPress(row); };
       longPress = () => { hits++; if (!empty) handlers.onLongPress(row); };
-    } else {
-      const ast = parse(read(`components/lyrics/${backend.split('-')[0]}-lyrics-view.tsx`));
-      let handler;
-      function visit(node) {
-        if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'handleMessage') handler = node.initializer.arguments[0].getText(ast);
-        ts.forEachChild(node, visit);
-      }
-      visit(ast);
-      const message = evaluate(handler, { currentSourceKey: { current: 'song' }, sourceKey: 'song', lyrics: empty ? [] : [{}], onUserInteraction: interaction, onLinePress: () => seeks++, onLineLongPress: () => selections++ });
-      tap = () => { hits++; message({ nativeEvent: { data: JSON.stringify({ type: 'linePress', index: 0 }) } }); };
-      longPress = () => { hits++; message({ nativeEvent: { data: JSON.stringify({ type: 'lineLongPress', index: 0 }) } }); };
     }
     const route = async (fraction, handler) => {
       if (backend === 'rust') await handler(fraction);

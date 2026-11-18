@@ -1,4 +1,4 @@
-/** Match the WebView's first significant character and preserve shaping joiners. */
+/** Use the Spicy reference's first significant character and preserve shaping joiners. */
 export function spicyIsRtl(text: string) {
   'worklet';
   for (let index = 0; index < text.length; index++) {

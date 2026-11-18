@@ -34,10 +34,13 @@ function validateImports(source) {
 }
 validateImports(sourceText(entry));
 assert.throws(() => validateImports("require('expo-screen-orientation')"), /Fixture dependency not locked/);
-// Preserve all seed values, lyric definitions, metadata and fixture state transitions.
+// Preserve the lyric fixtures and playback state transitions across mandatory Rust selection.
 const fixtureDefinitions = source => source.slice(source.indexOf('const seed ='), source.indexOf('function handle(url)'))
-  .replace('  armed = null;\n', '').replaceAll("require('../../", "require('./");
+  .replace('  armed = null;\n', '').replaceAll("require('../../", "require('./")
+  .replace("  ['kinesync_use_rust_renderer', 'true'],\n", '').replace(' useRustRenderer: true,', '')
+  .replace(" + ' rust=' + st.useRustRenderer", '');
 assert.equal(fixtureDefinitions(sourceText(entry)), fixtureDefinitions(sourceText(original)));
+assert.doesNotMatch(sourceText(entry), /kinesync_use_rust_renderer|useRustRenderer/);
 const logs = [];
 let state = {};
 let rootGetter;

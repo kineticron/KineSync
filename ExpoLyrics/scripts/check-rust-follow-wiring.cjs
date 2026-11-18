@@ -119,6 +119,7 @@ const imports = {
   '@/lib/rust-lyrics-gesture': gestureModule,
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },
   '@/lib/lyrics-timing': timing.exports,
+  '@/lib/lyrics-arrival-trace': { arrivalHandle: () => undefined },
 };
 const mod = { exports: {} };
 vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: id => { assert.ok(imports[id], id); return imports[id]; }, __DEV__: true, performance, console });

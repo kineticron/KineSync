@@ -3,8 +3,8 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 import { View } from 'react-native';
 import { buildArrivalFixture, ARRIVAL_LAB_WORKLOAD } from '@/lib/fixtures/lyrics-arrival-fixture';
 import type { LyricLine } from '@/types/bridge';
-import { startArrivalCapture, beginArrival, arrivalEvent, snapshotArrivalCapture, stopArrivalCapture, flushArrivalUiCounts } from '@/lib/lyrics-arrival-trace';
-import { NativeLyricsView } from '@/components/lyrics/native/native-lyrics-view';
+import { startArrivalCapture, beginArrival, arrivalEvent, snapshotArrivalCapture, stopArrivalCapture } from '@/lib/lyrics-arrival-trace';
+import { RustLyricsView } from '@/components/lyrics/rust/rust-lyrics-view';
 
 /** Synthetic fixture workload on the real native renderer; never a live-network baseline. */
 export default function ArrivalLab() {
@@ -20,8 +20,7 @@ export default function ArrivalLab() {
       arrivalEvent(handle, 0, 'fixture-delivered-not-network', undefined, undefined, packet.length);
       setLyrics(packet);
     }, 500);
-    const finish = setTimeout(async () => {
-      await flushArrivalUiCounts();
+    const finish = setTimeout(() => {
       const payload = JSON.stringify({ run: params.run, style: params.style, orientation: params.orientation,
         scenario: params.scenario, previewPositionMs, playing: false, fixtureRows: 100, initializedDelayMs: 500, workload: ARRIVAL_LAB_WORKLOAD, host: 'initialized for 500ms before packet; paused fixed preview; OS/font/GPU caches uncontrolled', trace: snapshotArrivalCapture() });
       const total = Math.ceil(payload.length / 1200);
@@ -33,8 +32,8 @@ export default function ArrivalLab() {
     return () => { clearTimeout(timer); clearTimeout(finish); stopArrivalCapture(); };
   }, [params.run, params.style, params.orientation, params.scenario, previewPositionMs]);
   if (!__DEV__) return <Redirect href="/" />;
-  return <View style={{ flex: 1, backgroundColor: '#000' }}><NativeLyricsView style={params.style === 'spicy' ? 'spicy' : 'amll'}
-    reveal="canvas" list="flash" demoLyrics={lyrics} demoLayout="player" demoIsPlaying={false}
-    previewPositionMs={previewPositionMs}
-    landscapeMode={params.orientation === 'landscape'} tapToSeekEnabled={false} /></View>;
+  return <View style={{ flex: 1, backgroundColor: '#000' }}><RustLyricsView active
+    demoStyle={params.style === 'spicy' ? 'spicy' : 'amll'} demoLyrics={lyrics}
+    demoDurationMs={Math.max(previewPositionMs, ...lyrics.map(line => line.lineEndTime))}
+    previewPositionMs={previewPositionMs} tapToSeekEnabled={false} /></View>;
 }

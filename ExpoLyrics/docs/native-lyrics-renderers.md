@@ -2,20 +2,17 @@
 
 Branch: `feat/native-lyrics-renderers`.
 
-Native Spicy and AMLL are the default on iOS and Android. Full visual parity
-is still being implemented. Set `EXPO_PUBLIC_NATIVE_LYRICS=0` when starting Metro
-to use the WebView reference hosts instead. Web retains the reference implementation. The native hosts currently
-select FlashList with native Skia paragraphs to reproduce the reference's
-gradients, glow and per-letter animation. Clip and software mask implementations
-remain available in the lab for comparison, they do not provide visual parity.
+This document records the earlier Skia experiments. The app now uses both
+styles through [Rust](lyrics-renderers.md). The Skia renderers remain
+independent references for layout and motion tests.
 
 ## Reference fidelity work (October 11)
 
-The bundled WebViews are the visual authority. Reference computed CSS, matching
+The WebViews served as the visual authority in these experiments. Reference computed CSS, matching
 paused timestamps, and Android motion recordings are used alongside source
 comparisons. Real API lyrics can be frozen with `fixture=live`, this snapshots
 already fetched lyrics without seeking or changing Spotify playback. The lab's
-development-only `nativeLyricsParityArm(position, playing)` starts either host
+development-only `nativeLyricsParityArm(position, playing)` starts the current Rust host
 after recording has begun.
 
 - Spicy uses the original cubic splines, analytic spring integration, letter
@@ -229,7 +226,7 @@ percent utilization. Memory includes retained engine/process resources from
 sequential runs. Emulator battery output is simulated. Repeat randomized cold
 launches in an optimized build and on physical Android/iOS devices after parity.
 
-## Reproduction
+## Rust profiling and historical setup
 
 The user's existing installation was preserved. The test package is
 `dev.kineticron.KineSync.performance`, installed side by side for the initial
@@ -239,26 +236,17 @@ updated with the matching signing key while preserving user data. Subsequent
 fidelity comparisons run in `dev.kineticron.KineSync` with the signed-in session
 and real API lyrics. The historical tables cover the isolated renderer workload.
 
-```powershell
-# ExpoLyrics/android, x86 BlueStacks, existing init script handles long Windows object paths.
-.\gradlew.bat :app:assembleDebug '-PreactNativeArchitectures=x86' '-PkineSyncPerformanceSideBySide=true' '-Djavax.net.ssl.trustStoreType=Windows-ROOT' '-Djavax.net.ssl.trustStore=NONE' -I ../../scripts/android-short-object-paths.gradle --console=plain
-
-# ExpoLyrics, in another terminal:
-$env:EXPO_OFFLINE='1'
-$env:KINESYNC_ISOLATED_LYRICS_LAB='1'
-npx expo start --localhost --port 8086
-adb -s 127.0.0.1:5555 reverse tcp:8086 tcp:8086
-# Open the development client against http://127.0.0.1:8086 first.
-$env:KINESYNC_PERFORMANCE_PACKAGE='dev.kineticron.KineSync.performance'
-npm run profile:lyrics-native -- 127.0.0.1:5555 both playback
-npm run profile:lyrics-native -- 127.0.0.1:5555 both scroll
-npm run profile:lyrics-native -- 127.0.0.1:5555 both stall --canvas-only
+```sh
+# ExpoLyrics, with a compatible development client already connected.
+npm run profile:lyrics-native -- DEVICE_SERIAL both playback
+npm run profile:lyrics-native -- DEVICE_SERIAL both scroll
+npm run profile:lyrics-native -- DEVICE_SERIAL both stall
 ```
 
-The lab supports `backend=webview|flat|flash`, `reveal=clip|mask|canvas|tree`,
-`renderer=spicy|amll`, `lines` (up to 2000), `position`, `paused=1`, and `stall=1`.
-`fixture=static` supplies untimed text. `--parity-candidates` compares the WebView
-reference and Skia, `--canvas-only` runs Skia alone.
+The Rust lab supports `renderer=spicy|amll`, `lines` (up to 2000), `position`,
+`paused=1`, and `stall=1`. The historical WebView and Skia measurements below
+are tied to their original builds.
+
 The stall workload blocks JS for 150 ms each second. Measurements stream logcat
 before launch, verify a unique readiness marker, save screenshots and merge
 results into `.cache/performance/native-lyrics/<scenario>/comparison.json`.

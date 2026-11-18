@@ -56,8 +56,6 @@ function sourceAnchorKey(packet: PlaybackPacket, source: PlaybackMode): string |
 }
 
 export type LyricsStyle = 'spicy' | 'amll';
-/** @deprecated Use LyricsStyle. Kept for migration of persisted settings. */
-export type LyricsRendererMode = LyricsStyle | 'native' | 'webview';
 
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
@@ -150,8 +148,6 @@ type PlaybackState = {
   packetDropRate: number;
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
-  useRustRenderer: boolean;
-  setUseRustRenderer: (value: boolean) => void;
   showRustDebugOverlay: boolean;
   setShowRustDebugOverlay: (value: boolean) => void;
   setShowSpotifyStatusBar: (value: boolean) => void;
@@ -185,14 +181,11 @@ type PlaybackState = {
   setPlaybackCompensationMs: (ms: number) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
   setLyricsStyle: (mode: LyricsStyle) => void;
-  /** @deprecated Use setLyricsStyle. Migrates legacy native/webview values. */
-  setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
-let rendererChanged = false;
+let lyricsStyleChanged = false;
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
-let rustRendererSettingChanged = false;
 let rustDebugOverlaySettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
@@ -279,8 +272,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
-  useRustRenderer: false,
-  showRustDebugOverlay: true,
+  showRustDebugOverlay: false,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -486,12 +478,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
-  setUseRustRenderer: (value) => {
-    rustRendererSettingChanged = true;
-    const useRustRenderer = Boolean(value);
-    set({ useRustRenderer });
-    void AsyncStorage.setItem('kinesync_use_rust_renderer', String(useRustRenderer)).catch(error => console.error('Could not save Rust renderer setting', error));
-  },
   setShowRustDebugOverlay: (value) => {
     rustDebugOverlaySettingChanged = true;
     const showRustDebugOverlay = Boolean(value);
@@ -510,22 +496,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
   setLyricsStyle: (mode) => {
-    rendererChanged = true;
+    lyricsStyleChanged = true;
     const lyricsStyle = mode === 'amll' ? 'amll' : 'spicy';
     set({ lyricsStyle });
     void AsyncStorage.setItem('kinesync_lyrics_style', lyricsStyle).catch(() => {});
   },
-  setLyricsRendererMode: (mode) =>
-    set({
-      lyricsStyle:
-        mode === 'amll'
-          ? 'amll'
-          : mode === 'spicy'
-            ? 'spicy'
-            : mode === 'native'
-              ? 'amll'
-              : 'spicy',
-    }),
 }));
 
 export function startPlaybackClock() {
@@ -543,7 +518,9 @@ export function stopPlaybackClock() {
 }
 
 void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
-  if (!rendererChanged && (style === 'amll' || style === 'spicy')) usePlaybackStore.setState({ lyricsStyle: style });
+  if (lyricsStyleChanged) return;
+  if (style === 'amll' || style === 'spicy') usePlaybackStore.setState({ lyricsStyle: style });
+  else if (style === 'native' || style === 'webview') usePlaybackStore.getState().setLyricsStyle(style === 'native' ? 'amll' : 'spicy');
 }).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
@@ -551,10 +528,10 @@ void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
 
+// The backend preference is obsolete. Keep the independently saved visual style.
 void AsyncStorage.getItem('kinesync_use_rust_renderer').then(value => {
-  if (rustRendererSettingChanged || (value !== 'true' && value !== 'false')) return;
-  usePlaybackStore.setState({ useRustRenderer: value === 'true' });
-}).catch(error => console.error('Could not load Rust renderer setting', error));
+  if (value !== null) return AsyncStorage.removeItem('kinesync_use_rust_renderer');
+}).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
   if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;

@@ -10,6 +10,14 @@ const repo = path.resolve(__dirname, '../..');
 const cli = path.join(repo, 'scripts/ios-dev-ci/ci.cjs');
 const workflow = fs.readFileSync(path.join(repo, '.github/workflows/ios-development-build.yml'), 'utf8');
 const identity = { xcode: 'Xcode 27.0\nBuild version 27A1', sdk: '27.0', sdkBuild: '27A1', runnerArch: 'ARM64', pod: '1.16.2', ccache: '4.13' };
+test('iOS Release prepares the validated device framework before CocoaPods', () => {
+  const release = fs.readFileSync(path.join(repo, '.github/workflows/ios-unsigned-ipa.yml'), 'utf8');
+  const build = release.indexOf('bash scripts/ios-dev-ci/build-rust-device.sh');
+  const validate = release.indexOf('node scripts/ios-dev-ci/rust-device.cjs validate');
+  const prebuild = release.indexOf('expo prebuild --clean --platform ios');
+  assert.ok(build >= 0 && validate > build && prebuild > validate);
+  assert.match(release, /rustup toolchain install .*--target .*config target/);
+});
 function temp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ios-dev-ci-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -360,8 +368,8 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(app, 'Final', 'final Mach-O mock');
   const map = path.join(root, 'App-LinkMap.txt'); put(root, 'App-LinkMap.txt', 'liblyrics_renderer.a _kr_render');
   put(ios, 'Pods/Target Support Files/Pods-App/ExpoModulesProvider.swift', 'KineSyncRustLyricsModule.self');
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer kinesync_use_rust_renderer');
-  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
+  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
   // The archive exists and its metadata passes, but the actual app lacks Rust.
   process.env.TEST_NM = '0000 T _unrelated';
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Final app Mach-O/);
@@ -373,8 +381,8 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   const indexed = maps => ({ version: 3, sections: maps.map((map, line) => ({ offset: { line, column: 0 }, map })) });
   // Metro's indexed output has no top-level sources and can contain empty sections.
   for (const sourcemap of [
-    indexed([flat([]), flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])]),
-    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])])]),
+    indexed([flat([]), flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])]),
+    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])])]),
   ]) {
     put(evidence, 'rust-js-path.map', JSON.stringify(sourcemap));
     assert.equal(Object.keys(prove({ app, executable: 'Final', linkMap: map, ios, evidence }).symbols).length, symbols.length);
@@ -390,15 +398,19 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   // Removing any wiring marker must fail the proof.
   put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer kinesync_use_rust_renderer');
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
   put(evidence, 'rust-js-path.map', '{invalid JSON');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), SyntaxError);
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'app/(tabs)/explore.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx',
+    'components/lyrics/rust/rust-lyrics-view.tsx', 'components/lyrics/amll-webview-bundle.ts'])));
+  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Rust-only player/);
 });
 
 for (const shell of new Set([process.env.BASH32 || '/bin/bash', '/bin/bash'])) {

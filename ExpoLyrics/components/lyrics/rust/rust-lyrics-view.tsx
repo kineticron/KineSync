@@ -1,13 +1,15 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
-import { usePlaybackStore } from '@/store/playback-store';
+import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';
 import { anchorChanged, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
 import { createRustLyricsGesture } from '@/lib/rust-lyrics-gesture';
 import { createRustLyricsFollow, type FollowCommand } from '@/lib/rust-lyrics-follow';
 import type { LyricLine } from '@/types/bridge';
+import type { PreviewPlaybackAnchor } from '@/components/lyrics/use-playback-timeline-clock';
 
 import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
+import { arrivalEvent, arrivalHandle, arrivalSpan } from '@/lib/lyrics-arrival-trace';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 import { selectTimedLyricLines, shouldHideTimedRenderer } from '@/lib/lyrics-timing';
 
@@ -20,39 +22,45 @@ type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: numbe
   gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }): void;
-  onMetrics(event: { nativeEvent: Metrics }): void };
+  onMetrics?(event: { nativeEvent: Metrics }): void };
 // A view can be torn down while a command is in flight during a track switch.
 // Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
 const STALE_VIEW = /Unable to find[^\n]*KineSyncRustLyricsView[^\n]*tag/i;
 const WAITING_LYRICS = 'Waiting for current-track timed lyrics';
 // No native require on web/Expo Go. Missing modules are an explicit unavailable state.
 function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props> | null; error: string } {
-  if (!__DEV__) return { api: null, view: null, error: 'Rust renderer is available only in a development client' };
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') return { api: null, view: null, error: 'Rust native surfaces require iOS or Android' };
   try {
     const api = requireOptionalNativeModule<NativeApi>('KineSyncRustLyrics');
-    if (!api || api.abiVersion() !== 11) return { api: null, view: null, error: 'Rust module unavailable or ABI mismatch. Rebuild the custom arm64 development client. Expo Go is unsupported.' };
+    if (!api || api.abiVersion() !== 11) return { api: null, view: null, error: 'Use a KineSync build with the compatible Rust lyrics module. Expo Go is unsupported.' };
     return { api, view: requireNativeViewManager<Props>('KineSyncRustLyrics'), error: '' };
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
 const { api, view: NativeView, error: moduleError } = loadNative();
+export const rustLyricsAvailable = NativeView !== null;
 let nextGeneration = 0;
 function generation() {
   nextGeneration = Math.max(nextGeneration + 1, Math.floor(performance.now() * 1000));
   return nextGeneration;
 }
 
-/** Development-only selection in the actual player, using its current track/store anchors. */
-export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, shouldRevealTap, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction }: {
+export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, shouldRevealTap, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction,
+  demoLyrics, demoPlayback, demoDurationMs = 25000, demoStyle = 'spicy', demoInteractive = false, fontScale: demoFontScale, showTranslatedText }: {
   active: boolean; previewPositionMs?: number | null; tapToSeekEnabled: boolean; autoFollowEnabled?: boolean; resumeAutoFollowSignal?: number;
+  demoLyrics?: LyricLine[]; demoPlayback?: PreviewPlaybackAnchor; demoDurationMs?: number; demoStyle?: LyricsStyle;
+  demoInteractive?: boolean;
+  fontScale?: number; showTranslatedText?: boolean;
   shouldRevealTap?: (pageY: number) => boolean;
   onLinePress?: (line: LyricLine) => void; onLineLongPress?: (line: LyricLine) => void;
   onCreditsTimestampPress?: (position: number) => void;
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
 }) {
-  const rawLyrics = usePlaybackStore(state => state.lyrics);
-  const metadata = usePlaybackStore(state => state.lyricsMetadata);
-  const lyricsSource = usePlaybackStore(state => state.lyricsSource);
+  const isDemo = demoLyrics !== undefined;
+  const interactive = !isDemo || demoInteractive;
+  const rawLyrics = usePlaybackStore(state => demoLyrics ?? state.lyrics);
+  const arrival = __DEV__ ? arrivalHandle(rawLyrics) : undefined;
+  const metadata = usePlaybackStore(state => isDemo ? null : state.lyricsMetadata);
+  const lyricsSource = usePlaybackStore(state => isDemo ? '' : state.lyricsSource);
   // The Rust surface is a timed renderer. Plain text stays in the packet for
   // other consumers but must never reach this payload, even when an older
   // provider result lacks the untimed flag.
@@ -73,23 +81,27 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (!songwriters.length && !hasAttribution) return null;
     return { ...(songwriters.length ? { songwriters } : {}), ...(hasAttribution ? { attribution } : {}) };
   }, [metadata]);
-  const lyricsStatusMessage = usePlaybackStore(state => state.lyricsStatusMessage);
+  const lyricsStatusMessage = usePlaybackStore(state => isDemo ? '' : state.lyricsStatusMessage);
   const empty = useMemo(() => lyrics.length ? null : {
     title: untimed ? 'Plain lyrics available' : metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet',
     subtitle: untimed ? 'Timed lyrics are unavailable for this recording.' : lyricsStatusMessage || `Source: ${lyricsSource || 'unavailable'}`,
   }, [lyrics.length, metadata?.instrumental, lyricsStatusMessage, lyricsSource, untimed]);
-  const showRustDebugOverlay = usePlaybackStore(state => state.showRustDebugOverlay);
-  const trackId = usePlaybackStore(state => state.currentTrack?.id ?? '');
-  const style = usePlaybackStore(state => state.lyricsStyle);
-  const showTranslation = usePlaybackStore(state => state.showTranslatedText);
+  const showRustDebugOverlay = usePlaybackStore(state => __DEV__ && !isDemo && state.showRustDebugOverlay);
+  const trackId = usePlaybackStore(state => isDemo ? 'kinesync-demo' : state.currentTrack?.id ?? '');
+  const style = usePlaybackStore(state => isDemo ? demoStyle : state.lyricsStyle);
+  const showTranslation = usePlaybackStore(state => isDemo ? showTranslatedText ?? true : state.showTranslatedText);
   const window = useWindowDimensions();
   const landscape = window.width > window.height;
-  const fontScale = landscape ? LANDSCAPE_FONT_SCALE : 1;
+  const fontScale = (isDemo ? demoFontScale : undefined) ?? (landscape ? LANDSCAPE_FONT_SCALE : 1);
   const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation, credits, empty }), [lyrics, trackId, style, fontScale, landscape, showTranslation, credits, empty]);
   const payload = useMemo(() => {
-    try { return { json: prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits, empty), error: '' }; }
+    try {
+      const prepare = () => prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits, empty);
+      const json = arrival ? arrivalSpan(arrival, revision.generation, 'rust-packet-prepared', prepare) : prepare();
+      return { json, error: '' };
+    }
     catch (error) { return { json: '', error: String(error) }; }
-  }, [lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits, empty]);
+  }, [arrival, lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits, empty]);
   const native = useRef<NativeRef | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);
@@ -181,14 +193,24 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     // `resumeAutoFollowSignal` re-asserts the same value after the player's
     // explicit resume gesture; the number itself carries no state.
   }, [followEnabled, resumeAutoFollowSignal, revision.generation, sendFollow, surfaceEpoch, trackId]);
+  const demoPlaying = isDemo && active && demoPlayback?.isPlaying === true;
   const sendAnchor = useCallback(() => {
-    if (!api || !native.current || payload.error || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
-    const state = usePlaybackStore.getState();
-    if (state.currentTrack?.id !== trackId) return;
+    if (!mounted.current || !api || !native.current || payload.error || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
+    const state = isDemo ? null : usePlaybackStore.getState();
+    if (state && state.currentTrack?.id !== trackId) return;
     const started = performance.now();
-    const previous = visual.current?.generation === revision.generation ? visual.current : null;
-    const next = nextVisualAnchor(state, started, api.monotonicMs(), rate, previous, previewPositionMs);
-    visual.current = { ...next, generation: revision.generation };
+    let next: Pick<VisualAnchor, 'positionMs' | 'nativeMs' | 'playing' | 'snap'>;
+    if (!state) {
+      const elapsed = demoPlayback?.isPlaying ? Math.max(0, started - demoPlayback.anchorMonotonicMs) : 0;
+      const projected = (demoPlayback?.anchorPositionMs ?? 0) + elapsed;
+      const positionMs = Math.max(0, Math.min(demoDurationMs, previewPositionMs ?? projected));
+      next = { positionMs, nativeMs: api.monotonicMs(), playing: demoPlaying && previewPositionMs == null && positionMs < demoDurationMs, snap: true };
+    } else {
+      const previous = visual.current?.generation === revision.generation ? visual.current : null;
+      const live = nextVisualAnchor(state, started, api.monotonicMs(), rate, previous, previewPositionMs);
+      visual.current = { ...live, generation: revision.generation };
+      next = live;
+    }
     const { positionMs, nativeMs, playing, snap } = next;
     const command = { generation: revision.generation, sequence: ++sequence.current, positionMs, nativeMs, playing, rate, snap };
     work.current.anchors++;
@@ -197,15 +219,16 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       commandFailed(error);
     });
     work.current.anchorMs = performance.now() - started;
-  }, [commandFailed, payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
+  }, [api, commandFailed, demoDurationMs, demoPlayback, demoPlaying, isDemo, payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
   useEffect(() => {
     sendAnchor();
+    if (isDemo) return;
     const unsubscribe = usePlaybackStore.subscribe((state, previous) => { if (anchorChanged(state, previous)) sendAnchor(); });
     const appState = AppState.addEventListener('change', state => { if (state === 'active') sendAnchor(); });
     return () => { unsubscribe(); appState.remove(); };
-  }, [active, sendAnchor]);
+  }, [active, isDemo, sendAnchor]);
   const onStatus = useCallback(({ nativeEvent }: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }) => {
-    if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.generation !== revision.generation) return;
+    if (!mounted.current || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.generation !== revision.generation) return;
     if (nativeEvent.state === 'follow') {
       // The native release recaptured follow near the active line. Only the
       // exact latest ownership epoch may move parent state. A delayed release
@@ -217,23 +240,23 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     setStatus(nativeEvent.message);
     setFailed(nativeEvent.state === 'error');
     if (nativeEvent.state === 'ready') {
+      if (arrival) arrivalEvent(arrival, revision.generation, 'rust-track-ready-not-presentation');
       // A handoff sent before the native owner existed is replayed by the owner
       // now. Reassert the current intent rather than a render-captured value.
       const command = follow.current.reassert(revision.generation);
       sendFollow(command);
       sendAnchor();
     }
-  }, [follow, revision.generation, sendFollow, sendAnchor, surfaceEpoch]);
+  }, [arrival, follow, revision.generation, sendFollow, sendAnchor, surfaceEpoch]);
   const onMetrics = useCallback(({ nativeEvent: value }: { nativeEvent: Metrics }) => {
-    if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
+    if (isDemo || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
     const now = performance.now();
     const deliveryMs = Math.max(0, api.monotonicMs() - value.sampleNativeMs);
     const projected = value.positionMs + (value.playing ? (api.monotonicMs() - value.targetNativeMs) * value.rate : 0);
-    // Native emits at most once per second. Keep this update independent of
-    // both diagnostic toggles so the compact FPS strip stays live.
+    // Both diagnostic views share the native sample.
     setMetrics({ native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs });
-  }, [revision.generation, surfaceEpoch]);
-  const waiting = payload.error.includes(WAITING_LYRICS);
+  }, [api, isDemo, revision.generation, surfaceEpoch]);
+  const waiting = !isDemo && payload.error.includes(WAITING_LYRICS);
   const unavailable = moduleError || (waiting ? '' : payload.error);
   useEffect(() => {
     if (waiting) setStatus(WAITING_LYRICS);
@@ -244,9 +267,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     setFailed(false);
   }, [revision.generation]);
   useEffect(() => {
-    if (unavailable || failed) console.error('Rust lyrics renderer:', unavailable || status);
-  }, [unavailable, failed, status]);
+    if (!isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
+  }, [isDemo, unavailable, failed, status]);
   const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
+  const visibleError = unavailable || (failed ? status : '');
   return <View style={styles.root}>
     {__DEV__ && showRustDebugOverlay ? <View pointerEvents="none" style={styles.fpsStrip}>
       <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust presents per second, callback interval, busy skips and estimated missed callback intervals in this window. Not display scanout or measured GPU time.">
@@ -282,9 +306,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
     </ScrollView> : null}
-    {payload.json && !unavailable && NativeView ? <View style={styles.gestureWrap} {...panResponder.panHandlers}>
-      <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={onMetrics} />
-    </View> : null}
+    <View style={styles.gestureWrap} pointerEvents={interactive ? undefined : 'none'} {...(interactive && rustLyricsAvailable ? panResponder.panHandlers : {})}>
+      {visibleError && !showRustDebugOverlay ? <Text style={styles.rendererError}>{isDemo ? 'Lyrics preview unavailable.' : 'Lyrics renderer unavailable.'} {visibleError}</Text> : null}
+      {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={showRustDebugOverlay ? onMetrics : undefined} /> : null}
+    </View>
   </View>;
 });
 const styles = StyleSheet.create({
@@ -295,5 +320,6 @@ const styles = StyleSheet.create({
   diagnostics: { paddingTop: 8, paddingHorizontal: 28 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   caption: { color: 'rgba(255,255,255,0.68)', fontSize: 11, marginBottom: 4 },
+  rendererError: { color: 'rgba(255,255,255,0.82)', fontSize: 12, paddingHorizontal: 12 },
   metrics: { color: 'rgba(255,255,255,0.48)', fontSize: 10, lineHeight: 14 },
 });

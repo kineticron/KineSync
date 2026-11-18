@@ -57,10 +57,9 @@ Provider gotchas:
 - `ExpoLyrics/components/lyrics/native/native-lyric-row.tsx`, `ExpoLyrics/components/lyrics/native/native-interlude.tsx`, `ExpoLyrics/components/lyrics/native/native-interlude-motion.ts`, and `ExpoLyrics/components/lyrics/native/reference-motion.ts` cover rows, dots, and motion.
 - `ExpoLyrics/components/lyrics/native/amll-native-layout.ts`, `ExpoLyrics/components/lyrics/native/amll-reference-line-break.ts`, `ExpoLyrics/components/lyrics/native/amll-reference-word-split.ts`, and `ExpoLyrics/components/lyrics/native/spicy-native-layout.ts` are style-specific layout helpers.
 - `ExpoLyrics/components/lyrics/native/use-native-lyrics-clock.ts`, `ExpoLyrics/components/lyrics/native/reference-scroll.tsx`, and `ExpoLyrics/components/lyrics/native/use-reference-line-motion.ts` cover clocks and scrolling.
-- `ExpoLyrics/components/lyrics/amll-lyrics-view.tsx` and `ExpoLyrics/components/lyrics/spicy-lyrics-view.tsx` are the WebView hosts. Their generated bundles are `ExpoLyrics/components/lyrics/amll-webview-bundle.ts` and `ExpoLyrics/components/lyrics/spicy-webview-bundle.ts`.
-- `ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx` is the Rust JS entry.
+- `ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx` is the app lyric renderer for both styles, in development and release.
 - `ExpoLyrics/lib/rust-lyrics-gesture.js`, `ExpoLyrics/lib/rust-lyrics-follow.js`, `ExpoLyrics/lib/rust-lyrics-protocol.js`, and `ExpoLyrics/lib/rust-lyrics-preparation.ts` own gesture, follow, anchor, and packet preparation.
-- `ExpoLyrics/components/lyrics/native/renderer-lab.tsx` is the comparative lab.
+- `ExpoLyrics/components/lyrics/native/renderer-lab.tsx` is the development Rust profiler.
 
 Parity gotchas:
 

@@ -105,7 +105,7 @@ Windows installs attempt to download verified native binaries for the matching r
 
 | Directory                                | Purpose                                                                |
 | ---------------------------------------- | ---------------------------------------------------------------------- |
-| [ExpoLyrics](ExpoLyrics/README.md)       | Expo / React Native mobile app and WebView lyric hosts                 |
+| [ExpoLyrics](ExpoLyrics/README.md)       | Expo / React Native mobile app with Rust lyrics                 |
 | [DesktopBridge](DesktopBridge/README.md) | Electron bridge, lyric providers, relay, and native playback helpers   |
 | [docs](docs/README.md)                   | Architecture, provider configuration, and maintainer guidance          |
 | [scripts](scripts/)                      | Repository checks, release publishing, and Docker setup                |

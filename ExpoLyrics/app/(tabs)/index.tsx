@@ -1,6 +1,6 @@
 import MaskedView from "@react-native-masked-view/masked-view";
 import { controlsAppIsForeground, controlsShowEdge } from '@/lib/controls-motion';
-import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
+import { RustLyricsView, rustLyricsAvailable } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
 import { BlurView } from "expo-blur";
@@ -60,7 +60,6 @@ import {
 import {
   getLandscapeLayoutMetrics,
   isLandscapeLayout,
-  LANDSCAPE_FONT_SCALE,
   LANDSCAPE_LEFT_PANE_PADDING,
   LANDSCAPE_LYRICS_PADDING,
   LYRICS_EDGE_FADE_HEIGHT,
@@ -74,9 +73,7 @@ import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
 import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
-import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
 import { LyricsAttribution } from "@/components/lyrics/lyrics-attribution";
-import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
 import {
   PlaybackControls,
   type PlaybackControlsLayout,
@@ -97,6 +94,8 @@ import {
   refreshLyricsForCurrentTrack,
   requestImmediateTranslationForCurrentSource,
 } from "@/lib/lyrics-sync";
+import { getPlaybackWindowState } from "@/lib/lyrics-layout";
+import { projectPosition } from "@/lib/rust-lyrics-protocol";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { isSpicyLyricsResponse, spicyLyricsExpiresAt } from "@/lib/lyrics-policy";
 import type { PlaybackMode } from "@/lib/playback-source";
@@ -109,7 +108,7 @@ import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
 import { usePlayerTour } from "@/hooks/use-player-tour";
 import { TOUR_DURATION_MS, TOUR_TRACK, usePlayerTourStore, type PlayerTourStep } from "@/store/player-tour-store";
-import { DEMO_LYRICS } from "@/components/onboarding/renderer-preview";
+import { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
 import { PlayerTourOverlay } from "@/components/onboarding/player-tour-overlay";
 import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 const LYRICS_PLAYBACK_WAKE_LOCK_TAG = "kinesync-lyrics-playback";
@@ -457,7 +456,6 @@ export default function HomeScreen() {
     return () => { clearTimeout(timer); subscription.remove(); };
   }, [spicyExpiry, liveLyrics.length]);
   const [menuOpen, setMenuOpen] = useState(false);
-  const rustRenderer = usePlaybackStore(state => state.useRustRenderer);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
   const [topBarMounted, setTopBarMounted] = useState(true);
@@ -498,7 +496,6 @@ export default function HomeScreen() {
     controlsScrubActive.current = positionMs !== null;
     setScrubPreviewPositionMs(positionMs);
   }, []);
-  const activeLineIndex = useRef(-1);
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1053,10 +1050,6 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.skipPrevious();
   }, [handleSeek]);
 
-  const handleActiveLineChange = useCallback((nextActiveLine: number) => {
-    activeLineIndex.current = nextActiveLine;
-  }, []);
-
   const handleLineLongPress = useCallback((line: LyricLine) => {
     if (usePlayerTourStore.getState().active) return;
     const key = getLineKey(line);
@@ -1072,7 +1065,8 @@ export default function HomeScreen() {
   }, []);
 
   const ensureSelectionForShare = useCallback(() => {
-    const { lyrics } = usePlaybackStore.getState();
+    const playback = usePlaybackStore.getState();
+    const { lyrics } = playback;
     const selected = lyrics.filter((line) =>
       selectedLineKeys.has(getLineKey(line)),
     );
@@ -1082,7 +1076,8 @@ export default function HomeScreen() {
     if (!lyrics.length) {
       return [];
     }
-    const anchorIndex = Math.max(0, activeLineIndex.current);
+    const position = projectPosition(playback, performance.now());
+    const anchorIndex = Math.max(0, getPlaybackWindowState(position, lyrics).activeLineStartIndex);
     const start = Math.max(0, Math.min(anchorIndex, lyrics.length - 1));
     const end = Math.min(lyrics.length, start + 6);
     return lyrics.slice(start, end);
@@ -1280,7 +1275,7 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
-  const rustHandlesReveal = !isLandscape && __DEV__ && rustRenderer && !tour.active && !showEmptyState;
+  const rustHandlesReveal = !isLandscape && rustLyricsAvailable && !showEmptyState;
   const shouldRevealRustTap = useCallback((pageY: number) =>
     !isLandscapeRef.current && !fullscreenAlbumModeRef.current && controlsTarget.get() === 0 &&
     pageY >= screenOriginY.current + screenHeight * 0.6,
@@ -1576,67 +1571,27 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : __DEV__ && rustRenderer && !tour.active ? (
+              ) : !tour.onboardingVisible ? (
                 <RustLyricsView
                   shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                />
-              ) : lyricsStyle === "amll" ? (
-                <AmllLyricsView
-                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
                   demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoLayout="player"
-                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  showTranslatedText={showTranslatedText}
-                        selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
                   demoPlayback={previewPlayback}
                   demoDurationMs={TOUR_DURATION_MS}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onActiveLineChange={handleActiveLineChange}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                  fontScale={LANDSCAPE_FONT_SCALE}
-                  landscapeMode
-                />
-              ) : (
-                <SpicyLyricsView
-                  active={isScreenFocused && (!tour.active || tour.foreground)}
-                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoLayout="player"
-                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
-                  tapToSeekEnabled={tapToSeekEnabled}
+                  demoStyle={lyricsStyle}
+                  demoInteractive
                   showTranslatedText={showTranslatedText}
-                        selectedLineKeys={selectedLineKeys}
                   previewPositionMs={scrubPreviewPositionMs}
-                  demoPlayback={previewPlayback}
-                  demoDurationMs={TOUR_DURATION_MS}
+                  tapToSeekEnabled={tapToSeekEnabled}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
                   onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
-                  fontScale={LANDSCAPE_FONT_SCALE}
-                  landscapeMode
                 />
-              )}
+              ) : null}
             </SafeAreaView>
           ) : null}
         </View>
@@ -1853,63 +1808,27 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : __DEV__ && rustRenderer && !tour.active ? (
+              ) : !tour.onboardingVisible ? (
                 <RustLyricsView
                   shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                />
-              ) : lyricsStyle === "amll" ? (
-                <AmllLyricsView
-                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
                   demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoLayout="player"
-                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  showTranslatedText={showTranslatedText}
-                  selectedLineKeys={selectedLineKeys}
-                  previewPositionMs={scrubPreviewPositionMs}
                   demoPlayback={previewPlayback}
                   demoDurationMs={TOUR_DURATION_MS}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onActiveLineChange={handleActiveLineChange}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                />
-              ) : (
-                <SpicyLyricsView
-                  active={isScreenFocused && (!tour.active || tour.foreground)}
-                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoLayout="player"
-                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
-                  tapToSeekEnabled={tapToSeekEnabled}
+                  demoStyle={lyricsStyle}
+                  demoInteractive
                   showTranslatedText={showTranslatedText}
-                  selectedLineKeys={selectedLineKeys}
                   previewPositionMs={scrubPreviewPositionMs}
-                  demoPlayback={previewPlayback}
-                  demoDurationMs={TOUR_DURATION_MS}
+                  tapToSeekEnabled={tapToSeekEnabled}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
-                  onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
                   onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                 />
-              )}
+              ) : null}
             </Reanimated.View>
           </Reanimated.View>
           </View>

@@ -7,7 +7,7 @@ const ts = require('typescript');
 const assert = require('node:assert/strict');
 const { runPerformanceBenchmarks } = require('./performance-benchmark-suite.cjs');
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'components/lyrics/active-line-timeline.ts'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'scripts/fixtures/active-line-timeline.ts'), 'utf8');
 const context = { exports: {} };
 vm.runInNewContext(ts.transpileModule(source, { compilerOptions: {
   module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,

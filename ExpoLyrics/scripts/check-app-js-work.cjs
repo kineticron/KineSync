@@ -93,23 +93,78 @@ function checkDemoClocks() {
   assert.equal(h.timers.size, 0); h.unmount();
 
   const p = hooks();
+  const selection = { lyricsStyle: 'spicy', setLyricsStyle(style) { selection.lyricsStyle = style; } };
+  const demoLyrics = [{ lineStartTime: 0, syllables: [{ text: 'Follow the lyrics' }] }];
   const { RendererPreview } = load('components/onboarding/renderer-preview.tsx', { ...p.mocks,
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-blur': { BlurView: 'BlurView' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
-    '@/components/lyrics/amll-lyrics-view': { AmllLyricsView: 'amll' }, '@/components/lyrics/spicy-lyrics-view': { SpicyLyricsView: 'spicy' },
+    '@/components/lyrics/rust/rust-lyrics-view': { RustLyricsView: 'Rust' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' }, '@/constants/design': { Design: {} },
-    '@/store/playback-store': { usePlaybackStore: selector => selector({ lyricsStyle: 'spicy', setLyricsStyle() {} }) },
-    '@/lib/onboarding-demo-lyrics': { DEMO_LYRICS: [] },
+    '@/store/playback-store': { usePlaybackStore: selector => selector(selection) },
+    '@/lib/onboarding-demo-lyrics': { DEMO_LYRICS: demoLyrics },
   }, p.globals);
-  let tree = p.run(() => RendererPreview({ active: true }));
-  const anchor = nodes(tree, 'amll')[0].props.demoPlayback;
+  const render = (active = true) => p.run(() => RendererPreview({ active }));
+  let tree = render();
+  const previews = () => nodes(tree, 'Rust');
+  assert.equal(previews().length, 1);
+  assert.equal(previews()[0].props.demoStyle, 'spicy');
+  assert.equal(previews()[0].props.demoLyrics, demoLyrics);
+  assert.ok(nodes(tree, 'Text').some(node => node.props.children === 'Follow the lyrics'));
+  const anchor = previews()[0].props.demoPlayback;
   const writes = p.writes;
-  p.advance(24900); tree = p.run(() => RendererPreview({ active: true }));
-  assert.equal(p.writes, writes); assert.equal(nodes(tree, 'amll')[0].props.demoPlayback, anchor);
-  p.advance(100); tree = p.run(() => RendererPreview({ active: true }));
-  assert.equal(nodes(tree, 'amll')[0].props.demoPlayback.anchorMonotonicMs, 26000);
-  p.run(() => RendererPreview({ active: false })); assert.equal(p.timers.size, 0); p.unmount();
+  p.advance(24900); tree = render();
+  assert.equal(p.writes, writes); assert.equal(previews()[0].props.demoPlayback, anchor);
+  nodes(tree, 'Button').find(node => node.props.accessibilityLabel === 'Choose AMLL').props.onPress();
+  tree = render();
+  assert.equal(previews().length, 1);
+  assert.equal(previews()[0].props.demoStyle, 'amll');
+  assert.equal(previews()[0].props.demoPlayback, anchor, 'switching styles keeps the demo clock');
+  p.advance(100); tree = render();
+  assert.equal(previews()[0].props.demoPlayback.anchorMonotonicMs, 26000);
+  p.foreground('background'); tree = render();
+  assert.equal(previews().length, 0); assert.equal(p.timers.size, 0);
+  p.advance(5000); p.foreground('active'); tree = render();
+  assert.equal(previews()[0].props.demoPlayback.anchorMonotonicMs, 31000);
+  tree = render(false);
+  assert.equal(previews().length, 0); assert.equal(p.timers.size, 0);
+  render(); p.unmount(); assert.equal(p.timers.size, 0);
   console.log('Tour/onboarding: zero 100ms position updates; one timer callback per 25s loop, pause/background cleanup passed.');
+}
+
+async function checkRendererPreferenceMigration() {
+  for (const [saved, legacyBackend, expected, pendingChoice] of [
+    ['amll', 'false', 'amll'],
+    ['spicy', 'true', 'spicy'],
+    ['native', 'false', 'amll'],
+    ['webview', 'false', 'spicy'],
+    ['native', 'false', 'spicy', 'spicy'],
+    [null, 'false', 'spicy'],
+  ]) {
+    const values = new Map([['kinesync_lyrics_style', saved], ['kinesync_use_rust_renderer', legacyBackend]]);
+    const create = initialize => {
+      const set = patch => { state = { ...state, ...patch }; };
+      let state = initialize(set);
+      return { getState: () => state, setState: set };
+    };
+    const { usePlaybackStore: store } = load('store/playback-store.ts', {
+      'react-native': { Platform: { OS: 'web' }, AppState: { currentState: 'active' } },
+      '@react-native-async-storage/async-storage': {
+        getItem: key => Promise.resolve(values.get(key) ?? null),
+        setItem: async (key, value) => { values.set(key, value); },
+        removeItem: async key => { values.delete(key); },
+      },
+      zustand: { create },
+      '@/lib/lyrics-arrival-trace': {}, '@/lib/translation-settings': {}, '@/lib/lyrics-enrich': {},
+      '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/artwork': {},
+      '@/lib/spotify-detector/timing-diagnostics': {}, '@/lib/playback-source': {},
+    }, { performance, console });
+    if (pendingChoice) store.getState().setLyricsStyle(pendingChoice);
+    await Promise.resolve();
+    assert.equal(store.getState().lyricsStyle, expected);
+    assert.equal(Object.hasOwn(store.getState(), 'useRustRenderer'), false);
+    assert.equal(values.has('kinesync_use_rust_renderer'), false);
+    assert.equal(values.get('kinesync_lyrics_style'), saved === null ? null : expected);
+  }
 }
 
 function checkNativeClock() {
@@ -235,23 +290,26 @@ function checkTranslationSelector() {
   console.log('Translation selector: 1,000 reads once, zero rescans over 600 playback updates, new/translated background packets passed.');
 }
 
-function checkPlayerNotificationsAndCatalogMerge() {
+function checkPlayerSharingAndCatalogMerge() {
   const source = fs.readFileSync(path.join(root, 'app/(tabs)/index.tsx'), 'utf8');
   const ast = ts.createSourceFile('index.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const callbacks = {};
   function visit(node) {
-    if (ts.isVariableDeclaration(node) && ['handleActiveLineChange', 'ensureSelectionForShare'].includes(node.name.getText(ast)))
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'ensureSelectionForShare')
       callbacks[node.name.getText(ast)] = node.initializer.arguments[0].getText(ast);
     ts.forEachChild(node, visit);
   }
   visit(ast);
-  const lyrics = Array.from({ length: 20 }, (_, id) => ({ id }));
-  const context = { result: {}, activeLineIndex: { current: -1 }, selectedLineKeys: new Set(), getLineKey: line => line.id,
-    usePlaybackStore: { getState: () => ({ lyrics }) }, setActiveLineIndex() { throw new Error('Line notifications cannot trigger a player render'); } };
+  const lyrics = Array.from({ length: 20 }, (_, id) => ({
+    id, lineStartTime: id * 1000, lineEndTime: (id + 1) * 1000, syllables: [],
+  }));
+  const layout = load('lib/lyrics-layout.ts', {});
+  const context = { result: {}, selectedLineKeys: new Set(), getLineKey: line => line.id,
+    getPlaybackWindowState: layout.getPlaybackWindowState, performance: { now: () => 1500 },
+    projectPosition: require('../lib/rust-lyrics-protocol').projectPosition,
+    usePlaybackStore: { getState: () => ({ lyrics, anchorPositionMs: 7000, anchorMonotonicMs: 1000, isPlaying: true }) } };
   for (const [name, callback] of Object.entries(callbacks)) vm.runInNewContext(ts.transpileModule(`result.${name} = ${callback}`, {}).outputText, context);
-  for (let i = 0; i < 600; i++) context.result.handleActiveLineChange(i % 20);
-  context.result.handleActiveLineChange(7);
-  assert.equal(context.result.ensureSelectionForShare()[0].id, 7, 'Sharing reads the most recent line without React state');
+  assert.equal(context.result.ensureSelectionForShare()[0].id, 7, 'Sharing derives the current line without renderer notifications');
   context.selectedLineKeys.add(2); assert.equal(context.result.ensureSelectionForShare()[0].id, 2);
 
   const catalog = fs.readFileSync(path.join(root, 'components/lyrics/desktop-vault-catalog.tsx'), 'utf8');
@@ -271,7 +329,7 @@ function checkPlayerNotificationsAndCatalogMerge() {
   const merged = mergeContext.merge(previous);
   assert.equal(merged.length, 1100); assert.equal(merged[900], previous[900], 'Overlapping pages retain the first version');
   assert.ok(reads <= (previous.length + incoming.length) * 2, 'Catalog pagination cannot perform quadratic duplicate scans');
-  console.log('Player line notifications: no React state writes; sharing stays current. Desktop pagination: linear duplicate checks over 1,200 entries passed.');
+  console.log('Player sharing uses the live position without renderer notifications. Desktop pagination: linear duplicate checks over 1,200 entries passed.');
 }
 
 function checkCanvasPresentation() {
@@ -300,5 +358,5 @@ function checkCanvasPresentation() {
   console.log('Native canvas: 100 line cues issue scroll/active notifications with zero React presentation updates; clip fallback and stale packets passed.');
 }
 
-(async () => { checkDemoClocks(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerNotificationsAndCatalogMerge(); checkCanvasPresentation(); })()
+(async () => { checkDemoClocks(); await checkRendererPreferenceMigration(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerSharingAndCatalogMerge(); checkCanvasPresentation(); })()
   .catch(error => { console.error(error); process.exitCode = 1; });

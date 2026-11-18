@@ -507,13 +507,13 @@ function inspectReveal(node) {
     revealOpening = node;
     revealPress = node.parent.children.find(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(ast) === 'Pressable');
   }
-  if (ts.isJsxSelfClosingElement(node) && ['RustLyricsView', 'AmllLyricsView', 'SpicyLyricsView'].includes(node.tagName.getText(ast))) {
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'RustLyricsView') {
     lyricInteractions.push(node.attributes.properties.find(property => property.name?.text === 'onUserInteraction').initializer.expression.getText(ast));
   }
   ts.forEachChild(node, inspectReveal);
 }
 inspectReveal(ast);
-assert.ok(lyricInteractions.length >= 3);
+assert.ok(lyricInteractions.length === 2);
 assert.ok(lyricInteractions.every(expression => expression === 'handleControlsInteraction'));
 assert.ok(revealOpening && revealPress);
 let revealCondition = revealOpening.parent;
@@ -521,15 +521,14 @@ while (revealCondition && !ts.isBinaryExpression(revealCondition)) revealConditi
 assert.ok(revealCondition);
 const overlayEnabled = evaluate(`(fullscreenAlbumMode, controlsVisible, rustHandlesReveal) => (${revealCondition.left.getText(ast)})`, {});
 for (const scenario of [
-  { rustRenderer: true, isLandscape: false, empty: false, tour: false, overlay: false },
-  { rustRenderer: false, isLandscape: false, empty: false, tour: false, overlay: true },
-  { rustRenderer: true, isLandscape: true, empty: false, tour: false, overlay: true },
-  { rustRenderer: true, isLandscape: false, empty: true, tour: false, overlay: true },
-  { rustRenderer: true, isLandscape: false, empty: false, tour: true, overlay: true },
+  { rustLyricsAvailable: true, isLandscape: false, empty: false, overlay: false },
+  { rustLyricsAvailable: false, isLandscape: false, empty: false, overlay: true },
+  { rustLyricsAvailable: true, isLandscape: true, empty: false, overlay: true },
+  { rustLyricsAvailable: true, isLandscape: false, empty: true, overlay: true },
 ]) {
   const handles = evaluate(declarations.rustHandlesReveal.getText(ast), {
-    __DEV__: true, rustRenderer: scenario.rustRenderer, isLandscape: scenario.isLandscape,
-    showEmptyState: scenario.empty, tour: { active: scenario.tour },
+    rustLyricsAvailable: scenario.rustLyricsAvailable, isLandscape: scenario.isLandscape,
+    showEmptyState: scenario.empty,
   });
   assert.equal(overlayEnabled(false, false, handles), scenario.overlay,
     'only portrait Rust replaces the hit-testing sibling with renderer touch policy');

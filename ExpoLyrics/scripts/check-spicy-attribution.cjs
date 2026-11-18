@@ -37,52 +37,8 @@ const xml = lyricsToTtml({ lyrics: [{ lineStartTime: 0, lineEndTime: 1000,
   syllables: [{ text: 'Hello', startTime: 0, endTime: 1000 }] }], metadata: { attribution } });
 assert.deepEqual(parseTtmlToLyrics(xml).metadata.attribution, JSON.parse(JSON.stringify(attribution)), 'TTML preserves contributor URLs');
 
-class Element {
-  constructor(tag) { this.tag = tag; this.children = []; this.style = {}; this.events = {}; }
-  appendChild(child) { this.children.push(child); }
-  addEventListener(type, handler) { this.events[type] = handler; }
-}
-class Anchor extends Element {}
 const descendants = node => Array.isArray(node) ? node.flatMap(descendants)
   : node ? [node, ...(node.children || []).flatMap(descendants)] : [];
-for (const file of ['amll-webview-entry.ts', 'spicy-webview-entry.ts']) {
-  const source = read(`components/lyrics/${file}`);
-  const start = source.indexOf('function appendCreditsContent(');
-  const end = source.indexOf('\nfunction ', start + 1);
-  const js = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
-  const messages = [];
-  const context = vm.createContext({
-    HTMLAnchorElement: Anchor,
-    document: { createElement: tag => tag === 'a' ? new Anchor(tag) : new Element(tag), createTextNode: textContent => ({ textContent }) },
-    post: message => messages.push(message),
-  });
-  vm.runInContext(js, context);
-  const container = new Element('div');
-  context.appendCreditsContent(container, [], attribution);
-  const anchors = descendants(container).filter(node => node instanceof Anchor);
-  assert.deepEqual(anchors.map(node => [node.textContent, node.href]), [
-    ['@maker', profiles.Maker.url], ['@uploader', profiles.Uploader.url],
-  ]);
-  for (const anchor of anchors) {
-    let prevented = false;
-    let stopped = false;
-    anchor.events.click({ preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
-    assert.ok(prevented && stopped, 'profile clicks must not trigger lyric seeking');
-    assert.equal(messages.at(-1).url, anchor.href);
-    assert.equal(messages.at(-1).type, 'attributionLink');
-  }
-  const uploaderOnly = new Element('div');
-  context.appendCreditsContent(uploaderOnly, [], { uploader: attribution.uploader });
-  assert.ok(descendants(uploaderOnly).some(node => node.textContent === 'Uploaded By: '));
-  for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
-    const officialFooter = new Element('div');
-    context.appendCreditsContent(officialFooter, [], { source: 'official', provider });
-    const content = descendants(officialFooter);
-    assert.ok(content.some(node => node.textContent === 'Provided By: '), `${file} keeps official provider credits without a tap`);
-    assert.ok(content.some(node => node.textContent === provider));
-    assert.equal(content.filter(node => node instanceof Anchor).length, 0);
-  }
-}
 
 // Render the native footer with lightweight host elements and exercise its actual handlers.
 const nativeSource = read('components/lyrics/native/native-lyrics-view.tsx');

@@ -158,8 +158,6 @@ async function resetOnboardingCompleted(): Promise<void> {
 export default function BridgeSettingsScreen() {
   const router = useRouter();
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
-  const useRustRenderer = usePlaybackStore(s => s.useRustRenderer);
-  const setUseRustRenderer = usePlaybackStore(s => s.setUseRustRenderer);
   const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
   const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
@@ -645,10 +643,6 @@ export default function BridgeSettingsScreen() {
 
               {__DEV__ ? <>
                 <SettingSection title="Rust diagnostics">
-                  <View style={styles.sectionToggle}>
-                    <Text style={styles.fieldLabel}>Use experimental Rust lyrics renderer</Text>
-                    <Switch accessibilityLabel="Use experimental Rust lyrics renderer" value={useRustRenderer} onValueChange={setUseRustRenderer} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
-                  </View>
                   <View style={styles.sectionToggle}>
                     <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
                     <Switch accessibilityLabel="Show Rust debug overlay" value={showRustDebugOverlay} onValueChange={setShowRustDebugOverlay} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />

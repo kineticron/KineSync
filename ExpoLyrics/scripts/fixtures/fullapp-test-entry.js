@@ -74,7 +74,6 @@ async function probe(kind, request) {
 const seed = AsyncStorage.multiSet([
   ['kinesync_onboarding_completed', 'true'],
   ['kinesync_bridge_settings', JSON.stringify({ serverUrl: '', handshakeKey: '', playbackMode: 'desktop', onboardingCompleted: true })],
-  ['kinesync_use_rust_renderer', 'true'],
   ['kinesync_tour_completed', 'true'],
 ]);
 let ready = false; let pending = null; let store = null;
@@ -93,7 +92,7 @@ function apply(fx) {
   armed = null;
   const nowMono = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const track = { id: 'fx-track-' + fx, title: 'Fixture ' + fx, artist: 'KineSync Test', durationMs: 60000 };
-  const base = { currentTrack: track, playbackMode: 'desktop', connectionStatus: 'connected', useRustRenderer: true, isPlaying: true, anchorPositionMs: 3000, anchorTimestampMs: Date.now(), anchorMonotonicMs: nowMono, playbackPosition: 3000, lyricsStatusMessage: '', lyricsSource: 'fixture' };
+  const base = { currentTrack: track, playbackMode: 'desktop', connectionStatus: 'connected', isPlaying: true, anchorPositionMs: 3000, anchorTimestampMs: Date.now(), anchorMonotonicMs: nowMono, playbackPosition: 3000, lyricsStatusMessage: '', lyricsSource: 'fixture' };
   const credits = { credits: { songwriters: ['Fixture Writer One', 'Fixture Writer Two'] }, attribution: { source: 'fixture', provider: 'FixtureProvider', community: true, maker: { username: 'fixture-maker', url: 'https://example.com/maker' }, uploader: { username: 'fixture-uploader', url: 'https://example.com/uploader' } } };
   let s;
   if (fx === 'amll') s = { lyrics: lines(), lyricsStyle: 'amll', lyricsMetadata: {} };
@@ -113,7 +112,7 @@ function apply(fx) {
   if (s.isPlaying === false && s.anchorPositionMs !== undefined) log('PAUSED_AT ' + s.anchorPositionMs);
   try { require('../../store/playback-store').startPlaybackClock(); } catch (e) {}
   const st = store.getState();
-  log('ACK fx=' + fx + ' style=' + st.lyricsStyle + ' lines=' + st.lyrics.length + ' rust=' + st.useRustRenderer + ' playing=' + st.isPlaying + ' pos=' + Math.round(st.playbackPosition));
+  log('ACK fx=' + fx + ' style=' + st.lyricsStyle + ' lines=' + st.lyrics.length + ' playing=' + st.isPlaying + ' pos=' + Math.round(st.playbackPosition));
 }
 function handle(url) {
   if (!url) return;

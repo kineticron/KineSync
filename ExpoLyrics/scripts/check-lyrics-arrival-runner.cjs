@@ -20,8 +20,8 @@ if (args.includes('logcat')) {
       if (raw === last) return;
       last = raw;
       const params = new URL(raw.replace(/^'|'$/g, '')).searchParams;
-      const trace = {counterSchema:1,saturated:false,dropped:0,records:['fixture-delivered-not-network','model','cues','glyph-shaping'].map(stage=>({stage,packet:1,generation:1,start:0,end:1})),counters:{modelCalls:1,cueBuilds:1,shapingCalls:1,paragraphBuilds:1,voiceRenders:1,firstPicturePublications:1},uiCounts:{complete:true,droppedOwners:0,timeouts:0,totals:{pictureBuilds:1}},unavailable:['actual first presented correct line','actual first presented correct window']};
-      const data = { trace,previewPositionMs:params.get('scenario')==='start'?0:90000,playing:false,fixtureRows:100,initializedDelayMs:500,workload:'synthetic-paused-delayed-arrival-initialized-host-v2',run: params.get('run'), style: params.get('style'),
+      const trace = {counterSchema:1,saturated:false,dropped:0,records:['fixture-delivered-not-network','rust-packet-prepared','rust-track-ready-not-presentation'].map((stage,index)=>({stage,packet:1,generation:index===0?0:1,start:index,end:index+1})),unavailable:['actual first presented correct line','actual first presented correct window']};
+      const data = { trace,previewPositionMs:params.get('scenario')==='start'?0:90000,playing:false,fixtureRows:100,initializedDelayMs:500,workload:'synthetic-paused-delayed-arrival-rust-host-v3',run: params.get('run'), style: params.get('style'),
         orientation: params.get('orientation'), scenario: params.get('scenario'), evidence: 'unit-test-stub-no-timing' };
       if(process.env.ARRIVAL_INVALID==='empty')data.trace.records=[];
       if(process.env.ARRIVAL_INVALID==='saturated'){data.trace.saturated=true;data.trace.dropped=1;}
@@ -60,15 +60,14 @@ else if (args.includes('start')) fs.writeFileSync(path.join(dir, 'launch'), args
 const {validateEvidence,WORKLOAD}=require('./lyrics-arrival-evidence.cjs');
 const request={run:'test',style:'spicy',orientation:'portrait',scenario:'overlap'};
 const valid={...request,previewPositionMs:90000,playing:false,fixtureRows:100,initializedDelayMs:500,workload:WORKLOAD,trace:{counterSchema:1,saturated:false,dropped:0,
-  records:['fixture-delivered-not-network','model','cues','glyph-shaping'].map(stage=>({stage,packet:1,generation:1,start:0,end:1})),
-  counters:{modelCalls:1,cueBuilds:1,shapingCalls:1,paragraphBuilds:1,voiceRenders:1,firstPicturePublications:1},
-  uiCounts:{complete:true,droppedOwners:0,timeouts:0,totals:{pictureBuilds:1}},
+  records:['fixture-delivered-not-network','rust-packet-prepared','rust-track-ready-not-presentation'].map((stage,index)=>({stage,packet:1,generation:index===0?0:1,start:index,end:index+1})),
   unavailable:['actual first presented correct line','actual first presented correct window']}};
 assert.equal(validateEvidence(valid,request),valid);
 for(const patch of [{trace:undefined},{trace:{...valid.trace,records:[]}},{trace:{...valid.trace,saturated:true,dropped:1}},
   {previewPositionMs:0},{playing:true},{scenario:'start'},{style:'amll'},{orientation:'landscape'},{workload:'unknown'},
-  {trace:{...valid.trace,uiCounts:{complete:false}}},{trace:{...valid.trace,counters:{}}}]) assert.throws(()=>validateEvidence({...valid,...patch},request));
-console.log('runner rejects missing/empty/saturated traces, mismatched scenarios and incomplete count samples; fixture data only');
+  {trace:{...valid.trace,records:valid.trace.records.slice(0, 2)}},
+  {trace:{...valid.trace,records:valid.trace.records.map((r,i)=>i===2?{...r,generation:2}:r)}}]) assert.throws(()=>validateEvidence({...valid,...patch},request));
+console.log('runner rejects missing/empty/saturated traces, mismatched scenarios and unmatched or missing Rust readiness; fixture data only');
 
 const vm=require('node:vm'),ts=require('typescript');
 const fixtureModule={exports:{}};
