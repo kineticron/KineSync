@@ -1,5 +1,5 @@
-// TEST-ONLY entry (full-app FTL test). Runs the real expo-router app with seeded stores.
-// Fixture states via deep link expolyrics://?fx=<state>. Not part of production.
+// TEST-ONLY entry (full-app FTL test). Runs the real expo-router app with synthetic
+// playback and bridge state via expolyrics://?fx=<state>&request=<id>.
 const RN = require('react-native');
 const React = require('react');
 const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -9,7 +9,9 @@ let surface = null;
 let armed = null;
 RN.Linking.openURL = (url) => {
   log('LINK_OPEN ' + url);
-  if (armed && armed.kind === 'link' && armed.url === url && store.getState().currentTrack.id === armed.track) {
+  const state = store?.getState();
+  if (armed?.kind === 'link' && armed.url === url
+      && state?.currentTrack?.id === armed.track && state.lyricsStyle === armed.style) {
     log('LINK_OK request=' + armed.request + ' url=' + url);
     armed = null;
   }
@@ -46,10 +48,12 @@ async function probe(kind, request) {
   const current = surface;
   if (!current || !current.box.current || !/^[a-zA-Z0-9-]+$/.test(request)) { log('TARGET_MISSING request=' + request); return; }
   const state = store.getState();
-  const track = state.currentTrack.id;
+  const track = state.currentTrack?.id;
+  if (!track) { log('TARGET_MISSING request=' + request); return; }
+  const style = state.lyricsStyle;
   const bounds = await new Promise(resolve => current.box.current.measureInWindow((x, y, width, height) => resolve({ x, y, width, height })));
   const window = RN.Dimensions.get('window');
-  log('WINDOW request=' + request + ' windowWidth=' + window.width + ' windowHeight=' + window.height + ' canvasWidth=' + bounds.width + ' canvasHeight=' + bounds.height);
+  log('WINDOW request=' + request + ' windowWidth=' + window.width + ' windowHeight=' + window.height + ' canvasWidth=' + bounds.width + ' canvasHeight=' + bounds.height + ' style=' + style + ' track=' + track);
   // Hit-test logical coordinates inside the measured canvas. Screen taps use
   // physical pixels, including the current orientation and window offset.
   for (let y = 12; y < bounds.height - 12; y += 12) {
@@ -60,10 +64,14 @@ async function probe(kind, request) {
       const seek = kind === 'seek' && index > 0 && line && Math.abs(line.lineStartTime - state.anchorPositionMs) > 900;
       const link = kind === 'link' && index === -3 && state.lyricsMetadata.attribution?.maker?.url;
       if (!seek && !link) continue;
-      if (surface !== current || store.getState().currentTrack.id !== track) break;
+      const latest = store.getState();
+      if (surface !== current || latest.currentTrack?.id !== track || latest.lyricsStyle !== style) {
+        log('TARGET_STALE request=' + request);
+        return;
+      }
       const expected = seek ? line.lineStartTime : -3;
       const url = link ? state.lyricsMetadata.attribution.maker.url : '';
-      armed = { kind, request, expected, url, track };
+      armed = { kind, request, expected, url, track, style };
       const ratio = RN.PixelRatio.get();
       log('TARGET request=' + request + ' x=' + Math.round((bounds.x + x) * ratio) + ' y=' + Math.round((bounds.y + y) * ratio) + ' expected=' + expected + ' url=' + url);
       return;
@@ -77,6 +85,7 @@ const seed = AsyncStorage.multiSet([
   ['kinesync_tour_completed', 'true'],
 ]);
 let ready = false; let pending = null; let store = null;
+let tourStore = null;
 function lines(kind) {
   const { DEMO_LYRICS } = require('../../lib/onboarding-demo-lyrics');
   if (kind === 'cjk') {
@@ -88,7 +97,7 @@ function lines(kind) {
   return out;
 }
 function afterEnd(ls) { const end = Math.max(...ls.map((l) => l.lineEndTime)) + 2000; return { isPlaying: false, anchorPositionMs: end, playbackPosition: end, currentTrack: { id: 'fx-track-credits', title: 'Fixture credits', artist: 'KineSync Test', durationMs: end + 8000 } }; }
-function apply(fx) {
+function apply({ fx, request, source }) {
   armed = null;
   const nowMono = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   const track = { id: 'fx-track-' + fx, title: 'Fixture ' + fx, artist: 'KineSync Test', durationMs: 60000 };
@@ -112,39 +121,85 @@ function apply(fx) {
   if (s.isPlaying === false && s.anchorPositionMs !== undefined) log('PAUSED_AT ' + s.anchorPositionMs);
   try { require('../../store/playback-store').startPlaybackClock(); } catch (e) {}
   const st = store.getState();
-  log('ACK fx=' + fx + ' style=' + st.lyricsStyle + ' lines=' + st.lyrics.length + ' playing=' + st.isPlaying + ' pos=' + Math.round(st.playbackPosition));
+  const tour = tourStore.getState();
+  log('ACK fx=' + fx + ' style=' + st.lyricsStyle + ' lines=' + st.lyrics.length + ' playing=' + st.isPlaying + ' pos=' + Math.round(st.playbackPosition)
+    + ' request=' + request + ' source=' + source + ' track=' + (st.currentTrack?.id ?? 'none') + ' title=' + JSON.stringify(st.currentTrack?.title ?? '')
+    + ' connection=' + st.connectionStatus + ' mode=' + st.playbackMode + ' appOnboardingVisible=' + tour.onboardingVisible + ' tourActive=' + tour.active);
 }
-function handle(url) {
+let sawFixtureEvent = false;
+function handle(url, source) {
   if (!url) return;
-  const probeMatch = /[?&]fx=probe-(seek|link)(?:&|$)/.exec(url);
-  if (probeMatch && ready) { const request = /[?&]request=([a-zA-Z0-9-]+)/.exec(url); if (request) void probe(probeMatch[1], request[1]).catch(error => log('PROBE_ERROR ' + error)); return; }
   const m = /[?&]fx=([^&]+)/.exec(url); if (!m) return;
-  if (!ready) { pending = m[1]; return; } apply(decodeURIComponent(m[1]));
+  const request = /[?&]request=([a-zA-Z0-9-]+)(?:&|$)/.exec(url)?.[1] ?? 'none';
+  const fx = decodeURIComponent(m[1]);
+  if (source === 'event') sawFixtureEvent = true;
+  if (fx === 'probe-seek' || fx === 'probe-link') {
+    if (ready && request !== 'none') void probe(fx.slice(6), request).catch(error => log('PROBE_ERROR ' + error));
+    return;
+  }
+  const fixture = { fx, request, source };
+  if (!ready) { pending = fixture; return; }
+  apply(fixture);
 }
-RN.Linking.addEventListener('url', (e) => handle(e.url));
-RN.Linking.getInitialURL().then(handle).catch(() => {});
+RN.Linking.addEventListener('url', (e) => handle(e.url, 'event'));
+RN.Linking.getInitialURL().then(url => {
+  // A newer VIEW intent takes precedence over the activity's original intent.
+  if (!sawFixtureEvent) handle(url, 'initial');
+}).catch(error => log('INITIAL_URL_ERROR ' + error));
 const AR = RN.AppRegistry; const origReg = AR.registerComponent.bind(AR);
 AR.registerComponent = (name, getter) => origReg(name, () => {
   const Inner = getter();
   return function SeededRoot(props) {
     const [ok, setOk] = React.useState(false);
-    React.useEffect(() => { seed.then(() => {
-      store = require('../../store/playback-store').usePlaybackStore;
-      const bridge = require('../../lib/bridge-client').bridgeClient;
-      const seekTo = bridge.seekTo.bind(bridge);
-      bridge.seekTo = (position, ...args) => {
-        const state = store.getState();
-        log('SEEK_REQUEST actual=' + position + ' anchor=' + state.anchorPositionMs);
-        if (armed && armed.kind === 'seek' && position === armed.expected && state.anchorPositionMs === armed.expected && state.playbackPosition === armed.expected && state.currentTrack.id === armed.track) {
-          log('SEEK_OK request=' + armed.request + ' expected=' + armed.expected + ' actual=' + position);
+    React.useEffect(() => {
+      let mounted = true;
+      let cleanup;
+      seed.then(() => {
+        if (!mounted) return;
+        store = require('../../store/playback-store').usePlaybackStore;
+        tourStore = require('../../store/player-tour-store').usePlayerTourStore;
+        const bridge = require('../../lib/bridge-client').bridgeClient;
+        const seekTo = bridge.seekTo;
+        bridge.seekTo = (position, ...args) => {
+          const state = store.getState();
+          log('SEEK_REQUEST actual=' + position + ' anchor=' + state.anchorPositionMs);
+          if (armed?.kind === 'seek' && position === armed.expected
+              && state.anchorPositionMs === armed.expected && state.playbackPosition === armed.expected
+              && state.currentTrack?.id === armed.track && state.lyricsStyle === armed.style) {
+            log('SEEK_OK request=' + armed.request + ' expected=' + armed.expected + ' actual=' + position);
+            armed = null;
+          }
+          return seekTo.call(bridge, position, ...args);
+        };
+        const unsubscribePlayback = store.subscribe((s, p) => { if (s.playbackPosition !== p.playbackPosition && Math.abs(s.playbackPosition - p.playbackPosition) > 900 && s.anchorMonotonicMs !== p.anchorMonotonicMs) log('STORE seek pos=' + Math.round(s.playbackPosition) + ' anchor=' + Math.round(s.anchorPositionMs)); });
+        // BridgeProvider updates onboardingVisible after defaults and connection
+        // setup. The deliberately empty server URL keeps this fixture offline.
+        const unsubscribeSetup = tourStore.subscribe((next, prev) => {
+          if (!prev.onboardingVisible || next.onboardingVisible) return;
+          const state = store.getState();
+          if (state.playbackMode !== 'desktop' || state.serverUrl || state.connectionStatus !== 'disconnected') {
+            log('APP_SETUP_UNEXPECTED mode=' + state.playbackMode + ' hasServer=' + Boolean(state.serverUrl) + ' connection=' + state.connectionStatus);
+            return;
+          }
+          ready = true;
+          log('APP_SETUP_READY mode=desktop connection=disconnected appOnboardingVisible=false');
+          const fixture = pending;
+          pending = null;
+          if (fixture) apply(fixture);
+        });
+        cleanup = () => {
+          ready = false;
           armed = null;
-        }
-        return seekTo(position, ...args);
-      };
-      store.subscribe((s, p) => { if (s.playbackPosition !== p.playbackPosition && Math.abs(s.playbackPosition - p.playbackPosition) > 900 && s.anchorMonotonicMs !== p.anchorMonotonicMs) log('STORE seek pos=' + Math.round(s.playbackPosition) + ' anchor=' + Math.round(s.anchorPositionMs)); });
-      setOk(true); log('SEEDED');
-      setTimeout(() => { ready = true; log('READY'); if (pending) apply(pending); }, 2500);
-    }); }, []);
+          unsubscribeSetup();
+          unsubscribePlayback();
+          bridge.seekTo = seekTo;
+        };
+        setOk(true);
+        log('SEEDED');
+        log('READY bundle=embedded');
+      }).catch(error => log('BOOTSTRAP_ERROR ' + error));
+      return () => { mounted = false; cleanup?.(); };
+    }, []);
     return ok ? React.createElement(Inner, props) : null;
   };
 });

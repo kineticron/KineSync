@@ -18,6 +18,8 @@ import android.view.accessibility.AccessibilityNodeInfo;
 public final class FullAppRunner extends Instrumentation {
   static final String PKG = "dev.kineticron.KineSync";
   static final String OUT = "/sdcard/Android/data/" + PKG + "/files/fullapp";
+  private static final String DEV_MENU_INTRO =
+    "This is the developer menu. It gives you access to useful tools in your development builds.";
   private UiAutomation ui;
   private File root;
   private PrintWriter proto;
@@ -124,14 +126,23 @@ public final class FullAppRunner extends Instrumentation {
     String request = kind + "-" + android.os.SystemClock.elapsedRealtime();
     String marker = "KSFX TARGET request=" + request + " ";
     String windowMarker = "KSFX WINDOW request=" + request + " ";
-    launch("expolyrics://?fx=probe-" + kind + "&request=" + request);
+    if (!launch("expolyrics://?fx=probe-" + kind + "&request=" + request)) return false;
     if (!waitFor(windowMarker, 0, 20)) {
       log("SETUP_APP_WINDOW_MISSING fixture=" + fixture + " request=" + request);
       save("target-" + request + ".txt", "SETUP app window unverified\n" + rn());
       return false;
     }
-    Matcher window = Pattern.compile(Pattern.quote(windowMarker) + "windowWidth=([0-9.]+) windowHeight=([0-9.]+) canvasWidth=([0-9.]+) canvasHeight=([0-9.]+)").matcher(rn());
+    Matcher window = Pattern.compile(Pattern.quote(windowMarker)
+      + "windowWidth=([0-9.]+) windowHeight=([0-9.]+) canvasWidth=([0-9.]+) canvasHeight=([0-9.]+)"
+      + " style=(amll|spicy) track=([a-zA-Z0-9-]+)").matcher(rn());
     if (!window.find()) return false;
+    String expectedStyle = fixture.endsWith("amll") ? "amll" : "spicy";
+    String expectedTrack = "fx-track-" + (kind.equals("link") ? "credits" : fixture);
+    if (!expectedStyle.equals(window.group(5)) || !expectedTrack.equals(window.group(6))) {
+      save("target-" + request + ".txt", "Fixture mismatch: expected style=" + expectedStyle
+        + " track=" + expectedTrack + "\n" + window.group() + "\n" + rn());
+      return false;
+    }
     double windowWidth = Double.parseDouble(window.group(1)), windowHeight = Double.parseDouble(window.group(2));
     double canvasWidth = Double.parseDouble(window.group(3)), canvasHeight = Double.parseDouble(window.group(4));
     // Sampled by the probe after this fixture, not inferred from display rotation.
@@ -164,7 +175,8 @@ public final class FullAppRunner extends Instrumentation {
     int baseline = count(logs, event);
     shell("input tap " + x + " " + y);
     boolean ok = waitFor(event, baseline, 8);
-    save("target-" + request + ".txt", "fixture=" + fixture + " screen=" + W + "x" + H + " target=" + target.group() + "\nexpectedEvent=" + event + "\nobserved=" + ok + "\n" + rn());
+    save("target-" + request + ".txt", "fixture=" + fixture + " screen=" + W + "x" + H + "\n"
+      + window.group() + "\n" + target.group() + "\nexpectedEvent=" + event + "\nobserved=" + ok + "\n" + rn());
     return ok;
   }
   private boolean launch(String url) throws IOException {
@@ -177,13 +189,208 @@ public final class FullAppRunner extends Instrumentation {
     return false;
   }
   private boolean fx(String name) throws IOException {
-    int base = count(rn(), "KSFX ACK fx=" + name + " ");
-    launch("expolyrics://?fx=" + name);
-    boolean ok = waitFor("KSFX ACK fx=" + name + " ", base, 15);
-    log("FX " + name + " ack=" + ok); sleep(2500); return ok;
+    String request = "fixture-" + android.os.SystemClock.elapsedRealtime();
+    boolean launched = launch("expolyrics://?fx=" + name + "&request=" + request);
+    Pattern ack = Pattern.compile(Pattern.quote("KSFX ACK fx=" + name + " ")
+      + "[^\\r\\n]* request=" + request + " source=(event|initial) ");
+    boolean ok = false;
+    for (int i = 0; launched && i < 30 && !ok; i++) {
+      ok = ack.matcher(rn()).find();
+      if (!ok) sleep(500);
+    }
+    log("FX " + name + " ack=" + ok + " request=" + request); sleep(2500); return ok;
+  }
+  private boolean initialSpicyFixture() throws IOException {
+    String request = "startup-" + android.os.SystemClock.elapsedRealtime();
+    log("INITIAL_FIXTURE_REQUEST fx=spicy request=" + request);
+    if (!launch("expolyrics://?fx=spicy&request=" + request)) return false;
+    if (!waitFor("request=" + request + " source=event ", 0, 15)) return false;
+    Pattern expected = Pattern.compile("KSFX ACK fx=spicy style=spicy lines=[1-9][0-9]* playing=true pos=[0-9]+"
+      + " request=" + request + " source=event track=fx-track-spicy title=\"Fixture spicy\""
+      + " connection=connected mode=desktop appOnboardingVisible=false tourActive=false\\s*$", Pattern.MULTILINE);
+    return expected.matcher(rn()).find();
   }
   private int[] findDesc(String desc) {
     try { return findIn(ui.getRootInActiveWindow(), desc); } catch (Throwable t) { return null; }
+  }
+  private int[] findVisibleLabel(AccessibilityNodeInfo n, String label, boolean description) {
+    if (n == null) return null;
+    CharSequence value = description ? n.getContentDescription() : n.getText();
+    if (PKG.contentEquals(n.getPackageName() == null ? "" : n.getPackageName())
+        && value != null && label.contentEquals(value) && n.isVisibleToUser()) {
+      Rect r = new Rect(); n.getBoundsInScreen(r);
+      if (r.width() > 0 && r.height() > 0) return new int[] {r.centerX(), r.centerY()};
+    }
+    for (int i = 0; i < n.getChildCount(); i++) {
+      int[] p = findVisibleLabel(n.getChild(i), label, description); if (p != null) return p;
+    }
+    return null;
+  }
+  private boolean playerIdentity(AccessibilityNodeInfo window, String fixture) {
+    String title = "Fixture " + fixture;
+    return window != null && window.getPackageName() != null && PKG.contentEquals(window.getPackageName())
+      && findVisibleLabel(window, "Open player menu", true) != null
+      && (findVisibleLabel(window, title, false) != null
+        || findVisibleLabel(window, title + ", KineSync Test. Show album artwork", true) != null)
+      && findVisibleLabel(window, "Close", true) == null
+      && findVisibleLabel(window, "Close player menu", true) == null;
+  }
+  private boolean dismissDevMenu() throws IOException {
+    boolean continued = false, closed = false;
+    int clearSamples = 0;
+    for (int i = 0; i < 60; i++) {
+      AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+      int[] next = findVisibleLabel(window, "Continue", false);
+      int[] close = findVisibleLabel(window, "Close", true);
+      boolean onboarding = findVisibleLabel(window, DEV_MENU_INTRO, false) != null;
+      boolean regularMenu = findVisibleLabel(window, "Reload", false) != null;
+      if (onboarding && next != null && !continued) {
+        log("DEV_MENU_CONTINUE_TAP x=" + next[0] + " y=" + next[1]);
+        shell("input tap " + next[0] + " " + next[1]);
+        continued = true;
+      } else if (!onboarding && next == null && regularMenu && close != null && !closed) {
+        log("DEV_MENU_CLOSE_TAP x=" + close[0] + " y=" + close[1]);
+        shell("input tap " + close[0] + " " + close[1]);
+        closed = true;
+      }
+      boolean appVisible = findVisibleLabel(window, "Desktop Bridge is not connected", false) != null;
+      boolean clear = appVisible && !onboarding && next == null && !regularMenu && close == null
+        && (!continued || closed);
+      clearSamples = clear ? clearSamples + 1 : 0;
+      if (clearSamples >= 3) {
+        log("DEV_MENU_RESULT " + (closed ? "closed continued=" + continued : "already clear"));
+        return true;
+      }
+      sleep(500);
+    }
+    log("DEV_MENU_RESULT timeout continued=" + continued + " closed=" + closed);
+    return false;
+  }
+  private boolean bootstrapEmbeddedBundle() throws IOException {
+    // Instrumentation lives in target process, so never force-stop that package here.
+    String out = shell("am start -W -a android.intent.action.MAIN -n " + PKG + "/.MainActivity");
+    log("EMBEDDED_BOOTSTRAP_LAUNCH " + out.replace('\n', ' '));
+    boolean started = out.contains("Status: ok");
+    log("ANDROID_LAUNCH_SUCCESS=" + started);
+    int[] button = null;
+    for (int i = 0; started && i < 60 && button == null; i++) {
+      button = findVisibleLabel(ui.getRootInActiveWindow(), "Load embedded bundle", false);
+      if (button == null) sleep(500);
+    }
+    shot("00-embedded-launcher");
+    boolean ready = false, setup = false, dismissed = false, seedReady = false, player = false;
+    if (button != null) {
+      log("EMBEDDED_BOOTSTRAP_TAP x=" + button[0] + " y=" + button[1]);
+      shell("input tap " + button[0] + " " + button[1]);
+      ready = waitFor("KSFX READY bundle=embedded", 0, 60);
+    }
+    log("EMBEDDED_ASSET_READY=" + ready);
+    if (ready) {
+      shot("00-devmenu-before");
+      setup = waitFor("KSFX APP_SETUP_READY ", 0, 30);
+      log("APP_SETUP_READY=" + setup);
+      if (setup) dismissed = dismissDevMenu();
+      shot("00-devmenu-after");
+    }
+    log("EXPO_ONBOARDING_DISMISSED=" + dismissed);
+    if (dismissed) seedReady = initialSpicyFixture();
+    log("INITIAL_SEED_READY=" + seedReady);
+    for (int i = 0; seedReady && i < 30 && !player; i++) {
+      player = playerIdentity(ui.getRootInActiveWindow(), "spicy");
+      if (!player) sleep(500);
+    }
+    log("PLAYER_IDENTITY=" + player);
+    save("00-embedded-bootstrap.txt", "started=" + started + " embeddedButton=" + (button != null)
+      + " ready=" + ready + " appSetupReady=" + setup + " expoOnboardingDismissed=" + dismissed
+      + " seedReady=" + seedReady + " playerIdentity=" + player + "\n" + tree() + "\n" + rn());
+    return player;
+  }
+  private void settingsRouteEvidence() throws IOException {
+    boolean portrait = orient(UiAutomation.ROTATION_FREEZE_0);
+    for (String style : new String[] { "spicy", "amll" }) {
+      String prefix = "69-settings-" + style;
+      boolean seeded = fx(style);
+      boolean beforePlayer = seeded && playerIdentity(ui.getRootInActiveWindow(), style);
+      boolean nativeTarget = portrait && beforePlayer && targetedTap("seek", style, false);
+      shot(prefix + "-BEFORE");
+      boolean opened = launch("expolyrics://explore");
+      boolean settingsIdentity = false;
+      for (int i = 0; opened && i < 20 && !settingsIdentity; i++) {
+        AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+        settingsIdentity = findVisibleLabel(window, "Settings", false) != null
+          && (findVisibleLabel(window, "Playback source", false) != null
+            || findVisibleLabel(window, "Playback source", true) != null);
+        if (!settingsIdentity) sleep(500);
+      }
+      sleep(2000);
+      shot(prefix + "-DURING");
+      if (settingsIdentity) {
+        shell("input keyevent KEYCODE_BACK");
+        sleep(3000);
+      }
+      shot(prefix + "-AFTER-RETURN-RAW");
+      String returnTree = tree();
+      boolean returned = settingsIdentity && playerIdentity(ui.getRootInActiveWindow(), style)
+        && !returnTree.contains("text=Settings");
+      boolean rawReturnTarget = returned && targetedTap("seek", style, false);
+      save(prefix + "-raw-return-native.txt",
+        "positivePlayerIdentity=" + returned + " nativeWindowTargetTapBeforeReseed=" + rawReturnTarget
+        + "\n" + returnTree + "\n" + rn());
+      boolean afterAck = returned && fx(style);
+      boolean afterTarget = afterAck && targetedTap("seek", style, false);
+      shot(prefix + "-AFTER-RESEEDED");
+      boolean setup = nativeTarget && settingsIdentity && returned && rawReturnTarget && afterTarget;
+      save(prefix + "-evidence.txt",
+        "displayPortrait=" + portrait + " seeded=" + seeded + " beforePlayerIdentity=" + beforePlayer
+        + " nativeTargetBefore=" + nativeTarget + " opened=" + opened
+        + " settingsIdentity=" + settingsIdentity + " returned=" + returned
+        + " rawReturnNativeTargetBeforeReseed=" + rawReturnTarget + " afterAck=" + afterAck
+        + " nativeTargetAfterReseed=" + afterTarget
+        + "\nReview the screenshots for visible lyrics BEFORE and AFTER-RETURN-RAW and absence of lyric bleed DURING.\n" + rn());
+      step("settings-route-" + style, setup,
+        "native interaction and route identity setup=" + setup + "; visual review of BEFORE/DURING/AFTER-RETURN-RAW required");
+      if (!setup) failures.add("settings-route-" + style + ": evidence setup incomplete");
+    }
+  }
+  private void closePlayerMenu() throws IOException {
+    int[] close = findVisibleLabel(ui.getRootInActiveWindow(), "Close player menu", true);
+    if (close != null) {
+      shell("input tap " + close[0] + " " + close[1]);
+      sleep(1000);
+    }
+  }
+  private void footerStyleSwitchEvidence(boolean portrait) throws IOException {
+    closePlayerMenu();
+    boolean seeded = fx("credits");
+    shot("71-footer-spicy-BEFORE");
+    boolean initialLink = portrait && seeded && playerIdentity(ui.getRootInActiveWindow(), "credits")
+      && targetedTap("link", "credits", false);
+    boolean sequenceComplete = initialLink;
+    for (String style : new String[] { "amll", "spicy" }) {
+      String label = (style.equals("amll") ? "AMLL" : "Spicy Lyrics") + " lyrics renderer";
+      int[] menu = findVisibleLabel(ui.getRootInActiveWindow(), "Open player menu", true);
+      int[] option = null;
+      if (menu != null) {
+        shell("input tap " + menu[0] + " " + menu[1]);
+        sleep(1500);
+        option = findVisibleLabel(ui.getRootInActiveWindow(), label, true);
+      }
+      boolean selected = false;
+      if (option != null) {
+        shell("input tap " + option[0] + " " + option[1]);
+        sleep(2500);
+        selected = findVisibleLabel(ui.getRootInActiveWindow(), label + ", selected", true) != null;
+      }
+      shot("71-footer-menu-" + style);
+      closePlayerMenu();
+      shot("71-footer-" + style + "-AFTER-SWITCH");
+      boolean link = portrait && seeded && selected && playerIdentity(ui.getRootInActiveWindow(), "credits")
+        && targetedTap("link", style.equals("amll") ? "credits-amll" : "credits", false);
+      sequenceComplete = sequenceComplete && link;
+      step("credits-link-style-switch-" + style, sequenceComplete,
+        "initial footer tap=" + initialLink + " selected=" + selected + " same-track footer tap=" + link
+        + "; visual review of 71-footer PNGs required");
+    }
   }
   private void step(String name, boolean evidence, String note) {
     if (!evidence && (name.equals("cold-launch") || name.startsWith("state-") || name.startsWith("seek-tap-") || name.startsWith("credits-link-") || name.equals("orientation-portrait"))) failures.add(name + ": " + note); summary.append(name).append(" | executed=").append(evidence).append(" | ").append(note).append("\n"); log("STEP " + name + " executed=" + evidence + " " + note); }
@@ -202,10 +409,11 @@ public final class FullAppRunner extends Instrumentation {
       for (String k : new String[] { "animator_duration_scale", "transition_animation_scale", "window_animation_scale" }) shell("settings put global " + k + " 1");
       shell("settings put system accelerometer_rotation 0; settings put system font_scale 1.0; input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard");
       shell("logcat -b all -c");
-      boolean up = launch("expolyrics://"); sleep(1500); appPid();
-      boolean ready = waitFor("KSFX READY", 0, 60);
-      step("cold-launch", up && ready, "am start ok=" + up + " JS READY marker=" + ready);
+      boolean up = bootstrapEmbeddedBundle(); sleep(1500); appPid();
+      step("cold-launch", up, "See 00-embedded-bootstrap.txt for launch, readiness, and player evidence");
       shot("00-launch");
+      if (!up) throw new IOException("Embedded fixture bootstrap failed; no UI scenarios executed");
+      settingsRouteEvidence();
       // fixture states
       String[] states = { "spicy", "amll", "cjk", "cjk-amll", "loading", "instrumental", "nolyrics" };
       for (String s : states) { boolean a = fx(s); shot("10-" + s); step("state-" + s, a, "fixture ack=" + a + "; screenshot 10-" + s + ".png needs visual review"); }
@@ -282,6 +490,7 @@ public final class FullAppRunner extends Instrumentation {
         if (spicy != null) { shell("input tap " + spicy[0] + " " + spicy[1]); sleep(3000); shot("70-menu-spicy"); }
       }
       step("settings-renderer-switch", sw, "menu found=" + (menu != null) + " AMLL selected state in a11y dump=" + sw);
+      footerStyleSwitchEvidence(settingsDisplayPortrait);
       // final
       String lc = shell("logcat -d -v threadtime");
       save("logcat-full.txt", lc); save("logcat-reactnativejs.txt", rn());
