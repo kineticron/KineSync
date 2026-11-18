@@ -203,9 +203,11 @@ internal class RustOwner(
     if (handle == 0L) {
       val logAbi = takeDiag(Diag.ABI)
       if (logAbi) logDiag("owner.abi enter")
-      val abi = RustBridge.abiVersion()
-      if (logAbi) logDiag("owner.abi exit actual=$abi expected=11")
-      if (abi != 11) { failed = true; emit(mapOf("state" to "error", "message" to "Rust ABI mismatch")); return }
+      if (RustBridge.abiVersion() != 11) {
+        if (logAbi) logDiag("owner.abi exit mismatch expected=11")
+        failed = true; emit(mapOf("state" to "error", "message" to "Rust ABI mismatch")); return
+      }
+      if (logAbi) logDiag("owner.abi exit=11")
       val s = Surface(texture)
       surface = s
       val logCreate = takeDiag(Diag.CREATE)
