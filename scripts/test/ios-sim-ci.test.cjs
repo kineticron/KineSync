@@ -9,10 +9,12 @@ const device = require('../ios-dev-ci/ci.cjs');
 const simConfig = require('../ios-sim-ci/config.json');
 const { withEmbeddedDevClient, DEV_CLIENT_OPTIONS } = require('../ios-sim-ci/prepare-app-config.cjs');
 const { EXPECTED, MARKER, patch } = require('../ios-sim-ci/patch-dev-launcher.cjs');
+const { JS_MARKERS, missingJsMarkers } = require('../ios-sim-ci/link-proof.cjs');
 const { matchesAbi } = require('../ios-sim-ci/rust-sim.cjs');
 const { matchOnboarding } = require('../ios-sim-ci/simulator-smoke.cjs');
 const repo = path.resolve(__dirname, '../..');
 const workflow = fs.readFileSync(path.join(repo, '.github/workflows/ios-simulator-build.yml'), 'utf8');
+const rendererBundleMarkers = ['KineSyncRustLyrics', 'abiVersion', 'trackJson', 'setAnchor'];
 const identity = { xcode: 'Xcode 27.0\nBuild version 27A1', sdk: '27.0', sdkBuild: '27A1', runnerArch: 'ARM64', pod: '1.16.2', ccache: '4.13' };
 
 function temp(t) {
@@ -134,6 +136,9 @@ test('simulator uses Debug and the native mobile loader requires ABI 11', () => 
   assert.equal(moduleConfig.apple.debugOnly, true);
   assert.match(view, /if \(Platform\.OS !== 'ios' && Platform\.OS !== 'android'\) return \{ api: null, view: null/);
   assert.match(view, /if \(!api \|\| api\.abiVersion\(\) !== 11\) return \{ api: null, view: null/);
+  assert.match(view, /requireNativeViewManager<Props>\('KineSyncRustLyrics'\)/);
+  assert.match(view, /<NativeView\b[^>]*\btrackJson=\{payload\.json\}/);
+  assert.match(view, /native\.current\.setAnchor\(JSON\.stringify\(command\)\)/);
   assert.equal(simConfig.configuration, 'Debug');
 });
 
@@ -153,7 +158,7 @@ function fakeSimulatorApp(root) {
   put(app, 'KineSync', Buffer.from('cffaedfe00000000', 'hex'));
   put(app, 'PlugIns/KineSyncLyricsWidget.appex/Info.plist', plist('dev.kineticron.KineSync.KineSyncLyricsWidget', 'KineSyncLyricsWidget'));
   put(app, 'PlugIns/KineSyncLyricsWidget.appex/KineSyncLyricsWidget', Buffer.from('cffaedfe00000000', 'hex'));
-  put(app, 'main.jsbundle', 'KineSync kinesync_use_rust_renderer Use experimental Rust lyrics renderer RustLyricsView ' + 'x'.repeat(100001));
+  put(app, 'main.jsbundle', rendererBundleMarkers.join(' ') + ' ' + 'x'.repeat(100001));
   fs.chmodSync(path.join(app, 'KineSync'), 0o755);
   fs.chmodSync(path.join(app, 'PlugIns/KineSyncLyricsWidget.appex/KineSyncLyricsWidget'), 0o755);
   return app;
@@ -176,8 +181,21 @@ test('independent simulator verifier rejects device, thin-foreign or missing bun
   const result = JSON.parse(ok.stdout);
   assert.equal(result.architectures.length, 2);
   assert.equal(result.js_bundles[0].bytes > 100000, true);
+  assert.deepEqual(JS_MARKERS, rendererBundleMarkers);
+  assert.deepEqual(result.js_bundles[0].markers, rendererBundleMarkers);
+  assert.deepEqual(missingJsMarkers(fs.readFileSync(path.join(app, 'main.jsbundle'))), []);
   const device = run({ TEST_PLATFORM: 'IOS' }); assert.equal(device.status, 1); assert.match(device.stderr, /IOSSIMULATOR/);
   const foreign = run({ TEST_ARCHS: 'x86_64' }); assert.equal(foreign.status, 1); assert.match(foreign.stderr, /Non-arm64/);
+  const obsoleteMarkers = 'KineSync kinesync_use_rust_renderer Use experimental Rust lyrics renderer RustLyricsView';
+  for (const marker of rendererBundleMarkers) {
+    const partial = rendererBundleMarkers.filter(value => value !== marker);
+    const bytes = Buffer.from([...partial, obsoleteMarkers, 'x'.repeat(100001)].join(' '));
+    put(app, 'main.jsbundle', bytes);
+    assert.deepEqual(missingJsMarkers(bytes), [marker]);
+    const rejected = run();
+    assert.equal(rejected.status, 1);
+    assert.ok(rejected.stderr.includes(`Embedded JS bundle main.jsbundle lacks ['${marker}']`), rejected.stderr);
+  }
   fs.unlinkSync(path.join(app, 'main.jsbundle'));
   const missing = run(); assert.equal(missing.status, 1); assert.match(missing.stderr, /No embedded .jsbundle/);
 });
@@ -322,16 +340,15 @@ test('real pinned Rust thin-LTO simulator archive exposes the expected ABI instr
 });
 
 test('actual locked Hermes bytecode retains ASCII and UTF-16 markers in the packaged bundle', { skip: process.env.KINESYNC_SIM_NATIVE_TOOLS_TEST !== '1' }, t => {
-  const { JS_MARKERS, missingJsMarkers } = require('../ios-sim-ci/link-proof.cjs');
   const root = temp(t), app = fakeSimulatorApp(root), bin = fakeXcrun(root);
   const compiler = process.env.KINESYNC_HERMESC || path.join(repo, 'ExpoLyrics/node_modules/hermes-compiler/hermesc', process.platform === 'darwin' ? 'osx-bin' : 'linux64-bin', 'hermesc');
   const source = path.join(root, 'input.js'), output = path.join(app, 'main.jsbundle');
   for (const unicode of [false, true]) {
-    fs.writeFileSync(source, `globalThis.proof = ${JSON.stringify(JS_MARKERS.map(marker => (unicode ? '語' : '') + marker + 'x'.repeat(60000)))};`);
+    fs.writeFileSync(source, `globalThis.proof = ${JSON.stringify(rendererBundleMarkers.map(marker => (unicode ? '語' : '') + marker + 'x'.repeat(60000)))};`);
     execFileSync(compiler, ['-emit-binary', '-out', output, source]);
     const bytes = fs.readFileSync(output);
     assert.deepEqual(missingJsMarkers(bytes), []);
-    assert.equal(bytes.includes(Buffer.from(JS_MARKERS[1], unicode ? 'utf16le' : 'utf8')), true);
+    assert.equal(bytes.includes(Buffer.from(rendererBundleMarkers[0], unicode ? 'utf16le' : 'utf8')), true);
     const result = spawnSync('python3', [path.join(repo, 'scripts/ios-sim-ci/verify_simulator.py'), '--app', app, '--bundle-id', 'dev.kineticron.KineSync'], { encoding: 'utf8', env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH } });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).js_bundles[0].sha256.length, 64);

@@ -16,7 +16,8 @@ import subprocess
 import sys
 
 MAGIC = {bytes.fromhex(value) for value in ['cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca']}
-MARKERS = ['KineSync', 'kinesync_use_rust_renderer', 'Use experimental Rust lyrics renderer', 'RustLyricsView']
+# Expo native module name, ABI method, native view input and playback command.
+MARKERS = ['KineSyncRustLyrics', 'abiVersion', 'trackJson', 'setAnchor']
 EXTENSION = 'KineSyncLyricsWidget.appex'
 
 

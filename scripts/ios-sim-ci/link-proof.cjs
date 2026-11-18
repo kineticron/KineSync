@@ -5,7 +5,8 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { symbols, inspectFonts } = require('./rust-sim.cjs');
 const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const JS_MARKERS = ['KineSync', 'kinesync_use_rust_renderer', 'Use experimental Rust lyrics renderer', 'RustLyricsView'];
+// Expo native module name, ABI method, native view input and playback command.
+const JS_MARKERS = ['KineSyncRustLyrics', 'abiVersion', 'trackJson', 'setAnchor'];
 function missingJsMarkers(data) {
   return JS_MARKERS.filter(marker => !data.includes(Buffer.from(marker, 'utf8')) && !data.includes(Buffer.from(marker, 'utf16le')));
 }
