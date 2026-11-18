@@ -29,6 +29,18 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private val textureView = TextureView(context)
   private var owner: RustOwner? = null
   private var texture: SurfaceTexture? = null
+  // TextureView and frame callbacks report on the UI thread.
+  private enum class Diag {
+    INIT, ATTACH, DETACH, WINDOW, LAYOUT, SIZE, AVAILABLE, RESIZE, DESTROY, UPDATED, OWNER_CREATE,
+    REFRESH_REJECT, REFRESH_NO_OWNER, REFRESH_UPDATE, PRESENTATION,
+    DRAW_GATE, DRAW_BUSY, DRAW_REQUEST, DRAW_RESULT, DRAW_FAILURE, STATUS
+  }
+  private val diagCounts = IntArray(Diag.entries.size)
+  private var diagUpdatedSession = -1L
+  private var diagPresentationFlags = -1
+  private var diagPresentationSession = -1L
+  private var diagPresentationGeneration = -1L
+  private var diagDisplayedGeneration = -2L
 
   private var session = 0L
   private var generation = 0L
@@ -99,6 +111,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   companion object { private val retryDelays = longArrayOf(100, 200, 400, 800) }
 
   init {
+    diag(Diag.INIT) { "view.init" }
     clipChildren = true
     setBackgroundColor(Color.TRANSPARENT)
     textureView.isOpaque = false
@@ -107,11 +120,25 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
   }
 
+  private inline fun diag(event: Diag, limit: Int = 8, st: SurfaceTexture? = texture, details: () -> String) {
+    val index = event.ordinal
+    if (diagCounts[index] >= limit) return
+    diagCounts[index]++
+    logRustDiag("view=${System.identityHashCode(this)} textureView=${System.identityHashCode(textureView)} " +
+      "texture=${System.identityHashCode(st)} owner=${System.identityHashCode(owner)} " +
+      "session=$session generation=$generation ${details()}")
+  }
+
+  private fun diagSurfaceState() = "available=${textureView.isAvailable} size=${width}x$height " +
+    "textureSize=${textureView.width}x${textureView.height} ownerPresent=${owner != null} " +
+    "attached=$attached foreground=$foreground enabled=$enabled failed=$failed surfaceWaiting=$surfaceWaiting"
+
   // React Native does not lay out natively added children; size the texture to this view.
   override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
     val w = r - l; val h = b - t
     textureView.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
     textureView.layout(0, 0, w, h)
+    diag(Diag.LAYOUT) { "view.layout changed=$changed layout=${w}x$h ${diagSurfaceState()}" }
   }
 
   // Observe touches without consuming them so JS keeps tap and hold classification.
@@ -166,11 +193,13 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     attached = true; foreground = windowVisibility == VISIBLE
+    diag(Diag.ATTACH) { "view.attach ${diagSurfaceState()}" }
     markDirty(); refresh(); lifecycle()
   }
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
     attached = false
+    diag(Diag.DETACH) { "view.detach ${diagSurfaceState()}" }
     updatePresentationVisibility()
     velocity?.recycle(); velocity = null; dragging = false
     Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
@@ -181,11 +210,13 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   override fun onWindowVisibilityChanged(visibility: Int) {
     super.onWindowVisibilityChanged(visibility)
     foreground = visibility == VISIBLE
+    diag(Diag.WINDOW) { "view.windowVisibility visibility=$visibility ${diagSurfaceState()}" }
     if (foreground) { markDirty(); refresh() }
     lifecycle()
   }
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
+    diag(Diag.SIZE) { "view.size old=${oldw}x$oldh new=${w}x$h ${diagSurfaceState()}" }
     markDirty(); refresh(); lifecycle()
   }
 
@@ -193,14 +224,21 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
     texture = st
     session++
+    diag(Diag.AVAILABLE, st = st) { "surface.available callbackSize=${w}x$h ${diagSurfaceState()}" }
     val epoch = session
     displayedGeneration = -1L
     failed = false; updatePresentationVisibility(); markDirty()
+    diag(Diag.OWNER_CREATE, 16) { "view.owner create.enter" }
     owner = RustOwner(context, st) { event -> handleEvent(event, epoch) }
+    diag(Diag.OWNER_CREATE, 16) { "view.owner create.exit" }
     refresh(); lifecycle()
   }
-  override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) { markDirty(); refresh(); lifecycle() }
+  override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+    diag(Diag.RESIZE, st = st) { "surface.resize callbackSize=${w}x$h ${diagSurfaceState()}" }
+    markDirty(); refresh(); lifecycle()
+  }
   override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+    diag(Diag.DESTROY, st = st) { "surface.destroy ${diagSurfaceState()}" }
     Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
     cancelRetry(); cancelCue()
     val o = owner
@@ -212,7 +250,12 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     // Owner releases the texture after kr_destroy, so the view must not.
     return false
   }
-  override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+  override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+    if (diagUpdatedSession != session) {
+      diagUpdatedSession = session
+      diag(Diag.UPDATED, st = st) { "surface.firstUpdate ${diagSurfaceState()}" }
+    }
+  }
 
   private fun handleEvent(event: Map<String, Any?>, epoch: Long) {
     if (session != epoch || (event["generation"] as? Long) != generation) return
@@ -237,6 +280,14 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
       }
       if (event["state"] == "ready") { markDirty(); lifecycle() }
+      diag(Diag.STATUS, 16) {
+        val state = when (event["state"]) {
+          "error" -> "error"
+          "ready" -> "ready"
+          else -> "other"
+        }
+        "view.status state=$state"
+      }
       onStatus(event)
     }
   }
@@ -271,6 +322,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         j.getBoolean("playing"), j.getDouble("rate"), j.getBoolean("snap"))
     } catch (_: Exception) {
       failed = true; updatePresentationVisibility(); lifecycle()
+      diag(Diag.STATUS, 16) { "view.status state=error source=anchorValidation" }
       onStatus(mapOf("state" to "error", "generation" to generation, "message" to "Invalid Rust playback anchor"))
       return
     }
@@ -310,6 +362,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     return true
   }
   private fun emitRecapturedFollow() {
+    diag(Diag.STATUS, 16) { "view.status state=follow" }
     onStatus(mapOf("state" to "follow", "generation" to generation,
       "ownershipEpoch" to ownershipEpoch,
       "message" to "Auto-follow resumed near the active line"))
@@ -365,9 +418,16 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   }
 
   private fun refresh() {
-    if (!attached || !foreground || !enabled || failed) return
-    val o = owner ?: return
+    if (!attached || !foreground || !enabled || failed) {
+      diag(Diag.REFRESH_REJECT) { "view.refresh rejected=lifecycle ${diagSurfaceState()}" }
+      return
+    }
+    val o = owner ?: run {
+      diag(Diag.REFRESH_NO_OWNER) { "view.refresh rejected=noOwner ${diagSurfaceState()}" }
+      return
+    }
     val d = density
+    diag(Diag.REFRESH_UPDATE) { "view.refresh ownerUpdate size=${width}x$height trackChars=${track.length}" }
     o.update(track, generation, anchor, width, height, d)
     o.setFollowing(following)
   }
@@ -378,6 +438,27 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val presentable = attached && foreground && enabled && !failed && !surfaceWaiting &&
       owner != null && displayedGeneration == generation
     textureView.alpha = if (presentable) 1f else 0f
+    if (diagCounts[Diag.PRESENTATION.ordinal] < 24) {
+      var flags = 0
+      if (textureView.isAvailable) flags = flags or 1
+      if (owner != null) flags = flags or 2
+      if (attached) flags = flags or 4
+      if (foreground) flags = flags or 8
+      if (enabled) flags = flags or 16
+      if (failed) flags = flags or 32
+      if (surfaceWaiting) flags = flags or 64
+      if (flags != diagPresentationFlags || session != diagPresentationSession ||
+        generation != diagPresentationGeneration || displayedGeneration != diagDisplayedGeneration) {
+        diagPresentationFlags = flags
+        diagPresentationSession = session
+        diagPresentationGeneration = generation
+        diagDisplayedGeneration = displayedGeneration
+        diag(Diag.PRESENTATION, 24) {
+          "view.presentation alpha=${textureView.alpha} presentable=$presentable " +
+            "displayedGeneration=$displayedGeneration ${diagSurfaceState()}"
+        }
+      }
+    }
   }
 
   private fun lifecycle() {
@@ -438,7 +519,12 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
 
   private fun tick(frameNs: Long) {
     callbacks++
-    if (!attached || !foreground || !enabled || failed || retryBlocked || retryWork != null) { inactive++; lifecycle(); return }
+    if (!attached || !foreground || !enabled || failed || retryBlocked || retryWork != null) {
+      diag(Diag.DRAW_GATE) {
+        "view.draw denied=lifecycle retryBlocked=$retryBlocked retryPending=${retryWork != null} ${diagSurfaceState()}"
+      }
+      inactive++; lifecycle(); return
+    }
     if (previousFrameNs > 0) {
       val gap = frameNs - previousFrameNs
       intervalMs = gap / 1e6
@@ -448,14 +534,21 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val periodNs = (1e9 / (display?.refreshRate?.toDouble() ?: 60.0)).toLong()
     previousStepNs = periodNs
     // Keep the loop alive for the next vsync while work is pending.
-    if (busy) { busyCallbacks++; repost(); return }
+    if (busy) {
+      diag(Diag.DRAW_BUSY, 4) { "view.draw waitingForWorker submitted=$submitted callbacks=$callbacks" }
+      busyCallbacks++; repost(); return
+    }
     if (!dirty && !animating) { idle++; lifecycle(); return }
-    val o = owner ?: run { inactive++; return }
+    val o = owner ?: run {
+      diag(Diag.DRAW_GATE) { "view.draw denied=noOwner ${diagSurfaceState()}" }
+      inactive++; return
+    }
     busy = true; dirty = false; submitted++
     val epoch = session
     val requestedRevision = frameRevision
     val resumeStepMs = if (resumePending) periodNs / 1e6 else 0.0
     resumePending = false
+    diag(Diag.DRAW_REQUEST) { "view.draw request=$submitted revision=$requestedRevision" }
     o.draw((frameNs + periodNs) / 1e6, resumeStepMs) { r -> onFrame(r, epoch, requestedRevision, resumeStepMs) }
     repost()
   }
@@ -465,6 +558,10 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   }
 
   private fun onFrame(r: FrameResult, epoch: Long, requestedRevision: Long, resumeStepMs: Double) {
+    diag(if (r.status != 0) Diag.DRAW_FAILURE else Diag.DRAW_RESULT) {
+      "view.draw result=${r.status} resultSession=$epoch resultGeneration=${r.generation} " +
+        "requestedRevision=$requestedRevision currentRevision=$frameRevision"
+    }
     if (session != epoch) return
     busy = false
     if (r.status == 0) presentCalls++
@@ -482,6 +579,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
         retryCount = 0
         if (surfaceWaiting || displayedGeneration != r.generation) {
           surfaceWaiting = false; displayedGeneration = r.generation
+          diag(Diag.STATUS, 16) { "view.status state=presented" }
           onStatus(mapOf("state" to "presented", "generation" to r.generation, "message" to "Rust submitted a present call for the current track"))
         }
       }
@@ -498,6 +596,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     dirty = true
     if (retryCount >= retryDelays.size) {
       retryBlocked = true; surfaceWaiting = true; updatePresentationVisibility()
+      diag(Diag.STATUS, 16) { "view.status state=waiting retries=$retryCount" }
       onStatus(mapOf("state" to "waiting", "generation" to generation,
         "message" to "Rust surface unavailable after bounded retries. Resume, seek, resize or recreate to retry."))
       return
