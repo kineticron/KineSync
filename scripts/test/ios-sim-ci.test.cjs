@@ -100,7 +100,7 @@ test('Rust ABI instruction matcher accepts ABI 11 and rejects other constants', 
   assert.equal(matchesAbi('_other:\n  mov w0, #0xb\n  ret'), false);
 });
 
-test('source gates justify Debug and the ABI stays 11 everywhere', () => {
+test('simulator uses Debug and the native mobile loader requires ABI 11', () => {
   const rust = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/ffi.rs'), 'utf8');
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
@@ -109,7 +109,8 @@ test('source gates justify Debug and the ABI stays 11 everywhere', () => {
   assert.match(swift, /kr_abi_version\(\) == 11/);
   assert.equal(simConfig.rust.abi, 11);
   assert.equal(moduleConfig.apple.debugOnly, true);
-  assert.match(view, /if \(!__DEV__\) return \{ api: null, view: null/);
+  assert.match(view, /if \(Platform\.OS !== 'ios' && Platform\.OS !== 'android'\) return \{ api: null, view: null/);
+  assert.match(view, /if \(!api \|\| api\.abiVersion\(\) !== 11\) return \{ api: null, view: null/);
   assert.equal(simConfig.configuration, 'Debug');
 });
 
@@ -172,7 +173,10 @@ test('simulator app ZIP preserves executable modes and refuses overwrite', t => 
 
 test('workflow has pinned actions, isolated caches and a mandatory offline UI smoke', () => {
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /branches: \[development\]/);
+  const pushTrigger = workflow.match(/^  push:\r?\n([\s\S]*?)(?=^  \S)/m)?.[1];
+  assert.ok(pushTrigger, 'expected a push trigger');
+  assert.match(pushTrigger, /^    branches: \[development, revyl-ios-regression-20261118\]$/m);
+  assert.doesNotMatch(pushTrigger, /^    paths(?:-ignore)?\s*:/m);
   assert.match(workflow, /runs-on: xcode-27/);
   assert.match(workflow, /actions\/checkout@[a-f0-9]{40}/);
   assert.match(workflow, /actions\/setup-node@[a-f0-9]{40}/);

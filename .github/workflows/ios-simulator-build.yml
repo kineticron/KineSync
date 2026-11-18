@@ -3,16 +3,7 @@ name: iOS simulator build
 
 on:
   push:
-    branches: [development]
-    paths:
-      - '.github/workflows/ios-simulator-build.yml'
-      - 'scripts/ios-sim-ci/**'
-      - 'scripts/test/ios-sim-ci.test.cjs'
-      - 'ExpoLyrics/**'
-      - 'native/lyrics-renderer/**'
-      - 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml'
-      - '.cargo/**'
-      - 'rust-toolchain*'
+    branches: [development, revyl-ios-regression-20261118]
   workflow_dispatch:
     inputs:
       cache_mode:
