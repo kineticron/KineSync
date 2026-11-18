@@ -250,6 +250,11 @@ impl FollowScroll {
         self.explicit_snap
     }
 
+    pub(crate) fn set_manual_bounds(&mut self, max_offset: f64, viewport: f64) {
+        self.max_offset = max_offset.max(0.0);
+        self.viewport = viewport.max(1.0);
+    }
+
     /// Restore a mapped manual viewport after replacing same-track geometry.
     /// Ownership stays manual, but old-layout momentum must not cross layouts.
     pub(crate) fn restore_manual(&mut self, position: f64, max: f64, viewport: f64) {

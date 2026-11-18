@@ -7,7 +7,7 @@ use crate::{
     typography::{Fonts, Style},
 };
 
-fn track(style: Style, width: u32, height: u32, scale: f32) -> TrackScene {
+pub(crate) fn track(style: Style, width: u32, height: u32, scale: f32) -> TrackScene {
     track_variant(style, width, height, scale, false)
 }
 
@@ -94,7 +94,12 @@ fn assert_footer(track: &TrackScene, scroll: f64, time: f64) {
 
 #[test]
 fn credits_switch_preserves_manual_footer_and_fresh_follow_at_exact_fixture_end() {
-    for (width, height, scale) in [(390, 640, 1.0), (560, 320, 1.0), (720, 1100, 2.0)] {
+    for (width, height, scale) in [
+        (390, 640, 1.0),
+        (560, 320, 1.0),
+        (720, 1100, 2.0),
+        (900, 1329, 1.5),
+    ] {
         for time in [49_599.0, 49_600.0, 51_600.0] {
             for following in [true, false] {
                 let mut spicy = track(Style::Spicy, width, height, scale);
@@ -105,7 +110,20 @@ fn credits_switch_preserves_manual_footer_and_fresh_follow_at_exact_fixture_end(
                 scroll.sample(&command, 1000.0, true);
                 if !following {
                     // Exact preceding maker tap: no drag, ownership becomes manual.
-                    scroll.sample(&command, 1100.0, false);
+                    let before_tap = scroll.position();
+                    scroll.set_manual_bounds(spicy.max_scroll(), f64::from(spicy.height));
+                    for frame in 0..10 {
+                        let after_tap =
+                            scroll.sample(&command, 1016.0 + f64::from(frame) * 16.0, false);
+                        assert_eq!(
+                            after_tap, before_tap,
+                            "a tap must leave the viewport in place"
+                        );
+                        assert!(
+                            !scroll.animating(),
+                            "a valid offset must not start a rebound"
+                        );
+                    }
                 }
                 if time >= 49_600.0 {
                     assert_footer(&spicy, scroll.position(), time);

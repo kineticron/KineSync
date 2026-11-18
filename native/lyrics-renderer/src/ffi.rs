@@ -69,7 +69,10 @@ struct Engine {
     layout_key: String,
     track_id: String,
     layout_cache: crate::scene::LayoutCache,
+    #[cfg(not(test))]
     surface: SurfaceRenderer,
+    #[cfg(test)]
+    surface: TestSurface,
     scene: vello::Scene,
     scale: f32,
     metrics: Metrics,
@@ -80,6 +83,26 @@ struct Engine {
     /// Inactive-line blur strength. Manual ownership makes every line sharp.
     /// Re-engaging follow eases this back to one so blur cannot snap on.
     blur: BlurRamp,
+}
+
+// Host tests can register real engines for CPU-only ABI calls without a native window.
+#[cfg(test)]
+struct TestSurface(Option<SurfaceRenderer>);
+
+#[cfg(test)]
+impl std::ops::Deref for TestSurface {
+    type Target = SurfaceRenderer;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("test engine has no native surface")
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for TestSurface {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("test engine has no native surface")
+    }
 }
 
 /// Blur restoration is deliberately one-way and time based. Manual ownership
@@ -289,7 +312,10 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                         gpu_interval_ms: -1.0,
                         ..Metrics::default()
                     },
+                    #[cfg(not(test))]
                     surface,
+                    #[cfg(test)]
+                    surface: TestSurface(Some(surface)),
                 })
             })();
             match result {
@@ -716,6 +742,16 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_set_following(handle: u64, following: bool) -> i32 {
     with(handle, |engine| {
+        // A footer tap can take manual ownership without a drag or fling.
+        // Retain the current offset within the live scene's scroll bounds.
+        if engine.following
+            && !following
+            && let Some(layout) = &engine.layout
+        {
+            engine
+                .scroll
+                .set_manual_bounds(layout.max_scroll(), f64::from(layout.height));
+        }
         engine.following = following;
         if following {
             engine.scroll.resume_follow();
@@ -1127,6 +1163,80 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credits_switch_ffi_follow_disable_keeps_the_maker_viewport() {
+        use crate::{credits_switch_tests::track, typography::Style};
+
+        const HANDLE: u64 = u64::MAX - 1;
+        let (width, height, scale) = (900, 1329, 1.5);
+        let time = 51_600.0;
+        let mut layout = track(Style::Spicy, width, height, scale);
+        layout.prepare(time).unwrap();
+        let mut timeline = Timeline::default();
+        assert!(timeline.replace(1));
+        assert!(
+            timeline
+                .anchor(1, 1, time, 1000.0, 1000.0, false, 1.0)
+                .unwrap()
+        );
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, f64::from(scale), layout.lines.len());
+        let command = layout.scroll_command(time, 0.0);
+        let before_tap = scroll.sample(&command, 1000.0, true);
+        assert!(before_tap > 0.0 && before_tap <= layout.max_scroll());
+        let engine = Engine {
+            timeline,
+            lines: layout.lines.clone(),
+            fonts: crate::typography::Fonts::default(),
+            settings: None,
+            credits: None,
+            empty: None,
+            empty_scene: None,
+            overlay: vello::Scene::new(),
+            layout: Some(layout),
+            layout_key: String::new(),
+            track_id: "fx-track-credits".into(),
+            layout_cache: crate::scene::LayoutCache::default(),
+            surface: TestSurface(None),
+            scene: vello::Scene::new(),
+            scale,
+            metrics: Metrics {
+                width,
+                height,
+                position_ms: time,
+                generation: 1,
+                ..Metrics::default()
+            },
+            scroll,
+            appearance: crate::appearance::AppearanceState::default(),
+            following: true,
+            blur: BlurRamp::default(),
+        };
+        let previous = engines().lock().unwrap().insert(HANDLE, engine);
+        assert!(previous.is_none());
+
+        let status = kr_set_following(HANDLE, false);
+        let sampled = with(HANDLE, |engine| {
+            assert!(!engine.following);
+            let layout = engine.layout.as_ref().unwrap();
+            for frame in 0..10 {
+                let native_ms = 1016.0 + f64::from(frame) * 16.0;
+                let command = layout.scroll_command(
+                    engine.timeline.position(native_ms),
+                    engine.scroll.position(),
+                );
+                let offset = engine.scroll.sample(&command, native_ms, engine.following);
+                assert_eq!(offset, before_tap);
+                assert!(!engine.scroll.animating());
+            }
+            Ok(0)
+        });
+        assert_eq!(kr_destroy(HANDLE), 0);
+        assert_eq!(status, 0);
+        assert_eq!(sampled, 0);
+    }
+
     #[test]
     fn abi_v11_metrics_layout_matches_header() {
         assert_eq!(kr_abi_version(), 11);
