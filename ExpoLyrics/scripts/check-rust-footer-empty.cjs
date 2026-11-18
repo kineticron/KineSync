@@ -14,6 +14,9 @@ const timingSource = buildSync({ entryPoints: [path.join(app, 'lib/lyrics-timing
   tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
 const timing = { exports: {} };
 vm.runInNewContext(timingSource, { module: timing, exports: timing.exports, require, Intl });
+const staticSource = buildSync({ entryPoints: [path.join(app, 'components/lyrics/rust/static-lyrics-view.tsx')],
+  bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false,
+  external: ['react', 'react-native'], tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
 const compiled = transformSync(fs.readFileSync(path.join(app, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
 let state;
 let gesture;
@@ -41,7 +44,11 @@ const imports = {
   '@/lib/lyrics-arrival-trace': { arrivalHandle: () => undefined },
 };
 const mod = { exports: {} };
-vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: id => { assert.ok(imports[id], id); return imports[id]; }, __DEV__: true, performance, console });
+const staticView = { exports: {} };
+const requireStub = id => { assert.ok(imports[id], id); return imports[id]; };
+vm.runInNewContext(staticSource, { module: staticView, exports: staticView.exports, require: requireStub, Intl, performance });
+imports['./static-lyrics-view'] = staticView.exports;
+vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: requireStub, __DEV__: true, performance, console });
 function nodes(node) {
   if (node == null || typeof node !== 'object') return [];
   if (Array.isArray(node)) return node.flatMap(nodes);
@@ -56,9 +63,14 @@ assert.equal(timing.exports.shouldHideTimedRenderer([staticLine], 'spicy-lyrics-
 assert.equal(timing.exports.shouldHideTimedRenderer([partialLine, staticLine], 'spicy-lyrics-syllable', undefined), false, 'one valid line keeps partial timing usable');
 assert.equal(timing.exports.selectTimedLyricLines([partialLine, staticLine]).length, 1, 'invalid rows are filtered from partial timing');
 state = { ...initial, lyrics: [staticLine], lyricsSource: 'spicy-lyrics-static' };
-const staticPacket = JSON.parse(render().find(n => n.type === 'NativeView').props.trackJson);
-assert.equal(staticPacket.lines.length, 0, 'static Spicy text must not enter the Rust payload');
-assert.equal(staticPacket.empty.title, 'Plain lyrics available');
+const staticRender = render();
+const plainView = staticRender.find(n => n.type === staticView.exports.StaticLyricsView);
+assert.ok(plainView, 'static Spicy lyrics use the React Native view');
+assert.equal(plainView.props.lines, state.lyrics);
+assert.ok(!staticRender.some(n => n.type === 'NativeView'), 'static Spicy lyrics do not mount the Rust surface');
+const plainContent = nodes(plainView.type(plainView.props));
+assert.equal(plainContent[0].type, 'ScrollView');
+assert.ok(plainContent.some(n => n.type === 'Text' && n.props.children === 'Plain text'));
 state = { ...initial, lyrics: [partialLine, staticLine], lyricsSource: 'spicy-lyrics-syllable' };
 const partialPacket = JSON.parse(render().find(n => n.type === 'NativeView').props.trackJson);
 assert.ok(partialPacket.lines.length > 0, 'partial timed data remains renderable');

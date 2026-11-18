@@ -120,6 +120,7 @@ const imports = {
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },
   '@/lib/lyrics-timing': timing.exports,
   '@/lib/lyrics-arrival-trace': { arrivalHandle: () => undefined },
+  './static-lyrics-view': { StaticLyricsView: 'StaticLyricsView' },
 };
 const mod = { exports: {} };
 vm.runInNewContext(compiled, { module: mod, exports: mod.exports, require: id => { assert.ok(imports[id], id); return imports[id]; }, __DEV__: true, performance, console });

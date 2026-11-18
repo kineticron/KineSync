@@ -12,6 +12,7 @@ import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
 import { arrivalEvent, arrivalHandle, arrivalSpan } from '@/lib/lyrics-arrival-trace';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 import { selectTimedLyricLines, shouldHideTimedRenderer } from '@/lib/lyrics-timing';
+import { getStaticLineText, StaticLyricsView } from './static-lyrics-view';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number };
 type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
@@ -61,12 +62,12 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const arrival = __DEV__ ? arrivalHandle(rawLyrics) : undefined;
   const metadata = usePlaybackStore(state => isDemo ? null : state.lyricsMetadata);
   const lyricsSource = usePlaybackStore(state => isDemo ? '' : state.lyricsSource);
-  // The Rust surface is a timed renderer. Plain text stays in the packet for
-  // other consumers but must never reach this payload, even when an older
-  // provider result lacks the untimed flag.
+  // Plain lyrics use the raw store rows, including older provider results
+  // that lack the untimed flag.
   const timedLyrics = useMemo(() => selectTimedLyricLines(rawLyrics), [rawLyrics]);
   const untimed = shouldHideTimedRenderer(rawLyrics, lyricsSource, metadata?.untimed) ||
     (rawLyrics.length > 0 && !timedLyrics.length);
+  const showStaticLyrics = useMemo(() => untimed && rawLyrics.some(getStaticLineText), [rawLyrics, untimed]);
   const lyrics = useMemo(() => untimed ? [] : timedLyrics, [timedLyrics, untimed]);
   const credits = useMemo(() => {
     const songwriters = metadata?.credits?.songwriters?.filter(name => typeof name === 'string' && name.length > 0) ?? [];
@@ -95,13 +96,14 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const fontScale = (isDemo ? demoFontScale : undefined) ?? (landscape ? LANDSCAPE_FONT_SCALE : 1);
   const revision = useMemo(() => ({ generation: generation(), lyrics, trackId, style, fontScale, landscape, showTranslation, credits, empty }), [lyrics, trackId, style, fontScale, landscape, showTranslation, credits, empty]);
   const payload = useMemo(() => {
+    if (showStaticLyrics) return { json: '', error: '' };
     try {
       const prepare = () => prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits, empty);
       const json = arrival ? arrivalSpan(arrival, revision.generation, 'rust-packet-prepared', prepare) : prepare();
       return { json, error: '' };
     }
     catch (error) { return { json: '', error: String(error) }; }
-  }, [arrival, lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits, empty]);
+  }, [arrival, lyrics, trackId, revision.generation, style, fontScale, landscape, showTranslation, credits, empty, showStaticLyrics]);
   const native = useRef<NativeRef | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);
@@ -180,7 +182,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     // Keep Android's native drag stream while JS classifies taps and holds.
     onShouldBlockNativeResponder: () => Platform.OS !== 'android',
   }), [gesture]);
-  useEffect(() => () => gesture.terminate(), [gesture]);
+  useEffect(() => () => gesture.terminate(), [gesture, showStaticLyrics]);
   useEffect(() => {
     if (!api || !native.current) return;
     const recreated = followSurface.current !== surfaceEpoch;
@@ -221,12 +223,13 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     work.current.anchorMs = performance.now() - started;
   }, [api, commandFailed, demoDurationMs, demoPlayback, demoPlaying, isDemo, payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
   useEffect(() => {
+    if (showStaticLyrics) return;
     sendAnchor();
     if (isDemo) return;
     const unsubscribe = usePlaybackStore.subscribe((state, previous) => { if (anchorChanged(state, previous)) sendAnchor(); });
     const appState = AppState.addEventListener('change', state => { if (state === 'active') sendAnchor(); });
     return () => { unsubscribe(); appState.remove(); };
-  }, [active, isDemo, sendAnchor]);
+  }, [active, isDemo, sendAnchor, showStaticLyrics]);
   const onStatus = useCallback(({ nativeEvent }: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }) => {
     if (!mounted.current || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.generation !== revision.generation) return;
     if (nativeEvent.state === 'follow') {
@@ -267,10 +270,15 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     setFailed(false);
   }, [revision.generation]);
   useEffect(() => {
-    if (!isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
-  }, [isDemo, unavailable, failed, status]);
+    if (!showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
+  }, [isDemo, unavailable, failed, status, showStaticLyrics]);
   const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
   const visibleError = unavailable || (failed ? status : '');
+  if (showStaticLyrics) {
+    return <StaticLyricsView key={trackId} lines={rawLyrics} fontScale={fontScale} landscape={landscape}
+      showTranslation={showTranslation} credits={credits} interactive={interactive}
+      shouldRevealTap={shouldRevealTap} onUserInteraction={onUserInteraction} />;
+  }
   return <View style={styles.root}>
     {__DEV__ && showRustDebugOverlay ? <View pointerEvents="none" style={styles.fpsStrip}>
       <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust presents per second, callback interval, busy skips and estimated missed callback intervals in this window. Not display scanout or measured GPU time.">
