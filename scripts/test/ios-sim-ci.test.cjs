@@ -146,8 +146,13 @@ require('node:child_process').spawnSync = (command, args, options) => {
     assert.equal(options.killSignal, 'SIGKILL');
     images += 1;
     assert.equal(args.length, 1);
-    assert.equal(path.basename(args[0]), 'simulator-0' + images + '.png');
+    assert.equal(path.basename(args[0]), 'simulator-' + String(images).padStart(2, '0') + '.png');
     if (failure === 'ocr-timeout') return timeout();
+    if (failure === 'ocr-vision-error') return {
+      status: 5, signal: null, stdout: JSON.stringify({ lines: ['KineSync', 'Start Setup', 'Skip'] }),
+      stderr: 'ocr vision: fast recognition failed\n',
+    };
+    if (failure === 'ocr-status-bar-only') return { ...success, stdout: JSON.stringify({ lines: ['1:58'] }) };
     return { ...success, stdout: JSON.stringify({ lines: images === 1 ? ['Development servers'] : ['KineSync', 'Start Setup', 'Skip'] }) };
   }
   assert.equal(command, 'xcrun');
@@ -243,6 +248,28 @@ test('compiled OCR timeout fails after launch and preserves failure diagnostics'
   assert.equal(result.command_failure.timed_out, true);
   assert.deepEqual(commands, ['swiftc', 'list', 'create', 'boot', 'bootstatus', 'uninstall', 'install', 'launch', 'io', 'ocr', 'shutdown', 'delete']);
   assert.equal(fs.existsSync(path.dirname(result.command_failure.command)), false);
+});
+
+test('Vision failure preserves stderr and rejects even matching OCR stdout', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'ocr-vision-error');
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(result.smoke_passed, false);
+  assert.deepEqual(result.attempts, []);
+  assert.equal(result.command_failure.stage, 'ocr');
+  assert.equal(result.command_failure.exit_code, 5);
+  assert.equal(result.command_failure.timed_out, false);
+  assert.equal(result.command_failure.stderr, 'ocr vision: fast recognition failed\n');
+  assert.equal(matchOnboarding(JSON.parse(result.command_failure.stdout).lines.join('\n')).matched, true);
+  assert.deepEqual(commands.slice(-3), ['ocr', 'shutdown', 'delete']);
+});
+
+test('successful OCR of status-bar text alone never proves app startup', t => {
+  const { run, result } = runMockedSmoke(t, 'ocr-status-bar-only');
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /No KineSync onboarding UI after bounded retries/);
+  assert.equal(result.smoke_passed, false);
+  assert.equal(result.attempts.length, 18);
+  assert.ok(result.attempts.every(attempt => !attempt.matched && attempt.text === '1:58'));
 });
 
 test('smoke compiles OCR once and evaluates each screenshot with the same executable', t => {
