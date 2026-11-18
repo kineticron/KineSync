@@ -2,6 +2,7 @@
  * Mirrors native Skia row Pressables (540 ms long press, tap-to-seek) and the
  * list takeover that disables auto-follow until the next tap or resume. */
 const assert = require('node:assert/strict');
+require('./check-rust-reveal-touch.cjs');
 require('./check-rust-scheduling.cjs');
 require('./check-rust-footer-empty.cjs');
 require('./check-rust-credits-switch.cjs');

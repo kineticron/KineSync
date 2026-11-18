@@ -32,14 +32,17 @@ module.exports = (async () => {
     const reveal = evaluate(revealExpression, { handleControlsInteraction: interaction });
     let tap, longPress;
     if (backend === 'rust') {
+      let stamp = 0;
       const gesture = createRustLyricsGesture({
+        now: () => stamp,
+        shouldRevealTap: pageY => pageY >= 600,
         hitTest: () => { hits++; return empty ? -1 : 0; }, scrollBy() {},
         setFollowing() {}, tapEnabled: () => true, onAutoFollowChange() {}, onUserInteraction: interaction,
         onLinePress: () => seeks++, onLineLongPress: () => selections++,
         setTimer: fn => { hold = fn; return 1; }, clearTimer() {},
       });
-      tap = async () => { gesture.grant(0); await Promise.resolve(); await Promise.resolve(); gesture.release(); await Promise.resolve(); };
-      longPress = async () => { gesture.grant(0); await Promise.resolve(); await Promise.resolve(); hold(); gesture.release(); };
+      tap = async fraction => { gesture.grant(0, 0, fraction * 1000); await Promise.resolve(); await Promise.resolve(); gesture.release(); await Promise.resolve(); };
+      longPress = async fraction => { gesture.grant(0, 0, fraction * 1000); stamp += 540; await Promise.resolve(); await Promise.resolve(); hold?.(); gesture.release(); };
     } else if (backend.endsWith('skia')) {
       const h = harness(backend.split('-')[0], 'flash');
       h.render({ tapToSeekEnabled: true, onUserInteraction: interaction, onLinePress: () => seeks++, onLineLongPress: () => selections++ });
@@ -61,11 +64,12 @@ module.exports = (async () => {
       longPress = () => { hits++; message({ nativeEvent: { data: JSON.stringify({ type: 'lineLongPress', index: 0 }) } }); };
     }
     const route = async (fraction, handler) => {
-      if (fraction >= parseFloat(zone.top) / 100) reveal();
+      if (backend === 'rust') await handler(fraction);
+      else if (fraction >= parseFloat(zone.top) / 100) reveal();
       else await handler();
     };
     for (const fraction of [.6, .6001, .9]) { await route(fraction, tap); await route(fraction, longPress); }
-    assert.deepEqual([reveals, seeks, selections, hits], [6, 0, 0, 0], `${backend}/${empty}: reveal owns both taps and holds`);
+    assert.deepEqual([reveals, seeks, selections, hits], [backend === 'rust' ? 3 : 6, 0, 0, 0], `${backend}/${empty}: bottom touches cannot reach lyric handlers`);
     await route(.5999, tap); await route(.5999, longPress);
     assert.equal(hits, 2, 'coordinates above the boundary still reach the renderer handlers');
     assert.equal(seeks, empty ? 0 : 1);

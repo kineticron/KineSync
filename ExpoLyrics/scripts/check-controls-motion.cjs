@@ -516,6 +516,46 @@ inspectReveal(ast);
 assert.ok(lyricInteractions.length >= 3);
 assert.ok(lyricInteractions.every(expression => expression === 'handleControlsInteraction'));
 assert.ok(revealOpening && revealPress);
+let revealCondition = revealOpening.parent;
+while (revealCondition && !ts.isBinaryExpression(revealCondition)) revealCondition = revealCondition.parent;
+assert.ok(revealCondition);
+const overlayEnabled = evaluate(`(fullscreenAlbumMode, controlsVisible, rustHandlesReveal) => (${revealCondition.left.getText(ast)})`, {});
+for (const scenario of [
+  { rustRenderer: true, isLandscape: false, empty: false, tour: false, overlay: false },
+  { rustRenderer: false, isLandscape: false, empty: false, tour: false, overlay: true },
+  { rustRenderer: true, isLandscape: true, empty: false, tour: false, overlay: true },
+  { rustRenderer: true, isLandscape: false, empty: true, tour: false, overlay: true },
+  { rustRenderer: true, isLandscape: false, empty: false, tour: true, overlay: true },
+]) {
+  const handles = evaluate(declarations.rustHandlesReveal.getText(ast), {
+    __DEV__: true, rustRenderer: scenario.rustRenderer, isLandscape: scenario.isLandscape,
+    showEmptyState: scenario.empty, tour: { active: scenario.tour },
+  });
+  assert.equal(overlayEnabled(false, false, handles), scenario.overlay,
+    'only portrait Rust replaces the hit-testing sibling with renderer touch policy');
+}
+for (const height of [390, 667, 844]) for (const origin of [0, 59]) {
+  let hidden = true;
+  const screenOriginY = { current: origin };
+  const context = { screenHeight: height, screenOriginY, controlsTarget: { get: () => hidden ? 0 : 1 },
+    isLandscapeRef: { current: false }, fullscreenAlbumModeRef: { current: false } };
+  const policy = evaluate(callback('shouldRevealRustTap'), context);
+  assert.equal(policy(origin + height * .6 - .01), false);
+  assert.equal(policy(origin + height * .6), true);
+  for (const nativeOrigin of [153, 169]) {
+    const nativeY = height * .6 - nativeOrigin;
+    assert.equal(policy(origin + nativeOrigin + nativeY), true, 'page coordinates include the actual native origin and optional FPS strip');
+  }
+  screenOriginY.current += 20;
+  assert.equal(policy(origin + height * .6), false, 'policy reads root origin updates after layout');
+  hidden = false;
+  assert.equal(policy(origin + height), false);
+  hidden = true; context.isLandscapeRef.current = true;
+  assert.equal(policy(origin + height), false, 'landscape retains its existing policy');
+  context.isLandscapeRef.current = false; context.fullscreenAlbumModeRef.current = true;
+  assert.equal(policy(origin + height), false, 'album mode retains its existing policy');
+}
+
 const revealStyleExpression = revealOpening.attributes.properties.find(property => property.name?.text === 'style').initializer.expression.getText(ast);
 const revealPolicy = evaluate(`(showEmptyState, lyrics, fillTouchStyle, styles) => (${revealStyleExpression})`, {});
 const revealPressExpression = revealPress.attributes.properties.find(property => property.name?.text === 'onPress').initializer.expression.getText(ast);

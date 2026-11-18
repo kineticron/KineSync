@@ -35,6 +35,8 @@ function clearFollowReset(state) {
  *   fling: (velocity: number) => void,
  *   setFollowing: (following: boolean) => void,
  *   tapEnabled: () => boolean,
+ *   shouldRevealTap?: (pageY: number) => boolean,
+ *   reserveTouchEpoch?: () => void,
  *   onFooterPress?: (target: number) => void,
  *   onLinePress: (index: number) => void,
  *   onLineLongPress: (index: number) => void,
@@ -51,6 +53,8 @@ function createRustLyricsGesture({
   fling = () => {},
   setFollowing = () => {},
   tapEnabled,
+  shouldRevealTap = () => false,
+  reserveTouchEpoch = () => {},
   onLinePress,
   onFooterPress = () => {},
   onLineLongPress,
@@ -76,11 +80,18 @@ function createRustLyricsGesture({
     onUserInteraction();
   };
   return {
-    grant(y, x = 0) {
+    grant(y, x = 0, pageY = y) {
       cancel(active);
       token += 1;
-      const current = { token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, lastTime: now(), velocity: 0, timer: null, hit: null };
+      // Snapshot before any interaction can reveal controls. Keep this intent
+      // through release, even if parent props change during the touch.
+      const revealOnly = shouldRevealTap(pageY);
+      const stamp = now();
+      const current = { startedAt: stamp, revealOnly, token, index: -1, moved: false, longPressed: false, released: false, lastDy: 0, lastTime: stamp, velocity: 0, timer: null, hit: null };
       active = current;
+      // UIKit owns follow only once its pan begins. A tap/hold/cancel in the
+      // reveal zone must not manufacture a false follow command or row hit.
+      if (revealOnly) { reserveTouchEpoch(); return; }
       takeOwnership();
       current.hit = Promise.resolve(hitTest(y, x))
         .then((index) => {
@@ -104,9 +115,11 @@ function createRustLyricsGesture({
         press();
       }, LONG_PRESS_MS);
     },
-    move(dy) {
+    move(dy, dx = 0) {
       if (!active) return;
-      if (!active.moved && Math.abs(dy) <= DRAG_SLOP) return;
+      const distance = active.revealOnly ? Math.hypot(dx, dy) : Math.abs(dy);
+      if (!active.moved && distance <= DRAG_SLOP) return;
+      if (!active.moved && active.revealOnly) takeOwnership();
       active.moved = true;
       cancel(active);
       const delta = dy - active.lastDy;
@@ -128,6 +141,10 @@ function createRustLyricsGesture({
       cancel(current);
       if (current.moved) {
         fling(-current.velocity);
+        return;
+      }
+      if (current.revealOnly) {
+        if (now() - current.startedAt < LONG_PRESS_MS) onUserInteraction();
         return;
       }
       if (current.longPressed) return;

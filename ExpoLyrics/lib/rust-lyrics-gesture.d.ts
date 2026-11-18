@@ -5,8 +5,8 @@ export function nextFollowState(state: FollowState, trackId: string, followEnabl
 export function desiredFollow(state: FollowState, followEnabled: boolean): boolean;
 export function clearFollowReset(state: FollowState): FollowState;
 export type RustLyricsGesture = {
-  grant(y: number, x?: number): void;
-  move(dy: number): void;
+  grant(y: number, x?: number, pageY?: number): void;
+  move(dy: number, dx?: number): void;
   release(): void;
   terminate(): void;
   isActive(): boolean;
@@ -18,6 +18,8 @@ export function createRustLyricsGesture(options: {
   fling: (velocity: number) => void;
   setFollowing: (following: boolean) => void;
   tapEnabled: () => boolean;
+  shouldRevealTap?: (pageY: number) => boolean;
+  reserveTouchEpoch?: () => void;
   onFooterPress?: (target: number) => void;
   onLinePress: (index: number) => void;
   onLineLongPress: (index: number) => void;

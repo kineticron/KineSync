@@ -526,6 +526,8 @@ export default function HomeScreen() {
   const dockTop = useSharedValue(windowDimensions.height);
   const dockLayout = useRef({ y: windowDimensions.height, childY: 0 });
   const [screenHeight, setScreenHeight] = useState(windowDimensions.height);
+  const screenRef = useRef<View>(null);
+  const screenOriginY = useRef(0);
   useEffect(() => {
     const listener = AccessibilityInfo.addEventListener('reduceMotionChanged', setLiveReducedMotion);
     return () => listener.remove();
@@ -1278,6 +1280,12 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
+  const rustHandlesReveal = !isLandscape && __DEV__ && rustRenderer && !tour.active && !showEmptyState;
+  const shouldRevealRustTap = useCallback((pageY: number) =>
+    !isLandscapeRef.current && !fullscreenAlbumModeRef.current && controlsTarget.get() === 0 &&
+    pageY >= screenOriginY.current + screenHeight * 0.6,
+  [controlsTarget, screenHeight]);
+
   const lyricTop = insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP;
   // The native renderer viewport stays full size. A masked band travels with
   // the dock so the last visible line fades out instead of slab-clipping.
@@ -1459,8 +1467,12 @@ export default function HomeScreen() {
 
   return (
     <View
+      ref={screenRef}
       style={styles.screen}
-      onLayout={event => setScreenHeight(event.nativeEvent.layout.height)}
+      onLayout={event => {
+        setScreenHeight(event.nativeEvent.layout.height);
+        screenRef.current?.measureInWindow((_x, y) => { screenOriginY.current = y; });
+      }}
       onTouchStart={() => { controlsTouchActive.current = true; clearControlsIdleTimer(); }}
       onTouchEnd={event => {
         controlsTouchActive.current = event.nativeEvent.touches.length > 0;
@@ -1566,6 +1578,7 @@ export default function HomeScreen() {
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : __DEV__ && rustRenderer && !tour.active ? (
                 <RustLyricsView
+                  shouldRevealTap={shouldRevealRustTap}
                   active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
                   previewPositionMs={scrubPreviewPositionMs}
                   tapToSeekEnabled={tapToSeekEnabled}
@@ -1842,6 +1855,7 @@ export default function HomeScreen() {
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
               ) : __DEV__ && rustRenderer && !tour.active ? (
                 <RustLyricsView
+                  shouldRevealTap={shouldRevealRustTap}
                   active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)}
                   previewPositionMs={scrubPreviewPositionMs}
                   tapToSeekEnabled={tapToSeekEnabled}
@@ -1909,7 +1923,7 @@ export default function HomeScreen() {
             accessible={false} importantForAccessibility="no" />
         </Reanimated.View>
       )}
-      {!fullscreenAlbumMode && !controlsVisible && (
+      {!fullscreenAlbumMode && !controlsVisible && !rustHandlesReveal && (
         <Reanimated.View pointerEvents="box-none" style={[
           styles.controlsRevealZone,
         ]}>

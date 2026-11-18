@@ -43,8 +43,9 @@ function generation() {
 }
 
 /** Development-only selection in the actual player, using its current track/store anchors. */
-export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction }: {
+export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, shouldRevealTap, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction }: {
   active: boolean; previewPositionMs?: number | null; tapToSeekEnabled: boolean; autoFollowEnabled?: boolean; resumeAutoFollowSignal?: number;
+  shouldRevealTap?: (pageY: number) => boolean;
   onLinePress?: (line: LyricLine) => void; onLineLongPress?: (line: LyricLine) => void;
   onCreditsTimestampPress?: (position: number) => void;
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
@@ -103,8 +104,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const [metrics, setMetrics] = useState<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
-  const latest = useRef({ tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics });
-  latest.current = { tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics };
+  const latest = useRef({ shouldRevealTap, tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics });
+  latest.current = { shouldRevealTap, tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics };
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -138,6 +139,11 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     fling: () => {},
     setFollowing: setFollow,
     tapEnabled: () => latest.current.tapToSeekEnabled,
+    shouldRevealTap: pageY => latest.current.shouldRevealTap?.(pageY) ?? false,
+    // Native down advances its epoch floor even without pan ownership. Reserve
+    // that epoch locally so the next resume can pass the native guard, without
+    // sending true/false commands that would freeze follow or reset grace.
+    reserveTouchEpoch: () => { follow.current.issue(follow.current.desired, followGeneration.current, true); },
     onFooterPress: target => {
       const value = latest.current;
       if (target === -2) value.onCreditsTimestampPress?.(Math.max(0, ...value.lyrics.map(line => line.lineEndTime)));
@@ -154,8 +160,8 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: event => gesture.grant(event.nativeEvent.locationY, event.nativeEvent.locationX),
-    onPanResponderMove: (_event, state) => gesture.move(state.dy),
+    onPanResponderGrant: event => gesture.grant(event.nativeEvent.locationY, event.nativeEvent.locationX, event.nativeEvent.pageY),
+    onPanResponderMove: (_event, state) => gesture.move(state.dy, state.dx),
     onPanResponderRelease: () => gesture.release(),
     onPanResponderTerminate: () => gesture.terminate(),
     onPanResponderTerminationRequest: () => false,
