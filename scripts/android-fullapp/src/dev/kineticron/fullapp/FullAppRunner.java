@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.*;
 import android.accessibilityservice.AccessibilityServiceInfo;
@@ -16,13 +17,16 @@ import android.view.accessibility.AccessibilityNodeInfo;
 /** Full-app UI runner. Drives the REAL KineSync app (test build) via deep-link fixture states.
  *  Evidence only: every step records files; nothing is marked pass from command success alone. */
 public final class FullAppRunner extends Instrumentation {
-  static final String PKG = "dev.kineticron.KineSync";
+  static final String PKG = "dev.kineticron.KineSync.testnov18";
   static final String OUT = "/sdcard/Android/data/" + PKG + "/files/fullapp";
+  private static final String MAIN_COMPONENT = PKG + "/dev.kineticron.KineSync.MainActivity";
   private static final String DEV_MENU_INTRO =
     "This is the developer menu. It gives you access to useful tools in your development builds.";
   private UiAutomation ui;
   private File root;
   private PrintWriter proto;
+  private boolean callbacksOnly;
+  private String logStart;
   private int W = 1080, H = 2400;
   private final StringBuilder summary = new StringBuilder();
   private final List<String> failures = new ArrayList<>();
@@ -33,7 +37,11 @@ public final class FullAppRunner extends Instrumentation {
     sendStatus(code, b);
   }
 
-  @Override public void onCreate(Bundle b) { super.onCreate(b); start(); }
+  @Override public void onCreate(Bundle b) {
+    super.onCreate(b);
+    callbacksOnly = b != null && "true".equals(b.getString("callbacksOnly"));
+    start();
+  }
 
   private String shell(String cmd) throws IOException {
     String marker = "__FA_EXIT__" + UUID.randomUUID();
@@ -87,7 +95,9 @@ public final class FullAppRunner extends Instrumentation {
   }
   private void log(String s) { proto.println(android.os.SystemClock.elapsedRealtime() + " " + s); proto.flush(); }
   private int count(String hay, String needle) { int c = 0, i = 0; while ((i = hay.indexOf(needle, i)) >= 0) { c++; i += needle.length(); } return c; }
-  private String rn() throws IOException { return shell("logcat -d -s ReactNativeJS:I"); }
+  private String rn() throws IOException {
+    return shell("logcat -d -T '" + logStart + "' --pid=" + android.os.Process.myPid() + " -s ReactNativeJS:I");
+  }
 
   private void shot(String name) throws IOException {
     Bitmap bm = ui.takeScreenshot();
@@ -123,7 +133,7 @@ public final class FullAppRunner extends Instrumentation {
     return false;
   }
   private boolean targetedTap(String kind, String fixture, boolean landscape) throws IOException {
-    String request = kind + "-" + android.os.SystemClock.elapsedRealtime();
+    String request = kind + "-" + UUID.randomUUID();
     String marker = "KSFX TARGET request=" + request + " ";
     String windowMarker = "KSFX WINDOW request=" + request + " ";
     if (!launch("expolyrics://?fx=probe-" + kind + "&request=" + request)) return false;
@@ -180,7 +190,7 @@ public final class FullAppRunner extends Instrumentation {
     return ok;
   }
   private boolean launch(String url) throws IOException {
-    String out = shell("am start -W -a android.intent.action.VIEW -d '" + url + "' -n " + PKG + "/.MainActivity");
+    String out = shell("am start -W -a android.intent.action.VIEW -d '" + url + "' -n " + MAIN_COMPONENT);
     log("AMSTART " + url + " -> " + out.replace('\n', ' '));
     return out.contains("Status: ok") || out.contains("Complete");
   }
@@ -189,7 +199,7 @@ public final class FullAppRunner extends Instrumentation {
     return false;
   }
   private boolean fx(String name) throws IOException {
-    String request = "fixture-" + android.os.SystemClock.elapsedRealtime();
+    String request = "fixture-" + UUID.randomUUID();
     boolean launched = launch("expolyrics://?fx=" + name + "&request=" + request);
     Pattern ack = Pattern.compile(Pattern.quote("KSFX ACK fx=" + name + " ")
       + "[^\\r\\n]* request=" + request + " source=(event|initial) ");
@@ -201,7 +211,7 @@ public final class FullAppRunner extends Instrumentation {
     log("FX " + name + " ack=" + ok + " request=" + request); sleep(2500); return ok;
   }
   private boolean initialSpicyFixture() throws IOException {
-    String request = "startup-" + android.os.SystemClock.elapsedRealtime();
+    String request = "startup-" + UUID.randomUUID();
     log("INITIAL_FIXTURE_REQUEST fx=spicy request=" + request);
     if (!launch("expolyrics://?fx=spicy&request=" + request)) return false;
     if (!waitFor("request=" + request + " source=event ", 0, 15)) return false;
@@ -268,7 +278,7 @@ public final class FullAppRunner extends Instrumentation {
   }
   private boolean bootstrapEmbeddedBundle() throws IOException {
     // Instrumentation lives in target process, so never force-stop that package here.
-    String out = shell("am start -W -a android.intent.action.MAIN -n " + PKG + "/.MainActivity");
+    String out = shell("am start -W -a android.intent.action.MAIN -n " + MAIN_COMPONENT);
     log("EMBEDDED_BOOTSTRAP_LAUNCH " + out.replace('\n', ' '));
     boolean started = out.contains("Status: ok");
     log("ANDROID_LAUNCH_SUCCESS=" + started);
@@ -395,9 +405,94 @@ public final class FullAppRunner extends Instrumentation {
   private void step(String name, boolean evidence, String note) {
     if (!evidence && (name.equals("cold-launch") || name.startsWith("state-") || name.startsWith("seek-tap-") || name.startsWith("credits-link-") || name.equals("orientation-portrait"))) failures.add(name + ": " + note); summary.append(name).append(" | executed=").append(evidence).append(" | ").append(note).append("\n"); log("STEP " + name + " executed=" + evidence + " " + note); }
 
+  private void callbackEvidence(int rotation) throws IOException {
+    // Seek and footer links in portrait and landscape. Targets come from the
+    // real native hit-test within the measured canvas, never a tap grid.
+    boolean orientationOk = orient(rotation);
+    String orientation = rotation == UiAutomation.ROTATION_FREEZE_90 ? "landscape" : "portrait";
+    for (String s : new String[] { "spicy", "amll" }) {
+      boolean ack = fx(s) && fx("pause");
+      shot("50-preseek-" + orientation + "-" + s);
+      boolean ok = orientationOk && ack && targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90);
+      shot("50-postseek-" + orientation + "-" + s);
+      step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
+    }
+    for (String s : new String[] { "credits", "credits-amll" }) {
+      boolean ack = fx(s);
+      shot("60-credits-" + orientation + "-" + s);
+      boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
+      shot("60-credits-after-" + orientation + "-" + s);
+      step("credits-link-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native maker target + exact fixture LINK_OPEN required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
+    }
+  }
+
+  private void broadScenarioEvidence() throws IOException {
+    // fixture states
+    String[] states = { "spicy", "amll", "cjk", "cjk-amll", "loading", "instrumental", "nolyrics" };
+    for (String s : states) { boolean a = fx(s); shot("10-" + s); step("state-" + s, a, "fixture ack=" + a + "; screenshot 10-" + s + ".png needs visual review"); }
+    // rotation on a lyric state (both ways), both renderers
+    for (String s : new String[] { "spicy", "amll" }) {
+      fx(s);
+      ui.setRotation(UiAutomation.ROTATION_FREEZE_90); sleep(3500); shot("20-rot90-" + s);
+      ui.setRotation(UiAutomation.ROTATION_FREEZE_270); sleep(3500); shot("20-rot270-" + s);
+      ui.setRotation(UiAutomation.ROTATION_FREEZE_0); sleep(3500); shot("20-rot0-" + s);
+      step("rotation-" + s, true, "90/270/0 screenshots captured; check lyrics visible+layout");
+    }
+    ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
+    boolean portraitOk = orient(UiAutomation.ROTATION_FREEZE_0);
+    step("orientation-portrait", portraitOk, "SETUP display-only portrait request, measured=" + W + "x" + H + ", app window checked separately at each tap probe");
+    // HOME / resume
+    for (String s : new String[] { "spicy", "amll" }) {
+      fx(s); shell("input keyevent KEYCODE_HOME"); sleep(3000); shot("30-home-" + s);
+      launch("expolyrics://"); sleep(3500); shot("30-resume-" + s);
+      step("home-resume-" + s, true, "see 30-home/30-resume pngs + focus/pid files");
+    }
+    // sleep/wake = surface destroy/recreate
+    fx("spicy"); shell("input keyevent 223"); sleep(3000); shell("input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard"); sleep(3500); shot("31-screenoff-wake");
+    step("surface-sleep-wake", true, "screen off/on cycle, screenshot after wake");
+    // activity recreation (font scale not handled by configChanges)
+    fx("amll"); String p0 = appPid(); int sd0 = count(rn(), "KSFX SEEDED");
+    shell("settings put system font_scale 1.3"); sleep(4000); shot("32-fontscale-recreate-NO-REAPPLY");
+    String p1 = appPid(); int sd1 = count(rn(), "KSFX SEEDED");
+    save("32-recreate-evidence.txt", "pidBefore=" + p0 + " pidAfter=" + p1 + " seededBefore=" + sd0 + " seededAfter=" + sd1 + "\n" + shell("dumpsys activity activities | grep -E 'ResumedActivity|ActivityRecord' | head -6"));
+    boolean re = fx("amll"); shot("32-fontscale-REAPPLIED-1.3");
+    shell("settings put system font_scale 1.0"); sleep(4000); shot("32-fontscale-restored-NO-REAPPLY"); fx("amll"); shot("32-fontscale-restored-REAPPLIED");
+    log("RECREATE pidSame=" + p0.equals(p1) + " reapplyAck=" + re);
+    step("activity-recreation", true, "font_scale 1.3->1.0 forces activity recreate; pngs + pid");
+    // swipe/fling and return
+    for (String s : new String[] { "spicy", "amll" }) {
+      fx(s); refreshSize(); int cx = W > H ? W * 3 / 4 : W / 2;
+      shell("input swipe " + cx + " " + (int)(H*0.75) + " " + cx + " " + (int)(H*0.35) + " 400"); sleep(1200); shot("40-swipe-" + s);
+      shell("input swipe " + cx + " " + (int)(H*0.75) + " " + cx + " " + (int)(H*0.30) + " 80"); sleep(300); shot("40-fling-mid-" + s); sleep(2500); shot("40-fling-settled-" + s);
+      shell("input swipe " + cx + " " + (int)(H*0.30) + " " + cx + " " + (int)(H*0.85) + " 80"); sleep(2500); shot("40-fling-back-" + s);
+      sleep(7000); shot("40-autofollow-return-" + s);
+      step("swipe-fling-return-" + s, true, "manual scroll, fling, reverse fling, autofollow after 7s");
+    }
+    for (int rotation : new int[] { UiAutomation.ROTATION_FREEZE_0, UiAutomation.ROTATION_FREEZE_90 }) {
+      callbackEvidence(rotation);
+    }
+    ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
+    boolean settingsDisplayPortrait = orient(UiAutomation.ROTATION_FREEZE_0);
+    log("SETUP settings portrait displayOnly=" + settingsDisplayPortrait + ", app window unverified, settings steps remain evidence-only");
+    // settings renderer switch
+    fx("spicy");
+    int[] menu = findDesc("Open player menu"); log("MENU " + (menu == null ? "not found" : menu[0] + "," + menu[1]));
+    boolean sw = false;
+    if (menu != null) {
+      shell("input tap " + menu[0] + " " + menu[1]); sleep(2000); shot("70-menu-open");
+      int[] amll = findDesc("AMLL lyrics renderer");
+      if (amll != null) { shell("input tap " + amll[0] + " " + amll[1]); sleep(3000); shot("70-menu-amll"); sw = findDesc("AMLL lyrics renderer, selected") != null; }
+      int[] spicy = findDesc("Spicy Lyrics lyrics renderer");
+      if (spicy != null) { shell("input tap " + spicy[0] + " " + spicy[1]); sleep(3000); shot("70-menu-spicy"); }
+    }
+    step("settings-renderer-switch", sw, "menu found=" + (menu != null) + " AMLL selected state in a11y dump=" + sw);
+    footerStyleSwitchEvidence(settingsDisplayPortrait);
+  }
+
   @Override public void onStart() {
     ui = getUiAutomation();
     try {
+      logStart = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
       AccessibilityServiceInfo si = ui.getServiceInfo(); si.flags |= AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS; ui.setServiceInfo(si);
       File ext = getTargetContext().getExternalFilesDir(null);
       root = new File(ext, "fullapp"); root.mkdirs();
@@ -408,91 +503,16 @@ public final class FullAppRunner extends Instrumentation {
       saveSettings();
       for (String k : new String[] { "animator_duration_scale", "transition_animation_scale", "window_animation_scale" }) shell("settings put global " + k + " 1");
       shell("settings put system accelerometer_rotation 0; settings put system font_scale 1.0; input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard");
-      shell("logcat -b all -c");
       boolean up = bootstrapEmbeddedBundle(); sleep(1500); appPid();
       step("cold-launch", up, "See 00-embedded-bootstrap.txt for launch, readiness, and player evidence");
       shot("00-launch");
       if (!up) throw new IOException("Embedded fixture bootstrap failed; no UI scenarios executed");
       settingsRouteEvidence();
-      // fixture states
-      String[] states = { "spicy", "amll", "cjk", "cjk-amll", "loading", "instrumental", "nolyrics" };
-      for (String s : states) { boolean a = fx(s); shot("10-" + s); step("state-" + s, a, "fixture ack=" + a + "; screenshot 10-" + s + ".png needs visual review"); }
-      // rotation on a lyric state (both ways), both renderers
-      for (String s : new String[] { "spicy", "amll" }) {
-        fx(s);
-        ui.setRotation(UiAutomation.ROTATION_FREEZE_90); sleep(3500); shot("20-rot90-" + s);
-        ui.setRotation(UiAutomation.ROTATION_FREEZE_270); sleep(3500); shot("20-rot270-" + s);
-        ui.setRotation(UiAutomation.ROTATION_FREEZE_0); sleep(3500); shot("20-rot0-" + s);
-        step("rotation-" + s, true, "90/270/0 screenshots captured; check lyrics visible+layout");
-      }
-      ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
-      boolean portraitOk = orient(UiAutomation.ROTATION_FREEZE_0);
-      step("orientation-portrait", portraitOk, "SETUP display-only portrait request, measured=" + W + "x" + H + ", app window checked separately at each tap probe");
-      // HOME / resume
-      for (String s : new String[] { "spicy", "amll" }) {
-        fx(s); shell("input keyevent KEYCODE_HOME"); sleep(3000); shot("30-home-" + s);
-        launch("expolyrics://"); sleep(3500); shot("30-resume-" + s);
-        step("home-resume-" + s, true, "see 30-home/30-resume pngs + focus/pid files");
-      }
-      // sleep/wake = surface destroy/recreate
-      fx("spicy"); shell("input keyevent 223"); sleep(3000); shell("input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard"); sleep(3500); shot("31-screenoff-wake");
-      step("surface-sleep-wake", true, "screen off/on cycle, screenshot after wake");
-      // activity recreation (font scale not handled by configChanges)
-      fx("amll"); String p0 = appPid(); int sd0 = count(rn(), "KSFX SEEDED");
-      shell("settings put system font_scale 1.3"); sleep(4000); shot("32-fontscale-recreate-NO-REAPPLY");
-      String p1 = appPid(); int sd1 = count(rn(), "KSFX SEEDED");
-      save("32-recreate-evidence.txt", "pidBefore=" + p0 + " pidAfter=" + p1 + " seededBefore=" + sd0 + " seededAfter=" + sd1 + "\n" + shell("dumpsys activity activities | grep -E 'ResumedActivity|ActivityRecord' | head -6"));
-      boolean re = fx("amll"); shot("32-fontscale-REAPPLIED-1.3");
-      shell("settings put system font_scale 1.0"); sleep(4000); shot("32-fontscale-restored-NO-REAPPLY"); fx("amll"); shot("32-fontscale-restored-REAPPLIED");
-      log("RECREATE pidSame=" + p0.equals(p1) + " reapplyAck=" + re);
-      step("activity-recreation", true, "font_scale 1.3->1.0 forces activity recreate; pngs + pid");
-      // swipe/fling and return
-      for (String s : new String[] { "spicy", "amll" }) {
-        fx(s); refreshSize(); int cx = W > H ? W * 3 / 4 : W / 2;
-        shell("input swipe " + cx + " " + (int)(H*0.75) + " " + cx + " " + (int)(H*0.35) + " 400"); sleep(1200); shot("40-swipe-" + s);
-        shell("input swipe " + cx + " " + (int)(H*0.75) + " " + cx + " " + (int)(H*0.30) + " 80"); sleep(300); shot("40-fling-mid-" + s); sleep(2500); shot("40-fling-settled-" + s);
-        shell("input swipe " + cx + " " + (int)(H*0.30) + " " + cx + " " + (int)(H*0.85) + " 80"); sleep(2500); shot("40-fling-back-" + s);
-        sleep(7000); shot("40-autofollow-return-" + s);
-        step("swipe-fling-return-" + s, true, "manual scroll, fling, reverse fling, autofollow after 7s");
-      }
-      // Seek and footer links in portrait and landscape. Targets come from the
-      // real native hit-test within the measured canvas, never a tap grid.
-      for (int rotation : new int[] { UiAutomation.ROTATION_FREEZE_0, UiAutomation.ROTATION_FREEZE_90 }) {
-        boolean orientationOk = orient(rotation);
-        String orientation = rotation == UiAutomation.ROTATION_FREEZE_90 ? "landscape" : "portrait";
-        for (String s : new String[] { "spicy", "amll" }) {
-          boolean ack = fx(s) && fx("pause");
-          shot("50-preseek-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("seek", s, rotation == UiAutomation.ROTATION_FREEZE_90);
-          shot("50-postseek-" + orientation + "-" + s);
-          step("seek-tap-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native target + exact seek/store anchor required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
-        }
-        for (String s : new String[] { "credits", "credits-amll" }) {
-          boolean ack = fx(s);
-          shot("60-credits-" + orientation + "-" + s);
-          boolean ok = orientationOk && ack && targetedTap("link", s, rotation == UiAutomation.ROTATION_FREEZE_90);
-          shot("60-credits-after-" + orientation + "-" + s);
-          step("credits-link-" + orientation + "-" + s, ok, "accepted rotation + post-fixture app window + native maker target + exact fixture LINK_OPEN required, displaySetupOk=" + orientationOk + ", setup mismatches are not renderer failures");
-        }
-      }
-      ui.setRotation(UiAutomation.ROTATION_UNFREEZE);
-      boolean settingsDisplayPortrait = orient(UiAutomation.ROTATION_FREEZE_0);
-      log("SETUP settings portrait displayOnly=" + settingsDisplayPortrait + ", app window unverified, settings steps remain evidence-only");
-      // settings renderer switch
-      fx("spicy");
-      int[] menu = findDesc("Open player menu"); log("MENU " + (menu == null ? "not found" : menu[0] + "," + menu[1]));
-      boolean sw = false;
-      if (menu != null) {
-        shell("input tap " + menu[0] + " " + menu[1]); sleep(2000); shot("70-menu-open");
-        int[] amll = findDesc("AMLL lyrics renderer");
-        if (amll != null) { shell("input tap " + amll[0] + " " + amll[1]); sleep(3000); shot("70-menu-amll"); sw = findDesc("AMLL lyrics renderer, selected") != null; }
-        int[] spicy = findDesc("Spicy Lyrics lyrics renderer");
-        if (spicy != null) { shell("input tap " + spicy[0] + " " + spicy[1]); sleep(3000); shot("70-menu-spicy"); }
-      }
-      step("settings-renderer-switch", sw, "menu found=" + (menu != null) + " AMLL selected state in a11y dump=" + sw);
-      footerStyleSwitchEvidence(settingsDisplayPortrait);
+      log("MODE callbacksOnly=" + callbacksOnly);
+      if (callbacksOnly) callbackEvidence(UiAutomation.ROTATION_FREEZE_0);
+      else broadScenarioEvidence();
       // final
-      String lc = shell("logcat -d -v threadtime");
+      String lc = shell("logcat -d -v threadtime -T '" + logStart + "'");
       save("logcat-full.txt", lc); save("logcat-reactnativejs.txt", rn());
       appPid();
       StringBuilder badSb = new StringBuilder(); Pattern bp = Pattern.compile("FATAL EXCEPTION|Fatal signal|SIGSEGV|DEVICE_LOST|DeviceLost|panicked|ANR in|Process: " + Pattern.quote(PKG) + "|has died");
