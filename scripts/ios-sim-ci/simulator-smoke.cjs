@@ -1,6 +1,7 @@
 // Boot a fresh simulator, install the Debug app, and prove real onboarding UI
 // while no Metro listener exists. OCR evidence is uploaded even on failure.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const config = require('./config.json');
@@ -9,6 +10,8 @@ const normalize = value => String(value).toLowerCase().replace(/[\u2018\u2019]/g
 const REQUIRED = config.onboarding.required;
 const EVIDENCE_TEXT = ['Skip', 'A modern, beautiful mobile app', 'syllable-synced lyrics', 'Spotify playback'];
 const BOOT_TIMEOUT_MS = 5 * 60 * 1000;
+const OCR_COMPILE_TIMEOUT_MS = 3 * 60 * 1000;
+const OCR_TIMEOUT_MS = 30000;
 
 function matchOnboarding(text, settings = config.onboarding) {
   const normalized = normalize(text);
@@ -73,10 +76,16 @@ async function main() {
   fs.mkdirSync(evidence, { recursive: true });
   const name = `KineSync Revyl CI ${process.env.GITHUB_RUN_ID || Date.now()}`;
   const result = { app, bundleId, name, attempts: [] };
+  let ocrDirectory;
   try {
     if (!fs.existsSync(app) || !app.endsWith('.app')) throw new Error(`Missing .app: ${app}`);
     result.metro_listeners = metroListeners();
     if (result.metro_listeners.length) throw new Error(`Metro-like listener present before smoke: ${JSON.stringify(result.metro_listeners)}`);
+    ocrDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'kinesync-sim-ocr-'));
+    const ocrExecutable = path.join(ocrDirectory, 'ocr');
+    run('xcrun', ['--sdk', 'macosx', 'swiftc', path.join(__dirname, 'ocr.swift'), '-o', ocrExecutable], {
+      stage: 'ocr-compile', timeout: OCR_COMPILE_TIMEOUT_MS, killSignal: 'SIGKILL',
+    });
     const pair = simulatorPair();
     Object.assign(result, pair);
     const udid = run('xcrun', ['simctl', 'create', name, pair.deviceType, pair.runtime]).trim();
@@ -96,7 +105,7 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 5000));
       const shot = path.join(evidence, `simulator-${String(attempt).padStart(2, '0')}.png`);
       run('xcrun', ['simctl', 'io', udid, 'screenshot', shot]);
-      const ocr = JSON.parse(run('xcrun', ['swift', path.join(__dirname, 'ocr.swift'), shot], { stage: 'ocr', timeout: 30000 }));
+      const ocr = JSON.parse(run(ocrExecutable, [shot], { stage: 'ocr', timeout: OCR_TIMEOUT_MS, killSignal: 'SIGKILL' }));
       const text = ocr.lines.join('\n');
       const match = matchOnboarding(text);
       last = { attempt, screenshot: shot, text, ocr, ...match };
@@ -123,6 +132,7 @@ async function main() {
       spawnSync('xcrun', ['simctl', 'shutdown', result.udid], { encoding: 'utf8', timeout: 15000 });
       spawnSync('xcrun', ['simctl', 'delete', result.udid], { encoding: 'utf8', timeout: 15000 });
     }
+    if (ocrDirectory) fs.rmSync(ocrDirectory, { recursive: true, force: true });
   }
   console.log(JSON.stringify({ passed: true, udid: result.udid, attempts: result.attempts.length, proof: result.proof }));
 }

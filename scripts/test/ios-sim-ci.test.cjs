@@ -116,7 +116,7 @@ test('onboarding matcher requires app-specific setup UI and rejects launcher tex
   assert.equal(matchOnboarding('Development servers\nStart Setup\nSkip').matched, false);
 });
 
-test('smoke persists boot timeout diagnostics and stops before install', t => {
+function runMockedSmoke(t, failure) {
   const root = temp(t);
   const app = path.join(root, 'KineSync.app');
   const evidence = path.join(root, 'evidence');
@@ -126,12 +126,46 @@ test('smoke persists boot timeout diagnostics and stops before install', t => {
   put(root, path.basename(preload), String.raw`
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
+const record = command => fs.appendFileSync(process.env.SMOKE_TEST_COMMANDS, command + '\n');
+const timeout = (stdout = '', stderr = '') => ({
+  error: Object.assign(new Error('mock command timed out'), { code: 'ETIMEDOUT' }),
+  status: null, signal: 'SIGKILL', stdout, stderr,
+});
+const failure = process.env.SMOKE_TEST_FAILURE;
+const setTimeout = global.setTimeout;
+global.setTimeout = (callback, delay, ...args) => setTimeout(callback, delay === 5000 ? 0 : delay, ...args);
+let executable;
+let images = 0;
 require('node:child_process').spawnSync = (command, args, options) => {
   const success = { status: 0, stdout: '', stderr: '' };
   if (command === 'lsof') return { ...success, status: 1 };
+  if (command === executable) {
+    record('ocr');
+    assert.equal(options.timeout, 30000);
+    assert.equal(options.killSignal, 'SIGKILL');
+    images += 1;
+    assert.equal(args.length, 1);
+    assert.equal(path.basename(args[0]), 'simulator-0' + images + '.png');
+    if (failure === 'ocr-timeout') return timeout();
+    return { ...success, stdout: JSON.stringify({ lines: images === 1 ? ['Development servers'] : ['KineSync', 'Start Setup', 'Skip'] }) };
+  }
   assert.equal(command, 'xcrun');
+  if (args[2] === 'swiftc') {
+    record('swiftc');
+    assert.equal(options.timeout, 180000);
+    assert.equal(options.killSignal, 'SIGKILL');
+    assert.deepEqual(args.slice(0, 2), ['--sdk', 'macosx']);
+    assert.equal(path.basename(args[3]), 'ocr.swift');
+    assert.equal(args[4], '-o');
+    executable = args[5];
+    if (failure === 'compile-timeout') return timeout('', 'still compiling\n');
+    if (failure === 'compile-error') return { ...success, status: 1, signal: null, stderr: 'compile failed\n' };
+    fs.writeFileSync(executable, 'mock OCR binary');
+    return success;
+  }
   assert.equal(args[0], 'simctl');
-  fs.appendFileSync(process.env.SMOKE_TEST_COMMANDS, args[1] + '\n');
+  record(args[1]);
   switch (args[1]) {
     case 'list':
       return { ...success, stdout: JSON.stringify({
@@ -140,26 +174,33 @@ require('node:child_process').spawnSync = (command, args, options) => {
       }) };
     case 'create': return { ...success, stdout: 'test-udid\n' };
     case 'boot':
+    case 'uninstall':
+    case 'install':
+    case 'io':
+    case 'spawn':
     case 'shutdown':
     case 'delete': return success;
+    case 'launch': return { ...success, stdout: 'dev.kineticron.KineSync: 59092\n' };
     case 'bootstatus':
       assert.equal(options.timeout, 300000);
       assert.equal(options.killSignal, 'SIGKILL');
-      return {
-        error: Object.assign(new Error('spawnSync xcrun ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-        status: null, signal: 'SIGKILL', stdout: 'Waiting for SpringBoard\n', stderr: 'Boot still in progress\n',
-      };
+      return failure === 'boot-timeout' ? timeout('Waiting for SpringBoard\n', 'Boot still in progress\n') : success;
     default: throw new Error('Unexpected smoke command: ' + args.join(' '));
   }
 };
 `);
   const smoke = path.join(repo, 'scripts/ios-sim-ci/simulator-smoke.cjs');
   const run = spawnSync(process.execPath, ['--require', preload, smoke, app, simConfig.expectedBundleIdentifier, evidence], {
-    encoding: 'utf8', env: { ...process.env, SMOKE_TEST_COMMANDS: commands },
+    encoding: 'utf8', env: { ...process.env, SMOKE_TEST_COMMANDS: commands, SMOKE_TEST_FAILURE: failure },
   });
+  const result = JSON.parse(fs.readFileSync(path.join(evidence, 'smoke.json'), 'utf8'));
+  return { run, result, commands: fs.readFileSync(commands, 'utf8').trim().split('\n') };
+}
+
+test('smoke persists boot timeout diagnostics and stops before install', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'boot-timeout');
   assert.equal(run.status, 1, run.stderr);
   assert.match(run.stderr, /simctl bootstatus test-udid -b timed out after 300000 ms/);
-  const result = JSON.parse(fs.readFileSync(path.join(evidence, 'smoke.json'), 'utf8'));
   assert.equal(result.smoke_passed, false);
   assert.deepEqual(result.attempts, []);
   assert.deepEqual(result.metro_listeners, []);
@@ -170,7 +211,46 @@ require('node:child_process').spawnSync = (command, args, options) => {
     timeout_ms: 300000, timed_out: true, exit_code: null, signal: 'SIGKILL', error_code: 'ETIMEDOUT',
     stdout: 'Waiting for SpringBoard\n', stderr: 'Boot still in progress\n',
   });
-  assert.deepEqual(fs.readFileSync(commands, 'utf8').trim().split('\n'), ['list', 'create', 'boot', 'bootstatus', 'shutdown', 'delete']);
+  assert.deepEqual(commands, ['swiftc', 'list', 'create', 'boot', 'bootstatus', 'shutdown', 'delete']);
+});
+
+test('OCR compile errors and timeouts fail before creating a simulator', t => {
+  for (const failure of ['compile-error', 'compile-timeout']) {
+    const { run, result, commands } = runMockedSmoke(t, failure);
+    const timedOut = failure === 'compile-timeout';
+    assert.equal(run.status, 1, run.stderr);
+    assert.equal(result.smoke_passed, false);
+    assert.deepEqual(result.attempts, []);
+    assert.deepEqual(commands, ['swiftc']);
+    assert.equal(result.command_failure.stage, 'ocr-compile');
+    assert.equal(result.command_failure.timeout_ms, 180000);
+    assert.equal(result.command_failure.timed_out, timedOut);
+    assert.equal(result.command_failure.exit_code, timedOut ? null : 1);
+    assert.equal(result.command_failure.stderr, timedOut ? 'still compiling\n' : 'compile failed\n');
+    assert.equal(fs.existsSync(path.dirname(result.command_failure.args.at(-1))), false);
+  }
+});
+
+test('compiled OCR timeout fails after launch and preserves failure diagnostics', t => {
+  const { run, result, commands } = runMockedSmoke(t, 'ocr-timeout');
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(result.smoke_passed, false);
+  assert.equal(result.pid, '59092');
+  assert.deepEqual(result.attempts, []);
+  assert.equal(result.command_failure.stage, 'ocr');
+  assert.equal(path.basename(result.command_failure.command), 'ocr');
+  assert.equal(result.command_failure.timeout_ms, 30000);
+  assert.equal(result.command_failure.timed_out, true);
+  assert.deepEqual(commands, ['swiftc', 'list', 'create', 'boot', 'bootstatus', 'uninstall', 'install', 'launch', 'io', 'ocr', 'shutdown', 'delete']);
+  assert.equal(fs.existsSync(path.dirname(result.command_failure.command)), false);
+});
+
+test('smoke compiles OCR once and evaluates each screenshot with the same executable', t => {
+  const { run, result, commands } = runMockedSmoke(t, '');
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(result.smoke_passed, true);
+  assert.deepEqual(result.attempts.map(attempt => attempt.matched), [false, true]);
+  assert.deepEqual(commands, ['swiftc', 'list', 'create', 'boot', 'bootstatus', 'uninstall', 'install', 'launch', 'io', 'ocr', 'io', 'ocr', 'spawn', 'shutdown', 'delete']);
 });
 
 test('Rust ABI instruction matcher accepts ABI 11 and rejects other constants', () => {
