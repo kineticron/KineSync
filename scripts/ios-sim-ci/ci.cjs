@@ -117,7 +117,7 @@ function initialize(env = process.env) {
     CI_EVIDENCE_DIR: paths.evidence, DERIVED_DATA_PATH: paths.derived, CCACHE_DIR: paths.ccache,
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
     CP_CACHE_DIR: paths.cocoapods, npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
-    EXPO_NO_METRO: '1', FORCE_BUNDLING: '1', SKIP_BUNDLING: '', SIMULATOR_SDK: config.sdk,
+    EXPO_NO_METRO: '1', SIMULATOR_SDK: config.sdk,
     RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
     IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_RELEASE_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_RELEASE_DEBUG: String(config.rust.debugInfo),
     CARGO_PROFILE_RELEASE_LTO: config.rust.lto, CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: String(config.rust.debugAssertions),
@@ -185,6 +185,19 @@ function assertSimulatorSettings(settings, scheme) {
     if (!String(values.ARCHS || '').replaceAll('"', '').split(/\s+/).includes(config.arch)) throw new Error(`${target} ARCHS lacks ${config.arch}`);
   }
 }
+function prepareBundleEnvironment(ios) {
+  // Expo sources this file again after setting SKIP_BUNDLING for Debug.
+  const file = path.join(ios, '.xcode.env.local');
+  const override = `# KineSync simulator CI embedded bundle
+if [ "\${PLATFORM_NAME:-}" = iphonesimulator ]; then
+  unset SKIP_BUNDLING
+  export FORCE_BUNDLING=1
+fi
+`;
+  const existing = fs.existsSync(file) ? read(file) : '';
+  if (existing.endsWith(override)) return;
+  fs.appendFileSync(file, `${existing && !existing.endsWith('\n') ? '\n' : ''}${override}`);
+}
 function build() {
   const current = state();
   const ios = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/ios');
@@ -211,7 +224,8 @@ function build() {
   if (!app.startsWith(current.paths.derived + path.sep) || !app.endsWith('.app')) throw new Error('App must be in owned DerivedData');
   run('ccache', ['--zero-stats']);
   fs.mkdirSync(path.join(current.paths.derived, 'LinkMaps'), { recursive: true });
-  stage('xcodebuild', 'xcodebuild', [...args, 'build'], { ...process.env, FORCE_BUNDLING: '1', SKIP_BUNDLING: '', RCT_NO_LAUNCH_PACKAGER: '1', EXPO_NO_METRO: '1' });
+  prepareBundleEnvironment(ios);
+  stage('xcodebuild', 'xcodebuild', [...args, 'build'], { ...process.env, RCT_NO_LAUNCH_PACKAGER: '1', EXPO_NO_METRO: '1' });
   if (!fs.existsSync(app)) throw new Error(`Expected built app missing: ${app}`);
   const evidence = current.paths.evidence;
   stage('verify-simulator-app', 'python3', [path.join(__dirname, 'verify_simulator.py'), '--app', app, '--bundle-id', config.expectedBundleIdentifier, '--evidence', path.join(evidence, 'built-simulator.json')]);
@@ -252,7 +266,7 @@ function summary() {
     ...required.map(name => `| ${name} | ${cache[name]?.hit || 'skipped/miss'} | ${cache[name]?.verified || 'not measured'} |`),
     ...(config.rust.enabled ? [`| Rust simulator prebuilt | ${cache.rust?.prebuilt_hit || 'skipped/miss'} | ${cache.rust?.verified || 'not measured'} |`] : []),
     '', '| Stage | Seconds | Exit |', '| --- | ---: | ---: |', ...stages.map(s => `| ${s.stage} | ${(s.elapsed_ms / 1000).toFixed(3)} | ${s.exit_code ?? s.signal} |`),
-    '', 'Debug configuration is intentional: the app and Rust module are __DEV__/debugOnly gated.', `Onboarding smoke passed: ${result.smoke_passed}. Rust renderer runtime and network isolation are not verified.`, ''];
+    '', 'Debug configuration is intentional: the Apple Rust module uses debugOnly registration.', `Onboarding smoke passed: ${result.smoke_passed}. Rust renderer runtime and network isolation are not verified.`, ''];
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
   if (!warmPass || !coldPass || !verifyPass) throw new Error('Controlled cache evidence failed. Inspect evidence.json, do not report a warm-cache pass.');
 }
@@ -285,4 +299,4 @@ function main(args) {
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.stack); process.exitCode = 1; }
 }
-module.exports = { digestInputs, rustIdentity, resolvePaths, cacheKeys, buildArgs, assertSimulatorSettings, cacheEvidence, targetSettingsArgs, config };
+module.exports = { digestInputs, rustIdentity, resolvePaths, cacheKeys, buildArgs, assertSimulatorSettings, prepareBundleEnvironment, cacheEvidence, targetSettingsArgs, config };

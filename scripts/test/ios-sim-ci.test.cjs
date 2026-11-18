@@ -73,6 +73,29 @@ test('CI-only app config enables embedded dev client without changing defaults',
   assert.equal(config.plugins.length, 3);
 });
 
+test('late Expo Xcode environment forces simulator bundling after the Debug skip', t => {
+  const ios = temp(t);
+  const file = path.join(ios, '.xcode.env.local');
+  const existing = 'export NODE_BINARY=/path/to/node';
+  fs.writeFileSync(file, existing);
+  sim.prepareBundleEnvironment(ios);
+  const prepared = fs.readFileSync(file, 'utf8');
+  assert.ok(prepared.startsWith(`${existing}\n`));
+  sim.prepareBundleEnvironment(ios);
+  assert.equal(fs.readFileSync(file, 'utf8'), prepared);
+
+  const probe = platform => execFileSync('sh', ['-eu', '-c', [
+    'PLATFORM_NAME=$2',
+    'unset SKIP_BUNDLING FORCE_BUNDLING',
+    '. "$1"',
+    'export SKIP_BUNDLING=1',
+    '. "$1"',
+    'printf "%s:%s:%s" "$NODE_BINARY" "${SKIP_BUNDLING-unset}" "${FORCE_BUNDLING-unset}"',
+  ].join('\n'), 'probe', file, platform], { encoding: 'utf8' });
+  assert.equal(probe('iphonesimulator'), '/path/to/node:unset:1');
+  assert.equal(probe('iphoneos'), '/path/to/node:1:unset');
+});
+
 test('dev launcher patch is exact, idempotent and fails closed on context drift', () => {
   const source = `import SwiftUI\n\n${EXPECTED}\n\nprivate func other() {}\n`;
   const patched = patch(source);
@@ -192,7 +215,7 @@ test('workflow has pinned actions, isolated caches and a mandatory offline UI sm
   assert.match(workflow, /if: always\(\) && steps\.plan\.outcome == 'success'/);
   assert.ok(!workflow.includes('ios-development-build.yml'));
   assert.ok(!workflow.match(/SDKROOT=iphoneos|SUPPORTED_PLATFORMS=iphoneos|SKIP_BUNDLING: '0'/));
-  assert.match(fs.readFileSync(path.join(repo, 'scripts/ios-sim-ci/ci.cjs'), 'utf8'), /FORCE_BUNDLING: '1'[\s\S]*SKIP_BUNDLING: ''/);
+  assert.match(fs.readFileSync(path.join(repo, 'scripts/ios-sim-ci/ci.cjs'), 'utf8'), /prepareBundleEnvironment\(ios\);\s+stage\('xcodebuild'/);
   assert.ok(workflow.indexOf('setup-node') < workflow.indexOf('npm --prefix ExpoLyrics ci'));
   assert.ok(workflow.indexOf('name: Install JS dependencies') < workflow.indexOf('name: Patch pinned dev launcher for embedded auto-load'));
   assert.ok(workflow.indexOf('rust-prepare') < workflow.indexOf('expo prebuild'));

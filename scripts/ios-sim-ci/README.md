@@ -5,9 +5,12 @@ The `iOS simulator build` workflow runs on dispatch and path-filtered pushes to
 The device workflow and its cache namespace are unchanged. No Revyl credentials,
 upload, or workflow dispatch are part of these scripts.
 
-Debug is intentional. The Rust view is gated by `__DEV__` and its Expo module
-uses `debugOnly` registration. CI forces React Native bundling with an empty
-`SKIP_BUNDLING` value. A simulator-only patch to the installed, locked
+Debug is intentional because the Apple Rust module uses `debugOnly` registration.
+Expo's generated Xcode phase sets `SKIP_BUNDLING=1` in Debug. CI appends a
+simulator-only override to the generated `.xcode.env.local` after pod install.
+The phase sources it again after the Debug default, clearing `SKIP_BUNDLING`
+and setting `FORCE_BUNDLING=1` so React Native runs Expo's `export:embed`.
+A simulator-only patch to the installed, locked
 `expo-dev-launcher` 58.0.12 controller checks `viewModel.hasEmbeddedBundle` and
 calls `loadLocalBundle`. The patch fails on version or context drift.
 
