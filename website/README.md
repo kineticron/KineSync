@@ -34,9 +34,9 @@ The GitHub Pages workflow builds and checks the static export before deploying. 
 
 The website uses the native onboarding palette and frosted glass surfaces. [Design references](design/REFERENCES.md) document inspiration from Apple Music, Apple iOS, Raycast, the frontend-design skill, and guides to avoiding generic AI design for every major element and motion treatment. The hero is a provisional capture from the running BlueStacks app, the artwork view comes from the repository's app previews. The vault has a labeled layout placeholder pending curated assets.
 
-The interactive preview runs the actual Spicy and AMLL WebView HTML, JavaScript and CSS from the mobile app. Run `npm run sync:previews` after changing the native bundles or source captures. Generated preview assets are checked in, so the Pages build does not need to install the mobile dependencies.
+The interactive preview uses checked-in Spicy and AMLL browser snapshots from an earlier version of the mobile app. The current mobile app renders both styles in Rust. Pages builds use the saved HTML and images in `public/previews/` and the demo lyrics in `app/demo-lyrics.json`.
 
-Run `npm run check:previews` in the app checkout to verify that the saved demo and both renderer bundles match the mobile sources. Syncing also records snapshot hashes in `public/previews/manifest.json`, Pages tests verify those hashes, JavaScript syntax, and exact exported assets without depending on unmerged mobile app changes.
+The website tests verify the demo and HTML hashes in `public/previews/manifest.json`, check the preview JavaScript syntax, and compare the exported HTML with the checked-in files. If the demo or HTML is updated, update its SHA-256 entry in the manifest too.
 
 Animations respect reduced motion, and the lyric timer stops when the preview leaves the viewport or the tab is hidden. Interactive controls have accessible names, keyboard focus indicators, and explicit pressed states. FAQ answers use native disclosures. Core content and download links are rendered into the HTML for search engines and browsers without JavaScript.
 

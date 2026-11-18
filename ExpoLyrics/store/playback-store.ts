@@ -272,7 +272,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
-  showRustDebugOverlay: false,
+  showRustDebugOverlay: true,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
