@@ -336,7 +336,10 @@ for (const gesture of ['scrub', 'previous long hold', 'next long hold']) {
 // The renderer viewport stays full size. Only the soft alpha mask moves.
 assert.match(source, /collapsable=\{false\}\s+style=\{\[styles.lyricsWrap, lyricsViewportStyle\]\}/);
 assert.match(source, /position: 'absolute', left: 0, right: 0, top: 0, height: Math.max\(0, screenHeight - lyricTop\)/);
-assert.match(source, /<MaskedView[\s\S]*?androidRenderingMode="software"[\s\S]*?maskElement=/);
+const portraitMask = source.match(/<MaskedView\b[^<>]*\bandroidRenderingMode="hardware"\s+maskElement=[\s\S]*?<\/MaskedView>/)?.[0];
+assert.ok(portraitMask, 'the portrait lyrics mask uses hardware composition');
+assert.match(portraitMask, /style=\{\[styles\.lyricsContentInner, lyricsChromeOpacityStyle\]\}\s*>[\s\S]*?<RustLyricsView\b/, 'the hardware mask contains the native Rust lyrics view');
+assert.doesNotMatch(source, /\bandroidRenderingMode\s*=\s*\{?\s*["']software["']/, 'the player never requests software mask composition');
 assert.ok(!source.includes('foregroundClipStyle'));
 assert.doesNotMatch(callback('lyricsEdgeMaskSolidStyle'), /translate|scale/);
 for (const height of [667, 844, 390]) for (const top of [60, 110]) for (const dockTop of [height - 180, height - 260]) {
