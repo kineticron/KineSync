@@ -1,0 +1,124 @@
+name: Inspect Revyl simulator logs
+
+on:
+  push:
+    branches: [revyl-log-inspect-nov18]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish encrypted diagnostics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          exec 2>/dev/null
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          mkdir "$work/bundle"
+
+          gh run view 44291740394 --repo kineticron/KineSync --log-failed > "$work/full.log"
+          if gh run download 44291740394 --repo kineticron/KineSync \
+            -n ios-simulator-ci-evidence --dir "$work/evidence" > /dev/null; then
+            mv "$work/evidence" "$work/bundle/evidence"
+          fi
+          unset GH_TOKEN
+
+          append_stages() (
+            [[ -d "$work/bundle/evidence" ]] || exit 0
+            cd "$work/bundle"
+            while IFS= read -r -d '' file; do
+              printf '\n--- %s ---\n' "$file"
+              cat -- "$file"
+              printf '\n'
+            done < <(find evidence -type f -name stages.jsonl -print0)
+          )
+
+          append_evidence() (
+            [[ -d "$work/bundle/evidence" ]] || exit 0
+            cd "$work/bundle"
+            printf '\n--- Evidence files ---\n'
+            find evidence -type f -print | sort
+            append_stages
+          )
+
+          write_filtered_log() {
+            local tail_lines=$1
+            printf '%s\n' "--- Last $tail_lines lines of failed logs ---"
+            tail -n "$tail_lines" "$work/full.log"
+            printf '\n--- Earlier error and failure matches with context ---\n'
+            head -n "-$tail_lines" "$work/full.log" > "$work/earlier.log"
+            grep -a -i -E -C 10 'error|fail|fatal|panic|exception|timeout|timed out' "$work/earlier.log" || [[ $? -eq 1 ]]
+          }
+
+          cat > "$work/public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA18mkpoWl62BbptwsMgrC
+          wAvOg23BmyCrTuEamFvNbU0NJE1Kv88RFUkyAuymsVTWcxhuhI4ch8pztvQh6OWO
+          l0uMbTrPbOSCAkLxYV6oJnS5wcTDEj1rT0TVNVUVAfQHBFZzjPBPZD9vDiMkspX/
+          FIAuIUhNjRpvoK8fBxfKr6oOYCazc8Uc+FhIAhVdF6dzYHw+IMMf7afjssn3U/gZ
+          ALlWyA5qkAHMMU30oYdmNsfFgi0Zdt71YgmlkUnzYqH2Qoy3zZEXf1DtdoHmjiQ9
+          QvNF9Uh0FZnXAFbSoYZtcrIu9aDUJPUwD1qojl3p29Flcbg++o1+LiGHYOXM9geE
+          3QIDAQAB
+          -----END PUBLIC KEY-----
+          PEM
+
+          openssl rand -hex 32 > "$work/password"
+          openssl pkeyutl -encrypt -pubin -inkey "$work/public.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256 -in "$work/password" -out "$work/password.enc"
+
+          encrypt_bundle() {
+            tar -czf "$work/diagnostics.tar.gz" -C "$1" .
+            openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$work/password" \
+              -in "$work/diagnostics.tar.gz" -out "$2"
+          }
+
+          cp "$work/full.log" "$work/bundle/failed.log"
+          append_evidence >> "$work/bundle/failed.log"
+          encrypt_bundle "$work/bundle" "$work/diagnostics.enc"
+          if (( $(wc -c < "$work/diagnostics.enc") > 700000 )); then
+            write_filtered_log 300 > "$work/bundle/failed.log"
+            append_evidence >> "$work/bundle/failed.log"
+            encrypt_bundle "$work/bundle" "$work/diagnostics.enc"
+          fi
+          if (( $(wc -c < "$work/diagnostics.enc") > 700000 )); then
+            exit 1
+          fi
+
+          {
+            printf '%s\n' '-----BEGIN ENCRYPTED DIAGNOSTICS BASE64-----'
+            base64 "$work/diagnostics.enc"
+            printf '%s\n' '-----END ENCRYPTED DIAGNOSTICS BASE64-----'
+            printf '%s\n' '-----BEGIN ENCRYPTED PASSWORD BASE64-----'
+            base64 "$work/password.enc"
+            printf '%s\n' '-----END ENCRYPTED PASSWORD BASE64-----'
+          } > "$work/summary"
+          cat "$work/summary" >> "$GITHUB_STEP_SUMMARY"
+
+          mkdir "$work/annotation-bundle"
+          write_filtered_log 400 > "$work/annotation-bundle/failed.log"
+          append_stages >> "$work/annotation-bundle/failed.log"
+          encrypt_bundle "$work/annotation-bundle" "$work/annotations.enc"
+
+          # The Actions runner truncates annotation messages at 4096 characters.
+          base64 -w 4096 "$work/annotations.enc" > "$work/chunks"
+          mapfile -t chunks < "$work/chunks"
+          count=${#chunks[@]}
+          if (( count == 0 || count > 9 )); then
+            exit 1
+          fi
+
+          encrypted_password=$(base64 -w 0 "$work/password.enc")
+          for index in "${!chunks[@]}"; do
+            printf '::warning title=Revyl encrypted diagnostics chunk %d/%d::%s\n' \
+              "$((index + 1))" "$count" "${chunks[index]}"
+          done
+          printf '::warning title=Revyl encrypted password::%s\n' "$encrypted_password"
