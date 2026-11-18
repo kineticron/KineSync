@@ -50,11 +50,16 @@ function setup(random = () => 0.5) {
     }};
   const d=new SpotifyDetector({sample:s=>samples.push(s),status(){},sessionNeeded:()=>needed++,authenticated(){},ready(){},health:h=>health.push(h)},runtime);
   const capture=e=>d.capture(JSON.stringify(e),'https://open.spotify.com/');
-  const credentials=(token='valid')=>capture({type:'credentials',authenticated:true,token,expiresAt:clock.wall+3600000});
-  const start=()=>{d.setEnabled(true);capture({type:'observerEndpoint',url:'https://spclient.spotify.com/connect-state/v1/devices/observer'});capture({type:'socket',url:'wss://dealer.spotify.com/'});credentials();};
+  const credentials=(token='valid',clientToken)=>capture({type:'credentials',authenticated:true,token,clientToken,expiresAt:clock.wall+3600000});
+  const recapture=(token='renewed',clientToken)=> {
+    capture({type:'observerEndpoint',url:'https://spclient.spotify.com/connect-state/v1/devices/observer'});
+    capture({type:'socket',url:'wss://dealer.spotify.com/'});
+    credentials(token,clientToken);
+  };
+  const start=(token='valid',clientToken)=>{d.setEnabled(true);recapture(token,clientToken);};
   const identify=async(id=`id-${sockets.length}`)=>{const ws=sockets.at(-1);ws.open();ws.event({headers:{'Spotify-Connection-Id':id}});await flush();return ws;};
   const posts=()=>requests.filter(r=>r.method==='POST');
-  return {d,clock,sockets,requests,health,samples,capture,credentials,start,identify,posts,set response(r){response=r;},get needed(){return needed;}};
+  return {d,clock,sockets,requests,health,samples,capture,credentials,recapture,start,identify,posts,set response(r){response=r;},get needed(){return needed;}};
 }
 let cases=0, baselineFailures=0;
 async function check(name,fn){
@@ -89,6 +94,8 @@ for (const stage of ['sending', 'awaitingConfirmation']) await check(`lifetime: 
   if (stage === 'awaitingConfirmation') await command;
   h.credentials('replacement');
   pending.resolve({status:204}); await settled;
+  await h.clock.advance(2000);
+  h.recapture('replacement');
   h.response = {status:200,body:state('replacement-phone')}; await h.identify();
   await h.clock.advance(5001);
   assert.equal(h.posts().length, 1); assert(h.d.health.controlsEnabled);
@@ -127,7 +134,7 @@ await check('review: no-op confirmation timeout reconciles observation once with
  const h=setup();try {h.start();const ws=await h.identify();const attempt=h.d.health.attempt;await h.d.control({type:'next'});await h.clock.advance(4999);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);await h.clock.advance(1);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.d.health.attempt,attempt);assert.equal(h.d.health.lastError,undefined);await h.clock.advance(5001);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);}finally{h.d.clear();}
 });
 await check('review: only failed reconciliation spends transport retry budget',async()=>{
- const h=setup();try{h.start();await h.identify();await h.d.control({type:'previous'});h.response={status:503};await h.clock.advance(5000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.attempt,1);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);await h.clock.advance(2000);assert.equal(h.sockets.length,2);assert.equal(h.posts().length,1);}finally{h.d.clear();}
+ const h=setup();try{h.start();await h.identify();await h.d.control({type:'previous'});h.response={status:503};await h.clock.advance(5000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.attempt,1);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);await h.clock.advance(2000);h.recapture();assert.equal(h.sockets.length,2);assert.equal(h.posts().length,1);}finally{h.d.clear();}
 });
 for(const cancel of [false,true])await check(`review: synchronous connecting health reentry ${cancel?'cancels':'coalesces'} the whole owned attempt`,async()=>{
  const h=setup();let entered=false;try {
@@ -143,7 +150,8 @@ await check('review: Dealer access_token-only rotations do not change observer a
  const h=setup();try{h.start();const ws=await h.identify();const generation=h.d.health.generation;const scope=h.d.lastSample.sourceClockScope;
  for(const token of ['browser-a','browser-b'])h.capture({type:'socket',url:`wss://dealer.spotify.com/?access_token=${token}#ignored`});
  assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.d.health.generation,generation);assert.equal(h.d.lastSample.sourceClockScope,scope);assert(h.d.health.controlsEnabled);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);assert.equal(h.posts().length,0);assert.equal(new URL(ws.url).searchParams.get('access_token'),'valid');
- h.credentials('actually-new-verified-token');assert.equal(h.sockets.length,2);assert.equal(h.d.health.observerConfirmed,false);
+ h.credentials('actually-new-verified-token');assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.observerConfirmed,false);
+ await h.clock.advance(2000);h.recapture('actually-new-verified-token');assert.equal(h.sockets.length,2);
  }finally{h.d.clear();}
 });
 for(const body of [{},[],{player_state:{}},{player_state:[]},{player_state:{is_playing:true}},{player_state:{is_paused:true,track:{uri:'malformed'}}},{arbitrary:{player_state:{is_paused:true}}}])await check(`review: malformed/unproven registration body never establishes readiness ${JSON.stringify(body)}`,async()=>{
@@ -151,7 +159,7 @@ for(const body of [{},[],{player_state:{}},{player_state:[]},{player_state:{is_p
 });
 await check('background detaches silent socket; old callbacks and cached replay cannot enable controls',async()=>{
  const h=setup();h.start();const ws=await h.identify();const late=ws.onmessage;assert(h.d.health.controlsEnabled);
- h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.sockets.length,2);await allDisabled(h);
+ h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.d.health.phase,'renewingSession');h.recapture();assert.equal(h.sockets.length,2);await allDisabled(h);
  late({data:JSON.stringify({payloads:[state()]})});assert.equal(h.d.health.observerConfirmed,false);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
 });
 for (const elapsed of [0, 1000, 30000]) await check(`review: inactive-only resume replaces OPEN pong-only socket immediately (${elapsed}ms)`,async()=>{
@@ -161,13 +169,13 @@ for (const elapsed of [0, 1000, 30000]) await check(`review: inactive-only resum
   // A queued pong can make lastContact look fresh even if playback is stuck.
   ws.event({type:'pong'});h.d.setActivity('active');
   assert.equal(ws.readyState,3);assert.equal(ws.onmessage,null);
-  assert.equal(h.sockets.length,2);assert.equal(h.d.health.phase,'connecting');
+  assert.equal(h.sockets.length,1);assert.equal(h.d.health.phase,'renewingSession');
   assert.equal(h.d.health.attempt,0);await allDisabled(h);
   late({data:JSON.stringify({payloads:[state('obsolete')]})});
   assert.equal(h.d.health.observerConfirmed,false);
   const next='spotify:track:0000000000000000000001';
   h.response={status:200,body:state('resumed',next,h.clock.wall)};
-  await h.identify();assert.equal(h.samples.at(-1).uri,next);assert(h.d.health.controlsEnabled);
+  h.recapture();await h.identify();assert.equal(h.samples.at(-1).uri,next);assert(h.d.health.controlsEnabled);
   h.d.setActivity('active');assert.equal(h.sockets.length,2,'duplicate active is a no-op');
   assert.equal(h.posts().length,0);
  }finally{h.d.clear();}
@@ -184,9 +192,10 @@ for (const stage of ['connecting','headers','body','ready']) await check(`review
   const before=h.clock.mono;
   h.d.refresh(true);
   assert.equal(h.clock.mono,before);assert.equal(old.readyState,3);
-  assert.equal(h.sockets.length,2);assert.equal(h.d.health.observerConfirmed,false);
+  assert.equal(h.sockets.length,1);assert.equal(h.d.health.observerConfirmed,false);
   if(stage==='headers'||stage==='body')assert.equal(request.signal.aborted,true);
-  h.d.refresh(true);assert.equal(h.sockets.length,2,'rapid Retry remains debounced');
+  const needed=h.needed;h.d.refresh(true);assert.equal(h.needed,needed,'rapid Retry remains debounced');
+  h.recapture();assert.equal(h.sockets.length,2);
   const next='spotify:track:0000000000000000000002';
   h.response={status:200,body:state('fresh',next,h.clock.wall)};
   await h.identify();assert.equal(h.samples.at(-1).uri,next);assert(h.d.health.controlsEnabled);
@@ -206,11 +215,94 @@ await check('review: explicit Retry replaces hanging session renewal deadline im
   h.credentials();await h.identify();assert(h.d.health.controlsEnabled);
  }finally{h.d.clear();}
 });
+for (const cause of ['Retry', 'socket error', 'socket close', 'registration error', 'path change', 'offline recovery', 'resume']) {
+ await check(`review: ${cause} waits for a fresh Spotify credential and route capture`, async () => {
+  const h = setup();
+  try {
+   h.d.setReachability('online', 'WIFI');
+   h.start('dead-token', 'dead-client');
+   if (cause === 'registration error') h.response = { status: 410 };
+   const old = await h.identify();
+   const needed = h.needed;
+   const requests = h.requests.length;
+   const automatic = ['socket error', 'socket close', 'registration error'].includes(cause);
+   if (cause === 'Retry') {
+    old.onerror();
+    assert.equal(h.d.health.phase, 'retryWait');
+    h.d.refresh(true);
+   }
+   if (cause === 'socket error') old.onerror();
+   if (cause === 'socket close') old.onclose();
+   if (cause === 'path change') h.d.setReachability('online', 'CELLULAR');
+   if (cause === 'offline recovery') {
+    h.d.setReachability('offline', 'WIFI');
+    h.d.refresh(true);
+    await h.clock.advance(30000);
+    assert.equal(h.needed, needed);
+    h.d.setReachability('online', 'CELLULAR');
+   }
+   if (cause === 'resume') { h.d.setActivity('inactive'); h.d.setActivity('active'); }
+   if (automatic || cause === 'offline recovery') {
+    const delay = automatic ? 2000 : 500;
+    assert.equal(h.credentials('dead-token', 'dead-client'), false, 'late capture cannot seed the next attempt');
+    await h.clock.advance(delay - 1);
+    assert.equal(h.needed, needed);
+    assert.equal(h.sockets.length, 1);
+    await h.clock.advance(1);
+   }
+   assert.equal(old.readyState, 3);
+   assert.equal(h.needed, needed + 1);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   h.d.refresh();
+   h.d.setEnabled(true);
+   assert.equal(h.needed, needed + 1, 'automatic recovery nudges coalesce');
+   h.credentials('fresh-token', cause === 'Retry' ? 'fresh-client' : undefined);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   assert.equal(h.sockets.length, 1, 'fresh bearer cannot reuse the old routes');
+   h.capture({ type: 'socket', url: 'wss://fresh-dealer.spotify.com/' });
+   assert.equal(h.sockets.length, 1, 'observer endpoint must also be rediscovered');
+   assert.equal(h.requests.length, requests);
+   h.capture({ type: 'observerEndpoint', url: 'https://fresh-spclient.spotify.com/connect-state/v1/devices/observer' });
+   assert.equal(h.sockets.length, 2);
+   const url = new URL(h.sockets.at(-1).url);
+   assert.equal(url.hostname, 'fresh-dealer.spotify.com');
+   assert.equal(url.searchParams.get('access_token'), 'fresh-token');
+   h.response = { status: 200, body: state('recovered') };
+   await h.identify();
+   const registration = h.requests.at(-1);
+   assert.equal(new URL(registration.url).hostname, 'fresh-spclient.spotify.com');
+   assert.equal(registration.headers.authorization, 'Bearer fresh-token');
+   assert.equal(registration.headers['client-token'], cause === 'Retry' ? 'fresh-client' : undefined);
+   assert(h.d.health.controlsEnabled);
+  } finally { h.d.clear(); }
+ });
+}
+await check('review: network changes and suspension retain transport backoff before renewing', async () => {
+ const h = setup();
+ try {
+  h.d.setReachability('online', 'WIFI');
+  h.start();
+  h.sockets[0].onerror();
+  const needed = h.needed;
+  h.d.setReachability('online', 'CELLULAR');
+  h.d.setReachability('offline', 'CELLULAR');
+  h.d.setActivity('background');
+  h.d.setActivity('active');
+  h.d.setEnabled(true);
+  h.d.setReachability('online', 'WIFI');
+  await h.clock.advance(1999);
+  assert.equal(h.needed, needed);
+  assert.equal(h.sockets.length, 1);
+  await h.clock.advance(1);
+  assert.equal(h.needed, needed + 1);
+  assert.equal(h.d.health.phase, 'renewingSession');
+ } finally { h.d.clear(); }
+});
 await check('expiry across suspended timers renews once; repeated fresh-token 401 stops at sign-in',async()=>{
  const h=setup();h.start();await h.identify();h.d.setEnabled(false);h.clock.wall+=4000000;h.clock.mono+=4000000;h.d.setEnabled(true);
  assert.equal(h.d.health.phase,'renewingSession');const needed=h.needed;h.d.setEnabled(true);assert.equal(h.needed,needed);await allDisabled(h);
- h.credentials('fresh');h.response={status:401};await h.identify();assert.equal(h.d.health.phase,'renewingSession');
- h.credentials('fresh2');await h.identify();assert.equal(h.d.health.phase,'signInRequired');await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');h.d.clear();
+ h.recapture('fresh');h.response={status:401};await h.identify();assert.equal(h.d.health.phase,'renewingSession');
+ h.recapture('fresh2');await h.identify();assert.equal(h.d.health.phase,'signInRequired');await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');h.d.clear();
 });
 await check('renewal episode has hard deadline and backoff for network stalls; explicit anonymous needs sign-in',async()=>{
  const h=setup();h.d.setEnabled(true);await h.clock.advance(20000);assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000+20000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.attempt,2);h.d.clear();
@@ -219,31 +311,33 @@ await check('renewal episode has hard deadline and backoff for network stalls; e
 await check('403 denied has no automatic loop across lifecycle/renderer/credentials; explicit retry is debounced',async()=>{
  const h=setup();h.response={status:403,bodyPromise:new Promise(()=>{})};h.start();await h.identify();assert.equal(h.d.health.phase,'denied');
  h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh();h.credentials('different');await h.clock.advance(120000);assert.equal(h.sockets.length,1);assert.equal(h.d.health.phase,'denied');
- h.response={status:200,body:state()};h.d.refresh(true);h.d.refresh(true);assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+ h.response={status:200,body:state()};h.d.refresh(true);h.d.refresh(true);h.recapture();assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
 });
 for(const [label,value,duration] of [['seconds','9',9000],['date',new Date(1900000012000).toUTCString(),12000],['invalid','nope',33000],['missing',undefined,33000],['large','900',900000]]){
  await check(`429 ${label}: exact shared not-before, monotonic clock jump guard, one retry`,async()=>{
   const h=setup();h.response={status:429,headers:value?{'retry-after':value}:undefined};h.start();await h.identify();assert.equal(h.d.health.phase,'rateLimited');
   assert.equal(h.d.health.retryNotBeforeWall,1900000000000+duration);
-  h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh(true);h.credentials('replacement');h.d.refresh();
+  const needed=h.needed;
+  h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh(true);assert.equal(h.credentials('replacement'),false);h.d.refresh();
   h.d.setReachability('offline');h.d.setReachability('online');await h.clock.advance(500);assert.equal(h.sockets.length,1);
-  h.clock.wall+=1000000;await h.clock.advance(duration-501);assert.equal(h.sockets.length,1);
-  await h.clock.advance(1);assert.equal(h.sockets.length,2);h.response={status:200,body:state()};await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+  h.clock.wall+=1000000;await h.clock.advance(duration-501);assert.equal(h.sockets.length,1);assert.equal(h.needed,needed);
+  await h.clock.advance(1);assert.equal(h.needed,needed+1);assert.equal(h.sockets.length,1);
+  h.recapture();assert.equal(h.sockets.length,2);h.response={status:200,body:state()};await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  });
 }
 for(const method of ['POST','GET'])await check(`429 ${method} cancels concurrent work; cooldown survives all recovery intents`,async()=>{
  const h=setup();h.start();await h.identify();h.response={status:429,headers:{'retry-after':'2'}};
  if(method==='POST')await assert.rejects(h.d.control({type:'next'}));else await assert.rejects(h.d.metadata(uri));
- assert.equal(h.d.health.phase,'rateLimited');h.d.refresh(true);h.d.refresh();await allDisabled(h);await h.clock.advance(1999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);assert.equal(h.posts().length,method==='POST'?1:0);h.d.clear();
+ assert.equal(h.d.health.phase,'rateLimited');h.d.refresh(true);h.d.refresh();await allDisabled(h);await h.clock.advance(1999);assert.equal(h.sockets.length,1);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,2);assert.equal(h.posts().length,method==='POST'?1:0);h.d.clear();
 });
 await check('fallback cooldown doubles to capped five minutes, never caps server value',async()=>{
  const h=setup();h.start();h.response={status:429};
- for(const duration of [33000,66000,132000,264000,300000,300000]){await h.identify();assert.equal(h.d.health.retryNotBeforeWall-h.clock.wall,duration);await h.clock.advance(duration);}
+ for(const duration of [33000,66000,132000,264000,300000,300000]){await h.identify();assert.equal(h.d.health.retryNotBeforeWall-h.clock.wall,duration);await h.clock.advance(duration);h.recapture();}
  h.d.clear();
 });
 await check('5xx/reset errors use seeded 2/4/8/16/30 then 60-second cycles; no parallel sockets',async()=>{
  const h=setup();h.start();h.response={status:503};
- for(const delay of [2000,4000,8000,16000,30000,60000,60000]){await h.identify();assert.equal(h.d.health.nextRetryAtWall-h.clock.wall,delay);const n=h.sockets.length;h.d.refresh();await h.clock.advance(delay-1);assert.equal(h.sockets.length,n);await h.clock.advance(1);assert.equal(h.sockets.length,n+1);}
+ for(const delay of [2000,4000,8000,16000,30000,60000,60000]){await h.identify();assert.equal(h.d.health.nextRetryAtWall-h.clock.wall,delay);const n=h.sockets.length;h.d.refresh();await h.clock.advance(delay-1);assert.equal(h.sockets.length,n);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,n+1);}
  h.d.clear();assert.equal(h.clock.timers.size,0);
 });
 for (const mode of ['headers', 'body', 'unusable']) for (const resumed of [false, true]) await check(`review: registering ID churn cannot renew observation deadline (${mode}, ${resumed ? 'resume' : 'install'})`, async () => {
@@ -255,6 +349,7 @@ for (const mode of ['headers', 'body', 'unusable']) for (const resumed of [false
    h.d.setActivity('background'); h.d.setActivity('active'); h.d.setEnabled(true);
    assert.equal(h.samples.length, before + 1, 'resume replays display cache');
    assert.equal(h.d.health.observerConfirmed, false, 'display cache cannot confirm replacement registration');
+   h.recapture();
   }
   h.response = mode === 'headers' ? () => late.promise : mode === 'body'
    ? { status: 200, bodyPromise: late.promise } : { status: 200, body: {} };
@@ -278,7 +373,7 @@ for (const mode of ['headers', 'body', 'unusable']) for (const resumed of [false
    : new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer);
   await flush(); assert.equal(h.d.health.observerConfirmed, false);
   h.response = { status: 200, body: state('recovered', uri, h.clock.wall) };
-  await h.clock.advance(2000); await h.identify('stable');
+  await h.clock.advance(2000); h.recapture(); await h.identify('stable');
   assert(h.d.health.controlsEnabled); assert.equal(h.d.currentTarget, 'recovered');
   assert.equal(h.posts().length, 0, 'recovery never replays a transport command');
  } finally { h.d.clear(); }
@@ -303,7 +398,7 @@ await check('review: registration churn recovery preserves latest 429 cooldown a
   h.d.setActivity('background'); h.d.setActivity('active'); h.d.setEnabled(true);
   h.credentials('replacement'); h.d.refresh(true);
   await h.clock.advance(29999); assert.equal(h.sockets.length, count);
-  await h.clock.advance(1); assert.equal(h.sockets.length, count + 1);
+  await h.clock.advance(1); h.recapture(); assert.equal(h.sockets.length, count + 1);
   h.response = { status: 200, body: state() }; await h.identify('stable');
   assert(h.d.health.controlsEnabled); assert.equal(h.posts().length, 0);
  } finally { h.d.clear(); }
@@ -312,20 +407,20 @@ for(const phase of ['open','id','register','body','state'])await check(`bounded 
  const h=setup();if(phase==='register')h.response=()=>new Promise(()=>{});if(phase==='body')h.response={status:200,bodyPromise:new Promise(()=>{})};if(phase==='state')h.response={status:200,body:{}};
  h.start();const ws=h.sockets[0];if(phase!=='open')ws.open();if(!['open','id'].includes(phase))ws.event({headers:{'spotify-connection-id':'id'}});await flush();
  if(phase==='id')for(let i=0;i<4;i++){await h.clock.advance(1000);ws.event({type:'pong'});}
- await h.clock.advance(phase==='id'?1000:5000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.socket,null);await h.clock.advance(2000);assert.equal(h.sockets.length,2);h.d.clear();
+ await h.clock.advance(phase==='id'?1000:5000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.socket,null);await h.clock.advance(2000);h.recapture();assert.equal(h.sockets.length,2);h.d.clear();
 });
 await check('valid idle/empty state confirms observer with absent target; cached active device never reused',async()=>{
- const h=setup();h.start();await h.identify();h.response={status:200,body:{player_state:{is_paused:true}}};h.d.refresh();await h.identify();assert.equal(h.d.health.phase,'ready');assert.equal(h.d.health.target,'absent');await allDisabled(h);h.d.clear();
+ const h=setup();h.start();await h.identify();h.response={status:200,body:{player_state:{is_paused:true}}};h.d.refresh();h.recapture();await h.identify();assert.equal(h.d.health.phase,'ready');assert.equal(h.d.health.target,'absent');await allDisabled(h);h.d.clear();
 });
 await check('new ID revokes readiness; stale registration headers/body cannot mutate replacement',async()=>{
  const h=setup();h.start();const ws=await h.identify();const late=deferred();h.response={status:200,bodyPromise:late.promise};ws.event({headers:{'spotify-connection-id':'old'}});await flush();await allDisabled(h);
  h.response={status:200,body:state('new-phone')};ws.event({headers:{'spotify-connection-id':'new'}});await flush();assert(h.d.health.controlsEnabled);late.resolve(new TextEncoder().encode(JSON.stringify(state('old-phone'))).buffer);await flush();assert.equal(h.d.currentTarget,'new-phone');h.d.clear();
 });
 await check('stale-target 404 invalidates target, one observation recovery, zero playback replay',async()=>{
- const h=setup();h.start();await h.identify();h.response={status:404};await assert.rejects(h.d.control({type:'next'}));await allDisabled(h);await h.clock.advance(2000);h.response={status:200,body:state('new')};await h.identify();assert.equal(h.posts().length,1);assert.equal(h.d.currentTarget,'new');h.d.clear();
+ const h=setup();h.start();await h.identify();h.response={status:404};await assert.rejects(h.d.control({type:'next'}));await allDisabled(h);await h.clock.advance(2000);h.recapture();h.response={status:200,body:state('new')};await h.identify();assert.equal(h.posts().length,1);assert.equal(h.d.currentTarget,'new');h.d.clear();
 });
 for(const type of ['toggle','next','previous','seek'])await check(`${type} response loss/ignored abort settles once with unknown outcome and exact one POST`,async()=>{
- const h=setup();h.start();await h.identify();h.response=()=>new Promise(()=>{});const result=h.d.control({type,positionMs:100});const rejected=assert.rejects(result,/unknown/);await allDisabled(h);await h.clock.advance(5000);await rejected;assert.equal(h.d.health.command,'outcomeUnknown');assert.equal(h.d.commandPending,null);await h.clock.advance(2000);h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,1);h.d.clear();
+ const h=setup();h.start();await h.identify();h.response=()=>new Promise(()=>{});const result=h.d.control({type,positionMs:100});const rejected=assert.rejects(result,/unknown/);await allDisabled(h);await h.clock.advance(5000);await rejected;assert.equal(h.d.health.command,'outcomeUnknown');assert.equal(h.d.commandPending,null);await h.clock.advance(2000);h.recapture();h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,1);h.d.clear();
 });
 await check('accepted command awaits authoritative state, five-second reconciliation never replays',async()=>{
  const h=setup();h.start();await h.identify();await h.d.control({type:'toggle'});assert.equal(h.d.health.command,'awaitingConfirmation');await allDisabled(h);await h.clock.advance(4999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.d.health.phase,'ready');assert.equal(h.sockets.length,1);assert.equal(h.d.health.attempt,0);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);assert.equal(h.d.health.command,'idle');h.d.clear();
@@ -334,14 +429,14 @@ await check('track/target change invalidates seek confirmation; current observat
  const h=setup();h.start();const ws=await h.identify();await h.d.control({type:'seek',positionMs:500});ws.event({payloads:[state('other','spotify:track:0000000000000000000001',1900000001000)]});await flush();assert.equal(h.d.health.command,'idle');await h.clock.advance(5000);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);h.d.clear();
 });
 await check('late old command finally cannot clear or recover newer command gate',async()=>{
- const h=setup();h.start();await h.identify();const old=deferred();h.response=()=>old.promise;const first=h.d.control({type:'next'});const rejected=assert.rejects(first);h.d.setEnabled(false);h.d.setEnabled(true);h.response={status:200,body:state()};await h.identify();const newer=deferred();h.response=()=>newer.promise;const second=h.d.control({type:'previous'});const id=h.d.commandPending;old.resolve({status:200,body:{}});await rejected;assert.equal(h.d.commandPending,id);newer.resolve({status:200,body:{}});await second;assert.equal(h.posts().length,2);h.d.clear();
+ const h=setup();h.start();await h.identify();const old=deferred();h.response=()=>old.promise;const first=h.d.control({type:'next'});const rejected=assert.rejects(first);h.d.setEnabled(false);h.d.setEnabled(true);h.recapture();h.response={status:200,body:state()};await h.identify();const newer=deferred();h.response=()=>newer.promise;const second=h.d.control({type:'previous'});const id=h.d.commandPending;old.resolve({status:200,body:{}});await rejected;assert.equal(h.d.commandPending,id);newer.resolve({status:200,body:{}});await second;assert.equal(h.posts().length,2);h.d.clear();
 });
 await check('offline suppresses periodic work; unknown attempts; online/active/renderer/manual events coalesce',async()=>{
- const h=setup();h.d.setReachability('offline');h.start();await h.clock.advance(120000);assert.equal(h.sockets.length,0);h.d.setReachability('online');h.d.setEnabled(true);h.d.refresh();h.d.refresh(true);await h.clock.advance(500);assert.equal(h.sockets.length,1);await h.identify();h.d.setActivity('inactive');await allDisabled(h);h.d.setActivity('active');await allDisabled(h);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+ const h=setup();h.d.setReachability('offline');h.start();await h.clock.advance(120000);assert.equal(h.sockets.length,0);h.d.setReachability('online');h.d.setEnabled(true);h.d.refresh();h.d.refresh(true);await h.clock.advance(500);h.recapture();assert.equal(h.sockets.length,1);await h.identify();h.d.setActivity('inactive');await allDisabled(h);h.d.setActivity('active');await allDisabled(h);h.recapture();await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  const u=setup();u.start();assert.equal(u.sockets.length,1);u.d.clear();
 });
 await check('online hint never certifies Spotify; malformed frames cannot renew liveness; onerror recovers locally',async()=>{
- const h=setup();h.start();const ws=await h.identify();ws.pongs=false;for(let i=0;i<14;i++){await h.clock.advance(1000);ws.event({unrecognized:true});}await h.clock.advance(1000);assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);const next=await h.identify();next.onerror();assert.equal(h.d.health.phase,'retryWait');h.d.clear();
+ const h=setup();h.start();const ws=await h.identify();ws.pongs=false;for(let i=0;i<14;i++){await h.clock.advance(1000);ws.event({unrecognized:true});}await h.clock.advance(1000);assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);h.recapture();const next=await h.identify();next.onerror();assert.equal(h.d.health.phase,'retryWait');h.d.clear();
 });
 for(const phase of ['connecting','registering','body','command','renewal'])await check(`logout/unmount/source-switch cancellation during ${phase}: settle and release all owned work`,async()=>{
  const h=setup();h.start();if(phase==='registering')h.response=()=>new Promise(()=>{});if(phase==='body')h.response={status:200,bodyPromise:new Promise(()=>{})};if(['registering','body','command'].includes(phase))await h.identify();let rejected;
@@ -349,10 +444,10 @@ for(const phase of ['connecting','registering','body','command','renewal'])await
  if(phase==='renewal'){h.d.needSession('renew');}h.d.clear();await flush();if(rejected)await rejected;assert.equal(h.clock.timers.size,0);assert.equal(h.d.socket,null);assert.equal(h.d.health.phase,'idle');assert.equal(h.capture({type:'credentials',authenticated:true,token:'late'}),false);await h.clock.advance(120000);assert.equal(h.d.health.phase,'idle');
 });
 await check('only sixty seconds of uninterrupted healthy contact resets transient budget',async()=>{
- const h=setup();h.start();h.sockets[0].onerror();await h.clock.advance(2000);let ws=await h.identify();assert.equal(h.d.health.attempt,1);await h.clock.advance(14000);ws.event({type:'pong'});ws.onerror();await h.clock.advance(4000);ws=await h.identify();assert.equal(h.d.health.attempt,2);for(let i=0;i<4;i++){await h.clock.advance(15000);ws.event({type:'pong'});}assert.equal(h.d.health.attempt,0);h.d.clear();
+ const h=setup();h.start();h.sockets[0].onerror();await h.clock.advance(2000);h.recapture();let ws=await h.identify();assert.equal(h.d.health.attempt,1);await h.clock.advance(14000);ws.event({type:'pong'});ws.onerror();await h.clock.advance(4000);h.recapture();ws=await h.identify();assert.equal(h.d.health.attempt,2);for(let i=0;i<4;i++){await h.clock.advance(15000);ws.event({type:'pong'});}assert.equal(h.d.health.attempt,0);h.d.clear();
 });
 await check('HTTP body hanging after command acceptance and late body settlement never replays or overwrites current generation',async()=>{
- const h=setup();h.start();await h.identify();const body=deferred();h.response={status:204,bodyPromise:body.promise};const command=h.d.control({type:'seek',positionMs:800});const rejected=assert.rejects(command,/unknown/);await flush();await h.clock.advance(5000);await rejected;await h.clock.advance(2000);h.response={status:200,body:state('replacement')};await h.identify();body.resolve(new ArrayBuffer(0));await flush();assert.equal(h.d.currentTarget,'replacement');assert.equal(h.d.health.command,'idle');assert.equal(h.posts().length,1);h.d.clear();
+ const h=setup();h.start();await h.identify();const body=deferred();h.response={status:204,bodyPromise:body.promise};const command=h.d.control({type:'seek',positionMs:800});const rejected=assert.rejects(command,/unknown/);await flush();await h.clock.advance(5000);await rejected;await h.clock.advance(2000);h.recapture();h.response={status:200,body:state('replacement')};await h.identify();body.resolve(new ArrayBuffer(0));await flush();assert.equal(h.d.currentTarget,'replacement');assert.equal(h.d.health.command,'idle');assert.equal(h.posts().length,1);h.d.clear();
 });
 await check('abort-respecting fetch and rejected DNS/TLS both settle commands as unknown without replay',async()=>{
  for(const mode of ['abort','network']) {
@@ -543,7 +638,7 @@ await check('rotated stale registration restores known target without replacing 
 });
 
 await check('registration 410 and socket constructor failure recover through observation only',async()=>{
- const h=setup();h.response={status:410};h.start();await h.identify();assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,0);h.d.clear();
+ const h=setup();h.response={status:410};h.start();await h.identify();assert.equal(h.d.health.phase,'retryWait');await h.clock.advance(2000);h.recapture();h.response={status:200,body:state()};await h.identify();assert.equal(h.posts().length,0);h.d.clear();
  const e=setup();e.d.runtime.socket=()=>{throw Error('TLS');};e.start();assert.equal(e.d.health.phase,'retryWait');assert.equal(e.posts().length,0);e.d.clear();
 });
 await check('ID rotation cancels an old command immediately and old completion cannot affect current observation',async()=>{
@@ -556,29 +651,31 @@ await check('expired captured credentials cannot create rapid auth loops; retry 
 await check('backward wall jump conservatively extends cooldown; offline flaps never multiply retry timers',async()=>{
  const h=setup();h.start();h.response={status:429,headers:{'retry-after':'10'}};await h.identify();h.clock.wall-=20000;
  for(let i=0;i<4;i++){h.d.setReachability('offline');h.d.setReachability('online');await h.clock.advance(100);}assert.equal(h.sockets.length,1);
- await h.clock.advance(29599);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);h.d.clear();
+ await h.clock.advance(29599);assert.equal(h.sockets.length,1);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,2);h.d.clear();
 });
 await check('explicit account review starts one auth epoch without forbidden observer loop; cooldown cannot be bypassed by sign-in',async()=>{
- const h=setup();h.start();h.response={status:403};await h.identify();h.d.beginSignIn();assert.equal(h.d.health.phase,'renewingSession');assert.equal(h.sockets.length,1);h.response={status:200,body:state()};h.credentials('new-account');await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+ const h=setup();h.start();h.response={status:403};await h.identify();h.d.beginSignIn();assert.equal(h.d.health.phase,'renewingSession');assert.equal(h.sockets.length,1);h.response={status:200,body:state()};h.recapture('new-account');await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  const r=setup();r.start();r.response={status:429,headers:{'retry-after':'10'}};await r.identify();const needs=r.needed;r.d.beginSignIn();assert.equal(r.needed,needs);assert.equal(r.d.health.phase,'rateLimited');r.d.clear();
 });
 await check('inactive-to-active revalidates expiry without waiting for suspended JS expiry timer',async()=>{
  const h=setup();h.start();await h.identify();h.d.setActivity('inactive');h.clock.wall+=4000000;h.clock.mono+=4000000;await allDisabled(h);h.d.setActivity('active');assert.equal(h.d.health.phase,'renewingSession');assert.equal(h.d.socket,null);h.d.clear();
 });
 await check('Retry-After HTTP-date uses server Date when local wall clock is skewed',async()=>{
- const h=setup();h.start();h.response={status:429,headers:{date:new Date(h.clock.wall-60000).toUTCString(),'retry-after':new Date(h.clock.wall-45000).toUTCString()}};await h.identify();assert.equal(h.d.health.retryNotBeforeWall-h.clock.wall,15000);await h.clock.advance(14999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);h.d.clear();
+ const h=setup();h.start();h.response={status:429,headers:{date:new Date(h.clock.wall-60000).toUTCString(),'retry-after':new Date(h.clock.wall-45000).toUTCString()}};await h.identify();assert.equal(h.d.health.retryNotBeforeWall-h.clock.wall,15000);await h.clock.advance(14999);assert.equal(h.sockets.length,1);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,2);h.d.clear();
 });
 await check('sign-in requirement survives background, renderer, reachability and late auth until explicit user sign-in',async()=>{
- const h=setup();h.start();h.response={status:401};await h.identify();h.credentials('fresh');await h.identify();assert.equal(h.d.health.phase,'signInRequired');const n=h.sockets.length, needs=h.needed;
+ const h=setup();h.start();h.response={status:401};await h.identify();h.recapture('fresh');
+ h.sockets.at(-1).onerror();await h.clock.advance(2000);h.recapture('fresh-after-transport-error');await h.identify();
+ assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.d.health.reason,'freshTokenRejected');const n=h.sockets.length, needs=h.needed;
  h.d.setEnabled(false);h.d.setEnabled(true);h.d.refresh();h.credentials('late');h.d.setReachability('offline');h.d.setReachability('online');await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.sockets.length,n);assert.equal(h.needed,needs);h.d.beginSignIn();assert.equal(h.d.health.phase,'renewingSession');h.d.clear();
 });
 await check('active rechecks silent liveness and establishment deadlines when native timers were suspended',async()=>{
  for(const phase of ['ready','connecting']) {
-  const h=setup();h.start();if(phase==='ready')await h.identify();h.d.setActivity('inactive');h.clock.wall+=50000;h.clock.mono+=50000;h.d.setActivity('active');assert.equal(h.d.health.phase,'connecting');await allDisabled(h);assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
+  const h=setup();h.start();if(phase==='ready')await h.identify();h.d.setActivity('inactive');h.clock.wall+=50000;h.clock.mono+=50000;h.d.setActivity('active');assert.equal(h.d.health.phase,'renewingSession');await allDisabled(h);h.recapture();assert.equal(h.sockets.length,2);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
  }
 });
 await check('native send throwing without an error/close event still detaches and retries locally',async()=>{
- const h=setup();h.start();const ws=await h.identify();ws.send=()=>{throw Error('native transport disconnected');};await h.clock.advance(10000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.socket,null);await h.clock.advance(2000);assert.equal(h.sockets.length,2);assert.equal(h.posts().length,0);h.d.clear();
+ const h=setup();h.start();const ws=await h.identify();ws.send=()=>{throw Error('native transport disconnected');};await h.clock.advance(10000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.socket,null);await h.clock.advance(2000);h.recapture();assert.equal(h.sockets.length,2);assert.equal(h.posts().length,0);h.d.clear();
 });
 await check('seeded jitter has exact deterministic backoff and positive-only rate-limit fallback',async()=>{
  const expected=seeded(123);for(let i=0;i<40;i++)expected();const h=setup(seeded(123));h.start();h.response={status:503};await h.identify();assert.equal(h.d.health.nextRetryAtWall,h.clock.wall+2000*(0.8+expected()*0.4));h.d.clear();
@@ -588,7 +685,7 @@ for(const method of ['POST','GET'])await check(`${method} 401 renews once and fr
  const h=setup();h.start();await h.identify();h.response={status:401};
  const send=()=>method==='POST'?h.d.control({type:'next'}):h.d.metadata(uri);
  await assert.rejects(send(),/HTTP 401/);assert.equal(h.d.health.phase,'renewingSession');
- h.credentials('fresh');h.response={status:200,body:state()};await h.identify();assert(h.d.health.controlsEnabled);h.response={status:401};await assert.rejects(send(),/HTTP 401/);assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.posts().length,method==='POST'?2:0);await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');h.d.clear();
+ h.recapture('fresh');h.response={status:200,body:state()};await h.identify();assert(h.d.health.controlsEnabled);h.response={status:401};await assert.rejects(send(),/HTTP 401/);assert.equal(h.d.health.phase,'signInRequired');assert.equal(h.posts().length,method==='POST'?2:0);await h.clock.advance(120000);assert.equal(h.d.health.phase,'signInRequired');h.d.clear();
 });
 // Execute the actual injected browser script with independently controlled fetch/body and lifecycle.
 function browser(response) {
@@ -648,7 +745,7 @@ for (const stage of ['connect','id','headers','body']) await check('review: loss
   await h.clock.advance(4999);assert.equal(h.d.socket,ws);
   await h.clock.advance(1);assert.equal(h.d.socket,null);assert.equal(h.d.health.phase,'retryWait');
   assert.equal(h.d.health.attempt,1);assert.equal(h.posts().length,0);
-  h.response={status:200,body:state('fresh')};await h.clock.advance(2000);await h.identify();
+  h.response={status:200,body:state('fresh')};await h.clock.advance(2000);h.recapture();await h.identify();
   pending.resolve(stage==='body'?new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer:{status:200,body:state('obsolete')});
   await flush();assert.equal(h.d.currentTarget,'fresh');assert(h.d.health.controlsEnabled);
  }finally{h.d.clear();assert.equal(h.clock.timers.size,0);}
@@ -694,7 +791,7 @@ for(const mode of ['headers','body','empty','429'])await check('review: lossy pe
  if(mode==='headers'||mode==='body'){assert(h.d.health.controlsEnabled,'routine snapshot does not disable controls');await h.clock.advance(4999);assert.equal(h.sockets.length,1);await h.clock.advance(1);}
  assert.equal(h.d.health.phase,mode==='429'?'rateLimited':'retryWait');assert.equal(h.d.socket,null);
  assert.equal(h.requests.length,2);assert.equal(h.posts().length,0);
- if(mode==='429'){h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');h.d.refresh(true);await h.clock.advance(29999);assert.equal(h.sockets.length,1);await h.clock.advance(1);assert.equal(h.sockets.length,2);}
+ if(mode==='429'){h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');h.d.refresh(true);await h.clock.advance(29999);assert.equal(h.sockets.length,1);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,2);}
  }finally{h.d.clear();}
 });
 for(const changed of ['handoff','idle'])await check('review: lossy snapshot cannot overwrite Dealer '+changed+' arriving during response',async()=>{
@@ -711,8 +808,9 @@ for(const stage of ['connect','snapshot','command'])await check('review: lossy W
  if(stage==='snapshot'){h.response={status:200,bodyPromise:pending.promise};await h.clock.advance(15000);}
  if(stage==='command'){h.response=()=>pending.promise;command=assert.rejects(h.d.control({type:'next'}),/unknown/);await flush();}
  const late=old.onmessage;h.d.setReachability('online','CELLULAR');
- assert.equal(old.readyState,3);assert.equal(h.sockets.length,2);assert.equal(h.d.health.attempt,0);assert(!h.d.health.controlsEnabled);
- h.d.setReachability('online','CELLULAR');assert.equal(h.sockets.length,2);
+ assert.equal(old.readyState,3);assert.equal(h.sockets.length,1);assert.equal(h.d.health.attempt,0);assert(!h.d.health.controlsEnabled);
+ h.d.setReachability('online','CELLULAR');assert.equal(h.sockets.length,1);
+ h.recapture();assert.equal(h.sockets.length,2);
  h.response={status:200,body:state('fresh',uri,h.clock.wall+1)};await h.identify();
  pending.resolve(stage==='snapshot'?new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer:{status:204});
  if(command)await command;late({data:JSON.stringify({payloads:[state('obsolete')]})});await flush();
@@ -721,11 +819,11 @@ for(const stage of ['connect','snapshot','command'])await check('review: lossy W
 });
 await check('review: lossy path flapping coalesces without parallel sockets or bypassing offline/auth guards',async()=>{
  const h=setup();try{h.d.setReachability('online','WIFI');h.start();await h.identify();
- h.d.setReachability('online','CELLULAR');h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');
- assert.equal(h.sockets.length,2);assert.equal(h.d.socket,null);await h.clock.advance(999);assert.equal(h.sockets.length,2);await h.clock.advance(1);assert.equal(h.sockets.length,3);
+ h.d.setReachability('online','CELLULAR');h.recapture();h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');
+ assert.equal(h.sockets.length,2);assert.equal(h.d.socket,null);await h.clock.advance(999);assert.equal(h.sockets.length,2);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,3);
  h.d.setReachability('offline','WIFI');await h.clock.advance(60000);assert.equal(h.sockets.length,3);
- h.d.setReachability('online','CELLULAR');await h.clock.advance(500);await h.identify();
- h.response={status:403};h.d.refresh(true);await h.identify();assert.equal(h.d.health.phase,'denied');const n=h.sockets.length;
+ h.d.setReachability('online','CELLULAR');await h.clock.advance(500);h.recapture();await h.identify();
+ h.response={status:403};h.d.refresh(true);h.recapture();await h.identify();assert.equal(h.d.health.phase,'denied');const n=h.sockets.length;
  h.d.setReachability('online','WIFI');await h.clock.advance(60000);assert.equal(h.sockets.length,n);assert.equal(h.d.health.phase,'denied');
  }finally{h.d.clear();}
 });

@@ -159,6 +159,7 @@ export class SpotifyDetector {
   private reason: SpotifyReason = 'disconnected';
   private phaseStarted = 0;
   private nextRetry = 0;
+  private observationRetryAt = 0;
   private reachability: Reachability = 'unknown';
   private activity: 'active' | 'inactive' | 'background' = 'active';
   private commandPhase: CommandPhase = 'idle';
@@ -228,12 +229,11 @@ export class SpotifyDetector {
     const previous = this.activity;
     this.activity = activity;
     if (activity === 'background') this.setEnabled(false);
-    else if (activity === 'active' && this.enabled && this.token && this.runtime.wall() >= this.expiresAt - 30000 && this.cooldownRemaining() <= 0) this.needSession('Refreshing Spotify session…');
     else if (activity === 'active' && previous !== 'active' && this.enabled && this.socket) {
       // A host such as LiveContainer can suspend us through inactive alone.
       // OPEN and recent pongs prove transport, not a live observer subscription.
-      // Replace the pre-suspension socket and obtain a fresh registration state
-      // immediately, without spending retry budget or replaying commands.
+      // Replace the pre-suspension socket and renew its session without spending
+      // retry budget or replaying commands.
       this.disconnect();
       this.connectIfReady();
     }
@@ -244,26 +244,27 @@ export class SpotifyDetector {
     if (path) this.networkPath = path;
     if (hint === this.reachability && !pathChanged) return;
     const previous = this.reachability; this.reachability = hint;
-    if (this.onlineTimer) this.runtime.clearTimeout(this.onlineTimer); this.onlineTimer = null;
     if (hint === 'offline') { this.disconnect(); if (this.enabled) this.transition('offline'); return; }
     this.publishHealth();
     if (!this.enabled) return;
+    if (previous === 'offline') {
+      this.onlineTimer = this.runtime.setTimeout(() => { this.onlineTimer = null; this.connectIfReady(); }, 500);
+      return;
+    }
     if (pathChanged) {
+      if (this.reconnect || this.onlineTimer) return;
       // Retire old interface work immediately. Coalesce flapping notifications
       // without allowing them to bypass auth, cooldown or request ownership.
       this.disconnect();
-      if (this.phase === 'renewingSession') this.transition('connecting');
       const delay = Math.max(0, this.pathRestartAt + 1000 - this.runtime.mono());
       if (!delay) { this.pathRestartAt = this.runtime.mono(); this.connectIfReady(); }
-      else this.onlineTimer = this.runtime.setTimeout(() => {
-        this.onlineTimer = null; this.pathRestartAt = this.runtime.mono(); this.connectIfReady();
-      }, delay);
-    } else if (previous === 'offline') this.onlineTimer = this.runtime.setTimeout(() => {
-      this.onlineTimer = null;
-      if (this.phase === 'renewingSession') this.transition('connecting');
-      this.connectIfReady();
-    }, 500);
-    else this.connectIfReady();
+      else {
+        this.onlineTimer = this.runtime.setTimeout(() => {
+          this.onlineTimer = null; this.pathRestartAt = this.runtime.mono(); this.connectIfReady();
+        }, delay);
+        this.publishHealth();
+      }
+    } else this.connectIfReady();
   }
   private binding() { return JSON.stringify([this.generation, this.connectionId, this.currentTarget, this.lastSample?.uri, this.lastSample?.playbackSessionId]); }
   private stateConfirmed(target: string | undefined, positive = true) {
@@ -302,39 +303,44 @@ export class SpotifyDetector {
       if (e.type === 'session' && ['anonymous', 'denied', 'unavailable'].includes(e.state)) {
         if (this.phase !== 'renewingSession') return true;
         if (e.state === 'anonymous' || e.state === 'denied') {
-          this.disconnect(); this.token = ''; this.transition('signInRequired', 'sessionChallenge');
+          this.disconnect(); this.transition('signInRequired', 'sessionChallenge');
         } else { this.retryObservation(); }
         return true;
       }
       if (e.type === 'credentials' && e.authenticated === true && typeof e.token === 'string' && e.token.length > 0 && e.token.length < 4096) {
         if (this.sessionRequired) return true;
         const changed = e.token !== this.token;
-        if (changed) { this.deliveryAuthEpoch++; this.deliveryBaseline.clear(); }
+        if (changed && this.socket) { this.retryObservation(); return true; }
+        if (changed) { this.clientToken = ''; this.deliveryAuthEpoch++; this.deliveryBaseline.clear(); }
         this.token = e.token;
         if (typeof e.clientToken === 'string' && e.clientToken.length < 4096) this.clientToken = e.clientToken;
         let expiresAt = Number(e.expiresAt) || 0;
         if (!expiresAt) { try { expiresAt = Number(JSON.parse(Buffer.from(e.token.split('.')[1], 'base64').toString()).exp) * 1000 || 0; } catch {} }
         // Opaque tokens cannot live forever just because the capture omitted expiry.
         this.expiresAt = expiresAt || (changed || !this.expiresAt ? this.runtime.wall() + 45 * 60_000 : this.expiresAt);
-        if (this.expiresAt <= this.runtime.wall() + 30000) { this.token = ''; this.retryObservation(); return true; }
-        if (this.renewalTimer) this.runtime.clearTimeout(this.renewalTimer); this.renewalTimer = null;
+        if (this.expiresAt <= this.runtime.wall() + 30000) { this.retryObservation(); return true; }
         this.callbacks.authenticated(this.token, this.expiresAt);
-        if (changed && this.socket) this.disconnect();
-        if (this.phase === 'renewingSession') this.transition('connecting');
+        this.discoveryReady();
         this.connectIfReady();
         return true;
       }
       if (e.type === 'observerEndpoint' && typeof e.url === 'string') {
         const route = observerEndpoint(e.url, this.deviceId);
         if (route) {
-          if (this.route !== route) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); if (this.socket) this.disconnect(); }
+          if (this.route !== route) {
+            if (this.socket) { this.retryObservation(); return true; }
+            this.deliveryRouteEpoch++; this.deliveryBaseline.clear();
+          }
           this.route = route; this.discoveryReady(); this.connectIfReady(); return true;
         }
       }
       if (e.type === 'socket' && typeof e.url === 'string' && spotifyHost(e.url, true) && /(^|\.)[^.]*dealer[^.]*\./i.test(new URL(e.url).hostname)) {
         const dealer = new URL(e.url); dealer.searchParams.delete('access_token'); dealer.searchParams.sort(); dealer.hash = '';
         const route = dealer.toString();
-        if (this.dealer !== route) { this.deliveryRouteEpoch++; this.deliveryBaseline.clear(); if (this.socket) this.disconnect(); }
+        if (this.dealer !== route) {
+          if (this.socket) { this.retryObservation(); return true; }
+          this.deliveryRouteEpoch++; this.deliveryBaseline.clear();
+        }
         this.dealer = route; this.discoveryReady(); this.connectIfReady(); return true;
       }
     } catch { /* Ignore untrusted/malformed bridge data. */ }
@@ -343,8 +349,6 @@ export class SpotifyDetector {
   setEnabled(enabled: boolean) {
     if (this.enabled === enabled) { if (enabled) this.connectIfReady(); return; }
     this.enabled = enabled;
-    if (enabled) this.acceptCapture = true;
-    if (enabled && this.phase === 'renewingSession' && !this.renewalTimer) this.transition('connecting');
     if (enabled) {
       // Returning from suspension reprojects the last authoritative anchor.
       if (this.lastSample) {
@@ -364,37 +368,33 @@ export class SpotifyDetector {
     // Automatic nudges coalesce, but Retry must retire a stuck attempt.
     if (!explicit && (this.onlineTimer || (this.socket && !this.observed))) return;
     if (explicit && this.runtime.mono() - this.manualAt < 2000) return;
-    if (explicit) { this.manualAt = this.runtime.mono(); this.rejectedFreshToken = false; this.sessionRequired = false; }
     if (this.cooldownRemaining() > 0) { this.connectIfReady(); return; }
-    if (!explicit && (this.blocked || this.phase === 'retryWait' || this.phase === 'renewingSession')) return;
-    if (!explicit && this.socket && !this.observed) return;
+    if (!explicit && !this.socket) { this.connectIfReady(); return; }
+    if (explicit) {
+      this.manualAt = this.runtime.mono(); this.rejectedFreshToken = false; this.sessionRequired = false;
+      this.observationRetryAt = 0;
+    }
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
       generation: this.generation, reason: 'explicit-refresh', registered: this.registered,
       ...this.deliveryBaseline.diagnosticSummary() });
-    this.deliveryBaseline.preserveForExplicitRefresh(this.runtime.mono(), this.currentDeliveryIdentity());
-    if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-preserved', {
-      generation: this.generation, ...this.deliveryBaseline.diagnosticSummary() });
     this.blocked = false;
-    if (explicit && (this.phase === 'signInRequired' || this.phase === 'denied' || this.phase === 'renewingSession')) this.transition('connecting');
     this.resetOrdering();
-    this.disconnect(true); this.connectIfReady();
+    this.disconnect(); this.connectIfReady();
   }
   beginSignIn() {
     if (this.phase === 'renewingSession' || this.runtime.mono() - this.manualAt < 2000) return;
     if (!this.enabled || this.activity !== 'active' || this.reachability === 'offline' || this.cooldownRemaining() > 0) return;
     this.manualAt = this.runtime.mono();
     this.blocked = false; this.rejectedFreshToken = false; this.sessionRequired = false;
+    this.observationRetryAt = 0;
     this.needSession('Refreshing Spotify session…');
   }
   clear() {
-    this.acceptCapture = false; this.enabled = false; this.disconnect(); this.token = ''; this.clientToken = '';
-    this.route = ''; this.dealer = ''; this.expiresAt = 0; this.lastSample = null;
-    this.deliveryBaseline.clear();
-    this.deliveryAuthEpoch++;
+    this.enabled = false; this.disconnect(); this.lastSample = null;
     this.resetOrdering();
     this.blocked = false; this.sessionRequired = false; this.cooldownWall = 0; this.cooldownMono = 0; this.rateLimits = 0;
     this.metadataCache.clear(); this.metadataPending.clear();
-    this.reconnects = 0; this.rejectedFreshToken = false; this.commandPhase = 'idle';
+    this.reconnects = 0; this.observationRetryAt = 0; this.rejectedFreshToken = false; this.commandPhase = 'idle';
     this.deviceRestricted = false;
     this.payloadRestrictions = {};
     this.blockedOperations.clear();
@@ -517,8 +517,12 @@ export class SpotifyDetector {
       return new Uint8Array(bytes);
     } finally { this.runtime.clearTimeout(timeout); this.requests.delete(controller); }
   }
-  private disconnect(preserveDeliveryBaseline = false) {
+  private disconnect() {
     this.generation++; this.reconciling = false; this.commandConfirmed = null;
+    // Only a new browser bootstrap may supply credentials for the next attempt.
+    this.acceptCapture = false;
+    this.token = ''; this.clientToken = ''; this.expiresAt = 0; this.route = ''; this.dealer = '';
+    this.deliveryAuthEpoch++;
     if (this.commandPending || this.commandPhase === 'awaitingConfirmation') this.commandPhase = 'outcomeUnknown';
     this.commandPending = null;
     this.healthySince = null;
@@ -526,7 +530,7 @@ export class SpotifyDetector {
     if (this.onlineTimer) this.runtime.clearTimeout(this.onlineTimer); this.onlineTimer = null;
     if (this.renewalTimer) this.runtime.clearTimeout(this.renewalTimer); this.renewalTimer = null;
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
-    if (!preserveDeliveryBaseline) this.deliveryBaseline.clear();
+    this.deliveryBaseline.clear();
     if (this.snapshotTimer) this.runtime.clearTimeout(this.snapshotTimer); this.snapshotTimer = null;
     if (this.pongDeadline) this.runtime.clearTimeout(this.pongDeadline); this.pongDeadline = null;
     this.controller?.abort(); this.controller = null;
@@ -543,16 +547,14 @@ export class SpotifyDetector {
     this.payloadRestrictions = {};
     this.blockedOperations.clear();
     this.restrictionSignature = ''; this.acceptedAuthority = '';
-    this.publishHealth();
   }
   private needSession(message: string, unauthorized = false) {
     if (unauthorized) this.lastError = { category: 'authentication', httpStatus: 401, occurredAtWall: this.runtime.wall() };
     if (unauthorized && this.rejectedFreshToken) {
-      this.disconnect(); this.token = ''; this.transition('signInRequired', 'freshTokenRejected'); return;
+      this.disconnect(); this.transition('signInRequired', 'freshTokenRejected'); return;
     }
     if (unauthorized) this.rejectedFreshToken = true;
-    this.disconnect(); this.token = ''; this.expiresAt = 0;
-    this.deliveryAuthEpoch++;
+    this.disconnect();
     if (!this.enabled || this.reachability === 'offline') return;
     const run = this.generation;
     this.renewalTimer = this.runtime.setTimeout(() => {
@@ -563,7 +565,10 @@ export class SpotifyDetector {
     this.transition('renewingSession');
     if (!this.enabled || run !== this.generation) return;
     this.callbacks.status(message);
-    if (this.enabled && run === this.generation) this.callbacks.sessionNeeded();
+    if (this.enabled && run === this.generation) {
+      this.acceptCapture = true;
+      this.callbacks.sessionNeeded();
+    }
   }
   private resetOrdering() {
     this.fingerprint = ''; this.lastSourceTimestamp = 0;
@@ -696,10 +701,6 @@ export class SpotifyDetector {
       receiptAgeMs: receipt ? nowMono - receipt.monotonicMs : undefined, sampleCount: 0,
     });
   }
-  private currentDeliveryIdentity(): DeliveryIdentity {
-    return { device: this.orderingDeviceId ?? '', session: this.orderingSessionId ?? '',
-      routeEpoch: this.deliveryRouteEpoch, authEpoch: this.deliveryAuthEpoch };
-  }
   private discoveryReady() {
     if (this.phase === 'renewingSession' && this.token && this.route && this.dealer) {
       if (this.renewalTimer) this.runtime.clearTimeout(this.renewalTimer); this.renewalTimer = null; this.transition('connecting');
@@ -721,12 +722,18 @@ export class SpotifyDetector {
   }
   private connectAttempt() {
     if (!this.enabled) return;
-    if (this.blocked) { this.transition('denied'); return; }
-    if (this.sessionRequired) { this.transition('signInRequired'); return; }
-    if (this.socket || this.reconnect || this.phase === 'renewingSession' || this.onlineTimer) return;
+    if (this.blocked) { if (this.phase !== 'denied') this.transition('denied'); return; }
+    if (this.sessionRequired) { if (this.phase !== 'signInRequired') this.transition('signInRequired'); return; }
+    if (this.socket || this.reconnect || this.renewalTimer || this.onlineTimer) return;
     if (this.reachability === 'offline') { this.transition('offline'); return; }
     const wait = this.cooldownRemaining();
-    if (wait > 0) { this.transition('rateLimited'); this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, Math.min(wait, 2147483647)); return; }
+    if (wait > 0) {
+      this.nextRetry = this.cooldownWall;
+      this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, Math.min(wait, 2147483647));
+      this.transition('rateLimited');
+      return;
+    }
+    if (this.waitForObservationRetry()) return;
     if (!this.token) { this.needSession('Refreshing Spotify session…'); return; }
     if (!this.route || !this.dealer) {
       const run = this.generation;
@@ -835,16 +842,23 @@ export class SpotifyDetector {
   private retryObservation() {
     this.lastError = { category: 'transport', occurredAtWall: this.runtime.wall() };
     this.disconnect();
-    if (!this.enabled || this.blocked) return;
+    if (!this.enabled || this.blocked || this.sessionRequired) return;
     if (this.reachability === 'offline') { this.transition('offline'); return; }
     const attempt = this.reconnects++;
     const delay = attempt < 5 ? Math.min(30000, 2000 * 2 ** attempt * (0.8 + this.runtime.random() * 0.4)) : 60000;
     const run = this.generation;
+    this.observationRetryAt = this.runtime.mono() + delay;
+    this.waitForObservationRetry();
+    if (this.enabled && run === this.generation) this.callbacks.status('Spotify connection lost; retrying automatically.');
+  }
+  private waitForObservationRetry() {
+    const delay = this.observationRetryAt - this.runtime.mono();
+    if (delay <= 0) return false;
     this.nextRetry = this.runtime.wall() + delay;
     // Own the deadline before publishing: a callback may synchronously dispose us.
-    this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.transition('connecting'); this.connectIfReady(); }, delay);
+    this.reconnect = this.runtime.setTimeout(() => { this.reconnect = null; this.connectIfReady(); }, delay);
     this.transition('retryWait');
-    if (this.enabled && run === this.generation) this.callbacks.status('Spotify connection lost; retrying automatically.');
+    return true;
   }
   private rateLimited(response: Response) {
     const value = response.headers?.get('retry-after');
