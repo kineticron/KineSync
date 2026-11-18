@@ -1760,12 +1760,12 @@ export default function HomeScreen() {
           collapsable={false}
           style={[styles.lyricsWrap, lyricsViewportStyle]}
         >
-          {/* The mask animates with the dock, so Android must redraw the mask
-              bitmap each frame instead of caching a hardware layer. */}
+          {/* Android's native TextureView requires hardware composition.
+              The mask bitmap still invalidates when the dock mask changes. */}
           <MaskedView
             pointerEvents="box-none"
             style={StyleSheet.absoluteFill}
-            androidRenderingMode="software"
+            androidRenderingMode="hardware"
             maskElement={
               <View
                 pointerEvents="none"
