@@ -196,9 +196,45 @@ try {
     return { ok: responseStatus === 200, status: responseStatus,
       arrayBuffer: async () => new TextEncoder().encode(JSON.stringify(snapshot)).buffer };
   };
+  let mono = 0, pendingRenewal;
   const detector = new SpotifyDetector({ sample: s => samples.push(s), status: s => statuses.push(s),
-    sessionNeeded: () => needs++, authenticated: () => auth++, ready: () => ready++ });
+    sessionNeeded() {
+      needs++;
+      if (needs === 1) return; // Initial capture exercises unverified and untrusted messages below.
+      assert.equal(pendingRenewal, undefined, 'only one browser renewal is pending');
+      pendingRenewal = needs;
+    }, authenticated: () => auth++, ready: () => ready++ }, {
+    wall: () => epoch + mono, mono: () => mono, random: () => 0.5,
+    fetch: (...args) => globalThis.fetch(...args), socket: url => new Socket(url),
+    setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+    setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
+  });
   const capture = e => detector.capture(JSON.stringify(e), 'https://open.spotify.com/');
+  const finishRenewal = () => {
+    assert(pendingRenewal, 'replacement session was requested from the browser');
+    assert.equal(detector.health.phase, 'renewingSession');
+    const renewal = pendingRenewal;
+    pendingRenewal = undefined;
+    const previousSockets = sockets.length;
+    const token = `verified-${renewal}`;
+    assert(capture({ type: 'credentials', token, clientToken: `client-${renewal}`, authenticated: true, expiresAt: epoch + mono + 3600000 }));
+    assert.equal(sockets.length, previousSockets, 'renewed bearer cannot use retired routes');
+    assert(capture({ type: 'observerEndpoint', url: `https://guc${renewal}-spclient.spotify.com/connect-state/v1/devices/browser` }));
+    assert.equal(sockets.length, previousSockets, 'registration discovery alone cannot open Dealer');
+    assert(capture({ type: 'socket', url: `wss://dealer-${renewal}.spotify.com/?access_token=browser-token` }));
+    assert.equal(sockets.length, previousSockets + 1, 'fresh bootstrap opens exactly one socket');
+    const socket = sockets.at(-1), url = new URL(socket.url);
+    assert.equal(url.hostname, `dealer-${renewal}.spotify.com`);
+    assert.equal(url.searchParams.get('access_token'), token);
+    return socket;
+  };
+  const fireTimer = id => {
+    const timer = timers.get(id);
+    assert(timer, 'detector owns the timer');
+    timers.delete(id);
+    mono += timer.ms;
+    timer.fn();
+  };
   detector.setEnabled(true);
   assert.equal(needs, 1);
   assert.equal(detector.capture(JSON.stringify({ type: 'credentials', token: 'secret', authenticated: true }), 'https://open.spotify.com.evil.test/'), false);
@@ -275,9 +311,13 @@ try {
   assert.equal(samples.length, count, 'disposed sockets cannot publish');
   assert.equal(timers.size, 0, 'background/disable cleans timers');
   detector.setEnabled(true);
-  assert.equal(sockets.length, 2, 'foreground reconnects without a browser');
+  assert.equal(sockets.length, 1, 'foreground waits for a new browser capture');
+  const ws2 = finishRenewal();
   holdResponse = true; responseState = state(61000, epoch + 2000);
-  const ws2 = sockets.at(-1); ws2.event({ headers: { 'spotify-connection-id': 'second' } }); await flush();
+  ws2.event({ headers: { 'spotify-connection-id': 'second' } }); await flush();
+  assert.equal(new URL(requests.at(-1).url).hostname, 'guc2-spclient.spotify.com');
+  assert.equal(requests.at(-1).headers.authorization, 'Bearer verified-2');
+  assert.equal(requests.at(-1).headers['client-token'], 'client-2');
   ws2.event({ payloads: [state(62000, epoch + 3000, true)] });
   releaseResponse(); await flush(); holdResponse = false;
   assert.equal(samples.at(-1).positionMs, 62000, 'Dealer event during registration beats older HTTP response');
@@ -300,15 +340,18 @@ try {
   responseStatus = 200;
   // Native close delivery is optional: a phase timeout releases ownership locally.
   detector.refresh(true);
-  const silentSocket = sockets.at(-1);
+  const silentSocket = finishRenewal();
   silentSocket.close = () => { silentSocket.readyState = 3; };
   const beforeTimeout = sockets.length;
-  const phaseTimer = timers.get(detector.phaseDeadline); timers.delete(detector.phaseDeadline); phaseTimer.fn();
+  fireTimer(detector.phaseDeadline);
   assert.equal(detector.socket, null, 'phase timeout detaches even when close emits nothing');
-  const retryTimer = timers.get(detector.reconnect); timers.delete(detector.reconnect); retryTimer.fn();
-  assert.equal(sockets.length, beforeTimeout + 1, 'phase timeout schedules exactly one new attempt');
+  const needsBeforeTimeoutRetry = needs;
+  fireTimer(detector.reconnect);
+  assert.equal(needs, needsBeforeTimeoutRetry + 1, 'phase timeout schedules exactly one browser renewal');
+  assert.equal(sockets.length, beforeTimeout, 'timer cannot reconnect before fresh capture');
+  const recovered = finishRenewal();
   responseStatus = 200;
-  sockets.at(-1).event({ headers: { 'spotify-connection-id': 'timeout-recovered' } }); await flush();
+  recovered.event({ headers: { 'spotify-connection-id': 'timeout-recovered' } }); await flush();
   const normalFetch = globalThis.fetch;
   globalThis.fetch = () => new Promise(() => {});
   const unknown = detector.control({ type: 'next' });
@@ -320,17 +363,20 @@ try {
   assert.equal(detector.commandPending, null, 'ignored fetch abort still settles command ownership');
   globalThis.fetch = normalFetch;
   responseStatus = 429;
-  const eligibleRetry = timers.get(detector.reconnect); timers.delete(detector.reconnect); eligibleRetry.fn();
-  sockets.at(-1).event({ headers: { 'spotify-connection-id': 'limited' } }); await flush();
+  fireTimer(detector.reconnect);
+  finishRenewal().event({ headers: { 'spotify-connection-id': 'limited' } }); await flush();
   const socketCount = sockets.length;
+  const needsBeforeCooldown = needs;
   detector.setEnabled(false); detector.setEnabled(true);
   detector.refresh();
-  capture({ type: 'credentials', token: 'replacement', authenticated: true, expiresAt: epoch + 3600000 });
+  assert.equal(capture({ type: 'credentials', token: 'late', authenticated: true, expiresAt: epoch + mono + 3600000 }), false);
+  assert.equal(needs, needsBeforeCooldown, 'rate limits prevent browser renewal during cooldown');
   assert.equal(sockets.length, socketCount, 'rate limits cannot trigger automatic reconnect loops');
   assert(statuses.some(s => s.includes('429')));
   detector.clear();
   detector.setEnabled(true);
-  assert.equal(sockets.length, socketCount, 'logout clears credentials/routes');
+  assert.equal(needs, needsBeforeCooldown + 1, 'enable after logout starts a clean browser bootstrap');
+  assert.equal(sockets.length, socketCount, 'logout clears credentials and routes');
   detector.setEnabled(false);
   assert.equal(timers.size, 0);
   const encoded = Buffer.from(JSON.stringify(state())).toString('base64');
