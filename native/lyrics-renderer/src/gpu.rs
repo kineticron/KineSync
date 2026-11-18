@@ -378,6 +378,10 @@ impl Gpu {
             } else {
                 0
             } | if timestamp_supported { 16 } else { 0 };
+        let mut required_limits = wgpu::Limits::default();
+        required_limits.max_inter_stage_shader_variables = required_limits
+            .max_inter_stage_shader_variables
+            .min(adapter.limits().max_inter_stage_shader_variables);
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("lyrics-renderer"),
@@ -386,6 +390,7 @@ impl Gpu {
                 } else {
                     Features::empty()
                 },
+                required_limits,
                 ..Default::default()
             })
             .await?;
