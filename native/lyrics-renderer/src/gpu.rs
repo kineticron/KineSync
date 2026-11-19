@@ -14,6 +14,317 @@ use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
 use wgpu::{util::DeviceExt, *};
 type Error = Box<dyn std::error::Error>;
 
+#[cfg(target_os = "android")]
+fn android_surface_log(message: String) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: std::ffi::c_int,
+            tag: *const std::ffi::c_char,
+            text: *const std::ffi::c_char,
+        ) -> std::ffi::c_int;
+    }
+    if let Ok(message) = std::ffi::CString::new(message) {
+        // SAFETY: Android's logger reads both NUL-terminated strings during the call.
+        unsafe { __android_log_write(4, c"KSRustDiag".as_ptr(), message.as_ptr()) };
+    }
+}
+
+#[cfg(target_os = "android")]
+struct PixelCapture {
+    dir: std::path::PathBuf,
+    id: u8,
+    persistent: bool,
+}
+
+#[cfg(target_os = "android")]
+const PIXEL_BURST_PRESENTS: u32 = 4;
+
+#[cfg(target_os = "android")]
+struct PixelBurst {
+    capture: PixelCapture,
+    ordinal: u32,
+    frozen: Option<(Texture, SurfaceBlit)>,
+}
+
+#[cfg(target_os = "android")]
+impl PixelCapture {
+    fn fail_burst(&self, code: u8, reason: &str) {
+        let _ = std::fs::write(self.dir.join("burst-failed"), format!("{} {code}", self.id));
+        android_surface_log(format!(
+            "pixelDiag.burstFailed capture={} code={code} reason={reason}",
+            self.id
+        ));
+    }
+
+    fn released(&self) -> bool {
+        ["release", "burst-failed"].iter().any(|name| {
+            std::fs::read_to_string(self.dir.join(name))
+                .ok()
+                .and_then(|value| value.split_whitespace().next()?.parse::<u8>().ok()) == Some(self.id)
+        })
+    }
+}
+
+#[cfg(target_os = "android")]
+fn claim_pixel_capture() -> Option<PixelCapture> {
+    const PACKAGE: &[u8] = b"dev.kineticron.KineSync.testnov18";
+    let cmdline = std::fs::read("/proc/self/cmdline").ok()?;
+    if cmdline.split(|&byte| byte == 0).next()? != PACKAGE {
+        return None;
+    }
+    let dir = std::path::PathBuf::from(
+        "/data/user/0/dev.kineticron.KineSync.testnov18/files/rust-pixel-diag",
+    );
+    let arm = dir.join("arm");
+    let marker = std::fs::read_to_string(&arm).ok()?;
+    let marker = marker.trim();
+    let persistent = marker.starts_with("burst ");
+    let id: u8 = marker.strip_prefix("burst ").unwrap_or(marker).parse().ok()?;
+    if id == 0 {
+        return None;
+    }
+    let clean = (|| -> std::io::Result<()> {
+        let mut files = ["frame-1.ready", "release", "burst-present"]
+            .map(str::to_owned)
+            .to_vec();
+        // The runner clears the failure marker before publishing the arm. A persistent
+        // view may already have recorded a new failure while this owner was starting.
+        if !persistent {
+            files.push("burst-failed".to_owned());
+        }
+        for stage in ["offscreen", "surface", "blit-proxy", "textureview"] {
+            for extension in ["raw", "png", "json"] {
+                files.push(format!("frame-1-{stage}.{extension}"));
+            }
+        }
+        for file in files {
+            match std::fs::remove_file(dir.join(file)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        // Keep arm present until every stale file is gone.
+        std::fs::remove_file(arm)
+    })();
+    if let Err(error) = clean {
+        android_surface_log(format!("pixelDiag.armFailed capture={id} error={error}"));
+        return None;
+    }
+    Some(PixelCapture { dir, id, persistent })
+}
+
+#[cfg(target_os = "android")]
+fn burst_marker_layout(width: u32, height: u32) -> [u32; 5] {
+    let cell = (width / 20).min(height / 12).min(36);
+    [cell, cell, cell, width - 5 * cell, height / 3]
+}
+
+#[cfg(target_os = "android")]
+fn burst_marker_bits(id: u8, ordinal: u32) -> [bool; 16] {
+    let mut bits = [false; 16];
+    bits[..4].copy_from_slice(&[true, false, true, true]);
+    for (bit, block) in bits[4..12].iter_mut().enumerate() {
+        *block = id & (1 << bit) != 0;
+    }
+    for (bit, block) in bits[12..15].iter_mut().enumerate() {
+        *block = ordinal & (1 << bit) != 0;
+    }
+    bits[15] = bits[4..15].iter().filter(|&&bit| bit).count() % 2 != 0;
+    bits
+}
+
+#[cfg(target_os = "android")]
+fn write_burst_marker(queue: &Queue, texture: &Texture, id: u8, ordinal: u32) {
+    let [cell, x1, y1, x2, y2] = burst_marker_layout(texture.width(), texture.height());
+    let side = 4 * cell;
+    let bits = burst_marker_bits(id, ordinal);
+    let mut pixels = Vec::with_capacity((side * side * 4) as usize);
+    for y in 0..side {
+        for x in 0..side {
+            let shade = if bits[(y / cell * 4 + x / cell) as usize] { 255 } else { 0 };
+            pixels.extend_from_slice(&[shade, shade, shade, 255]);
+        }
+    }
+    for (x, y) in [(x1, y1), (x2, y2)] {
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: Origin3d { x, y, z: 0 },
+                aspect: TextureAspect::All,
+            },
+            &pixels,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(side * 4),
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+fn save_diagnostic_pixels(
+    gpu: &Gpu,
+    texture: &Texture,
+    capture: &PixelCapture,
+    name: &str,
+    linear: bool,
+    ordinal: Option<u32>,
+) -> Result<(), Error> {
+    use sha2::{Digest, Sha256};
+
+    let size = texture.size();
+    let format = texture.format();
+    if !matches!(format, TextureFormat::Rgba8Unorm | TextureFormat::Bgra8Unorm)
+        || (linear && format != TextureFormat::Rgba8Unorm)
+    {
+        return Err(format!("unsupported {name} format {format:?}").into());
+    }
+    if size.width != gpu.width || size.height != gpu.height || size.depth_or_array_layers != 1 {
+        return Err(format!("unexpected {name} size {size:?}").into());
+    }
+    let mut pixels = gpu.read_texture_with_poll(
+        texture,
+        PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(2)),
+        },
+    )?;
+    if pixels.len() != size.width as usize * size.height as usize * 4 {
+        return Err(format!("unexpected {name} byte length {}", pixels.len()).into());
+    }
+    let marker_layout = if let Some(ordinal) = ordinal {
+        let layout @ [cell, x1, y1, x2, y2] = burst_marker_layout(size.width, size.height);
+        let bits = burst_marker_bits(capture.id, ordinal);
+        for (x, y) in [(x1, y1), (x2, y2)] {
+            for (bit, &white) in bits.iter().enumerate() {
+                let px = x + (bit as u32 % 4) * cell + cell / 2;
+                let py = y + (bit as u32 / 4) * cell + cell / 2;
+                let offset = ((py * size.width + px) * 4) as usize;
+                let shade = if white { 255 } else { 0 };
+                if pixels[offset..offset + 4] != [shade, shade, shade, 255] {
+                    return Err(format!("{name} did not contain the expected burst marker").into());
+                }
+            }
+        }
+        Some(layout)
+    } else {
+        None
+    };
+    let raw_file = capture.dir.join(format!("frame-1-{name}.raw"));
+    std::fs::write(&raw_file, &pixels)?;
+    let raw_sha = format!("{:x}", Sha256::digest(&pixels));
+    for pixel in pixels.chunks_exact_mut(4) {
+        if format == TextureFormat::Bgra8Unorm {
+            pixel.swap(0, 2);
+        }
+        let alpha = f32::from(pixel[3]);
+        for channel in &mut pixel[..3] {
+            let straight = if alpha > 0.0 {
+                (f32::from(*channel) / alpha).min(1.0)
+            } else {
+                0.0
+            };
+            *channel = ((if linear { linear_to_srgb(straight) } else { straight }) * 255.0)
+                .round() as u8;
+        }
+    }
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, size.width, size.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&pixels)?;
+    writer.finish()?;
+    let file = capture.dir.join(format!("frame-1-{name}.png"));
+    std::fs::write(&file, &bytes)?;
+    let png_sha = format!("{:x}", Sha256::digest(&bytes));
+    let mut metadata = serde_json::json!({
+        "frame": 1,
+        "capture": capture.id,
+        "stage": name,
+        "width": size.width,
+        "height": size.height,
+        "format": format!("{format:?}"),
+        "rawRowBytes": size.width * 4,
+        "gpuCopyRowBytes": (size.width * 4).div_ceil(256) * 256,
+        "rowOrder": "texture y=0 first",
+        "rawColorSpace": if linear { "linear sRGB" } else { "encoded sRGB" },
+        "rawAlpha": "premultiplied",
+        "pngColorSpace": "encoded sRGB",
+        "pngAlpha": "straight",
+        "rawSha256": raw_sha,
+        "pngSha256": png_sha,
+    });
+    if let (Some(ordinal), Some(layout)) = (ordinal, marker_layout) {
+        metadata["presentOrdinal"] = serde_json::json!(ordinal);
+        metadata["markerLayout"] = serde_json::json!(layout);
+    }
+    std::fs::write(
+        capture.dir.join(format!("frame-1-{name}.json")),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
+    android_surface_log(format!(
+        "pixelDiag.gpu capture={} frame=1 stage={name} size={}x{} format={format:?} rawSha256={raw_sha} pngSha256={png_sha} path={}",
+        capture.id,
+        size.width,
+        size.height,
+        file.display(),
+    ));
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn pixel_capture_overlay(overlay: Option<&Scene>, width: u32, id: u8) -> Scene {
+    use vello::{
+        kurbo::{Affine, Rect},
+        peniko::Fill,
+    };
+
+    let mut result = Scene::new();
+    if let Some(overlay) = overlay {
+        result.append(overlay, None);
+    }
+    // An asymmetrical top-right RGB/alpha swatch and a white numeral 1.
+    let x = f64::from(width) - 112.0;
+    for (rect, color) in [
+        (Rect::new(x, 38.0, x + 20.0, 74.0), Color::from_rgba8(255, 0, 0, 255)),
+        (Rect::new(x + 24.0, 38.0, x + 52.0, 55.0), Color::from_rgba8(0, 255, 0, 128)),
+        (Rect::new(x + 24.0, 60.0, x + 62.0, 74.0), Color::from_rgba8(0, 0, 255, 192)),
+        (Rect::new(x + 78.0, 38.0, x + 84.0, 69.0), Color::WHITE),
+        (Rect::new(x + 72.0, 69.0, x + 90.0, 74.0), Color::WHITE),
+        (Rect::new(x + 72.0, 38.0, x + 84.0, 43.0), Color::WHITE),
+    ] {
+        result.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rect);
+    }
+    // Eight opaque blocks encode the capture ID, least-significant bit first.
+    for bit in 0..8 {
+        let left = x + f64::from(bit) * 10.0;
+        let color = if id & (1 << bit) != 0 {
+            Color::from_rgba8(255, 255, 0, 255)
+        } else {
+            Color::from_rgba8(0, 255, 255, 255)
+        };
+        result.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            color,
+            None,
+            &Rect::new(left, 80.0, left + 8.0, 90.0),
+        );
+    }
+    result
+}
+
 // Shared by Spicy and AMLL. Narrow the distance kernels to 40% of the
 // original sigma so each separable pass also executes fewer texture taps.
 // Emphasized glyph glow shares these bases, so its spread narrows too.
@@ -146,12 +457,28 @@ fn view_entry(binding: u32, view: &TextureView) -> BindGroupEntry<'_> {
     }
 }
 fn read_buffer(device: &Device, buffer: &Buffer) -> Result<Vec<u8>, Error> {
+    read_buffer_with_poll(device, buffer, PollType::wait_indefinitely())
+}
+fn read_buffer_with_poll(
+    device: &Device,
+    buffer: &Buffer,
+    poll: PollType,
+) -> Result<Vec<u8>, Error> {
     let (tx, rx) = mpsc::channel();
     buffer.slice(..).map_async(MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
-    device.poll(PollType::wait_indefinitely())?;
-    rx.recv()??;
+    let timeout = match &poll {
+        PollType::Wait { timeout, .. } => *timeout,
+        PollType::Poll => None,
+    };
+    let started = Instant::now();
+    device.poll(poll)?;
+    if let Some(timeout) = timeout {
+        rx.recv_timeout(timeout.saturating_sub(started.elapsed()))??;
+    } else {
+        rx.recv()??;
+    }
     let data = buffer.slice(..).get_mapped_range()?;
     let bytes = data.to_vec();
     drop(data);
@@ -665,6 +992,9 @@ impl Gpu {
         self.read_texture(&output)
     }
     fn read_texture(&self, texture: &Texture) -> Result<Vec<u8>, Error> {
+        self.read_texture_with_poll(texture, PollType::wait_indefinitely())
+    }
+    fn read_texture_with_poll(&self, texture: &Texture, poll: PollType) -> Result<Vec<u8>, Error> {
         let stride = (self.width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&BufferDescriptor {
             label: Some("PNG-readback"),
@@ -694,10 +1024,20 @@ impl Gpu {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit([encoder.finish()]);
-        let data = read_buffer(&self.device, &buffer)?;
+        let submission = self.queue.submit([encoder.finish()]);
+        let poll = match poll {
+            PollType::Wait { timeout: Some(timeout), .. } => PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(timeout),
+            },
+            other => other,
+        };
+        let data = read_buffer_with_poll(&self.device, &buffer, poll)?;
+        if data.len() != stride as usize * self.height as usize {
+            return Err("Unexpected padded texture readback length".into());
+        }
         let pixels: Vec<u8> = data
-            .chunks(stride as usize)
+            .chunks_exact(stride as usize)
             .flat_map(|row| row[..self.width as usize * 4].iter().copied())
             .collect();
         Ok(pixels)
@@ -773,6 +1113,10 @@ pub struct SurfaceRenderer {
     blitter: SurfaceBlit,
     pub timing: SurfaceTiming,
     flight: Flight,
+    #[cfg(target_os = "android")]
+    pixel_capture: Option<PixelCapture>,
+    #[cfg(target_os = "android")]
+    pixel_burst: Option<PixelBurst>,
     _instance: Instance,
 }
 impl SurfaceRenderer {
@@ -810,8 +1154,61 @@ impl SurfaceRenderer {
         config.color_space = SurfaceColorSpace::Srgb;
         // Three OS drawables, at most two submitted application frames.
         config.desired_maximum_frame_latency = 2;
+        #[cfg(target_os = "android")]
+        let pixel_capture = claim_pixel_capture().filter(|capture| {
+            let supported = capture.persistent || (width >= 120 && height >= 96);
+            if !supported {
+                android_surface_log(format!("pixelDiag.skipped size={width}x{height}"));
+            }
+            supported
+        });
+        #[cfg(target_os = "android")]
+        let (pixel_capture, pixel_burst) = match pixel_capture {
+            Some(capture) if capture.persistent => {
+                if !caps.usages.contains(TextureUsages::COPY_SRC) || width < 320 || height < 240 {
+                    capture.fail_burst(10, "direct COPY_SRC or burst extent unavailable");
+                    (None, None)
+                } else {
+                    config.usage |= TextureUsages::COPY_SRC;
+                    android_surface_log(format!(
+                        "pixelDiag.burstArmed capture={} presents={PIXEL_BURST_PRESENTS}",
+                        capture.id
+                    ));
+                    (
+                        None,
+                        Some(PixelBurst {
+                            capture,
+                            ordinal: 0,
+                            frozen: None,
+                        }),
+                    )
+                }
+            }
+            capture => (capture, None),
+        };
+        #[cfg(target_os = "android")]
+        if let Some(capture) = &pixel_capture {
+            let direct = caps.usages.contains(TextureUsages::COPY_SRC);
+            if direct {
+                config.usage |= TextureUsages::COPY_SRC;
+            }
+            android_surface_log(format!(
+                "pixelDiag.armed capture={} frame=1 surfaceCopySrc={direct}",
+                capture.id,
+            ));
+        }
         surface.configure(&gpu.device, &config);
         let blitter = SurfaceBlit::new(&gpu.device, config.format, &gpu.target_view);
+        #[cfg(target_os = "android")]
+        android_surface_log(format!(
+            "gpu.surface.configured adapter={:?} size={}x{} format={:?} alpha={:?} presentMode={:?}",
+            gpu.adapter_handle.get_info(),
+            config.width,
+            config.height,
+            config.format,
+            config.alpha_mode,
+            config.present_mode,
+        ));
         Ok(Self {
             surface,
             gpu,
@@ -819,10 +1216,18 @@ impl SurfaceRenderer {
             blitter,
             timing: SurfaceTiming::default(),
             flight: Flight::default(),
+            #[cfg(target_os = "android")]
+            pixel_capture,
+            #[cfg(target_os = "android")]
+            pixel_burst,
             _instance: instance,
         })
     }
     pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
+        #[cfg(target_os = "android")]
+        if let Some(burst) = self.pixel_burst.take() {
+            burst.capture.fail_burst(11, "renderer resized or reconfigured");
+        }
         self.gpu.resize(width, height, scale)?;
         self.blitter
             .set_input(&self.gpu.device, &self.gpu.target_view);
@@ -857,11 +1262,21 @@ impl SurfaceRenderer {
         let acquired = self.surface.get_current_texture();
         self.timing.acquire_ms = acquire_start.elapsed().as_secs_f64() * 1000.0;
         let frame = match acquired {
-            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
+            CurrentSurfaceTexture::Success(frame) => frame,
+            CurrentSurfaceTexture::Suboptimal(frame) => {
+                #[cfg(target_os = "android")]
+                if let Some(burst) = self.pixel_burst.take() {
+                    burst.capture.fail_burst(11, "surface suboptimal during burst");
+                    return Ok(None);
+                }
                 frame
             }
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return Ok(None),
             CurrentSurfaceTexture::Outdated => {
+                #[cfg(target_os = "android")]
+                if let Some(burst) = self.pixel_burst.take() {
+                    burst.capture.fail_burst(11, "surface outdated before reconfigure");
+                }
                 self.surface.configure(&self.gpu.device, &self.config);
                 return Ok(None);
             }
@@ -922,6 +1337,28 @@ impl SurfaceRenderer {
     ) -> Result<(FrameStats, f64), Error> {
         // All shared texture accesses and Vello pool reuse are ordered on one
         // queue. wgpu retains submitted resources. No GPU wait in live render.
+        #[cfg(target_os = "android")]
+        if let Some(mut burst) = self.pixel_burst.take()
+            && !burst.capture.released()
+        {
+            let result = self.render_pixel_burst(&mut burst, scene, overlay, band, frame, appearance, glow, blur);
+            if let Err(error) = &result {
+                // Keep an earlier Kotlin abort code if it released us while the GPU was busy.
+                if !burst.capture.released() {
+                    burst.capture.fail_burst(12, &error.to_string());
+                }
+            } else if burst.ordinal < PIXEL_BURST_PRESENTS {
+                self.pixel_burst = Some(burst);
+            }
+            return result;
+        }
+        #[cfg(target_os = "android")]
+        let diagnostic_overlay = self
+            .pixel_capture
+            .as_ref()
+            .map(|capture| pixel_capture_overlay(overlay, self.config.width, capture.id));
+        #[cfg(target_os = "android")]
+        let overlay = diagnostic_overlay.as_ref().or(overlay);
         let stats = self
             .gpu
             .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
@@ -936,14 +1373,180 @@ impl SurfaceRenderer {
         self.gpu.queue.submit([commands]);
         self.timing.submit_ms = submit_start.elapsed().as_secs_f64() * 1000.0;
         let (id, completed) = self.flight.submit();
+        #[cfg(target_os = "android")]
+        let capture_id = self.pixel_capture.as_ref().map(|capture| capture.id);
+        #[cfg(target_os = "android")]
+        if id == 1 {
+            android_surface_log(format!("gpu.firstSubmit frame={id} capture={capture_id:?}"));
+        }
         self.gpu.queue.on_submitted_work_done(move || {
             completed.fetch_max(id, Ordering::Release);
         });
+        #[cfg(target_os = "android")]
+        if let Some(capture) = self.pixel_capture.take() {
+            if let Err(error) = self.capture_pixels(&frame.texture, &capture) {
+                android_surface_log(format!(
+                    "pixelDiag.failed capture={} frame={id} error={error}",
+                    capture.id,
+                ));
+            }
+        }
+        let present_start = Instant::now();
+        self.gpu.queue.present(frame);
+        self.timing.present_call_ms = present_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(target_os = "android")]
+        if id == 1 {
+            android_surface_log(format!("gpu.firstPresent frame={id} capture={capture_id:?}"));
+        }
+        self.gpu.check_error()?;
+        Ok((stats, start.elapsed().as_secs_f64() * 1000.0))
+    }
+
+    #[cfg(target_os = "android")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Reuse existing renderer configuration for the frozen fixture"
+    )]
+    fn render_pixel_burst(
+        &mut self,
+        burst: &mut PixelBurst,
+        scene: &Scene,
+        overlay: Option<&Scene>,
+        band: (f32, f32),
+        frame: SurfaceTexture,
+        appearance: bool,
+        glow: bool,
+        blur: f32,
+    ) -> Result<(FrameStats, f64), Error> {
+        if !appearance
+            || !frame.texture.usage().contains(TextureUsages::COPY_SRC)
+            || frame.texture.format() != self.config.format
+            || frame.texture.size() != self.gpu.target.size()
+        {
+            return Err("Burst requires a live fixture and a matching direct acquired texture".into());
+        }
+        let start = Instant::now();
+        let stats = if burst.frozen.is_none() {
+            let stats = self
+                .gpu
+                .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
+            let size = self.gpu.target.size();
+            let frozen = self.gpu.device.create_texture(&TextureDescriptor {
+                label: Some("frozen diagnostic fixture"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_texture(
+                self.gpu.target.as_image_copy(),
+                frozen.as_image_copy(),
+                size,
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            let blitter = SurfaceBlit::new(
+                &self.gpu.device,
+                self.config.format,
+                &frozen.create_view(&Default::default()),
+            );
+            burst.frozen = Some((frozen, blitter));
+            stats
+        } else {
+            FrameStats {
+                cpu_encode_ms: 0.0,
+                wait_readback_ms: 0.0,
+                gpu_interval_ms: None,
+            }
+        };
+        let ordinal = burst.ordinal + 1;
+        let (frozen, blitter) = burst.frozen.as_ref().ok_or("Missing frozen diagnostic fixture")?;
+        write_burst_marker(&self.gpu.queue, frozen, burst.capture.id, ordinal);
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        blitter.copy(&mut encoder, &frame.texture.create_view(&Default::default()));
+        let submit_start = Instant::now();
+        let submission = self.gpu.queue.submit([encoder.finish()]);
+        self.timing.submit_ms = submit_start.elapsed().as_secs_f64() * 1000.0;
+        let (id, completed) = self.flight.submit();
+        self.gpu.queue.on_submitted_work_done(move || {
+            completed.fetch_max(id, Ordering::Release);
+        });
+        self.gpu.device.poll(PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(std::time::Duration::from_secs(2)),
+        })?;
+        if ordinal == PIXEL_BURST_PRESENTS {
+            save_diagnostic_pixels(&self.gpu, frozen, &burst.capture, "offscreen", true, Some(ordinal))?;
+            save_diagnostic_pixels(
+                &self.gpu,
+                &frame.texture,
+                &burst.capture,
+                "surface",
+                false,
+                Some(ordinal),
+            )?;
+        }
+        if burst.capture.released() {
+            return Err("Burst released before present".into());
+        }
         let present_start = Instant::now();
         self.gpu.queue.present(frame);
         self.timing.present_call_ms = present_start.elapsed().as_secs_f64() * 1000.0;
         self.gpu.check_error()?;
+        std::fs::write(
+            burst.capture.dir.join("burst-present"),
+            format!("{} {ordinal} {id}", burst.capture.id),
+        )?;
+        android_surface_log(format!(
+            "pixelDiag.burstPresent capture={} ordinal={ordinal} submission={id}",
+            burst.capture.id
+        ));
+        if ordinal == PIXEL_BURST_PRESENTS {
+            std::fs::write(burst.capture.dir.join("frame-1.ready"), burst.capture.id.to_string())?;
+        }
+        burst.ordinal = ordinal;
         Ok((stats, start.elapsed().as_secs_f64() * 1000.0))
+    }
+
+    #[cfg(target_os = "android")]
+    fn capture_pixels(&self, surface: &Texture, capture: &PixelCapture) -> Result<(), Error> {
+        if surface.format() != self.config.format || surface.size() != self.gpu.target.size() {
+            return Err(format!(
+                "unexpected acquired texture {:?} {:?}, expected {:?} {:?}",
+                surface.format(),
+                surface.size(),
+                self.config.format,
+                self.gpu.target.size(),
+            )
+            .into());
+        }
+        save_diagnostic_pixels(&self.gpu, &self.gpu.target, capture, "offscreen", true, None)?;
+        if surface.usage().contains(TextureUsages::COPY_SRC) {
+            save_diagnostic_pixels(&self.gpu, surface, capture, "surface", false, None)?;
+        } else {
+            let proxy = self.gpu.device.create_texture(&TextureDescriptor {
+                label: Some("diagnostic surface blit proxy"),
+                size: self.gpu.target.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: self.config.format,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+            self.blitter.copy(&mut encoder, &proxy.create_view(&Default::default()));
+            self.gpu.queue.submit([encoder.finish()]);
+            save_diagnostic_pixels(&self.gpu, &proxy, capture, "blit-proxy", false, None)?;
+        }
+        // Only the diagnostic frame can arrive while this new view is holding its loop.
+        std::fs::write(capture.dir.join("frame-1.ready"), capture.id.to_string())?;
+        Ok(())
     }
 }
 impl Drop for SurfaceRenderer {

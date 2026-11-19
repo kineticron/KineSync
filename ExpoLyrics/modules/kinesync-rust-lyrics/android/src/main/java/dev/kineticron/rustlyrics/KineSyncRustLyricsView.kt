@@ -1,7 +1,9 @@
 package dev.kineticron.rustlyrics
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
@@ -14,8 +16,60 @@ import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import kotlin.math.ceil
+
+private const val PIXEL_BURST_PRESENTS = 4
+
+private enum class PixelBurstFailure(val code: Int) {
+  Detached(20), WindowHidden(21), ViewResized(22), SurfaceReplaced(23), SurfaceResized(24),
+  SurfaceDestroyed(25), BitmapCopy(26), SurfaceMissing(27), FixtureWait(28), WorkerWait(29),
+  ConsumerWait(30), HoldExpired(31), FixtureChanged(32), HeldTimestampChanged(33), InvalidGeometry(34),
+  WorkerStatus(35), ProducerReceipt(36), WorkerError(37), TrackGenerationChanged(38), AnchorChanged(39),
+  Inactive(40), UnexpectedBufferBetweenDraws(41), ClaimWait(42), DrawWait(43), DrawableRetries(44),
+  FixtureStyle(45),
+}
+
+private class PixelBurst(val dir: File, val id: Int, val deadlineNs: Long) {
+  var fixtureGeneration: Long? = null
+  var width = 0
+  var height = 0
+  var scale = 0f
+  var updates = 0L
+  var beforeUpdates = 0L
+  var beforeNs = 0L
+  var submittedNs = 0L
+  var workerDoneNs = 0L
+  var presentOrdinal = 0
+  var submission = 0L
+  val history = JSONArray()
+}
+
+private class ColdFirstPixel(val dir: File, val id: Int, val deadlineNs: Long) {
+  var readyGeneration = -1L
+  var readySequence = 0L
+  var readyFollowEpoch = 0L
+  var updates = 0L
+  var request: ColdFirstRequest? = null
+}
+
+private data class ColdFirstRequest(
+  val revision: Long, val generation: Long, val width: Int, val height: Int, val density: Float,
+  val beforeNs: Long, val beforeUpdates: Long,
+)
+
+private class ColdFactorTrial(val ordinal: Int, val mode: Char, val deadlineNs: Long) {
+  var readyGeneration = -1L
+  var readySequence = 0L
+  var readyFollowEpoch = 0L
+  var attempts = 0
+  var firstPresent = false
+}
 
 /**
  * Parity port of the Swift view. TextureView hosts a transparent Vulkan surface,
@@ -29,6 +83,16 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private val textureView = TextureView(context)
   private var owner: RustOwner? = null
   private var texture: SurfaceTexture? = null
+  private var loggedUpdateSession = -1L
+  private var pixelCaptureDir: File? = null
+  private var pixelCaptureId = 0
+  private var pixelUpdateSeen = false
+  private var pixelCaptureSaved = false
+  private var pixelInitialBufferNs = 0L
+  private var pixelHoldUntilNs = 0L
+  private var pixelBurst: PixelBurst? = null
+  private var coldFirstPixel: ColdFirstPixel? = null
+  private var coldFactorTrial: ColdFactorTrial? = null
 
   private var session = 0L
   private var generation = 0L
@@ -170,6 +234,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   }
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
+    rejectColdFirst(1)
+    abortPixelBurst(PixelBurstFailure.Detached)
     attached = false
     updatePresentationVisibility()
     velocity?.recycle(); velocity = null; dragging = false
@@ -181,26 +247,79 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   override fun onWindowVisibilityChanged(visibility: Int) {
     super.onWindowVisibilityChanged(visibility)
     foreground = visibility == VISIBLE
+    if (!foreground) rejectColdFirst(1)
+    if (!foreground) abortPixelBurst(PixelBurstFailure.WindowHidden)
     if (foreground) { markDirty(); refresh() }
     lifecycle()
   }
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
+    if (pixelBurst?.fixtureGeneration != null) abortPixelBurst(PixelBurstFailure.ViewResized)
     markDirty(); refresh(); lifecycle()
   }
 
   // TextureView surface lifecycle. One owner per SurfaceTexture.
+  private fun logSurface(event: String, st: SurfaceTexture, w: Int, h: Int) {
+    val location = IntArray(2)
+    textureView.getLocationInWindow(location)
+    val transform = textureView.getTransform(Matrix())
+    logRustDiag("$event texture=${System.identityHashCode(st)} session=$session generation=$generation " +
+      "size=${w}x$h viewSize=${width}x$height windowOrigin=${location[0]},${location[1]} " +
+      "bounds=${textureView.left},${textureView.top},${textureView.right},${textureView.bottom} " +
+      "hardware=${textureView.isHardwareAccelerated} layerType=${textureView.layerType} " +
+      "alpha=${textureView.alpha} viewMatrix=${textureView.matrix} textureTransform=$transform")
+  }
+
   override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+    loseColdFactorSurface()
+    rejectColdFirst(1)
+    abortPixelBurst(PixelBurstFailure.SurfaceReplaced)
     texture = st
     session++
+    pixelCaptureDir = if (context.packageName == "dev.kineticron.KineSync.testnov18") {
+      File(context.filesDir, "rust-pixel-diag").takeIf { File(it, "arm").isFile }
+    } else null
+    if (session == 1L && pixelCaptureDir == null && context.packageName == "dev.kineticron.KineSync.testnov18") {
+      val ticket = readPixelMarker(File(context.filesDir, "rust-pixel-diag"), "cold-factor").orEmpty()
+      if (ticket.length == 3 && ticket[0] in '1'..'6' && ticket[1] == ' ' && ticket[2] in "BG") {
+        coldFactorTrial = ColdFactorTrial(ticket[0] - '0', ticket[2], System.nanoTime() + 12_000_000_000L)
+        logColdFactorSnapshot("ticket")
+      }
+    }
+    val marker = pixelCaptureDir?.let { readPixelMarker(it, "arm") }.orEmpty()
+    pixelCaptureId = marker.removePrefix("burst ").toIntOrNull() ?: 0
+    if (pixelCaptureId !in 1..255) pixelCaptureDir = null
+    if (marker.startsWith("burst ")) pixelCaptureDir?.let { dir ->
+      pixelBurst = PixelBurst(dir, pixelCaptureId, System.nanoTime() + 18_000_000_000L)
+    }
+    if (marker == pixelCaptureId.toString()) pixelCaptureDir?.let { dir ->
+      if (pixelMarker(dir, "cold-first") == pixelCaptureId) {
+        coldFirstPixel = ColdFirstPixel(dir, pixelCaptureId, System.nanoTime() + 12_000_000_000L)
+      }
+    }
+    pixelUpdateSeen = false
+    pixelCaptureSaved = false
+    pixelInitialBufferNs = if (pixelCaptureDir == null) 0L else st.timestamp
+    pixelHoldUntilNs = 0L
+    logSurface("surface.available", st, w, h)
     val epoch = session
     displayedGeneration = -1L
     failed = false; updatePresentationVisibility(); markDirty()
     owner = RustOwner(context, st) { event -> handleEvent(event, epoch) }
     refresh(); lifecycle()
   }
-  override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) { markDirty(); refresh(); lifecycle() }
+  override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+    logSurface("surface.resize", st, w, h)
+    if (pixelBurst?.fixtureGeneration != null) abortPixelBurst(PixelBurstFailure.SurfaceResized)
+    markDirty(); refresh(); lifecycle()
+  }
   override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+    logSurface("surface.destroy", st, textureView.width, textureView.height)
+    rejectColdFirst(1)
+    abortPixelBurst(PixelBurstFailure.SurfaceDestroyed)
+    loseColdFactorSurface()
+    pixelCaptureDir = null
+    pixelHoldUntilNs = 0L
     Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
     cancelRetry(); cancelCue()
     val o = owner
@@ -212,7 +331,269 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     // Owner releases the texture after kr_destroy, so the view must not.
     return false
   }
-  override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+  override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+    if (loggedUpdateSession != session) {
+      loggedUpdateSession = session
+      logSurface("surface.firstUpdate", st, textureView.width, textureView.height)
+    }
+    if (st === texture) pixelBurst?.let { it.updates++ }
+    if (st === texture) coldFirstPixel?.let { it.updates++ }
+    if (pixelCaptureDir == null || st !== texture || pixelUpdateSeen) return
+    pixelUpdateSeen = true
+    logRustDiag("pixelDiag.update capture=$pixelCaptureId session=$session " +
+      "texture=${System.identityHashCode(st)} callbackNs=${st.timestamp} initialNs=$pixelInitialBufferNs")
+  }
+
+  private fun awaitPixelBitmap(dir: File, expectedGeneration: Long) {
+    val st = texture ?: return
+    val epoch = session
+    val id = pixelCaptureId
+    val width = textureView.width
+    val height = textureView.height
+    val cold = coldFirstPixel
+    main.post(object : Runnable {
+      override fun run() {
+        if (session != epoch || texture !== st || pixelCaptureDir != dir || pixelCaptureId != id ||
+          pixelHoldUntilNs == 0L || pixelMarker(dir, "release") == id) return
+        val timestamp = st.timestamp
+        val request = cold?.request
+        if (cold != null && (coldFirstPixel !== cold || !coldFirstRequestCurrent(request))) {
+          rejectColdFirst(3)
+          return
+        }
+        if (generation != expectedGeneration || textureView.width != width || textureView.height != height ||
+          System.nanoTime() >= pixelHoldUntilNs) {
+          logRustDiag("pixelDiag.textureUnpaired capture=$id session=$epoch updateSeen=$pixelUpdateSeen " +
+            "bufferNs=$timestamp initialNs=$pixelInitialBufferNs generation=$generation " +
+            "expectedGeneration=$expectedGeneration size=${textureView.width}x${textureView.height} expectedSize=${width}x$height")
+          if (cold != null) rejectColdFirst(4)
+          return
+        }
+        if (!pixelUpdateSeen || displayedGeneration != expectedGeneration || textureView.alpha != 1f ||
+          timestamp == 0L || timestamp == pixelInitialBufferNs ||
+          (cold != null && request != null &&
+            (cold.updates <= request.beforeUpdates || timestamp <= maxOf(0L, request.beforeNs)))) {
+          main.postDelayed(this, 16L)
+          return
+        }
+        savePixelBitmap(dir, st, timestamp, cold = cold)
+      }
+    })
+  }
+
+  private fun pixelGeometry(st: SurfaceTexture): JSONArray {
+    val origin = IntArray(2)
+    textureView.getLocationOnScreen(origin)
+    val view = FloatArray(9).also { textureView.matrix.getValues(it) }
+    val content = FloatArray(9).also { textureView.getTransform(Matrix()).getValues(it) }
+    val uv = FloatArray(16).also { st.getTransformMatrix(it) }
+    return JSONArray().apply {
+      put(origin[0]); put(origin[1]); put(textureView.width); put(textureView.height); put(textureView.alpha.toDouble())
+      for (values in arrayOf(view, content, uv)) for (value in values) put(value.toDouble())
+    }
+  }
+
+  private fun savePixelBitmap(dir: File, st: SurfaceTexture, textureTimestamp: Long, burst: PixelBurst? = null,
+                              cold: ColdFirstPixel? = null) {
+    try {
+      val geometry = if (burst != null || cold != null) pixelGeometry(st) else null
+      val bitmap = textureView.bitmap ?: error("TextureView bitmap unavailable")
+      try {
+        check(st === texture && st.timestamp == textureTimestamp) { "SurfaceTexture buffer changed during bitmap copy" }
+        if (geometry != null) {
+          check(geometry.toString() == pixelGeometry(st).toString() && st.timestamp == textureTimestamp) {
+            "SurfaceTexture geometry changed during bitmap copy"
+          }
+        }
+        check(bitmap.config == Bitmap.Config.ARGB_8888)
+        check(bitmap.rowBytes >= bitmap.width * 4 && bitmap.byteCount == bitmap.rowBytes * bitmap.height)
+        val raw = ByteBuffer.allocate(bitmap.byteCount)
+        bitmap.copyPixelsToBuffer(raw)
+        File(dir, "frame-1-textureview.raw").writeBytes(raw.array())
+        val file = File(dir, "frame-1-textureview.png")
+        file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        val rawSha = pixelSha256(raw.array())
+        val pngSha = pixelSha256(file.readBytes())
+        val metadata = JSONObject()
+          .put("frame", 1).put("capture", pixelCaptureId).put("session", session).put("generation", generation)
+          .put("texture", System.identityHashCode(st)).put("bufferNs", textureTimestamp)
+          .put("width", bitmap.width).put("height", bitmap.height).put("rawRowBytes", bitmap.rowBytes)
+          .put("config", bitmap.config.toString()).put("byteOrder", ByteOrder.nativeOrder().toString())
+          .put("colorSpace", bitmap.colorSpace?.name).put("premultiplied", bitmap.isPremultiplied)
+          .put("rawSha256", rawSha).put("pngSha256", pngSha)
+        // Keep the buffer held while the runner takes its matching screen crop.
+        pixelHoldUntilNs = System.nanoTime() + 10_000_000_000L
+        if (burst != null) {
+          metadata.put("presentOrdinal", burst.presentOrdinal).put("presentHistory", burst.history)
+            .put("geometry", geometry).put("holdUntilNs", pixelHoldUntilNs)
+        }
+        if (cold != null) {
+          val request = checkNotNull(cold.request)
+          check(coldFirstRequestCurrent(request) && st.timestamp == textureTimestamp)
+          metadata.put("geometry", geometry).put("holdUntilNs", pixelHoldUntilNs)
+            .put("requestedRevision", request.revision).put("beforeNs", request.beforeNs)
+        }
+        File(dir, "frame-1-textureview.json").writeText(metadata.toString(2))
+        pixelCaptureSaved = true
+        logRustDiag("pixelDiag.texture capture=$pixelCaptureId frame=1 session=$session generation=$generation " +
+          "texture=${System.identityHashCode(st)} bufferNs=$textureTimestamp size=${bitmap.width}x${bitmap.height} " +
+          "rawSha256=$rawSha pngSha256=$pngSha path=${file.absolutePath}")
+      } finally {
+        bitmap.recycle()
+      }
+    } catch (error: Exception) {
+      logRustDiag("pixelDiag.textureFailed capture=$pixelCaptureId frame=1 session=$session error=$error")
+      if (burst != null) abortPixelBurst(PixelBurstFailure.BitmapCopy)
+      if (cold != null) rejectColdFirst(6)
+    }
+  }
+
+  private fun pixelSha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
+    .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+  private fun readPixelMarker(dir: File, name: String): String? =
+    runCatching { File(dir, name).readText().trim() }.getOrNull()
+
+  private fun pixelMarker(dir: File, name: String): Int? = readPixelMarker(dir, name)?.toIntOrNull()
+
+  private fun pixelReady(dir: File): Boolean =
+    !File(dir, "arm").exists() && pixelMarker(dir, "frame-1.ready") == pixelCaptureId
+
+  private fun logColdFactorSnapshot(phase: String, requested: Long = -1L, result: FrameResult? = null) {
+    val trial = coldFactorTrial ?: return
+    val st = texture ?: return
+    logRustDiag("pixelDiag.coldFactor phase=$phase trial=${trial.ordinal} mode=${trial.mode} " +
+      "texture=${System.identityHashCode(st)} session=$session generation=$generation " +
+      "sequence=$sequence followEpoch=$ownershipEpoch revision=$frameRevision priorPresents=$presentCalls " +
+      "attempt=${trial.attempts} requestedRevision=$requested workerGeneration=${result?.generation ?: -1L} " +
+      "status=${result?.status ?: -1}")
+  }
+
+  private fun loseColdFactorSurface() {
+    if (coldFactorTrial?.firstPresent == false) logColdFactorSnapshot("surfaceLost")
+    coldFactorTrial = null
+  }
+
+  private fun endColdFirst() {
+    coldFirstPixel = null
+    pixelCaptureDir = null
+    pixelHoldUntilNs = 0L
+  }
+
+  private fun rejectColdFirst(code: Int) {
+    val cold = coldFirstPixel ?: return
+    runCatching { File(cold.dir, "cold-first-failed").writeText("${cold.id} $code") }
+    logRustDiag("pixelDiag.coldFirstRejected capture=${cold.id} code=$code session=$session generation=$generation " +
+      "requestedRevision=${cold.request?.revision} currentRevision=$frameRevision displayedGeneration=$displayedGeneration")
+    endColdFirst()
+  }
+
+  private fun coldFirstRequestCurrent(request: ColdFirstRequest?): Boolean = request != null &&
+    request.revision == frameRevision && request.generation == generation && request.width == textureView.width &&
+    request.height == textureView.height && request.density == density && attached && foreground && enabled && !failed
+
+  private fun endPixelBurst() {
+    pixelBurst = null
+    pixelCaptureDir = null
+    pixelHoldUntilNs = 0L
+  }
+
+  private fun abortPixelBurst(reason: PixelBurstFailure) {
+    val burst = pixelBurst ?: return
+    runCatching {
+      val marker = File(burst.dir, "burst-failed")
+      if (!marker.exists()) marker.writeText("${burst.id} ${reason.code}")
+    }
+    logRustDiag("pixelDiag.burstAborted capture=${burst.id} session=$session code=${reason.code} reason=$reason")
+    endPixelBurst()
+  }
+
+  private fun pausedPixelCredits(): Boolean {
+    val a = anchor ?: return false
+    return trackId == "fx-track-credits" && a.generation == generation && !a.playing && a.positionMs == 51600.0
+  }
+
+  // Returns true while a draw is gated on a consumer latch, or while the final buffer is held.
+  private fun gatePixelBurst(burst: PixelBurst): Boolean {
+    val st = texture
+    if (pixelMarker(burst.dir, "release") == burst.id) {
+      endPixelBurst()
+      return false
+    }
+    val failure = readPixelMarker(burst.dir, "burst-failed")?.substringBefore(' ')?.toIntOrNull()
+    if (failure == burst.id) {
+      endPixelBurst()
+      return true
+    }
+    if (st == null) {
+      abortPixelBurst(PixelBurstFailure.SurfaceMissing)
+      return true
+    }
+    val now = System.nanoTime()
+    val expectedGeneration = burst.fixtureGeneration
+    val armPending = File(burst.dir, "arm").exists()
+    if (now >= (if (pixelCaptureSaved) pixelHoldUntilNs else burst.deadlineNs)) {
+      abortPixelBurst(when {
+        pixelCaptureSaved -> PixelBurstFailure.HoldExpired
+        armPending -> PixelBurstFailure.ClaimWait
+        busy -> PixelBurstFailure.WorkerWait
+        expectedGeneration == null -> PixelBurstFailure.FixtureWait
+        burst.presentOrdinal > burst.history.length() -> PixelBurstFailure.ConsumerWait
+        else -> PixelBurstFailure.DrawWait
+      })
+      return true
+    }
+    if (expectedGeneration != null && (!pausedPixelCredits() || generation != expectedGeneration ||
+        textureView.width != burst.width || textureView.height != burst.height || density != burst.scale)) {
+      abortPixelBurst(PixelBurstFailure.FixtureChanged)
+      return true
+    }
+    if (busy || !pausedPixelCredits() || armPending) return true
+    if (pixelCaptureSaved) {
+      val finalNs = burst.history.optJSONObject(PIXEL_BURST_PRESENTS - 1)?.optLong("bufferNs")
+      if (st.timestamp != finalNs) abortPixelBurst(PixelBurstFailure.HeldTimestampChanged)
+      return true
+    }
+    if (burst.presentOrdinal == burst.history.length()) return false
+    val timestamp = st.timestamp
+    if (displayedGeneration != expectedGeneration || textureView.alpha != 1f ||
+      burst.updates <= burst.beforeUpdates || timestamp <= maxOf(0L, burst.beforeNs)) return true
+    val geometry = runCatching { pixelGeometry(st) }.getOrElse {
+      abortPixelBurst(PixelBurstFailure.InvalidGeometry)
+      return true
+    }
+    if (st.timestamp != timestamp) return true
+    burst.history.put(JSONObject().put("ordinal", burst.presentOrdinal).put("submission", burst.submission)
+      .put("session", session).put("generation", generation).put("texture", System.identityHashCode(st))
+      .put("beforeNs", burst.beforeNs).put("bufferNs", timestamp).put("submittedNs", burst.submittedNs)
+      .put("beforeUpdates", burst.beforeUpdates).put("updates", burst.updates)
+      .put("workerDoneNs", burst.workerDoneNs).put("observedNs", now).put("geometry", geometry))
+    logRustDiag("pixelDiag.burstLatch capture=${burst.id} ordinal=${burst.presentOrdinal} session=$session " +
+      "generation=$generation texture=${System.identityHashCode(st)} beforeNs=${burst.beforeNs} bufferNs=$timestamp")
+    if (burst.presentOrdinal == PIXEL_BURST_PRESENTS) {
+      savePixelBitmap(burst.dir, st, timestamp, burst)
+    }
+    return true
+  }
+
+  private fun recordPixelBurstPresent(burst: PixelBurst, result: FrameResult) {
+    if (result.status != 0) {
+      if (result.status != 2 && result.status != 3) abortPixelBurst(PixelBurstFailure.WorkerStatus)
+      return
+    }
+    val receipt = readPixelMarker(burst.dir, "burst-present")?.split(' ').orEmpty()
+    val ordinal = burst.presentOrdinal + 1
+    val submission = receipt.getOrNull(2)?.toLongOrNull() ?: 0L
+    if (receipt.size != 3 || receipt[0].toIntOrNull() != burst.id || receipt[1].toIntOrNull() != ordinal ||
+      submission != burst.submission + 1 || result.generation != burst.fixtureGeneration ||
+      (ordinal == PIXEL_BURST_PRESENTS && !pixelReady(burst.dir))) {
+      abortPixelBurst(PixelBurstFailure.ProducerReceipt)
+      return
+    }
+    burst.presentOrdinal = ordinal
+    burst.submission = submission
+    burst.workerDoneNs = System.nanoTime()
+  }
 
   private fun handleEvent(event: Map<String, Any?>, epoch: Long) {
     if (session != epoch || (event["generation"] as? Long) != generation) return
@@ -233,10 +614,27 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       onMetrics(m)
     } else {
       if (event["state"] == "error") {
+        rejectColdFirst(5)
+        abortPixelBurst(PixelBurstFailure.WorkerError)
         failed = true; updatePresentationVisibility()
         Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
       }
-      if (event["state"] == "ready") { markDirty(); lifecycle() }
+      if (event["state"] == "ready") {
+        coldFactorTrial?.let { trial ->
+          trial.readyGeneration = generation
+          trial.readySequence = sequence
+          trial.readyFollowEpoch = ownershipEpoch
+          logColdFactorSnapshot("ready")
+        }
+        coldFirstPixel?.let { cold ->
+          cold.readyGeneration = generation
+          cold.readySequence = sequence
+          cold.readyFollowEpoch = ownershipEpoch
+          logRustDiag("pixelDiag.coldFirstReady capture=${cold.id} session=$session generation=$generation " +
+            "sequence=$sequence followEpoch=$ownershipEpoch")
+        }
+        markDirty(); lifecycle()
+      }
       onStatus(event)
     }
   }
@@ -246,6 +644,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val id = try { JSONObject(value).getLong("generation") } catch (_: Exception) { return }
     if (id <= generation) return
     val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
+    if (pixelBurst?.fixtureGeneration != null) abortPixelBurst(PixelBurstFailure.TrackGenerationChanged)
     generation = id; sequence = 0; anchor = null; animating = false
     ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
     releasePending = false; releaseRecaptured = false
@@ -275,12 +674,17 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
       return
     }
     if (next.generation != generation || next.sequence <= sequence) return
+    if (pixelBurst?.fixtureGeneration != null && (next.playing || next.positionMs != 51600.0)) {
+      abortPixelBurst(PixelBurstFailure.AnchorChanged)
+    }
     sequence = next.sequence; anchor = next; markDirty()
     owner?.setAnchor(next)
     lifecycle()
   }
   fun setActive(value: Boolean) {
     enabled = value
+    if (!value) rejectColdFirst(1)
+    if (!value) abortPixelBurst(PixelBurstFailure.Inactive)
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
@@ -385,7 +789,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val visible = attached && foreground && enabled && !failed && width > 0 && height > 0 && owner != null
     owner?.setVisible(visible)
     if (!visible) { cancelRetry(); cancelCue(); resumePending = false }
-    if (visible && retryWork == null && !retryBlocked && (dirty || animating)) {
+    if (visible && retryWork == null && !retryBlocked && (dirty || animating || pixelBurst != null)) {
       cancelCue()
       if (!callbackPosted) {
         val hz = display?.refreshRate?.toDouble() ?: 60.0
@@ -439,6 +843,15 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun tick(frameNs: Long) {
     callbacks++
     if (!attached || !foreground || !enabled || failed || retryBlocked || retryWork != null) { inactive++; lifecycle(); return }
+    val burst = pixelBurst
+    if (burst != null && (gatePixelBurst(burst) || pixelBurst == null)) { repost(); return }
+    if (burst == null && pixelHoldUntilNs != 0L) {
+      val released = pixelCaptureDir?.let { pixelMarker(it, "release") == pixelCaptureId } == true
+      if (!released && System.nanoTime() < pixelHoldUntilNs) { repost(); return }
+      logRustDiag("pixelDiag.holdEnd capture=$pixelCaptureId frame=1 session=$session " +
+        "updateSeen=$pixelUpdateSeen bitmapSaved=$pixelCaptureSaved released=$released")
+      if (coldFirstPixel != null && !released) rejectColdFirst(4) else endColdFirst()
+    }
     if (previousFrameNs > 0) {
       val gap = frameNs - previousFrameNs
       intervalMs = gap / 1e6
@@ -447,13 +860,71 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     previousFrameNs = frameNs
     val periodNs = (1e9 / (display?.refreshRate?.toDouble() ?: 60.0)).toLong()
     previousStepNs = periodNs
+    coldFactorTrial?.let { trial ->
+      if (!trial.firstPresent && System.nanoTime() >= trial.deadlineNs) {
+        logColdFactorSnapshot("timeout")
+        coldFactorTrial = null
+      } else if (trial.attempts == 0) {
+        val ready = trial.readyGeneration == generation && ownershipEpoch > trial.readyFollowEpoch &&
+          sequence > trial.readySequence && pausedPixelCredits()
+        if (!ready && trial.mode == 'G') { repost(); return }
+      }
+    }
     // Keep the loop alive for the next vsync while work is pending.
     if (busy) { busyCallbacks++; repost(); return }
-    if (!dirty && !animating) { idle++; lifecycle(); return }
+    val cold = coldFirstPixel
+    if (cold != null) {
+      if (pixelMarker(cold.dir, "release") == cold.id) { endColdFirst(); repost(); return }
+      if (System.nanoTime() >= cold.deadlineNs) { rejectColdFirst(2); repost(); return }
+      // JS handles ready by sending a fresh follow epoch and then a fresh anchor. Both
+      // commands dirty the frame, so consume them before submitting the first draw.
+      if (cold.readyGeneration != generation || ownershipEpoch <= cold.readyFollowEpoch ||
+        sequence <= cold.readySequence || !pausedPixelCredits()) { repost(); return }
+      if (cold.request?.generation != generation) {
+        val style = runCatching { JSONObject(track).optJSONObject("settings")?.optString("style") }.getOrNull()
+        if (style != "amll") { rejectColdFirst(7); repost(); return }
+      }
+    }
+    if (!dirty && !animating && burst == null) { idle++; lifecycle(); return }
     val o = owner ?: run { inactive++; return }
+    if (burst != null) {
+      if (burst.fixtureGeneration == null) {
+        val style = runCatching { JSONObject(track).optJSONObject("settings")?.optString("style") }.getOrNull()
+        if (style != "amll") {
+          abortPixelBurst(PixelBurstFailure.FixtureStyle)
+          repost()
+          return
+        }
+        burst.fixtureGeneration = generation
+        burst.width = textureView.width
+        burst.height = textureView.height
+        burst.scale = density
+      }
+      burst.beforeNs = texture?.timestamp ?: 0L
+      if (burst.presentOrdinal > 0 &&
+        burst.beforeNs != burst.history.optJSONObject(burst.presentOrdinal - 1)?.optLong("bufferNs")) {
+        abortPixelBurst(PixelBurstFailure.UnexpectedBufferBetweenDraws)
+        repost()
+        return
+      }
+      burst.beforeUpdates = burst.updates
+      burst.submittedNs = System.nanoTime()
+    }
     busy = true; dirty = false; submitted++
     val epoch = session
     val requestedRevision = frameRevision
+    coldFactorTrial?.let { trial ->
+      if (!trial.firstPresent) {
+        trial.attempts++
+        if (trial.attempts == 1) logColdFactorSnapshot("submit", requestedRevision)
+      }
+    }
+    if (cold != null) {
+      cold.request = ColdFirstRequest(requestedRevision, generation, textureView.width, textureView.height, density,
+        texture?.timestamp ?: 0L, cold.updates)
+      logRustDiag("pixelDiag.coldFirstSubmit capture=${cold.id} session=$session generation=$generation " +
+        "revision=$requestedRevision sequence=$sequence followEpoch=$ownershipEpoch")
+    }
     val resumeStepMs = if (resumePending) periodNs / 1e6 else 0.0
     resumePending = false
     o.draw((frameNs + periodNs) / 1e6, resumeStepMs) { r -> onFrame(r, epoch, requestedRevision, resumeStepMs) }
@@ -467,6 +938,38 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun onFrame(r: FrameResult, epoch: Long, requestedRevision: Long, resumeStepMs: Double) {
     if (session != epoch) return
     busy = false
+    coldFactorTrial?.let { trial ->
+      if (!trial.firstPresent) {
+        if (trial.attempts == 1) logColdFactorSnapshot("result", requestedRevision, r)
+        if (System.nanoTime() >= trial.deadlineNs) {
+          logColdFactorSnapshot("timeout", requestedRevision, r)
+          coldFactorTrial = null
+        } else if (r.status == 0) {
+          logColdFactorSnapshot("present", requestedRevision, r)
+          trial.firstPresent = true
+        }
+      }
+    }
+    val burst = pixelBurst
+    if (burst != null) recordPixelBurstPresent(burst, r)
+    coldFirstPixel?.let { cold ->
+      if (r.status == 0) {
+        if (r.generation != generation || !coldFirstRequestCurrent(cold.request)) rejectColdFirst(3)
+        else if (!pixelReady(cold.dir)) rejectColdFirst(5)
+      } else if (r.status <= 1) rejectColdFirst(5)
+    }
+    if (burst == null && r.status == 0 && pixelHoldUntilNs == 0L) pixelCaptureDir?.let { dir ->
+      if (pixelReady(dir)) {
+        pixelHoldUntilNs = System.nanoTime() + 10_000_000_000L
+        logRustDiag("pixelDiag.hold capture=$pixelCaptureId frame=1 session=$session generation=${r.generation} " +
+          "revisionCurrent=${frameRevision == requestedRevision && r.generation == generation}")
+        // A TextureView listener may run before RenderThread latches the buffer timestamp.
+        // Post outside the draw callback and let this hold protect the first buffer until the latch.
+        awaitPixelBitmap(dir, r.generation)
+      } else {
+        pixelCaptureDir = null
+      }
+    }
     if (r.status == 0) presentCalls++
     if (r.status == 2) noDrawable++
     if (r.status == 3) dirty = true
@@ -490,6 +993,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   }
 
   private fun markDirty() {
+    if (coldFirstPixel != null && pixelHoldUntilNs != 0L) rejectColdFirst(3)
     cancelCue(); nextCueNativeMs = -1.0
     dirty = true; frameRevision++; retryCount = 0; retryBlocked = false; cancelRetry()
   }
@@ -497,6 +1001,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun scheduleRetry(revision: Long, epoch: Long) {
     dirty = true
     if (retryCount >= retryDelays.size) {
+      rejectColdFirst(5)
+      abortPixelBurst(PixelBurstFailure.DrawableRetries)
       retryBlocked = true; surfaceWaiting = true; updatePresentationVisibility()
       onStatus(mapOf("state" to "waiting", "generation" to generation,
         "message" to "Rust surface unavailable after bounded retries. Resume, seek, resize or recreate to retry."))

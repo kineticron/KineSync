@@ -6,7 +6,12 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
+import android.util.Log
 import android.view.Surface
+
+internal fun logRustDiag(message: String) {
+  Log.i("KSRustDiag", "monoNs=${System.nanoTime()} $message")
+}
 
 internal data class Anchor(
   val generation: Long, val sequence: Long, val positionMs: Double,
@@ -145,7 +150,10 @@ internal class RustOwner(
       if (RustBridge.abiVersion() != 11) { failed = true; emit(mapOf("state" to "error", "message" to "Rust ABI mismatch")); return }
       val s = Surface(texture)
       surface = s
+      val textureId = System.identityHashCode(texture)
+      logRustDiag("owner.create.enter texture=$textureId size=${w}x$h scale=${u.scale}")
       handle = RustBridge.create(s, w, h, u.scale)
+      logRustDiag("owner.create.exit texture=$textureId generation=$currentGeneration success=${handle != 0L}")
       if (handle == 0L) { s.release(); surface = null; failure(); return }
       val f = loadFonts(context)
       if (f == null) {
