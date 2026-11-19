@@ -1,5 +1,5 @@
-import { useRetainedActiveLine } from '@/lib/retained-active-line';
-import { RetainedGlyphPicture } from './retained-glyph-graph';
+import { useRetainedActiveLine, useRetainedClipVariant } from '@/lib/retained-active-line';
+import { RetainedGlyphPicture, RetainedNoMaskGlyphPicture } from './retained-glyph-graph';
 import { nativeGeometryCache } from './native-geometry-cache';
 import { useArrivalVoice, useArrivalShapeAttribution } from '@/lib/lyrics-arrival-context';
 import { arrivalEvent, arrivalSpan, arrivalCounter, arrivalNow, arrivalProduced } from '@/lib/lyrics-arrival-trace';
@@ -25,7 +25,8 @@ export const NativeLazySkiaVoice = memo(function NativeLazySkiaVoice({ voice, po
   right: boolean; hasDuet: boolean; background: boolean; animate: boolean; prepared: boolean; staticLyrics: boolean; blur: SharedValue<number>; lineActive: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>; spicy: boolean; playing: boolean; batched?: boolean; showTranslation: boolean; prepareGlyphs?: boolean;
 }) {
   const retained = useRetainedActiveLine();
-  const GlyphPicture = retained ? RetainedGlyphPicture : NativeGlyphPicture;
+  const clipVariant = useRetainedClipVariant();
+  const GlyphPicture = retained ? clipVariant === 'group' ? RetainedNoMaskGlyphPicture : RetainedGlyphPicture : NativeGlyphPicture;
   const sharedBlur = useContext(NativeSharedBlurContext);
   const trace = useArrivalVoice();
   if (__DEV__) arrivalCounter(trace.handle, 'voiceRenders');

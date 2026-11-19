@@ -210,6 +210,8 @@ function scenario({ initialPacket, development = false } = {}) {
     '@shopify/react-native-skia': skia, 'react-native-reanimated': reanimated, 'react-native-worklets': worklets,
     'react-native-gesture-handler': { Pressable: 'Pressable' }, '@react-native-masked-view/masked-view': 'MaskedView',
     'expo-linear-gradient': { LinearGradient: 'LinearGradient' }, 'expo-image': { Image: 'Image' },
+    'expo-blur': { BlurView: 'BlurView', BlurTargetView: 'BlurTargetView' },
+    'expo-font': { isLoaded: () => true },
     '@react-native-async-storage/async-storage': { getItem: async () => null, setItem: async () => {} },
   };
   function resolveFile(target) {

@@ -153,8 +153,8 @@ export function RetainedGlyphGraph({ words, state, spicy, clipMode = 'mask' }: {
   return <Group layer={<Paint opacity={state.ready} />}>{nodes}</Group>;
 }
 /** Experimental replacement; do not select in the app before raster acceptance. */
-export const RetainedGlyphPicture = memo(function RetainedGlyphPicture({ words, position, active, lineMotion, spicy, background, fontSize, lineEnd }: {
-  words: ShapedGlyphWord[]; position: SharedValue<number>; active: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>;
+export const RetainedGlyphPicture = memo(function RetainedGlyphPicture({ words, position, active, lineMotion, spicy, background, fontSize, lineEnd, clipMode = 'mask' }: {
+  clipMode?: 'mask' | 'group'; words: ShapedGlyphWord[]; position: SharedValue<number>; active: SharedValue<boolean>; lineMotion: SharedValue<ReferenceLineMotion>;
 } & RetainedGlyphOptions) {
   const buffers = useMemo(() => createRetainedGlyphState(words), [words]);
   const state = useMemo(() => makeMutable(buffers), [buffers]);
@@ -165,5 +165,10 @@ export const RetainedGlyphPicture = memo(function RetainedGlyphPicture({ words, 
       Math.min(0.064, Math.max(0, (info.timeSincePreviousFrame ?? 0) / 1000)), lineMotion.value, options);
   }, [active, lineMotion, options, position, state, words]), false);
   useEffect(() => { frame.setActive(words.length > 0); return () => frame.setActive(false); }, [frame, words]);
-  return <RetainedGlyphGraph words={words} state={buffers} spicy={spicy} />;
+  return <RetainedGlyphGraph words={words} state={buffers} spicy={spicy} clipMode={clipMode} />;
+});
+
+/** Explicit opt-in diagnostic: installed native Group clipping has aliased edges. */
+export const RetainedNoMaskGlyphPicture = memo(function RetainedNoMaskGlyphPicture(props: React.ComponentProps<typeof RetainedGlyphPicture>) {
+  return <RetainedGlyphPicture {...props} clipMode="group" />;
 });

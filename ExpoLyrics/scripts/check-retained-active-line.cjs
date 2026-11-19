@@ -8,6 +8,13 @@ for (const code of [currentCode, lazy]) for (const spicy of [true, false]) {
  const settings = { dev: false, retained: false }, h = createVoiceHarness(code, spicy, settings);
  let tree = h.render(voice); tree.props.onLayout({ nativeEvent: { layout: { width: 320 } } });
  for (const enabled of [false,true,false,true,false]) { settings.retained = enabled; tree = h.render(voice); assert.equal(!!find(tree, 'RetainedGlyphPicture'), enabled); assert.equal(!!find(tree, h.NativeGlyphPicture), !enabled); if(enabled) assert.equal(find(tree, 'RetainedGlyphPicture').props.spicy, spicy); }
+ for (const clipVariant of ['mask','group','mask']) {
+  settings.retained = true; settings.clipVariant = clipVariant; tree = h.render(voice);
+  assert.ok(find(tree, clipVariant === 'group' ? 'RetainedNoMaskGlyphPicture' : 'RetainedGlyphPicture'));
+  assert.equal(!!find(tree, h.NativeGlyphPicture), false);
+ }
+ settings.retained = false; settings.clipVariant = 'group'; tree = h.render(voice);
+ assert.ok(find(tree,h.NativeGlyphPicture)); assert.equal(find(tree,'RetainedNoMaskGlyphPicture'),null);
  h.unmount();
 }
 console.log('Retained routing PASS: both styles/voice paths, default off and repeated on/off replacement');
@@ -22,6 +29,9 @@ async function checkStore(dev, os) {
   return { useSyncExternalStore(subscribe, snapshot) { listeners.add(subscribe(() => {})); return snapshot(); }, useEffect(fn) { effects.push(fn); } };
  } });
  const api = module.exports; assert.equal(api.getRetainedActiveLine(), false);
+ assert.equal(api.getRetainedClipVariant(), 'mask'); api.setRetainedClipVariant('group');
+ assert.equal(api.getRetainedClipVariant(), dev && os !== 'web' ? 'group' : 'mask');
+ assert.equal(api.getRetainedActiveLine(), false, 'variant selection must not enable renderer');
  api.useRetainedActiveLine(); effects.forEach(fn => fn());
  await api.setRetainedActiveLine(true); resolveLoad?.('false'); await api.loadRetainedActiveLine();
  assert.equal(api.getRetainedActiveLine(), dev && os !== 'web', 'late storage load must not undo user toggle; web/release stay off');
@@ -43,7 +53,8 @@ Promise.all([checkStore(true,'ios'), checkStore(false,'ios'), checkStore(true,'w
   return {};
  } });
  const props = { words: [{ word: { text: 'hello', emphasized: false, letters: [] }, runs: [] }], position: { value: 100 }, active: { value: true }, lineMotion: { value: {} }, spicy: true, background: false, fontSize: 32, lineEnd: 102 };
- const first = module.exports.RetainedGlyphPicture(props); const stop = effects.pop()(); assert.deepEqual(frames[0], [true]); stop(); assert.deepEqual(frames[0], [true,false]);
- const second = module.exports.RetainedGlyphPicture({ ...props, spicy: false }); const stopSecond = effects.pop()(); assert.notEqual(first.props.state, second.props.state); stopSecond(); assert.deepEqual(frames[1], [true,false]);
+ const noMask = module.exports.RetainedNoMaskGlyphPicture(props); assert.equal(noMask.props.clipMode,'group');
+ const first = module.exports.RetainedGlyphPicture(props); assert.equal(first.props.clipMode,'mask'); const stop = effects.pop()(); assert.deepEqual(frames[0], [true]); stop(); assert.deepEqual(frames[0], [true,false]);
+ const second = module.exports.RetainedGlyphPicture({ ...props, spicy: false, clipMode: 'group' }); assert.equal(second.props.clipMode,'group'); const stopSecond = effects.pop()(); assert.notEqual(first.props.state, second.props.state); stopSecond(); assert.deepEqual(frames[1], [true,false]);
  console.log('Retained lifecycle PASS: actual component enables/disables frame callbacks on mount/unmount; remount owns fresh state');
 }

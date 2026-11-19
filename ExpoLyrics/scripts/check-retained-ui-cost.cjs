@@ -5,6 +5,7 @@
 // --raster-only skips timing; --counts-only skips raster/timing.
 // --original uses the pre-suppression retained source. Resume is unsupported.
 // Use a fresh output directory for each run.
+// --four-way-benchmark compares ORIGINAL / f86c4fd retained / notification fix / no-mask updater.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -58,6 +59,8 @@ async function main() {
   const entries = { visit: 'sksg/Recorder/Visitor', Recorder: 'sksg/Recorder/Recorder', replay: 'sksg/Recorder/Player', createDrawingContext: 'sksg/Recorder/DrawingContext', Group: 'renderer/components/Group', Blur: 'renderer/components/imageFilters/Blur', ColorMatrix: 'renderer/components/colorFilters/Matrix', Fill: 'renderer/components/shapes/Fill', Glyphs: 'renderer/components/text/Glyphs', LinearGradient: 'renderer/components/shaders/LinearGradient', Paint: 'renderer/components/Paint', Path: 'renderer/components/shapes/Path', Picture: 'renderer/components/Picture' };
   renderer = load(Object.entries(entries).map(([name, file]) => `export {${name}} from ${JSON.stringify(path.join(installed, 'src', file))};`).join('\n'));
   for (const name of Object.keys(entries)) if (!['visit', 'Recorder', 'replay', 'createDrawingContext'].includes(name)) skiaExports[name] = renderer[name];
+  const priorSource = execFileSync('git', ['show', 'f86c4fd:ExpoLyrics/components/lyrics/native/retained-glyph-graph.tsx'], {encoding:'utf8'});
+  const priorApi = load(priorSource);
   const api = load(source);
   const noBlur = load(source.replace('<Blur blur={slice.radius} mode="decal" />', ''));
   const noClip = load(source.replace("return clipMode === 'group' ? <Group clip={word.clips[letter]}>{children}</Group>", "return true ? <Group>{children}</Group>"));
@@ -104,6 +107,12 @@ async function main() {
   sourceHashes['retained-glyph-benchmark.cjs'] = hash(fs.readFileSync(path.join(__dirname,'retained-glyph-benchmark.cjs')));
   const provenance = { sourceHashes, baseline: hash(original), fonts: Object.fromEntries(Object.entries(fonts).map(([name,data])=>[name,hash(data)])), node:process.version,
     packages: Object.fromEntries(['@shopify/react-native-skia','react-native-reanimated','react-native-worklets','react','canvaskit-wasm'].map(name=>[name,require(name+'/package.json').version])), argv:process.argv.slice(2) };
+  sourceHashes['retained-four-way-benchmark.cjs'] = hash(fs.readFileSync(path.join(__dirname,'retained-four-way-benchmark.cjs')));
+  provenance.priorRetainedSource = hash(priorSource);
+  if (process.argv.includes('--four-way-benchmark')) {
+    await require('./retained-four-way-benchmark.cjs')({ original, source, priorSource, load, Skia, createPicture, fixture, out, provenance });
+    return;
+  }
   if (process.argv.includes('--benchmark')) {
     await require('./retained-glyph-benchmark.cjs')({ api, baseline, original, source, load, Skia, createPicture, fixture, out, provenance });
     return;
@@ -117,13 +126,13 @@ async function main() {
     const { children, ...props } = element.props;
     return { type: element.type, props, children: React.Children.toArray(children).flatMap(e => expand(e) ?? []) };
   }
-  function record(words, state, spicy, clipMode, graph = api) {
+  function record(words, state, spicy, clipMode, graph = api, fixtureName, width, mode, background) {
     const recorder = new renderer.Recorder();
     const tree = expand(React.createElement(graph.RetainedGlyphGraph, { words, state, spicy, clipMode }));
     renderer.visit(recorder, [tree]);
     const count = node => node ? 1 + node.children.reduce((n,c)=>n+count(c),0) : 0;
     const recording = recorder.getRecording();
-    graphCounts.push({spicy,clipMode,slices:words.reduce((n,w)=>n+w.runs.length,0),nodes:count(tree),subscriptions:recording.animationValues.size,topLevelCommands:recording.commands.length});
+    graphCounts.push({fixture:fixtureName,width,mode,background,spicy,clipMode,slices:words.reduce((n,w)=>n+w.runs.length,0),nodes:count(tree),subscriptions:recording.animationValues.size,topLevelCommands:recording.commands.length});
     return recording;
   }
   function raster(draw, width, height, name) {
@@ -152,7 +161,7 @@ async function main() {
     const f = fixture(text, font, parts, rtl, fallbackName, width);
     for (const spicy of [true, false]) for (const background of [false, true]) {
       const options = { spicy, background, fontSize: 64, lineEnd: 2000 }, words = f.shape(spicy);
-      const state = api.createRetainedGlyphState(words), recordings = Object.fromEntries(['group','mask','native-aa','no-clip','no-blur'].map(mode => [mode, record(words, state, spicy, mode === 'mask' || mode === 'no-blur' ? 'mask' : 'group', mode === 'no-clip' ? noClip : mode === 'no-blur' ? noBlur : api)]));
+      const state = api.createRetainedGlyphState(words), recordings = Object.fromEntries(['group','mask','prior-mask','native-aa','no-clip','no-blur'].map(mode => [mode, record(words, state, spicy, mode === 'mask' || mode === 'prior-mask' || mode === 'no-blur' ? 'mask' : 'group', mode === 'no-clip' ? noClip : mode === 'no-blur' ? noBlur : mode === 'prior-mask' ? priorApi : api, label, width, mode, background)]));
       let springs = words.map(w => baseline.initialWordSpringState(w.word)), clock = { active: false, releasePosition: -1, elapsed: 0 };
       const paints = { paint: Skia.Paint(), glowPaint: Skia.Paint(), blurRadii: [], blurFilters: [], revealShaders: [] };
       const sequence = [ ['future', -100, false], ['attack', 0, true],
@@ -183,7 +192,7 @@ async function main() {
         if (!stage || process.argv.includes('--counts-only')) continue;
         const prefix = `${width}-${label}-${spicy?'spicy':'amll'}-${background?'bg':'fg'}-${stage}`;
         // CPU software CanvasKit: parent picture recording, then playback + flush.
-        for (const mode of !process.argv.includes('--raster-only') && label === 'latin' && !background && ['reveal','emphasis'].includes(stage) ? ['off', 'mask', 'group', 'native-aa', 'no-clip', 'no-blur'] : []) {
+        for (const mode of !process.argv.includes('--raster-only') && label === 'latin' && !background && ['reveal','emphasis'].includes(stage) ? ['off', 'prior-mask', 'mask', 'group', 'native-aa', 'no-clip', 'no-blur'] : []) {
           const recording = recordings[mode];
           const surface = Skia.Surface.Make(width + 128, 320), canvas = surface.getCanvas();
           const recTimes = [], rasterTimes = [];
@@ -210,7 +219,7 @@ async function main() {
           fs.writeFileSync(path.join(out,'timing-progress.json'),JSON.stringify(timing,null,2));
         }
         const before = raster(c => baseline.drawVoice(c, words, motions, time, active, spicy, background, 64, 2000, line, clock, paints), width, 320, prefix + '-old');
-        for (const mode of ['group','mask','native-aa','no-clip','no-blur']) {
+        for (const mode of ['group','mask','prior-mask','native-aa','no-clip','no-blur']) {
           const recording = recordings[mode];
           const after = raster(c => {
             // Installed JS player uses AA clips; the native C++ recorder omits

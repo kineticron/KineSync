@@ -34,6 +34,10 @@ function harness(style,list,options={}){
  for(const name of ['useRef','useState','useMemo','useCallback','useEffect']){const original=react[name];react[name]=(...args)=>{hookCalls.push(name);return original(...args);};}
  const arrivalContextModule=options.arrivalContextFactory?.(react,state)??options.arrivalContextModule;
  const modules={react,
+  // This scroll regression exercises the original path with shared blur disabled.
+  '@/lib/fast-lyric-loading':{useFastLyricLoading:()=>false},
+  'expo-blur':{BlurTargetView:'BlurTargetView'},
+  './native-shared-blur':{NativeSharedBlur:'NativeSharedBlur',NativeSharedBlurContext:{Provider:'SharedBlurProvider'},NativeBlurGeometryContext:{Provider:'BlurGeometryProvider'},SHARED_BLUR_PROFILES:{},hasBlurGeometry:()=>false},
   '@/lib/lyrics-arrival-context':arrivalContextModule??{LyricsArrivalContext:{Provider:'TraceProvider'},LyricsArrivalCommit:'TraceCommit',useArrivalGeometry:()=>({}),useArrivalIdentity:()=>({handle:undefined,identity:{id:0},context:{},producers:{}})},
   '@/lib/lyrics-arrival-trace':arrivalContextModule??{},
   '@/lib/native-clock-diagnostics':{emitNativeClockDiagnostic(){}},

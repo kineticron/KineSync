@@ -36,3 +36,16 @@ export function useRetainedActiveLine() {
   useEffect(() => { void loadRetainedActiveLine(); }, []);
   return value;
 }
+
+// Session-only diagnostic choice; enabling the renderer remains separately persisted.
+export type RetainedClipVariant = 'mask' | 'group';
+let clipVariant: RetainedClipVariant = 'mask';
+export const getRetainedClipVariant = (): RetainedClipVariant => development ? clipVariant : 'mask';
+export function setRetainedClipVariant(value: RetainedClipVariant) {
+  if (!development || (value !== 'mask' && value !== 'group') || value === clipVariant) return;
+  clipVariant = value;
+  notify();
+}
+export function useRetainedClipVariant() {
+  return useSyncExternalStore(subscribe, getRetainedClipVariant, () => 'mask' as const);
+}
