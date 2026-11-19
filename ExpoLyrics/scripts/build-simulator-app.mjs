@@ -1,0 +1,266 @@
+// Build Release iOS Simulator .app bundle using actual xcodebuild
+// Dynamically discovers workspace and verifies application scheme via showBuildSettings
+// Test flags exist only in this build process and xcodebuild settings.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const expoLyricsDir = path.resolve(__dirname, '..');
+const iosDir = path.join(expoLyricsDir, 'ios');
+
+export function parseXcodebuildJson(output) {
+  const trimmed = String(output || '').trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const startBracket = trimmed.indexOf('[');
+    const startBrace = trimmed.indexOf('{');
+    let startIdx = -1;
+    if (startBracket !== -1 && startBrace !== -1) {
+      startIdx = Math.min(startBracket, startBrace);
+    } else if (startBracket !== -1) {
+      startIdx = startBracket;
+    } else {
+      startIdx = startBrace;
+    }
+
+    if (startIdx !== -1) {
+      const endBracket = trimmed.lastIndexOf(']');
+      const endBrace = trimmed.lastIndexOf('}');
+      const endIdx = Math.max(endBracket, endBrace);
+      if (endIdx > startIdx) {
+        return JSON.parse(trimmed.slice(startIdx, endIdx + 1));
+      }
+    }
+    throw new Error(`Failed to parse xcodebuild JSON output: ${trimmed.slice(0, 300)}`);
+  }
+}
+
+function applicationIdentity(application) {
+  const settings = application.buildSettings;
+  // Extension schemes can expose the host app as a dependency. Compare the app,
+  // not the scheme that happened to expose it. Keep distinct projects/products separate.
+  return JSON.stringify([
+    settings.PROJECT_FILE_PATH || settings.PROJECT_NAME || '',
+    application.target,
+    settings.PRODUCT_BUNDLE_IDENTIFIER || '',
+    settings.FULL_PRODUCT_NAME || '',
+    settings.TARGET_BUILD_DIR ? path.normalize(settings.TARGET_BUILD_DIR) : '',
+  ]);
+}
+
+export function findApplicationTarget(targetList) {
+  if (!targetList) return null;
+  const targets = Array.isArray(targetList)
+    ? targetList
+    : (targetList.targets || [targetList]);
+
+  const matches = [];
+  for (const entry of targets) {
+    const settings = entry?.buildSettings || entry;
+    if (!settings || typeof settings !== 'object') continue;
+
+    const wrapperExt = settings.WRAPPER_EXTENSION;
+    const productType = settings.PRODUCT_TYPE;
+
+    const isAppWrapper = wrapperExt === 'app';
+    const isAppProductType = productType === 'com.apple.product-type.application';
+
+    if (isAppWrapper && isAppProductType) {
+      matches.push({
+        target: entry.target || settings.TARGET_NAME || settings.PRODUCT_NAME || '',
+        action: entry.action || 'build',
+        buildSettings: settings,
+      });
+    }
+  }
+  const identities = new Map(matches.map(app => [applicationIdentity(app), app]));
+  if (identities.size > 1) throw new Error('Ambiguous application targets within scheme');
+  return identities.values().next().value || null;
+}
+
+export function discoverApplicationScheme(workspacePath, options = {}) {
+  const {
+    applicationScheme = 'KineSync',
+    configuration = 'Release',
+    sdk = 'iphonesimulator',
+    destination = 'generic/platform=iOS Simulator',
+    derivedDataPath,
+    cwd = path.dirname(workspacePath),
+    execCommand = execFileSync,
+  } = options;
+
+  const wsName = path.basename(workspacePath);
+  console.log(`[BUILD] Discovering schemes for workspace: ${wsName}...`);
+
+  const listRaw = execCommand('xcodebuild', ['-workspace', workspacePath, '-list', '-json'], {
+    encoding: 'utf8',
+    cwd, timeout: 60000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024,
+  });
+  const listData = parseXcodebuildJson(listRaw);
+  const schemes = listData.workspace?.schemes || [];
+
+  if (!Array.isArray(schemes) || schemes.length === 0) {
+    throw new Error(`No build schemes found in workspace ${wsName}`);
+  }
+
+  if (!schemes.includes(applicationScheme)) throw new Error(`Intended application scheme ${applicationScheme} was not found`);
+  const started = Date.now();
+  const showArgs = ['-workspace', workspacePath, '-scheme', applicationScheme,
+    '-configuration', configuration, '-sdk', sdk, '-destination', destination];
+  if (derivedDataPath) showArgs.push('-derivedDataPath', path.resolve(derivedDataPath));
+  showArgs.push('ONLY_ACTIVE_ARCH=YES', 'ARCHS=arm64', '-showBuildSettings', '-json');
+  const app = findApplicationTarget(parseXcodebuildJson(execCommand('xcodebuild', showArgs, {
+    encoding: 'utf8', cwd, timeout: 60000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024,
+  })));
+  if (!app || app.target !== 'KineSync' || app.buildSettings.FULL_PRODUCT_NAME !== 'KineSync.app' ||
+      app.buildSettings.PRODUCT_BUNDLE_IDENTIFIER !== 'dev.kineticron.KineSync') {
+    throw new Error('Intended scheme does not produce the exact KineSync application identity');
+  }
+  const selected = { scheme: applicationScheme, ...app };
+  console.log(`[BUILD] Direct scheme validation completed in ${Date.now() - started}ms`);
+  console.log(`[BUILD] Selected application scheme: ${selected.scheme} (target: ${selected.target})`);
+  return selected;
+}
+
+// Generated files only. Verify the installed template has an embedded Release entry.
+export function configureStandaloneSimulator(iosDirectory) {
+  const delegates = fs.readdirSync(iosDirectory, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && !['Pods', 'build'].includes(entry.name))
+    .map(entry => path.join(iosDirectory, entry.name, 'AppDelegate.swift'))
+    .filter(file => fs.existsSync(file));
+  if (delegates.length !== 1) throw new Error('Expected one generated AppDelegate.swift for standalone simulator');
+  const delegate = delegates[0];
+  const source = fs.readFileSync(delegate, 'utf8');
+  const releaseEntry = '#else\n    return Bundle.main.url(forResource: "main", withExtension: "jsbundle")\n#endif';
+  if (!source.includes(releaseEntry)) throw new Error('Unsupported generated Release bundle URL; refusing an unverified startup path');
+  const metro = 'return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")';
+  const embedded = 'return Bundle.main.url(forResource: "main", withExtension: "jsbundle") // standalone simulator harness';
+  if (!source.includes(metro) && !source.includes(embedded)) throw new Error('Unsupported generated Debug bundle URL; refusing an unverified startup path');
+  fs.writeFileSync(delegate, source.replace(metro, embedded));
+  // Expo sources this file again AFTER its unconditional Debug SKIP_BUNDLING=1.
+  const envFile = path.join(iosDirectory, '.xcode.env.local');
+  const envSource = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  if (!envSource.includes('# Standalone simulator harness')) fs.appendFileSync(envFile, '\n# Standalone simulator harness\nunset SKIP_BUNDLING\nexport FORCE_BUNDLING=1\n');
+}
+
+export function buildSimulatorApp(options = {}) {
+  const derivedDataPath = path.resolve(options.derivedDataPath || process.env.DERIVED_DATA_PATH || path.join(iosDir, 'build'));
+  const iosDirectory = options.iosDirectory || iosDir;
+  const execCommand = options.execCommand || execFileSync;
+
+  // Explicit test-only compile-time opt-in. Never persist it into .env.local:
+  // a later ordinary production build must not inherit harness activation.
+  process.env.EXPO_PUBLIC_SIMULATOR_TEST = '1';
+  process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD = 'release-arm64';
+
+  if (!fs.existsSync(iosDirectory)) {
+    throw new Error(`iOS directory not found at ${iosDirectory}. Run npx expo prebuild first.`);
+  }
+
+  configureStandaloneSimulator(iosDirectory);
+
+  const ws = fs.readdirSync(iosDirectory).find((f) => f.endsWith('.xcworkspace'));
+  if (!ws) {
+    throw new Error(`No .xcworkspace found in ${iosDirectory}`);
+  }
+  const workspacePath = path.join(iosDirectory, ws);
+
+  const discovered = discoverApplicationScheme(workspacePath, {
+    derivedDataPath,
+    cwd: iosDirectory,
+    execCommand,
+  });
+
+  const scheme = discovered.scheme;
+  const targetBuildDir = discovered.buildSettings?.TARGET_BUILD_DIR;
+  const fullProductName = discovered.buildSettings?.FULL_PRODUCT_NAME;
+
+  const signing = [
+    'CODE_SIGNING_ALLOWED=NO',
+    'CODE_SIGNING_REQUIRED=NO',
+    'CODE_SIGN_STYLE=Manual',
+    'DEVELOPMENT_TEAM=',
+    'PROVISIONING_PROFILE_SPECIFIER=',
+    'PROVISIONING_PROFILE=',
+    'EXPANDED_CODE_SIGN_IDENTITY=',
+    'COMPILER_INDEX_STORE_ENABLE=NO',
+  ];
+
+  const ccache = process.env.KINESYNC_USE_CCACHE === '1' && process.env.KINESYNC_CC_WRAPPER
+    ? [`CC=${process.env.KINESYNC_CC_WRAPPER}`]
+    : [];
+
+  const args = [
+    '-workspace', workspacePath,
+    '-scheme', scheme,
+    '-configuration', 'Release',
+    '-sdk', 'iphonesimulator',
+    '-destination', 'generic/platform=iOS Simulator',
+    '-derivedDataPath', derivedDataPath,
+    'ONLY_ACTIVE_ARCH=YES',
+    'ARCHS=arm64',
+    'FORCE_BUNDLING=1',
+    'EXPO_PUBLIC_SIMULATOR_TEST_BUILD=release-arm64',
+    'EXPO_PUBLIC_SIMULATOR_TEST=1',
+    ...signing,
+    ...ccache,
+    'build',
+  ];
+
+  if (!targetBuildDir || !fullProductName || path.basename(fullProductName) !== fullProductName || !fullProductName.endsWith('.app')) throw new Error('Missing exact application product path');
+  const appPath = path.resolve(targetBuildDir, fullProductName);
+  if (!appPath.startsWith(`${derivedDataPath}${path.sep}`)) throw new Error('Application product escapes the canonical DerivedData path');
+  fs.rmSync(path.join(iosDirectory, '.built_app_path'), { force: true });
+  fs.rmSync(path.join(appPath, 'main.jsbundle'), { force: true });
+  console.log(`[BUILD] Invoking actual xcodebuild for ${scheme} (Release arm64 iphonesimulator)...`);
+  execCommand('xcodebuild', args, {
+    stdio: 'inherit',
+    cwd: iosDirectory,
+    env: {
+      ...process.env,
+      EXPO_PUBLIC_SIMULATOR_TEST: '1',
+    },
+  });
+
+  if (!fs.existsSync(appPath)) throw new Error(`Expected built application does not exist: ${appPath}`);
+  const plistPath = path.join(appPath, 'Info.plist');
+  const bundleId = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', plistPath], { encoding: 'utf8' })).trim();
+  const platforms = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleSupportedPlatforms', plistPath], { encoding: 'utf8' }));
+  if (bundleId !== 'dev.kineticron.KineSync' || !/\biPhoneSimulator\b/.test(platforms)) throw new Error('Built product is not the expected KineSync simulator application');
+  const executableName = String(execCommand('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleExecutable', plistPath], { encoding: 'utf8' })).trim();
+  if (!executableName || path.basename(executableName) !== executableName) throw new Error('Invalid CFBundleExecutable');
+  const executable = path.join(appPath, executableName);
+  if (!fs.existsSync(executable) || !fs.statSync(executable).isFile()) throw new Error('Missing built executable');
+  const architectures = String(execCommand('xcrun', ['lipo', '-archs', executable], { encoding: 'utf8', timeout: 15000 })).trim();
+  const loadCommands = String(execCommand('xcrun', ['vtool', '-show-build', executable], { encoding: 'utf8', timeout: 15000 }));
+  if (architectures !== 'arm64' || !/platform\s+IOSSIMULATOR\b/.test(loadCommands)) throw new Error('Executable must be exactly arm64 IOSSIMULATOR');
+  console.log(`[BUILD] Verified product ${appPath}; executable=${executableName}; archs=${architectures}; ${loadCommands.trim()}`);
+
+  if (!fs.existsSync(path.join(appPath, 'main.jsbundle')) || fs.statSync(path.join(appPath, 'main.jsbundle')).size === 0) throw new Error('Simulator app has no main.jsbundle: bundling was skipped despite FORCE_BUNDLING; inspect generated Xcode bundle phase and .xcode.env files');
+
+  // Ad-hoc codesign app bundle for simulator execution
+  console.log('[BUILD] Ad-hoc codesigning app bundle...');
+  execCommand('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
+
+  const builtAppRecord = path.join(iosDirectory, '.built_app_path');
+  fs.writeFileSync(builtAppRecord, appPath, 'utf8');
+  console.log(`[BUILD] Successfully built and codesigned app bundle at: ${appPath}`);
+
+  return appPath;
+}
+
+const isDirectExecution = process.argv[1] && (
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]) ||
+  import.meta.url.endsWith(path.basename(process.argv[1]))
+);
+
+if (isDirectExecution) {
+  const derivedIndex = process.argv.indexOf('--derived-data-path');
+  const derivedDataPath = derivedIndex >= 0 ? process.argv[derivedIndex + 1] : undefined;
+  buildSimulatorApp({ derivedDataPath });
+}

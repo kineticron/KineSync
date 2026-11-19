@@ -43,6 +43,8 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
 }: NativeLyricsViewProps & { style: NativeLyricsStyle; list?: 'flat' | 'flash'; reveal?: NativeReveal }) {
   const fonts = useNativeLyricsFonts();
   const transition = useLyricsPacketTransition();
+  // Simulator-only observation of this baseline renderer, without candidate renderer logic.
+  const simulatorTrackId = usePlaybackStore(state => demoLyrics ? null : transition?.packet.currentTrack?.id ?? state.currentTrack?.id ?? null);
   const lyrics = usePlaybackStore(state => demoLyrics ?? transition?.packet.lyrics ?? state.lyrics);
   const source = usePlaybackStore(state => demoLyrics ? 'demo-syllable' : transition?.packet.lyricsSource ?? state.lyricsSource);
   const metadata = usePlaybackStore(state => demoLyrics ? emptyMetadata : transition?.packet.lyricsMetadata ?? state.lyricsMetadata);
@@ -223,8 +225,25 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     flatRef.current?.scrollToOffset({ offset: averageItemLength * index, animated: false });
     // Retry only after new rows have laid out; no delayed retries can steal a user drag.
   }, []);
+  const simulatorProbe = useRef({ style, list, reveal, trackId: simulatorTrackId, lyrics, generation: 1, eligible: false });
+  const previousProbe = simulatorProbe.current;
+  const simulatorGeneration = ((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1'
+    ? previousProbe.generation + Number(previousProbe.style !== style || previousProbe.list !== list || previousProbe.reveal !== reveal || previousProbe.trackId !== simulatorTrackId || previousProbe.lyrics !== lyrics) : 0;
+  simulatorProbe.current = { style, list, reveal, trackId: simulatorTrackId, lyrics, generation: simulatorGeneration,
+    eligible: active && !demoLyrics && lyrics.length > 0 };
+  const publishSimulatorReady = useCallback(() => {
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1' &&
+      mounted.current && simulatorProbe.current.eligible && simulatorProbe.current.generation === simulatorGeneration &&
+      AppState.currentState === 'active' && simulatorTrackId && latestLyrics.current === lyrics) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { notifySimulatorRendererReady } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      notifySimulatorRendererReady({ key: `baseline-${simulatorGeneration}`, generation: simulatorGeneration,
+        style, linesCount: lyrics.length, trackId: simulatorTrackId });
+    }
+  }, [lyrics, simulatorGeneration, simulatorTrackId, style]);
   const onContentSizeChange = useCallback(() => {
     transition?.onReady();
+    publishSimulatorReady();
     if (pendingScroll.current && following.current) {
       const { index, animated } = pendingScroll.current;
       pendingScroll.current = null;
@@ -237,9 +256,22 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
       const range = getAutoScrollTargetRange(current, currentPosition.current, lyrics);
       if (range) scrollTo(range.startIndex, true);
     }
-  }, [backgrounds, lyrics, scrollTo, timing, transition]);
+  }, [backgrounds, lyrics, scrollTo, timing, transition, publishSimulatorReady]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
-  return <View style={styles.root} onLayout={event => { setViewportHeight(event.nativeEvent.layout.height); setViewportWidth(event.nativeEvent.layout.width); }} testID={`native-${style}-${list}-${reveal}`}>
+  return <View style={styles.root} onLayout={event => {
+    const w = event.nativeEvent.layout.width;
+    const h = event.nativeEvent.layout.height;
+    setViewportHeight(h);
+    setViewportWidth(w);
+    if (((typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_SIMULATOR_TEST_BUILD === 'release-arm64') && process.env.EXPO_PUBLIC_SIMULATOR_TEST === '1') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { notifySimulatorLayout } = require('@/lib/simulator-test-bridge') as typeof import('@/lib/simulator-test-bridge');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Dimensions } = require('react-native') as typeof import('react-native');
+      const win = Dimensions.get('window');
+      notifySimulatorLayout({ width: w, height: h, windowWidth: win.width, windowHeight: win.height, style });
+    }
+  }} testID={`native-${style}-${list}-${reveal}`}>
     <NativeLyricsFontContext.Provider value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}
