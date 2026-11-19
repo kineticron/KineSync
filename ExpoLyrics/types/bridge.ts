@@ -16,6 +16,7 @@ export type PlaybackPacket = {
   type: "playback";
   trackId: string;
   spotifyTrackId?: string;
+  isrc?: string;
   title: string;
   artist: string;
   album?: string;
@@ -99,6 +100,7 @@ export type Track = {
   artworkUrl?: string;
   durationMs: number;
   spotifyTrackId?: string;
+  isrc?: string;
 };
 
 export type LyricsTranslationMetadata = {
@@ -178,6 +180,7 @@ export type LyricsMetadata = {
     host?: string;
     url?: string;
     spotifyTrackId?: string;
+  isrc?: string;
     isrc?: string;
     [key: string]: unknown;
   };

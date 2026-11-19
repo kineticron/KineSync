@@ -118,6 +118,10 @@ function filterLikelyQqRankedCandidates(
   getSongArtist,
   getSongInterval,
 ) {
+  const { recordingIdentityMatches } = require("./lyricsRecordingIdentity");
+  const strict = ranked.filter(candidate => recordingIdentityMatches(track,
+    getSongTitle(candidate.song), getSongArtist(candidate.song), getQqCandidateDurationMs(getSongInterval, candidate.song)));
+  if (strict.length) return strict;
   return filterLikelySameTrackCandidates(track, ranked, {
     getTitle: (candidate) => getSongTitle(candidate.song),
     getArtist: (candidate) => getSongArtist(candidate.song),

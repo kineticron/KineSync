@@ -477,6 +477,8 @@ async function fetchFromLrcLib(track) {
     }
   }
 
+  for (const title of titleVariants) queryVariants.push({ q: title });
+
   const candidates = [];
   const seenCandidates = new Set();
   let lastError = null;
@@ -484,7 +486,10 @@ async function fetchFromLrcLib(track) {
   let sawNotFoundResponse = false;
 
   for (const endpoint of endpoints) {
-    for (const params of queryVariants) {
+    for (const query of queryVariants) {
+      if (endpoint.mode === "get" && (!query.track_name || !query.artist_name)) continue;
+      const params = endpoint.mode === "get" && track.durationMs > 0
+        ? { ...query, duration: track.durationMs / 1000 } : query;
       try {
         const payload = await fetchJsonWithRetry(
           endpoint.url,
@@ -534,42 +539,14 @@ async function fetchFromLrcLib(track) {
     throw lastError || new Error("Failed to reach LrcLib API");
   }
 
-  const ranked = candidates
-    .map((item) => ({
-      item,
-      score: scoreCandidate(
-        track,
-        item?.trackName || item?.name || "",
-        item?.artistName || "",
-      ),
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  if (!ranked.length) {
-    return null;
-  }
-
-  const lrclibMinScore = Math.max(3.5, MATCH_ACCEPTANCE_THRESHOLD - 1);
-  const likelyLrcLibCandidates = ranked
-    .filter(
-      (candidate) =>
-        candidate.score >= lrclibMinScore &&
-        isLikelySameTrack(
-          track,
-          candidate.item?.trackName || candidate.item?.name || "",
-          candidate.item?.artistName || "",
-          (() => {
-            const raw = Number(
-              candidate.item?.durationMs || candidate.item?.duration || 0,
-            );
-            if (!Number.isFinite(raw) || raw <= 0) {
-              return 0;
-            }
-            return raw < 10_000 ? raw * 1000 : raw;
-          })(),
-        ),
-    )
-    .slice(0, 8);
+  const { recordingIdentityMatches } = require("./lyricsRecordingIdentity");
+  // Identity and duration gates precede ranking and any limit. A high title
+  // score must not hide a safe synced row behind preview/live/unknown versions.
+  const likelyLrcLibCandidates = candidates.filter(item => recordingIdentityMatches(
+    track, item?.trackName || item?.name, item?.artistName,
+    Number(item?.durationMs || Number(item?.duration) * 1000),
+  )).map(item => ({ item, delta: Math.abs(Number(track.durationMs || 0) - Number(item.durationMs || Number(item.duration) * 1000)) }))
+    .sort((a, b) => Number(!a.item.syncedLyrics) - Number(!b.item.syncedLyrics) || a.delta - b.delta || Number(a.item.id) - Number(b.item.id));
 
   for (const candidate of likelyLrcLibCandidates) {
     if (
@@ -587,7 +564,7 @@ async function fetchFromLrcLib(track) {
     }
     const lyrics = parseLrc(candidate.item.syncedLyrics);
     if (lyrics.length) {
-      return { lyrics, source: "lrclib-fallback" };
+      return { lyrics, source: "lrclib-fallback", metadata: { matchedTrack: { id: candidate.item.id, title: candidate.item.trackName || candidate.item.name, artist: candidate.item.artistName, durationMs: Number(candidate.item.durationMs || Number(candidate.item.duration) * 1000) } } };
     }
   }
   return null;
