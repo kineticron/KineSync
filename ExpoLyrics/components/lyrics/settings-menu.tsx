@@ -557,7 +557,7 @@ export const SettingsMenu = memo(function SettingsMenu({
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
             >
-<MenuSection title="Lyrics style">
+<MenuSection title="Lyrics renderer">
                 {RENDERER_OPTIONS.map((option) => (
                   <RendererOption
                     key={option.id}

@@ -4,8 +4,6 @@ export const TOP_BAR_PADDING_BOTTOM = 10;
 export const TOP_BAR_CONTENT_HEIGHT =
   TOP_BAR_ARTWORK_TOP + TOP_BAR_ARTWORK_SIZE + TOP_BAR_PADDING_BOTTOM;
 export const LYRICS_WRAP_MARGIN_TOP = 10;
-/** Height of the transparent fade that keeps lyric glyphs off a hard clip edge. */
-export const LYRICS_EDGE_FADE_HEIGHT = 56;
 
 export const LANDSCAPE_FONT_SCALE = 0.9;
 export const LANDSCAPE_LEFT_PANE_PADDING = 12;
@@ -21,7 +19,7 @@ export const LANDSCAPE_LINE_SCALE_BLEED = 14;
 /** Landscape lyric lane width — wide but leaves room to read alignment. */
 export const LANDSCAPE_LYRIC_TEXT_LANE_WIDTH = "90%";
 export const LANDSCAPE_VERTICAL_PADDING = 12;
-export const LANDSCAPE_META_BELOW_RESERVE = 100;
+export const LANDSCAPE_META_BELOW_RESERVE = 76;
 export const LANDSCAPE_MAX_ARTWORK_SIZE = 248;
 export const LANDSCAPE_LEFT_PANE_MAX_WIDTH_RATIO = 0.34;
 export const LANDSCAPE_ACTIVE_LINE_TOP_OFFSET = 32;
@@ -91,9 +89,4 @@ export function getLandscapeLyricsCenterUpwardOffset(insetsTop: number) {
 
 export function isLandscapeLayout(width: number, height: number) {
   return width > height;
-}
-
-/** Fit the cover above the measured metadata, including accessibility text sizes. */
-export function fitLandscapeArtwork(maxSize: number, panelHeight: number, metadataHeight: number) {
-  return Math.max(0, Math.min(maxSize, panelHeight - metadataHeight - 8 - LANDSCAPE_VERTICAL_PADDING * 2));
 }

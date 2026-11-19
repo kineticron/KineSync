@@ -1,4 +1,4 @@
-// Device-only dev-client CI with a release-optimized Rust static library.
+// Device-only dev-client CI. No release, dispatch or signing operations.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -30,7 +30,7 @@ function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evid
 function rustIdentity(root, identity, buildConfig = config) {
   // Entire source directory includes WGSL, not only Rust modules. Include include_str! input.
   const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
-    'native/lyrics-renderer/src', 'native/lyrics-renderer/vendor', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
+    'native/lyrics-renderer/src', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
     'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
     'scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml',
     'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);
@@ -54,7 +54,7 @@ function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
   const env = hash(JSON.stringify({ identity, configuration: buildConfig.configuration, sdk: buildConfig.sdk, arch: buildConfig.arch })).slice(0, 24);
   const native = digestInputs(root, ['ExpoLyrics/package.json', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json',
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins', 'ExpoLyrics/modules', 'ExpoLyrics/ios/Podfile',
-    'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf']);
+    'ExpoLyrics/ios/Podfile.properties.json']);
   const rust = rustIdentity(root, identity, buildConfig);
   const lock = path.join(root, 'ExpoLyrics/ios/Podfile.lock');
   const podHash = fs.existsSync(lock) ? hash(fs.readFileSync(lock)) : null;
@@ -119,8 +119,7 @@ function initialize(env = process.env) {
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
     npm_config_cache: paths.npm, CI: '1', COCOAPODS_DISABLE_STATS: 'true', RCT_NO_LAUNCH_PACKAGER: '1',
     RUSTUP_TOOLCHAIN: config.rust.toolchain, RUSTFLAGS: config.rust.rustflags,
-    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_RELEASE_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_RELEASE_DEBUG: String(config.rust.debugInfo),
-    CARGO_PROFILE_RELEASE_LTO: config.rust.lto, CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: String(config.rust.debugAssertions),
+    IPHONEOS_DEPLOYMENT_TARGET: config.rust.iosDeploymentTarget, CARGO_BUILD_JOBS: '2', CARGO_PROFILE_DEV_OPT_LEVEL: String(config.rust.optLevel), CARGO_PROFILE_DEV_DEBUG: String(config.rust.debugInfo),
     RUST_PREBUILT_DIR: paths.prebuilt, RUST_DEVICE_KEY: keys.prebuilt, CARGO_BUILD_TARGET: config.rust.target, CARGO_TARGET_DIR: paths.rustTarget,
   };
   output(vars, env.GITHUB_ENV);

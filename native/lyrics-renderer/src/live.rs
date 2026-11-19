@@ -1,66 +1,19 @@
 //! Validated live-track protocol and monotonic anchor state, independent of the platform ABI.
 use crate::{Atom, Line, clock};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackPacket {
-    pub schema: u32,
-    #[serde(default)]
-    pub settings: Option<crate::typography::Settings>,
     pub generation: u64,
     pub track_id: String,
-    /// Footer credits shown below the last row (`native-lyrics-view.tsx`
-    /// footer). Optional so older packets keep parsing unchanged.
-    #[serde(default)]
-    pub credits: Option<Credits>,
-    #[serde(default)]
-    pub empty: Option<EmptyState>,
     pub lines: Vec<WireLine>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EmptyState {
-    pub title: String,
-    pub subtitle: String,
-}
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Credits {
-    #[serde(default)]
-    pub songwriters: Vec<String>,
-    #[serde(default)]
-    pub attribution: Option<Attribution>,
-}
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Attribution {
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub community: bool,
-    #[serde(default)]
-    pub maker: Option<String>,
-    #[serde(default)]
-    pub uploader: Option<String>,
-    #[serde(default)]
-    pub maker_url: Option<String>,
-    #[serde(default)]
-    pub uploader_url: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WireLine {
-    #[serde(default)]
-    pub paint: Option<crate::typography::PaintVoice>,
-    /// Background vocal voices in source display order (Skia `backgrounds`).
-    #[serde(default)]
-    pub backgrounds: Vec<crate::typography::PaintVoice>,
     pub start: f64,
     pub end: f64,
-    /// Package end including background voices. Optional for older packets.
-    #[serde(default)]
-    pub background_end: Option<f64>,
     pub atoms: Vec<WireAtom>,
 }
 #[derive(Deserialize)]
@@ -76,73 +29,25 @@ impl TrackPacket {
             return Err("Track packet exceeds 2 MB".into());
         }
         let packet: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-        // Schema6 payloads gain optional background voices: an additive field
-        // that older binaries reject, so ABI8 (not the schema number) is the
-        // client-compatibility gate. Old packets parse with no backgrounds.
-        if packet.schema != 6
-            || packet
-                .settings
-                .as_ref()
-                .is_some_and(|s| !s.font_scale.is_finite() || !(0.5..=2.0).contains(&s.font_scale))
-            || packet.generation == 0
+        if packet.generation == 0
             || packet.track_id.is_empty()
             || packet.track_id.len() > 1024
-            || (packet.lines.is_empty() != packet.empty.is_some())
-            || packet.empty.as_ref().is_some_and(|e| {
-                e.title.is_empty()
-                    || e.title.len() > 2000
-                    || e.subtitle.len() > 2000
-                    || e.title.contains('\0')
-                    || e.subtitle.contains('\0')
-            })
+            || packet.lines.is_empty()
             || packet.lines.len() > 2000
         {
             return Err("Invalid track identity or line count".into());
         }
-        if packet
-            .credits
-            .as_ref()
-            .is_some_and(|credits| !crate::credits::valid(credits))
-        {
-            return Err("Invalid footer credits".into());
-        }
+        let mut previous = 0.0;
         let mut count = 0;
         for line in &packet.lines {
-            // Starts may overlap or even be out of source order (duet lines can
-            // begin a few milliseconds before the line above them). Display order
-            // stays the packet order; active-line lookup is overlap-safe instead.
             if line.end <= line.start
                 || !valid_interval(line.start, line.end)
+                || line.start < previous
                 || line.atoms.is_empty()
             {
-                return Err("Invalid line timing".into());
+                return Err("Invalid or unordered line timing".into());
             }
-            if let Some(paint) = &line.paint {
-                paint.validate(line.start, line.end)?;
-            }
-            if line.backgrounds.len() > MAX_BACKGROUND_VOICES {
-                return Err("Too many background voices".into());
-            }
-            for background in &line.backgrounds {
-                // A background voice owns its own syllable interval, which may
-                // extend past the lead end. It stays inside the line's package
-                // end apart from the tolerated 1 ms word-end rounding, and it
-                // inherits the row's duet alignment instead of overriding it.
-                let (first, last) = background.interval();
-                background.validate(first, last)?;
-                if last > line.background_end.unwrap_or(line.end) + 1.0
-                    || line.paint.as_ref().is_some_and(|lead| {
-                        lead.duet != background.duet || lead.opposite != background.opposite
-                    })
-                {
-                    return Err("Background voice disagrees with its parent row".into());
-                }
-            }
-            if let Some(background_end) = line.background_end
-                && (!valid_interval(line.start, background_end) || background_end < line.end)
-            {
-                return Err("Invalid background voice end".into());
-            }
+            previous = line.start;
             for atom in &line.atoms {
                 count += 1;
                 if !valid_interval(atom.start, atom.end)
@@ -178,20 +83,15 @@ impl TrackPacket {
                     })
                     .collect();
                 Line {
-                    paint: line.paint,
-                    backgrounds: line.backgrounds,
                     text,
                     start: line.start,
                     end: line.end,
-                    background_end: line.background_end.unwrap_or(line.end).max(line.end),
                     atoms,
                 }
             })
             .collect()
     }
 }
-/// Skia rows may carry several background voices; bound the retained count.
-pub const MAX_BACKGROUND_VOICES: usize = 16;
 fn valid_interval(start: f64, end: f64) -> bool {
     start.is_finite() && end.is_finite() && start >= 0.0 && end >= start && end <= 86_400_000.0
 }
@@ -309,25 +209,8 @@ mod tests {
         assert!(t.anchor(3, 1, 0.0, f64::NAN, 0.0, true, 1.0).is_err());
     }
     #[test]
-    fn empty_packets_are_explicit_bounded_and_cannot_hide_timed_rows() {
-        let packet = br#"{"schema":6,"generation":1,"track_id":"empty","lines":[],"empty":{"title":"This song is an instrumental","subtitle":"Source: unavailable"}}"#;
-        let parsed = TrackPacket::parse(packet).unwrap();
-        assert!(parsed.lines.is_empty());
-        assert_eq!(parsed.empty.unwrap().title, "This song is an instrumental");
-        let no_state = br#"{"schema":6,"generation":1,"track_id":"empty","lines":[]}"#;
-        assert!(TrackPacket::parse(no_state).is_err());
-        let mut value: serde_json::Value = serde_json::from_slice(packet).unwrap();
-        value["lines"] =
-            serde_json::json!([{"start":0,"end":100,"atoms":[{"text":"a","start":0,"end":100}]}]);
-        assert!(TrackPacket::parse(&serde_json::to_vec(&value).unwrap()).is_err());
-        value["lines"] = serde_json::json!([]);
-        value["empty"]["subtitle"] = "x".repeat(2001).into();
-        assert!(TrackPacket::parse(&serde_json::to_vec(&value).unwrap()).is_err());
-    }
-
-    #[test]
     fn live_korean_byte_ranges_and_invalid_payload() {
-        let packet = br#"{"schema":6,"generation":1,"track_id":"live","lines":[{"start":0,"end":100,"atoms":[{"text":"a ","start":0,"end":40},{"text":"b","start":40,"end":100}]}]}"#;
+        let packet = br#"{"generation":1,"track_id":"live","lines":[{"start":0,"end":100,"atoms":[{"text":"a ","start":0,"end":40},{"text":"b","start":40,"end":100}]}]}"#;
         let lines = TrackPacket::parse(packet).unwrap().into_lines();
         assert_eq!(lines[0].text, "a b");
         assert_eq!(lines[0].atoms[1].bytes, 2..3);
@@ -338,21 +221,5 @@ mod tests {
             .replace("a ", "뒤 ");
         let lines = TrackPacket::parse(unicode.as_bytes()).unwrap().into_lines();
         assert_eq!(lines[0].atoms[1].bytes, 4..5);
-    }
-    #[test]
-    fn overlapping_duet_starts_and_background_tails_parse_in_source_order() {
-        // `promise` by slayr: the second duet line starts 2 ms before the first.
-        let packet = br#"{"schema":6,"generation":1,"track_id":"duet","lines":[
-            {"start":1000,"end":4000,"atoms":[{"text":"a","start":1000,"end":4000}]},
-            {"start":998,"end":4200,"atoms":[{"text":"b","start":998,"end":4200}]},
-            {"start":5000,"end":6000,"background_end":9000,"atoms":[{"text":"c","start":5000,"end":6000}]}]}"#;
-        let lines = TrackPacket::parse(packet).unwrap().into_lines();
-        assert_eq!((lines[0].start, lines[1].start), (1000.0, 998.0));
-        assert_eq!(lines[2].background_end, 9000.0);
-        assert_eq!(lines[0].text, "a");
-        let invalid = String::from_utf8(packet.to_vec())
-            .unwrap()
-            .replace("\"background_end\":9000", "\"background_end\":5000");
-        assert!(TrackPacket::parse(invalid.as_bytes()).is_err());
     }
 }

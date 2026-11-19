@@ -16,9 +16,6 @@ const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected
   `${message}: actual=${actual}, expected=${expected}`);
 const epoch = 1_800_000_000_000;
 const uri = 'spotify:track:0000000000000000000001';
-const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-const registration = state => ({ ok: true, status: 200, arrayBuffer: async () =>
-  new TextEncoder().encode(JSON.stringify(state)).buffer });
 
 async function main() {
   const plugins = [{ name: 'native-stubs', setup(b) {
@@ -45,7 +42,7 @@ async function main() {
     class Socket {
       static OPEN = 1;
       readyState = 1;
-      constructor(url) { this.url = url; sockets.push(this); }
+      constructor() { sockets.push(this); }
       send() {}
       close() { this.readyState = 3; this.onclose?.(); }
       event(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -68,27 +65,14 @@ async function main() {
     return { store, sample, packet, sockets, requests,
       createDetector() {
         const accepted = [];
-        let captureId, lastConfiguredId;
         const detector = new SpotifyDetector({ sample: value => accepted.push(value), status() {},
-          ready() {}, sessionNeeded(id) { captureId = id; }, authenticated() {} });
-        const capture = (value, id = captureId) => detector.capture(JSON.stringify(value), 'https://open.spotify.com', id);
-        const configure = (change = 'none') => {
-          assert(captureId && captureId !== lastConfiguredId, 'detector requested a fresh session capture');
-          lastConfiguredId = captureId;
-          const token = `synthetic-test-credential-${change === 'auth' ? 'B' : 'A'}`;
-          const observerHost = change === 'observer-route' ? 'spclient2.spotify.com' : 'spclient.spotify.com';
-          const dealerHost = change === 'dealer-route' ? 'dealer2.spotify.com' : 'dealer.spotify.com';
-          const previous = sockets.length;
-          assert(capture({ type: 'credentials', authenticated: true, token, expiresAt: wall + 3600000 }));
-          assert(capture({ type: 'observerEndpoint', url: `https://${observerHost}/connect-state/v1/devices/synthetic-observer` }));
-          assert.equal(sockets.length, previous, 'Dealer opens only when fresh capture has both routes');
-          assert(capture({ type: 'socket', url: `wss://${dealerHost}/` }));
-          assert.equal(sockets.length, previous + 1);
-          const url = new URL(sockets.at(-1).url);
-          assert.equal(url.hostname, dealerHost);
-          assert.equal(url.searchParams.get('access_token'), token);
+          ready() {}, sessionNeeded() {}, authenticated() {} });
+        const capture = value => detector.capture(JSON.stringify(value), 'https://open.spotify.com');
+        const configure = () => {
+          assert.equal(capture({ type: 'credentials', authenticated: true, token: 'synthetic-test-credential-A', expiresAt: wall + 3600000 }), true);
+          assert.equal(capture({ type: 'observerEndpoint', url: 'https://spclient.spotify.com/connect-state/v1/devices/synthetic-observer' }), true);
+          assert.equal(capture({ type: 'socket', url: 'wss://dealer.spotify.com/' }), true);
         };
-        const start = () => { detector.setEnabled(true); configure(); };
         const raw = (extra = {}) => ({ server_timestamp_ms: epoch,
           active_device_id: extra.activeDeviceId ?? 'device-A', player_state: {
             timestamp: extra.timestamp ?? epoch - 10000, position_as_of_timestamp: extra.positionMs ?? 10000,
@@ -96,15 +80,7 @@ async function main() {
             track: { uri, metadata: { title: 'Synthetic', artist_name: 'Artist', album_title: 'Album' } } } });
         const emit = (extra = {}) => detector.emit(raw(extra), wall, { origin: 'dealer',
           receipt: { wallMs: wall, monotonicMs: mono }, connectionId: detector.connectionId, generation: detector.generation });
-        const register = async (id, extra) => {
-          const previous = requests.length;
-          sockets.at(-1).event({ headers: { 'Spotify-Connection-Id': id } });
-          assert.equal(requests.length, previous + 1, 'Dealer connection starts registration');
-          requests.at(-1)(registration(raw(extra)));
-          await flush();
-          assert(detector.health.controlsEnabled, 'registration proves current playback');
-        };
-        return { detector, accepted, capture, configure, start, raw, emit, register, get captureId() { return captureId; } };
+        return { detector, accepted, capture, configure, raw, emit };
       },
       at(t) { wall = epoch + t; mono = 1000 + t; },
       stamp(nextWall, nextMono) { wall = nextWall; mono = nextMono; },
@@ -316,73 +292,70 @@ async function main() {
 
   // These run the actual detector parser, capture, ordering, scope assignment,
   // refresh/disconnect and foreground replay methods. Only transport is fake.
-  await testAsync('actual-client-forwards-device-session-scope-through-packet', async () => {
-    const r = runtime(), client = r.createDetector(); client.start(); await client.register('connection-initial');
+  test('actual-client-forwards-device-session-scope-through-packet', () => {
+    const r = runtime(), client = r.createDetector(); client.configure(); client.emit();
     const s = client.accepted.at(-1); assert(s);
     const p = r.packet(s);
     assert.equal(p.activeDeviceId, 'device-A'); assert.equal(p.playbackSessionId, 'session-A');
     assert.equal(typeof p.sourceClockScope, 'string'); assert(p.sourceClockScope.length > 0);
     assert.equal(p.sourceClockScope, s.sourceClockScope);
-    r.ingest(p); r.at(3000); const expected = r.position(), initialCapture = client.captureId;
-    client.detector.refresh(true);
-    assert.notEqual(client.captureId, initialCapture, 'refresh requests a fresh session');
-    assert(client.detector.health.controlsEnabled, 'current observer stays authoritative during capture');
+    r.ingest(p); r.at(3000); const expected = r.position();
+    client.detector.refresh(); client.emit();
     r.ingest(r.packet(client.accepted.at(-1)));
-    near(r.position(), expected, 'same source anchor remains valid while refresh is pending');
+    near(r.position(), expected, 'actual source identity remains valid after explicit refresh');
     client.detector.clear();
   });
-  await testAsync('actual-client-refresh-replaces-scope-only-at-handover', async () => {
-    const r = runtime(), client = r.createDetector(); client.start(); await client.register('connection-initial');
+  test('actual-client-scope-survives-refresh-and-socket-generation', () => {
+    const r = runtime(), client = r.createDetector(); client.configure(); client.detector.setEnabled(true); client.emit();
     const scope = client.accepted.at(-1).sourceClockScope; assert(scope);
     const generation = client.detector.generation, socket = client.detector.socket;
-    client.detector.refresh(true);
-    assert.equal(client.detector.generation, generation); assert.equal(client.detector.socket, socket);
-    client.configure();
+    client.detector.refresh();
     assert.notEqual(client.detector.generation, generation); assert.notEqual(client.detector.socket, socket);
-    assert.equal(client.accepted.at(-1).sourceClockScope, scope, 'capture itself publishes no new source proof');
-    assert.equal(client.detector.health.controlsEnabled, false);
-    await client.register('connection-refreshed');
-    assert(client.accepted.at(-1).sourceClockScope);
-    assert.notEqual(client.accepted.at(-1).sourceClockScope, scope);
+    client.emit(); assert.equal(client.accepted.at(-1).sourceClockScope, scope);
     client.detector.clear();
   });
   for (const change of ['auth', 'observer-route', 'dealer-route', 'clear', 'new-instance']) {
-    await testAsync(`actual-client-scope-changes-${change}`, async () => {
-      const r = runtime(), client = r.createDetector(); client.start(); await client.register('connection-initial');
+    test(`actual-client-scope-changes-${change}`, () => {
+      const r = runtime(), client = r.createDetector(); client.configure(); client.emit();
       const initial = client.accepted.at(-1).sourceClockScope; assert(initial);
       let nextClient = client;
-      if (change === 'clear') { client.detector.clear(); client.start(); }
-      else if (change === 'new-instance') { nextClient = r.createDetector(); nextClient.start(); }
-      else { client.detector.refresh(true); client.configure(change); }
-      await nextClient.register('connection-replacement', { positionMs: 10001 });
+      if (change === 'auth') client.capture({ type: 'credentials', authenticated: true,
+        token: 'synthetic-test-credential-B', expiresAt: r.wall + 3600000 });
+      else if (change === 'observer-route') client.capture({ type: 'observerEndpoint',
+        url: 'https://spclient2.spotify.com/connect-state/v1/devices/synthetic-observer' });
+      else if (change === 'dealer-route') client.capture({ type: 'socket', url: 'wss://dealer2.spotify.com/' });
+      else if (change === 'clear') { client.detector.clear(); client.detector.setEnabled(true); client.configure(); }
+      else { nextClient = r.createDetector(); nextClient.configure(); }
+      // Change position only to avoid ordinary duplicate suppression in this
+      // scope test; equal-anchor preservation is tested independently above.
+      nextClient.emit({ positionMs: 10001 });
       assert.notEqual(nextClient.accepted.at(-1).sourceClockScope, initial);
       assert(nextClient.accepted.at(-1).sourceClockScope);
       nextClient.detector.clear(); client.detector.clear();
     });
   }
   for (const change of ['none', 'auth', 'observer-route', 'dealer-route']) {
-    await testAsync(`actual-client-foreground-cache-scope-${change}`, async () => {
-      const r = runtime(), client = r.createDetector(); client.start(); await client.register('connection-initial');
+    test(`actual-client-foreground-cache-scope-${change}`, () => {
+      const r = runtime(), client = r.createDetector(); client.configure(); client.emit();
       const oldScope = client.accepted.at(-1).sourceClockScope; assert(oldScope);
-      const retiredCapture = client.captureId;
       client.detector.setEnabled(false);
+      if (change === 'auth') client.capture({ type: 'credentials', authenticated: true,
+        token: 'synthetic-test-credential-B', expiresAt: r.wall + 3600000 });
+      else if (change === 'observer-route') client.capture({ type: 'observerEndpoint',
+        url: 'https://spclient2.spotify.com/connect-state/v1/devices/synthetic-observer' });
+      else if (change === 'dealer-route') client.capture({ type: 'socket', url: 'wss://dealer2.spotify.com/' });
       const before = client.accepted.length; client.detector.setEnabled(true);
       assert.equal(client.accepted.length, before + 1, 'foreground republishes existing cache once');
       const replay = client.accepted.at(-1);
-      assert.equal(replay.sourceClockScope, undefined, 'cached state must not certify a retired socket');
+      assert.equal(replay.sourceClockScope, change === 'none' ? oldScope : undefined,
+        'cached state must not certify an authority that never observed it');
       assert.equal(r.packet(replay).sourceClockScope, replay.sourceClockScope);
-      assert.equal(client.capture({ type: 'credentials', authenticated: true, token: 'retired-capture' }, retiredCapture), false);
-      client.configure(change);
-      assert.equal(client.detector.health.controlsEnabled, false);
-      await client.register('connection-foreground');
-      const freshScope = client.accepted.at(-1).sourceClockScope;
-      assert(freshScope); assert.notEqual(freshScope, oldScope);
       client.detector.clear();
     });
   }
   for (const field of ['activeDeviceId', 'playbackSessionId']) {
     test(`actual-client-positive-${field}-handoff-publishes`, () => {
-      const r = runtime(), client = r.createDetector(); client.start(); client.emit();
+      const r = runtime(), client = r.createDetector(); client.configure(); client.emit();
       const before = client.accepted.length;
       client.emit({ [field]: `${field}-B` });
       assert.equal(client.accepted.length, before + 1, 'positive source handoff cannot be a duplicate');
@@ -391,42 +364,48 @@ async function main() {
     });
   }
   await testAsync('actual-client-stale-registration-generation-does-not-publish', async () => {
-    const r = runtime(), client = r.createDetector(); client.start();
+    const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+    const r = runtime(), client = r.createDetector(); client.configure(); client.detector.setEnabled(true);
     const oldSocket = r.sockets.at(-1);
     oldSocket.event({ headers: { 'Spotify-Connection-Id': 'connection-old' } });
     assert.equal(r.requests.length, 1, 'old connection starts actual registration');
-    client.detector.setEnabled(false); client.detector.setEnabled(true); client.configure();
+    client.detector.setEnabled(false); client.detector.setEnabled(true);
     const newSocket = r.sockets.at(-1); assert.notEqual(newSocket, oldSocket);
-    r.requests[0](registration(client.raw()));
+    r.requests[0]({ ok: true, status: 200, arrayBuffer: async () =>
+      new TextEncoder().encode(JSON.stringify(client.raw())).buffer });
     await flush(); assert.equal(client.accepted.length, 0, 'completed old response cannot publish in new generation');
     oldSocket.event({ payloads: [client.raw()] });
     assert.equal(client.accepted.length, 0, 'old socket events are also ignored');
     newSocket.event({ headers: { 'Spotify-Connection-Id': 'connection-new' } });
     assert.equal(r.requests.length, 2, 'replacement connection starts its own registration');
-    r.requests[1](registration(client.raw()));
+    r.requests[1]({ ok: true, status: 200, arrayBuffer: async () =>
+      new TextEncoder().encode(JSON.stringify(client.raw())).buffer });
     await flush(); assert.equal(client.accepted.length, 1, 'current registration publishes once');
     assert(client.accepted[0].sourceClockScope); client.detector.clear();
   });
   for (const change of ['auth', 'observer-route', 'dealer-route']) {
     await testAsync(`actual-client-inflight-registration-cannot-certify-new-${change}`, async () => {
-      const r = runtime(), client = r.createDetector(); client.start();
+      const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+      const r = runtime(), client = r.createDetector(); client.configure(); client.detector.setEnabled(true);
       const oldSocket = r.sockets.at(-1);
       oldSocket.event({ headers: { 'Spotify-Connection-Id': 'connection-old' } });
       assert.equal(r.requests.length, 1);
       client.emit(); r.ingest(r.packet(client.accepted.at(-1)));
       const before = client.accepted.length;
-      client.detector.refresh(true);
-      client.configure(change);
-      assert.notEqual(r.sockets.at(-1), oldSocket);
-      r.requests[0](registration(client.raw()));
+      if (change === 'auth') client.capture({ type: 'credentials', authenticated: true,
+        token: 'synthetic-test-credential-B', expiresAt: r.wall + 3600000 });
+      else if (change === 'observer-route') client.capture({ type: 'observerEndpoint',
+        url: 'https://spclient2.spotify.com/connect-state/v1/devices/synthetic-observer' });
+      else client.capture({ type: 'socket', url: 'wss://dealer2.spotify.com/' });
+      r.requests[0]({ ok: true, status: 200, arrayBuffer: async () =>
+        new TextEncoder().encode(JSON.stringify(client.raw())).buffer });
       await flush();
       oldSocket.event({ payloads: [client.raw({ positionMs: 10002 })] });
       assert.equal(client.accepted.length, before,
         'old auth/route registration and socket are discarded after authority changes');
-      r.at(6000);
-      await client.register('connection-current', { positionMs: 10001 });
+      r.at(6000); client.emit({ positionMs: 10001 });
       const fresh = r.packet(client.accepted.at(-1));
-      assert(fresh.sourceClockScope, 'new registration is scoped to current authority');
+      assert(fresh.sourceClockScope, 'new direct observation is scoped to current authority');
       r.ingest(fresh); near(r.position(), fresh.positionMs, 'fresh current authority applies after proof was revoked');
       client.detector.clear();
     });

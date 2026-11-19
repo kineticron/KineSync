@@ -2,15 +2,13 @@
 export const bootstrap = String.raw`(function () {
   if (location.origin !== 'https://open.spotify.com' || window.__connectProbe) return;
   window.__connectProbe = true;
-  var captureId = 0, route = null, dealer = null;
   var send = function (v) {
     // Production only needs session verification and connection discovery.
     // Browser playback never feeds the direct detector or its lyrics clock.
     if (!/^(credentials|observerEndpoint|socket|notice|session)$/.test(v.type)) return;
-    if (captureId) v = Object.assign({captureId:captureId},v);
     window.ReactNativeWebView.postMessage(JSON.stringify(v));
   };
-  var trusted = function (raw) { try { var u = new URL(raw, location.href); return !u.username && !u.password && /(^|\.)spotify\.com$/.test(u.hostname); } catch (_) { return false; } };
+  var trusted = function (raw) { try { var u = new URL(raw, location.href); return /(^|\.)spotify\.com$/.test(u.hostname); } catch (_) { return false; } };
   var headers = function (h) { var out = {}; try { new Headers(h).forEach(function (v,k) { if (/^(authorization|client-token|x-spotify-connection-id|spotify-connection-id|accept|content-type)$/.test(k)) out[k] = v; }); } catch (_) {} return out; };
   var observer = function (raw) {
     if (!trusted(raw)) return false;
@@ -25,7 +23,7 @@ export const bootstrap = String.raw`(function () {
   var inspectResponse = function (url, response, requestHeaders) {
     // Only verification needs a response body. Discarded diagnostics must not
     // clone requests/responses or parse the browser's playback traffic.
-    if (captureId || stopped || response.status !== 200 || !observer(url) || !requestHeaders ||
+    if (response.status !== 200 || !observer(url) || !requestHeaders ||
         !/^Bearer\s+\S+$/i.test(requestHeaders.authorization || '')) return;
     var length = Number(response.headers.get('content-length') || 0);
     if (length > 262144) return;
@@ -46,12 +44,9 @@ export const bootstrap = String.raw`(function () {
   var observe = function (url, method, h) {
     if (!trusted(url)) return;
     var u = new URL(url, location.href);
-    if (!captureId && !stopped && h.authorization) send({type:'credentials', token:h.authorization.replace(/^Bearer\s+/i,''), clientToken:h['client-token']});
+    if (h.authorization) send({type:'credentials', token:h.authorization.replace(/^Bearer\s+/i,''), clientToken:h['client-token']});
     // Capture the registration destination, not its body or playing device identity.
-    if (method === 'PUT' && observer(u.href)) {
-      route = {type:'observerEndpoint',url:u.origin + u.pathname};
-      if (!stopped) send(route);
-    }
+    if (method === 'PUT' && /^\/connect-state\/v1\/devices\/[^/]+$/.test(u.pathname)) send({type:'observerEndpoint',url:u.href});
   };
   var nativeFetch = window.fetch;
   window.fetch = function (input, init) {
@@ -59,9 +54,8 @@ export const bootstrap = String.raw`(function () {
     var method = String(init && init.method || input.method || 'GET').toUpperCase();
     var h = headers(init && init.headers || input.headers);
     try { observe(url,method,h); } catch (_) {}
-    var requestEpoch = epoch;
     var result = nativeFetch.apply(this, arguments);
-    result.then(function(response){try{if (requestEpoch === epoch) inspectResponse(url,response,h);}catch(_){}}).catch(function(){});
+    result.then(function(response){try{inspectResponse(url,response,h);}catch(_){}}).catch(function(){});
     return result;
   };
   var open = XMLHttpRequest.prototype.open, set = XMLHttpRequest.prototype.setRequestHeader, submit = XMLHttpRequest.prototype.send;
@@ -72,7 +66,7 @@ export const bootstrap = String.raw`(function () {
       if (this.__probe) {
         var request = this.__probe, xhr = this, requestEpoch = epoch;
         observe(request.url,request.method,request.headers);
-        if (!captureId && !stopped && observer(request.url) && /^Bearer\s+\S+$/i.test(request.headers.authorization || '')) this.addEventListener('loadend',function(){
+        if (observer(request.url) && /^Bearer\s+\S+$/i.test(request.headers.authorization || '')) this.addEventListener('loadend',function(){
           if (xhr.status !== 200 || requestEpoch !== epoch || stopped) return;
           try {
             var parsed = xhr.responseType === 'json' ? xhr.response : JSON.parse(xhr.responseText);
@@ -90,10 +84,7 @@ export const bootstrap = String.raw`(function () {
   function ProbeSocket(url, protocols) {
     var ws = protocols === undefined ? new OriginalSocket(url) : new OriginalSocket(url, protocols);
     if (trusted(url) && /dealer/i.test(new URL(url).hostname)) {
-      var endpoint = new URL(url);
-      endpoint.searchParams.delete('access_token'); endpoint.hash = '';
-      dealer = {type:'socket',url:endpoint.href};
-      if (!stopped) send(dealer);
+      send({type:'socket',url:String(url)});
     }
     return ws;
   }
@@ -121,11 +112,10 @@ export const bootstrap = String.raw`(function () {
     var timeout = new Promise(function(_, reject) {
       cancel = function(){ reject(new Error('probe canceled')); };
       own.signal.addEventListener('abort',cancel,{once:true});
-      limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 5000);
+      limit = setTimeout(function(){ own.abort(); reject(new Error('probe deadline')); }, 15000);
     });
     var work = Promise.resolve().then(function(){
-      if (own.signal.aborted) throw new Error('probe canceled');
-      return nativeFetch('/api/token?reason=init&productType=web_player',{credentials:'include',cache:'no-store',signal:own.signal});
+      return nativeFetch('/api/token?reason=init&productType=web_player',{credentials:'include',signal:own.signal});
     }).then(function(r){
       if (r.status === 401 || r.status === 403) return {challenge:true};
       if (r.status && (r.status < 200 || r.status >= 300)) throw new Error('token HTTP');
@@ -153,22 +143,12 @@ export const bootstrap = String.raw`(function () {
   var start = function () {
     if (!stopped && (inFlight || attempts > 0)) return;
     stopped = false; attempts = 0; epoch++;
-    deadline = setTimeout(function(){stop();send({type:'session',state:'unavailable'});},20000);
+    deadline = setTimeout(function(){stop();send({type:'session',state:'unavailable'});},45000);
     probeToken();
   };
   window.__probeToken = probeToken;
-  // Discovery belongs to this document. A new attempt can reuse its routes,
-  // but only a new authenticated token response can supply the bearer.
-  window.__startDetectorCapture = function(id) {
-    stop(); captureId = id;
-    if (!route || !dealer) { send({type:'session',state:'unavailable'}); return; }
-    start(); send(route); send(dealer);
-  };
-  window.__cancelDetectorCapture = function(id) {
-    if (id === captureId) stop();
-  };
   window.addEventListener('pagehide',stop);
-  window.addEventListener('pageshow',function(){ if (!captureId) start(); });
+  window.addEventListener('pageshow',start);
   start();
   send({type:'notice',message:'Network capture installed.'});
 })(); true;`;

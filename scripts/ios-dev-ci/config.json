@@ -7,14 +7,12 @@
     "enabled": true,
     "toolchain": "1.97.0",
     "target": "aarch64-apple-ios",
-    "profile": "release",
+    "profile": "dev",
     "features": [],
     "framework": "KineSyncLyrics.xcframework",
     "rustflags": "",
-    "optLevel": 3,
-    "debugInfo": 0,
-    "iosDeploymentTarget": "16.4",
-    "lto": "thin",
-    "debugAssertions": false
+    "optLevel": 1,
+    "debugInfo": 1,
+    "iosDeploymentTarget": "16.4"
   }
 }

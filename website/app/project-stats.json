@@ -1,11 +1,11 @@
 {
-  "stars": 6,
+  "stars": 4,
   "contributors": 1,
   "license": "GPL-3.0",
-  "updatedAt": "2026-11-18T08:57:42.825Z",
+  "updatedAt": "2026-10-09T08:33:13.805Z",
   "cadence": {
-    "days": 4,
-    "releases": 18,
+    "days": 7,
+    "releases": 6,
     "windowDays": 90
   }
 }

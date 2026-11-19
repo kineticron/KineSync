@@ -179,7 +179,7 @@ for (const animated of [false, true]) {
 for (const [index, animated, snap, geometry] of [[4, true, true, true], [5, true, true, false], [4, false, true, false], [4, true, false, false]]) {
   const command = { current: { serial: 8, index: 4, offset: 600, snap } };
   const context = { useCallback: fn => fn, nativeFollowIndex: (_rows, index) => index,
-    manualDrag: { current: false }, currentPosition: { current: 14000 }, following: { current: true }, active: true, staticLyrics: false,
+    currentPosition: { current: 14000 }, following: { current: true }, active: true, staticLyrics: false,
     rows: Array.from({ length: 10 }, (_, index) => ({ lead: { start: index * 1000, end: (index + 1) * 1000 } })),
     list: 'flash', flashRef: { current: { getLayout: () => ({ y: 500 }), getFirstItemOffset: () => 150, getFirstVisibleIndex: () => 3 } },
     flatRef: {}, lastScrollTarget: { current: '' }, landscapeMode: false, fontScale: 1, showTranslatedText: true,

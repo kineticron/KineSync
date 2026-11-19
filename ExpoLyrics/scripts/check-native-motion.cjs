@@ -38,17 +38,19 @@ release = floatClock.advanceAmllFloatClock(release, false, 5800, 200);
 assert.equal(floatClock.amllWordFloatPosition(release, 5800, 5000, 5100), 5500, 'The float releases while the playback position is paused');
 assert.equal(floatClock.amllWordFloatPosition(release, 5800, 0, 500), 700, 'Each word reverses from its own clamped WAAPI endpoint');
 const textPolicy = load('export * from "./components/lyrics/native/spicy-text-policy"');
-for (const [text, rtl] of [['12, مرحبا', true], ['hello مرحبا', false], ['\uFB50', true], ['क्षि', false], ['👨‍👩‍👧‍👦', false]]) {
-  assert.equal(textPolicy.spicyIsRtl(text), rtl, 'Spicy direction follows the first significant character');
+const spicyEntry = fs.readFileSync(path.join(root, 'components/lyrics/spicy-webview-entry.ts'), 'utf8');
+const textReference = load(spicyEntry.slice(spicyEntry.indexOf('function stripZeroWidth('), spicyEntry.indexOf('function addSourceElement(')) + '\nexport { stripZeroWidth, isRtl };');
+for (const text of ['12, مرحبا', 'hello مرحبا', '\uFB50', 'क्षि', '👨‍👩‍👧‍👦', 'a\u200Bb\u200Ec\u2060', 'می\u200Cروم']) {
+  assert.equal(textPolicy.spicyIsRtl(text), textReference.isRtl(text), 'Direction matches the WebView first-character policy');
+  assert.equal(textPolicy.spicyPaintText(text), textReference.stripZeroWidth(text), 'Only reference formatting characters are removed');
 }
-assert.equal(textPolicy.spicyPaintText('a\u200Bb\u200Ec\u2060'), 'abc');
-assert.equal(textPolicy.spicyPaintText('می\u200Cروم'), 'می\u200Cروم', 'preserve shaping joiners');
 for (const [rtl, expected] of [[false, [1, 0.5, 0, 0.5]], [true, [0, 1, 1, 0.5]]]) {
   const joined = [true, true, false, false];
   assert.deepEqual(joined.map((value, index) => textPolicy.spicyWordOrigin(value, !!joined[index - 1], rtl)), expected,
     'Joined syllables follow CSS pivot specificity and RTL overrides');
 }
-const reference = load('export * from "./scripts/fixtures/spicy-motion-reference"');
+const referencePath = path.join(root, 'components/lyrics/spicy-upstream-runtime.ts');
+const reference = load(fs.readFileSync(referencePath, 'utf8') + '\nexport { SCALE_SPLINE, LETTER_SCALE_SPLINE, Y_OFFSET_SPLINE, LETTER_Y_OFFSET_SPLINE, GLOW_SPLINE, DOT_SCALE_SPLINE, DOT_Y_OFFSET_SPLINE, DOT_GLOW_SPLINE, DOT_OPACITY_SPLINE, animateActiveWord };', path.dirname(referencePath));
 const near = (a, b, message) => assert.ok(Math.abs(a - b) < 1e-10, `${message}: ${a} != ${b}`);
 for (const [actual, expected] of [['SPICY_SCALE', 'SCALE_SPLINE'], ['SPICY_LETTER_SCALE', 'LETTER_SCALE_SPLINE'],
   ['SPICY_Y', 'Y_OFFSET_SPLINE'], ['SPICY_LETTER_Y', 'LETTER_Y_OFFSET_SPLINE'], ['SPICY_GLOW', 'GLOW_SPLINE']]) {

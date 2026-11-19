@@ -37,8 +37,44 @@ const xml = lyricsToTtml({ lyrics: [{ lineStartTime: 0, lineEndTime: 1000,
   syllables: [{ text: 'Hello', startTime: 0, endTime: 1000 }] }], metadata: { attribution } });
 assert.deepEqual(parseTtmlToLyrics(xml).metadata.attribution, JSON.parse(JSON.stringify(attribution)), 'TTML preserves contributor URLs');
 
+class Element {
+  constructor(tag) { this.tag = tag; this.children = []; this.style = {}; this.events = {}; }
+  appendChild(child) { this.children.push(child); }
+  addEventListener(type, handler) { this.events[type] = handler; }
+}
+class Anchor extends Element {}
 const descendants = node => Array.isArray(node) ? node.flatMap(descendants)
   : node ? [node, ...(node.children || []).flatMap(descendants)] : [];
+for (const file of ['amll-webview-entry.ts', 'spicy-webview-entry.ts']) {
+  const source = read(`components/lyrics/${file}`);
+  const start = source.indexOf('function appendCreditsContent(');
+  const end = source.indexOf('\nfunction ', start + 1);
+  const js = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+  const messages = [];
+  const context = vm.createContext({
+    HTMLAnchorElement: Anchor,
+    document: { createElement: tag => tag === 'a' ? new Anchor(tag) : new Element(tag), createTextNode: textContent => ({ textContent }) },
+    post: message => messages.push(message),
+  });
+  vm.runInContext(js, context);
+  const container = new Element('div');
+  context.appendCreditsContent(container, [], attribution);
+  const anchors = descendants(container).filter(node => node instanceof Anchor);
+  assert.deepEqual(anchors.map(node => [node.textContent, node.href]), [
+    ['@maker', profiles.Maker.url], ['@uploader', profiles.Uploader.url],
+  ]);
+  for (const anchor of anchors) {
+    let prevented = false;
+    let stopped = false;
+    anchor.events.click({ preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
+    assert.ok(prevented && stopped, 'profile clicks must not trigger lyric seeking');
+    assert.equal(messages.at(-1).url, anchor.href);
+    assert.equal(messages.at(-1).type, 'attributionLink');
+  }
+  const uploaderOnly = new Element('div');
+  context.appendCreditsContent(uploaderOnly, [], { uploader: attribution.uploader });
+  assert.ok(descendants(uploaderOnly).some(node => node.textContent === 'Uploaded By: '));
+}
 
 // Render the native footer with lightweight host elements and exercise its actual handlers.
 const nativeSource = read('components/lyrics/native/native-lyrics-view.tsx');
@@ -119,28 +155,6 @@ for (const link of nativeLinks) {
   assert.ok(stopped);
 }
 assert.deepEqual(opened, [profiles.Maker.url, profiles.Uploader.url]);
-for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
-  context.metadata = { spicyApi: { fetchedAt: 1, expiresAt: 2 }, attribution: { source: 'official', provider } };
-  vm.runInContext(`(() => { ${nativeJs} })()`, context);
-  const content = descendants(context.result);
-  assert.ok(content.some(node => node.children?.includes('Provided By: ')), 'Native official provider credit is rendered without opening the popup');
-  assert.ok(content.some(node => node.children?.includes(provider)));
-  assert.equal(content.filter(node => node.props?.accessibilityRole === 'link').length, 0);
-}
-
-// Exercise the unchanged Rust JS credit packet independently of popup visibility.
-const rustSource = read('components/lyrics/rust/rust-lyrics-view.tsx');
-const rustCredits = rustSource.slice(rustSource.indexOf('const credits = useMemo('), rustSource.indexOf('const lyricsStatusMessage ='));
-const rustCreditsJs = ts.transpileModule(`${rustCredits}\nresult = credits;`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
-for (const value of [attribution, ...['Apple Music', 'Spotify', 'Unknown'].map(provider => ({ source: 'official', provider }))]) {
-  const packet = vm.createContext({ metadata: { attribution: value }, useMemo: callback => callback(), result: null });
-  vm.runInContext(rustCreditsJs, packet);
-  assert.equal(packet.result.attribution.provider, value.provider, 'Rust keeps provider credit independently of community status');
-  if (value.community) {
-    assert.equal(packet.result.attribution.maker_url, profiles.Maker.url);
-    assert.equal(packet.result.attribution.uploader_url, profiles.Uploader.url);
-  }
-}
 
 // Exercise the persistent overlay with real component handlers and shared progress.
 let expanded = false;
@@ -172,18 +186,11 @@ const overlayCode = ts.transpileModule(read('components/lyrics/lyrics-attributio
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2020 },
 }).outputText;
 vm.runInNewContext(overlayCode, { exports: overlayModule.exports, require(name) {
-  if (name === '@/lib/lyrics-policy') return require('../lib/lyrics-policy');
   if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
   if (name === 'react') return { memo: component => component, useEffect(callback, deps) {
     if (!previousOverlayDeps || deps.some((value, index) => value !== previousOverlayDeps[index])) callback();
     previousOverlayDeps = deps;
   }, useState: () => [expanded, value => { expanded = value; stateUpdates++; }] };
-  if (name === '@/components/lyrics/lyrics-glass-dialog') return {
-    LyricsGlassDialog: props => jsx('Modal', { ...props, transparent: true, visible: props.visible, animationType: 'fade', statusBarTranslucent: true, supportedOrientations: ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right'], onRequestClose: props.onClose, children: jsx('Pressable', { accessibilityLabel: props.closeLabel, onPress: props.onClose, style: [{}, { paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom), paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right) }], children: jsx('View', { accessibilityViewIsModal: true, onAccessibilityEscape: props.onClose, onPress: event => event.stopPropagation(), style: { flexShrink: 1 }, children: jsx('ScrollView', { style: { flexShrink: 1 }, children: props.children }) }) }) }),
-    LyricsDialogTitle: props => jsx('Text', props),
-    LyricsDialogAction: props => jsx('Pressable', { ...props, accessibilityRole: 'button', children: jsx('Text', { children: props.label }) }),
-    dialogStyles: { description: {}, title: {}, detailProvider: {}, close: {}, closeText: {}, disabled: {} },
-  };
   if (name === 'expo-blur') return { BlurView: 'BlurView' };
   if (name === 'expo-image') return { Image: 'Image' };
   if (name === 'react-native-safe-area-context') return { useSafeAreaInsets: () => insets };
@@ -324,41 +331,6 @@ for (const provider of ['Apple Music', 'Spotify']) {
   assert.ok(!compact.some(node => node.props?.accessibilityRole === 'link'));
   assert.ok(!compact.some(node => node.tag === 'Image'), 'Commercial provider labels do not gain contributor pictures');
 }
-for (const allCredits of [false, true]) {
-  for (const provider of ['Apple Music', 'Spotify', 'Unknown']) {
-    const official = { source: 'official', provider };
-    for (const provenance of [
-      { spicyApi: { fetchedAt: 1, expiresAt: 2 } },
-      { fetchOrigin: { host: 'api.spicylyrics.org' } },
-      { vault: { originalSource: 'spicy-lyrics' } },
-    ]) {
-      assert.equal(renderOverlay({ ...overlayProps, allCredits, metadata: { ...provenance, attribution: official } }), null,
-        `Spicy-origin ${provider} has no popup with allCredits=${allCredits}`);
-      assert.equal(sharedCursor, 4, 'Hidden popup still calls every shared-value hook');
-    }
-  }
-  for (const communityAttribution of [
-    { ...attribution, provider: 'Community provider', community: true },
-    { source: 'spicy_lyrics', provider: 'Legacy' },
-    { source: 'spl', provider: 'Legacy' },
-    { source: 'unknown', provider: 'Spicy Lyrics' },
-  ]) {
-    assert.ok(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: communityAttribution } }),
-      'Explicit community status and legacy community labels retain the popup');
-  }
-  assert.equal(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: { ...attribution, community: false } } }), null,
-    'Explicit non-community status overrides legacy source and provider labels');
-  for (const provider of ['Apple Music', 'Spotify']) {
-    assert.ok(renderOverlay({ ...overlayProps, allCredits, metadata: { attribution: { source: provider, provider } } }),
-      'Non-Spicy provider popup behavior is unchanged');
-    assert.equal(renderOverlay({ ...overlayProps, allCredits, isSpicyResponse: true, metadata: { attribution: { source: provider, provider } } }), null,
-      'Caller source provenance hides old official Spicy responses with no metadata provenance');
-  }
-}
-assert.ok(renderOverlay({ ...overlayProps, allCredits: true, metadata: { credits: { songwriters: ['Writer'] } } }),
-  'Desktop songwriter-only popup remains available');
-assert.equal(renderOverlay({ ...overlayProps, allCredits: true, metadata: { spicyApi: { fetchedAt: 1, expiresAt: 2 }, credits: { songwriters: ['Writer'] } } }), null,
-  'Desktop songwriter fallback cannot restore a non-community Spicy popup');
 reducedMotion = true;
 renderOverlay(overlayProps);
 assert.equal(sharedValues[0].get(), 0);
@@ -379,10 +351,6 @@ const controlCallbacks = {};
 function inspectPlayer(node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(playerAst) === 'styles') playerStyles = node.initializer.arguments[0];
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(playerAst) === 'LyricsAttribution') attributionParent = node.parent;
-  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(playerAst) === 'LyricsAttribution') {
-    assert.ok(node.attributes.properties.some(property => ts.isJsxAttribute(property) && property.name.getText(playerAst) === 'isSpicyResponse' && !property.initializer),
-      'The Spicy-only caller passes its source provenance to the shared popup');
-  }
   if (ts.isVariableDeclaration(node) && ['showControls', 'hideControls'].includes(node.name.getText(playerAst))) controlCallbacks[node.name.getText(playerAst)] = node.initializer.arguments[0].getText(playerAst);
   ts.forEachChild(node, inspectPlayer);
 }
@@ -390,7 +358,8 @@ inspectPlayer(playerAst);
 for (const [name, target] of [['showControls', 1], ['hideControls', 0]]) {
   const events = [];
   vm.runInNewContext(`(${controlCallbacks[name]})()`, {
-    animateControls: () => events.push(['react']), controlsTarget: { get: () => 0, set: value => events.push(['target', value]) },
+    controlsTarget: { set: value => events.push(['target', value]) },
+    setControlsVisible: () => events.push(['react']), controlsOpacity: {}, controlsTranslateY: {},
     withTiming: () => {}, ReanimatedEasing: { out: value => value, cubic: 'cubic' },
   });
   assert.deepEqual(events[0], ['target', target], 'Shared target is sent before the controls React update');
@@ -398,15 +367,9 @@ for (const [name, target] of [['showControls', 1], ['hideControls', 0]]) {
 assert.ok(attributionParent.openingElement.attributes.getText(playerAst).includes('styles.lyricsAttributionLayer'));
 const layerIndex = name => {
   const property = playerStyles.properties.find(property => property.name.getText(playerAst) === name);
-  assert.ok(property, `Expected player layer ${name} to exist`);
-  const zIndex = vm.runInNewContext(`(${property.initializer.getText(playerAst)})`, { StyleSheet: { absoluteFill: {} } }).zIndex;
-  assert.equal(typeof zIndex, 'number', `Expected an explicit zIndex for ${name}`);
-  return zIndex;
+  return vm.runInNewContext(`(${property.initializer.getText(playerAst)})`, { StyleSheet: { absoluteFill: {} } }).zIndex;
 };
-// The black gradient was removed. The moving fill's touch blocker remains a
-// sibling that attribution must sit above, along with the reveal zone and dock.
-assert.ok(!playerStyles.properties.some(property => property.name.getText(playerAst) === 'lyricsBottomBlurWrap'));
-for (const name of ['controlsRevealZone', 'bottomArea', 'fillTouchBlocker']) {
+for (const name of ['controlsRevealZone', 'bottomArea', 'lyricsBottomBlurWrap']) {
   assert.ok(layerIndex('lyricsAttributionLayer') > layerIndex(name), `Attribution must receive taps above ${name}`);
 }
 console.log('Spicy contributor links, native accessibility, and TTML attribution checks passed.');

@@ -123,7 +123,7 @@ function collectVersionHints(input) {
 }
 
 function collectFeaturedArtistHints(input) {
-  const raw = require("./lyricsRecordingIdentity").translatedTitleBase(input);
+  const raw = String(input || "");
   const hints = [];
   const seen = new Set();
   const addHint = (value) => {
@@ -199,9 +199,6 @@ function applySpotifyCatalogOverlay(playbackTrack, catalog) {
     return { ...playbackTrack };
   }
   const overlay = { ...playbackTrack };
-  // Catalog identity is authoritative only for this exact Spotify recording.
-  const sameRecording = String(playbackTrack.spotifyTrackId || "") === String(catalog.id || "") && Boolean(catalog.id);
-  if (sameRecording && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(String(catalog.isrc || ""))) overlay.isrc = catalog.isrc;
   const catalogDurationMs = Number(catalog.durationMs || 0);
   if (catalogDurationMs > 0) {
     overlay.durationMs = catalogDurationMs;

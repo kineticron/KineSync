@@ -134,16 +134,6 @@ function getDatabase(): Promise<SQLiteDatabase> {
           }
           await db.runAsync("INSERT INTO vault_migrations VALUES (?)", "spicy-policy-v1");
         });
-        await transaction(db, async () => {
-          if (await db.getFirstAsync("SELECT 1 FROM vault_migrations WHERE name = ?", "spicy-export-v2")) return;
-          // Stale rows predate fetch-origin provenance. Recompute from stored
-          // metadata and labels so genuine independent providers stay exportable.
-          for (const row of await db.getAllAsync<VaultRow>("SELECT vault_id, saved_at, source_label, original_source, metadata FROM vault_entries")) {
-            const entry = { savedAt: row.saved_at, sourceLabel: row.source_label, originalSource: row.original_source, metadata: JSON.parse(row.metadata) };
-            await db.runAsync("UPDATE vault_entries SET export_restricted = ? WHERE vault_id = ?", Number(isSpicyCommunityLyrics(entry)), row.vault_id);
-          }
-          await db.runAsync("INSERT INTO vault_migrations VALUES (?)", "spicy-export-v2");
-        });
         // Recovery copies cannot retain unmanaged Spicy responses indefinitely.
         const backup = await AsyncStorage.getItem(MOBILE_LYRICS_VAULT_KEY);
         if (backup) {
@@ -300,16 +290,9 @@ export async function saveMobileVaultLyrics({ track, lyrics, sourceLabel = "loca
   const safeTrack = vaultTrack(track);
   return withVault(db => transaction(db, async () => {
     const existing = await findMatchingRows(db, safeTrack);
-    const existingMetadata = existing[0]
-      ? JSON.parse((await db.getFirstAsync<{ metadata: string }>("SELECT metadata FROM vault_entries WHERE vault_id = ?", existing[0].vault_id))?.metadata || "{}")
-      : {};
     const savedAt = Date.now();
     const vaultId = existing[0]?.vault_id || `${normalizeText(track.title).replace(/\s+/g, "-")}-${savedAt.toString(36)}-${(++nextId).toString(36)}`;
-    const existingSpicy = Boolean(existingMetadata?.spicyApi) || String(existingMetadata?.fetchOrigin?.host || "").includes("spicylyrics") || String(existingMetadata?.fetchOrigin?.source || "").includes("spicy");
-    const effectiveMetadata = existingSpicy
-      ? { ...metadata, fetchOrigin: { ...(metadata?.fetchOrigin || {}), ...existingMetadata.fetchOrigin }, spicyApi: metadata?.spicyApi || existingMetadata.spicyApi, ttml: metadata?.ttml || existingMetadata.ttml }
-      : metadata;
-    const entry: MobileVaultEntry = { vaultId, savedAt, track: safeTrack, lyrics: safeLyrics, sourceLabel, originalSource, metadata: withSpicyFreshness({ metadata: effectiveMetadata, sourceLabel, originalSource }) };
+    const entry: MobileVaultEntry = { vaultId, savedAt, track: safeTrack, lyrics: safeLyrics, sourceLabel, originalSource, metadata: withSpicyFreshness({ metadata, sourceLabel, originalSource }) };
     // Preserve the existing replace-song behavior, atomically.
     for (const row of existing) await db.runAsync("DELETE FROM vault_entries WHERE vault_id = ?", row.vault_id);
     await putEntry(db, entry);

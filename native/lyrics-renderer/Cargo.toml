@@ -22,15 +22,3 @@ png = "=0.18.1"
 roxmltree = "=0.21.1"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-sha2 = "=0.10.9"
-skrifa = "=0.44.0"
-icu_segmenter = { version = "=2.4.0", default-features = false, features = ["compiled_data"] }
-
-# Temporary Mali workgroup-index safety fix. See vendor/vello_shaders/KINESYNC-PATCH.md.
-[patch.crates-io]
-vello_shaders = { path = "vendor/vello_shaders" }
-# iOS UIView-backed CAMetalLayer setters must run on main.
-wgpu-hal = { path = "vendor/wgpu-hal" }
-
-[dev-dependencies]
-vello_shaders = "=0.12.0"

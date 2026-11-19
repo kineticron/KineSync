@@ -1,4 +1,3 @@
-import { controlsRowIsExposed, controlsStage, controlsTouchIsCovered } from '@/lib/controls-motion';
 import { usePlaybackStore } from '@/store/playback-store';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import {
@@ -10,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Pressable, StyleSheet, View, TextInput, type ViewProps } from 'react-native';
+import { Pressable, StyleSheet, View, TextInput } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   Easing,
@@ -87,8 +86,6 @@ type PlaybackControlsProps = {
   fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
-  controlsProgress?: SharedValue<number>;
-  controlsCoverage?: SharedValue<{ top: number; bottom: number; originY: number }>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -247,23 +244,6 @@ function TransportButton({
   );
 }
 
-function useControlsRowAccess(
-  progress: SharedValue<number> | undefined, start: number, end: number,
-  coverage: SharedValue<{ top: number; bottom: number; originY: number }> | undefined,
-) {
-  const layout = useSharedValue({ top: 0, height: 0 });
-  const allowed = useDerivedValue(() => controlsRowIsExposed(
-    progress?.value ?? 1, start, end, layout.value.top, layout.value.height,
-    coverage?.value.top ?? 0, coverage?.value.bottom ?? Infinity,
-  ));
-  const animatedProps = useAnimatedProps<ViewProps>(() => ({
-    pointerEvents: allowed.value ? 'box-none' : 'none',
-    accessibilityElementsHidden: !allowed.value,
-    importantForAccessibility: allowed.value ? 'auto' : 'no-hide-descendants',
-  }));
-  return { layout, allowed, animatedProps };
-}
-
 export const PlaybackControls = memo(function PlaybackControls({
   controlsDisabled = false,
   previousDisabled = false,
@@ -294,19 +274,11 @@ export const PlaybackControls = memo(function PlaybackControls({
   fullscreenActions,
   controlsModeTransitioning = false,
   fullscreenAlbumProgress,
-  controlsProgress,
-  controlsCoverage,
   layout = 'default',
   previewPlayback,
   tourStep,
   previewTranslated,
 }: PlaybackControlsProps) {
-  const timelineRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0, 0.6));
-  const transportRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.2, 0.8));
-  const utilityRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.4, 1));
-  const timelineAccess = useControlsRowAccess(controlsProgress, 0, 0.6, controlsCoverage);
-  const transportAccess = useControlsRowAccess(controlsProgress, 0.2, 0.8, controlsCoverage);
-  const utilityAccess = useControlsRowAccess(controlsProgress, 0.4, 1, controlsCoverage);
   const liveTranslated = usePlaybackStore(s => hasLyricsTranslation(s.lyrics));
   const translated = previewTranslated ?? liveTranslated;
   const isOverlay = layout === 'overlay';
@@ -515,14 +487,10 @@ onPressIn={onUserInteraction}
 
   return (
     <Reanimated.View
-      pointerEvents="box-none"
       style={[
         styles.card,
         isOverlay && styles.cardOverlay,
       ]}>
-      <Reanimated.View animatedProps={timelineAccess.animatedProps}
-        onLayout={event => { timelineAccess.layout.value = { top: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height }; }}
-        style={[{ gap: isOverlay ? 2 : 10 }, timelineRevealStyle]}>
       <PlaybackTimeline
         controlsDisabled={controlsDisabled || seekDisabled}
         previewPlayback={previewPlayback}
@@ -531,14 +499,9 @@ onPressIn={onUserInteraction}
         onSeek={onSeek}
         onUserInteraction={onUserInteraction}
         compact={isOverlay}
-        interactionAllowed={timelineAccess.allowed}
-        interactionCoverage={controlsCoverage}
       />
 
-      </Reanimated.View>
-      <Reanimated.View animatedProps={transportAccess.animatedProps}
-        onLayout={event => { transportAccess.layout.value = { top: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height }; }}
-        style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay, transportRevealStyle]}>
+      <View style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay]}>
         <TransportButton
           disabled={controlsDisabled || previousDisabled}
           accessibilityLabel="Previous track"
@@ -605,12 +568,11 @@ onPressIn={onUserInteraction}
             color="#FFFFFF"
           />
         </TransportButton>
-      </Reanimated.View>
+      </View>
 
       {!isOverlay ? (
-        <Reanimated.View animatedProps={utilityAccess.animatedProps}
-          onLayout={event => { utilityAccess.layout.value = { top: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height }; }}
-          style={[!fullscreenActions && styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle, utilityRevealStyle]}>
+        <Reanimated.View
+          style={[!fullscreenActions && styles.collapsibleRowClip, styles.bottomSlot, bottomSlotStyle]}>
           <Reanimated.View
             pointerEvents={controlsModeTransitioning || fullscreenAlbumMode ? 'none' : 'auto'}
             accessibilityElementsHidden={fullscreenAlbumMode}
@@ -640,16 +602,12 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   onScrubPreview,
   onSeek,
   onUserInteraction,
-  interactionAllowed,
-  interactionCoverage,
   compact = false,
   previewPlayback,
 }: Pick<
   PlaybackControlsProps,
   'controlsDisabled' | 'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlayback'
 > & {
-  interactionAllowed?: SharedValue<boolean>;
-  interactionCoverage?: SharedValue<{ top: number; bottom: number; originY: number }>;
   compact?: boolean;
 }) {
   const [trackWidth, setTrackWidth] = useState(1);
@@ -732,16 +690,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
       Gesture.Pan()
         .enabled(!controlsDisabled)
         .minDistance(0)
-        .onTouchesDown((event, manager) => {
-          if (isScrubbingShared.value) return;
-          if ((interactionAllowed && !interactionAllowed.value) ||
-            event.allTouches.some(touch => !controlsTouchIsCovered(touch.absoluteY, interactionCoverage?.value))) {
-            manager.fail();
-          }
-        })
         .onBegin((event) => {
-          if ((interactionAllowed && !interactionAllowed.value) ||
-            !controlsTouchIsCovered(event.absoluteY, interactionCoverage?.value)) return;
           const ratio = Math.max(
             0,
             Math.min(1, event.x / Math.max(1, trackWidth)),
@@ -755,7 +704,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           runOnJS(flushScrubPreview)(ratio);
         })
         .onUpdate((event) => {
-          if (interactionAllowed && !interactionAllowed.value) return;
           const ratio = Math.max(
             0,
             Math.min(1, event.x / Math.max(1, trackWidth)),
@@ -768,9 +716,8 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
           }
         })
         .onFinalize((event, success) => {
-          if (!isScrubbingShared.value) return;
           trackScaleY.value = withTiming(1, { duration: 160 });
-          if (success && (!interactionAllowed || interactionAllowed.value)) {
+          if (success) {
             // Commit the release coordinate, even when the last JS preview
             // was throttled. Hold here until JS installs the new playback anchor.
             const ratio = Math.max(0, Math.min(1, event.x / Math.max(1, trackWidth)));
@@ -784,8 +731,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
         }),
     [
       controlsDisabled,
-      interactionAllowed,
-      interactionCoverage,
       cancelScrub,
       finishScrub,
       flushScrubPreview,
@@ -869,8 +814,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 const styles = StyleSheet.create({
   tourHighlight: { borderWidth: 2, borderColor: '#A8F0CF', backgroundColor: 'rgba(168,240,207,0.12)' },
   card: {
-    // Row transforms must remain visible outside their unchanged layout bounds.
-    overflow: 'visible',
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 14,

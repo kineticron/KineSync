@@ -14,7 +14,8 @@ const bridgeSettings = read('lib/bridge-settings.ts');
 const explore = read('app/(tabs)/explore.tsx');
 const onboarding = read('components/onboarding/onboarding-screen.tsx');
 const login = read('components/spotify-login-webview.tsx');
-const rustLyrics = read('components/lyrics/rust/rust-lyrics-view.tsx');
+const spicyLyrics = read('components/lyrics/spicy-lyrics-view.tsx');
+const amllLyrics = read('components/lyrics/amll-lyrics-view.tsx');
 const signingPlugin = read('plugins/with-release-signing.js');
 
 assert.equal(pkg.dependencies['expo-secure-store'], require('expo/bundledNativeModules.json')['expo-secure-store']);
@@ -100,8 +101,28 @@ assert(
   !explore.includes("setServerUrl('');\n      bridgeClient.disconnect();"),
   'invalid form input must not clear a previously working bridge URL',
 );
-assert(!rustLyrics.includes('react-native-webview'), 'lyrics packets stay on the native bridge');
-assert.match(rustLyrics, /nativeEvent\.generation !== revision\.generation/, 'stale native readiness cannot reset the current track');
+assert(
+  spicyLyrics.includes('key={`spicy-lyrics-${webViewGeneration}`}') ||
+    spicyLyrics.includes('key={`spicy-lyrics-${sourceKey}`}') ||
+    spicyLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
+  'refocusing must remount the suspended Spicy lyrics WebView',
+);
+assert(
+  amllLyrics.includes('key={`amll-lyrics-${webViewGeneration}`}') ||
+    amllLyrics.includes('key={`amll-lyrics-${sourceKey}`}') ||
+    amllLyrics.includes('key={`web-lyrics-${webViewGeneration}`}'),
+  'refocusing must remount the suspended AMLL lyrics WebView',
+);
+for (const webLyrics of [spicyLyrics, amllLyrics]) {
+  assert(
+    webLyrics.includes('readyGeneration === webViewGeneration') || webLyrics.includes('readySourceKey === sourceKey'),
+    'lyrics WebView readiness must belong to the active generation',
+  );
+  assert(
+    !webLyrics.includes('webViewRef.current?.reload()'),
+    'refocusing must not rely on reloading a suspended lyrics WebView',
+  );
+}
 assert(app.android.blockedPermissions.includes('android.permission.RECORD_AUDIO'));
 assert(app.plugins.includes('./plugins/with-release-signing.js'));
 assert(signingPlugin.includes('signingConfigs\\.debug'));

@@ -8,7 +8,8 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
+import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
+import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
 import { MotionPressable } from "@/components/ui/motion-pressable";
 import { BlurView } from 'expo-blur';
 import { Design } from "@/constants/design";
@@ -16,44 +17,38 @@ import { usePlaybackStore } from "@/store/playback-store";
 
 import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 import { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
-
-const PREVIEW_DURATION_MS = 25000;
+export { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
 
 export function RendererPreview({ active, sideBySide = false }: { active: boolean; sideBySide?: boolean }) {
   const selected = usePlaybackStore((s) => s.lyricsStyle);
   const select = usePlaybackStore((s) => s.setLyricsStyle);
-  const [playback, setPlayback] = useState<PreviewPlaybackAnchor | null>(null);
+  const [playback, setPlayback] = useState<PreviewPlaybackAnchor>(() => ({ anchorPositionMs: 0, anchorMonotonicMs: performance.now(), isPlaying: false }));
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
   const insets = useSafeAreaInsets();
-  const running = active && foreground;
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) =>
       setForeground(state === "active"),
     );
-    setForeground(AppState.currentState === "active");
     return () => subscription.remove();
   }, []);
   useEffect(() => {
-    if (!running) {
-      setPlayback(null);
-      return;
-    }
     let timer: ReturnType<typeof setTimeout>;
     const restart = () => {
-      setPlayback({ anchorPositionMs: 0, anchorMonotonicMs: performance.now(), isPlaying: true });
-      timer = setTimeout(restart, PREVIEW_DURATION_MS);
+      setPlayback({ anchorPositionMs: 0, anchorMonotonicMs: performance.now(), isPlaying: active && foreground });
+      if (active && foreground) timer = setTimeout(restart, 25000);
     };
     restart();
     return () => clearTimeout(timer);
-  }, [running]);
+  }, [active, foreground]);
   return (
     <View style={styles.comparison}>
       <View style={[styles.panels, sideBySide && styles.panelsSideBySide]}>
       {(["spicy", "amll"] as const).map((style) => {
+        const Renderer = style === "spicy" ? SpicyLyricsView : AmllLyricsView;
         return (
           <View
             key={style}
@@ -95,26 +90,15 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
               />
             </MotionPressable>
             <View style={styles.lyrics}>
-              {running && playback && selected === style ? (
-                <RustLyricsView
-                  demoStyle={style}
-                  demoLyrics={DEMO_LYRICS}
-                  demoPlayback={playback}
-                  demoDurationMs={PREVIEW_DURATION_MS}
-                  active
-                  tapToSeekEnabled={false}
-                  showTranslatedText
-                  fontScale={0.82}
-                />
-              ) : (
-                <View style={styles.sample}>
-                  {DEMO_LYRICS.slice(0, 2).map((line) => (
-                    <Text key={line.lineStartTime} style={styles.sampleLine} numberOfLines={1}>
-                      {line.syllables.map((syllable) => syllable.text).join("")}
-                    </Text>
-                  ))}
-                </View>
-              )}
+              <Renderer
+                demoLyrics={DEMO_LYRICS}
+                demoPlayback={playback}
+                demoDurationMs={25000}
+                active={active && foreground}
+                tapToSeekEnabled={false}
+                showTranslatedText
+                fontScale={0.82}
+              />
             </View>
           </View>
         );
@@ -149,7 +133,5 @@ const styles = StyleSheet.create({
   labelCopy: { flex: 1, minWidth: 0, paddingRight: 8 },
   hint: { color: Design.muted, fontSize: 11, marginTop: 3 },
   lyrics: { flex: 1 },
-  sample: { flex: 1, justifyContent: "center", paddingHorizontal: 16, gap: 4 },
-  sampleLine: { color: Design.muted, fontSize: 17, fontWeight: "700" },
 });
 

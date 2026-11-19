@@ -31,7 +31,7 @@ export function splineAt(c: Curve, x: number): number {
 }
 
 export type SpringState = { p: number; v: number };
-/** Exact underdamped branch of the Spicy Lyrics Spring.Step reference. All Spicy word springs use d < 1. */
+/** Exact underdamped branch of spicy-upstream-runtime.Spring.Step. All Spicy word springs use d < 1. */
 export function stepSpicySpring(s: SpringState, goal: number, frequency: number, damping: number, dt: number): SpringState {
   'worklet';
   const o = s.p - goal;

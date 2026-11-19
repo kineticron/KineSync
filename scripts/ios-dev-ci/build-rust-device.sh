@@ -9,14 +9,14 @@ export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
 TOOLCHAIN=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.toolchain')
 TARGET=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.target')
 PROFILE=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.profile')
-[[ "$TARGET" == aarch64-apple-ios && "$PROFILE" == release ]]
+[[ "$TARGET" == aarch64-apple-ios && "$PROFILE" == dev ]]
 FEATURES=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.features.join(",")')
 # Bash 3.2 treats an empty array expansion as unset under nounset.
 set -- "+${TOOLCHAIN}" build --locked --lib --manifest-path native/lyrics-renderer/Cargo.toml \
   --target "$TARGET" --profile "$PROFILE"
 if [[ -n "$FEATURES" ]]; then set -- "$@" --features "$FEATURES"; fi
 cargo "$@"
-LIBRARY="${CARGO_TARGET_DIR}/${TARGET}/release/liblyrics_renderer.a"
+LIBRARY="${CARGO_TARGET_DIR}/${TARGET}/debug/liblyrics_renderer.a"
 [[ $(xcrun lipo -archs "$LIBRARY") == arm64 ]]
 HEADERS="${RUNNER_TEMP}/kinesync-rust-device-headers"
 mkdir -p "$HEADERS" "$RUST_PREBUILT_DIR"

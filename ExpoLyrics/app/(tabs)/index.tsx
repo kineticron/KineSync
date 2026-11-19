@@ -1,6 +1,5 @@
-import MaskedView from "@react-native-masked-view/masked-view";
-import { controlsAppIsForeground, controlsShowEdge } from '@/lib/controls-motion';
-import { RustLyricsView, rustLyricsAvailable } from "@/components/lyrics/rust/rust-lyrics-view";
+import { rustViewport } from "@/lib/rust-lyrics-protocol";
+import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
 import { BlurView } from "expo-blur";
@@ -22,7 +21,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  AccessibilityInfo,
   Alert,
   AppState,
   Platform,
@@ -34,13 +32,9 @@ import {
   Text,
 } from "react-native";
 import Reanimated, {
-  cancelAnimation,
-  useReducedMotion,
   useSharedValue,
   withTiming,
-  withDelay,
   useAnimatedStyle,
-  useDerivedValue,
   Easing as ReanimatedEasing,
   interpolate,
   interpolateColor,
@@ -60,9 +54,9 @@ import {
 import {
   getLandscapeLayoutMetrics,
   isLandscapeLayout,
+  LANDSCAPE_FONT_SCALE,
   LANDSCAPE_LEFT_PANE_PADDING,
   LANDSCAPE_LYRICS_PADDING,
-  LYRICS_EDGE_FADE_HEIGHT,
   LYRICS_WRAP_MARGIN_TOP,
   TOP_BAR_ARTWORK_SIZE,
   TOP_BAR_ARTWORK_TOP,
@@ -73,7 +67,9 @@ import { resolveAnimatedArtworkForTrack } from "@/lib/animated-artwork";
 import { normalizeBridgeArtworkUri, resolveTrackArtworkUrl } from "@/lib/artwork";
 import { MAX_GIF_BYTES } from "@/lib/bridge-validation";
 import { HorizontalPlayerPanel } from "@/components/lyrics/horizontal-player-panel";
+import { SpicyLyricsView } from "@/components/lyrics/spicy-lyrics-view";
 import { LyricsAttribution } from "@/components/lyrics/lyrics-attribution";
+import { AmllLyricsView } from "@/components/lyrics/amll-lyrics-view";
 import {
   PlaybackControls,
   type PlaybackControlsLayout,
@@ -94,8 +90,6 @@ import {
   refreshLyricsForCurrentTrack,
   requestImmediateTranslationForCurrentSource,
 } from "@/lib/lyrics-sync";
-import { getPlaybackWindowState } from "@/lib/lyrics-layout";
-import { projectPosition } from "@/lib/rust-lyrics-protocol";
 import { detectLyricsTimingMode } from "@/lib/lyrics-timing";
 import { isSpicyLyricsResponse, spicyLyricsExpiresAt } from "@/lib/lyrics-policy";
 import type { PlaybackMode } from "@/lib/playback-source";
@@ -108,11 +102,10 @@ import { usePlaybackStore } from "@/store/playback-store";
 import type { LyricLine } from "@/types/bridge";
 import { usePlayerTour } from "@/hooks/use-player-tour";
 import { TOUR_DURATION_MS, TOUR_TRACK, usePlayerTourStore, type PlayerTourStep } from "@/store/player-tour-store";
-import { DEMO_LYRICS } from "@/lib/onboarding-demo-lyrics";
+import { DEMO_LYRICS } from "@/components/onboarding/renderer-preview";
 import { PlayerTourOverlay } from "@/components/onboarding/player-tour-overlay";
 import type { PreviewPlaybackAnchor } from "@/components/lyrics/use-playback-timeline-clock";
 const LYRICS_PLAYBACK_WAKE_LOCK_TAG = "kinesync-lyrics-playback";
-const CONTROLS_EASE = ReanimatedEasing.bezier(0.16, 1, 0.3, 1);
 const CONTROLS_IDLE_TIMEOUT_MS = 2500;
 const PLAYER_MODE_TRANSITION_MS = 420;
 const PLAYER_MODE_EASE = ReanimatedEasing.out(ReanimatedEasing.cubic);
@@ -314,8 +307,6 @@ type PlaybackControlsDockProps = {
   fullscreenActions?: ReactNode;
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
-  controlsProgress?: SharedValue<number>;
-  controlsCoverage?: SharedValue<{ top: number; bottom: number; originY: number }>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -352,8 +343,6 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   fullscreenActions,
   controlsModeTransitioning,
   fullscreenAlbumProgress,
-  controlsProgress,
-  controlsCoverage,
   layout,
   previewPlayback,
   tourStep,
@@ -393,8 +382,6 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       fullscreenActions={fullscreenActions}
       controlsModeTransitioning={controlsModeTransitioning}
       fullscreenAlbumProgress={fullscreenAlbumProgress}
-      controlsProgress={controlsProgress}
-      controlsCoverage={controlsCoverage}
       layout={layout}
     />
   );
@@ -420,6 +407,9 @@ export default function HomeScreen() {
   const spotifyBrowserRef = useRef<SpotifyBrowserFallbackHandle>(null);
   const insets = useSafeAreaInsets();
   const windowDimensions = useWindowDimensions();
+  const viewportKey = `${windowDimensions.width}x${windowDimensions.height}`;
+  const [rustPlayerBounds, setRustPlayerBounds] = useState({ height: 0, key: '' });
+  const [rustDockBounds, setRustDockBounds] = useState({ top: 0, key: '' });
   const tour = usePlayerTour(isScreenFocused);
   const liveTrack = usePlaybackStore((s) => s.currentTrack);
   const currentTrack = tour.active ? TOUR_TRACK : liveTrack;
@@ -456,6 +446,7 @@ export default function HomeScreen() {
     return () => { clearTimeout(timer); subscription.remove(); };
   }, [spicyExpiry, liveLyrics.length]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [rustRenderer, setRustRenderer] = useState(false);
   const [fullscreenAlbumMode, setFullscreenAlbumMode] = useState(false);
   const [lyricsMounted, setLyricsMounted] = useState(true);
   const [topBarMounted, setTopBarMounted] = useState(true);
@@ -477,25 +468,15 @@ export default function HomeScreen() {
   const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
-  // Manual ownership belongs to one track. A new track identity restores
-  // follow in the parent so a stale false from the previous song cannot win.
-  const autoFollowTrackId = useRef<string | null>(null);
-  useEffect(() => {
-    const id = currentTrack?.id ?? null;
-    if (autoFollowTrackId.current === id) return;
-    autoFollowTrackId.current = id;
-    setAutoFollowEnabled(true);
-  }, [currentTrack?.id]);
   const [controlsDockHeight, setControlsDockHeight] = useState(0);
   const [scrubPreviewPositionMs, setScrubPreviewPositionMs] = useState<
     number | null
   >(null);
-  const controlsScrubActive = useRef(false);
   const handleScrubPreview = useCallback((positionMs: number | null) => {
       if (nativePlaybackUnavailable('seek') && positionMs !== null) return;
-    controlsScrubActive.current = positionMs !== null;
     setScrubPreviewPositionMs(positionMs);
   }, []);
+  const activeLineIndex = useRef(-1);
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(
     () => new Set(),
   );
@@ -514,27 +495,11 @@ export default function HomeScreen() {
   const fullscreenMenuButtonScale = useSharedValue(1);
   const lyricsRestoreOpacity = useSharedValue(1);
   const controlsOpacity = useSharedValue(1);
-  const controlsStageProgress = useSharedValue(1);
   const controlsTarget = useSharedValue(1);
-  const reducedMotion = useReducedMotion();
-  const [liveReducedMotion, setLiveReducedMotion] = useState(reducedMotion);
-  const [controlsInteractive, setControlsInteractive] = useState(true);
-  const controlsTouchActive = useRef(false);
-  const dockTop = useSharedValue(windowDimensions.height);
-  const dockLayout = useRef({ y: windowDimensions.height, childY: 0 });
-  const [screenHeight, setScreenHeight] = useState(windowDimensions.height);
-  const screenRef = useRef<View>(null);
-  const screenOriginY = useRef(0);
-  useEffect(() => {
-    const listener = AccessibilityInfo.addEventListener('reduceMotionChanged', setLiveReducedMotion);
-    return () => listener.remove();
-  }, []);
+  const controlsTranslateY = useSharedValue(0);
   const controlsIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const controlsForeground = useRef(controlsAppIsForeground(AppState.currentState));
-  const scheduleControlsHideRef = useRef<() => void>(() => {});
-  const showControlsRef = useRef<() => void>(() => {});
   const autoHidePlaybackControlsRef = useRef(autoHidePlaybackControls);
   const fullscreenAlbumModeRef = useRef(fullscreenAlbumMode);
   const albumArtworkMorphingRef = useRef(albumArtworkMorphing);
@@ -763,84 +728,51 @@ export default function HomeScreen() {
   }, [fullscreenAlbumMode, fullscreenAlbumProgress, isLandscape]);
 
   const clearControlsIdleTimer = useCallback(() => {
-    if (controlsIdleTimerRef.current !== null) {
+    if (controlsIdleTimerRef.current) {
       clearTimeout(controlsIdleTimerRef.current);
       controlsIdleTimerRef.current = null;
     }
   }, []);
 
-  const resetControlsInteraction = useCallback(() => {
-    controlsTouchActive.current = false;
-    controlsScrubActive.current = false;
-    setScrubPreviewPositionMs(null);
-    clearControlsIdleTimer();
-  }, [clearControlsIdleTimer]);
-
-  const animateControls = useCallback((shown: boolean) => {
-    // Enable visible rows immediately. UI-thread row guards keep clipped or
-    // transparent descendants inert without waiting for animation completion.
-    setControlsInteractive(shown);
-    cancelAnimation(controlsOpacity);
-    cancelAnimation(controlsStageProgress);
-    const target = shown ? 1 : 0;
-    if (liveReducedMotion) {
-      controlsOpacity.value = target;
-      controlsStageProgress.value = target;
-    } else {
-      // The bounded controls clip reveals only pixels already covered by the
-      // moving lyric mask. Rows retain their own independent 36px transforms.
-      // Hide holds the backdrop until the reverse stagger has finished.
-      if (shown) {
-        // Clear the rows before their expo-out slide settles behind the clip.
-        controlsOpacity.value = withTiming(1, { duration: 200, easing: controlsShowEdge });
-      } else {
-        const coverageHold = controlsStageProgress.get() > 0 ? 700 : 0;
-        controlsOpacity.value = withDelay(coverageHold,
-          withTiming(0, { duration: 400, easing: CONTROLS_EASE }));
-      }
-      const rowAnimation = withTiming(target, { duration: 700, easing: ReanimatedEasing.linear });
-      // Let the show edge lead slightly without changing the stagger or hide.
-      controlsStageProgress.value = shown ? withDelay(60, rowAnimation) : rowAnimation;
-    }
-    setControlsVisible(shown);
-  }, [controlsOpacity, controlsStageProgress, liveReducedMotion]);
   const hideControls = useCallback(() => {
     controlsTarget.set(0);
-    animateControls(false);
-  }, [animateControls, controlsTarget]);
-  const showControls = useCallback(() => {
-    const alreadyShown = controlsTarget.get() === 1;
-    controlsTarget.set(1);
-    if (!alreadyShown) animateControls(true);
-  }, [animateControls, controlsTarget]);
-  useEffect(() => {
-    animateControls(controlsTarget.get() > 0);
-  }, [animateControls, controlsTarget]);
+    controlsOpacity.value = withTiming(0, {
+      duration: 240,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
+    controlsTranslateY.value = withTiming(44, {
+      duration: 260,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
+    setControlsVisible(false);
+  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
 
-  useEffect(() => () => {
-    controlsTouchActive.current = false;
-    controlsScrubActive.current = false;
-    clearControlsIdleTimer();
-    cancelAnimation(controlsOpacity);
-    cancelAnimation(controlsStageProgress);
-  }, [clearControlsIdleTimer, controlsOpacity, controlsStageProgress]);
+  const showControls = useCallback(() => {
+    controlsTarget.set(1);
+    controlsOpacity.value = withTiming(1, {
+      duration: 220,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
+    controlsTranslateY.value = withTiming(0, {
+      duration: 240,
+      easing: ReanimatedEasing.out(ReanimatedEasing.cubic),
+    });
+    setControlsVisible(true);
+  }, [controlsOpacity, controlsTarget, controlsTranslateY]);
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
-    if (!controlsForeground.current || controlsTouchActive.current || controlsScrubActive.current) return;
 
     if (isLandscapeRef.current && !tourAutoHideDemo) {
       if (!landscapeArtControlsVisibleRef.current) {
         return;
       }
-      const timer = setTimeout(() => {
-        if (controlsIdleTimerRef.current !== timer) return;
+      controlsIdleTimerRef.current = setTimeout(() => {
         controlsIdleTimerRef.current = null;
-        if (controlsForeground.current && isLandscapeRef.current && !controlsTouchActive.current && !controlsScrubActive.current) {
+        if (isLandscapeRef.current) {
           setLandscapeArtControlsVisible(false);
         }
       }, CONTROLS_IDLE_TIMEOUT_MS);
-      controlsIdleTimerRef.current = timer;
       return;
     }
 
@@ -852,10 +784,8 @@ export default function HomeScreen() {
       return;
     }
 
-    const timer = setTimeout(() => {
-      if (controlsIdleTimerRef.current !== timer) return;
+    controlsIdleTimerRef.current = setTimeout(() => {
       controlsIdleTimerRef.current = null;
-      if (!controlsForeground.current || controlsTouchActive.current || controlsScrubActive.current) return;
       if (
         fullscreenAlbumModeRef.current ||
         !autoHidePlaybackControlsRef.current
@@ -865,27 +795,18 @@ export default function HomeScreen() {
       }
       hideControls();
     }, CONTROLS_IDLE_TIMEOUT_MS);
-    controlsIdleTimerRef.current = timer;
   }, [clearControlsIdleTimer, hideControls, showControls, tourAutoHideDemo]);
 
-  scheduleControlsHideRef.current = scheduleControlsHide;
-  showControlsRef.current = showControls;
-
-  // Keep Gesture.Pan and press callbacks stable when motion policy changes.
   const handleControlsInteraction = useCallback(() => {
     if (isLandscapeRef.current && !tourAutoHideDemo) {
-      scheduleControlsHideRef.current();
+      scheduleControlsHide();
       return;
     }
-    if (controlsTarget.get() === 0) showControlsRef.current();
-    scheduleControlsHideRef.current();
-  }, [controlsTarget, tourAutoHideDemo]);
-
-  // Interaction ownership survives timer-policy and callback identity changes.
-  // Only entering a different presentation invalidates its current gesture.
-  useEffect(() => {
-    resetControlsInteraction();
-  }, [fullscreenAlbumMode, isLandscape, tour.active, resetControlsInteraction]);
+    if (!controlsVisible) {
+      showControls();
+    }
+    scheduleControlsHide();
+  }, [controlsVisible, scheduleControlsHide, showControls, tourAutoHideDemo]);
 
   useEffect(() => {
     clearControlsIdleTimer();
@@ -912,25 +833,13 @@ export default function HomeScreen() {
     landscapeArtControlsVisible,
     scheduleControlsHide,
     showControls,
-    tour.active,
     tourAutoHideDemo,
   ]);
 
   useEffect(() => {
-    if (scrubPreviewPositionMs === null) scheduleControlsHide();
-    else clearControlsIdleTimer();
-  }, [clearControlsIdleTimer, scheduleControlsHide, scrubPreviewPositionMs]);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', state => {
-      const foreground = controlsAppIsForeground(state);
-      if (controlsForeground.current === foreground) return;
-      controlsForeground.current = foreground;
-      resetControlsInteraction();
-      if (controlsForeground.current) scheduleControlsHideRef.current();
-    });
+    const subscription = AppState.addEventListener('change', () => setScrubPreviewPositionMs(null));
     return () => subscription.remove();
-  }, [resetControlsInteraction]);
+  }, []);
 
   const sendSeekToPlaybackSource = useCallback((positionMs: number) => {
       if (nativePlaybackUnavailable('seek')) return;
@@ -1050,6 +959,10 @@ export default function HomeScreen() {
     spotifyBrowserRef.current?.skipPrevious();
   }, [handleSeek]);
 
+  const handleActiveLineChange = useCallback((nextActiveLine: number) => {
+    activeLineIndex.current = nextActiveLine;
+  }, []);
+
   const handleLineLongPress = useCallback((line: LyricLine) => {
     if (usePlayerTourStore.getState().active) return;
     const key = getLineKey(line);
@@ -1065,8 +978,7 @@ export default function HomeScreen() {
   }, []);
 
   const ensureSelectionForShare = useCallback(() => {
-    const playback = usePlaybackStore.getState();
-    const { lyrics } = playback;
+    const { lyrics } = usePlaybackStore.getState();
     const selected = lyrics.filter((line) =>
       selectedLineKeys.has(getLineKey(line)),
     );
@@ -1076,8 +988,7 @@ export default function HomeScreen() {
     if (!lyrics.length) {
       return [];
     }
-    const position = projectPosition(playback, performance.now());
-    const anchorIndex = Math.max(0, getPlaybackWindowState(position, lyrics).activeLineStartIndex);
+    const anchorIndex = Math.max(0, activeLineIndex.current);
     const start = Math.max(0, Math.min(anchorIndex, lyrics.length - 1));
     const end = Math.min(lyrics.length, start + 6);
     return lyrics.slice(start, end);
@@ -1275,58 +1186,28 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
-  const rustHandlesReveal = !isLandscape && rustLyricsAvailable && !showEmptyState;
-  const shouldRevealRustTap = useCallback((pageY: number) =>
-    !isLandscapeRef.current && !fullscreenAlbumModeRef.current && controlsTarget.get() === 0 &&
-    pageY >= screenOriginY.current + screenHeight * 0.6,
-  [controlsTarget, screenHeight]);
-
-  const lyricTop = insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP;
-  // The native renderer viewport stays full size. A masked band travels with
-  // the dock so the last visible line fades out instead of slab-clipping.
-  const lyricsEdgeMaskSolidStyle = useAnimatedStyle(() => {
-    const edge = screenHeight - lyricTop -
-      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value;
-    const fade = Math.min(
-      Math.max(0, edge),
-      LYRICS_EDGE_FADE_HEIGHT * Math.max(0, Math.min(1, controlsOpacity.value)),
-    );
-    return { height: Math.max(0, edge - fade) };
-  });
-  const lyricsEdgeMaskFadeStyle = useAnimatedStyle(() => {
-    const edge = screenHeight - lyricTop -
-      Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value;
-    const fade = Math.min(
-      Math.max(0, edge),
-      LYRICS_EDGE_FADE_HEIGHT * Math.max(0, Math.min(1, controlsOpacity.value)),
-    );
+  const controlsStyle = useAnimatedStyle(() => {
     return {
-      transform: [{ translateY: Math.max(0, edge - fade) }],
-      height: fade,
+      opacity: controlsOpacity.value,
+      transform: [{ translateY: controlsTranslateY.value }],
     };
   });
-  const fillTouchStyle = useAnimatedStyle(() => ({
-    top: screenHeight - Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value,
-  }));
 
-  const controlsCoverage = useDerivedValue(() => ({
-    originY: dockTop.value,
-    top: Math.max(0, screenHeight - dockTop.value) * (1 - controlsOpacity.value),
-    bottom: Math.max(0, screenHeight - dockTop.value),
-  }));
-  const controlsCoverageClipStyle = useAnimatedStyle(() => {
-    const offset = controlsCoverage.value.top;
+  const lyricsBottomBlurOpacityStyle = useAnimatedStyle(() => {
+    const modeOpacity = interpolate(
+      fullscreenAlbumProgress.value,
+      [0, 0.32],
+      [1, 0],
+      Extrapolation.CLAMP,
+    );
     return {
-      top: offset,
-      marginBottom: -36,
+      opacity:
+        controlsOpacity.value *
+        modeOpacity *
+        lyricsRestoreOpacity.value,
     };
   });
-  const controlsCoverageContentStyle = useAnimatedStyle(() => ({
-    flexShrink: 0,
-    // Translate pixels only. Negative layout margins would let Yoga's minimum
-    // padding height change the dock's occupied height once offset exceeds it.
-    transform: [{ translateY: -controlsCoverage.value.top }],
-  }));
+
 
   const fullscreenMenuButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: fullscreenMenuButtonScale.value }],
@@ -1407,17 +1288,20 @@ export default function HomeScreen() {
     topBarTrackPress,
   ]);
 
-  // The fixed child retains the full renderer viewport while its parent clips.
+  const rustLyricsViewport = rustViewport(rustPlayerBounds.height, insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP,
+    rustDockBounds.key === viewportKey && rustPlayerBounds.key === viewportKey ? rustDockBounds.top : null);
   const lyricsViewportStyle = useMemo(
     () => ({
       position: "absolute" as const,
       left: 0,
       right: 0,
       top: insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP,
-      height: Math.max(0, screenHeight - insets.top - TOP_BAR_CONTENT_HEIGHT - LYRICS_WRAP_MARGIN_TOP),
+      bottom: __DEV__ && rustRenderer && !tour.active
+        ? rustLyricsViewport.bottom : 0,
+      maxHeight: __DEV__ && rustRenderer && !tour.active ? rustLyricsViewport.height : undefined,
       overflow: "hidden" as const,
     }),
-    [insets.top, screenHeight],
+    [insets.top, rustRenderer, tour.active, rustLyricsViewport.bottom, rustLyricsViewport.height],
   );
 
   const lyricsChromeOpacityStyle = useAnimatedStyle(() => {
@@ -1442,9 +1326,9 @@ export default function HomeScreen() {
   }));
 
   const handleControlsDockLayout = useCallback((height: number) => {
-    // The portrait utility slot has constant height through the album morph.
-    // Keep the intrinsic measurement current, including first layout in album
-    // mode and font/safe-area changes that may not emit another layout later.
+    if (fullscreenAlbumModeRef.current || albumArtworkMorphingRef.current) {
+      return;
+    }
     setControlsDockHeight(height);
   }, []);
 
@@ -1461,23 +1345,15 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <View
-      ref={screenRef}
-      style={styles.screen}
-      onLayout={event => {
-        setScreenHeight(event.nativeEvent.layout.height);
-        screenRef.current?.measureInWindow((_x, y) => { screenOriginY.current = y; });
-      }}
-      onTouchStart={() => { controlsTouchActive.current = true; clearControlsIdleTimer(); }}
-      onTouchEnd={event => {
-        controlsTouchActive.current = event.nativeEvent.touches.length > 0;
-        if (!controlsTouchActive.current) scheduleControlsHide();
-      }}
-      onTouchCancel={event => {
-        controlsTouchActive.current = event.nativeEvent.touches.length > 0;
-        if (!controlsTouchActive.current) scheduleControlsHide();
-      }}
-    >
+    <View style={styles.screen} onLayout={event => {
+      const height = event.nativeEvent.layout.height;
+      setRustPlayerBounds(previous => previous.height === height && previous.key === viewportKey ? previous : { height, key: viewportKey });
+    }}>
+      {__DEV__ ? <Pressable accessibilityRole="button" accessibilityLabel="Switch experimental Rust renderer" disabled={tour.active}
+        onPress={() => setRustRenderer(value => !value)}
+        style={{ position: 'absolute', zIndex: 100, top: insets.top + 4, right: 12, padding: 8, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.6)' }}>
+        <Text style={{ color: '#fff', fontSize: 11 }}>{tour.active ? 'Rust unavailable during tour' : rustRenderer ? 'Rust · switch to Skia' : 'Try Rust renderer'}</Text>
+      </Pressable> : null}
       {isScreenFocused && isPlaying && lyrics.length > 0 ? (
         <LyricsPlaybackWakeLock />
       ) : null}
@@ -1571,27 +1447,55 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : !tour.onboardingVisible ? (
-                <RustLyricsView
-                  shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
+              ) : __DEV__ && rustRenderer && !tour.active ? (
+                <RustLyricsView active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)} previewPositionMs={scrubPreviewPositionMs} />
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
                   demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                        selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
                   demoPlayback={previewPlayback}
                   demoDurationMs={TOUR_DURATION_MS}
-                  demoStyle={lyricsStyle}
-                  demoInteractive
-                  showTranslatedText={showTranslatedText}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
                   onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
+                  fontScale={LANDSCAPE_FONT_SCALE}
+                  landscapeMode
                 />
-              ) : null}
+              ) : (
+                <SpicyLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                        selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
+                  onUserInteraction={handleControlsInteraction}
+                  fontScale={LANDSCAPE_FONT_SCALE}
+                  landscapeMode
+                />
+              )}
             </SafeAreaView>
           ) : null}
         </View>
@@ -1757,40 +1661,8 @@ export default function HomeScreen() {
           pointerEvents={
             fullscreenAlbumMode || albumArtworkMorphing ? "none" : "auto"
           }
-          collapsable={false}
           style={[styles.lyricsWrap, lyricsViewportStyle]}
         >
-          {/* The mask animates with the dock, so Android must redraw the mask
-              bitmap each frame instead of caching a hardware layer. */}
-          <MaskedView
-            pointerEvents="box-none"
-            style={StyleSheet.absoluteFill}
-            androidRenderingMode="software"
-            maskElement={
-              <View
-                pointerEvents="none"
-                accessible={false}
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                style={StyleSheet.absoluteFill}
-                collapsable={false}
-              >
-                <Reanimated.View
-                  style={[styles.lyricsEdgeMaskSolid, lyricsEdgeMaskSolidStyle]}
-                />
-                <Reanimated.View
-                  style={[styles.lyricsEdgeMaskFade, lyricsEdgeMaskFadeStyle]}
-                >
-                  <LinearGradient
-                    pointerEvents="none"
-                    colors={_stableMaskColors9}
-                    style={StyleSheet.absoluteFill}
-                  />
-                </Reanimated.View>
-              </View>
-            }
-          >
-          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, height: Math.max(0, screenHeight - lyricTop) }}>
           <Reanimated.View
             entering={FadeInUp.duration(PLAYER_MODE_TRANSITION_MS).easing(
               PLAYER_MODE_EASE,
@@ -1808,78 +1680,99 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : !tour.onboardingVisible ? (
-                <RustLyricsView
-                  shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
+              ) : __DEV__ && rustRenderer && !tour.active ? (
+                <RustLyricsView active={isScreenFocused && (isLandscape || !fullscreenAlbumMode)} previewPositionMs={scrubPreviewPositionMs} />
+              ) : lyricsStyle === "amll" ? (
+                <AmllLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
                   demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
                   demoPlayback={previewPlayback}
                   demoDurationMs={TOUR_DURATION_MS}
-                  demoStyle={lyricsStyle}
-                  demoInteractive
-                  showTranslatedText={showTranslatedText}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
                   autoFollowEnabled={autoFollowEnabled}
                   resumeAutoFollowSignal={resumeAutoFollowSignal}
                   onLinePress={handleLyricLinePress}
                   onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
                   onAutoFollowChange={handleAutoFollowChange}
                   onCreditsTimestampPress={handleSeek}
                   onUserInteraction={handleControlsInteraction}
                 />
-              ) : null}
+              ) : (
+                <SpicyLyricsView
+                  active={isScreenFocused && (!tour.active || tour.foreground)}
+                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
+                  demoLayout="player"
+                  demoIsPlaying={tour.active ? tour.isPlaying : undefined}
+                  tapToSeekEnabled={tapToSeekEnabled}
+                  showTranslatedText={showTranslatedText}
+                  selectedLineKeys={selectedLineKeys}
+                  previewPositionMs={scrubPreviewPositionMs}
+                  demoPlayback={previewPlayback}
+                  demoDurationMs={TOUR_DURATION_MS}
+                  autoFollowEnabled={autoFollowEnabled}
+                  resumeAutoFollowSignal={resumeAutoFollowSignal}
+                  onLinePress={handleLyricLinePress}
+                  onLineLongPress={handleLineLongPress}
+                  onActiveLineChange={handleActiveLineChange}
+                  onAutoFollowChange={handleAutoFollowChange}
+                  onCreditsTimestampPress={handleSeek}
+                  onUserInteraction={handleControlsInteraction}
+                />
+              )}
             </Reanimated.View>
           </Reanimated.View>
-          </View>
-          </MaskedView>
+          {/* ponytail: LinearGradient replaces BlurView — same fade, no GPU blur cost */}
+          {!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View
+            pointerEvents="none"
+            style={[
+              styles.lyricsBottomBlurWrap,
+              { height: Math.max(0, controlsDockHeight + 58) },
+              lyricsBottomBlurOpacityStyle,
+            ]}
+          >
+            <LinearGradient
+              pointerEvents="none"
+              colors={_stableColors7}
+              style={styles.lyricsBottomBlur}
+            />
+          </Reanimated.View>}
         </Reanimated.View>
       )}
 
-      {!fullscreenAlbumMode && (
-        <Reanimated.View style={[styles.fillTouchBlocker, fillTouchStyle]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={handleControlsInteraction}
-            accessible={false} importantForAccessibility="no" />
-        </Reanimated.View>
-      )}
-      {!fullscreenAlbumMode && !controlsVisible && !rustHandlesReveal && (
-        <Reanimated.View pointerEvents="box-none" style={[
-          styles.controlsRevealZone,
-        ]}>
-          <Pressable style={StyleSheet.absoluteFill}
-            onPress={handleControlsInteraction} hitSlop={0}
-            onResponderTerminationRequest={() => false}
-            accessible={false} importantForAccessibility="no" />
-        </Reanimated.View>
+      {!fullscreenAlbumMode && !controlsVisible && (
+        <Pressable
+          style={styles.controlsRevealZone}
+          onPress={handleControlsInteraction}
+          hitSlop={0}
+        />
       )}
 
       <SafeAreaView
         edges={_stableEdges8}
         style={styles.bottomArea}
         onLayout={event => {
-          dockLayout.current.y = event.nativeEvent.layout.y;
-          dockTop.value = dockLayout.current.y + dockLayout.current.childY;
+          const top = event.nativeEvent.layout.y;
+          setRustDockBounds(previous => previous.top === top && previous.key === viewportKey ? previous : { top, key: viewportKey });
         }}
         pointerEvents={
-          controlsInteractive || fullscreenAlbumMode ? "box-none" : "none"
+          controlsVisible || fullscreenAlbumMode ? "box-none" : "none"
         }
       >
         <Reanimated.View
           pointerEvents={
-            controlsInteractive || fullscreenAlbumMode ? "box-none" : "none"
+            controlsVisible || fullscreenAlbumMode ? "auto" : "none"
           }
-          accessibilityElementsHidden={!controlsInteractive && !fullscreenAlbumMode}
-          importantForAccessibility={!controlsInteractive && !fullscreenAlbumMode ? 'no-hide-descendants' : 'auto'}
-          style={styles.controlsWrap}
+          style={[styles.controlsWrap, controlsStyle]}
           onLayout={(event) => {
-            dockLayout.current.childY = event.nativeEvent.layout.y;
-            dockTop.value = dockLayout.current.y + dockLayout.current.childY;
+            handleControlsDockLayout(event.nativeEvent.layout.height);
           }}
         >
-          <Reanimated.View pointerEvents="box-none"
-            style={[styles.controlsCoverageClip, controlsCoverageClipStyle]}>
-            <Reanimated.View pointerEvents="box-none" style={controlsCoverageContentStyle}
-              onLayout={event => handleControlsDockLayout(event.nativeEvent.layout.height)}>
           <PlaybackControlsDock
                     controlsDisabled={!tour.active && nativeUnavailable}
                     previousDisabled={!tour.active && previousDisabled}
@@ -1891,8 +1784,6 @@ export default function HomeScreen() {
                     previewTranslated={tour.active ? tour.translated : undefined}
             isPlaying={isPlaying}
             durationMs={currentTrack?.durationMs ?? 0}
-            controlsProgress={controlsStageProgress}
-            controlsCoverage={controlsCoverage}
             shareSelectionCount={selectedLineKeys.size}
             shareSelectionMode={selectedLineKeys.size > 0}
             shareBusy={shareBusy}
@@ -1934,18 +1825,16 @@ export default function HomeScreen() {
             }
             fullscreenAlbumProgress={fullscreenAlbumProgress}
           />
-            </Reanimated.View>
-          </Reanimated.View>
         </Reanimated.View>
       </SafeAreaView>
       </>
       ) : null}
 
       {!tour.active && lyrics.length > 0 && !showEmptyState && isSpicyLyricsResponse({ source: lyricsSource, metadata: lyricsMetadata }) ? (
-        <Reanimated.View pointerEvents={(!isLandscape && !controlsVisible && !fullscreenAlbumMode) || (fullscreenAlbumMode && !albumArtworkMorphing) ? 'none' : 'box-none'}
+        <Reanimated.View pointerEvents={fullscreenAlbumMode && !albumArtworkMorphing ? 'none' : 'box-none'}
           style={[styles.lyricsAttributionLayer, !isLandscape && lyricsChromeOpacityStyle]}>
-          <LyricsAttribution metadata={lyricsMetadata} isSpicyResponse trackId={currentTrack?.id}
-            followControlsProgress={!isLandscape} controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
+          <LyricsAttribution metadata={lyricsMetadata} trackId={currentTrack?.id}
+            controlsProgress={controlsOpacity} controlsTarget={controlsTarget} controlsVisible={isLandscape || controlsVisible}
             controlsHeight={isLandscape ? 0 : controlsDockHeight}
             bottomInset={insets.bottom} onInteraction={handleControlsInteraction} />
         </Reanimated.View>
@@ -2128,15 +2017,24 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.18)",
     opacity: 0.94,
   },
-  fillTouchBlocker: {
-    position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 5,
+  lyricsBottomBlurWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: -48,
+    height: 320,
+    zIndex: 7,
+    overflow: "hidden",
+  },
+  lyricsBottomBlur: {
+    ...StyleSheet.absoluteFill,
   },
   controlsRevealZone: {
-    top: "60%",
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
+    top: "75%",
     zIndex: 20,
   },
   lyricsAttributionLayer: {
@@ -2144,7 +2042,6 @@ const styles = StyleSheet.create({
     zIndex: 21,
   },
   bottomArea: {
-    overflow: "visible",
     position: "absolute",
     left: 0,
     right: 0,
@@ -2153,30 +2050,10 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     zIndex: 6,
   },
-  controlsCoverageClip: {
-    // Natural height stays content + reserve at every offset. Move the clip
-    // below the viewport instead of shrinking its layout around the content.
-    overflow: "hidden",
-    paddingBottom: 36,
-  },
   controlsWrap: {
-    overflow: "visible",
     width: "100%",
     position: "relative",
     backgroundColor: "transparent",
-  },
-  lyricsEdgeMaskSolid: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
-    backgroundColor: "#000000",
-  },
-  lyricsEdgeMaskFade: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 0,
   },
 });
 
@@ -2193,5 +2070,5 @@ const _stableStyle4 = [
               ];
 const _stableEdges5 = ["top", "left", "right"] as const;
 const _stableEdges6 = ["top", "left", "right"] as const;
+const _stableColors7 = ["transparent", "rgba(0,0,0,0.85)"] as const;
 const _stableEdges8 = ["bottom", "left", "right"] as const;
-const _stableMaskColors9 = ["rgba(0,0,0,1)", "rgba(0,0,0,0)"] as const;

@@ -18,7 +18,7 @@ These are published, professionally designed website references. They inform hie
 | Hero and headline | [Apple Music](https://www.apple.com/apple-music/) Listening Experience and Sing device presentations | Left-aligned three-line headline, actual app capture as the main visual, simple free/Premium message, one download action. No fictional player UI. |
 | Screenshot composition | [Apple iOS](https://www.apple.com/os/ios/) device-led product storytelling | Slightly angled app capture with a quiet lavender/mint light field. Image is a real BlueStacks capture, provisionally awaiting curated assets. |
 | Benefits row | [Raycast](https://www.raycast.com/) concise benefit hierarchy | Four plain statements: free, files, platforms, open source. No decorative statistics or repeated glass tiles. |
-| Experience / renderer switch | [Apple Music Sing](https://www.apple.com/apple-music/) lyrics presentation and [Spicy Lyrics](https://spicylyrics.org/) product identity | An interactive stage using the saved Spicy and AMLL browser previews. Segmented control, playback, seek and tap-a-line interactions. |
+| Experience / renderer switch | [Apple Music Sing](https://www.apple.com/apple-music/) lyrics presentation; [Spicy Lyrics](https://spicylyrics.org/) product identity | An interactive stage running the exact mobile WebView HTML, JS and CSS. Segmented control, playback, seek and tap-a-line interactions. |
 | Vault section | [Apple iOS](https://www.apple.com/os/ios/) app feature presentations | Alternating image/copy layout, individual song TTML files and export as the concrete benefit. The placeholder shows Blinding Lights, Sloppy Joe and GERONIMO!. Current vault illustration is a labeled layout placeholder. |
 | Open-source section | [Raycast](https://www.raycast.com/) community and extension ecosystem presentation | Short invitation and four floating frosted app windows for stars, contributors, GPL license and recent release rhythm. Raycast supplies the floating-window composition; GitHub supplies the actual figures. Direct repository/contribution/issue links. |
 | Downloads | [Apple Music](https://www.apple.com/apple-music/) platform and acquisition sections | Two equally visible download choices, iOS and Android only. Installation conditions and guide links sit with each download. |
@@ -50,9 +50,9 @@ Type: platform system sans first, matching the app's SF Pro/system stack, with l
 | Vault panel | Explicitly labeled HTML layout placeholder | Real vault capture demonstrating local files and export. |
 | App identity | `ExpoLyrics/assets/images/R.png`, as configured in `app.json` | Keep the actual icon, never the earlier invented orange K. |
 
-The checked-in HTML snapshots are self-contained, so Pages builds require only website dependencies. The frames load on entering the viewport and suspend when hidden or offscreen. Preview playback starts only on request. Reduced motion uses the browser previews' static lyrics mode and disables playback and scrubbing while preserving style controls and scrolling. There is no demo audio.
+Run `npm run sync:previews` from `website/` after updating app renderer bundles or source captures. The generated HTML hosts are checked in so Pages builds require only website dependencies. The frames are loaded on entering the viewport and suspend when hidden/offscreen. Preview playback starts only on request; reduced motion uses the engines' native static lyrics presentation and disables playback/scrubbing while preserving style controls and scrolling. There is no demo audio.
 
-The saved hosts declare a dark color scheme for transparent frame compositing. A message adapter connects each snapshot's callbacks to the parent, which checks both origin and frame identity. These snapshots preserve the earlier browser renderers. The current mobile renderer uses Rust.
+The host adds a dark color-scheme declaration so transparent WebViews composite correctly in the browser. A small standard message adapter connects the native WebView callbacks to the parent; the parent checks both origin and frame identity. The website copies the native renderer bundles without modifying them. Spicy now paints text only at animated word/letter leaves: parent text-clipped backgrounds and group shadows previously left duplicate outlines during word transforms. Static lines retain their original paint.
 
 Validation: production export, TypeScript, formatting and ten export/demo/statistics tests pass. Browser review at 390px, 768px and 1280px found no horizontal page overflow. Both engines render; play/pause, keyboard scrub, Spicy/AMLL word taps, style switching, mobile installation links and FAQ disclosure were checked. Desktop and mobile review captures are saved alongside this document. The reduced-motion branch uses native static rendering; OS preference emulation was not available in the browser tool.
 
@@ -64,7 +64,7 @@ Validation: production export, TypeScript, formatting and ten export/demo/statis
 - Verify the static Pages export and all subpath assets.
 - Replace provisional imagery after the asset folder arrives; retain this source map.
 
-The website's checked-in `app/demo-lyrics.json` is a copy of the original onboarding lyrics from `ExpoLyrics/lib/onboarding-demo-lyrics.ts`, including timing, French translations, background vocals and opposite alignment. If the website demo is refreshed from onboarding, update its hash in `public/previews/manifest.json`.
+The onboarding preview and website share the exact original demo lyrics from `ExpoLyrics/lib/onboarding-demo-lyrics.ts`, including timing, French translations, background vocals and opposite alignment. `sync:previews` also generates `app/demo-lyrics.json`; regenerate it when the shared demo changes.
 
 
 ## Glass backgrounds and project statistics

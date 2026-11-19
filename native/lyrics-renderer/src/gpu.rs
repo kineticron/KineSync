@@ -14,11 +14,6 @@ use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
 use wgpu::{util::DeviceExt, *};
 type Error = Box<dyn std::error::Error>;
 
-// Shared by Spicy and AMLL. Narrow the distance kernels to 40% of the
-// original sigma so each separable pass also executes fewer texture taps.
-// Emphasized glyph glow shares these bases, so its spread narrows too.
-const LYRIC_BLUR_SIGMA_SCALE: f32 = 0.4;
-
 #[derive(Serialize)]
 pub struct FrameStats {
     pub cpu_encode_ms: f64,
@@ -30,31 +25,6 @@ struct Timestamps {
     resolve: Buffer,
     readback: Buffer,
 }
-// Match composite.wgsl exactly. A skipped tier is never sampled by the
-// composite, including the two Gaussian bases used for active glyph glow.
-fn required_blur_tiers(
-    height: u32,
-    protection: (f32, f32),
-    scale: f32,
-    blur: bool,
-    glow: bool,
-) -> usize {
-    if glow {
-        return 2;
-    }
-    let max_distance = protection
-        .0
-        .max((height - 1) as f32 - protection.1)
-        .max(0.0);
-    if !blur || max_distance == 0.0 {
-        0
-    } else if max_distance <= 160.0 * scale {
-        1
-    } else {
-        2
-    }
-}
-
 struct Filter {
     downsample: ComputePipeline,
     downsample_group: BindGroup,
@@ -64,7 +34,6 @@ struct Filter {
     composite: ComputePipeline,
     composite_group: BindGroup,
     band: Buffer,
-    blur: Buffer,
     // Textures retained for the lifetime of the bind groups, avoiding per-frame allocation.
     _textures: Vec<Texture>,
 }
@@ -75,11 +44,7 @@ pub struct Gpu {
     queue: Queue,
     renderer: Renderer,
     sharp: Texture,
-    sharp_view: TextureView,
-    overlay: Texture,
-    overlay_view: TextureView,
     target: Texture,
-    target_view: TextureView,
     filter: Filter,
     timestamps: Option<Timestamps>,
     width: u32,
@@ -162,7 +127,6 @@ impl Filter {
     fn new(
         device: &Device,
         sharp: &Texture,
-        overlay: &Texture,
         target: &Texture,
         width: u32,
         height: u32,
@@ -186,12 +150,9 @@ impl Filter {
             include_str!("downsample.wgsl"),
             "downsample",
         );
-        // Keep Vello and protected glyphs full resolution. Only the shared
-        // Gaussian bases use quarter-size pixels. Sigma halves relative to the
-        // previous half-size buffers, preserving the point-space blur radius.
-        let extent = (width.div_ceil(4), height.div_ceil(4));
+        let extent = (width.div_ceil(2), height.div_ceil(2));
         let textures: Vec<_> = [
-            "quarter-linear-premultiplied",
+            "half-linear-premultiplied",
             "near-horizontal",
             "near-vertical",
             "far-horizontal",
@@ -219,13 +180,11 @@ impl Filter {
             layout: &downsample.get_bind_group_layout(0),
             entries: &[view_entry(0, &sharp_view), view_entry(1, &views[0])],
         });
-        let near_sigma = 0.625 * scale * LYRIC_BLUR_SIGMA_SCALE;
-        let far_sigma = 1.5 * scale * LYRIC_BLUR_SIGMA_SCALE;
         let specs = [
-            (&views[0], &views[1], [1.0, 0.0, near_sigma, 0.0]),
-            (&views[1], &views[2], [0.0, 1.0, near_sigma, 0.0]),
-            (&views[0], &views[3], [1.0, 0.0, far_sigma, 0.0]),
-            (&views[3], &views[4], [0.0, 1.0, far_sigma, 0.0]),
+            (&views[0], &views[1], [1.0, 0.0, 1.25 * scale, 0.0]),
+            (&views[1], &views[2], [0.0, 1.0, 1.25 * scale, 0.0]),
+            (&views[0], &views[3], [1.0, 0.0, 3.0 * scale, 0.0]),
+            (&views[3], &views[4], [0.0, 1.0, 3.0 * scale, 0.0]),
         ];
         let groups = specs
             .into_iter()
@@ -263,7 +222,6 @@ impl Filter {
             })
             .collect();
         let band = uniform(device, "protected active and next band", [0.0; 4]);
-        let blur = uniform(device, "inactive line blur strength", [1.0, 0.0, 0.0, 0.0]);
         let composite_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("composite inputs"),
             layout: &composite.get_bind_group_layout(0),
@@ -272,14 +230,9 @@ impl Filter {
                 view_entry(1, &views[2]),
                 view_entry(2, &views[4]),
                 view_entry(3, &target_view),
-                view_entry(5, &overlay.create_view(&Default::default())),
                 BindGroupEntry {
                     binding: 4,
                     resource: band.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: blur.as_entire_binding(),
                 },
             ],
         });
@@ -292,21 +245,20 @@ impl Filter {
             composite,
             composite_group,
             band,
-            blur,
             _textures: textures,
         }
     }
-    fn encode(&self, encoder: &mut CommandEncoder, width: u32, height: u32, tiers: usize) {
-        if tiers > 0 {
+    fn encode(&self, encoder: &mut CommandEncoder, width: u32, height: u32) {
+        {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                label: Some("quarter-resolution 4x4 box"),
+                label: Some("half-resolution box"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.downsample);
             pass.set_bind_group(0, &self.downsample_group, &[]);
             pass.dispatch_workgroups(self.extent.0.div_ceil(8), self.extent.1.div_ceil(8), 1);
         }
-        for group in self.groups.iter().take(tiers * 2) {
+        for group in &self.groups {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
                 label: Some("shared blur tier/axis"),
                 timestamp_writes: None,
@@ -378,10 +330,6 @@ impl Gpu {
             } else {
                 0
             } | if timestamp_supported { 16 } else { 0 };
-        let mut required_limits = wgpu::Limits::default();
-        required_limits.max_inter_stage_shader_variables = required_limits
-            .max_inter_stage_shader_variables
-            .min(adapter.limits().max_inter_stage_shader_variables);
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("lyrics-renderer"),
@@ -390,7 +338,6 @@ impl Gpu {
                 } else {
                     Features::empty()
                 },
-                required_limits,
                 ..Default::default()
             })
             .await?;
@@ -414,11 +361,7 @@ impl Gpu {
         )?;
         let sharp = texture(&device, width, height, "vello-sharp");
         let target = texture(&device, width, height, "final-composite");
-        let overlay = texture(&device, width, height, "unfiltered-footer");
-        let overlay_view = overlay.create_view(&Default::default());
-        let filter = Filter::new(&device, &sharp, &overlay, &target, width, height, scale);
-        let sharp_view = sharp.create_view(&Default::default());
-        let target_view = target.create_view(&Default::default());
+        let filter = Filter::new(&device, &sharp, &target, width, height, scale);
         let timestamps = timestamp_supported.then(|| Timestamps {
             queries: device.create_query_set(&QuerySetDescriptor {
                 label: Some("whole frame GPU interval"),
@@ -452,11 +395,7 @@ impl Gpu {
             queue,
             renderer,
             sharp,
-            sharp_view,
-            overlay,
-            overlay_view,
             target,
-            target_view,
             filter,
             timestamps,
             width,
@@ -484,14 +423,9 @@ impl Gpu {
         self.scale = scale;
         self.sharp = texture(&self.device, width, height, "resized-sharp");
         self.target = texture(&self.device, width, height, "resized-composite");
-        self.sharp_view = self.sharp.create_view(&Default::default());
-        self.overlay = texture(&self.device, width, height, "resized-footer");
-        self.overlay_view = self.overlay.create_view(&Default::default());
-        self.target_view = self.target.create_view(&Default::default());
         self.filter = Filter::new(
             &self.device,
             &self.sharp,
-            &self.overlay,
             &self.target,
             width,
             height,
@@ -505,18 +439,7 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
     ) -> Result<FrameStats, Error> {
-        self.render_frame(scene, protection, blur, true, false, false)
-    }
-    /// RGB channels carry sharp alpha and two glyph-emission bases; output remains
-    /// ordinary transparent linear premultiplied RGBA. Reuses the same filter passes.
-    pub fn render_appearance(
-        &mut self,
-        scene: &Scene,
-        protection: (f32, f32),
-        blur: bool,
-        glow: bool,
-    ) -> Result<FrameStats, Error> {
-        self.render_frame(scene, protection, blur, true, true, glow)
+        self.render_frame(scene, protection, blur, true)
     }
     fn render_frame(
         &mut self,
@@ -524,32 +447,6 @@ impl Gpu {
         protection: (f32, f32),
         blur: bool,
         profile: bool,
-        appearance: bool,
-        glow: bool,
-    ) -> Result<FrameStats, Error> {
-        self.render_frame_with_overlay(
-            scene,
-            None,
-            protection,
-            if blur { 1.0 } else { 0.0 },
-            profile,
-            appearance,
-            glow,
-        )
-    }
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Explicit render pass configuration"
-    )]
-    fn render_frame_with_overlay(
-        &mut self,
-        scene: &Scene,
-        overlay: Option<&Scene>,
-        protection: (f32, f32),
-        blur: f32,
-        profile: bool,
-        appearance: bool,
-        glow: bool,
     ) -> Result<FrameStats, Error> {
         self.check_error()?;
         let start = Instant::now();
@@ -563,7 +460,7 @@ impl Gpu {
             &self.device,
             &self.queue,
             scene,
-            &self.sharp_view,
+            &self.sharp.create_view(&Default::default()),
             &RenderParams {
                 base_color: Color::TRANSPARENT,
                 width: self.width,
@@ -571,44 +468,18 @@ impl Gpu {
                 antialiasing_method: AaConfig::Area,
             },
         )?;
-        self.renderer.render_to_texture(
-            &self.device,
-            &self.queue,
-            overlay.unwrap_or(&Scene::new()),
-            &self.overlay_view,
-            &RenderParams {
-                base_color: Color::TRANSPARENT,
-                width: self.width,
-                height: self.height,
-                antialiasing_method: AaConfig::Area,
-            },
-        )?;
-        let values = [
+        let band: Vec<u8> = [
             protection.0,
             protection.1,
-            if blur > 0.0 { 1.0 } else { 0.0 }
-                + if appearance { 2.0 } else { 0.0 }
-                + if glow { 4.0 } else { 0.0 },
+            if blur { 1.0 } else { 0.0 },
             self.scale,
-        ];
-        let band: [u8; 16] = std::array::from_fn(|i| values[i / 4].to_le_bytes()[i % 4]);
+        ]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect();
         self.queue.write_buffer(&self.filter.band, 0, &band);
-        let blur_strength = blur.clamp(0.0, 1.0).to_le_bytes();
-        self.queue
-            .write_buffer(&self.filter.blur, 0, &blur_strength);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.filter.encode(
-            &mut encoder,
-            self.width,
-            self.height,
-            required_blur_tiers(
-                self.height,
-                protection,
-                self.scale,
-                blur > 0.0,
-                appearance && glow,
-            ),
-        );
+        self.filter.encode(&mut encoder, self.width, self.height);
         if let Some(ts) = timestamps {
             encoder.write_timestamp(&ts.queries, 1);
             encoder.resolve_query_set(&ts.queries, 0..2, &ts.resolve, 0);
@@ -663,9 +534,14 @@ impl Gpu {
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let blit = SurfaceBlit::new(&self.device, TextureFormat::Rgba8Unorm, &self.target_view);
+        let blit = SurfaceBlit::new(&self.device, TextureFormat::Rgba8Unorm);
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        blit.copy(&mut encoder, &output.create_view(&Default::default()));
+        blit.copy(
+            &self.device,
+            &mut encoder,
+            &self.target.create_view(&Default::default()),
+            &output.create_view(&Default::default()),
+        );
         self.queue.submit([encoder.finish()]);
         self.read_texture(&output)
     }
@@ -710,7 +586,7 @@ impl Gpu {
     pub fn save(&self, path: &str) -> Result<(), Error> {
         // PNG expects straight sRGB. Internal readback remains linear premultiplied.
         let mut pixels = self.read_pixels()?;
-        for p in pixels.as_chunks_mut::<4>().0 {
+        for p in pixels.chunks_exact_mut(4) {
             let alpha = f32::from(p[3]) / 255.0;
             for c in &mut p[..3] {
                 *c = (linear_to_srgb(if alpha > 0.0 {
@@ -742,35 +618,17 @@ fn transparent_alpha(
     backend: Backend,
     modes: &[CompositeAlphaMode],
 ) -> Result<CompositeAlphaMode, Error> {
-    transparent_alpha_for_platform(backend, modes, cfg!(target_os = "android"))
-}
-
-fn transparent_alpha_for_platform(
-    backend: Backend,
-    modes: &[CompositeAlphaMode],
-    android_texture: bool,
-) -> Result<CompositeAlphaMode, Error> {
     if modes.contains(&CompositeAlphaMode::PreMultiplied) {
         Ok(CompositeAlphaMode::PreMultiplied)
     } else if backend == Backend::Metal && modes.contains(&CompositeAlphaMode::PostMultiplied) {
         // Only the exact locked Metal backend has the documented metadata bug.
         Ok(CompositeAlphaMode::PostMultiplied)
-    } else if android_texture
-        && backend == Backend::Vulkan
-        && modes.contains(&CompositeAlphaMode::Inherit)
-    {
-        // Android WSI inherits native window composition. Our non-opaque
-        // TextureView consumes premultiplied RGBA, matching the shared blit.
-        Ok(CompositeAlphaMode::Inherit)
     } else {
         Err("Surface lacks supported premultiplied transparency".into())
     }
 }
 
 /// A retained platform surface. Caller keeps its platform layer alive through Drop.
-/// On iOS all three configure paths use the patched HAL's main-thread layer
-/// setters. Keep full configure calls on the worker: wgpu-core waits for GPU
-/// completion before entering the HAL. Main must never wait for this worker.
 pub struct SurfaceRenderer {
     surface: Surface<'static>,
     gpu: Gpu,
@@ -816,7 +674,7 @@ impl SurfaceRenderer {
         // Three OS drawables, at most two submitted application frames.
         config.desired_maximum_frame_latency = 2;
         surface.configure(&gpu.device, &config);
-        let blitter = SurfaceBlit::new(&gpu.device, config.format, &gpu.target_view);
+        let blitter = SurfaceBlit::new(&gpu.device, config.format);
         Ok(Self {
             surface,
             gpu,
@@ -829,8 +687,6 @@ impl SurfaceRenderer {
     }
     pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
         self.gpu.resize(width, height, scale)?;
-        self.blitter
-            .set_input(&self.gpu.device, &self.gpu.target_view);
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.gpu.device, &self.config);
@@ -885,55 +741,15 @@ impl SurfaceRenderer {
         band: (f32, f32),
         frame: SurfaceTexture,
     ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, None, band, frame, false, false, 1.0)
-    }
-    pub fn render_appearance(
-        &mut self,
-        scene: &Scene,
-        band: (f32, f32),
-        frame: SurfaceTexture,
-        glow: bool,
-    ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, None, band, frame, true, glow, 1.0)
-    }
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Explicit render pass configuration"
-    )]
-    pub(crate) fn render_overlay_scaled(
-        &mut self,
-        scene: &Scene,
-        overlay: &Scene,
-        band: (f32, f32),
-        frame: SurfaceTexture,
-        glow: bool,
-        blur: f32,
-    ) -> Result<(FrameStats, f64), Error> {
-        self.render_surface(scene, Some(overlay), band, frame, true, glow, blur)
-    }
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Explicit render pass configuration"
-    )]
-    fn render_surface(
-        &mut self,
-        scene: &Scene,
-        overlay: Option<&Scene>,
-        band: (f32, f32),
-        frame: SurfaceTexture,
-        appearance: bool,
-        glow: bool,
-        blur: f32,
-    ) -> Result<(FrameStats, f64), Error> {
         // All shared texture accesses and Vello pool reuse are ordered on one
         // queue. wgpu retains submitted resources. No GPU wait in live render.
-        let stats = self
-            .gpu
-            .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
+        let stats = self.gpu.render_frame(scene, band, true, false)?;
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
+            &self.gpu.device,
             &mut encoder,
+            &self.gpu.target.create_view(&Default::default()),
             &frame.texture.create_view(&Default::default()),
         );
         let commands = encoder.finish();
@@ -986,10 +802,9 @@ pub struct SurfaceTiming {
 struct SurfaceBlit {
     pipeline: RenderPipeline,
     layout: BindGroupLayout,
-    group: BindGroup,
 }
 impl SurfaceBlit {
-    fn new(device: &Device, format: TextureFormat, input: &TextureView) -> Self {
+    fn new(device: &Device, format: TextureFormat) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("linear premultiplied to encoded premultiplied sRGB surface"),
             source: ShaderSource::Wgsl(include_str!("surface.wgsl").into()),
@@ -1020,24 +835,20 @@ impl SurfaceBlit {
             cache: None,
         });
         let layout = pipeline.get_bind_group_layout(0);
-        let group = Self::input_group(device, &layout, input);
-        Self {
-            pipeline,
-            layout,
-            group,
-        }
+        Self { pipeline, layout }
     }
-    fn input_group(device: &Device, layout: &BindGroupLayout, input: &TextureView) -> BindGroup {
-        device.create_bind_group(&BindGroupDescriptor {
+    fn copy(
+        &self,
+        device: &Device,
+        encoder: &mut CommandEncoder,
+        input: &TextureView,
+        output: &TextureView,
+    ) {
+        let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("surface copy"),
-            layout,
+            layout: &self.layout,
             entries: &[view_entry(0, input)],
-        })
-    }
-    fn set_input(&mut self, device: &Device, input: &TextureView) {
-        self.group = Self::input_group(device, &self.layout, input);
-    }
-    fn copy(&self, encoder: &mut CommandEncoder, output: &TextureView) {
+        });
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("premultiplied sRGB copy, no blending"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -1052,117 +863,13 @@ impl SurfaceBlit {
             ..Default::default()
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.group, &[]);
+        pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
-    #[test]
-    #[ignore = "requires a working Vulkan adapter; run explicitly for host pixel proof"]
-    fn credits_pixels_bypass_glow_and_blur_and_static_empty_replaces_prior_frame() {
-        let mut fonts = crate::typography::Fonts::default();
-        fonts
-            .register(
-                &std::fs::read(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf"
-                ))
-                .unwrap(),
-                &std::fs::read(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-        let settings = crate::typography::Settings {
-            style: crate::typography::Style::Spicy,
-            font_scale: 1.0,
-            landscape: false,
-        };
-        let footer = crate::credits::build(
-            &crate::live::Credits {
-                songwriters: vec!["Writer".into()],
-                ..Default::default()
-            },
-            &settings,
-            390,
-            1.0,
-            &mut fonts,
-        )
-        .unwrap();
-        let mut overlay = Scene::new();
-        footer.draw(&mut overlay, 70.0, 390, 256.0, 1.0);
-        let mut gpu = pollster::block_on(Gpu::new(390, 256)).unwrap();
-        gpu.render_frame(&overlay, (0.0, 256.0), false, false, false, false)
-            .unwrap();
-        let reference = gpu.read_pixels().unwrap();
-        assert!(reference.chunks_exact(4).any(|p| p[3] > 100));
-        assert!(
-            reference.chunks_exact(4).all(|p| p[3] <= 144),
-            "Skia credits alpha is 0.56"
-        );
-        for band in [(0.0, 20.0), (60.0, 120.0)] {
-            gpu.render_frame_with_overlay(
-                &Scene::new(),
-                Some(&overlay),
-                band,
-                1.0,
-                false,
-                true,
-                true,
-            )
-            .unwrap();
-            assert!(
-                gpu.read_pixels().unwrap() == reference,
-                "footer must be pixel-identical with blur/glow enabled, without widening the band"
-            );
-        }
-        for title in ["No synced lyrics yet", "This song is an instrumental"] {
-            for subtitle in [
-                "Loading best lyrics source on mobile...",
-                "Source: unavailable",
-            ] {
-                let empty = crate::credits::empty_scene(
-                    &crate::live::EmptyState {
-                        title: title.into(),
-                        subtitle: subtitle.into(),
-                    },
-                    390,
-                    256,
-                    1.0,
-                    &mut fonts,
-                );
-                assert!(!empty.encoding().draw_data.is_empty());
-                gpu.render_frame(&empty, (0.0, 256.0), true, false, false, false)
-                    .unwrap();
-                let pixels = gpu.read_pixels().unwrap();
-                assert_ne!(
-                    pixels, reference,
-                    "first static frame must replace credits without a timed row"
-                );
-                assert!(pixels.chunks_exact(4).any(|p| p[3] > 200));
-                // The idle frame is stable, including after prior animated content.
-                gpu.render_frame(&empty, (0.0, 256.0), true, false, false, false)
-                    .unwrap();
-                let repeated = gpu.read_pixels().unwrap();
-                let differences = repeated.iter().zip(&pixels).filter(|(a, b)| a != b).count();
-                let max_delta = repeated
-                    .iter()
-                    .zip(&pixels)
-                    .map(|(a, b)| a.abs_diff(*b))
-                    .max()
-                    .unwrap();
-                assert!(
-                    repeated == pixels,
-                    "static text must remain stable: {differences} bytes, max delta {max_delta}"
-                );
-            }
-        }
-    }
-
     #[test]
     #[ignore = "requires a working Vulkan adapter; run explicitly for host proxy proof"]
     fn real_gpu_two_frames_keep_texture_and_buffer_ownership_ordered() {
@@ -1186,8 +893,7 @@ mod ownership_tests {
                 None,
                 &Rect::new(8.0, 8.0, 56.0, 56.0),
             );
-            gpu.render_frame(&scene, (0.0, 64.0), true, false, false, false)
-                .unwrap();
+            gpu.render_frame(&scene, (0.0, 64.0), true, false).unwrap();
             // Preserve each frame with the exact production copy shader before
             // the following Vello render reuses shared textures/buffer pools.
             let output = gpu.device.create_texture(&TextureDescriptor {
@@ -1201,8 +907,12 @@ mod ownership_tests {
                 view_formats: &[],
             });
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
-            SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm, &gpu.target_view)
-                .copy(&mut encoder, &output.create_view(&Default::default()));
+            SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm).copy(
+                &gpu.device,
+                &mut encoder,
+                &gpu.target.create_view(&Default::default()),
+                &output.create_view(&Default::default()),
+            );
             gpu.queue.submit([encoder.finish()]);
             let (id, done) = flight.submit();
             gpu.queue.on_submitted_work_done(move || {
@@ -1221,59 +931,6 @@ mod ownership_tests {
         gpu.check_error().unwrap();
     }
     #[test]
-    #[ignore = "requires a working Vulkan adapter; cached surface inputs and resize proof"]
-    fn cached_surface_inputs_match_fresh_bindings_across_frames_and_resize() {
-        use vello::{
-            kurbo::{Affine, Rect},
-            peniko::Fill,
-        };
-        let mut gpu = pollster::block_on(Gpu::new(64, 64)).unwrap();
-        let mut blit = SurfaceBlit::new(&gpu.device, TextureFormat::Rgba8Unorm, &gpu.target_view);
-        for (width, height) in [(64, 64), (80, 72), (64, 64)] {
-            if (width, height) != (gpu.width, gpu.height) {
-                gpu.resize(width, height, 1.0).unwrap();
-                blit.set_input(&gpu.device, &gpu.target_view);
-            }
-            for color in [
-                Color::from_rgba8(255, 0, 0, 128),
-                Color::from_rgba8(0, 255, 0, 192),
-            ] {
-                let mut scene = Scene::new();
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    color,
-                    None,
-                    &Rect::new(8.0, 8.0, f64::from(width - 8), f64::from(height - 8)),
-                );
-                gpu.render_frame(&scene, (0.0, height as f32), true, false, false, false)
-                    .unwrap();
-                let output = gpu.device.create_texture(&TextureDescriptor {
-                    label: Some("cached binding proof"),
-                    size: gpu.target.size(),
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: TextureDimension::D2,
-                    format: TextureFormat::Rgba8Unorm,
-                    usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                });
-                let mut encoder = gpu.device.create_command_encoder(&Default::default());
-                blit.copy(&mut encoder, &output.create_view(&Default::default()));
-                gpu.queue.submit([encoder.finish()]);
-                let cached = gpu.read_texture(&output).unwrap();
-                assert_eq!(cached, gpu.surface_pixels().unwrap());
-                let center = ((height / 2 * width + width / 2) * 4) as usize;
-                let expected = if color == Color::from_rgba8(255, 0, 0, 128) {
-                    [128, 0, 0, 128]
-                } else {
-                    [0, 192, 0, 192]
-                };
-                assert_eq!(&cached[center..center + 4], &expected);
-            }
-        }
-    }
-    #[test]
     fn alpha_selection_confines_locked_metal_workaround() {
         use CompositeAlphaMode::{Opaque, PostMultiplied, PreMultiplied};
         assert_eq!(
@@ -1290,22 +947,6 @@ mod ownership_tests {
         );
         assert!(transparent_alpha(Backend::Vulkan, &[Opaque, PostMultiplied]).is_err());
         assert!(transparent_alpha(Backend::Metal, &[Opaque]).is_err());
-    }
-    #[test]
-    fn android_texture_inherits_only_native_vulkan_composition() {
-        use CompositeAlphaMode::{Inherit, Opaque, PreMultiplied};
-        assert_eq!(
-            transparent_alpha_for_platform(Backend::Vulkan, &[Inherit], true).unwrap(),
-            Inherit
-        );
-        assert_eq!(
-            transparent_alpha_for_platform(Backend::Vulkan, &[Inherit, PreMultiplied], true)
-                .unwrap(),
-            PreMultiplied
-        );
-        assert!(transparent_alpha_for_platform(Backend::Vulkan, &[Inherit], false).is_err());
-        assert!(transparent_alpha_for_platform(Backend::Metal, &[Inherit], true).is_err());
-        assert!(transparent_alpha_for_platform(Backend::Vulkan, &[Opaque], true).is_err());
     }
     #[test]
     fn burst_capacity_drops_opportunities_without_backlog() {
@@ -1348,53 +989,5 @@ mod ownership_tests {
         // callback ownership is independent of owner/resize destruction.
         drop(flight);
         done.fetch_max(c, Ordering::Release);
-    }
-}
-
-#[cfg(test)]
-mod filter_work_tests {
-    use super::{LYRIC_BLUR_SIGMA_SCALE, required_blur_tiers};
-
-    #[test]
-    fn reduced_shared_sigma_cuts_kernel_taps_at_every_supported_scale() {
-        for scale in [0.5_f32, 1.0, 2.0, 3.0, 4.0] {
-            for sigma in [0.625_f32, 1.5] {
-                let before = (sigma * scale * 3.0).ceil() as u32 * 2 + 1;
-                let after = (sigma * scale * LYRIC_BLUR_SIGMA_SCALE * 3.0).ceil() as u32 * 2 + 1;
-                assert!(after <= before);
-                if scale >= 1.0 {
-                    assert!(after < before);
-                }
-            }
-        }
-        assert!(
-            include_str!("composite.wgsl")
-                .contains("reconstructed(near,gid.xy).g+reconstructed(far,gid.xy).b")
-        );
-    }
-    #[test]
-    fn only_skip_gaussian_bases_that_composite_cannot_sample() {
-        assert_eq!(
-            required_blur_tiers(900, (350.0, 500.0), 1.0, false, false),
-            0
-        );
-        assert_eq!(required_blur_tiers(900, (0.0, 899.0), 1.0, true, false), 0);
-        assert_eq!(
-            required_blur_tiers(900, (140.0, 760.0), 1.0, true, false),
-            1
-        );
-        assert_eq!(
-            required_blur_tiers(900, (160.0, 739.0), 1.0, true, false),
-            1
-        );
-        assert_eq!(
-            required_blur_tiers(900, (160.1, 739.0), 1.0, true, false),
-            2
-        );
-        assert_eq!(
-            required_blur_tiers(900, (280.0, 620.0), 2.0, true, false),
-            1
-        );
-        assert_eq!(required_blur_tiers(900, (0.0, 899.0), 1.0, false, true), 2);
     }
 }

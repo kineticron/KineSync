@@ -1,3 +1,0 @@
-# Keep upstream bytes stable for the provenance hashes on every checkout.
-* -text
-src/vulkan/descriptor.rs whitespace=cr-at-eol

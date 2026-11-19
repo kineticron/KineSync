@@ -4,7 +4,7 @@
 function timingRank(packet) {
   if (!packet?.lyrics?.length) return 0
   const source = String(packet.source || "").toLowerCase()
-  if (/static|none|plain|untimed/.test(source)) return 0
+  if (/static|none/.test(source)) return 0
   if (/karaoke|syllable|word/.test(source)) return 2
   if (/line/.test(source)) return 1
   return 0
@@ -64,7 +64,6 @@ function sourcePriority(packetOrSource) {
   if (source.includes("musixmatch-richsync")) return 520
   if (source.includes("spicy-lyrics-line")) return 360
   if (source.includes("spicy-lyrics-static")) return 180
-  if (source.includes("lrclib-plain")) return 40
   if (source.includes("lrclib")) return 320
   if (source.includes("netease-lrc")) return 300
   if (source.includes("musixmatch") && !source.includes("richsync")) return 280
