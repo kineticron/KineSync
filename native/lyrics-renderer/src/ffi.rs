@@ -1086,14 +1086,24 @@ mod tests {
         assert!(timeline.anchor(1, 1, 1_000.0, 0.0, 0.0, true, 1.0).unwrap());
         let projected = timeline.position(500.0);
         assert_eq!(
-            release_target(Some(&track), timeline.anchored, 1, timeline.generation, projected),
+            release_target(
+                Some(&track),
+                timeline.anchored,
+                1,
+                timeline.generation,
+                projected
+            ),
             Some(track.scroll_target(projected)),
             "a seek accepted before the next frame uses the projected anchor"
         );
         // A new track before the next frame leaves the timeline unanchored and
         // rejects an anchor from the old song, so release cannot recapture.
         assert!(timeline.replace(2));
-        assert!(!timeline.anchor(1, 2, 9_000.0, 500.0, 500.0, true, 1.0).unwrap());
+        assert!(
+            !timeline
+                .anchor(1, 2, 9_000.0, 500.0, 500.0, true, 1.0)
+                .unwrap()
+        );
         assert!(
             release_target(
                 Some(&track),
