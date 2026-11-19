@@ -626,15 +626,89 @@ test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/disc
   assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
 });
 
-test('Rust lyric surface extends under the complete dock and keeps the dock gradient', () => {
+test('Rust viewport stays full height while the shared foreground clip reveals the artwork behind the dock', () => {
   const player = fs.readFileSync(path.join(repo, 'ExpoLyrics/app/(tabs)/index.tsx'), 'utf8');
-  // Skia parity: the surface is no longer measured against the controls dock.
-  assert.match(player, /top: insets\.top \+ TOP_BAR_CONTENT_HEIGHT \+ LYRICS_WRAP_MARGIN_TOP,\s*bottom: 0,\s*overflow: "hidden" as const,/);
+  const foregroundStart = player.indexOf('{lyricsMounted && (');
+  assert.ok(foregroundStart >= 0);
+  const foreground = player.slice(foregroundStart, player.indexOf('{!fullscreenAlbumMode && (', foregroundStart));
+  // Only the non-collapsible parent clips. Its absolute child keeps the complete
+  // viewport, including the area behind the dock, without moving touch coordinates.
+  assert.match(foreground, /collapsable=\{false\}\s+style=\{\[styles\.lyricsWrap, lyricsViewportStyle, foregroundClipStyle\]\}/);
+  const fixedChild = foreground.match(/<View style=\{\{([\s\S]*?)\}\}>/);
+  assert.ok(fixedChild, 'lyrics and gradient need a fixed absolute child');
+  const viewportBody = player.match(/const lyricsViewportStyle = useMemo\(\s*\(\) => \(\{([\s\S]*?)\}\),/);
+  assert.ok(viewportBody);
+  const viewport = new Function('screenHeight', 'insets', 'TOP_BAR_CONTENT_HEIGHT', 'LYRICS_WRAP_MARGIN_TOP',
+    `return ({${viewportBody[1].replace(/\s+as const\b/g, '')}})`);
+  const child = new Function('screenHeight', 'lyricTop', `return ({${fixedChild[1]}})`);
+  const clipBody = player.match(/const foregroundClipStyle = useAnimatedStyle\(\(\) => \(\{([\s\S]*?)\}\)\);/);
+  const fillBody = player.match(/const fillTouchStyle = useAnimatedStyle\(\(\) => \(\{([\s\S]*?)\}\)\);/);
+  const gradientBody = player.match(/const lyricsBottomBlurOpacityStyle = useAnimatedStyle[\s\S]*?return \{([\s\S]*?)\n    \};/);
+  assert.ok(clipBody); assert.ok(fillBody); assert.ok(gradientBody);
+  const clip = new Function('screenHeight', 'lyricTop', 'dockTop', 'controlsOpacity', `return ({${clipBody[1]}})`);
+  const fill = new Function('screenHeight', 'dockTop', 'controlsOpacity', `return ({${fillBody[1]}})`);
+  const gradient = new Function('screenHeight', 'dockTop', 'controlsOpacity', 'modeOpacity', 'lyricsRestoreOpacity', `return ({${gradientBody[1]}})`);
+  const gradientBounds = player.match(/lyricsBottomBlurWrap: \{([\s\S]*?)\n  \},/);
+  assert.ok(gradientBounds);
+  const gradientBottom = new Function(`return ({${gradientBounds[1]}})`)().bottom;
+  assert.equal(gradientBottom, -48, 'retain the existing fade extent');
+  // Execute production expressions at hidden, intermediate and shown states.
+  // These are geometry contracts, not native layout or GPU measurements.
+  for (const screenHeight of [667, 844]) for (const safeBottom of [0, 21, 34]) {
+    const lyricTop = 59 + 84 + 10;
+    const controlsDockHeight = 220;
+    // bottomArea has bottom:-25, paddingBottom:10 and additive bottom safe area.
+    const dockTop = { value: screenHeight - controlsDockHeight + 15 - safeBottom };
+    for (const progress of [0, 0.125, 0.5, 0.9975, 1]) {
+      const controlsOpacity = { value: progress };
+      const base = viewport(screenHeight, { top: 59 }, 84, 10);
+      const fixed = child(screenHeight, lyricTop);
+      assert.equal(base.top, lyricTop);
+      assert.equal(base.height, screenHeight - lyricTop);
+      assert.equal(base.overflow, 'hidden');
+      assert.equal(fixed.height, screenHeight - lyricTop, 'native viewport is independent of reveal progress and dock size');
+      assert.equal(fixed.position, 'absolute');
+      assert.equal(fixed.top, 0); assert.equal(fixed.left, 0); assert.equal(fixed.right, 0);
+      assert.equal(fixed.transform, undefined);
+      const clipped = clip(screenHeight, lyricTop, dockTop, controlsOpacity);
+      const edge = screenHeight - (screenHeight - dockTop.value) * progress;
+      assert.equal(clipped.height + lyricTop, edge);
+      assert.equal(clipped.transform, undefined);
+      assert.equal(clipped.backgroundColor, undefined);
+      assert.equal(fill(screenHeight, dockTop, controlsOpacity).top, edge);
+      const fade = gradient(screenHeight, dockTop, controlsOpacity, 1, { value: 1 });
+      const fadeBottom = screenHeight - gradientBottom + fade.transform[0].translateY;
+      assert.equal(fadeBottom, edge + 48, 'gradient follows the moving clip edge');
+      assert.ok(fadeBottom - (controlsDockHeight + 58) < edge, 'gradient must overlap visible lyrics above the edge');
+      assert.equal(fade.opacity, progress);
+      if (progress === 0) {
+        assert.equal(clipped.height, fixed.height, 'hidden controls leave the full lyric viewport visible');
+        assert.equal(fade.opacity, 0, 'hidden controls leave no residual dock gradient');
+        assert.equal(fade.transform[0].translateY, 0);
+      }
+      if (progress === 1) assert.equal(edge, dockTop.value);
+    }
+  }
+  assert.match(player, /dockTop.value = dockLayout.current.y \+ dockLayout.current.childY/);
+  // The fade remains outside the renderer-selection branches and inside the
+  // fixed child and moving clip. It cannot tint the exposed artwork below them.
+  assert.match(foreground, /<RustLyricsView[\s\S]*?<AmllLyricsView[\s\S]*?<SpicyLyricsView[\s\S]*?\)\}\s*<\/Reanimated.View>\s*<\/Reanimated.View>\s*\{\/\*[\s\S]*?\*\/\}\s*<Reanimated.View\s+pointerEvents="none"/);
+  assert.match(foreground, /styles\.lyricsBottomBlurWrap/);
+  assert.match(foreground, /\{ height: Math.max\(0, controlsDockHeight \+ 58\) \},\s*lyricsBottomBlurOpacityStyle/);
+  assert.match(foreground, /<LinearGradient\s+pointerEvents="none"\s+colors=\{_stableColors7\}\s+style=\{styles.lyricsBottomBlur\}\s*\/>\s*<\/Reanimated.View>\s*<\/View>\s*<\/Reanimated.View>/);
+  assert.match(player, /const _stableColors7 = \["transparent", "rgba\(0,0,0,0.85\)"\]/);
+  // The stationary background is rendered once behind the foreground. The dock
+  // and touch blocker add no fill, so clipping exposes that same moving artwork.
+  const backgrounds = player.match(/<ArtworkBackground\b[^>]*\/>/g);
+  assert.equal(backgrounds.length, 1);
+  assert.ok(player.indexOf(backgrounds[0]) < foregroundStart);
+  assert.doesNotMatch(backgrounds[0], /controlsOpacity|controlsVisible|controlsTarget|style=/);
+  assert.doesNotMatch(foreground, /<ArtworkBackground/);
+  assert.match(player, /controlsWrap: \{[\s\S]*?backgroundColor: "transparent"/);
+  assert.doesNotMatch(player.match(/fillTouchBlocker: \{([\s\S]*?)\n  \},/)[1], /backgroundColor/);
   assert.ok(!player.includes('rustLyricsViewport'));
   assert.ok(!player.includes('setRustDockBounds'));
   assert.ok(!player.includes('rustDockBounds'));
-  // The bottom gradient is a renderer-agnostic dock fade, not a Skia-only branch.
-  assert.match(player, /\{\/\* ponytail: LinearGradient replaces BlurView[\s\S]*?<Reanimated\.View\s+pointerEvents="none"/);
   assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));
