@@ -1,7 +1,6 @@
 import {
   createLyricsService,
   fetchFromSpicyLyrics,
-  fetchLrcRedExportLyrics,
   isLikelySameTrack,
 } from "@/lib/mobile-lyrics-service";
 import { lookupMobileVaultLyrics, startMobileVaultRefresh, refreshMobileVault } from "@/lib/mobile-lyrics-vault";
@@ -181,7 +180,6 @@ function toMobileTrack(track: Track) {
     album,
     durationMs,
     spotifyTrackId,
-    isrc: track.isrc,
   };
 }
 
@@ -191,13 +189,6 @@ function toActiveLyricsPacket(track: Track, packet: Omit<LyricsPacket, "type">):
     ...packet,
     trackId: track.id,
   };
-}
-
-export function fetchLrcRedExportLyricsForTrack(track: Track, isrc?: string) {
-  return fetchLrcRedExportLyrics({
-    ...toMobileTrack(track),
-    isrc: String(isrc || "").trim(),
-  });
 }
 
 export async function fetchMobileLyricsForTrack(

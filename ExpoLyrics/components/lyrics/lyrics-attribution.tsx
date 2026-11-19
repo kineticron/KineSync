@@ -1,18 +1,14 @@
 import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
-import Animated, { cancelAnimation, Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
-import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog } from '@/components/lyrics/lyrics-glass-dialog';
-import { isSpicyLyricsResponse } from '@/lib/lyrics-policy';
-import type { LyricsMetadata, LyricsAttributionMetadata, LyricsAttributionProfile } from '@/types/bridge';
+import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import Animated, { Easing, FadeIn, ReduceMotion, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { LyricsMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
 type Props = {
   metadata: LyricsMetadata;
-  isSpicyResponse?: boolean;
-  allCredits?: boolean;
   trackId?: string;
-  followControlsProgress?: boolean;
   controlsProgress: SharedValue<number>;
   controlsTarget: SharedValue<number>;
   controlsVisible: boolean;
@@ -50,17 +46,14 @@ function Profile({ label, profile, link = false, avatarStyle }: { label: string;
 }
 
 // Mounted outside both lyric renderers, so attribution never scrolls away.
-export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isSpicyResponse = false, allCredits = false, trackId, followControlsProgress = false, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
+export const LyricsAttribution = memo(function LyricsAttribution({ metadata, trackId, controlsProgress, controlsTarget, controlsVisible, controlsHeight, bottomInset, onInteraction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const reducedMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
   const { width: viewportWidth } = useWindowDimensions();
   const badgeRef = useAnimatedRef<View>();
-  const attribution: LyricsAttributionMetadata | undefined = metadata.attribution ?? (allCredits && metadata.credits?.songwriters?.length ? { source: '', provider: '' } : undefined);
-  // Explicit community metadata wins over labels retained by older caches.
-  const community = attribution?.community ?? (attribution?.source === 'spicy_lyrics' || attribution?.source === 'spl' || attribution?.provider === 'Spicy Lyrics');
-  const spicyResponse = isSpicyResponse || isSpicyLyricsResponse({ metadata }) || attribution?.provider === 'Spicy Lyrics';
-  const providerUrl = allCredits ? attribution?.url?.trim() : undefined;
-  const providerLinked = Boolean(providerUrl && /^https:\/\//i.test(providerUrl));
+  const attribution = metadata.attribution;
+  const community = attribution?.provider === 'Spicy Lyrics';
   useEffect(() => { setExpanded(false); }, [trackId, attribution?.source, attribution?.provider]);
   const controlsOffset = Math.max(0, controlsHeight - 12);
   const translateX = useSharedValue(0);
@@ -68,18 +61,8 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isS
   const opacity = useSharedValue(1);
   const chromeReady = useSharedValue(controlsVisible ? 1 : 0);
   useAnimatedReaction(
-    () => ({ shown: controlsTarget.get() > 0, offset: controlsOffset, viewportWidth, reducedMotion, followControlsProgress }),
+    () => ({ shown: controlsTarget.get() > 0, offset: controlsOffset, viewportWidth, reducedMotion }),
     (current, previous) => {
-      if (current.followControlsProgress || (previous && current.followControlsProgress !== previous.followControlsProgress)) {
-        cancelAnimation(translateX);
-        cancelAnimation(translateY);
-        cancelAnimation(opacity);
-        translateX.set(0);
-        translateY.set(current.shown ? -current.offset : 0);
-        opacity.set(1);
-        chromeReady.set(current.shown ? 1 : 0);
-        return;
-      }
       if (!previous || current.reducedMotion || current.offset === 0 || current.offset !== previous.offset || current.viewportWidth !== previous.viewportWidth) {
         translateX.set(0);
         translateY.set(current.shown ? -current.offset : 0);
@@ -112,14 +95,14 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isS
     },
   );
   const positionStyle = useAnimatedStyle(() => ({
-    opacity: followControlsProgress ? 1 : Math.max(0, Math.min(1, opacity.get())),
+    opacity: Math.max(0, Math.min(1, opacity.get())),
     transform: [
-      { translateX: followControlsProgress ? 0 : Math.max(0, Math.min(viewportWidth + 24, translateX.get())) },
-      { translateY: followControlsProgress ? -controlsOffset * controlsProgress.get() : Math.max(-controlsOffset, Math.min(0, translateY.get())) },
+      { translateX: Math.max(0, Math.min(viewportWidth + 24, translateX.get())) },
+      { translateY: Math.max(-controlsOffset, Math.min(0, translateY.get())) },
     ],
   }));
-  const glassStyle = useAnimatedStyle(() => ({ opacity: controlsProgress.get() * (followControlsProgress ? 1 : chromeReady.get()) }));
-  if (!attribution || (spicyResponse && !community)) return null;
+  const glassStyle = useAnimatedStyle(() => ({ opacity: controlsProgress.get() * chromeReady.get() }));
+  if (!attribution) return null;
 
   return <>
     <View pointerEvents="box-none" style={[styles.anchor, { bottom: bottomInset + 10 }]}>
@@ -129,26 +112,39 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isS
           <Animated.View pointerEvents="none" style={[styles.glass, glassStyle]}>
             <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
           </Animated.View>
-          {(community || allCredits) && (attribution.uploader || attribution.maker) ? <>
+          {community && (attribution.uploader || attribution.maker) ? <>
             <Animated.Text style={[styles.provider, glassStyle]}>{attribution.provider}</Animated.Text>
             <Profile label="U:" profile={attribution.uploader} avatarStyle={glassStyle} />
             <Profile label="M:" profile={attribution.maker} avatarStyle={glassStyle} />
-          </> : <Text style={styles.credit}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>}
+          </> : <Text style={styles.credit}>{attribution.provider || 'Unknown'}</Text>}
         </Pressable>
       </Animated.View>
     </View>
-    <LyricsGlassDialog visible={expanded} onClose={() => setExpanded(false)} closeLabel="Close lyrics attribution">
-      <LyricsDialogTitle>Lyrics attribution</LyricsDialogTitle>
-      <Text style={[styles.detailProvider, providerLinked && styles.link]} accessibilityRole={providerLinked ? 'link' : undefined}
-        onPress={providerLinked ? event => { event.stopPropagation(); void Linking.openURL(providerUrl!).catch(() => {}); } : undefined}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>
-      {community || allCredits ? <>
-        <Profile label="Uploader:" profile={attribution.uploader} link />
-        <Profile label="Maker:" profile={attribution.maker} link />
-      </> : null}
-      {metadata.credits?.songwriters?.length ? <Text style={styles.description}>Written by {metadata.credits.songwriters.join(', ')}</Text> : null}
-      {community ? <Text style={styles.description}>Community lyrics sync provided by Spicy Lyrics. Contributor names link to their profiles.</Text> : null}
-      <LyricsDialogAction label="Done" onPress={() => setExpanded(false)} />
-    </LyricsGlassDialog>
+    <Modal transparent visible={expanded} animationType="fade" statusBarTranslucent
+      supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
+      onRequestClose={() => setExpanded(false)}>
+      <Pressable accessibilityLabel="Close lyrics attribution" style={[styles.scrim, {
+        paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
+        paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
+      }]} onPress={() => setExpanded(false)}>
+        <Animated.View entering={FadeIn.duration(200).reduceMotion(ReduceMotion.System)} style={styles.dialog}>
+          <Pressable style={styles.dialogBody} onPress={event => event.stopPropagation()} accessibilityViewIsModal onAccessibilityEscape={() => setExpanded(false)}>
+            <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
+            <ScrollView style={styles.detailsScroll} contentContainerStyle={styles.details}>
+              <Text accessibilityRole="header" style={styles.title}>Lyrics attribution</Text>
+              <Text style={styles.detailProvider}>{attribution.provider || 'Unknown'}</Text>
+              {community ? <>
+                <Profile label="Uploader:" profile={attribution.uploader} link />
+                <Profile label="Maker:" profile={attribution.maker} link />
+              </> : null}
+              {metadata.credits?.songwriters?.length ? <Text style={styles.description}>Written by {metadata.credits.songwriters.join(', ')}</Text> : null}
+              {community ? <Text style={styles.description}>Community lyrics sync provided by Spicy Lyrics. Contributor names link to their profiles.</Text> : null}
+              <Pressable accessibilityRole="button" onPress={() => setExpanded(false)} style={styles.close}><Text style={styles.closeText}>Done</Text></Pressable>
+            </ScrollView>
+          </Pressable>
+        </Animated.View>
+      </Pressable>
+    </Modal>
   </>;
 });
 

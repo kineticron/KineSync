@@ -10,7 +10,7 @@ const manifest = JSON.parse(
 )
 const digest = (value) => createHash('sha256').update(value).digest('hex')
 
-test('checked-in demo matches the manifest and preserves translations and background vocals', () => {
+test('website demo preserves the synced onboarding timing, translations and background vocals', () => {
   const website = JSON.parse(
     readFileSync(resolve('app/demo-lyrics.json'), 'utf8')
   )
@@ -25,7 +25,7 @@ test('checked-in demo matches the manifest and preserves translations and backgr
 })
 
 for (const engine of ['spicy', 'amll']) {
-  test(`${engine} export preserves the checked-in browser preview`, () => {
+  test(`${engine} export preserves the synced native renderer snapshot`, () => {
     const html = readFileSync(resolve(`out/previews/${engine}.html`), 'utf8')
     assert.equal(
       html,

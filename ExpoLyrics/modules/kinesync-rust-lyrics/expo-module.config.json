@@ -1,7 +1,6 @@
 {
   "platforms": [
-    "apple",
-    "android"
+    "apple"
   ],
   "apple": {
     "modules": [
@@ -9,10 +8,5 @@
     ],
     "swiftModuleName": "KineSyncRustLyrics",
     "debugOnly": true
-  },
-  "android": {
-    "modules": [
-      "dev.kineticron.rustlyrics.KineSyncRustLyricsModule"
-    ]
   }
 }

@@ -2,7 +2,7 @@
 
 [← Documentation](../docs/README.md) · [Architecture](../docs/architecture.md) · [Contributing](../CONTRIBUTING.md)
 
-The Expo / React Native app for Android and iOS. It follows Spotify through an embedded browser or the optional Desktop Bridge and presents synchronized lyrics through the Rust renderer in Spicy and AMLL styles.
+The Expo / React Native app for Android and iOS. It follows Spotify through an embedded browser or the optional Desktop Bridge and presents synchronized lyrics using Spicy and AMLL WebView hosts.
 
 For downloads and end-user setup, see [Android installation](../ANDROID_INSTALL.md), [iOS installation](../IOS_INSTALL.md), and the [documentation index](../docs/README.md).
 
@@ -35,7 +35,14 @@ The default test suite runs deterministic lyric, playback, vault, tour, artwork,
 
 The native player uses album artwork for a Kawarp background rendered with Skia, without a WebView. Eight Kawase blur passes prepare a 128 by 128 color texture once per artwork change. A single shader combines fluid warping, saturation, grain and a dark scrim for readable lyrics. Ambient motion runs on the UI thread at up to 30 updates per second, with the shader's longest physical edge capped at 720 pixels. The background fades in and crossfades between artwork over 1.2 seconds, retaining the displayed color mix if another song arrives mid-transition. Missing artwork fades back to the promotional backdrop. Motion freezes when playback pauses, the player loses focus, the app backgrounds or reduced motion is enabled. The web build and native rendering failures use a static blurred artwork background. These bounds limit rendering work, they are not device frame-time or battery measurements.
 
-## Shared providers
+## Generated bundles and shared providers
+
+Rebuild tracked WebView bundles after changing an entry point or its styles:
+
+```sh
+npm run build:spicy-webview
+npm run build:amll-webview
+```
 
 Shared provider changes originate in `DesktopBridge/src/lyrics/parts/`. The mobile service is a portable bundled copy with runtime adapters. No regeneration tool is currently shipped. Keep provider behavior aligned in both implementations and run their regression tests.
 
@@ -44,7 +51,7 @@ Shared provider changes originate in `DesktopBridge/src/lyrics/parts/`. The mobi
 | Directory | Purpose |
 | --- | --- |
 | `app/` | Expo Router screens |
-| `components/lyrics/` | Rust lyrics, controls, artwork, and settings |
+| `components/lyrics/` | WebView hosts, controls, artwork, and settings |
 | `lib/` | Playback, providers, storage, translation, and timing |
 | `store/`, `providers/`, `hooks/` | State and lifecycle |
 | `plugins/`, `modules/`, `widgets/` | Native project generation and iOS integration |

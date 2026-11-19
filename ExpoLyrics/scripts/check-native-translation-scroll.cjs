@@ -6,7 +6,7 @@ const assert=require('node:assert/strict'),path=require('node:path'),vm=require(
 const {buildSync}=require('esbuild');
 const native=path.resolve(__dirname,'../components/lyrics/native');
 function bundle(file,external=[]){return buildSync({entryPoints:[file],bundle:true,platform:'node',format:'cjs',write:false,external}).outputFiles[0].text;}
-function evaluate(code,requireImpl=require,dev=false,clock=performance){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process,performance:clock,__DEV__:dev});return module.exports;}
+function evaluate(code,requireImpl=require,dev=false){const module={exports:{}};vm.runInNewContext(code,{module,exports:module.exports,require:requireImpl,console,process,performance,__DEV__:dev});return module.exports;}
 const model=evaluate(bundle(path.join(native,'native-lyrics-model.ts')));
 const layout=evaluate(bundle(path.resolve(__dirname,'../lib/lyrics-layout.ts')));
 const cues=evaluate(bundle(path.join(native,'native-cue-timeline.ts')));
@@ -57,12 +57,11 @@ function harness(style,list,options={}){
   './use-native-lyrics-clock':{useNativeLyricsClock:()=>({position,running,seekVersion})},
   './native-lyrics-fonts':{NativeLyricsFontContext:{Provider:'FontProvider'},useNativeLyricsFonts:()=>options.fontProvider?.()??null},
   './reference-scroll':{initialScrollCommand:{serial:0,offset:0,delta:0,index:0,firstVisible:0,interval:800,instant:true,interlude:false,snap:false},ReferenceScrollContext:{Provider:'ScrollProvider'},ReferenceScrollView:'Scroll'},
-  '@/lib/lyrics-scroll-escape':require('../lib/lyrics-scroll-escape'),
   './amll-layout-cell':{AmllLayoutCell:'Cell'},'./native-cue-timeline':cues,
   './native-renderer-ready-refresh':{NativeRendererReadyRefreshGate:class{begin(){return 0;}setMounted(){}foreground(){return 0;}onReady(){}},requestNativeRendererReadyResync(){throw Error('unexpected request');}},
   'react/jsx-runtime':{jsx,jsxs:jsx},
  };
- const {NativeLyricsView}=evaluate(options.code??code,name=>{assert(Object.hasOwn(modules,name),`Unexpected native dependency ${name}`);return modules[name];},!!options.dev,options.clock??performance);
+ const {NativeLyricsView}=evaluate(options.code??code,name=>{assert(Object.hasOwn(modules,name),`Unexpected native dependency ${name}`);return modules[name];},!!options.dev);
  function find(node,type){if(!node||typeof node!=='object')return null;if(node.type===type)return node;const children=node.props?.children;for(const child of Array.isArray(children)?children:[children]){const result=find(child,type);if(result)return result;}return null;}
  function render(next={}){props={...props,...next};cursor=0;reactions.length=0;tree=NativeLyricsView(props);find(tree,list==='flash'?'FlashList':'FlatList').props.ref.current=host;while(effects.length)effects.shift()();return tree;}
  function content(){find(tree,list==='flash'?'FlashList':'FlatList').props.onContentSizeChange();}

@@ -186,11 +186,6 @@ export async function saveMobileVaultLyrics({
   return mutateVault(async () => {
   const entries = await readVaultEntriesUnlocked();
   const savedAt = Date.now();
-  const existing = entries.find(item => entryMatchesTrack(item, track));
-  const existingSpicy = Boolean(existing?.metadata?.spicyApi) || String(existing?.metadata?.fetchOrigin?.host || "").includes("spicylyrics") || String(existing?.metadata?.fetchOrigin?.source || "").includes("spicy");
-  const effectiveMetadata = existingSpicy
-    ? { ...metadata, fetchOrigin: { ...(metadata?.fetchOrigin || {}), ...(existing?.metadata?.fetchOrigin || {}) }, spicyApi: metadata?.spicyApi || existing?.metadata?.spicyApi, ttml: metadata?.ttml || existing?.metadata?.ttml }
-    : metadata;
   const vaultId = `${normalizeText(track.title).replace(/\s+/g, "-")}-${savedAt.toString(36)}-${(++nextId).toString(36)}`;
   const entry: MobileVaultEntry = {
     vaultId,
@@ -199,7 +194,7 @@ export async function saveMobileVaultLyrics({
     lyrics: cloneLyrics(lyrics),
     sourceLabel,
     originalSource,
-    metadata: withSpicyFreshness({ metadata: effectiveMetadata, originalSource, sourceLabel }),
+    metadata: withSpicyFreshness({ metadata, originalSource, sourceLabel }),
   };
   const nextEntries = [entry, ...entries.filter((item) => !entryMatchesTrack(item, track))];
   if (nextEntries.length > MAX_VAULT_ENTRIES) throw new Error("Your vault holds 100 songs. Remove an entry before adding another.");

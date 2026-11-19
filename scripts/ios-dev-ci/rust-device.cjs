@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const config = require('./config.json');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const symbols = ['kr_abi_version', 'kr_create', 'kr_set_fonts', 'kr_copy_layout_json', 'kr_set_track', 'kr_set_anchor', 'kr_resize', 'kr_set_following', 'kr_scroll_by', 'kr_fling', 'kr_hit_test', 'kr_render', 'kr_metrics', 'kr_destroy', 'kr_copy_error'];
+const symbols = ['kr_abi_version', 'kr_create', 'kr_set_track', 'kr_set_anchor', 'kr_resize', 'kr_render', 'kr_metrics', 'kr_destroy', 'kr_copy_error'];
 function inspect(framework) {
   const info = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path.join(framework, 'Info.plist')], { encoding: 'utf8' }));
   if (info.AvailableLibraries?.length !== 1) throw new Error('Expected one device-only XCFramework slice');
@@ -21,31 +21,6 @@ function inspect(framework) {
   if (arch !== 'arm64') throw new Error(`Static library has unexpected architecture: ${arch}`);
   if (!fs.readFileSync(modulemap, 'utf8').includes('module KineSyncLyrics')) throw new Error('Missing Swift Clang module map');
   return { slice, library, files: Object.fromEntries([library, header, modulemap, path.join(framework, 'Info.plist')].map(file => [path.relative(framework, file), hash(file)])) };
-}
-// Prove actual packaged resources match the existing source assets, not just podspec text.
-function inspectFonts(app, sourceRoot = path.resolve(__dirname, '../..')) {
-  const bundles = [];
-  function walk(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) continue;
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === 'KineSyncLyricsFonts.bundle') bundles.push(file);
-        else walk(file);
-      }
-    }
-  }
-  walk(app);
-  if (bundles.length !== 1) throw new Error('Expected exactly one packaged Rust font bundle');
-  const files = {};
-  for (const name of ['SF-Pro-Display-Regular.otf', 'SF-Pro-Display-Bold.otf']) {
-    const file = path.join(bundles[0], name);
-    if (!fs.existsSync(file) || !fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error(`Missing packaged Rust font ${name}`);
-    const expected = hash(path.join(sourceRoot, 'ExpoLyrics/assets/fonts', name));
-    if (hash(file) !== expected) throw new Error(`Packaged Rust font digest mismatch: ${name}`);
-    files[path.relative(app, file)] = expected;
-  }
-  return files;
 }
 // Rust archives include bundled std bitcode; Apple's older LLVM reader may reject it.
 function inventory(library) {
@@ -88,4 +63,4 @@ if (require.main === module) {
   else if (process.argv[2] === 'validate') validate();
   else throw new Error('Expected seal or validate');
 }
-module.exports = { symbols, inspect, inventory, inspectFonts };
+module.exports = { symbols, inspect, inventory };

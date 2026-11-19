@@ -56,6 +56,8 @@ function sourceAnchorKey(packet: PlaybackPacket, source: PlaybackMode): string |
 }
 
 export type LyricsStyle = 'spicy' | 'amll';
+/** @deprecated Use LyricsStyle. Kept for migration of persisted settings. */
+export type LyricsRendererMode = LyricsStyle | 'native' | 'webview';
 
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
@@ -148,8 +150,6 @@ type PlaybackState = {
   packetDropRate: number;
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
-  showRustDebugOverlay: boolean;
-  setShowRustDebugOverlay: (value: boolean) => void;
   setShowSpotifyStatusBar: (value: boolean) => void;
   showTranslatedText: boolean;
   translationLanguage: TranslationLanguage;
@@ -181,12 +181,13 @@ type PlaybackState = {
   setPlaybackCompensationMs: (ms: number) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
   setLyricsStyle: (mode: LyricsStyle) => void;
+  /** @deprecated Use setLyricsStyle. Migrates legacy native/webview values. */
+  setLyricsRendererMode: (mode: LyricsRendererMode) => void;
 };
 
-let lyricsStyleChanged = false;
+let rendererChanged = false;
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
-let rustDebugOverlaySettingChanged = false;
 function persistTranslationSettings(showTranslatedText: boolean, translationLanguage: TranslationLanguage) {
   translationSettingsChanged = true;
   void AsyncStorage.setItem('kinesync_translation_settings', JSON.stringify({ showTranslatedText, translationLanguage })).catch(() => {});
@@ -272,7 +273,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
-  showRustDebugOverlay: true,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -336,7 +336,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       artworkUrl: resolvePacketArtworkUrl(previousArtwork, packet),
       durationMs: packet.durationMs,
       spotifyTrackId: packet.spotifyTrackId,
-      isrc: packet.isrc,
     };
 
     const trackChanged = prev.currentTrack?.id !== incomingTrack.id;
@@ -369,8 +368,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       prev.currentTrack?.album !== incomingTrack.album ||
       prev.currentTrack?.artworkUrl !== incomingTrack.artworkUrl ||
       prev.currentTrack?.durationMs !== incomingTrack.durationMs ||
-      prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId ||
-      prev.currentTrack?.isrc !== incomingTrack.isrc;
+      prev.currentTrack?.spotifyTrackId !== incomingTrack.spotifyTrackId;
     const stationaryDuplicate =
       !metadataChanged &&
       !playStateChanged &&
@@ -478,12 +476,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
-  setShowRustDebugOverlay: (value) => {
-    rustDebugOverlaySettingChanged = true;
-    const showRustDebugOverlay = Boolean(value);
-    set({ showRustDebugOverlay });
-    void AsyncStorage.setItem('kinesync_rust_debug_overlay', String(showRustDebugOverlay)).catch(error => console.error('Could not save Rust debug overlay setting', error));
-  },
   setShowTranslatedText: (value) => {
     const showTranslatedText = Boolean(value);
     set({ showTranslatedText });
@@ -496,11 +488,22 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
   setAutoHidePlaybackControls: (value) => set({ autoHidePlaybackControls: Boolean(value) }),
   setLyricsStyle: (mode) => {
-    lyricsStyleChanged = true;
+    rendererChanged = true;
     const lyricsStyle = mode === 'amll' ? 'amll' : 'spicy';
     set({ lyricsStyle });
     void AsyncStorage.setItem('kinesync_lyrics_style', lyricsStyle).catch(() => {});
   },
+  setLyricsRendererMode: (mode) =>
+    set({
+      lyricsStyle:
+        mode === 'amll'
+          ? 'amll'
+          : mode === 'spicy'
+            ? 'spicy'
+            : mode === 'native'
+              ? 'amll'
+              : 'spicy',
+    }),
 }));
 
 export function startPlaybackClock() {
@@ -518,25 +521,13 @@ export function stopPlaybackClock() {
 }
 
 void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
-  if (lyricsStyleChanged) return;
-  if (style === 'amll' || style === 'spicy') usePlaybackStore.setState({ lyricsStyle: style });
-  else if (style === 'native' || style === 'webview') usePlaybackStore.getState().setLyricsStyle(style === 'native' ? 'amll' : 'spicy');
+  if (!rendererChanged && (style === 'amll' || style === 'spicy')) usePlaybackStore.setState({ lyricsStyle: style });
 }).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   if (value === null || spotifyStatusBarSettingChanged) return;
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
-
-// The backend preference is obsolete. Keep the independently saved visual style.
-void AsyncStorage.getItem('kinesync_use_rust_renderer').then(value => {
-  if (value !== null) return AsyncStorage.removeItem('kinesync_use_rust_renderer');
-}).catch(() => {});
-
-void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
-  if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;
-  usePlaybackStore.setState({ showRustDebugOverlay: value === 'true' });
-}).catch(error => console.error('Could not load Rust debug overlay setting', error));
 
 void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
   if (!raw || translationSettingsChanged) return;

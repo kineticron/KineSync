@@ -1,0 +1,20 @@
+Bounded physical-gate checkpoint (not full v4 acceptance)
+
+Mapping before implementation:
+C01/P01-P09/P12: parity-contact-sheets.py fixed-viewport premultiplied RGBA absolute error divided by full reference energy -> physical_passed -> baseline_passed/gate_passed -> CLI strict exit1. Score is diagnostic. Zero reference energy is invalid. P13: validateManifestSchema requires finite numeric max_physical_error in [0,0.10].
+Existing foreground RGB/alpha, coverage, ink counts, global mean RGB/alpha, bbox dimensions, mean ink alpha and outside alpha remain additional gates. Foreground RGBA, mean alpha on reference, global score/changed/max deltas, foreground counts, bbox score and thirds remain diagnostics; union support denominators are not physical acceptance.
+Record physical_error/physical_score/physical_threshold/physical_passed/gate_passed/failure_reasons expose the decision. Aggregate status/accepted_parity feed strict exit; ABI3 remains nonaccepting even on numerical agreement. Diagnostic mode may exit0 for valid evidence and labels physical failures DIAGNOSTIC_FAILED. Invalid CLI paths emit structured JSON and exit2.
+
+Deferred: ordinary replay seam and its schema, recursively closed supported contracts, authoritative semantic/full-matrix/inventory validation, build preflight/attestation improvements and full subprocess oracle. No full-oracle claim. Existing live capture still requires unavailable owned Rust target.
+
+Review-fix checkpoint: ordinary replay
+
+`node scripts/parity-compare.cjs --evaluate BUNDLE --output OUTPUT --json [--diagnostic]` reads BUNDLE/captures/capture-manifest.json (existing schema2 capture shape) and BUNDLE/rust-binary-attestation.json (existing build attestation shape). It does not execute Cargo or render. File paths in the capture remain explicit local paths; copies must update paths/hashes when changing images. The selected current fixed specification binds replay semantics; the historical acquisition manifest digest is replaced in memory and is not authenticated. Source/font/binary/packet hashes must match current local files. Output acquisition is replay/untrusted, determinism is UNVERIFIED_REPLAY, accepted_parity remains false. PNG bytes may intentionally differ from historical capture. This is numeric evidence, not authenticated acquisition.
+
+Shared live/replay validation now closes the selected manifest against parity-supported-contract.json, allowing only max_physical_error tightening. It binds exact history, viewport/style identity, settings, declared lane/font geometry, TTML syllables and rebuilt production packet bytes. Preflight rejects compiler/build overrides and applicable Cargo config before either acquisition. Replay checks local binary and listed attestation source digests.
+
+Remaining BLOCK requirements: complete authoritatively derived canonical source/depfile closure is NOT implemented (uniqueness plus listed-file hash checks are insufficient); skiaVoice and shaped paragraphHeight/effectiveFamilies are not independently regenerated; replay repeat pass is not independently evaluated; compiler depfile parsing/recursive live source attestation remains old implementation. Frozen full v4 subprocess families, mixed-alpha CLI variants, and new actual canonical two-pass capture remain incomplete. Do not merge or infer full acceptance from targeted passing cases.
+
+The original cached bundle can reject with `sources input changed: .../parity-manifest.json`: its old inventory hash no longer matches the local file. Numeric probes use explicitly untrusted copies with refreshed local hashes; this does not certify inventory completeness.
+
+Follow-up bounded checkpoint: replay now requires BUNDLE/repeat/capture-manifest.json unless --skip-repeat. Both passes undergo the same independent semantic, listed-input, PNG hash and fixed dimension validation; artifact PNG equality is checked but never certifies replay determinism. Replay status is UNVERIFIED_REPLAY_MATCHING_ARTIFACTS. This supersedes the replay-repeat limitation above; authoritative source closure and regenerated shaped voice/paragraph geometry remain BLOCK.

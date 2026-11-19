@@ -57,15 +57,6 @@ contextBridge.exposeInMainWorld('bridgeLyrics', {
   exportTtml() {
     return ipcRenderer.invoke('bridge:lyrics:export-ttml');
   },
-  exportIdentity() {
-    return ipcRenderer.invoke('bridge:lyrics:export-identity');
-  },
-  exportLrcRed(options = {}) {
-    return ipcRenderer.invoke('bridge:lyrics:export-lrc-red', options);
-  },
-  cancelLrcRedExport(requestId) {
-    return ipcRenderer.invoke('bridge:lyrics:export-lrc-red:cancel', { requestId });
-  },
   saveToVault(options = {}) {
     return ipcRenderer.invoke('bridge:lyrics:vault:save', options);
   },

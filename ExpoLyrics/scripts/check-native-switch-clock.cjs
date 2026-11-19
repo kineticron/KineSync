@@ -40,7 +40,7 @@ function scenario({ initialPacket, development = false } = {}) {
   ui.global = ui;
   ui._getAnimationTimestamp = () => now + 420000;
   const rn = vm.createContext({ __DEV__: development, __RUNTIME_KIND: 1, performance: { now: nativeNow }, console,
-    process: { env: {} },
+    process: { env: { EXPO_PUBLIC_NATIVE_LYRICS: '1' } },
     Date: { now: () => 1700000000000 + now }, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {} });
   rn.global = rn;
 
@@ -215,7 +215,7 @@ function scenario({ initialPacket, development = false } = {}) {
     '@react-native-async-storage/async-storage': { getItem: async () => null, setItem: async () => {} },
   };
   function resolveFile(target) {
-    return [target, `${target}.js`, `${target}.ts`, `${target}.tsx`, `${target}.native.ts`, `${target}.native.tsx`].find(filename => fs.existsSync(filename) && fs.statSync(filename).isFile());
+    return [target, `${target}.ts`, `${target}.tsx`, `${target}.native.ts`, `${target}.native.tsx`].find(filename => fs.existsSync(filename) && fs.statSync(filename).isFile());
   }
   function load(filename) {
     filename = resolveFile(filename);
@@ -264,8 +264,8 @@ function scenario({ initialPacket, development = false } = {}) {
   let refreshes = 0, nextRefresh;
   const unregister = ready.registerNativeRendererReadyResync({ canResync: () => true, resyncPlayback: () => { refreshes++; nextRefresh?.(); } });
   const wrappers = {
-    spicy: load(path.join(root, 'components/lyrics/native-spicy-lyrics-view.tsx')).NativeSpicyLyricsView,
-    amll: load(path.join(root, 'components/lyrics/native-amll-lyrics-view.tsx')).NativeAmllLyricsView,
+    spicy: load(path.join(root, 'components/lyrics/spicy-lyrics-view.native.tsx')).SpicyLyricsView,
+    amll: load(path.join(root, 'components/lyrics/amll-lyrics-view.native.tsx')).AmllLyricsView,
   };
   const NativeGlyphPicture = load(path.join(root, 'components/lyrics/native/native-glyph-picture.tsx')).NativeGlyphPicture;
   const NativeLyricRowView = load(path.join(root, 'components/lyrics/native/native-lyric-row.tsx')).NativeLyricRowView;

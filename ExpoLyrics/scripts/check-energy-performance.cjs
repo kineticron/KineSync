@@ -7,7 +7,7 @@ const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 const timelineModule = { exports: {} };
 vm.runInThisContext(`(function(exports){${ts.transpileModule(
-  fs.readFileSync(path.join(root, 'scripts/fixtures/active-line-timeline.ts'), 'utf8'),
+  fs.readFileSync(path.join(root, 'components/lyrics/active-line-timeline.ts'), 'utf8'),
   { compilerOptions: { module: ts.ModuleKind.CommonJS } },
 ).outputText}\n})`)(timelineModule.exports);
 const { createActiveLineTimeline } = timelineModule.exports;
@@ -26,20 +26,44 @@ for (let song = 0; song < 100; song++) {
 }
 assert.equal(createActiveLineTimeline([])(0), -1);
 
-// Native lifecycle owns frame scheduling. JS may only send anchor updates.
-const rustView = fs.readFileSync(path.join(root, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
-assert.doesNotMatch(rustView, /requestAnimationFrame|setInterval|setTimeout/);
-const ios = fs.readFileSync(path.join(root, 'modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-assert.match(ios, /let visible = window != nil && foreground && enabled/);
-assert.match(ios, /link\?\.invalidate\(\); link = nil/);
-const android = fs.readFileSync(path.join(root, 'modules/kinesync-rust-lyrics/android/src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsView.kt'), 'utf8');
-assert.match(android, /val visible = attached && foreground && enabled/);
-assert.match(android, /removeFrameCallback\(this\); callbackPosted = false/);
+// Execute the production AMLL scheduler with deterministic frames and visibility.
+const entry = fs.readFileSync(path.join(root, 'components/lyrics/amll-webview-entry.ts'), 'utf8');
+const frames = new Map();
+let nextId = 0, updates = 0, resumes = 0, pauses = 0;
+const document = { visibilityState: 'visible', addEventListener() {} };
+const context = vm.createContext({
+  performance: { now: () => 100 }, document,
+  rendererActive: true, staticLyricsMode: false, isPlaying: true, previewPositionMs: null,
+  sourceLines: [{}], durationMs: 1000, frameRequestId: null, animateUntilMs: 0, lastFrameMs: 0,
+  IDLE_ANIMATION_GRACE_MS: 750, activeSourceIndex: -1, longPressTimer: 0, touchStartSourceIndex: -1,
+  getProjectedPosition: () => 100, findActiveSource: () => 0, post() {},
+  player: { setCurrentTime() {}, update() { updates++; }, pause() { pauses++; }, resume() { resumes++; } },
+  window: { clearTimeout() {} },
+  requestAnimationFrame: cb => { frames.set(++nextId, cb); return nextId; },
+  cancelAnimationFrame: id => frames.delete(id),
+});
+vm.runInContext(entry.slice(entry.indexOf('function playbackNeedsFrames()'), entry.indexOf('window.KineSyncLyrics =')), context);
+context.scheduleFrame();
+assert.equal(frames.size, 1);
+context.rendererActive = false;
+context.updateSuspension();
+assert.equal(frames.size, 0, 'inactive renderer cancels pending work');
+for (let i = 0; i < 100; i++) context.scheduleFrame(750);
+assert.equal(frames.size, 0, 'inactive updates cannot restart the loop');
+context.frame();
+assert.equal(updates, 0, 'late callback cannot render while suspended');
+context.rendererActive = true;
+context.updateSuspension();
+assert.equal(frames.size, 1);
+assert.equal(resumes, 1);
+document.visibilityState = 'hidden';
+context.updateSuspension();
+assert.equal(frames.size, 0);
+assert.equal(pauses, 2);
 
 // Keep the desktop's visible 50ms diagnostics cadence, with no idle/hidden timer.
 const html = fs.readFileSync(path.join(root, '../DesktopBridge/src/index.html'), 'utf8');
 const timers = new Map();
-let nextId = 0;
 let now = 0;
 const desktop = vm.createContext({
   document: { hidden: false, addEventListener() {} }, monotonicNow: () => now,

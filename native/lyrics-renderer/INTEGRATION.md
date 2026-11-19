@@ -33,10 +33,9 @@ Vello glyph scenes and independently fills timed atoms. Literal spaces are
 preserved and explicit word-end flags add missing gaps. Invalid/untimed tracks,
 oversized packets and missing glyphs produce explicit errors. Lead-line overlaps
 are now highlighted/protected together, including the phase-1 88.2-second case.
-This is not a complete port of romanization, native scrolling footer/timestamp
-seek or accessibility semantics. ABI8 renders translations, background voices,
-duet alignment and word glow/syllable spring motion per source. Existing player seek
-controls still work. System Apple fonts replace
+This is not a complete port of translations, background voices, duet alignment,
+word glow/syllable spring motion, drag scrolling, lyric press/credits or accessibility
+semantics. Existing player seek controls still work. System Apple fonts replace
 the Linux Noto stack. Phone font and visual acceptance are pending.
 
 ## Clock, stale updates and ownership
@@ -48,10 +47,9 @@ through a synchronous Expo function, and sends that anchor. JS sends no display
 frame calls and has no animation/timer loop for Rust. Foreground and renderer
 readiness trigger occasional resynchronization. Native CADisplayLink scheduling
 and the shared Rust timeline project elapsed native time, pause, seek and rate.
-ABI version 9 retains explicit seek-snap intent and separate display-target/sample
-clocks. Its 168-byte metrics include visible changes and the next native cue.
-Both JS and Swift reject an older native ABI. This requires a rebuilt IPA.
-A Metro-only update cannot install the Rust/Swift changes.
+ABI version 3 carries explicit seek-snap intent, separate display-target/sample
+clocks and 152-byte capability/motion/presentation metrics. Both JS and Swift reject an older native ABI. This requires a rebuilt
+IPA; a Metro-only update cannot install the Rust/Swift changes.
 
 The display link requests preferredFrameRateRange with a hardware-capped maximum
 and preference up to 120Hz (minimum up to 30Hz). This is a best-effort hint, never
@@ -183,14 +181,6 @@ execution time. There is no per-frame explicit wait in the live path (`waitMs`
 remains zero). Headless profiling retains timestamp brackets/readback, includes
 submission gaps and excludes the final surface blit.
 
-ABI 9 adds two scheduling fields. `next_cue_native_ms` is an absolute monotonic
-deadline in ms, or negative when playback has no timed visual change left.
-`visible_changes` reports conservative visual activity for the frame just drawn.
-`animating` still requests continuous frames, including retained animation
-history for hidden or outgoing rows, so it is not a pixel-difference claim. The
-native owner invalidates the display link when a frame settles and rearms it
-from one cancellable wakeup only when a cue is projected.
-
 ### Transparent composition
 
 ExpoUIView, its child MetalHost and CAMetalLayer are clear/nonopaque. FIFO is
@@ -286,165 +276,3 @@ API contracts were checked against the official
 ExpoModulesCore ViewDefinitionBuilder/ViewFactories sources, plus the pinned
 wgpu 30 registry source for CoreAnimationLayer, CurrentSurfaceTexture,
 Queue completion callbacks, transparent surface formats and Queue.present.
-
-
-## ABI4 static typography preparation
-
-Schema4 track packets carry distinct Spicy/AMLL settings and exact production
-paint-word/UTF16/grapheme metadata alongside original syllables. Existing bundled
-SF Pro Display Regular/Bold assets are packaged by the pod resource bundle and
-read once on the worker. Rust validates exact asset SHA256/role/weight and retains
-registered font bytes; missing assets fail visibly. Fonts are immutable per owner.
-`kr_set_fonts` precedes track setup. JS/native ABI guards reject ABI3 clients.
-No device-only slice/cache checks or phone compiler optimization settings change.
-
-Detailed timed fragments are prepared only for active/overlapping leads and next
-two rows. Visible inactive rows use cached plain paragraphs, without timed slice
-construction. Row preparation is on demand; measured heights persist after glyph
-eviction. A per-owner cache retains at most three inactive source/style/viewport
-variants, keyed by original text/timing, complete paint mappings, settings, DPR,
-extent and immutable font identity. Rotation/settings changes cannot reuse a
-mismatched key. Shared GPU blur, premultiplied output, two-frame ownership and
-clock/gating controls remain unchanged.
-
-`copyLayout()` is an explicit asynchronous diagnostic request, not per-frame JS
-telemetry. Call after rendering; unprepared rows are null. It returns actual face
-SHA256/collection index/names/variation coordinates and measured geometry. Native
-fallback equivalence and packaged font execution require final native proof.
-There are no intermediate phone-test/IPA dependencies; one final IPA delivery
-follows near-complete parity and host gates. Physical presentation remains
-unverified until the final user test.
-
-## ABI5 timed appearance checkpoint
-
-Schema5 requires validated per-word emphasis, pivot, direction and AMLL group
-metadata from the actual production JS preparation helpers. C/Swift/JS guards
-all require5; KRMetrics remains152 bytes. Existing SF resource ownership and
-cache keys remain; metadata changes invalidate immutable geometry.
-
-Mutable source timing belongs to the native owner, separately from retained
-geometry. Track/seek/resize reset timing; pause preserves source release motion.
-Active/overlapping and next-two geometry is prepared on demand; plain inactive
-rows remain cached. The live per-effect policy and measured/rejected stages are
-recorded in `evidence/parity-live-appearance-handoff.md`, which is the historical
-record of the stages measured before ABI8. Glow uses a two-radius shared
-approximation; its intensity, radius and activation now follow the Skia sources
-and it is the live effect (see the ABI8 section below), so that handoff's
-glow-off policy is superseded. No per-line GPU filter, full-resolution blur,
-active animated-picture cache, new wait or deeper queue was introduced.
-
-One coordinator-built parity-so-far IPA is now user-authorized after independent
-review; this supersedes the earlier near-complete-only delivery rule. This
-worker performs no push, CI dispatch, Metro operation or IPA build. Physical
-phone HUD/performance and native font packaging remain unverified for ABI5.
-
-## ABI6 auxiliary subtitle visibility and sharp attribution
-
-Schema6 adds an optional foreground `paint.translation` string. It is the exact
-upstream `LyricLine.translatedText`, selected by `showTranslatedText` using the
-actual production `buildNativeVoice` preparation helper. Visibility changes send
-a new track generation; translation bytes participate in retained geometry keys.
-A subtitle is shaped once with its visible row, contributes to row height,
-scrolling and the shared protected envelope, and inherits source outer opacity /
-AMLL voice scale rather than timed word brightness. Spicy and AMLL preserve their
-different source subtitle size/leading/inset/weight policies. Actual faces are
-reported in sparse `translation` layout diagnostics. No per-frame JS, shape or
-readback was added. C/JS/Swift all require6; KRMetrics remains152 bytes.
-
-The existing sharp attribution overlay now accepts all available providers and
-credit-only metadata while Rust is selected. Its existing modal and HTTPS profile
-callbacks are reused, with a matching HTTPS provider link. It lives outside the
-GPU blur/viewport and preserves player chrome rules. This is not the unimplemented
-native scrolling footer/timestamp-seek behavior. See evidence/parity-auxiliary-handoff.md
-for actual source inputs, performance gates, pixel receipts and remaining
-romanization / native capture limitations. Rows with background voices are drawn
-per voice since ABI8 (see below). The live effect is now `Glow`: intensity,
-radius and activation follow the Skia sources and the glow is composited inside
-the existing shared half-resolution filter pass, so there is no additional pass,
-texture or full-resolution blur.
-
-## ABI7 Skia follow ownership and overlapping line timing
-
-Schema6 gains an optional `background_end` per line (the JS producer sends
-`getBackgroundEndTime`, covering `backgroundSyllables` and `spicyBackgrounds`).
-A line stays in the active presentation package until that end, so background
-vocal tails no longer collapse the highlight or scroll at the lead end. Line
-starts may overlap or be out of source order: the parser still rejects inverted
-line/atom intervals but no longer rejects unordered starts, and the playback
-window scans source order so a duet line that starts a few milliseconds before
-the line above it stays active together with it. Display order is unchanged.
-
-The native playback window, auto-scroll target range and follow index are ported
-from `lib/lyrics-layout.ts` (`getPlaybackWindowState`,
-`getAutoScrollTargetRange`, `interludeIndex`) including 3000 ms long pauses,
-500 ms dot early exit, 24 pt bottom padding and per-style anchors (AMLL 8% + 8 pt,
-landscape Spicy 32 pt, portrait 0). Spicy uses the same 240-440 ms tween and
-cubic-bezier(0.22, 0.88, 0.34, 1); AMLL uses the same stiffness/damping, 0.9 mass
-and per-row cascade residual. Interlude dots are native: the break slot expands
-above the upcoming row (Spicy 400 ms, AMLL 375 ms, cubic-bezier(0.25,0.1,0.25,1))
-and shifts that row and every later row without changing stored row heights.
-Spicy draws three spring-animated bullet dots (`spline` goals, 0.7/0.6,
-1.25/0.4 and 1/0.5 frequencies/damping), a 300 ms group entrance and the CSS
-`linear()` exit group; AMLL draws the three breathing circles from the source
-snapshot. A two-radius translucent halo approximates the Spicy glyph shadow
-without per-glyph blur; seek resets the springs and the color/layout policy is
-unchanged. The Spicy intro seed (`spicyLyricsStartTime`) is not on the wire yet,
-so the first break starts at 0 like AMLL. Group/slot transitions are evaluated
-from playback time, so they freeze with pause and follow the visual debug rate.
-
-`kr_set_following(bool)`, `kr_scroll_by(double)` and
-`kr_hit_test(double) -> int32` add Skia's explicit ownership contract. A touch
-freezes the current offset (turning follow off), drag deltas are applied in touch
-order, and a line tap restores follow before seeking; the Swift view exposes
-`setFollowing`, `scrollBy` and `hitTest`, and the JS PanResponder implements the
-540 ms long press, tap-to-seek and drag threshold from the Skia row Pressables.
-The Rust surface now fills the whole area below the top bar with the controls
-dock's gradient over it instead of being clipped above the dock.
-
-## ABI8 background voices, duet rows and glow parity
-
-Schema6 gains an optional additive per-line `backgrounds` array plus an explicit
-per-voice `start`/`end`. It is produced by the real `spicyBackgrounds` /
-`backgroundSyllables` source blocks through the actual `buildNativeVoice` helper
-(the same blocks and helper the Skia rows consume), so no rule is re-invented in
-JS. ABI8, not the schema number, is the client gate: older binaries reject the
-additive field, and C/JS/Swift all require 8 now. The JS producer refuses a voice
-whose own word timing is unusable; the Rust parser additionally bounds the voice
-count (16), keeps every voice inside its row's package end (1 ms rounding
-tolerance), and requires the background `duet`/`opposite` flags to equal the
-row's, so a background voice can never flip a duet side.
-
-Each voice is shaped, wrapped and timed on its own, from the pinned Skia
-renderers: Spicy uses 0.75x parent type, 0.62x leading, weight 500, a 3 pt top
-margin and the parent's text width, while AMLL uses 0.7x type, 0.7x leading, the
-parent weight, a 0.3em top margin, 0.2em inner padding, 0.4 container alpha and
-the duet-inset text width. Background voices stack under the lead in source
-order, keep the row's alignment origin (AMLL right-aligned voices align on the
-shared right edge), fill from their own syllable timings inside the parent
-reveal, and reuse the parent type size for Spicy word/letter motion. A voice's
-own `translation` contributes its own subtitle policy and height.
-
-Voice boxes participate in the row measurement, so `content_height`, the row
-height, `prefix`, the auto-scroll target, the protected blur band and the
-interlude shift all include background vocals; that is what keeps the active line
-in the right place while a background tail is still singing. The presentation
-window already used `background_end` for activation.
-
-Glow parity is source-derived and stays inside the existing shared half-resolution
-pass: Spicy uses `clamp01(glow * 1.85) * 0.5` with `(4 + 12 * glow) / 2` for
-emphasized letters and `clamp01(glow * 0.35) * 0.5` with `(4 + 2 * glow) / 2` for
-other syllables; AMLL keeps `style_timing::amll_emphasis` scaled by the voice's
-own type size and filters its white glow through the bright/dark reveal channels.
-Glow now follows the whole active package (it no longer drops at the lead end
-while a background voice is singing), settled/dimmed Spicy voices use their sung
-or unsung alpha instead of the reveal alpha, and background voices glow at their
-own size and alpha. Intensity is packed into the existing near/far Gaussian bases,
-so there is no new pass, texture, allocation or full-resolution blur; the far base
-stops mixing past 6 logical px, which is the documented radius residual versus
-Skia's variable-radius glyph blur.
-
-Measured host gates, fresh pixel receipts and phone performance with glow
-composited remain open, and the recorded Motion->Glow encode comparison must be
-re-run on the real adapter before any phone claim. Nothing in the enabled path
-adds a pass, texture, allocation or deeper queue: the glow rides the two existing
-half-resolution Gaussian bases that the inactive blur ramp already owns.

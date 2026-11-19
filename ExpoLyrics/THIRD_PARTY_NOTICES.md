@@ -16,42 +16,53 @@ canvas uses Reanimated on the UI thread with bounded output resolution, and
 stops ambient motion on pause, loss of focus, backgrounding or reduced motion.
 The web player and native failures use a static artwork fallback.
 
-## Spicy Lyrics and Apple Music-like Lyrics
+## Spicy Lyrics renderer
 
-The Rust styles and native reference helpers adapt layout and motion policies
-from [Spikerko/spicy-lyrics](https://github.com/Spikerko/spicy-lyrics) v6.3.15,
-commit `2a14863f8c29782f9ab3becff2b1360dfb74a4fb`, and
-[amll-dev/applemusic-like-lyrics](https://github.com/amll-dev/applemusic-like-lyrics).
-Spicy Lyrics is AGPL-3.0 and Apple Music-like Lyrics is AGPL-3.0-only.
-The reference tests use the Spicy spring and spline fixture in
-`scripts/fixtures/spicy-motion-reference.ts` and AMLL core 0.6.0.
-The AMLL package version and integrity hash are recorded in `package-lock.json`.
+The WebView lyrics renderer includes code and CSS from
+[`Spikerko/spicy-lyrics`](https://github.com/Spikerko/spicy-lyrics), version
+6.3.15 at commit `2a14863f8c29782f9ab3becff2b1360dfb74a4fb`.
+
+Spicy Lyrics is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). `components/lyrics/spicy-webview.css` contains the upstream
+`src/css/Lyrics/main.css` and `src/css/Lyrics/Mixed.css` renderer styles, followed
+by a small KineSync host shell. The standalone WebView renderer also copies or
+closely ports the upstream implementations from `src/modules/Spring.ts`,
+`src/utils/Lyrics/LyricsVirtualizer.ts`,
+`src/utils/Lyrics/Animator/Lyrics/LyricsAnimator.ts`,
+`src/utils/Lyrics/Animator/Lyrics/LyricsSetter.ts`,
+`src/utils/Lyrics/Applyer/Synced/Syllable.ts`, and
+`src/utils/Scrolling/ScrollToActiveLine.ts`. These live in
+`components/lyrics/spicy-upstream-*.ts` and are wrapped by
+`components/lyrics/spicy-webview-entry.ts`, which replaces Spicetify, Spotify,
+network, and global-store dependencies with KineSync's local WebView bridge and
+playback clock. The renderer preserves upstream spring/spline, emphasis,
+blur, interlude-dot and line-state effects. `spicy-layout-host.ts` and
+`spicy-layout.css` provide KineSync's native row geometry and scrolling policy.
+The upstream virtualizer and scroll controller are not bundled into the host.
+
+## Apple Music-like Lyrics WebView renderer
+
+The AMLL WebView host bundles `@applemusic-like-lyrics/core` version 0.6.0
+from [`amll-dev/applemusic-like-lyrics`](https://github.com/amll-dev/applemusic-like-lyrics).
+The installed version and integrity hash are recorded in `package-lock.json`.
+The earlier native port used commit `eb5c852f7bf809f32425c3025f423598c619af58`.
+That port is no longer the active renderer.
+
+Apple Music-like Lyrics is licensed under the GNU Affero General Public License
+v3.0 (AGPL-3.0-only). `components/lyrics/amll-webview-entry.ts` wraps its
+lyric player and background support with KineSync's local message bridge,
+playback clock, layout options, and attribution UI. Generated JavaScript and
+CSS are included in `amll-webview-bundle.ts`. Native React Native controls
+surround the WebView. The lyrics themselves use the upstream web renderer.
 
 The mobile app declares AGPL-3.0-only in its package metadata. The complete
 license text is included in [LICENSE](LICENSE). Other dependencies retain
 the license files and copyright notices distributed with their packages.
 
-## Noto Sans CJK SC fallback font
-
-The iOS Rust lyric module bundles the full official Noto Sans CJK SC Regular
-and Bold OpenType files from
-[`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk), path
-`Sans/OTF/SimplifiedChinese/` on `main`. They are used only when the platform
-Japanese, Chinese and Korean system fonts cannot draw a cluster. The files are
-licensed under the SIL Open Font License 1.1. The complete license is in
-`modules/kinesync-rust-lyrics/ios/Fonts/NotoSansCJK-LICENSE.txt`.
-
-Recorded SHA-256 values:
-
-- `NotoSansCJKsc-Regular.otf`: `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b`
-- `NotoSansCJKsc-Bold.otf`: `b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a`
-
-No Android bundle is added because Android exposes its own system CJK fonts.
-
 ## Experimental native lyric renderers
 
 `components/lyrics/native/reference-motion.ts` and the native word/line/scroll
-controllers port the Spicy and AMLL motion policies cited above.
+controllers port the bundled Spicy and AMLL motion policies cited above.
 The `amll-reference-*.ts` files contain pure layout and word splitting source
 extracted from AMLL core 0.5.2 and retain its AGPL-3.0-only license.
 The Skia measurement adapter replaces the browser's DOM measurement.

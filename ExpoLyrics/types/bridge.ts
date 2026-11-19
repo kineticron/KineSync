@@ -16,7 +16,6 @@ export type PlaybackPacket = {
   type: "playback";
   trackId: string;
   spotifyTrackId?: string;
-  isrc?: string;
   title: string;
   artist: string;
   album?: string;
@@ -100,7 +99,6 @@ export type Track = {
   artworkUrl?: string;
   durationMs: number;
   spotifyTrackId?: string;
-  isrc?: string;
 };
 
 export type LyricsTranslationMetadata = {
@@ -172,17 +170,7 @@ export type LyricsAttributionMetadata = {
 };
 
 export type LyricsMetadata = {
-  spicyApi?: { fetchedAt: number; expiresAt: number; [key: string]: unknown };
-  /** Network boundary provenance stamped only for responses fetched from api.spicylyrics.org. */
-  fetchOrigin?: {
-    provider?: string;
-    source?: string;
-    host?: string;
-    url?: string;
-    spotifyTrackId?: string;
-    isrc?: string;
-    [key: string]: unknown;
-  };
+  spicyApi?: { fetchedAt: number; expiresAt: number };
   /** Original imported XML, retained for lossless TTML export. */
   ttml?: {
     content: string;
@@ -200,8 +188,6 @@ export type LyricsMetadata = {
     preservedTranslations?: Array<{ index: number; text?: string; backgroundText?: string }>;
   };
   instrumental?: boolean;
-  /** Plain provider text with no timing. It must never reach a timed renderer. */
-  untimed?: boolean;
   credits?: LyricsCreditsMetadata;
   attribution?: LyricsAttributionMetadata;
   translation?: LyricsTranslationMetadata;
@@ -230,7 +216,7 @@ export type LyricLine = {
   lineEndTime: number;
   syllables: LyricSyllable[];
   backgroundSyllables?: LyricSyllable[];
-  /** Exact Spicy Background[] blocks with independent vocal timing. */
+  /** Exact Spicy Background[] blocks for the WebView renderer. */
   spicyBackgrounds?: SpicyBackgroundSyllableBlock[];
   /** Exact Spicy payload StartTime converted from seconds to milliseconds. */
   spicyLyricsStartTime?: number;

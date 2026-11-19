@@ -27,7 +27,7 @@ let fetchResponse = async () => ({ ok: true, status: 200, arrayBuffer: async () 
 class Socket {
   static OPEN = 1;
   readyState = 1;
-  constructor(url) { this.url = url; sockets.push(this); }
+  constructor() { sockets.push(this); }
   send() {}
   close() { this.readyState = 3; this.onclose?.(); }
   event(value) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -58,39 +58,14 @@ function reset() {
 function publish(sample) { const packet = api.detectorPacket(sample); store.getState().ingestPacket(packet, 'mobile'); return packet; }
 function position() { const s = store.getState(); return s.anchorPositionMs + (s.isPlaying ? Math.max(0, mono - s.anchorMonotonicMs) : 0); }
 async function connect(sample) {
-  let pendingBootstrap, captureId;
-  const detector = new api.SpotifyDetector({ sample, ready() {}, status() {}, authenticated() {},
-    sessionNeeded(id) {
-      assert.equal(pendingBootstrap, undefined, 'only one browser bootstrap is pending');
-      pendingBootstrap = captureId = id;
-    },
-  });
-  const capture = value => detector.capture(JSON.stringify(value), 'https://open.spotify.com', captureId);
-  const connection = {
-    detector, socket: null,
-    async register(id) {
-      assert(pendingBootstrap, 'the browser must be asked to bootstrap before registration');
-      if (connection.socket?.readyState === 1 && connection.socket === detector.socket) {
-        assert(detector.health.observerConfirmed, 'healthy observer remains verified through renewal');
-      } else assert.equal(detector.health.phase, 'renewingSession');
-      const token = `synthetic-test-credential-${pendingBootstrap}`;
-      const clientToken = `synthetic-client-${pendingBootstrap}`;
-      pendingBootstrap = undefined;
-      const previousSockets = sockets.length;
-      assert(capture({ type: 'credentials', authenticated: true, token, clientToken, expiresAt: wall + 3_600_000 }));
-      assert.equal(sockets.length, previousSockets, 'fresh credentials require fresh routes');
-      assert(capture({ type: 'observerEndpoint', url: 'https://spclient.spotify.com/connect-state/v1/devices/synthetic-observer' }));
-      assert(capture({ type: 'socket', url: 'wss://dealer.spotify.com/' }));
-      assert.equal(sockets.length, previousSockets + 1);
-      this.socket = sockets.at(-1);
-      assert.equal(new URL(this.socket.url).searchParams.get('access_token'), token);
-      this.socket.event({ headers: { 'Spotify-Connection-Id': id } });
-      await flush();
-    },
-  };
-  detector.setEnabled(true);
-  await connection.register('synthetic-connection');
-  return connection;
+  const detector = new api.SpotifyDetector({ sample, ready() {}, status() {}, sessionNeeded() {}, authenticated() {} });
+  const capture = value => detector.capture(JSON.stringify(value), 'https://open.spotify.com');
+  capture({ type: 'credentials', authenticated: true, token: 'synthetic-test-credential', expiresAt: wall + 3_600_000 });
+  capture({ type: 'observerEndpoint', url: 'https://spclient.spotify.com/connect-state/v1/devices/synthetic-observer' });
+  capture({ type: 'socket', url: 'wss://dealer.spotify.com/' }); detector.setEnabled(true);
+  const socket = sockets.at(-1);
+  socket.event({ headers: { 'Spotify-Connection-Id': 'synthetic-connection' } }); await flush();
+  return { detector, socket };
 }
 
 // Diagnostics must not change projection, store corrections or wire packet shape.
@@ -195,9 +170,7 @@ at(1200); const buffering = raw(3500, wall, true); buffering.player_state.is_buf
 live.socket.event({ payloads: [buffering] }); at(1300); assert.equal(position(), 3500, 'buffering never extrapolates');
 live.detector.setEnabled(false); at(2000); live.detector.setEnabled(true);
 assert.equal(accepted.at(-1).timingProvenance.receipt.wallMs, epoch + 1200);
-assert.equal(receipt.wallMs, epoch + 50);
-await live.register('foreground-reconnected');
-live.detector.clear();
+assert.equal(receipt.wallMs, epoch + 50); live.detector.clear();
 // Wall jump changes new wall-projected packets, not an already monotonic store.
 const beforeJump = position(); wall += 60000; assert.equal(position(), beforeJump);
 
@@ -228,14 +201,14 @@ for (const diagnostics of [false, true]) {
   send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, 6);
   const oldSocket = live.socket;
   live.detector.setEnabled(false); live.detector.setEnabled(true);
-  await live.register('reconnected');
+  live.socket = sockets.at(-1); live.socket.event({ headers: { 'Spotify-Connection-Id': 'reconnected' } }); await flush();
   const count = seen.length;
   oldSocket.event({ payloads: [raw(10000, epoch + 100000)] }); assert.equal(seen.length, count, 'old generation callback ignored');
   send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, count, 'reconnect retains same-source watermark');
   send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1, 'new connection confirms equal state once');
   send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1);
-  live.detector.refresh();
-  await live.register('refreshed');
+  live.detector.refresh(); live.socket = sockets.at(-1);
+  live.socket.event({ headers: { 'Spotify-Connection-Id': 'refreshed' } }); await flush();
   send(500, 'device-C', 'session-D'); assert.equal(seen.length, count + 2, 'explicit refresh clears source fence');
   live.detector.clear();
   const unknown = []; live = await connect(s => unknown.push(s));
@@ -453,8 +426,8 @@ for (const diagnostics of [false, true]) for (const capture of bootstraps.cases)
     while (next < events.length && events[next].at <= row.wallMs) {
       const event = events[next++]; at(event.at);
       if (event.refresh) {
-        live.detector.refresh();
-        await live.register('bootstrap-refreshed');
+        live.detector.refresh(); live.socket = sockets.at(-1);
+        live.socket.event({ headers: { 'Spotify-Connection-Id': 'bootstrap-refreshed' } }); await flush();
       } else if (event.metadata) {
         resolveMetadata({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(JSON.stringify({
           gid: '00000000000000000000000000000001', name: 'Synthetic', artist: [{ name: 'Synthetic' }], album: { name: 'Synthetic' },

@@ -1,11 +1,5 @@
 # Development arrival capture
 
-The current development arrival lab captures Rust JS packet preparation and
-the corresponding native track-ready callback. Its workload ID is
-`synthetic-paused-delayed-arrival-rust-host-v3`. Skia-specific UI and shaping
-counters below describe historical captures and independent reference tests.
-Track-ready timestamps do not establish pixel presentation.
-
 No performance baseline has been measured by these scripts. Do not label unit-test timings, fixture delivery, React commits, UI picture publication, or readiness as the first presented correct line/window.
 
 Use a physical Android device with an already installed compatible development binary and this JS bundle. No native build is required by this runner. If the binary is incompatible, stop and record that requirement. Native WebView is excluded.

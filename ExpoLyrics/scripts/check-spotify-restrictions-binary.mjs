@@ -39,26 +39,22 @@ let pass=0,fail=0;
 async function test(name,fn){try{await fn();pass++;console.log('PASS '+name);}catch(e){fail++;console.log('FAIL '+name+' '+e.message);}}
 const flush=async()=>{for(let i=0;i<40;i++)await Promise.resolve();};
 async function setup(raw,transport){
- let socket, captureId; const posts=[], samples=[];let id=0;const timers=new Map();
+ let socket; const posts=[], samples=[];let id=0;const timers=new Map();
  const runtime={wall:()=>epoch+1000,mono:()=>1000,random:()=>0.3,
  setTimeout:(fn,ms)=>{timers.set(++id,{fn,ms});return id;},clearTimeout:i=>timers.delete(i),
  setInterval:(fn,ms)=>{timers.set(++id,{fn,ms});return id;},clearInterval:i=>timers.delete(i),
- socket:url=>socket={url,readyState:1,send(){},close(){this.readyState=3;},event(value){this.onmessage?.({data:JSON.stringify(value)});}},
+ socket:()=>socket={readyState:1,send(){},close(){this.readyState=3;},event(value){this.onmessage?.({data:JSON.stringify(value)});}},
  fetch:async(url,options)=>{
   if(options.method==='POST')posts.push(JSON.parse(gunzipSync(Buffer.from(options.body)).toString()));
   const body=options.method==='PUT'?(transport==='registration'?raw:fixture()):Buffer.alloc(0);
   return {ok:true,status:200,headers:new Headers(),arrayBuffer:async()=>Uint8Array.from(body).buffer};
  }};
- const d=new SpotifyDetector({sample:s=>samples.push(s),status(){},ready(){},authenticated(){},sessionNeeded(id){captureId=id;}},runtime);
- const capture=e=>assert(d.capture(JSON.stringify(e),'https://open.spotify.com/',captureId), 'requested capture accepts '+e.type);
+ const d=new SpotifyDetector({sample:s=>samples.push(s),status(){},ready(){},authenticated(){},sessionNeeded(){}},runtime);
+ const capture=e=>d.capture(JSON.stringify(e),'https://open.spotify.com/');
  d.setEnabled(true);
- assert(captureId, 'detector requests a fresh browser session on startup');
- capture({type:'credentials',token:'fixture',authenticated:true,expiresAt:epoch+3600000});
  capture({type:'observerEndpoint',url:'https://guc3-spclient.spotify.com/connect-state/v1/devices/test-observer'});
- assert.equal(socket,undefined,'capture cannot connect before Dealer discovery');
  capture({type:'socket',url:'wss://dealer.spotify.com/'});
- assert(socket,'completed capture opens Dealer');
- assert.equal(new URL(socket.url).searchParams.get('access_token'),'fixture');
+ capture({type:'credentials',token:'fixture',authenticated:true,expiresAt:epoch+3600000});
  socket.onopen?.();
  socket.event({headers:{'Spotify-Connection-Id':'fixture-connection'}});
  await flush();

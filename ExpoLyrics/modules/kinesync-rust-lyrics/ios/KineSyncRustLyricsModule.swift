@@ -1,4 +1,3 @@
-import CoreText
 import ExpoModulesCore
 import QuartzCore
 import UIKit
@@ -13,24 +12,9 @@ public final class KineSyncRustLyricsModule: Module {
       Events("onStatus", "onMetrics")
       Prop("trackJson") { (view: KineSyncRustLyricsView, value: String) in view.setTrack(value) }
       Prop("active") { (view: KineSyncRustLyricsView, value: Bool) in view.setActive(value) }
-      AsyncFunction("copyLayout") { (view: KineSyncRustLyricsView, promise: Promise) in
-        MainActor.assumeIsolated { view.copyLayout(promise) }
-      }
       AsyncFunction("setAnchor") { (view: KineSyncRustLyricsView, value: String) in
         // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
         MainActor.assumeIsolated { view.setAnchor(value) }
-      }
-      AsyncFunction("setFollowing") { (view: KineSyncRustLyricsView, value: Bool, epoch: Double, generation: Double, gesture: Bool) in
-        MainActor.assumeIsolated { view.setFollowing(value, epoch: epoch, generation: generation, gesture: gesture) }
-      }
-      AsyncFunction("scrollBy") { (view: KineSyncRustLyricsView, dy: Double) in
-        MainActor.assumeIsolated { view.scrollBy(dy) }
-      }
-      AsyncFunction("fling") { (view: KineSyncRustLyricsView, velocity: Double) in
-        MainActor.assumeIsolated { view.fling(velocity) }
-      }
-      AsyncFunction("hitTest") { (view: KineSyncRustLyricsView, x: Double, y: Double, promise: Promise) in
-        MainActor.assumeIsolated { view.hitTest(x, y, promise) }
       }
     }
   }
@@ -45,13 +29,10 @@ private struct Anchor: Decodable {
   let rate: Double
   let snap: Bool
 }
-private struct TrackIdentity: Decodable { let generation: UInt64; let track_id: String }
+private struct TrackIdentity: Decodable { let generation: UInt64 }
 
 // Only the serial queue touches Rust. Retirement is asynchronous and retains the
 // layer until the last bounded frame and surface destruction have completed.
-// HAL configuration synchronously dispatches only CAMetalLayer setters to main.
-// Main must never wait for this worker. Never hold gate across a Rust call,
-// because main lifecycle callbacks also take gate. GPU waits stay on worker.
 private final class RustOwner: @unchecked Sendable {
   // Shared serialization also orders old-owner retirement before a rapid remount
   // can create/configure another wgpu surface on the same retained layer.
@@ -71,56 +52,6 @@ private final class RustOwner: @unchecked Sendable {
   private var size = CGSize.zero
   private var scale: CGFloat = 1
   private var lastMetrics = 0.0
-  // Bundle bytes are cached once, loaded on the worker, never resolved via Metro per frame.
-  private static let fontBundle: Bundle? = {
-    let url = [Bundle.main, Bundle(for: KineSyncRustLyricsModule.self)].compactMap { $0.url(forResource: "KineSyncLyricsFonts", withExtension: "bundle") }.first
-    return url.flatMap { Bundle(url: $0) }
-  }()
-  private static let fontBytes: (Data, Data)? = {
-    guard let bundle = fontBundle,
-          let regular = bundle.url(forResource: "SF-Pro-Display-Regular", withExtension: "otf"),
-          let bold = bundle.url(forResource: "SF-Pro-Display-Bold", withExtension: "otf"),
-          let regularData = try? Data(contentsOf: regular), let boldData = try? Data(contentsOf: bold) else { return nil }
-    return (regularData, boldData)
-  }()
-  // Register the bundled Simplified Chinese fallback before Fontique's CoreText
-  // scan runs in kr_create. The fonts are process scoped and already loaded from
-  // KineSyncLyricsFonts.bundle, so this adds no per-frame work or network access.
-  private static func registerBundledCJKFonts() -> Bool {
-    guard let bundle = fontBundle else { return false }
-    var ready = true
-    for name in ["NotoSansCJKsc-Regular", "NotoSansCJKsc-Bold"] {
-      guard let url = bundle.url(forResource: name, withExtension: "otf") else {
-        ready = false
-        continue
-      }
-      var error: Unmanaged<CFError>?
-      if CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) { continue }
-      // A second renderer owner can find these fonts already registered.
-      if let error = error?.takeRetainedValue(), CFErrorGetCode(error) == 105 { continue }
-      ready = false
-    }
-    return ready
-  }
-  private func installFonts() -> Bool {
-    guard let (regular, bold) = Self.fontBytes else {
-      failed = true; emit(["state": "error", "message": "Bundled Rust lyric fonts unavailable; rebuild with KineSyncLyricsFonts.bundle"]); return false
-    }
-    let result = regular.withUnsafeBytes { r in bold.withUnsafeBytes { b in
-      kr_set_fonts(handle, r.baseAddress!.assumingMemoryBound(to: UInt8.self), r.count,
-                   b.baseAddress!.assumingMemoryBound(to: UInt8.self), b.count)
-    } }
-    if result < 0 { failure(); return false }
-    return true
-  }
-  private func layoutReceipt() -> String {
-    let capacity = kr_copy_layout_json(handle, nil, 0)
-    guard capacity > 0, capacity <= 8_000_000 else { return "" }
-    var bytes = [UInt8](repeating: 0, count: capacity)
-    let actual = bytes.withUnsafeMutableBufferPointer { kr_copy_layout_json(handle, $0.baseAddress, $0.count) }
-    guard actual == capacity else { return "" }
-    return String(decoding: bytes.dropLast(), as: UTF8.self)
-  }
   private struct SurfaceInput {
     let track: String
     let anchor: Anchor?
@@ -134,7 +65,6 @@ private final class RustOwner: @unchecked Sendable {
   private var inputScheduled = false
 
   init(layer: CAMetalLayer, report: @escaping @MainActor ([String: Any]) -> Void) {
-    assert(Thread.isMainThread, "RustOwner must be created on main")
     self.layer = layer
     self.report = report
   }
@@ -164,45 +94,6 @@ private final class RustOwner: @unchecked Sendable {
     enqueue(update: SurfaceInput(track: track, anchor: anchor, size: size, scale: scale))
   }
   func setAnchor(_ value: Anchor) { enqueue(anchor: value) }
-  // Gestures bypass the latest-wins anchor coalescer: every drag delta and the
-  // follow handoff must arrive in touch order. The shared serial queue still
-  // orders them against frames, anchors, resize and track replacement.
-  func setFollowing(_ value: Bool) {
-    queue.async {
-      guard self.permitted(), self.handle != 0, !self.failed else { return }
-      if kr_set_following(self.handle, value) < 0 { self.failure() }
-    }
-  }
-  func scrollBy(_ dy: Double) {
-    guard dy.isFinite else { return }
-    queue.async {
-      guard self.permitted(), self.handle != 0, !self.failed else { return }
-      if kr_scroll_by(self.handle, dy) < 0 { self.failure() }
-    }
-  }
-  func fling(_ velocity: Double, nativeMs: Double, completion: @escaping @MainActor (Bool) -> Void) {
-    guard velocity.isFinite, nativeMs.isFinite, nativeMs >= 0 else { return }
-    queue.async {
-      guard self.permitted(), self.handle != 0, !self.failed else { return }
-      let result = kr_fling(self.handle, velocity, nativeMs)
-      if result < 0 { self.failure(); return }
-      let resumed = result == 1
-      DispatchQueue.main.async { completion(resumed) }
-    }
-  }
-  func hitTest(_ x: Double, _ y: Double, _ completion: @escaping @MainActor (Int32) -> Void) {
-    queue.async {
-      var index: Int32 = -1
-      if self.permitted(), self.handle != 0, !self.failed { index = kr_hit_test(self.handle, x, y) }
-      DispatchQueue.main.async { completion(index) }
-    }
-  }
-  func copyLayout(_ completion: @escaping @MainActor (String?) -> Void) {
-    queue.async {
-      let receipt = self.permitted() && self.handle != 0 ? self.layoutReceipt() : ""
-      DispatchQueue.main.async { completion(receipt.isEmpty ? nil : receipt) }
-    }
-  }
   private func enqueue(update: SurfaceInput? = nil, anchor: Anchor? = nil) {
     gate.lock()
     guard !retired else { gate.unlock(); return }
@@ -234,10 +125,6 @@ private final class RustOwner: @unchecked Sendable {
     }
   }
   private func applyUpdate(track: String, anchor: Anchor?, size: CGSize, scale: CGFloat, forceSnap: Bool) {
-    #if DEBUG
-    dispatchPrecondition(condition: .onQueue(queue))
-    assert(!Thread.isMainThread, "GPU creation and resize must stay on worker")
-    #endif
     guard self.permitted() else { return }
     let identity = track.data(using: .utf8).flatMap { try? JSONDecoder().decode(TrackIdentity.self, from: $0) }
     if self.failed {
@@ -256,15 +143,9 @@ private final class RustOwner: @unchecked Sendable {
     let width = UInt32(min(8192, ceil(size.width * scale)))
     let height = UInt32(min(8192, ceil(size.height * scale)))
     if self.handle == 0 {
-      guard kr_abi_version() == 11 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
-      guard Self.registerBundledCJKFonts() else {
-        self.failed = true
-        self.emit(["state": "error", "message": "Bundled CJK lyric font unavailable; rebuild with KineSyncLyricsFonts.bundle"])
-        return
-      }
+      guard kr_abi_version() == 3 else { self.failed = true; self.emit(["state": "error", "message": "Rust ABI mismatch"]); return }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
-      if !self.installFonts() { return }
     } else if self.size != size || self.scale != scale {
       if kr_resize(self.handle, width, height, Float(scale)) < 0 { self.failure(); return }
     }
@@ -285,39 +166,31 @@ private final class RustOwner: @unchecked Sendable {
     // Immediate gate only; lifecycle never waits for GPU/worker completion on main.
     gate.lock(); visible = value; gate.unlock()
   }
-  func draw(targetMs: Double, resumeStepMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
+  func draw(targetMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool) -> Void) {
     queue.async {
-      #if DEBUG
-      dispatchPrecondition(condition: .onQueue(self.queue))
-      assert(!Thread.isMainThread, "GPU acquire and Outdated recovery must stay on worker")
-      #endif
       var result: Int32 = 1
       var animating = false
-      var nextCue = -1.0
       defer {
         let status = result
         let generation = self.currentGeneration
         let settling = animating
-        let wakeup = nextCue
-        DispatchQueue.main.async { completion(status, generation, settling, wakeup) }
+        DispatchQueue.main.async { completion(status, generation, settling) }
       }
       guard self.permitted(rendering: true), !self.failed, self.handle != 0 else { return }
       let sampled = CACurrentMediaTime() * 1000
       // Never replay a target which became stale while input/resize work ran.
       let frameTarget = max(targetMs, sampled)
-      result = kr_render(self.handle, frameTarget, sampled, resumeStepMs)
+      result = kr_render(self.handle, frameTarget, sampled)
       if result < 0 { self.failure(); return }
       var m = KRMetrics()
       if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
       animating = m.animating != 0
-      nextCue = m.next_cue_native_ms
       let now = CACurrentMediaTime()
       if result == 0 && now - self.lastMetrics >= 1 {
         self.lastMetrics = now
         self.emit(["state": "metrics", "frames": m.frames, "generation": m.generation,
                    "sampleNativeMs": sampled, "targetNativeMs": m.target_native_ms, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
                    "positionMs": m.position_ms, "cpuSceneMs": m.cpu_scene_ms,
-                   "visibleChanges": m.visible_changes != 0, "nextCueNativeMs": m.next_cue_native_ms,
                    "cpuEncodeMs": m.cpu_encode_ms, "gpuIntervalMs": m.gpu_interval_ms,
                    "waitMs": m.wait_ms, "cpuBlitMs": m.cpu_blit_ms,
                    "acquireMs": m.acquire_ms, "blitSubmitMs": m.blit_submit_ms,
@@ -359,7 +232,7 @@ private final class DisplayTarget: NSObject {
   @objc func tick(_ link: CADisplayLink) { view?.tick(link) }
 }
 
-final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
+final class KineSyncRustLyricsView: ExpoView {
   let onStatus = EventDispatcher()
   let onMetrics = EventDispatcher()
   private let metal = MetalHost()
@@ -370,25 +243,8 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var generation: UInt64 = 0
   private var sequence: UInt64 = 0
   private var track = ""
-  private var trackId = ""
   private var anchor: Anchor?
   private var enabled = true
-  // Desired follow ownership. Kept here so a handoff sent before the native
-  // owner exists is replayed when the owner is created or the track changes.
-  private var following = true
-  // Invalidates an asynchronous release handoff after a newer touch, track or
-  // follow command. A stale completion must never resume a later gesture.
-  private var followEpoch: UInt64 = 0
-  // A queued JS touch-down false must not undo a release recapture. It clears
-  // on a new touch, explicit follow true, or track identity change.
-  private var releasePending = false
-  private var releaseRecaptured = false
-  private var releaseSerial: UInt64 = 0
-  // JS ownership epochs order touches, parent changes and track resets. Native
-  // rejects true commands from an older epoch and while a newer touch is active.
-  private var ownershipEpoch: UInt64 = 0
-  private var ownershipFloor: UInt64 = 0
-  private var touchActive = false
   private var foreground = UIApplication.shared.applicationState == .active
   private var busy = false
   private var dirty = true
@@ -401,10 +257,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var surfaceWaiting = false
   private var failed = false
   private var animating = false
-  private var resumePending = false
-  private var nextCueNativeMs = -1.0
-  private var cueWork: DispatchWorkItem?
-  private var cueDeadline = -1.0
   private var callbacks: UInt64 = 0
   private var submitted: UInt64 = 0
   private var idle: UInt64 = 0
@@ -417,8 +269,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var windowStart = 0.0
   private var windowCallbacks: UInt64 = 0
   private var windowPresentCalls: UInt64 = 0
-  private var windowBusyCallbacks: UInt64 = 0
-  private var windowMissedEstimate: UInt64 = 0
   private var previousStep = 0.0
   private var tickMs = 0.0
   private var intervalMs = 0.0
@@ -435,41 +285,15 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     (metal.layer as? CAMetalLayer)?.backgroundColor = UIColor.clear.cgColor
     (metal.layer as? CAMetalLayer)?.presentsWithTransaction = false
     addSubview(metal)
-    let pan = UIPanGestureRecognizer(target: self, action: #selector(manualPan(_:)))
-    pan.cancelsTouchesInView = false
-    pan.delegate = self
-    addGestureRecognizer(pan)
     target.view = self
     NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.willResignActiveNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(foregrounded), name: UIApplication.didBecomeActiveNotification, object: nil)
-  }
-  // UIKit owns translation/velocity sampling. JS only classifies taps and holds;
-  // it never sends per-move scrolling commands.
-  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
-  @objc private func manualPan(_ pan: UIPanGestureRecognizer) {
-    switch pan.state {
-    case .began:
-      takeOwnership()
-      fallthrough
-    case .changed:
-      let dy = pan.translation(in: self).y
-      pan.setTranslation(.zero, in: self)
-      owner?.scrollBy(-Double(dy))
-      markDirty(); lifecycle()
-    case .ended:
-      fling(-Double(pan.velocity(in: self).y) / 1000.0)
-    case .cancelled, .failed:
-      fling(0)
-    default: break
-    }
   }
   override func didMoveToWindow() {
     super.didMoveToWindow()
     if window == nil {
       link?.invalidate(); link = nil
       retryWork?.cancel(); retryWork = nil
-      cancelCue()
       owner?.dispose(); owner = nil
       session &+= 1; busy = false; animating = false
     } else if owner == nil {
@@ -496,21 +320,14 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
           metrics["requestedHz"] = self.requestedHz
           metrics["windowSeconds"] = elapsed
           metrics["deliveredCallbackHz"] = elapsed > 0 ? Double(self.callbacks - self.windowCallbacks) / elapsed : 0
-          metrics["busyCallbacksInWindow"] = self.busyCallbacks - self.windowBusyCallbacks
-          metrics["missedIntervalsInWindow"] = self.missedObservedEstimate - self.windowMissedEstimate
           metrics["presentCallRate"] = elapsed > 0 ? Double(self.presentCalls - self.windowPresentCalls) / elapsed : 0
           self.windowStart = CACurrentMediaTime()
           self.windowCallbacks = self.callbacks; self.windowPresentCalls = self.presentCalls
-          self.windowBusyCallbacks = self.busyCallbacks; self.windowMissedEstimate = self.missedObservedEstimate
           self.onMetrics(metrics)
         } else {
           if event["state"] as? String == "error" {
             self.failed = true; self.metal.isHidden = true
             self.link?.invalidate(); self.link = nil
-          }
-          if event["state"] as? String == "ready" {
-            self.markDirty()
-            self.lifecycle()
           }
           self.onStatus(event)
         }
@@ -531,26 +348,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     guard value.utf8.count <= 2_000_000,
           let data = value.data(using: .utf8), let identity = try? JSONDecoder().decode(TrackIdentity.self, from: data), identity.generation > generation else { return }
     generation = identity.generation; sequence = 0; anchor = nil; animating = false
-    ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
-    releasePending = false; releaseRecaptured = false
-    // Only a track identity change restores follow. Translation, credit and
-    // layout revisions keep the user's manual ownership.
-    if identity.track_id != trackId {
-      trackId = identity.track_id
-      following = true
-      releasePending = false
-      followEpoch &+= 1
-    }
     failed = false; metal.isHidden = true
     track = value; markDirty()
     refresh(); lifecycle()
-  }
-  func copyLayout(_ promise: Promise) {
-    guard let owner else { promise.reject("ERR_RUST_LAYOUT", "Rust owner unavailable"); return }
-    owner.copyLayout { receipt in
-      if let receipt { promise.resolve(receipt) }
-      else { promise.reject("ERR_RUST_LAYOUT", "No prepared Rust layout receipt") }
-    }
   }
   func setAnchor(_ value: String) {
     guard let data = value.data(using: .utf8), let next = try? JSONDecoder().decode(Anchor.self, from: data) else {
@@ -569,176 +369,28 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     if value { markDirty(); refresh() }
     lifecycle()
   }
-  func setFollowing(_ value: Bool, epoch: Double, generation commandGeneration: Double, gesture: Bool) {
-    guard epoch.isFinite, epoch >= 0, commandGeneration.isFinite, commandGeneration >= 0,
-          UInt64(commandGeneration) == generation else { return }
-    let nextEpoch = UInt64(epoch)
-    // A delayed touch-down false belongs to the release gesture even when the
-    // near recapture already won physical ownership. Record its epoch without
-    // undoing the recapture, then re-announce the recapture at that epoch so JS
-    // can accept the current gesture instead of rejecting an older event.
-    if lateGestureOwnershipAllowed(value, gesture: gesture, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) {
-      ownershipEpoch = nextEpoch
-      if releaseRecaptured { emitRecapturedFollow() }
-      return
-    }
-    guard followCommandAllowed(value, nextEpoch: nextEpoch, identity: UInt64(commandGeneration)) else { return }
-    ownershipEpoch = nextEpoch
-    if value { ownershipFloor = max(ownershipFloor, nextEpoch) }
-    releasePending = false
-    releaseRecaptured = false
-    following = value
-    followEpoch &+= 1
-    owner?.setFollowing(value)
-    // A paused/settled surface still needs frames while the spring settles.
-    markDirty()
-    lifecycle()
-  }
-  private func lateGestureOwnershipAllowed(_ value: Bool, gesture: Bool, nextEpoch: UInt64, identity: UInt64) -> Bool {
-    guard identity == self.generation, nextEpoch > self.ownershipEpoch else { return false }
-    guard !value, gesture, self.releasePending else { return false }
-    return true
-  }
-  private func emitRecapturedFollow() {
-    onStatus(["state": "follow", "generation": generation,
-              "ownershipEpoch": ownershipEpoch,
-              "message": "Auto-follow resumed near the active line"])
-  }
-  // A true from before a newer touch, or while that touch owns the viewport,
-  // must not reclaim follow even when its JS callback is delayed.
-  private func followCommandAllowed(_ value: Bool, nextEpoch: UInt64, identity: UInt64) -> Bool {
-    guard identity == self.generation, nextEpoch > self.ownershipEpoch else { return false }
-    guard !value || (!self.touchActive && nextEpoch > self.ownershipFloor) else { return false }
-    return true
-  }
-  // Native drag starts ownership without consuming a JS epoch. The following
-  // JS false command still records the epoch and keeps command ordering intact.
-  private func takeOwnership() {
-    releasePending = false
-    releaseRecaptured = false
-    following = false
-    followEpoch &+= 1
-    owner?.setFollowing(false)
-    markDirty()
-    lifecycle()
-  }
-  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-    // Invalidate an in-flight release before JS or the pan recognizer can
-    // deliver the next ownership command.
-    releasePending = false
-    releaseRecaptured = false
-    touchActive = true
-    ownershipFloor = max(ownershipFloor, ownershipEpoch &+ 1)
-    followEpoch &+= 1
-    super.touchesBegan(touches, with: event)
-  }
-  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-    touchActive = false
-    super.touchesEnded(touches, with: event)
-  }
-  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-    touchActive = false
-    super.touchesCancelled(touches, with: event)
-  }
-  func scrollBy(_ dy: Double) {
-    guard dy.isFinite, dy != 0 else { return }
-    owner?.scrollBy(dy)
-    markDirty()
-    lifecycle()
-  }
-  func fling(_ velocity: Double) {
-    guard velocity.isFinite else { return }
-    let releaseSession = session
-    let releaseGeneration = generation
-    let releaseEpoch = followEpoch
-    releaseSerial &+= 1
-    let serial = releaseSerial
-    releasePending = true
-    releaseRecaptured = false
-    owner?.fling(velocity, nativeMs: CACurrentMediaTime() * 1000) { [weak self] resumed in
-      guard let self,
-            self.session == releaseSession,
-            self.generation == releaseGeneration,
-            self.followEpoch == releaseEpoch,
-            self.releaseSerial == serial,
-            !self.failed else { return }
-      if resumed {
-        self.following = true
-        self.releaseRecaptured = true
-        self.emitRecapturedFollow()
-      } else {
-        self.releasePending = false
-        self.releaseRecaptured = false
-      }
-    }
-    markDirty()
-    lifecycle()
-  }
-  func hitTest(_ x: Double, _ y: Double, _ promise: Promise) {
-    guard x.isFinite, y.isFinite else { promise.reject("ERR_RUST_HIT", "Invalid lyric hit-test point"); return }
-    guard let owner else { promise.resolve(Int32(-1)); return }
-    owner.hitTest(x, y) { index in promise.resolve(index) }
-  }
   private func refresh() {
     guard window != nil, foreground, enabled, !failed else { return }
     owner?.update(track: track, anchor: anchor, size: bounds.size, scale: window?.screen.scale ?? UIScreen.main.scale)
-    owner?.setFollowing(following)
   }
   @objc private func background() { foreground = false; lifecycle() }
   @objc private func foregrounded() { foreground = true; markDirty(); refresh(); lifecycle() }
   private func lifecycle() {
     let visible = window != nil && foreground && enabled && !failed && bounds.width > 0 && bounds.height > 0
     owner?.setVisible(visible)
-    if !visible { retryWork?.cancel(); retryWork = nil; cancelCue(); resumePending = false }
-    if visible && retryWork == nil && !retryBlocked && (dirty || animating) {
-      cancelCue()
+    if !visible { retryWork?.cancel(); retryWork = nil }
+    if visible && retryWork == nil && !retryBlocked && (dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0)) {
       if link == nil {
         let next = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick(_:)))
         let maximum = Float(min(120, window?.screen.maximumFramesPerSecond ?? 60))
         requestedHz = Double(maximum)
-        next.preferredFrameRateRange = CAFrameRateRange(minimum: maximum, maximum: maximum, preferred: maximum)
+        next.preferredFrameRateRange = CAFrameRateRange(minimum: min(30, maximum), maximum: maximum, preferred: maximum)
         windowStart = CACurrentMediaTime()
         windowCallbacks = callbacks; windowPresentCalls = presentCalls
-        windowBusyCallbacks = busyCallbacks; windowMissedEstimate = missedObservedEstimate
         next.add(to: .main, forMode: .common)
         link = next
       }
-    } else {
-      link?.invalidate(); link = nil; previousTick = 0; previousStep = 0
-      if visible && !busy && retryWork == nil && !retryBlocked {
-        resumePending = anchor?.playing == true && (anchor?.rate ?? 0) > 0
-        scheduleCue()
-      }
-    }
-  }
-  private func cancelCue() {
-    cueWork?.cancel(); cueWork = nil; cueDeadline = -1
-  }
-  private func scheduleCue() {
-    guard nextCueNativeMs.isFinite, nextCueNativeMs >= 0,
-          anchor?.playing == true, (anchor?.rate ?? 0) > 0 else { cancelCue(); return }
-    if cueWork != nil && cueDeadline == nextCueNativeMs { return }
-    cancelCue()
-    let deadline = nextCueNativeMs
-    let revision = frameRevision
-    let epoch = session
-    // Rearm one display interval early. The next vsync still supplies the
-    // actual target, and a late timer never replays its stored cue time.
-    let hz = Double(min(120, window?.screen.maximumFramesPerSecond ?? 60))
-    let delay = max(0, (deadline - CACurrentMediaTime() * 1000) / 1000 - 1 / hz)
-    let work = DispatchWorkItem { [weak self] in
-      guard let self, self.session == epoch, self.frameRevision == revision,
-            self.nextCueNativeMs == deadline, self.cueDeadline == deadline, self.cueWork != nil,
-            self.window != nil, self.foreground,
-            self.enabled, !self.failed, self.anchor?.playing == true,
-            (self.anchor?.rate ?? 0) > 0 else { return }
-      self.cancelCue()
-      self.markDirty()
-      self.lifecycle()
-    }
-    cueDeadline = deadline
-    cueWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    } else { link?.invalidate(); link = nil; previousTick = 0; previousStep = 0 }
   }
   fileprivate func tick(_ display: CADisplayLink) {
     let start = CACurrentMediaTime()
@@ -758,16 +410,14 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     previousTick = display.timestamp
     previousStep = display.targetTimestamp - display.timestamp
     if busy { busyCallbacks &+= 1; return }
-    guard dirty || animating else {
+    guard dirty || animating || (anchor?.playing == true && (anchor?.rate ?? 1) > 0) else {
       idle &+= 1; lifecycle(); return
     }
     guard let owner else { inactive &+= 1; return }
     busy = true; dirty = false; submitted &+= 1
     let epoch = session
     let requestedRevision = frameRevision
-    let resumeStepMs = resumePending ? max(0, display.targetTimestamp - display.timestamp) * 1000 : 0
-    resumePending = false
-    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs) { [weak self] result, renderedGeneration, settling, nextCue in
+    owner.draw(targetMs: display.targetTimestamp * 1000) { [weak self] result, renderedGeneration, settling in
       guard let self, self.session == epoch else { return }
       self.busy = false
       if result == 0 { self.presentCalls &+= 1 }
@@ -777,7 +427,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         self.lifecycle(); return
       }
       self.animating = settling
-      if result != 0 && resumeStepMs > 0 { self.resumePending = true }
       if result == 3 {
         // No backoff and no stored target; completion polling continues at vsync.
       } else if result == 2 {
@@ -786,7 +435,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
         // No anchor/track yet. A new input/ready handshake will rearm, not a frame loop.
         self.retryBlocked = true
       } else if result == 0 {
-        self.nextCueNativeMs = nextCue
         self.retryCount = 0
         self.metal.isHidden = false
         if self.surfaceWaiting || self.displayedGeneration != renderedGeneration {
@@ -799,8 +447,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     }
   }
   private func markDirty() {
-    cancelCue()
-    nextCueNativeMs = -1
     dirty = true
     frameRevision &+= 1
     retryCount = 0
@@ -829,7 +475,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
   deinit {
-    cueWork?.cancel()
     retryWork?.cancel()
     link?.invalidate()
     NotificationCenter.default.removeObserver(self)

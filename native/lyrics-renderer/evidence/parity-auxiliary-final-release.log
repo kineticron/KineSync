@@ -1,9 +1,0 @@
-   Compiling lyrics-renderer v0.1.0 (/home/kit/rust-renderer-spike/native/lyrics-renderer)
-    Finished `release` profile [optimized] target(s) in 7.19s
-     Running unittests src/lib.rs (native/lyrics-renderer/target/release/deps/lyrics_renderer-f8836f2ba3b59edc)
-
-running 2 tests
-test auxiliary::tests::actual_translation_visibility_fonts_source_policy_and_cache_identity ... ok
-test auxiliary::tests::actual_auxiliary_gpu_pixels ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 1.93s

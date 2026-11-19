@@ -1,5 +1,4 @@
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,14 +9,6 @@ const repo = path.resolve(__dirname, '../..');
 const cli = path.join(repo, 'scripts/ios-dev-ci/ci.cjs');
 const workflow = fs.readFileSync(path.join(repo, '.github/workflows/ios-development-build.yml'), 'utf8');
 const identity = { xcode: 'Xcode 27.0\nBuild version 27A1', sdk: '27.0', sdkBuild: '27A1', runnerArch: 'ARM64', pod: '1.16.2', ccache: '4.13' };
-test('iOS Release prepares the validated device framework before CocoaPods', () => {
-  const release = fs.readFileSync(path.join(repo, '.github/workflows/ios-unsigned-ipa.yml'), 'utf8');
-  const build = release.indexOf('bash scripts/ios-dev-ci/build-rust-device.sh');
-  const validate = release.indexOf('node scripts/ios-dev-ci/rust-device.cjs validate');
-  const prebuild = release.indexOf('expo prebuild --clean --platform ios');
-  assert.ok(build >= 0 && validate > build && prebuild > validate);
-  assert.match(release, /rustup toolchain install .*--target .*config target/);
-});
 function temp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ios-dev-ci-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -32,7 +23,7 @@ function fixture(root) {
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins/native.js', 'ExpoLyrics/modules/example/ios/Shim.swift',
     'ExpoLyrics/ios/Podfile', 'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/ios/Podfile.lock',
     'native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/src/lib.rs',
-    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/vendor/vello_shaders/shader/fine.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h',
+    'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h',
     'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh', 'scripts/ios-dev-ci/ci.cjs',
     '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) put(root, file);
 }
@@ -60,11 +51,11 @@ test('Rust prebuilt is source-exact, and independent of JS or Swift shims', t =>
   put(root, 'native/lyrics-renderer/target/out', 'build output');
   put(root, 'native/lyrics-renderer/evidence/report.json', 'evidence');
   assert.equal(rustIdentity(root, identity), initial);
-  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/vendor/vello_shaders/shader/fine.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh',
+  for (const file of ['native/lyrics-renderer/src/lib.rs', 'native/lyrics-renderer/src/blur.wgsl', 'native/lyrics-renderer/include/KineSyncLyrics.h', 'native/lyrics-renderer/Cargo.lock', 'native/lyrics-renderer/Cargo.toml', 'scripts/ios-dev-ci/rust-device.cjs', 'scripts/ios-dev-ci/build-rust-device.sh',
     'scripts/ios-dev-ci/ci.cjs', '.github/workflows/ios-development-build.yml', 'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']) {
     put(root, file, 'changed'); assert.notEqual(rustIdentity(root, identity), initial, file); put(root, file);
   }
-  for (const [field, value] of [['toolchain', '1.98.0'], ['target', 'other-target'], ['profile', 'dev'], ['features', ['new-feature']]]) {
+  for (const [field, value] of [['toolchain', '1.98.0'], ['target', 'other-target'], ['profile', 'release'], ['features', ['new-feature']]]) {
     const changed = structuredClone(config); changed.rust[field] = value;
     assert.notEqual(rustIdentity(root, identity, changed), initial, field);
   }
@@ -269,33 +260,15 @@ with zipfile.ZipFile(sys.argv[2],'w') as z:
 });
 test('live Rust track protocol preserves source atoms and sends anchors only for actual anchor changes', () => {
   const { buildRustTrack, anchorChanged, projectPosition } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
-  const lyrics = [{ lineStartTime: 10, lineEndTime: 30, backgroundSyllables: [{ text: 'x', startTime: 20, endTime: 45 }], syllables: [{ text: '뒤', startTime: 10, endTime: 20, isPartOfWord: true }, { text: '죽', startTime: 20, endTime: 30 }] },
-    { lineStartTime: 50, lineEndTime: 70, syllables: [{ text: 'a', startTime: 50, endTime: 70 }] }];
+  const lyrics = [{ lineStartTime: 10, lineEndTime: 30, syllables: [{ text: '뒤', startTime: 10, endTime: 20, isPartOfWord: true }, { text: '죽', startTime: 20, endTime: 30 }] }];
   const packet = JSON.parse(buildRustTrack('current-song', 7, lyrics));
   assert.equal(packet.generation, 7); assert.equal(packet.track_id, 'current-song');
   assert.equal(packet.lines[0].atoms.map(a => a.text).join(''), '뒤죽');
-  // Background voice tails keep the row active past the lead end (Skia getBackgroundEndTime).
-  assert.equal(packet.lines[0].background_end, 45);
-  assert.equal('background_end' in packet.lines[1], false);
   const previous = { anchorPositionMs: 50, anchorMonotonicMs: 100, isPlaying: true, currentTrack: { id: 'current-song', durationMs: 1000 }, positionMs: 70 };
   assert.equal(anchorChanged({ ...previous, positionMs: 80 }, previous), false);
   assert.equal(anchorChanged({ ...previous, anchorMonotonicMs: 120 }, previous), true);
   assert.equal(projectPosition(previous, 150), 100);
   assert.equal(projectPosition({ ...previous, isPlaying: false }, 150), 50);
-  // Prepared tracks carry source background voices under their parent line, and
-  // the producer refuses a voice whose own timing is unusable.
-  const voice = (start, end, text) => ({ start, end, text, words: [{ text, offset: 0, start, end }], cjk_breaks: [], opposite: false, duet: true });
-  const prepared = { settings: { style: 'spicy', font_scale: 1, landscape: false },
-    paints: lyrics.map(line => voice(line.lineStartTime, line.lineEndTime, 'x')),
-    backgrounds: [[voice(20, 45, 'bg')], []] };
-  const withBackgrounds = JSON.parse(buildRustTrack('current-song', 8, lyrics, prepared));
-  assert.equal(withBackgrounds.lines[0].backgrounds.length, 1);
-  assert.equal(withBackgrounds.lines[0].backgrounds[0].end, 45);
-  assert.equal(withBackgrounds.lines[0].paint.start, 10);
-  assert.equal('backgrounds' in withBackgrounds.lines[1], false);
-  assert.equal(withBackgrounds.lines[0].background_end, 45);
-  assert.throws(() => buildRustTrack('current-song', 9, lyrics, { ...prepared,
-    backgrounds: [[{ start: 20, end: 10, text: 'bg', words: [] }], []] }), /background vocal timing/);
 });
 test('native lifecycle source harness flushes inactive updates and bounds paused surface retries', () => {
   // Explicit source-level harness: executes the simple Swift activation body after
@@ -321,7 +294,7 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
     assert.equal(state.dirty, true); assert.deepEqual(calls, ['dirty', 'refresh', 'lifecycle']);
   }
   const tick = body('tick'), retry = body('scheduleRetry'), mark = body('markDirty'), lifecycle = body('lifecycle');
-  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
+  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000\) \{ \[weak self\] result, renderedGeneration, settling/);
   assert.match(tick, /self\.frameRevision == requestedRevision, renderedGeneration == self\.generation/);
   assert.match(tick, /if result == 2 \{\s*self\.scheduleRetry/);
   assert.match(tick, /else if result == 1[\s\S]*?self\.retryBlocked = true/);
@@ -368,21 +341,20 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(app, 'Final', 'final Mach-O mock');
   const map = path.join(root, 'App-LinkMap.txt'); put(root, 'App-LinkMap.txt', 'liblyrics_renderer.a _kr_render');
   put(ios, 'Pods/Target Support Files/Pods-App/ExpoModulesProvider.swift', 'KineSyncRustLyricsModule.self');
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
-  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Try Rust renderer');
+  put(evidence, 'rust-js-path.map', JSON.stringify({ version: 3, sources: ['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'], names: [], mappings: '' }));
   // The archive exists and its metadata passes, but the actual app lacks Rust.
   process.env.TEST_NM = '0000 T _unrelated';
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Final app Mach-O/);
   process.env.TEST_NM = symbols.map(symbol => `0000 T _${symbol}`).join('\n');
-  for (const name of ['SF-Pro-Display-Regular.otf', 'SF-Pro-Display-Bold.otf']) put(app, 'KineSyncLyricsFonts.bundle/' + name, fs.readFileSync(path.join(repo, 'ExpoLyrics/assets/fonts', name)));
   const report = prove({ app, executable: 'Final', linkMap: map, ios, evidence });
   assert.equal(Object.keys(report.symbols).length, symbols.length);
   const flat = sources => ({ version: 3, sources, names: [], mappings: '' });
   const indexed = maps => ({ version: 3, sections: maps.map((map, line) => ({ offset: { line, column: 0 }, map })) });
   // Metro's indexed output has no top-level sources and can contain empty sections.
   for (const sourcemap of [
-    indexed([flat([]), flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])]),
-    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])])]),
+    indexed([flat([]), flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])]),
+    indexed([flat([]), indexed([flat(['app/(tabs)/index.tsx']), flat(['components/lyrics/rust/rust-lyrics-view.tsx'])])]),
   ]) {
     put(evidence, 'rust-js-path.map', JSON.stringify(sourcemap));
     assert.equal(Object.keys(prove({ app, executable: 'Final', linkMap: map, ios, evidence }).symbols).length, symbols.length);
@@ -395,22 +367,11 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   assert.equal(fs.readFileSync(path.join(evidence, 'app-rust-LinkMap.txt'), 'utf8'), fs.readFileSync(map, 'utf8'));
   assert.match(fs.readFileSync(path.join(evidence, 'ExpoModulesProvider-0.swift'), 'utf8'), /KineSyncRustLyricsModule/);
   assert.ok(!fs.existsSync(path.join(evidence, 'rust-link-proof.json')));
-  // Removing any wiring marker must fail the proof.
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
-  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
-  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
   put(evidence, 'rust-js-path.map', '{invalid JSON');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), SyntaxError);
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
+  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
-  put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx',
-    'components/lyrics/rust/rust-lyrics-view.tsx', 'components/lyrics/amll-webview-bundle.ts'])));
-  assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Rust-only player/);
 });
 
 for (const shell of new Set([process.env.BASH32 || '/bin/bash', '/bin/bash'])) {
@@ -441,7 +402,7 @@ if (name === 'node') {
   fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR,'rust-static-nm.txt'),'0000 T _kr_abi_version');
  }
 } else if (name === 'cargo') {
- const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/release/liblyrics_renderer.a');
+ const library=path.join(process.env.CARGO_TARGET_DIR,'aarch64-apple-ios/debug/liblyrics_renderer.a');
  fs.mkdirSync(path.dirname(library),{recursive:true}); fs.writeFileSync(library,'fake arm64 archive');
 } else if (name === 'xcrun') {
  if (args.join(' ') === '--sdk iphoneos --show-sdk-path') console.log('/fake iPhoneOS SDK');
@@ -471,7 +432,7 @@ if (name === 'node') {
       const cargo = calls.filter(call => call.name === 'cargo');
       assert.equal(cargo.length, 1);
       assert.deepEqual(cargo[0].args, [`+${buildConfig.rust.toolchain}`, 'build', '--locked', '--lib', '--manifest-path',
-        'native/lyrics-renderer/Cargo.toml', '--target', 'aarch64-apple-ios', '--profile', 'release',
+        'native/lyrics-renderer/Cargo.toml', '--target', 'aarch64-apple-ios', '--profile', 'dev',
         ...(features.length ? ['--features', features.join(',')] : [])]);
       assert.equal(cargo[0].sdk, '/fake iPhoneOS SDK');
       assert.equal(fs.readFileSync(path.join(evidence, 'sealed'), 'utf8'), 'yes');
@@ -566,20 +527,17 @@ test('SourceMap v3 source collection accepts flat and nested Metro sections and 
 });
 
 test('native frame source contract uses display targets, one draw and asynchronous retirement', () => {
-  // Normalize Windows CRLF once so body slicing and closing-brace extraction
-  // operate on the same LF layout as the reviewed checkout.
-  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8')
-    .replace(/\r\n/g, '\n');
-  const predicate = swift.match(/guard (dirty \|\| animating) else/)[1];
-  const needsFrame = new Function('dirty', 'animating', `return ${predicate}`);
-  // ABI 9: playback alone no longer arms continuous drawing. Settled playback
-  // arms one cancellable cue wakeup, so only input or reported motion draws.
-  assert.equal(needsFrame(false, false), false);
-  assert.equal(needsFrame(false, true), true);
-  assert.equal(needsFrame(true, false), true);
+  const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
+  const predicate = swift.match(/guard (dirty \|\| animating \|\| .+?) else/)[1];
+  const needsFrame = new Function('dirty', 'animating', 'anchor', `return ${predicate}`);
+  assert.equal(needsFrame(false, false, { playing: true, rate: 1 }), true);
+  assert.equal(needsFrame(false, false, { playing: false, rate: 1 }), false);
+  assert.equal(needsFrame(false, true, { playing: false, rate: 1 }), true);
+  assert.equal(needsFrame(false, false, { playing: true, rate: 0 }), false);
+  assert.equal(needsFrame(true, false, null), true);
   assert.ok(swift.indexOf('if busy { busyCallbacks') < swift.indexOf('owner.draw(targetMs:'));
   assert.match(swift, /busy = true; dirty = false; submitted &\+= 1/);
-  assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled, resumeStepMs\)/);
+  assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled\)/);
   assert.match(swift, /let sampled = CACurrentMediaTime\(\) \* 1000/);
   assert.match(swift, /preferredFrameRateRange = CAFrameRateRange/);
   assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
@@ -607,7 +565,7 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(pending.pendingUpdate.generation, 9999);
   for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentCallRate']) assert.ok(swift.includes(`metrics["${name}"]`), name);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
-  assert.match(gpu, /render_frame_with_overlay\(scene, overlay, band, blur, false, appearance, glow\)/);
+  assert.match(gpu, /render_frame\(scene, band, true, false\)/);
   assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
   assert.match(gpu, /device.poll\(PollType::Poll\)/);
   assert.match(gpu, /on_submitted_work_done/);
@@ -642,37 +600,21 @@ test('visual anchor clock preserves rate/pause/resume and snaps scrub/track/disc
   assert.equal(a.positionMs, 1000); assert.equal(a.snap, true);
 });
 
-test('Rust lyric surface keeps a full-size viewport, soft moving edge and real dock background', () => {
+test('measured player viewport clips before the complete dock and diagnostics reserve canvas space', () => {
+  const { rustViewport } = require('../../ExpoLyrics/lib/rust-lyrics-protocol.js');
+  // Includes small/large portrait, landscape fallback geometry, and unknown initial measurement.
+  for (const [height, top, dock] of [[844, 120, 590], [667, 90, 410], [1024, 135, 800], [390, 24, 310], [844, 120, null], [390, 300, 100]]) {
+    const viewport = rustViewport(height, top, dock);
+    const bottomEdge = height - viewport.bottom;
+    assert.ok(viewport.height >= 0);
+    assert.equal(top + viewport.height, bottomEdge);
+    if (dock != null && dock >= top) assert.ok(bottomEdge <= dock);
+    else assert.equal(viewport.height, 0);
+  }
   const player = fs.readFileSync(path.join(repo, 'ExpoLyrics/app/(tabs)/index.tsx'), 'utf8');
-  // The renderer viewport stays pinned to the full lyric area. No moving height
-  // and no dock-measured surface returns, so the native view never resizes.
-  assert.match(player, /style=\{\[styles\.lyricsWrap, lyricsViewportStyle\]\}/);
-  assert.ok(!player.includes('foregroundClipStyle'));
-  assert.ok(!player.includes('rustLyricsViewport'));
-  assert.ok(!player.includes('setRustDockBounds'));
-  assert.ok(!player.includes('rustDockBounds'));
-  assert.doesNotMatch(player, /bottom: 0,\s*overflow: "hidden" as const/);
-  // The moving edge is an alpha mask. The opaque band and the transparent
-  // gradient fade meet at the dock edge so glyphs never end on a hard cut.
-  // Android must use software mask rendering to redraw an animated mask.
-  assert.match(player, /<MaskedView[\s\S]*?androidRenderingMode="software"[\s\S]*?maskElement=/);
-  assert.match(player, /const lyricsEdgeMaskSolidStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?LYRICS_EDGE_FADE_HEIGHT \* Math\.max\(0, Math\.min\(1, controlsOpacity\.value\)\)[\s\S]*?height: Math\.max\(0, edge - fade\)/);
-  assert.match(player, /const lyricsEdgeMaskFadeStyle = useAnimatedStyle\(\(\) => \{[\s\S]*?transform: \[\{ translateY: Math\.max\(0, edge - fade\) \}\],[\s\S]*?height: fade/);
-  // The fade scales with controlsOpacity, so the hidden end state is fully opaque.
-  assert.match(player, /LYRICS_EDGE_FADE_HEIGHT \* Math\.max\(0, Math\.min\(1, controlsOpacity\.value\)\)/);
-  assert.match(player, /colors=\{_stableMaskColors9\}/);
-  assert.match(player, /_stableMaskColors9 = \["rgba\(0,0,0,1\)", "rgba\(0,0,0,0\)"\]/);
-  assert.match(player, /LYRICS_EDGE_FADE_HEIGHT,/);
-  // The real animated artwork background remains mounted behind the lyrics.
-  assert.equal((player.match(/<ArtworkBackground\s/g) || []).length, 1);
-  assert.match(player, /<ArtworkBackground[\s\S]*?uri=\{resolvedArtworkUrl\}[\s\S]*?playing=\{isPlaying && !showEmptyState\}/);
-  // The mask fades lyrics into the real dynamic background without a black
-  // overlay. Keep the moving dock boundary independent of the row stagger.
-  assert.doesNotMatch(player, /lyricsBottomBlurWrap|lyricsBottomBlurOpacityStyle|styles\.lyricsBottomBlur|_stableColors7/);
-  assert.doesNotMatch(player, /rgba\(0,0,0,0\.85\)/);
-  assert.match(player, /const fillTouchStyle = useAnimatedStyle\(\(\) => \(\{\s*top: screenHeight - Math\.max\(0, screenHeight - dockTop\.value\) \* controlsOpacity\.value/);
-  assert.match(player, /style=\{\[styles\.fillTouchBlocker, fillTouchStyle\]\}/);
-  assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
+  assert.match(player, /const top = event.nativeEvent.layout.y;\s*setRustDockBounds/);
+  assert.match(player, /maxHeight: __DEV__ && rustRenderer && !tour.active \? rustLyricsViewport.height/);
+  assert.match(player, /rustDockBounds.key === viewportKey && rustPlayerBounds.key === viewportKey/);
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));
   assert.match(view, /root: \{ flex: 1, minHeight: 0, overflow: 'hidden' \}/);
@@ -705,151 +647,25 @@ with zipfile.ZipFile(sys.argv[1],'w') as z:
   assert.match(header, /uint32_t capabilities, animating/);
 });
 
-test('ABI 11 C layout and both native-client guards reject incompatible clients', () => {
+test('ABI 3 C layout and both native-client guards reject incompatible clients', () => {
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const condition = view.match(/if \((!api \|\| api.abiVersion\(\) !== \d+)\)/)[1];
   const rejects = new Function('api', `return ${condition}`);
   assert.equal(rejects(null), true);
-  for (const version of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) assert.equal(rejects({ abiVersion: () => version }), true);
-  assert.equal(rejects({ abiVersion: () => 11 }), false);
+  for (const version of [0, 1, 2, 4]) assert.equal(rejects({ abiVersion: () => version }), true);
+  assert.equal(rejects({ abiVersion: () => 3 }), false);
   const swift = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/KineSyncRustLyricsModule.swift'), 'utf8');
-  assert.match(swift, /guard kr_abi_version\(\) == 11 else/);
-  assert.match(swift, /AsyncFunction\("scrollBy"\)/);
-  assert.match(swift, /AsyncFunction\("hitTest"\)/);
-  assert.match(swift, /kr_scroll_by\(self\.handle, dy\)/);
-  assert.match(swift, /UIPanGestureRecognizer\(target: self/);
-  assert.match(swift, /pan\.velocity\(in: self\)\.y/);
-  assert.match(swift, /kr_fling\(self\.handle, velocity, nativeMs\)/);
-  assert.match(swift, /kr_hit_test\(self\.handle, x, y\)/);
-  const androidOwner = fs.readFileSync(path.join(repo, 'ExpoLyrics/modules/kinesync-rust-lyrics/android/src/main/java/dev/kineticron/rustlyrics/RustOwner.kt'), 'utf8');
-  assert.match(androidOwner, /RustBridge.abiVersion\(\) != 11/);
-  assert.match(androidOwner, /RustBridge.hitTest\(handle, x, y\)/);
+  assert.match(swift, /guard kr_abi_version\(\) == 3 else/);
   const result = spawnSync('cc', ['-std=c11', '-x', 'c', '-fsyntax-only', '-I', path.join(repo, 'native/lyrics-renderer/include'), '-'], {
     encoding: 'utf8', input: `#include "KineSyncLyrics.h"
-_Static_assert(sizeof(KRMetrics) == 168, "ABI 11 metrics size");
+_Static_assert(sizeof(KRMetrics) == 152, "ABI 3 metrics size");
 _Static_assert(offsetof(KRMetrics, capabilities) == 80, "capability offset");
 _Static_assert(offsetof(KRMetrics, acquire_ms) == 88, "acquire offset");
 _Static_assert(offsetof(KRMetrics, completed) == 120, "completion offset");
 _Static_assert(offsetof(KRMetrics, target_native_ms) == 144, "clock offset");
-_Static_assert(offsetof(KRMetrics, next_cue_native_ms) == 152, "cue offset");
-_Static_assert(offsetof(KRMetrics, visible_changes) == 160, "visible change offset");
-int32_t (*render_signature)(uint64_t, double, double, double) = kr_render;
-int32_t (*fonts_signature)(uint64_t, const uint8_t *, size_t, const uint8_t *, size_t) = kr_set_fonts;
-size_t (*layout_signature)(uint64_t, uint8_t *, size_t) = kr_copy_layout_json;
-int32_t (*follow_signature)(uint64_t, bool) = kr_set_following;
-int32_t (*scroll_signature)(uint64_t, double) = kr_scroll_by;
-int32_t (*fling_signature)(uint64_t, double, double) = kr_fling;
-int32_t (*hit_signature)(uint64_t, double, double) = kr_hit_test;
+int32_t (*render_signature)(uint64_t, double, double) = kr_render;
 ` });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(!swift.includes('presentedFps'));
   assert.ok(!view.includes('presentedFps'));
-});
-
-
-test('local pod font resources match CocoaPods descendant inventory and resolve tracked assets', t => {
-  const relativePod = 'ExpoLyrics/modules/kinesync-rust-lyrics/ios';
-  const pod = path.join(repo, relativePod);
-  const spec = fs.readFileSync(path.join(pod, 'KineSyncRustLyrics.podspec'), 'utf8');
-  const declaration = spec.match(/s\.resource_bundles\s*=\s*\{\s*'KineSyncLyricsFonts'\s*=>\s*\[([^\]]+)\]/);
-  assert.ok(declaration, 'expected an explicit font resource bundle');
-  const resources = [...declaration[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
-  const fonts = [
-    // The two SF faces remain relative symlinks to the tracked app assets.
-    { name: 'SF-Pro-Display-Regular.otf', symlink: true },
-    { name: 'SF-Pro-Display-Bold.otf', symlink: true },
-    // The bundled CJK fallback and its license are new regular files in the pod.
-    {
-      name: 'NotoSansCJKsc-Regular.otf',
-      symlink: false,
-      bytes: 16_437_364,
-      sha256: '2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b',
-    },
-    {
-      name: 'NotoSansCJKsc-Bold.otf',
-      symlink: false,
-      bytes: 17_002_248,
-      sha256: 'b5f0d1a190a7f9b43c310a8850630af12553df32c4c050543f9059732d9b4c0a',
-    },
-    { name: 'NotoSansCJK-LICENSE.txt', symlink: false, license: true },
-  ];
-  assert.deepEqual(resources, fonts.map(font => 'Fonts/' + font.name));
-  // CocoaPods 1.16.2 Sandbox::PathList enumerates descendants first, then
-  // matches patterns against that inventory (not unrestricted Dir.glob).
-  // File symlinks are entries; symlink directories need not be traversed.
-  const inventory = new Set();
-  function walk(dir, prefix = '') {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === 'Frameworks') continue;
-      const relative = prefix + entry.name;
-      if (entry.isDirectory()) walk(path.join(dir, entry.name), relative + '/');
-      else inventory.add(relative);
-    }
-  }
-  walk(pod);
-  // Run from an unrelated checkout path with spaces as well: links must be
-  // relative to the local pod, not the process cwd or the rescue host path.
-  const checkout = path.join(temp(t), 'checkout with spaces');
-  for (const [i, resource] of resources.entries()) {
-    const font = fonts[i];
-    assert.ok(inventory.has(resource), `CocoaPods cannot select ${resource}`);
-    const file = path.join(pod, resource);
-    if (font.symlink) {
-      const original = '../../../assets/fonts/' + font.name;
-      assert.ok(fs.existsSync(path.resolve(pod, original)), 'original asset exists');
-      assert.ok(!inventory.has(original), 'original escaping pattern matches nothing');
-      assert.ok(fs.lstatSync(file).isSymbolicLink(), 'reuse assets without copying binaries');
-      const target = fs.readlinkSync(file);
-      assert.ok(!path.isAbsolute(target));
-      const asset = path.join(repo, 'ExpoLyrics/assets/fonts', font.name);
-      assert.equal(fs.realpathSync(file), fs.realpathSync(asset));
-      put(checkout, 'ExpoLyrics/assets/fonts/' + font.name, fs.readFileSync(asset));
-      const relocated = path.join(checkout, relativePod, resource);
-      fs.mkdirSync(path.dirname(relocated), { recursive: true });
-      fs.symlinkSync(target, relocated);
-      assert.deepEqual(fs.readFileSync(relocated), fs.readFileSync(asset));
-    } else {
-      // New bundled files must stay inside the pod as regular tracked files.
-      assert.ok(path.dirname(resource) === 'Fonts', `${resource} must stay in the pod Fonts directory`);
-      assert.ok(fs.lstatSync(file).isFile(), `${resource} must be a regular file`);
-      assert.ok(!fs.lstatSync(file).isSymbolicLink(), `${resource} must not be a symlink`);
-      const bytes = fs.readFileSync(file);
-      if (font.sha256) {
-        assert.equal(bytes.length, font.bytes, `${resource} byte size`);
-        assert.equal(
-          crypto.createHash('sha256').update(bytes).digest('hex'),
-          font.sha256,
-          `${resource} digest`
-        );
-        assert.equal(bytes.subarray(0, 4).toString('latin1'), 'OTTO', `${resource} CFF signature`);
-      } else {
-        assert.match(bytes.toString('utf8'), /SIL OPEN FONT LICENSE Version 1\.1/);
-      }
-    }
-  }
-});
-
-test('font resources invalidate native caches and packaged bytes fail closed', t => {
-  const root=temp(t);fixture(root);const keys=()=>cacheKeys(root,identity,'fonts','refs/heads/rust-renderer-spike');
-  const before=keys();put(root,'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf','changed');
-  const after=keys();assert.notEqual(before.derived,after.derived);assert.notEqual(before.lock,after.lock);assert.equal(before.prebuilt,after.prebuilt);
-  const {inspectFonts}=require('../ios-dev-ci/rust-device.cjs');const app=path.join(root,'App.app');fs.mkdirSync(app);
-  assert.throws(()=>inspectFonts(app),/exactly one/);
-  for(const name of ['SF-Pro-Display-Regular.otf','SF-Pro-Display-Bold.otf'])put(app,'KineSyncLyricsFonts.bundle/'+name,fs.readFileSync(path.join(repo,'ExpoLyrics/assets/fonts',name)));
-  assert.equal(Object.keys(inspectFonts(app)).length,2);
-  put(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf','bad');assert.throws(()=>inspectFonts(app),/digest mismatch/);
-  fs.unlinkSync(path.join(app,'KineSyncLyricsFonts.bundle/SF-Pro-Display-Bold.otf'));assert.throws(()=>inspectFonts(app),/Missing packaged/);
-  fs.mkdirSync(path.join(app,'Duplicate/KineSyncLyricsFonts.bundle'),{recursive:true});assert.throws(()=>inspectFonts(app),/exactly one/);
-});
-
-test('device Rust uses release optimization without changing host dev profile', () => {
-  assert.equal(config.rust.profile, 'release');
-  assert.equal(config.rust.optLevel, 3);
-  assert.equal(config.rust.lto, 'thin');
-  assert.equal(config.rust.debugAssertions, false);
-  const source = fs.readFileSync(path.join(repo, 'scripts/ios-dev-ci/ci.cjs'), 'utf8');
-  assert.match(source, /CARGO_PROFILE_RELEASE_OPT_LEVEL/);
-  assert.match(source, /CARGO_PROFILE_RELEASE_LTO/);
-  assert.match(source, /CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS/);
-  assert.doesNotMatch(source, /CARGO_PROFILE_DEV_OPT_LEVEL/);
 });

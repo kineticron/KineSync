@@ -1,0 +1,147 @@
+{
+  "schema": 2,
+  "manifest_id": "deterministic-rust-skia-parity-manifest-v2",
+  "scope": "Actual current production Skia NativeSkiaVoice preparation + drawVoice vs unchanged Rust isolated voice. NOT full native screen parity.",
+  "fixture_source": "DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml",
+  "fixtures": [
+    {
+      "id": "korean",
+      "line_index": 1,
+      "line_start_ms": 13170,
+      "line_end_ms": 16440,
+      "time_ratio": 0.47,
+      "time_ms": 14706.9,
+      "expected_text": "깍지 놓친 손은",
+      "description": "Korean lyric line with CJK glyph shaping and timing",
+      "baseline_thresholds": {
+        "max_physical_error": 0.10,
+        "min_foreground_score": 0.50,
+        "min_foreground_alpha_score": 0.45,
+        "min_coverage_ratio": 0.50,
+        "min_ink_pixels_1x": 1500,
+        "min_ink_pixels_3x": 10000,
+        "max_mean_rgb_delta": 6.0,
+        "max_mean_alpha_delta": 150.0,
+        "min_mean_rust_ink_alpha": 0.20,
+        "max_outside_alpha": 0
+      }
+    },
+    {
+      "id": "latin",
+      "line_index": 9,
+      "line_start_ms": 55205,
+      "line_end_ms": 58865,
+      "time_ratio": 0.47,
+      "time_ms": 56925.2,
+      "expected_text": "Du, du-ru-ru-ru-ru-du-du",
+      "description": "Latin syllable-only lyric line with word-spring motion",
+      "baseline_thresholds": {
+        "max_physical_error": 0.10,
+        "min_foreground_score": 0.40,
+        "min_foreground_alpha_score": 0.35,
+        "min_coverage_ratio": 0.50,
+        "min_ink_pixels_1x": 1500,
+        "min_ink_pixels_3x": 10000,
+        "max_mean_rgb_delta": 6.0,
+        "max_mean_alpha_delta": 160.0,
+        "min_mean_rust_ink_alpha": 0.20,
+        "max_outside_alpha": 0
+      }
+    }
+  ],
+  "viewports": [
+    {
+      "name": "portrait-1x",
+      "width": 390,
+      "height": 640,
+      "dpr": 1,
+      "strict_dimensions": { "width": 390, "height": 640 }
+    },
+    {
+      "name": "landscape-1x",
+      "width": 844,
+      "height": 390,
+      "dpr": 1,
+      "strict_dimensions": { "width": 844, "height": 390 }
+    },
+    {
+      "name": "portrait-3x",
+      "width": 390,
+      "height": 640,
+      "dpr": 3,
+      "strict_dimensions": { "width": 1170, "height": 1920 }
+    }
+  ],
+  "styles": [
+    {
+      "name": "spicy",
+      "font_size_scale": 1.05,
+      "line_height_scale": 1.05,
+      "rust_supported": false,
+      "rust_fallback_behavior": "Identical baseline raster used for both spicy and amll"
+    },
+    {
+      "name": "amll",
+      "font_size_scale": 1.0,
+      "line_height_scale": 1.0,
+      "rust_supported": false,
+      "rust_fallback_behavior": "Identical baseline raster used for both spicy and amll"
+    }
+  ],
+  "expected_record_ids": [
+    "korean-390x640-1x-spicy",
+    "korean-390x640-1x-amll",
+    "korean-844x390-1x-spicy",
+    "korean-844x390-1x-amll",
+    "korean-390x640-3x-spicy",
+    "korean-390x640-3x-amll",
+    "latin-390x640-1x-spicy",
+    "latin-390x640-1x-amll",
+    "latin-844x390-1x-spicy",
+    "latin-844x390-1x-amll",
+    "latin-390x640-3x-spicy",
+    "latin-390x640-3x-amll"
+  ],
+  "capabilities": {
+    "renderer": "lyrics-renderer-abi3",
+    "styles": false,
+    "font_selection": false,
+    "dynamic_history": false,
+    "requires_identical_style_rasters": true
+  },
+  "rendering_contract": {
+    "background": "transparent reproducible alpha readback; composited on rgb(22, 28, 40) for visual difference inspection",
+    "history_simulation": "120 Hz word-spring / AMLL float-clock step history starting line.lineStartTime - 1000 ms",
+    "strict_dimensions": true,
+    "require_alpha_ink": true,
+    "max_missing_glyphs": 0,
+    "hash_determinism": true
+  },
+  "fonts": {
+    "skia": {
+      "provenance": "EXPLICITLY_LOADED_ASSETS_VERIFIED",
+      "files": [
+        "ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf",
+        "ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+      ]
+    },
+    "rust": {
+      "provenance": "UNVERIFIED_SYSTEM_FALLBACK_CANDIDATES",
+      "face_attestation": "UNVERIFIED: Selected font face and blob digest cannot be intercepted without modifying forbidden runtime/example files. Only system candidate paths are recorded.",
+      "candidate_files": [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+      ]
+    }
+  },
+  "honest_limitations": [
+    "React hooks/state/clock sampled in Node; no Yoga/UI thread/UIKit material blur",
+    "Skia paragraph adapter appends explicit Parity Linux CJK family (TTC first face); not iOS cascade",
+    "Rust baseline has no style support and is intentionally identical in both style comparisons",
+    "Same source syllables/times; each production model retains its own text/spacing transformation",
+    "Isolated host-selected lane origin and width, no claim of native measured layout or touch proof",
+    "AMLL line-motion sampled at declared bright/dark/scale; outer row/view opacity and transforms excluded for both styles",
+    "Rust font selection is unverified system candidate fallback; exact face blob/index attestation is unsupported in baseline"
+  ]
+}

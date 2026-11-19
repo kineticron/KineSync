@@ -25,11 +25,8 @@ test('export restrictions follow Spicy provenance through vault labels and impor
   for (const originalSource of ['spicy-lyrics-syllable', 'spicy-lyrics-line', 'local-vault', 'ttml-import', 'desktop-vault']) {
     assert.throws(() => policy.assertLyricsExportAllowed({ originalSource, metadata: metadata(Date.now()) }), /cannot be exported/);
   }
-  policy.assertLyricsExportAllowed({ originalSource: 'lrc-red-karaoke', metadata: { attribution: { source: 'lrc-red', provider: 'lrc.red' } } });
-  for (const provider of ['Apple Music', 'Spotify', 'Musixmatch']) {
-    assert.throws(() => policy.assertLyricsExportAllowed({ originalSource: 'spicy-lyrics-line', metadata: { attribution: { provider } } }), /cannot be exported/, `${provider} responses from Spicy stay blocked`);
-  }
-  assert.throws(() => policy.assertLyricsExportAllowed({ originalSource: 'lrc-red-karaoke', metadata: { ...metadata(Date.now()), attribution: { provider: 'lrc.red', source: 'lrc-red' } } }), /cannot be exported/, 'explicit Spicy provenance outranks a misleading lrc.red label');
+  policy.assertLyricsExportAllowed({ originalSource: 'lrc-red-karaoke', metadata: { attribution } });
+  for (const provider of ['Apple Music', 'Spotify']) policy.assertLyricsExportAllowed({ originalSource: 'spicy-lyrics-line', metadata: { attribution: { provider } } });
   assert.equal(policy.isSpicyCommunityLyrics({ originalSource: 'spicy-lyrics-line', metadata: null }), true);
 });
 
@@ -129,30 +126,4 @@ test('an on-screen expired copy is cleared and refreshed once, without an empty-
   assert.equal(clears, 1);
   assert.equal(refreshes, 1);
   assert.equal(context.latestLyricsPacket.lyrics.length, 0);
-});
-
-test('vault replacement keeps Spicy origin and ISRC through relabel and ordinary saves', t => {
-  const { store } = fixture(t);
-  const saved = store.save({ track, lyrics, originalSource: 'spicy-lyrics-line', metadata: {
-    ...metadata(Date.now()), fetchOrigin: { provider: 'Spicy Lyrics', host: 'api.spicylyrics.org', isrc: 'US5TA1500050' },
-  } });
-  const cached = store.getEntry(saved.vaultId);
-  store.save({ track, lyrics: cached.lyrics, originalSource: 'lrc-red-karaoke', metadata: {
-    ...cached.metadata, attribution: { source: 'lrc-red', provider: 'lrc.red' },
-  } });
-  const relabeled = store.listEntries()[0];
-  assert.equal(relabeled.exportRestricted, true, 'relabeling cached Spicy data must not make it exportable');
-  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin.isrc, 'US5TA1500050');
-  store.save({ track, lyrics: cached.lyrics, originalSource: 'lrc-red-karaoke', metadata: {
-    attribution: { source: 'lrc-red', provider: 'lrc.red' }, fetchOrigin: { source: 'lrc-red', host: 'lrc.red' },
-  } });
-  assert.equal(store.listEntries()[0].exportRestricted, true, 'mutable lrc.red fetchOrigin must not clear Spicy provenance');
-  store.save({ track, lyrics: cached.lyrics, originalSource: 'lrc-red-karaoke', metadata: {
-    attribution: { source: 'lrc-red', provider: 'lrc.red' }, ttml: { content: '<tt>independent</tt>' },
-    independentContent: { source: 'lrc-red', verified: true },
-  } });
-  const ordinarySave = store.listEntries()[0];
-  assert.equal(ordinarySave.exportRestricted, true, 'ordinary saves must keep Spicy provenance sticky');
-  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin.isrc, 'US5TA1500050');
-  assert.equal(store.getEntry(saved.vaultId).metadata.fetchOrigin.host, 'api.spicylyrics.org');
 });

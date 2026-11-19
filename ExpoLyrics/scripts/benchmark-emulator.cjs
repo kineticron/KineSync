@@ -13,7 +13,7 @@ const pid = adb('shell', 'pidof', 'dev.kineticron.KineSync').split(/\s+/)[0];
 if (!/^\d+$/.test(pid)) throw new Error('KineSync must be running with a debuggable WebView');
 const port = adb('forward', 'tcp:0', `localabstract:webview_devtools_remote_${pid}`);
 const context = { exports: {} };
-vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'scripts/fixtures/active-line-timeline.ts'), 'utf8'), {
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, 'components/lyrics/active-line-timeline.ts'), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, context);
 (async () => {

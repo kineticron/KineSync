@@ -14,7 +14,7 @@ flowchart LR
   Bridge -->|LAN WebSocket or secure relay| Mobile
   Providers[Lyric providers / local vault] --> Bridge
   Providers --> Mobile
-  Mobile --> Hosts[Rust lyric renderer on iOS and Android]
+  Mobile --> Hosts[Spicy / AMLL WebView hosts]
   Mobile --> NativeUI[Native controls and artwork]
 ```
 
@@ -25,7 +25,7 @@ flowchart LR
 
 The mobile playback store accepts packets from the selected playback mode and maintains position/time anchors. Native controls use a UI-thread clock, and lyric hosts project anchors in their own rendering runtime. Background and hidden views suspend animation work. A diagnostic store tick is separate from display-rate rendering.
 
-The native Rust surface renders both Spicy and AMLL styles in the mobile app. [Renderer notes](../ExpoLyrics/docs/lyrics-renderers.md) cover playback anchors, gestures, and validation.
+Both lyric styles currently render through WebViews. Spicy adapts an upstream word/letter animation runtime. AMLL wraps `@applemusic-like-lyrics/core`. Their generated JavaScript and CSS bundles are tracked for reproducible app packaging. [Renderer notes](../ExpoLyrics/docs/lyrics-renderers.md) describe scrolling, synchronization, and regeneration.
 
 ## Lyric lookup and storage
 

@@ -1,5 +1,5 @@
 import type { LyricLine, LyricSyllable } from '@/types/bridge';
-export const ARRIVAL_LAB_WORKLOAD = 'synthetic-paused-delayed-arrival-rust-host-v3';
+export const ARRIVAL_LAB_WORKLOAD = 'synthetic-paused-delayed-arrival-initialized-host-v2';
 /** Bounded synthetic complexity, not captured provider data or a fidelity oracle. */
 export function buildArrivalFixture(overlap: boolean): LyricLine[] {
   const phrases = [

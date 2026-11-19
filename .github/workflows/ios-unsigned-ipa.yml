@@ -60,26 +60,6 @@ jobs:
           version=$(node ../scripts/release-version.js)
           node scripts/stamp-ios-release-version.js "${version}" "${GITHUB_RUN_NUMBER}"
 
-      - name: Prepare Rust lyrics framework for iOS Release
-        run: |
-          set -euo pipefail
-          config() { node -p 'require("./scripts/ios-dev-ci/config.json").rust[process.argv[1]]' "$1"; }
-          toolchain=$(config toolchain)
-          rustup toolchain install "$toolchain" --profile minimal --target "$(config target)" --component llvm-tools-preview
-          export IPHONEOS_DEPLOYMENT_TARGET="$(config iosDeploymentTarget)"
-          export RUSTFLAGS="$(config rustflags)"
-          export CARGO_PROFILE_RELEASE_OPT_LEVEL="$(config optLevel)"
-          export CARGO_PROFILE_RELEASE_DEBUG="$(config debugInfo)"
-          export CARGO_PROFILE_RELEASE_LTO="$(config lto)"
-          export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS="$(config debugAssertions)"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/kinesync-release-cargo"
-          export CI_EVIDENCE_DIR="$RUNNER_TEMP/kinesync-release-evidence"
-          export RUST_PREBUILT_DIR="$RUNNER_TEMP/kinesync-release-framework"
-          export RUST_DEVICE_KEY="$GITHUB_SHA"
-          mkdir -p "$CI_EVIDENCE_DIR"
-          bash scripts/ios-dev-ci/build-rust-device.sh
-          node scripts/ios-dev-ci/rust-device.cjs validate
-
       - name: Expo prebuild (iOS)
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
