@@ -560,3 +560,5 @@ mod background_tests;
 
 #[cfg(test)]
 mod cold_prepare_tests;
+#[cfg(test)]
+mod credits_switch_tests;
