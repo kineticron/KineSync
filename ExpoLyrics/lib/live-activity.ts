@@ -6,12 +6,36 @@ import { liveActivityInputChanged, makeLiveActivitySnapshot } from '@/lib/live-a
 import { usePlaybackStore } from '@/store/playback-store';
 
 type Status = { state: string; message: string };
+export type CarPlaySpikeStatus = Status & {
+  lifecycle?: string;
+  lyric?: string;
+  sequence?: string;
+  timestamp?: string;
+  logError?: string;
+};
 declare class LyricsModule extends NativeModule<{ onStatus: (status: Status) => void }> {
   sync(snapshot: string, retry: boolean): Promise<Status>;
   stop(): Promise<void>;
+  startCarPlaySpike(): Promise<void>;
+  stopCarPlaySpike(): Promise<void>;
+  getCarPlaySpikeStatus(): Promise<CarPlaySpikeStatus>;
+  getCarPlaySpikeLog(): Promise<string>;
 }
 
 const native = Platform.OS === 'ios' ? requireOptionalNativeModule<LyricsModule>('KineSyncLiveActivity') : null;
+export const carPlaySpike = __DEV__ && native
+  && typeof native.startCarPlaySpike === 'function'
+  && typeof native.stopCarPlaySpike === 'function'
+  && typeof native.getCarPlaySpikeStatus === 'function'
+  && typeof native.getCarPlaySpikeLog === 'function'
+  ? {
+    start: () => native.startCarPlaySpike(),
+    stop: () => native.stopCarPlaySpike(),
+    getStatus: () => native.getCarPlaySpikeStatus(),
+    getLog: () => native.getCarPlaySpikeLog(),
+  }
+  : null;
+
 export const useLiveActivityStatus = create<Status>(() => ({
   state: native ? 'idle' : 'unavailable',
   message: native ? 'Open KineSync to show playback details.' : 'Live Activity requires an iOS build with the KineSync widget extension. Expo Go is not supported.',

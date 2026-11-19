@@ -15,9 +15,31 @@ struct KineSyncLyricsWidgetBundle: WidgetBundle {
 }
 
 struct KineSyncLyricsActivity: Widget {
+  @MainActor
   var body: some WidgetConfiguration {
+    configuredActivity()
+  }
+
+  @MainActor
+  private func configuredActivity() -> some WidgetConfiguration {
+    if #available(iOS 18.0, *) {
+      return configuration.supplementalActivityFamilies([.small])
+    }
+    return configuration
+  }
+
+  @MainActor
+  private var configuration: some WidgetConfiguration {
     ActivityConfiguration(for: LyricsActivityAttributes.self) { context in
-      LyricsBanner(state: context.state)
+      Group {
+        if #available(iOS 18.0, *) {
+          FamilyLyricsBanner(state: context.state)
+        } else if let sample = context.state.spikeSample {
+          SpikeLyric(sample: sample).padding(14)
+        } else {
+          LyricsBanner(state: context.state)
+        }
+      }
         .activityBackgroundTint(.black)
         .activitySystemActionForegroundColor(.white)
         .widgetURL(URL(string: "expolyrics://"))
@@ -26,19 +48,28 @@ struct KineSyncLyricsActivity: Widget {
         DynamicIslandExpandedRegion(.leading) {
           HStack(spacing: 6) {
             LyricsArtwork(state: context.state, size: 28)
-            Text("KineSync").font(.system(size: 11, weight: .semibold))
+            Text(context.state.spikeSample == nil ? "KineSync" : "CarPlay spike")
+              .font(.system(size: 11, weight: .semibold))
               .foregroundColor(.white).lineLimit(1)
           }
         }
         DynamicIslandExpandedRegion(.trailing) {
-          Image(systemName: context.state.isPlaying ? "play.fill" : "pause.fill")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white)
-            .frame(width: 24, height: 24)
-            .accessibilityLabel(context.state.isPlaying ? "Playing" : "Paused")
+          if context.state.spikeSample == nil {
+            Image(systemName: context.state.isPlaying ? "play.fill" : "pause.fill")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundColor(.white)
+              .frame(width: 24, height: 24)
+              .accessibilityLabel(context.state.isPlaying ? "Playing" : "Paused")
+          }
         }
         DynamicIslandExpandedRegion(.bottom) {
-          LyricsDetails(state: context.state)
+          Group {
+            if let sample = context.state.spikeSample {
+              SpikeLyric(sample: sample)
+            } else {
+              LyricsDetails(state: context.state)
+            }
+          }
             // Keep the footer clear of the Island's curved lower corners.
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
@@ -48,17 +79,78 @@ struct KineSyncLyricsActivity: Widget {
         // Apple's smaller reference device offers 52.33 x 36.67 pt per side.
         LyricsArtwork(state: context.state, size: 24)
       } compactTrailing: {
-        Image(systemName: context.state.isPlaying ? "play.fill" : context.state.artist.isEmpty ? "music.note" : "pause.fill")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundColor(.white)
-          .frame(width: 24, height: 24)
-          .accessibilityLabel(context.state.isPlaying ? "Playing" : context.state.artist.isEmpty ? "Ready for music" : "Paused")
+        if let sample = context.state.spikeSample {
+          Text(verbatim: "#\(sample.sequence)")
+            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+            .foregroundColor(.white)
+            .accessibilityLabel("Sample \(sample.sequence)")
+        } else {
+          CompactPlaybackIcon(state: context.state)
+        }
       } minimal: {
         Text("KS").font(.system(size: 12, weight: .bold)).foregroundColor(.white)
       }
       .widgetURL(URL(string: "expolyrics://"))
       .keylineTint(.white)
     }
+  }
+}
+
+@available(iOS 18.0, *)
+private struct FamilyLyricsBanner: View {
+  @Environment(\.activityFamily) private var family
+  let state: LyricsActivityAttributes.ContentState
+
+  var body: some View {
+    if let sample = state.spikeSample {
+      SpikeLyric(sample: sample, small: family == .small)
+        .padding(family == .small ? 8 : 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    } else if family == .small {
+      HStack {
+        LyricsArtwork(state: state, size: 24)
+        Spacer(minLength: 4)
+        CompactPlaybackIcon(state: state)
+      }
+      .padding(8)
+    } else {
+      LyricsBanner(state: state)
+    }
+  }
+}
+
+private struct SpikeLyric: View {
+  let sample: LyricsActivityAttributes.SpikeSample
+  var small = false
+
+  var body: some View {
+    // Display the UTC time from the same attempt recorded in the host log.
+    let time = String(sample.timestamp.dropFirst(11).prefix(12))
+    VStack(alignment: .leading, spacing: 3) {
+      Text(verbatim: sample.lyric)
+        .font(.system(size: small ? 14 : 16, weight: .semibold))
+        .lineLimit(2)
+        .minimumScaleFactor(0.8)
+      Text(verbatim: "#\(sample.sequence) · \(time)Z")
+        .font(.system(size: small ? 10 : 11, weight: .medium).monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+    .foregroundColor(.white)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(sample.lyric), sample \(sample.sequence), \(time) UTC")
+  }
+}
+
+private struct CompactPlaybackIcon: View {
+  let state: LyricsActivityAttributes.ContentState
+
+  var body: some View {
+    Image(systemName: state.isPlaying ? "play.fill" : state.artist.isEmpty ? "music.note" : "pause.fill")
+      .font(.system(size: 12, weight: .semibold))
+      .foregroundColor(.white)
+      .frame(width: 24, height: 24)
+      .accessibilityLabel(state.isPlaying ? "Playing" : state.artist.isEmpty ? "Ready for music" : "Paused")
   }
 }
 

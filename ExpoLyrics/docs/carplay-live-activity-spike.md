@@ -1,0 +1,14 @@
+# CarPlay Live Activity spike
+
+1. Use the custom iOS development client from `spike/carplay-live-activity` and enable Live Activities for KineSync in iOS Settings. For a free re-sign, keep the `KineSyncLyricsWidget.appex` embedded and verify that the signed widget works on the phone. The spike adds no signing or account requirement.
+2. Connect to CarPlay on iOS 26 or later and start playback in Spotify. Open KineSync Settings → CarPlay Live Activity spike and tap **Start** while KineSync is in the foreground. Verify the sample on the Lock Screen and, where available, the expanded Dynamic Island and the CarPlay Live Activity surface.
+3. Lock the phone or switch back to Spotify. Compare the on-screen sample number and UTC time against the host log. Check that Spotify keeps playing at its original volume. Try a metadata restart during the experiment and check that the fake activity stays active.
+4. Return to the screen and tap **Stop**. Verify that the fake activity ends and metadata returns. Repeat with system dismissal, an audio interruption, and the 15-minute expiry to check cleanup. After relaunch, the spike requires a new explicit Start.
+
+Shutdown requests finite background time from iOS before stopping silent audio. It uses that time to let an in-flight update return, end the activity, and write the final log record. If the grant expires first, iOS can suspend the host before cleanup finishes.
+
+**View recent log** shows the last 12 records. **Share log** sends the JSONL as text through the iOS share sheet. The bounded file is `Documents/carplay-spike.jsonl` in the host sandbox and starts over at 256 KiB. The same records go to OSLog under subsystem `dev.kineticron.KineSync.live-activity` and category `carplay-spike`. Group by `runId` and match `sequence` to the displayed sample. Each attempt records a UTC timestamp, host lifecycle, and the monotonic interval since the previous attempt. Request and update completions record when ActivityKit returned or threw. Record actual display times separately.
+
+The native loop targets roughly three seconds while iOS lets the host run. Silent mixed audio is a battery-intensive experiment with no App Store suitability claim. iOS controls host suspension, update delivery, and CarPlay presentation. This tests a Live Activity card. There is no dedicated CarPlay app UI. Use a phone and CarPlay display to verify signing, coexistence with Spotify, background execution, and frame cadence.
+
+[Apple ActivityKit overview](https://developer.apple.com/documentation/activitykit/displaying-live-data-with-live-activities) · [Live Activity views](https://developer.apple.com/documentation/activitykit/creating-custom-views-for-live-activities) · [CarPlay developer guide](https://developer.apple.com/download/files/CarPlay-Developer-Guide.pdf)

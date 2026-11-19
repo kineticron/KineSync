@@ -1,0 +1,45 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const host = read('modules/kinesync-live-activity/ios/KineSyncLiveActivityModule.swift');
+const types = read('modules/kinesync-live-activity/ios/types/LyricsActivityAttributes.swift');
+const widget = read('widgets/KineSyncLyricsActivity.swift');
+const bridge = read('lib/live-activity.ts');
+const screen = read('app/carplay-spike.tsx');
+const settings = read('app/(tabs)/explore.tsx');
+
+assert.match(types, /var spikeSample: SpikeSample\?/);
+assert.match(types, /spikeSample: SpikeSample\? = nil/);
+assert.match(host, /snapshot = next\s+guard spike == nil else \{ return status \}\s+loadArtwork\(next\)/);
+assert.match(host, /guard generation == revision, spike == nil, let value = snapshot/);
+assert.match(host, /func stop\(\) async \{\s+guard spike == nil/);
+assert.match(host, /guard !Task\.isCancelled, spike === run else \{ return \}\s+guard isForeground/);
+assert.match(host, /session: CarPlaySpikeRun\.session\), content: content, pushType: nil/);
+assert.match(host, /let next = .* \+ \.seconds\(3\)/);
+assert.match(host, /static let duration = 15 \* 60/);
+assert.match(host, /setCategory\(\.playback, mode: \.default, options: \[\.mixWithOthers\]\)/);
+assert.match(host, /numberOfLoops = -1/);
+assert.match(host, /Data\(repeating: 0, count: Int\(bytes\)\)/);
+assert.match(host, /setActive\(false, options: \[\.notifyOthersOnDeactivation\]\)/);
+assert.match(host, /\.interruptionNotification/);
+const cleanup = host.slice(host.indexOf('  private func finishSpike('), host.indexOf('  private func spikeContent('));
+assert.match(cleanup, /beginBackgroundTask\(withName: "CarPlay spike cleanup"\)[\s\S]*?run\.player\?\.stop\(\)/);
+assert.match(cleanup, /\{ \[weak run\] in\s+\/\/[^\n]*\n\s+MainActor\.assumeIsolated \{\s+run\?\.releaseCleanupBackgroundTask\(\)/);
+assert.match(cleanup, /await run\.updates\?\.value[\s\S]*?await activity\.end[\s\S]*?writeSpikeLog\(run, operation: "stop", phase: "completion"[^\n]*\n\s+run\.releaseCleanupBackgroundTask\(\)/);
+assert.match(host, /guard identifier != \.invalid else \{ return \}\s+cleanupBackgroundTask = \.invalid\s+UIApplication\.shared\.endBackgroundTask\(identifier\)/);
+assert.doesNotMatch(host, /duckOthers|MPNowPlayingInfoCenter/);
+assert.match(host, /spikeLogLimit = 256 \* 1024/);
+assert.match(host, /"carplay-spike\.jsonl"/);
+assert.match(host, /phase: "attempt", timestamp: sample\.timestamp/);
+assert.match(host, /await activity\.update\(content\)[\s\S]*?operation: "update", phase: "completion"/);
+assert.match(widget, /if #available\(iOS 18\.0, \*\) \{\s+return configuration\.supplementalActivityFamilies\(\[\.small\]\)/);
+assert.match(widget, /@available\(iOS 18\.0, \*\)\s+private struct FamilyLyricsBanner[\s\S]*?@Environment\(\\\.activityFamily\)/);
+assert.match(bridge, /const carPlaySpike = __DEV__ && native/);
+assert.match(settings, /__DEV__ \? <>\s+\{Platform\.OS === 'ios'[\s\S]*?router\.push\('\/carplay-spike'/);
+assert.match(screen, /if \(state === 'active'\) \{\s+void refresh\(\);\s+timer = setInterval\(\(\) => void refresh\(\)/);
+assert.match(screen, /Share\.share\(/);
+
+console.log('CarPlay spike source contracts passed.');

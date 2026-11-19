@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import { BlurView } from 'expo-blur';
 import { PromotionalBackdrop } from '@/components/ui/promotional-backdrop';
 import { useSpotifySessionStore } from '@/store/spotify-session-store';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -642,6 +642,15 @@ export default function BridgeSettingsScreen() {
               <View style={styles.divider} />
 
               {__DEV__ ? <>
+                {Platform.OS === 'ios' && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="CarPlay Live Activity spike"
+                    style={styles.secondaryButton}
+                    onPress={() => router.push('/carplay-spike' as Href)}>
+                    <Text style={styles.secondaryButtonText}>CarPlay Live Activity spike</Text>
+                  </Pressable>
+                )}
                 <SettingSection title="Rust diagnostics">
                   <View style={styles.sectionToggle}>
                     <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
