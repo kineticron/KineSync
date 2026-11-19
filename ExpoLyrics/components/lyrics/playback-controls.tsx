@@ -88,6 +88,7 @@ type PlaybackControlsProps = {
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
   controlsProgress?: SharedValue<number>;
+  controlsBackdropOffset?: SharedValue<number>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -277,14 +278,15 @@ export const PlaybackControls = memo(function PlaybackControls({
   controlsModeTransitioning = false,
   fullscreenAlbumProgress,
   controlsProgress,
+  controlsBackdropOffset,
   layout = 'default',
   previewPlayback,
   tourStep,
   previewTranslated,
 }: PlaybackControlsProps) {
-  const timelineRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0, 0.70));
-  const transportRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.15, 0.85));
-  const utilityRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.30, 1));
+  const timelineRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0, 0.6, controlsBackdropOffset?.value ?? 0));
+  const transportRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.2, 0.8, controlsBackdropOffset?.value ?? 0));
+  const utilityRevealStyle = useAnimatedStyle(() => controlsStage(controlsProgress?.value ?? 1, 0.4, 1, controlsBackdropOffset?.value ?? 0));
   const liveTranslated = usePlaybackStore(s => hasLyricsTranslation(s.lyrics));
   const translated = previewTranslated ?? liveTranslated;
   const isOverlay = layout === 'overlay';
@@ -822,6 +824,8 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 const styles = StyleSheet.create({
   tourHighlight: { borderWidth: 2, borderColor: '#A8F0CF', backgroundColor: 'rgba(168,240,207,0.12)' },
   card: {
+    // Row transforms must remain visible outside their unchanged layout bounds.
+    overflow: 'visible',
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 14,

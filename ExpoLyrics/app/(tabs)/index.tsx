@@ -38,6 +38,7 @@ import Reanimated, {
   useReducedMotion,
   useSharedValue,
   withTiming,
+  useDerivedValue,
   useAnimatedStyle,
   Easing as ReanimatedEasing,
   interpolate,
@@ -314,6 +315,7 @@ type PlaybackControlsDockProps = {
   controlsModeTransitioning?: boolean;
   fullscreenAlbumProgress: SharedValue<number>;
   controlsProgress?: SharedValue<number>;
+  controlsBackdropOffset?: SharedValue<number>;
   layout?: PlaybackControlsLayout;
   previewPlayback?: PreviewPlaybackAnchor;
   tourStep?: PlayerTourStep;
@@ -351,6 +353,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
   controlsModeTransitioning,
   fullscreenAlbumProgress,
   controlsProgress,
+  controlsBackdropOffset,
   layout,
   previewPlayback,
   tourStep,
@@ -391,6 +394,7 @@ const PlaybackControlsDock = memo(function PlaybackControlsDock({
       controlsModeTransitioning={controlsModeTransitioning}
       fullscreenAlbumProgress={fullscreenAlbumProgress}
       controlsProgress={controlsProgress}
+      controlsBackdropOffset={controlsBackdropOffset}
       layout={layout}
     />
   );
@@ -512,10 +516,10 @@ export default function HomeScreen() {
   const fullscreenMenuButtonScale = useSharedValue(1);
   const lyricsRestoreOpacity = useSharedValue(1);
   const controlsOpacity = useSharedValue(1);
+  const controlsStageProgress = useSharedValue(1);
   const controlsTarget = useSharedValue(1);
   const reducedMotion = useReducedMotion();
   const [liveReducedMotion, setLiveReducedMotion] = useState(reducedMotion);
-  const controlsGeneration = useRef(0);
   const [controlsInteractive, setControlsInteractive] = useState(true);
   const controlsTouchActive = useRef(false);
   const dockTop = useSharedValue(windowDimensions.height);
@@ -772,24 +776,22 @@ export default function HomeScreen() {
     clearControlsIdleTimer();
   }, [clearControlsIdleTimer]);
 
-  const finishControlsTransition = useCallback((generation: number, shown: boolean) => {
-    if (controlsGeneration.current === generation) setControlsInteractive(shown);
-  }, []);
   const animateControls = useCallback((shown: boolean) => {
-    const generation = ++controlsGeneration.current;
-    setControlsInteractive(false);
+    // Revealing controls must accept touch and accessibility immediately.
+    // No animation completion can override a newer visibility request.
+    setControlsInteractive(shown);
     cancelAnimation(controlsOpacity);
+    cancelAnimation(controlsStageProgress);
     const target = shown ? 1 : 0;
-    if (liveReducedMotion || fullscreenAlbumModeRef.current || controlsOpacity.get() === target) {
+    if (liveReducedMotion || fullscreenAlbumModeRef.current) {
       controlsOpacity.value = target;
-      finishControlsTransition(generation, shown);
+      controlsStageProgress.value = target;
     } else {
-      controlsOpacity.value = withTiming(target, { duration: 400, easing: CONTROLS_EASE }, finished => {
-        if (finished) runOnJS(finishControlsTransition)(generation, shown);
-      });
+      controlsOpacity.value = withTiming(target, { duration: 400, easing: CONTROLS_EASE });
+      controlsStageProgress.value = withTiming(target, { duration: 700, easing: ReanimatedEasing.linear });
     }
     setControlsVisible(shown);
-  }, [controlsOpacity, finishControlsTransition, liveReducedMotion]);
+  }, [controlsOpacity, controlsStageProgress, liveReducedMotion]);
   const hideControls = useCallback(() => {
     controlsTarget.set(0);
     animateControls(false);
@@ -804,12 +806,12 @@ export default function HomeScreen() {
   }, [animateControls, controlsTarget, fullscreenAlbumMode]);
 
   useEffect(() => () => {
-    controlsGeneration.current++;
     controlsTouchActive.current = false;
     controlsScrubActive.current = false;
     clearControlsIdleTimer();
     cancelAnimation(controlsOpacity);
-  }, [clearControlsIdleTimer, controlsOpacity]);
+    cancelAnimation(controlsStageProgress);
+  }, [clearControlsIdleTimer, controlsOpacity, controlsStageProgress]);
 
   const scheduleControlsHide = useCallback(() => {
     clearControlsIdleTimer();
@@ -1291,23 +1293,13 @@ export default function HomeScreen() {
     top: screenHeight - Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value,
   }));
 
-  const lyricsBottomBlurOpacityStyle = useAnimatedStyle(() => {
-    const modeOpacity = interpolate(
-      fullscreenAlbumProgress.value,
-      [0, 0.32],
-      [1, 0],
-      Extrapolation.CLAMP,
-    );
-    return {
-      // Anchor the gradient to the moving masked edge without moving the lyrics.
-      transform: [{ translateY: -Math.max(0, screenHeight - dockTop.value) * controlsOpacity.value }],
-      opacity:
-        controlsOpacity.value *
-        modeOpacity *
-        lyricsRestoreOpacity.value,
-    };
-  });
-
+  // Distance from the settled dock top to the current opaque backdrop edge.
+  // Rows translate by at least this distance, so their visible content always
+  // stays below the mask edge, even with independently reversed clocks.
+  const controlsBackdropOffset = useDerivedValue(() =>
+    Math.max(0, screenHeight - dockTop.value) *
+    (1 - Math.max(0, Math.min(1, controlsOpacity.value))),
+  );
 
   const fullscreenMenuButtonAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: fullscreenMenuButtonScale.value }],
@@ -1882,21 +1874,6 @@ export default function HomeScreen() {
               )}
             </Reanimated.View>
           </Reanimated.View>
-          {/* Keep the existing fade inside the same masked edge as the lyrics. */}
-          <Reanimated.View
-            pointerEvents="none"
-            style={[
-              styles.lyricsBottomBlurWrap,
-              { height: Math.max(0, controlsDockHeight + 58) },
-              lyricsBottomBlurOpacityStyle,
-            ]}
-          >
-            <LinearGradient
-              pointerEvents="none"
-              colors={_stableColors7}
-              style={styles.lyricsBottomBlur}
-            />
-          </Reanimated.View>
           </View>
           </MaskedView>
         </Reanimated.View>
@@ -1953,7 +1930,8 @@ export default function HomeScreen() {
                     previewTranslated={tour.active ? tour.translated : undefined}
             isPlaying={isPlaying}
             durationMs={currentTrack?.durationMs ?? 0}
-            controlsProgress={controlsOpacity}
+            controlsProgress={controlsStageProgress}
+            controlsBackdropOffset={controlsBackdropOffset}
             shareSelectionCount={selectedLineKeys.size}
             shareSelectionMode={selectedLineKeys.size > 0}
             shareBusy={shareBusy}
@@ -2187,18 +2165,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.18)",
     opacity: 0.94,
   },
-  lyricsBottomBlurWrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: -48,
-    height: 320,
-    zIndex: 7,
-    overflow: "hidden",
-  },
-  lyricsBottomBlur: {
-    ...StyleSheet.absoluteFill,
-  },
   fillTouchBlocker: {
     position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 5,
   },
@@ -2215,6 +2181,7 @@ const styles = StyleSheet.create({
     zIndex: 21,
   },
   bottomArea: {
+    overflow: "visible",
     position: "absolute",
     left: 0,
     right: 0,
@@ -2224,6 +2191,7 @@ const styles = StyleSheet.create({
     zIndex: 6,
   },
   controlsWrap: {
+    overflow: "visible",
     width: "100%",
     position: "relative",
     backgroundColor: "transparent",
@@ -2256,6 +2224,5 @@ const _stableStyle4 = [
               ];
 const _stableEdges5 = ["top", "left", "right"] as const;
 const _stableEdges6 = ["top", "left", "right"] as const;
-const _stableColors7 = ["transparent", "rgba(0,0,0,0.85)"] as const;
 const _stableEdges8 = ["bottom", "left", "right"] as const;
 const _stableMaskColors9 = ["rgba(0,0,0,1)", "rgba(0,0,0,0)"] as const;

@@ -372,9 +372,15 @@ for (const [name, target] of [['showControls', 1], ['hideControls', 0]]) {
 assert.ok(attributionParent.openingElement.attributes.getText(playerAst).includes('styles.lyricsAttributionLayer'));
 const layerIndex = name => {
   const property = playerStyles.properties.find(property => property.name.getText(playerAst) === name);
-  return vm.runInNewContext(`(${property.initializer.getText(playerAst)})`, { StyleSheet: { absoluteFill: {} } }).zIndex;
+  assert.ok(property, `Expected player layer ${name} to exist`);
+  const zIndex = vm.runInNewContext(`(${property.initializer.getText(playerAst)})`, { StyleSheet: { absoluteFill: {} } }).zIndex;
+  assert.equal(typeof zIndex, 'number', `Expected an explicit zIndex for ${name}`);
+  return zIndex;
 };
-for (const name of ['controlsRevealZone', 'bottomArea', 'lyricsBottomBlurWrap']) {
+// The black gradient was removed. The moving fill's touch blocker remains a
+// sibling that attribution must sit above, along with the reveal zone and dock.
+assert.ok(!playerStyles.properties.some(property => property.name.getText(playerAst) === 'lyricsBottomBlurWrap'));
+for (const name of ['controlsRevealZone', 'bottomArea', 'fillTouchBlocker']) {
   assert.ok(layerIndex('lyricsAttributionLayer') > layerIndex(name), `Attribution must receive taps above ${name}`);
 }
 console.log('Spicy contributor links, native accessibility, and TTML attribution checks passed.');

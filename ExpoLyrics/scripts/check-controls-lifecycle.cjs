@@ -30,7 +30,7 @@ const sameDeps = (a, b) => a && a.length === b.length && b.every((value, index) 
 // and a deterministic JS timer queue. This does not emulate UIKit or Reanimated.
 function mount(initialAppState = 'active', overrides = {}) {
   const state = {
-    controlsVisible: true, liveReducedMotion: false, isLandscape: false,
+    controlsVisible: true, controlsInteractive: true, liveReducedMotion: false, isLandscape: false,
     fullscreenAlbumMode: false, autoHidePlaybackControls: true,
     landscapeArtControlsVisible: false, tourAutoHideDemo: false,
     tour: { active: false }, scrubPreviewPositionMs: null, ...overrides,
@@ -48,18 +48,19 @@ function mount(initialAppState = 'active', overrides = {}) {
     Math, controlsAppIsForeground,
     controlsForeground: ref(initialForeground),
     controlsTouchActive: ref(false), controlsScrubActive: ref(false),
-    controlsGeneration: ref(0), controlsOpacity: progress,
+    controlsOpacity: progress,
+    controlsStageProgress: { current: 1, get() { return this.current; }, set value(value) { this.current = value; } },
     controlsTarget: { current: 1, get() { return this.current; }, set(value) { this.current = value; if (!value) hidden++; } },
     controlsIdleTimerRef: ref(null), scheduleControlsHideRef: ref(() => {}), showControlsRef: ref(() => {}),
     isLandscapeRef: ref(state.isLandscape), fullscreenAlbumModeRef: ref(false),
     autoHidePlaybackControlsRef: ref(true), landscapeArtControlsVisibleRef: ref(false),
-    CONTROLS_IDLE_TIMEOUT_MS: 2500, CONTROLS_EASE: 'configured cubic',
+    CONTROLS_IDLE_TIMEOUT_MS: 2500, CONTROLS_EASE: 'configured cubic', ReanimatedEasing: { linear: 'linear' },
     nativePlaybackUnavailable: () => false,
     setScrubPreviewPositionMs: value => set('scrubPreviewPositionMs', value),
     setControlsVisible: value => set('controlsVisible', value),
-    setControlsInteractive: () => {},
+    setControlsInteractive: value => set('controlsInteractive', value),
     setLandscapeArtControlsVisible: value => set('landscapeArtControlsVisible', value),
-    cancelAnimation: () => {}, withTiming: target => target, runOnJS: fn => fn,
+    cancelAnimation: () => {}, withTiming: target => target,
     setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, time: now + delay }); return id; },
     clearTimeout: id => timers.delete(id),
     AppState: { addEventListener: (name, listener) => {
@@ -130,6 +131,17 @@ function mount(initialAppState = 'active', overrides = {}) {
     unmount() { hooks.forEach(hook => hook.cleanup?.()); assert.equal(listeners.size, 0); },
   };
 }
+
+// Visibility requests update touch and accessibility eligibility in the same
+// render, without waiting for either motion clock or an animation completion.
+const immediate = mount();
+immediate.tick(2500);
+assert.equal(immediate.state.controlsVisible, false);
+assert.equal(immediate.state.controlsInteractive, false);
+immediate.interact();
+assert.equal(immediate.state.controlsVisible, true);
+assert.equal(immediate.state.controlsInteractive, true);
+immediate.unmount();
 
 for (const landscape of [false, true]) for (const terminal of ['onTouchEnd', 'onTouchCancel']) {
   const player = mount('active', { isLandscape: landscape, landscapeArtControlsVisible: landscape });
