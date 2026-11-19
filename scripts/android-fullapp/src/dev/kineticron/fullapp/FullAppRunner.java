@@ -1,11 +1,16 @@
 package dev.kineticron.fullapp;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.app.Activity;
 import android.app.Instrumentation;
 import android.app.UiAutomation;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
+import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
@@ -14,17 +19,39 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
+import android.view.TextureView;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import java.io.*;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.regex.*;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /** Full-app UI runner. Drives the REAL KineSync app (test build) via deep-link fixture states.
  *  Evidence only: every step records files; nothing is marked pass from command success alone. */
 public final class FullAppRunner extends Instrumentation {
-  static final String PKG = "dev.kineticron.KineSync";
+  private static final String ISOLATED_PACKAGE = "dev.kineticron.KineSync.testnov18";
+  private static final String ISOLATED_RUNNER = "dev.kineticron.fullapp.testnov18";
+  private static final int PIXEL_COLD_TRIALS = 6;
+  private static final String COLD_FACTOR_ORDER = "BGGBBG";
+  private static final int PIXEL_BURST_PRESENTS = 4;
+  private static final int PIXEL_GEOMETRY_VALUES = 39;
+  private static final String RUST_LYRICS_VIEW = "dev.kineticron.rustlyrics.KineSyncRustLyricsView";
+  private String PKG = "dev.kineticron.KineSync";
+  private static final String MAIN_ACTIVITY = "dev.kineticron.KineSync.MainActivity";
   private static final String EXPORT_ROOT = "/sdcard/Download/kinesync-fullapp-nov18";
   private static final String MAKER_URL = "https://example.com/maker";
   private static final String DEV_MENU_INTRO =
@@ -33,11 +60,25 @@ public final class FullAppRunner extends Instrumentation {
   private File root;
   private PrintWriter proto;
   private boolean remainingGates;
+  private boolean pixelDiagOnly;
+  private boolean pixelColdRepro;
+  private boolean pixelColdFactorial;
+  private boolean pixelPersistent;
+  private int pixelBurstId;
+  private int pixelColdTrial;
+  private int pixelCaptureId = 173;
+  private long pixelColdSeedNs;
+  private int pixelScreenshotTexture;
+  private int pixelScreenshotWidth, pixelScreenshotHeight;
+  private long pixelScreenshotNs;
+  // Accessed on the app main thread only.
+  private Activity pixelActivity;
   private long scenarioDeadline = Long.MAX_VALUE;
   private int requestNumber;
   private int W = 1080, H = 2400;
   private final StringBuilder summary = new StringBuilder();
   private final List<String> failures = new ArrayList<>();
+  private final List<File> pixelExportFiles = new ArrayList<>();
   private void status(int code, String stack) {
     Bundle b = new Bundle(); b.putString("id", "InstrumentationTestRunner"); b.putInt("numtests", 1); b.putInt("current", 1);
     b.putString("class", "dev.kineticron.fullapp.FullAppRunner"); b.putString("test", "fullAppEvidence");
@@ -47,8 +88,37 @@ public final class FullAppRunner extends Instrumentation {
 
   @Override public void onCreate(Bundle b) {
     super.onCreate(b);
+    if (b != null && Boolean.parseBoolean(b.getString("isolatedBlueStacks"))) {
+      PKG = ISOLATED_PACKAGE;
+    }
     remainingGates = b != null && Boolean.parseBoolean(b.getString("remainingGates"));
+    pixelColdFactorial = b != null && Boolean.parseBoolean(b.getString("pixelColdFactorial"));
+    pixelColdRepro = pixelColdFactorial || (b != null && Boolean.parseBoolean(b.getString("pixelColdRepro")));
+    pixelPersistent = b != null && Boolean.parseBoolean(b.getString("pixelPersistent"));
+    pixelDiagOnly = pixelColdRepro || pixelPersistent || (b != null && Boolean.parseBoolean(b.getString("pixelDiagOnly")));
+    if (pixelColdRepro) {
+      String trial = b.getString("pixelColdTrial", "");
+      if (trial.matches("[1-" + PIXEL_COLD_TRIALS + "]")) {
+        pixelColdTrial = Integer.parseInt(trial);
+        if (pixelColdTrial % 2 == 0) pixelCaptureId += pixelColdTrial / 2;
+      }
+    }
+    if (pixelPersistent && b.getString("pixelBurstId", "").matches("[0-9]{3}")) {
+      pixelBurstId = Integer.parseInt(b.getString("pixelBurstId"));
+      pixelCaptureId = pixelBurstId;
+    }
     start();
+  }
+
+  @Override public void callActivityOnResume(Activity activity) {
+    super.callActivityOnResume(activity);
+    if (pixelDiagOnly && MAIN_ACTIVITY.equals(activity.getClass().getName()) &&
+        ISOLATED_PACKAGE.equals(activity.getPackageName())) pixelActivity = activity;
+  }
+
+  @Override public void callActivityOnPause(Activity activity) {
+    if (pixelActivity == activity) pixelActivity = null;
+    super.callActivityOnPause(activity);
   }
 
   private String shell(String cmd) throws IOException {
@@ -60,7 +130,9 @@ public final class FullAppRunner extends Instrumentation {
   }
 
   private String shell(String cmd, boolean checked) throws IOException {
-    if (SystemClock.elapsedRealtime() >= scenarioDeadline) throw new IOException("Remaining gates time budget exceeded");
+    if (SystemClock.elapsedRealtime() >= scenarioDeadline) {
+      throw new IOException(pixelColdRepro ? "Cold pixel trial time budget exceeded" : "Remaining gates time budget exceeded");
+    }
     String marker = "__FA_EXIT__" + UUID.randomUUID();
     String script = "(\n" + cmd + "\n) 2>&1\nrc=$?\nprintf '\\n" + marker + "%d\\n' \"$rc\"\n";
     String enc = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_8));
@@ -88,12 +160,6 @@ public final class FullAppRunner extends Instrumentation {
   private String tree() {
     try { AccessibilityNodeInfo root = ui.getRootInActiveWindow(); if (root == null) return "NO_ROOT_ACTIVE_WINDOW\n"; StringBuilder sb = new StringBuilder("pkg=" + root.getPackageName() + "\n"); ser(root, sb, 0); return sb.toString(); }
     catch (Throwable t) { return "TREE_ERROR " + t + "\n"; }
-  }
-  private int[] findIn(AccessibilityNodeInfo n, String desc) {
-    if (n == null) return null; CharSequence cd = n.getContentDescription();
-    if (cd != null && cd.toString().equals(desc)) { Rect r = new Rect(); n.getBoundsInScreen(r); return new int[] { r.centerX(), r.centerY(), r.left, r.top, r.right, r.bottom }; }
-    for (int i = 0; i < n.getChildCount(); i++) { int[] x = findIn(n.getChild(i), desc); if (x != null) return x; }
-    return null;
   }
   private void saveSettings() throws IOException {
     for (String k : new String[] { "global animator_duration_scale", "global transition_animation_scale", "global window_animation_scale", "system font_scale", "system accelerometer_rotation", "system user_rotation" })
@@ -154,7 +220,7 @@ public final class FullAppRunner extends Instrumentation {
 
   private void exportEvidence(String path) throws IOException {
     shellChecked("mkdir -p " + path);
-    File[] files = evidenceFiles();
+    File[] files = pixelDiagOnly ? pixelExportFiles.toArray(new File[0]) : evidenceFiles();
     if (files.length == 0) throw new IOException("No evidence to export");
     IOException failure = null;
     StringBuilder lengths = new StringBuilder();
@@ -178,14 +244,24 @@ public final class FullAppRunner extends Instrumentation {
     }
     Log.i("KineSyncFullApp", "Evidence at " + path + "\n" + listing);
     if (failure != null) throw failure;
+    if (pixelDiagOnly) return;
     save("export-verification.txt", "Verified shell byte lengths\n" + lengths + "\n" + listing);
     mirrorFile(new File(root, "export-verification.txt"), path + "/export-verification.txt");
   }
   private void log(String s) { proto.println(android.os.SystemClock.elapsedRealtime() + " " + s); proto.flush(); }
   private int count(String hay, String needle) { int c = 0, i = 0; while ((i = hay.indexOf(needle, i)) >= 0) { c++; i += needle.length(); } return c; }
-  private String rn() throws IOException { return shell("logcat -d -s ReactNativeJS:I"); }
+  private String rn() throws IOException {
+    String pidFilter = pixelDiagOnly ? " --pid=" + android.os.Process.myPid() : "";
+    return shell((pixelColdRepro ? "timeout 5 " : "") + "logcat -d" + pidFilter + " -s ReactNativeJS:I");
+  }
 
   private void shot(String name) throws IOException {
+    screenshot(name);
+    save(name + "-a11y.txt", tree());
+    save(name + "-focus.txt", "pid=" + appPid() + "\n" + shell("dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'") + shell("dumpsys activity top | grep -E 'ACTIVITY|Hosting|mFocused' | head -8") + "\n" + shell("dumpsys SurfaceFlinger --list"));
+  }
+
+  private void screenshot(String name) throws IOException {
     Bitmap bm = ui.takeScreenshot();
     File f = new File(root, name + ".png");
     if (bm == null) {
@@ -203,8 +279,6 @@ public final class FullAppRunner extends Instrumentation {
       }
       log("SHOT " + name + " " + W + "x" + H + " bytes=" + f.length());
     }
-    save(name + "-a11y.txt", tree());
-    save(name + "-focus.txt", "pid=" + appPid() + "\n" + shell("dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'") + shell("dumpsys activity top | grep -E 'ACTIVITY|Hosting|mFocused' | head -8") + "\n" + shell("dumpsys SurfaceFlinger --list"));
   }
   private void refreshSize() throws IOException {
     Bitmap bitmap = ui.takeScreenshot();
@@ -360,11 +434,13 @@ public final class FullAppRunner extends Instrumentation {
   }
 
   private boolean launch(String url, boolean wait) throws IOException {
-    String command = (remainingGates ? "timeout 15 " : "") + "am start" + (wait ? " -W" : "");
-    String out = shell(command + " -a android.intent.action.VIEW -d '" + url + "' -n " + PKG + "/.MainActivity");
-    log("AMSTART " + url + " -> " + out.replace('\n', ' '));
-    return wait ? out.contains("Status: ok") || out.contains("Complete")
+    String command = (remainingGates || pixelColdRepro ? "timeout 15 " : "") + "am start" + (wait ? " -W" : "");
+    String out = shell(command + " -a android.intent.action.VIEW -d '" + url + "' -n " + PKG + "/" + MAIN_ACTIVITY);
+    boolean started = wait ? out.contains("Status: ok") || out.contains("Complete")
       : out.contains("Starting: Intent") && !out.contains("Error");
+    if (pixelDiagOnly) log("PIXEL_FIXTURE_LAUNCH success=" + started);
+    else log("AMSTART " + url + " -> " + out.replace('\n', ' '));
+    return started;
   }
   private boolean waitFor(String marker, int baseline, int secs) throws IOException {
     for (int i = 0; i < secs * 2; i++) { if (count(rn(), marker) > baseline) return true; sleep(500); }
@@ -393,8 +469,20 @@ public final class FullAppRunner extends Instrumentation {
       + " connection=connected mode=desktop appOnboardingVisible=false tourActive=false\\s*$", Pattern.MULTILINE);
     return expected.matcher(rn()).find();
   }
-  private int[] findDesc(String desc) {
-    try { return findIn(ui.getRootInActiveWindow(), desc); } catch (Throwable t) { return null; }
+
+  private boolean initialPixelFixture() throws IOException {
+    String request = "pixel-credits-" + SystemClock.elapsedRealtime();
+    if (pixelColdRepro) {
+      pixelColdSeedNs = System.nanoTime();
+      log("PIXEL_COLD_SEED request=" + request + " launchNs=" + pixelColdSeedNs);
+    }
+    if (!launch("expolyrics://?fx=credits-amll&request=" + request, !pixelColdRepro)) return false;
+    Pattern expected = Pattern.compile("KSFX ACK fx=credits-amll style=amll lines=[1-9][0-9]* playing=false pos=51600"
+      + " request=" + request + " source=event track=fx-track-credits title=\"Fixture credits\""
+      + " connection=connected mode=desktop appOnboardingVisible=false tourActive=false\\s*$", Pattern.MULTILINE);
+    boolean acknowledged = expected.matcher(awaitLog(expected, 15)).find();
+    log("PIXEL_FIXTURE_ACK request=" + request + " confirmed=" + acknowledged);
+    return acknowledged;
   }
   private int[] findVisibleLabel(AccessibilityNodeInfo n, String label, boolean description) {
     if (n == null) return null;
@@ -409,6 +497,43 @@ public final class FullAppRunner extends Instrumentation {
     }
     return null;
   }
+  private AccessibilityNodeInfo clickableAppDescription(AccessibilityNodeInfo node, String label) {
+    if (node == null) return null;
+    if (PKG.equals(String.valueOf(node.getPackageName())) && node.isVisibleToUser() && node.isClickable()
+        && node.isEnabled() && label.equals(String.valueOf(node.getContentDescription()))) {
+      return node;
+    }
+    for (int i = 0; i < node.getChildCount(); i++) {
+      AccessibilityNodeInfo button = clickableAppDescription(node.getChild(i), label);
+      if (button != null) return button;
+    }
+    return null;
+  }
+
+  private boolean developerOverlayVisible(AccessibilityNodeInfo window) {
+    return findVisibleLabel(window, DEV_MENU_INTRO, false) != null
+      || (findVisibleLabel(window, "Reload", false) != null
+        && findVisibleLabel(window, "Go home", false) != null);
+  }
+
+  private boolean waitForOverlayFreeWindow(String fixture) {
+    return waitForUi(new Condition() {
+      private boolean closeRequested;
+
+      @Override public boolean matches() {
+        AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+        if (window == null) return false;
+        if (!developerOverlayVisible(window)) return fixture == null || playerIdentity(window, fixture);
+        int[] close = findVisibleLabel(window, "Close", true);
+        if (close != null && !closeRequested) {
+          closeRequested = true;
+          log("DEV_MENU_CLOSE_DURING_SCENARIO inputTap=" + tap(close[0], close[1]));
+        }
+        return false;
+      }
+    });
+  }
+
   private boolean playerIdentity(AccessibilityNodeInfo window, String fixture) {
     String title = "Fixture " + fixture;
     return window != null && window.getPackageName() != null && PKG.contentEquals(window.getPackageName())
@@ -416,7 +541,8 @@ public final class FullAppRunner extends Instrumentation {
       && (findVisibleLabel(window, title, false) != null
         || findVisibleLabel(window, title + ", KineSync Test. Show album artwork", true) != null)
       && findVisibleLabel(window, "Close", true) == null
-      && findVisibleLabel(window, "Close player menu", true) == null;
+      && findVisibleLabel(window, "Close player menu", true) == null
+      && !developerOverlayVisible(window);
   }
   private boolean dismissDevMenu() throws IOException {
     boolean continued = false, closed = false;
@@ -437,10 +563,11 @@ public final class FullAppRunner extends Instrumentation {
         closed = true;
       }
       boolean appVisible = findVisibleLabel(window, "Desktop Bridge is not connected", false) != null;
-      boolean clear = appVisible && !onboarding && next == null && !regularMenu && close == null
+      boolean playerVisible = pixelDiagOnly && findVisibleLabel(window, "Open player menu", true) != null;
+      boolean clear = (appVisible || playerVisible) && !onboarding && next == null && !regularMenu && close == null
         && (!continued || closed);
       clearSamples = clear ? clearSamples + 1 : 0;
-      if (clearSamples >= 3) {
+      if (clearSamples >= (pixelColdRepro ? 1 : 3)) {
         log("DEV_MENU_RESULT " + (closed ? "closed continued=" + continued : "already clear"));
         return true;
       }
@@ -451,18 +578,19 @@ public final class FullAppRunner extends Instrumentation {
   }
   private boolean bootstrapEmbeddedBundle() throws IOException {
     // Instrumentation lives in target process, so never force-stop that package here.
-    String out = shell((remainingGates ? "timeout 15 " : "")
-      + "am start -W -a android.intent.action.MAIN -n " + PKG + "/.MainActivity");
-    log("EMBEDDED_BOOTSTRAP_LAUNCH " + out.replace('\n', ' '));
+    String out = shell((remainingGates || pixelColdRepro ? "timeout 15 " : "")
+      + "am start -W -a android.intent.action.MAIN -n " + PKG + "/" + MAIN_ACTIVITY);
+    if (!pixelDiagOnly) log("EMBEDDED_BOOTSTRAP_LAUNCH " + out.replace('\n', ' '));
     boolean started = out.contains("Status: ok");
     log("ANDROID_LAUNCH_SUCCESS=" + started);
     int[] button = null;
-    for (int i = 0; started && i < 60 && button == null; i++) {
-      button = findVisibleLabel(ui.getRootInActiveWindow(), "Load embedded bundle", false);
-      if (button == null) sleep(500);
-    }
-    shot("00-embedded-launcher");
     boolean ready = false, setup = false, dismissed = false, seedReady = false, player = false;
+    for (int i = 0; started && i < 60 && button == null && !ready; i++) {
+      button = findVisibleLabel(ui.getRootInActiveWindow(), "Load embedded bundle", false);
+      if (pixelDiagOnly && button == null) ready = rn().contains("KSFX READY bundle=embedded");
+      if (button == null && (!pixelColdRepro || !ready)) sleep(500);
+    }
+    if (!pixelDiagOnly) shot("00-embedded-launcher");
     if (button != null) {
       log("EMBEDDED_BOOTSTRAP_TAP x=" + button[0] + " y=" + button[1]);
       shell("input tap " + button[0] + " " + button[1]);
@@ -470,23 +598,26 @@ public final class FullAppRunner extends Instrumentation {
     }
     log("EMBEDDED_ASSET_READY=" + ready);
     if (ready) {
-      shot("00-devmenu-before");
+      if (!pixelDiagOnly) shot("00-devmenu-before");
       setup = waitFor("KSFX APP_SETUP_READY ", 0, 30);
       log("APP_SETUP_READY=" + setup);
       if (setup) dismissed = dismissDevMenu();
-      shot("00-devmenu-after");
+      if (!pixelDiagOnly) shot("00-devmenu-after");
     }
     log("EXPO_ONBOARDING_DISMISSED=" + dismissed);
-    if (dismissed) seedReady = initialSpicyFixture();
+    if (pixelColdRepro) return dismissed;
+    if (dismissed) seedReady = pixelDiagOnly ? initialPixelFixture() : initialSpicyFixture();
     log("INITIAL_SEED_READY=" + seedReady);
     for (int i = 0; seedReady && i < 30 && !player; i++) {
-      player = playerIdentity(ui.getRootInActiveWindow(), "spicy");
+      player = playerIdentity(ui.getRootInActiveWindow(), pixelDiagOnly ? "credits" : "spicy");
       if (!player) sleep(500);
     }
     log("PLAYER_IDENTITY=" + player);
-    save("00-embedded-bootstrap.txt", "started=" + started + " embeddedButton=" + (button != null)
-      + " ready=" + ready + " appSetupReady=" + setup + " expoOnboardingDismissed=" + dismissed
-      + " seedReady=" + seedReady + " playerIdentity=" + player + "\n" + tree() + "\n" + rn());
+    if (!pixelDiagOnly) {
+      save("00-embedded-bootstrap.txt", "started=" + started + " embeddedButton=" + (button != null)
+        + " ready=" + ready + " appSetupReady=" + setup + " expoOnboardingDismissed=" + dismissed
+        + " seedReady=" + seedReady + " playerIdentity=" + player + "\n" + tree() + "\n" + rn());
+    }
     return player;
   }
   private interface Condition {
@@ -550,7 +681,7 @@ public final class FullAppRunner extends Instrumentation {
         + "\n" + returnTree + "\n" + rn());
       boolean afterAck = rawReturnTarget && fx(style) && fx("pause");
       boolean afterTarget = afterAck && targetedTap("seek", style, false, prefix + "-after-reseed");
-      shot(prefix + "-AFTER-RESEEDED");
+      shot(prefix + (rawReturnTarget ? "-AFTER-RESEEDED" : "-AFTER-RESEED-SKIPPED"));
       boolean setup = nativeTarget && settings && returned && rawReturnTarget && afterTarget;
       save(prefix + "-evidence.txt",
         "displayPortrait=" + portrait + " seededAndPaused=" + seeded + " beforePlayerIdentity=" + beforePlayer
@@ -565,37 +696,43 @@ public final class FullAppRunner extends Instrumentation {
   }
 
   private boolean closePlayerMenu() {
-    int[] close = findVisibleLabel(ui.getRootInActiveWindow(), "Close player menu", true);
-    if (close != null && !tap(close[0], close[1])) return false;
+    if (!waitForOverlayFreeWindow(null)) return false;
+    AccessibilityNodeInfo close = clickableAppDescription(ui.getRootInActiveWindow(), "Close player menu");
+    if (close != null && !close.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false;
     return waitForUi(new Condition() {
       @Override public boolean matches() {
         AccessibilityNodeInfo window = ui.getRootInActiveWindow();
-        return findVisibleLabel(window, "Close player menu", true) == null
-          && findVisibleLabel(window, "Open player menu", true) != null;
+        return !developerOverlayVisible(window) && findVisibleLabel(window, "Close player menu", true) == null
+          && clickableAppDescription(window, "Open player menu") != null;
       }
     });
   }
 
-  private int[] rendererOption(AccessibilityNodeInfo node, String style, boolean selected) {
-    if (node == null) return null;
+  private AccessibilityNodeInfo rendererOption(AccessibilityNodeInfo window, String style, boolean selected) {
     String title = style.equals("amll") ? "AMLL" : "Spicy Lyrics";
-    String label = title + " lyrics renderer";
-    String desc = String.valueOf(node.getContentDescription());
-    String text = String.valueOf(node.getText());
-    boolean named = desc.equals(label) || desc.equals(label + ", selected")
-      || text.equals(label) || text.equals(label + ", selected")
-      || (node.isClickable() && text.equals(title));
-    boolean active = node.isSelected() || desc.equals(label + ", selected") || text.equals(label + ", selected");
-    if (named && selected == active && node.isVisibleToUser() && PKG.equals(String.valueOf(node.getPackageName()))) {
-      Rect bounds = new Rect();
-      node.getBoundsInScreen(bounds);
-      if (!bounds.isEmpty()) return new int[] { bounds.centerX(), bounds.centerY() };
-    }
-    for (int i = 0; i < node.getChildCount(); i++) {
-      int[] option = rendererOption(node.getChild(i), style, selected);
-      if (option != null) return option;
-    }
-    return null;
+    return clickableAppDescription(window, title + " lyrics renderer" + (selected ? ", selected" : ""));
+  }
+
+  private boolean chooserState(AccessibilityNodeInfo window, String selected, String unselected) {
+    return !developerOverlayVisible(window)
+      && findVisibleLabel(window, "Settings", false) != null
+      && findVisibleLabel(window, "Close player menu", true) != null
+      && rendererOption(window, selected, true) != null
+      && rendererOption(window, unselected, false) != null;
+  }
+
+  private boolean openPlayerMenu() {
+    AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+    AccessibilityNodeInfo menu = developerOverlayVisible(window) ? null : clickableAppDescription(window, "Open player menu");
+    // Expo's floating control overlaps the player menu on the Moto capture.
+    return menu != null && menu.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+  }
+
+  private boolean selectStyle(String previous, String style) {
+    AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+    if (!chooserState(window, previous, style)) return false;
+    AccessibilityNodeInfo option = rendererOption(window, style, false);
+    return option != null && option.performAction(AccessibilityNodeInfo.ACTION_CLICK);
   }
 
   private void footerStyleSwitchEvidence(boolean portrait) throws IOException {
@@ -610,22 +747,16 @@ public final class FullAppRunner extends Instrumentation {
     String previous = "spicy";
     for (String style : new String[] { "amll", "spicy" }) {
       final String oldStyle = previous;
-      int[] menu = findVisibleLabel(ui.getRootInActiveWindow(), "Open player menu", true);
-      boolean opened = menu != null && tap(menu[0], menu[1]);
+      boolean opened = seeded && !oldStyle.equals(style) && closePlayerMenu() && openPlayerMenu();
       boolean rendered = opened && waitForUi(new Condition() {
         @Override public boolean matches() {
-          AccessibilityNodeInfo window = ui.getRootInActiveWindow();
-          return findVisibleLabel(window, "Close player menu", true) != null
-            && rendererOption(window, oldStyle, true) != null && rendererOption(window, style, false) != null;
+          return chooserState(ui.getRootInActiveWindow(), oldStyle, style);
         }
       });
-      if (rendered) sleep(500);
-      int[] option = rendered ? rendererOption(ui.getRootInActiveWindow(), style, false) : null;
-      boolean tapped = option != null && tap(option[0], option[1]);
+      boolean tapped = rendered && selectStyle(oldStyle, style);
       boolean selected = tapped && waitForUi(new Condition() {
         @Override public boolean matches() {
-          AccessibilityNodeInfo window = ui.getRootInActiveWindow();
-          return rendererOption(window, style, true) != null && rendererOption(window, oldStyle, false) != null;
+          return chooserState(ui.getRootInActiveWindow(), style, oldStyle);
         }
       });
       shot("71-footer-menu-" + style);
@@ -639,7 +770,7 @@ public final class FullAppRunner extends Instrumentation {
         "initialTap=" + initialLink + " menuOpened=" + opened + " optionsRendered=" + rendered
         + " optionTapped=" + tapped + " selected=" + selected + " closed=" + closed + " sameTrackMakerCallback=" + link
         + ". Review 71-footer PNGs");
-      previous = style;
+      if (selected) previous = style;
     }
   }
   private void step(String name, boolean evidence, String note) {
@@ -698,17 +829,20 @@ public final class FullAppRunner extends Instrumentation {
         step("rotation-" + angles[i] + "-" + style, rotated && target, "Display angle and native app window/target measured. Review " + name + ".png");
         if (angles[i] == 0) portrait = rotated;
       }
+      boolean clearBeforeHome = waitForOverlayFreeWindow(style);
       shellChecked("input keyevent KEYCODE_HOME");
       boolean home = waitForUi(new Condition() {
         @Override public boolean matches() { return homeWindowVisible(); }
       });
       shot("30-home-" + style);
-      boolean resumed = launch("expolyrics://") && waitForPlayer(style, false);
+      boolean resumed = launch("expolyrics://") && waitForOverlayFreeWindow(style);
       shot("30-resume-" + style);
       boolean homeTarget = ack && portrait && resumed && nativeEvidence("seek", style, false, "30-resume-" + style, false);
-      step("home-resume-" + style, home && resumed && homeTarget,
-        "App left foreground and returned to the same fixture with a measured target. Review 30-home/30-resume PNGs");
+      step("home-resume-" + style, clearBeforeHome && home && resumed && homeTarget,
+        "overlayFreePlayerBeforeHome=" + clearBeforeHome + " home=" + home + " overlayFreePlayerResumed=" + resumed
+        + " nativeTarget=" + homeTarget + ". Review 30-home/30-resume PNGs");
 
+      boolean clearBeforeSleep = waitForOverlayFreeWindow(style);
       boolean interactiveBefore = power.isInteractive();
       boolean asleep = false;
       try {
@@ -728,14 +862,16 @@ public final class FullAppRunner extends Instrumentation {
         }
       }
       boolean interactiveAfter = waitForPower(power, true);
-      boolean wakePlayer = waitForPlayer(style, false);
+      boolean wakePlayer = waitForOverlayFreeWindow(style);
       shot("31-screenoff-wake-" + style);
       boolean wakeTarget = ack && portrait && wakePlayer && nativeEvidence("seek", style, false, "31-wake-" + style, false);
-      save("31-power-" + style + ".txt", "interactiveBefore=" + interactiveBefore + "\nobservedAsleep=" + asleep
+      save("31-power-" + style + ".txt", "overlayFreePlayerBeforeSleep=" + clearBeforeSleep
+        + "\ninteractiveBefore=" + interactiveBefore + "\nobservedAsleep=" + asleep
         + "\ninteractiveAfter=" + interactiveAfter + "\nplayerReturned=" + wakePlayer + "\nnativeTarget=" + wakeTarget + "\n"
         + shell("dumpsys power"));
-      step("surface-sleep-wake-" + style, interactiveBefore && asleep && interactiveAfter && wakePlayer && wakeTarget,
-        "Observed interactive/off/interactive with the same fixture restored. Review 31-screenoff-wake PNG and 31-power report");
+      step("surface-sleep-wake-" + style, clearBeforeSleep && interactiveBefore && asleep && interactiveAfter && wakePlayer && wakeTarget,
+        "overlayFreePlayerBeforeSleep=" + clearBeforeSleep + " overlayFreePlayerAfterWake=" + wakePlayer
+        + " nativeTarget=" + wakeTarget + ". Review 31-screenoff-wake PNG and 31-power report");
     }
   }
 
@@ -787,17 +923,31 @@ public final class FullAppRunner extends Instrumentation {
     boolean settingsDisplayPortrait = orient(UiAutomation.ROTATION_FREEZE_0);
     log("SETUP settings portrait displayOnly=" + settingsDisplayPortrait + ", app window unverified, settings steps remain evidence-only");
     // settings renderer switch
-    fx("spicy");
-    int[] menu = findDesc("Open player menu"); log("MENU " + (menu == null ? "not found" : menu[0] + "," + menu[1]));
-    boolean sw = false;
-    if (menu != null) {
-      shell("input tap " + menu[0] + " " + menu[1]); sleep(2000); shot("70-menu-open");
-      int[] amll = findDesc("AMLL lyrics renderer");
-      if (amll != null) { shell("input tap " + amll[0] + " " + amll[1]); sleep(3000); shot("70-menu-amll"); sw = findDesc("AMLL lyrics renderer, selected") != null; }
-      int[] spicy = findDesc("Spicy Lyrics lyrics renderer");
-      if (spicy != null) { shell("input tap " + spicy[0] + " " + spicy[1]); sleep(3000); shot("70-menu-spicy"); }
-    }
-    step("settings-renderer-switch", sw, "menu found=" + (menu != null) + " AMLL selected state in a11y dump=" + sw);
+    boolean opened = fx("spicy") && closePlayerMenu() && openPlayerMenu();
+    boolean rendered = opened && waitForUi(new Condition() {
+      @Override public boolean matches() {
+        return chooserState(ui.getRootInActiveWindow(), "spicy", "amll");
+      }
+    });
+    shot("70-menu-open");
+    boolean amll = rendered && selectStyle("spicy", "amll")
+      && waitForUi(new Condition() {
+        @Override public boolean matches() {
+          return chooserState(ui.getRootInActiveWindow(), "amll", "spicy");
+        }
+      });
+    shot("70-menu-amll");
+    boolean spicy = amll && selectStyle("amll", "spicy")
+      && waitForUi(new Condition() {
+        @Override public boolean matches() {
+          return chooserState(ui.getRootInActiveWindow(), "spicy", "amll");
+        }
+      });
+    shot("70-menu-spicy");
+    boolean closed = closePlayerMenu();
+    step("settings-renderer-switch", spicy && closed,
+      "menuOpened=" + opened + " optionsRendered=" + rendered + " amllSelected=" + amll
+      + " spicySelected=" + spicy + " closed=" + closed);
     footerStyleSwitchEvidence(settingsDisplayPortrait);
   }
 
@@ -825,6 +975,698 @@ public final class FullAppRunner extends Instrumentation {
     return text.toString();
   }
 
+  private JSONObject matchingPixelReceipt(File receipt) throws IOException {
+    if (!Files.isRegularFile(receipt.toPath(), LinkOption.NOFOLLOW_LINKS)) return null;
+    try {
+      JSONObject metadata = new JSONObject(new String(Files.readAllBytes(receipt.toPath()), StandardCharsets.UTF_8));
+      return metadata.optInt("capture") == pixelCaptureId && metadata.optInt("frame") == 1
+        ? metadata : null;
+    } catch (JSONException incomplete) {
+      // Kotlin writes the sidecar just before it logs the corresponding update.
+      return null;
+    }
+  }
+
+  private boolean finiteNumbers(JSONArray array, int length) {
+    if (array == null || array.length() != length) return false;
+    for (int i = 0; i < length; i++) {
+      if (!(array.opt(i) instanceof Number) || !Double.isFinite(array.optDouble(i))) return false;
+    }
+    return true;
+  }
+
+  private boolean validBurstHistory(JSONObject receipt) {
+    JSONArray history = receipt.optJSONArray("presentHistory");
+    JSONArray geometry = receipt.optJSONArray("geometry");
+    if (receipt.optInt("presentOrdinal") != PIXEL_BURST_PRESENTS || !finiteNumbers(geometry, PIXEL_GEOMETRY_VALUES) ||
+        !(receipt.opt("holdUntilNs") instanceof Number) || history == null || history.length() != PIXEL_BURST_PRESENTS) return false;
+    long priorBufferNs = 0;
+    long priorObservedNs = 0;
+    String[] numbers = { "ordinal", "submission", "session", "generation", "texture", "beforeNs", "bufferNs",
+      "beforeUpdates", "updates", "submittedNs", "workerDoneNs", "observedNs" };
+    for (int i = 0; i < PIXEL_BURST_PRESENTS; i++) {
+      JSONObject visit = history.optJSONObject(i);
+      if (visit == null || visit.length() != numbers.length + 1) return false;
+      for (String key : numbers) if (!(visit.opt(key) instanceof Number)) return false;
+      JSONArray visitGeometry = visit.optJSONArray("geometry");
+      long beforeNs = visit.optLong("beforeNs"), bufferNs = visit.optLong("bufferNs");
+      long submittedNs = visit.optLong("submittedNs"), workerDoneNs = visit.optLong("workerDoneNs");
+      long observedNs = visit.optLong("observedNs");
+      if (visit.optInt("ordinal") != i + 1 || visit.optLong("submission") != i + 1 ||
+          visit.optLong("session") != receipt.optLong("session") || visit.optLong("generation") != receipt.optLong("generation") ||
+          visit.optInt("texture") != receipt.optInt("texture") || beforeNs < 0 || bufferNs <= beforeNs ||
+          (i > 0 && beforeNs != priorBufferNs) || visit.optLong("updates") <= visit.optLong("beforeUpdates") ||
+          submittedNs < priorObservedNs || workerDoneNs < submittedNs || observedNs < workerDoneNs ||
+          !finiteNumbers(visitGeometry, PIXEL_GEOMETRY_VALUES) || visitGeometry.optInt(2) != receipt.optInt("width") ||
+          visitGeometry.optInt(3) != receipt.optInt("height")) return false;
+      if (i + 1 == PIXEL_BURST_PRESENTS && (bufferNs != receipt.optLong("bufferNs") ||
+          !visitGeometry.toString().equals(geometry.toString()) || receipt.optLong("holdUntilNs") <= observedNs)) return false;
+      priorBufferNs = bufferNs;
+      priorObservedNs = observedNs;
+    }
+    return true;
+  }
+
+  private boolean validBurstLayout(JSONObject receipt) {
+    int width = receipt.optInt("width"), height = receipt.optInt("height");
+    JSONArray layout = receipt.optJSONArray("markerLayout");
+    if (receipt.optInt("presentOrdinal") != PIXEL_BURST_PRESENTS || width < 320 || height < 240 ||
+        !finiteNumbers(layout, 5)) return false;
+    int cell = Math.min(36, Math.min(width / 20, height / 12));
+    return layout.optDouble(0) == cell && layout.optDouble(1) == cell && layout.optDouble(2) == cell &&
+      layout.optDouble(3) == width - 5 * cell && layout.optDouble(4) == height / 3;
+  }
+
+  private boolean validColdFirstReceipt(JSONObject receipt) {
+    JSONArray geometry = receipt.optJSONArray("geometry");
+    return finiteNumbers(geometry, PIXEL_GEOMETRY_VALUES) && geometry.optDouble(2) == receipt.optInt("width") &&
+      geometry.optDouble(3) == receipt.optInt("height") && geometry.optDouble(4) == 1 &&
+      receipt.opt("requestedRevision") instanceof Number && receipt.optLong("requestedRevision") > 0 &&
+      receipt.opt("holdUntilNs") instanceof Number && receipt.optLong("holdUntilNs") > 0 &&
+      receipt.opt("beforeNs") instanceof Number && receipt.optLong("beforeNs") >= 0 &&
+      receipt.optLong("bufferNs") > receipt.optLong("beforeNs");
+  }
+
+  private static String pixelHash(File file) throws IOException {
+    try (InputStream in = new FileInputStream(file)) {
+      MessageDigest hash = MessageDigest.getInstance("SHA-256");
+      byte[] bytes = new byte[32768];
+      for (int n; (n = in.read(bytes)) != -1; ) hash.update(bytes, 0, n);
+      return String.format(Locale.ROOT, "%064x", new BigInteger(1, hash.digest()));
+    } catch (NoSuchAlgorithmException error) {
+      throw new IOException("SHA-256 unavailable", error);
+    }
+  }
+
+  private void copyPixelStage(File dir, String stage, List<File> matched) throws IOException {
+    String base = "frame-1-" + stage;
+    String metadataName = base + ".json";
+    JSONObject metadata = matchingPixelReceipt(new File(dir, metadataName));
+    if (metadata == null) throw new IOException("Missing matching pixel metadata for " + stage);
+    boolean textureStage = stage.equals("textureview");
+    if (pixelPersistent && !(textureStage ? validBurstHistory(metadata) : validBurstLayout(metadata))) {
+      throw new IOException("Invalid burst metadata for " + stage);
+    }
+    if (pixelColdRepro && textureStage && !validColdFirstReceipt(metadata)) {
+      throw new IOException("Invalid first-surface TextureView receipt");
+    }
+    for (String extension : new String[] { "raw", "png" }) {
+      String name = base + "." + extension;
+      File file = new File(dir, name);
+      if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) || file.length() == 0) {
+        throw new IOException("Missing pixel artifact " + name);
+      }
+      File copy = new File(root, name);
+      Files.copy(file.toPath(), copy.toPath(), LinkOption.NOFOLLOW_LINKS);
+      if (!Files.isRegularFile(copy.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+          !pixelHash(copy).equals(metadata.optString(extension + "Sha256"))) {
+        throw new IOException("Pixel hash mismatch for " + name);
+      }
+      matched.add(copy);
+    }
+    String[] keys = textureStage
+      ? new String[] { "frame", "capture", "session", "generation", "texture", "bufferNs", "width", "height",
+          "rawRowBytes", "config", "byteOrder", "colorSpace", "premultiplied", "rawSha256", "pngSha256" }
+      : new String[] { "frame", "capture", "stage", "width", "height", "format", "rawRowBytes", "gpuCopyRowBytes",
+          "rowOrder", "rawColorSpace", "rawAlpha", "pngColorSpace", "pngAlpha", "rawSha256", "pngSha256" };
+    try {
+      JSONObject allowed = new JSONObject(metadata, keys);
+      if (pixelPersistent) {
+        allowed.put("presentOrdinal", metadata.optInt("presentOrdinal"));
+        if (textureStage) {
+          allowed.put("presentHistory", metadata.optJSONArray("presentHistory")).put("geometry", metadata.optJSONArray("geometry"))
+            .put("holdUntilNs", metadata.optLong("holdUntilNs"));
+        } else {
+          allowed.put("markerLayout", metadata.optJSONArray("markerLayout"));
+        }
+      }
+      if (pixelColdRepro && textureStage) {
+        allowed.put("geometry", metadata.optJSONArray("geometry")).put("holdUntilNs", metadata.optLong("holdUntilNs"))
+          .put("requestedRevision", metadata.optLong("requestedRevision")).put("beforeNs", metadata.optLong("beforeNs"));
+      }
+      save(metadataName, allowed.toString());
+    } catch (JSONException error) {
+      throw new IOException("Cannot export pixel metadata for " + stage, error);
+    }
+    matched.add(new File(root, metadataName));
+  }
+
+  private void findPixelTextures(View view, List<TextureView> matches) {
+    if (view instanceof TextureView && view.getParent() != null &&
+        RUST_LYRICS_VIEW.equals(view.getParent().getClass().getName()) && view.isShown()) {
+      matches.add((TextureView) view);
+    }
+    if (view instanceof ViewGroup) {
+      ViewGroup group = (ViewGroup) view;
+      for (int i = 0; i < group.getChildCount(); i++) findPixelTextures(group.getChildAt(i), matches);
+    }
+  }
+
+  private Rect pixelViewport(JSONObject receipt, Point displaySize) {
+    return pixelViewport(receipt, displaySize, null);
+  }
+
+  private boolean matchesHeldPixel(TextureView texture, SurfaceTexture surface, int[] origin, JSONObject receipt) {
+    long bufferNs = receipt.optLong("bufferNs");
+    long heldUntil = receipt.optLong("holdUntilNs");
+    if (bufferNs <= 0 || surface.getTimestamp() != bufferNs || System.nanoTime() >= heldUntil) return false;
+    JSONArray geometry = receipt.optJSONArray("geometry");
+    if (!finiteNumbers(geometry, PIXEL_GEOMETRY_VALUES) || geometry.optDouble(0) != origin[0] ||
+        geometry.optDouble(1) != origin[1] || geometry.optDouble(2) != texture.getWidth() ||
+        geometry.optDouble(3) != texture.getHeight() || geometry.optDouble(4) != texture.getAlpha()) return false;
+    float[] view = new float[9], content = new float[9], uv = new float[16];
+    texture.getMatrix().getValues(view);
+    texture.getTransform(new Matrix()).getValues(content);
+    surface.getTransformMatrix(uv);
+    int index = 5;
+    for (float[] matrix : new float[][] {view, content, uv}) {
+      for (float value : matrix) if (geometry.optDouble(index++) != value) return false;
+    }
+    return surface.getTimestamp() == bufferNs && System.nanoTime() < heldUntil;
+  }
+
+  private Rect pixelViewport(final JSONObject receipt, final Point displaySize, final int[] textureId) {
+    final Rect bounds = new Rect();
+    runOnMainSync(new Runnable() {
+      @Override public void run() {
+        if (pixelActivity == null || !pixelActivity.hasWindowFocus()) return;
+        List<TextureView> matches = new ArrayList<>();
+        findPixelTextures(pixelActivity.getWindow().getDecorView(), matches);
+        if (matches.size() != 1) return;
+        TextureView texture = matches.get(0);
+        SurfaceTexture surface = texture.getSurfaceTexture();
+        if (surface == null || !texture.getTransform(null).isIdentity() || texture.getDisplay() == null) return;
+        for (View view = texture; view != null; ) {
+          if (view.getAlpha() != 1f || !view.getMatrix().isIdentity()) return;
+          view = view.getParent() instanceof View ? (View) view.getParent() : null;
+        }
+        int width = texture.getWidth(), height = texture.getHeight();
+        if (receipt != null && (!receipt.has("texture") || receipt.optInt("texture") != System.identityHashCode(surface) ||
+            receipt.optInt("width") != width || receipt.optInt("height") != height)) return;
+        Rect visible = new Rect();
+        Point offset = new Point();
+        if (!texture.getGlobalVisibleRect(visible, offset) ||
+            !visible.equals(new Rect(offset.x, offset.y, offset.x + width, offset.y + height))) return;
+        int[] origin = new int[2];
+        texture.getLocationOnScreen(origin);
+        if ((pixelPersistent || pixelColdRepro) && receipt != null && !matchesHeldPixel(texture, surface, origin, receipt)) return;
+        texture.getDisplay().getRealSize(displaySize);
+        WindowInsets insets = texture.getRootWindowInsets();
+        if (insets == null) return;
+        Rect unobscured = new Rect(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+          displaySize.x - insets.getSystemWindowInsetRight(), displaySize.y - insets.getSystemWindowInsetBottom());
+        Rect candidate = new Rect(origin[0], origin[1], origin[0] + width, origin[1] + height);
+        if (!candidate.isEmpty() && unobscured.contains(candidate)) {
+          bounds.set(candidate);
+          if (textureId != null) textureId[0] = System.identityHashCode(surface);
+        }
+      }
+    });
+    return bounds;
+  }
+
+  private boolean pixelControlsClear() {
+    AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+    return playerIdentity(window, "credits") && findVisibleLabel(window, "Play music", true) == null &&
+      findVisibleLabel(window, "Pause playback", true) == null;
+  }
+
+  private File pixelScreenshot(String name, JSONObject receipt) throws IOException {
+    Point display = new Point();
+    int[] texture = new int[1];
+    Rect bounds = pixelViewport(receipt, display, texture);
+    if (bounds.isEmpty() || !pixelControlsClear()) throw new IOException("No unobstructed Rust viewport for " + name);
+    long sampledNs = System.nanoTime();
+    Bitmap screen = ui.takeScreenshot();
+    if (screen == null) throw new IOException("Pixel screenshot unavailable: " + name);
+    Bitmap crop = null;
+    try {
+      Point finalDisplay = new Point();
+      int[] finalTexture = new int[1];
+      if (screen.getWidth() != display.x || screen.getHeight() != display.y ||
+          !bounds.equals(pixelViewport(receipt, finalDisplay, finalTexture)) || !display.equals(finalDisplay) ||
+          texture[0] != finalTexture[0] ||
+          bounds.equals(new Rect(0, 0, display.x, display.y)) || !pixelControlsClear()) {
+        throw new IOException("Rust viewport changed or does not match screenshot coordinates: " + name);
+      }
+      if ((pixelPersistent || pixelColdRepro) && receipt != null) {
+        log((pixelPersistent ? "PIXEL_BURST" : "PIXEL_COLD") + "_CROP_TIMESTAMPS capture=" + pixelCaptureId +
+          " bufferNs=" + receipt.optLong("bufferNs") +
+          " screenshotNs=" + sampledNs + " verifiedAfterNs=" + System.nanoTime());
+      }
+      crop = Bitmap.createBitmap(screen, bounds.left, bounds.top, bounds.width(), bounds.height());
+      File file = new File(root, name + ".png");
+      try (FileOutputStream out = new FileOutputStream(file)) {
+        if (!crop.compress(Bitmap.CompressFormat.PNG, 100, out)) throw new IOException("Pixel crop encoding failed: " + name);
+      }
+      W = display.x;
+      H = display.y;
+      pixelScreenshotTexture = texture[0];
+      pixelScreenshotWidth = bounds.width();
+      pixelScreenshotHeight = bounds.height();
+      pixelScreenshotNs = sampledNs;
+      log("PIXEL_DIAG_CROP " + name + " x=" + bounds.left + " y=" + bounds.top +
+        " size=" + bounds.width() + "x" + bounds.height());
+      return file;
+    } finally {
+      if (crop != null && crop != screen) crop.recycle();
+      screen.recycle();
+    }
+  }
+
+  private void clearPixelReceipts(File dir) throws IOException {
+    Files.deleteIfExists(new File(dir, "frame-1.ready").toPath());
+    Files.deleteIfExists(new File(dir, "release").toPath());
+    Files.deleteIfExists(new File(dir, "burst-present").toPath());
+    Files.deleteIfExists(new File(dir, "burst-failed").toPath());
+    Files.deleteIfExists(new File(dir, "cold-first").toPath());
+    Files.deleteIfExists(new File(dir, "cold-first-failed").toPath());
+    for (String stage : new String[] { "offscreen", "surface", "blit-proxy", "textureview" }) {
+      for (String extension : new String[] { "raw", "png", "json" }) {
+        Files.deleteIfExists(new File(dir, "frame-1-" + stage + "." + extension).toPath());
+      }
+    }
+  }
+
+  private void releasePixelHold(File dir) throws IOException {
+    Files.write(new File(dir, "release").toPath(), Integer.toString(pixelCaptureId).getBytes(StandardCharsets.UTF_8));
+    log("PIXEL_DIAG_RELEASE capture=" + pixelCaptureId);
+  }
+
+  private void publishPixelMarker(File markerFile, String marker) throws IOException {
+    Path temporary = Files.createTempFile(markerFile.getParentFile().toPath(), markerFile.getName() + "-", ".tmp");
+    try {
+      Files.write(temporary, marker.getBytes(StandardCharsets.UTF_8));
+      if (Files.exists(markerFile.toPath(), LinkOption.NOFOLLOW_LINKS)) throw new IOException("Existing pixel marker");
+      Files.move(temporary, markerFile.toPath(), StandardCopyOption.ATOMIC_MOVE);
+    } finally {
+      Files.deleteIfExists(temporary);
+    }
+  }
+
+  private void armPixelCapture(File arm) throws IOException {
+    publishPixelMarker(arm, (pixelPersistent ? "burst " : "") + pixelCaptureId);
+  }
+
+  private File pixelDiagnosticDirectory() throws IOException {
+    File dir = new File(getTargetContext().getFilesDir(), "rust-pixel-diag");
+    if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Cannot create " + dir);
+    if (!Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+      throw new IOException("Invalid pixel diagnostic directory");
+    }
+    File arm = new File(dir, "arm");
+    if (Files.exists(arm.toPath(), LinkOption.NOFOLLOW_LINKS)) throw new IOException("Existing pixel capture arm marker");
+    Files.deleteIfExists(new File(dir, "cold-factor").toPath());
+    return dir;
+  }
+
+  private void recordPixelDevice() throws IOException {
+    save("device.txt", "display=" + W + "x" + H + "\napi=" + Build.VERSION.SDK_INT
+      + "\ndensityDpi=" + getTargetContext().getResources().getDisplayMetrics().densityDpi + "\n");
+    pixelExportFiles.add(new File(root, "device.txt"));
+  }
+
+  private int decodeBurstOrdinal(Bitmap bitmap, int cell, int x, int y) {
+    if (x < 0 || y < 0 || x + 4 * cell > bitmap.getWidth() || y + 4 * cell > bitmap.getHeight()) return 0;
+    int bits = 0;
+    for (int bit = 0; bit < 16; bit++) {
+      int pixel = bitmap.getPixel(x + bit % 4 * cell + cell / 2, y + bit / 4 * cell + cell / 2);
+      int r = (pixel >>> 16) & 255, g = (pixel >>> 8) & 255, b = pixel & 255;
+      if ((pixel >>> 24) < 240) return 0;
+      if (Math.min(r, Math.min(g, b)) >= 223) bits |= 1 << bit;
+      else if (Math.max(r, Math.max(g, b)) > 32) return 0;
+    }
+    int payload = (bits >>> 4) & 2047;
+    if ((bits & 15) != 13 || (payload & 255) != pixelCaptureId ||
+        ((bits >>> 15) & 1) != (Integer.bitCount(payload) & 1)) return 0;
+    int ordinal = payload >>> 8;
+    return ordinal >= 1 && ordinal <= PIXEL_BURST_PRESENTS ? ordinal : 0;
+  }
+
+  private boolean recordBurstMarker(String stage, File file, JSONArray layout, int width, int height) throws IOException {
+    Bitmap image = BitmapFactory.decodeFile(file.getPath());
+    if (image == null) throw new IOException("Could not decode burst PNG for " + stage);
+    try {
+      if (image.getWidth() != width || image.getHeight() != height) throw new IOException("Burst size mismatch for " + stage);
+      int cell = layout.optInt(0);
+      int first = decodeBurstOrdinal(image, cell, layout.optInt(1), layout.optInt(2));
+      int second = decodeBurstOrdinal(image, cell, layout.optInt(3), layout.optInt(4));
+      log("PIXEL_BURST_MARKER capture=" + pixelCaptureId + " stage=" + stage + " firstOrdinal=" + first + " secondOrdinal=" + second);
+      return (first == PIXEL_BURST_PRESENTS || second == PIXEL_BURST_PRESENTS) &&
+        (first == 0 || first == PIXEL_BURST_PRESENTS) && (second == 0 || second == PIXEL_BURST_PRESENTS);
+    } finally {
+      image.recycle();
+    }
+  }
+
+  private void recordBurstPairing(File dir, File composited) throws IOException {
+    JSONObject surface = matchingPixelReceipt(new File(dir, "frame-1-surface.json"));
+    JSONObject offscreen = matchingPixelReceipt(new File(dir, "frame-1-offscreen.json"));
+    JSONObject texture = matchingPixelReceipt(new File(dir, "frame-1-textureview.json"));
+    if (surface == null || offscreen == null || texture == null) throw new IOException("Missing direct burst receipts");
+    int width = surface.optInt("width"), height = surface.optInt("height");
+    if (offscreen.optInt("width") != width || offscreen.optInt("height") != height ||
+        texture.optInt("width") != width || texture.optInt("height") != height) throw new IOException("Burst extent changed across stages");
+    JSONArray layout = surface.optJSONArray("markerLayout");
+    if (!recordBurstMarker("offscreen", new File(root, "frame-1-offscreen.png"), layout, width, height) ||
+        !recordBurstMarker("surface", new File(root, "frame-1-surface.png"), layout, width, height)) {
+      throw new IOException("Producer PNG did not contain the final burst marker");
+    }
+    boolean texturePaired = recordBurstMarker("textureview", new File(root, "frame-1-textureview.png"), layout, width, height);
+    boolean compositorPaired = recordBurstMarker("composited", composited, layout, width, height);
+    log("PIXEL_BURST_PAIRING capture=" + pixelCaptureId + " texturePaired=" + texturePaired + " compositorPaired=" + compositorPaired);
+  }
+
+  private void collectPixelStages(File dir, File composited) throws IOException {
+    List<File> matched = new ArrayList<>();
+    String bufferStage = pixelPersistent || new File(dir, "frame-1-surface.json").isFile() ? "surface" : "blit-proxy";
+    if (pixelColdRepro) {
+      JSONObject texture = matchingPixelReceipt(new File(dir, "frame-1-textureview.json"));
+      if (texture == null) throw new IOException("First-surface TextureView receipt is missing");
+      for (String stage : new String[] { "offscreen", bufferStage }) {
+        JSONObject gpu = matchingPixelReceipt(new File(dir, "frame-1-" + stage + ".json"));
+        if (gpu == null || gpu.optInt("width") != texture.optInt("width") ||
+            gpu.optInt("height") != texture.optInt("height")) {
+          throw new IOException("First-surface extent mismatch for " + stage);
+        }
+      }
+    }
+    copyPixelStage(dir, "offscreen", matched);
+    copyPixelStage(dir, bufferStage, matched);
+    copyPixelStage(dir, "textureview", matched);
+    if (pixelPersistent) recordBurstPairing(dir, composited);
+    matched.add(composited);
+    pixelExportFiles.addAll(matched);
+    summary.append("pixelCapture=").append(pixelCaptureId).append(" bufferStage=").append(bufferStage).append('\n');
+    if (pixelColdRepro) log("PIXEL_DIAG_STAGES capture=" + pixelCaptureId + " bufferStage=" + bufferStage);
+  }
+
+  private void pixelDiagnosticEvidence() throws IOException {
+    File dir = pixelDiagnosticDirectory();
+    File arm = new File(dir, "arm");
+    if (pixelPersistent) {
+      log("PIXEL_BURST_START capture=" + pixelCaptureId + " count=" + PIXEL_BURST_PRESENTS + " target=" + PKG +
+        " runner=" + ISOLATED_RUNNER + " pid=" + android.os.Process.myPid() + " fixture=credits-amll positionMs=51600");
+    }
+    if (!bootstrapEmbeddedBundle()) throw new IOException("Isolated embedded AMLL credits bootstrap failed");
+    if (!waitForUi(new Condition() {
+      @Override public boolean matches() { return pixelControlsClear() && !pixelViewport(null, new Point()).isEmpty(); }
+    })) throw new IOException("Isolated Rust viewport did not become unobstructed");
+    // The dock hides from accessibility at the start of its 700 ms hold and 400 ms fade.
+    sleep(1100);
+    AccessibilityNodeInfo window = ui.getRootInActiveWindow();
+    if (!playerIdentity(window, "credits")) throw new IOException("Open the isolated paused credits player first");
+    String label = "Recreate Rust surface";
+    int[] recreate = findVisibleLabel(window, label, true);
+    if (recreate == null) recreate = findVisibleLabel(window, label, false);
+    if (recreate == null) throw new IOException("Rust surface recreate control is unavailable");
+    pixelExportFiles.add(pixelScreenshot("pixel-no-copy-control", null));
+    int controlTexture = pixelScreenshotTexture;
+    recordPixelDevice();
+    log("PIXEL_DIAG_CONTROL pid=" + android.os.Process.myPid());
+
+    File receipt = new File(dir, "frame-1-textureview.json");
+    clearPixelReceipts(dir);
+    armPixelCapture(arm);
+    boolean released = false;
+    try {
+      if (!tap(recreate[0], recreate[1])) throw new IOException("Could not tap Recreate Rust surface");
+      log("PIXEL_DIAG_RECREATE capture=" + pixelCaptureId + " x=" + recreate[0] + " y=" + recreate[1]);
+      long deadline = SystemClock.elapsedRealtime() + (pixelPersistent ? 22_000 : 12_000);
+      JSONObject captured = null;
+      while (SystemClock.elapsedRealtime() < deadline) {
+        requireBurstActive(dir);
+        if (!arm.exists()) {
+          captured = matchingPixelReceipt(receipt);
+          if (captured != null) break;
+        }
+        sleep(40);
+      }
+      if (captured == null) {
+        if (pixelPersistent) log("PIXEL_BURST_WAIT_TIMEOUT capture=" + pixelCaptureId + " phase=" +
+          (arm.exists() ? "unclaimed" : "textureReceipt"));
+        throw new IOException("No matching TextureView update for capture " + pixelCaptureId);
+      }
+      if (pixelPersistent) {
+        if (!validBurstHistory(captured) || captured.optInt("texture") == controlTexture) {
+          throw new IOException("Incomplete burst history or recreated surface identity missing");
+        }
+        log("PIXEL_BURST_HELD capture=" + pixelCaptureId + " controlTexture=" + controlTexture +
+          " texture=" + captured.optInt("texture") + " session=" + captured.optLong("session") +
+          " generation=" + captured.optLong("generation") + " bufferNs=" + captured.optLong("bufferNs"));
+      }
+      log("PIXEL_DIAG_TEXTURE capture=" + pixelCaptureId);
+      if (!pixelPersistent) sleep(50);
+      if (!playerIdentity(ui.getRootInActiveWindow(), "credits")) {
+        throw new IOException("Isolated credits player lost foreground before pixel screenshot");
+      }
+      File composited = pixelScreenshot("pixel-frame-1-composited", captured);
+      requireBurstActive(dir);
+      releasePixelHold(dir);
+      released = true;
+      collectPixelStages(dir, composited);
+    } finally {
+      if (!released && !Files.deleteIfExists(arm.toPath())) {
+        // Rust claimed the arm, so release even if receipt or screenshot collection failed.
+        releasePixelHold(dir);
+      }
+    }
+  }
+
+  private void requireBurstActive(File dir) throws IOException {
+    if (!pixelPersistent) return;
+    Path failure = new File(dir, "burst-failed").toPath();
+    if (!Files.exists(failure, LinkOption.NOFOLLOW_LINKS)) return;
+    int code = 0;
+    if (Files.isRegularFile(failure, LinkOption.NOFOLLOW_LINKS) && Files.size(failure) <= 16) {
+      String marker = new String(Files.readAllBytes(failure), StandardCharsets.UTF_8).trim();
+      if (marker.matches(pixelCaptureId + " (1[0-2]|2[0-9]|3[0-9]|4[0-5])")) {
+        code = Integer.parseInt(marker.substring(marker.indexOf(' ') + 1));
+      }
+    }
+    log("PIXEL_BURST_FAILED capture=" + pixelCaptureId + " code=" + code);
+    throw new IOException("Isolated burst aborted before a held crop was verified, code=" + code);
+  }
+
+  private String coldSurfaceEvents() throws IOException {
+    try {
+      String clock = pixelColdFactorial ? " -v threadtime -v monotonic -v usec" : "";
+      return shellChecked("timeout 5 logcat -d --pid=" + android.os.Process.myPid() + clock + " -s KSRustDiag:I");
+    } catch (IOException unavailable) {
+      throw new IOException("Could not read the isolated cold surface markers");
+    }
+  }
+
+  private void confirmInitialPixelSurface(boolean armed) throws IOException {
+    String events = coldSurfaceEvents();
+    requireColdFactorStartup(events);
+    if (count(events, " surface.available ") != 1 || count(events, " surface.firstUpdate ") != 1) {
+      throw new IOException("Cold crop does not have exactly one initial Rust surface and first update");
+    }
+    if (armed && count(events, "gpu.firstPresent frame=1 capture=Some(" + pixelCaptureId + ")") != 1) {
+      throw new IOException("Cold capture was not the first GPU present of the initial surface");
+    }
+    String identity = " texture=" + pixelScreenshotTexture + " session=([0-9]+) ";
+    Matcher available = Pattern.compile("monoNs=([0-9]+) surface\\.available" + identity).matcher(events);
+    Matcher updated = Pattern.compile("monoNs=([0-9]+) surface\\.firstUpdate" + identity).matcher(events);
+    if (!available.find() || !updated.find() || !available.group(2).equals(updated.group(2))) {
+      throw new IOException("Cold crop did not come from the initial Rust surface");
+    }
+    long availableNs = Long.parseLong(available.group(1));
+    long firstUpdateNs = Long.parseLong(updated.group(1));
+    if (availableNs < pixelColdSeedNs || firstUpdateNs < availableNs || pixelScreenshotNs < firstUpdateNs) {
+      throw new IOException("Cold crop did not follow the seeded initial Rust surface update");
+    }
+    log("PIXEL_COLD_FRAME texture=" + pixelScreenshotTexture + " session=" + available.group(2) +
+      " availableNs=" + availableNs + " firstUpdateNs=" + firstUpdateNs + " sampledNs=" + pixelScreenshotNs +
+      " afterFirstUpdateMs=" + (pixelScreenshotNs - firstUpdateNs) / 1_000_000);
+    if (pixelColdFactorial) confirmColdFactor(events, available.group(2), availableNs, firstUpdateNs);
+  }
+
+  private void requireColdFactorStartup(String events) throws IOException {
+    if (!pixelColdFactorial) return;
+    if (events.contains("pixelDiag.coldFactor phase=surfaceLost ")) {
+      throw new IOException("Cold-factor surface was lost before the first present (surfaceLost)");
+    }
+    if (!events.contains("pixelDiag.coldFactor phase=ready ")) {
+      throw new IOException("Missing cold-factor ready snapshot");
+    }
+  }
+
+  private long coldLogClock(String events, String marker) throws IOException {
+    Matcher match = Pattern.compile("(?m)^[ \\t]*(\\d+)\\.(\\d{6})[ \\t]+[^\\r\\n]*?" +
+      Pattern.quote(marker) + "[^\\r\\n]*$").matcher(events);
+    if (!match.find()) throw new IOException("Missing monotonic cold-factor log timestamp");
+    long time = Long.parseLong(match.group(1)) * 1_000_000_000L + Long.parseLong(match.group(2)) * 1000L;
+    if (match.find()) throw new IOException("Duplicate cold-factor log timestamp");
+    return time;
+  }
+
+  private MatchResult coldFactorSnapshot(String events, String phase, String session) throws IOException {
+    String mode = String.valueOf(COLD_FACTOR_ORDER.charAt(pixelColdTrial - 1));
+    Matcher match = Pattern.compile("monoNs=(\\d+) (pixelDiag\\.coldFactor phase=" + phase +
+      " trial=" + pixelColdTrial + " mode=" + mode + " texture=" + pixelScreenshotTexture + " session=" + session +
+      " generation=(\\d+) sequence=(\\d+) followEpoch=(\\d+) revision=(\\d+) priorPresents=(\\d+)" +
+      " attempt=(\\d+) requestedRevision=(-?\\d+) workerGeneration=(-?\\d+) status=(-?\\d+))(?=\\r?$)",
+      Pattern.MULTILINE).matcher(events);
+    if (!match.find()) throw new IOException("Missing cold-factor snapshot: " + phase);
+    MatchResult snapshot = match.toMatchResult();
+    if (match.find()) throw new IOException("Duplicate cold-factor snapshot: " + phase);
+    log("PIXEL_FACTOR_SNAPSHOT monoNs=" + snapshot.group(1) + " " + snapshot.group(2));
+    return snapshot;
+  }
+
+  private void confirmColdFactor(String events, String session, long availableNs, long firstUpdateNs) throws IOException {
+    String firstPresent = "gpu.firstPresent frame=1 capture=None";
+    if (count(events, "gpu.firstPresent ") != 1 || count(events, firstPresent) != 1 ||
+        events.contains(" surface.resize ") || events.contains(" surface.destroy ") || events.contains("pixelDiag.armed") ||
+        events.contains("pixelDiag.burstArmed") || events.contains("pixelDiag.coldFactor phase=timeout")) {
+      throw new IOException("Cold-factor initial surface or ordinary GPU usage evidence did not match");
+    }
+    Matcher config = Pattern.compile("gpu\\.surface\\.configured adapter=[^\\r\\n]*?\\bbackend: (Vulkan|Gl)" +
+      "[^\\r\\n]*? size=(\\d+)x(\\d+) format=(Rgba8Unorm|Bgra8Unorm) alpha=(Inherit|PreMultiplied|PostMultiplied) presentMode=Fifo")
+      .matcher(events);
+    if (!config.find() || Integer.parseInt(config.group(2)) != pixelScreenshotWidth ||
+        Integer.parseInt(config.group(3)) != pixelScreenshotHeight) throw new IOException("Cold-factor GPU configuration missing or changed");
+    log("PIXEL_FACTOR_CONFIG backend=" + config.group(1) + " width=" + config.group(2) + " height=" + config.group(3) +
+      " format=" + config.group(4) + " alpha=" + config.group(5) + " presentMode=Fifo");
+    if (config.find()) throw new IOException("Duplicate cold-factor GPU configuration");
+    MatchResult ticket = coldFactorSnapshot(events, "ticket", session);
+    MatchResult ready = coldFactorSnapshot(events, "ready", session);
+    MatchResult submit = coldFactorSnapshot(events, "submit", session);
+    MatchResult result = coldFactorSnapshot(events, "result", session);
+    MatchResult present = coldFactorSnapshot(events, "present", session);
+    if (!present.group(8).equals("1") || !present.group(9).equals(submit.group(6))) {
+      throw new IOException("Cold-factor present did not come from the first submission and its revision");
+    }
+    long submitNs = Long.parseLong(submit.group(1)), presentDoneNs = Long.parseLong(present.group(1));
+    long availableOffset = availableNs - coldLogClock(events, "monoNs=" + availableNs + " surface.available");
+    long updateOffset = firstUpdateNs - coldLogClock(events, "monoNs=" + firstUpdateNs + " surface.firstUpdate");
+    long presentNs = coldLogClock(events, firstPresent) + updateOffset;
+    final long clockToleranceNs = 10_000_000L;
+    if (Math.abs(availableOffset - updateOffset) > clockToleranceNs || presentNs < submitNs - clockToleranceNs ||
+        presentNs > presentDoneNs + clockToleranceNs || presentNs > pixelScreenshotNs || presentDoneNs > pixelScreenshotNs ||
+        Long.parseLong(ticket.group(1)) < pixelColdSeedNs || Long.parseLong(ticket.group(1)) > submitNs ||
+        Long.parseLong(ready.group(1)) > pixelScreenshotNs || Long.parseLong(result.group(1)) < submitNs ||
+        !ticket.group(7).equals("0") || !submit.group(7).equals("0") || !result.group(7).equals("0") ||
+        !present.group(7).equals("0") || !submit.group(8).equals("1") || !result.group(8).equals("1") ||
+        !submit.group(6).equals(submit.group(9)) || !submit.group(9).equals(result.group(9)) ||
+        !present.group(11).equals("0")) {
+      throw new IOException("Cold-factor timing or initial submission evidence is inconsistent");
+    }
+    if (COLD_FACTOR_ORDER.charAt(pixelColdTrial - 1) == 'G' &&
+        (Long.parseLong(ready.group(1)) >= submitNs || !ready.group(3).equals(submit.group(3)) ||
+         Long.parseLong(submit.group(4)) <= Long.parseLong(ready.group(4)) ||
+         Long.parseLong(submit.group(5)) <= Long.parseLong(ready.group(5)) ||
+         !present.group(3).equals(present.group(10)) || !present.group(6).equals(present.group(9)))) {
+      throw new IOException("G did not present a current first frame after the readiness fence");
+    }
+    log("PIXEL_FACTOR_TIMING firstPresentNs=" + presentNs + " firstUpdateNs=" + firstUpdateNs +
+      " sampledNs=" + pixelScreenshotNs + " afterFirstPresentNs=" + (pixelScreenshotNs - presentNs) +
+      " afterFirstUpdateNs=" + (pixelScreenshotNs - firstUpdateNs) + " clockOffsetDriftNs=" + (availableOffset - updateOffset));
+  }
+
+  private void requireColdFirstActive(File dir) throws IOException {
+    Path failure = new File(dir, "cold-first-failed").toPath();
+    if (!Files.exists(failure, LinkOption.NOFOLLOW_LINKS)) return;
+    int code = 0;
+    if (Files.isRegularFile(failure, LinkOption.NOFOLLOW_LINKS) && Files.size(failure) <= 16) {
+      String marker = new String(Files.readAllBytes(failure), StandardCharsets.UTF_8).trim();
+      if (marker.matches(pixelCaptureId + " [1-7]")) code = marker.charAt(marker.length() - 1) - '0';
+    }
+    log("PIXEL_COLD_FIRST_REJECTED capture=" + pixelCaptureId + " code=" + code);
+    throw new IOException("Initial Rust frame was rejected, code=" + code);
+  }
+
+  private void pixelColdEvidence(String output) throws IOException {
+    boolean armed = !pixelColdFactorial && pixelColdTrial % 2 == 0;
+    log("PIXEL_COLD_TRIAL ordinal=" + pixelColdTrial + " total=" + PIXEL_COLD_TRIALS +
+      " mode=" + (armed ? "armed" : "no-copy") + " capture=" + (armed ? pixelCaptureId : 0) +
+      " app=" + PKG + " runner=" + ISOLATED_RUNNER + " pid=" + android.os.Process.myPid() + " output=" + output);
+    log("PIXEL_COLD_FIXTURE fx=credits-amll style=amll track=fx-track-credits playing=false posMs=51600");
+    File dir = pixelDiagnosticDirectory();
+    File arm = new File(dir, "arm");
+    if (!bootstrapEmbeddedBundle()) throw new IOException("Isolated embedded cold bootstrap failed");
+    String preSeedEvents = coldSurfaceEvents();
+    if (preSeedEvents.contains(" surface.available ") || preSeedEvents.contains("gpu.firstPresent")) {
+      throw new IOException("Rust surface already created before the cold fixture seed");
+    }
+    clearPixelReceipts(dir);
+    Path coldFirst = new File(dir, "cold-first").toPath();
+    File factorTicket = new File(dir, "cold-factor");
+    boolean published = false;
+    boolean released = false;
+    try {
+      if (pixelColdFactorial) {
+        char mode = COLD_FACTOR_ORDER.charAt(pixelColdTrial - 1);
+        publishPixelMarker(factorTicket, pixelColdTrial + " " + mode);
+        log("PIXEL_FACTOR_PLAN trial=" + pixelColdTrial + " mode=" + mode + " order=" + COLD_FACTOR_ORDER +
+          " publishedNs=" + System.nanoTime());
+      }
+      if (armed) {
+        // The side marker is complete before the atomic decimal arm becomes visible to Kotlin or Rust.
+        Files.write(coldFirst, Integer.toString(pixelCaptureId).getBytes(StandardCharsets.UTF_8));
+        armPixelCapture(arm);
+        published = true;
+      }
+      if (!initialPixelFixture()) throw new IOException("Isolated cold credits fixture ACK missing");
+      File receipt = new File(dir, "frame-1-textureview.json");
+      JSONObject captured = null;
+      long clearSince = -1;
+      long deadline = SystemClock.elapsedRealtime() + 12_000;
+      File cropped = null;
+      while (SystemClock.elapsedRealtime() < deadline) {
+        if (armed) {
+          requireColdFirstActive(dir);
+          if (captured == null && !arm.exists()) {
+            captured = matchingPixelReceipt(receipt);
+            if (captured != null && !validColdFirstReceipt(captured)) throw new IOException("Invalid first-surface receipt");
+          }
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (!pixelControlsClear()) {
+          clearSince = -1;
+        } else if (clearSince < 0) {
+          clearSince = now;
+        } else if (now - clearSince >= 1100 && (!armed || captured != null) &&
+                   !pixelViewport(captured, new Point()).isEmpty()) {
+          cropped = pixelScreenshot(armed ? "pixel-frame-1-composited" : "pixel-no-copy-control", captured);
+          break;
+        }
+        // Observe the clear UI throughout the dock's bounded 700 ms hold and 400 ms fade.
+        sleep(40);
+      }
+      if (cropped == null) {
+        log("PIXEL_COLD_WAIT_TIMEOUT capture=" + (armed ? pixelCaptureId : 0) + " receipt=" + (captured != null));
+        if (pixelColdFactorial) requireColdFactorStartup(coldSurfaceEvents());
+        throw new IOException("No eligible initial Rust viewport within the cold sampling window");
+      }
+      if (armed) {
+        requireColdFirstActive(dir);
+        releasePixelHold(dir);
+        released = true;
+      } else if (Files.exists(arm.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                 Files.exists(new File(dir, "frame-1.ready").toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        throw new IOException("A diagnostic marker appeared during the cold no-copy trial");
+      }
+      confirmInitialPixelSurface(armed);
+      // Hash the two installed APKs after sampling so evidence identification cannot delay the frame.
+      log("PIXEL_COLD_ARTIFACT appBaseSha256=" + pixelHash(new File(getTargetContext().getApplicationInfo().sourceDir)) +
+        " runnerBaseSha256=" + pixelHash(new File(getContext().getApplicationInfo().sourceDir)));
+      recordPixelDevice();
+      if (armed) collectPixelStages(dir, cropped);
+      else pixelExportFiles.add(cropped);
+      log("PIXEL_COLD_RESULT captured=true");
+    } finally {
+      try {
+        if (published && !released && !Files.deleteIfExists(arm.toPath())) releasePixelHold(dir);
+      } finally {
+        if (armed) Files.deleteIfExists(coldFirst);
+        if (pixelColdFactorial) Files.deleteIfExists(factorTicket.toPath());
+      }
+    }
+  }
+
   @Override public void onStart() {
     status(1, null);
     long started = SystemClock.elapsedRealtime();
@@ -833,46 +1675,67 @@ public final class FullAppRunner extends Instrumentation {
     boolean exported = false;
     Throwable error = null;
     if (remainingGates) scenarioDeadline = started + 12 * 60 * 1000L;
+    if (pixelColdRepro) scenarioDeadline = started + 150_000;
     try {
+      if (pixelDiagOnly && (!ISOLATED_PACKAGE.equals(PKG) ||
+          !ISOLATED_PACKAGE.equals(getTargetContext().getPackageName()))) {
+        throw new IOException("pixelDiagOnly requires the isolated BlueStacks runner and target");
+      }
+      if (pixelColdRepro && (pixelColdTrial == 0 || remainingGates ||
+          !ISOLATED_RUNNER.equals(getContext().getPackageName()))) {
+        throw new IOException("pixelColdRepro requires the isolated runner, pixelColdTrial 1 through 6 and no remainingGates");
+      }
+      if (pixelPersistent && (pixelColdRepro || remainingGates || pixelBurstId < 177 || pixelBurstId > 255 ||
+          !ISOLATED_RUNNER.equals(getContext().getPackageName()))) {
+        throw new IOException("pixelPersistent requires the isolated runner and unused pixelBurstId 177 through 255");
+      }
       File ext = getTargetContext().getExternalFilesDir(null);
       root = new File(new File(ext != null ? ext : getTargetContext().getFilesDir(), "fullapp"), run);
       if (!root.mkdirs()) throw new IOException("Cannot create evidence directory " + root);
       proto = new PrintWriter(new FileWriter(new File(root, "protocol.log")));
       summary.append("remainingGates=").append(remainingGates).append("\nexportDirectory=").append(output).append('\n');
+      if (pixelDiagOnly) summary.append("pixelDiagOnly=true\n");
       ui = getUiAutomation();
       AccessibilityServiceInfo si = ui.getServiceInfo();
       si.flags |= AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
       ui.setServiceInfo(si);
-      String sz = shell("wm size; wm density; getprop ro.build.version.sdk; getprop ro.product.model");
-      save("device.txt", sz);
-      log("DEVICE " + sz.replace('\n', ' '));
-      saveSettings();
-      for (String k : new String[] { "animator_duration_scale", "transition_animation_scale", "window_animation_scale" }) {
-        shell("settings put global " + k + " 1");
-      }
-      shell("settings put system accelerometer_rotation 0; settings put system font_scale 1.0; input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard");
-      shell("logcat -b all -c");
-      boolean up = bootstrapEmbeddedBundle();
-      sleep(1500);
-      appPid();
-      step("cold-launch", up, "See 00-embedded-bootstrap.txt for launch, readiness, and player evidence");
-      shot("00-launch");
-      if (!up) throw new IOException("Embedded fixture bootstrap failed; no UI scenarios executed");
-      settingsRouteEvidence();
-      seekAndMakerEvidence();
-      if (remainingGates) {
-        boolean portrait = orient(UiAutomation.ROTATION_FREEZE_0);
-        step("orientation-portrait", portrait, "Portrait display measured before same-track footer switch");
-        footerStyleSwitchEvidence(portrait);
-        remainingLifecycleEvidence();
+      if (pixelColdRepro) {
+        pixelColdEvidence(output);
+      } else if (pixelDiagOnly) {
+        pixelDiagnosticEvidence();
       } else {
-        broadEvidence();
+        String sz = shell("wm size; wm density; getprop ro.build.version.sdk; getprop ro.product.model");
+        save("device.txt", sz);
+        log("DEVICE " + sz.replace('\n', ' '));
+        saveSettings();
+        for (String k : new String[] { "animator_duration_scale", "transition_animation_scale", "window_animation_scale" }) {
+          shell("settings put global " + k + " 1");
+        }
+        shell("settings put system accelerometer_rotation 0; settings put system font_scale 1.0; input keyevent KEYCODE_WAKEUP; wm dismiss-keyguard");
+        shell("logcat -b all -c");
+        boolean up = bootstrapEmbeddedBundle();
+        sleep(1500);
+        appPid();
+        step("cold-launch", up, "See 00-embedded-bootstrap.txt for launch, readiness, and player evidence");
+        shot("00-launch");
+        if (!up) throw new IOException("Embedded fixture bootstrap failed; no UI scenarios executed");
+        settingsRouteEvidence();
+        seekAndMakerEvidence();
+        if (remainingGates) {
+          boolean portrait = orient(UiAutomation.ROTATION_FREEZE_0);
+          step("orientation-portrait", portrait, "Portrait display measured before same-track footer switch");
+          footerStyleSwitchEvidence(portrait);
+          remainingLifecycleEvidence();
+        } else {
+          broadEvidence();
+        }
       }
     } catch (Throwable t) {
       error = t;
+      if (pixelColdRepro && proto != null) log("PIXEL_COLD_RESULT captured=false");
     } finally {
       scenarioDeadline = Long.MAX_VALUE;
-      if (ui != null && proto != null) {
+      if (!pixelDiagOnly && ui != null && proto != null) {
         try {
           save("logcat-reactnativejs.txt", rn());
           captureCrashEvidence();
@@ -895,18 +1758,22 @@ public final class FullAppRunner extends Instrumentation {
           else error.addSuppressed(protocolError);
         }
         proto.close();
-        try {
-          if (error != null) {
-            save("RUNNER-ERROR.txt", stackTrace(error));
-            summary.append("Runner error: ").append(error).append('\n');
+        if (pixelDiagOnly) {
+          pixelExportFiles.add(new File(root, "protocol.log"));
+        } else {
+          try {
+            if (error != null) {
+              save("RUNNER-ERROR.txt", stackTrace(error));
+              summary.append("Runner error: ").append(error).append('\n');
+            }
+            summary.append("Hard gate failures: ").append(failures).append("\nEvidence files:\n");
+            for (File file : evidenceFiles()) summary.append(file.getName()).append('\n');
+            summary.append("SUMMARY.txt\nexport-verification.txt (written after mirror verification)\n");
+            save("SUMMARY.txt", summary.toString());
+          } catch (Throwable t) {
+            if (error == null) error = t;
+            else error.addSuppressed(t);
           }
-          summary.append("Hard gate failures: ").append(failures).append("\nEvidence files:\n");
-          for (File file : evidenceFiles()) summary.append(file.getName()).append('\n');
-          summary.append("SUMMARY.txt\nexport-verification.txt (written after mirror verification)\n");
-          save("SUMMARY.txt", summary.toString());
-        } catch (Throwable t) {
-          if (error == null) error = t;
-          else error.addSuppressed(t);
         }
       }
       try {
