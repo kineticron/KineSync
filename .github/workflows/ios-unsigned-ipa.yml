@@ -257,6 +257,98 @@ jobs:
           fs.writeFileSync(marker, chosen, "utf8");
           NODE
 
+      - name: Verify Release Rust lyrics registration and linkage
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { symbols } = require('./scripts/ios-dev-ci/rust-device.cjs');
+
+          const ios = 'ExpoLyrics/ios';
+          const app = fs.realpathSync(fs.readFileSync(path.join(ios, '.ci_built_app'), 'utf8').trim());
+          const run = (tool, args, input) => execFileSync(tool, args, {
+            encoding: 'utf8', maxBuffer: 128 * 1024 * 1024, input,
+          });
+          const executable = run('plutil', ['-extract', 'CFBundleExecutable', 'raw', '-o', '-', path.join(app, 'Info.plist')]).trim();
+          const image = path.join(app, executable);
+          const evidence = 'ExpoLyrics/ios-release-evidence';
+          fs.mkdirSync(evidence, { recursive: true });
+          const save = (file, data) => fs.writeFileSync(path.join(evidence, file), data);
+
+          const provider = fs.readFileSync(path.join(ios, 'Pods/Target Support Files', `Pods-${executable}`, 'ExpoModulesProvider.swift'), 'utf8');
+          save('ExpoModulesProvider.swift', provider);
+          const registrations = provider.match(/^  public override func getModuleClasses\(\)[^\n]*\{\n([\s\S]*?)^  \}/m)?.[1].trim();
+          // Expo duplicates common registrations in both branches when other modules are debug-only.
+          const debug = registrations?.match(/^#if (?:EXPO_CONFIGURATION_DEBUG|DEBUG)\n([\s\S]*?)\n[ \t]*#else\n([\s\S]*?)\n[ \t]*#endif$/);
+          const branches = debug ? debug.slice(1) : [registrations];
+          if (!branches.every(branch => branch && /^return \[[^#]*\]$/.test(branch.trim()) &&
+              /^\s*\(module: KineSyncRustLyricsModule\.self,/m.test(branch))) {
+            throw new Error('Generated ExpoModulesProvider lacks unconditional KineSyncRustLyricsModule registration');
+          }
+
+          const nm = run('xcrun', ['nm', '-arch', 'arm64', '-U', image]);
+          save('app-nm.txt', nm);
+          const swift = nm.split('\n').filter(line => line.includes('KineSyncRustLyrics')).join('\n');
+          const demangled = run('xcrun', ['swift-demangle'], `${swift}\n`);
+          save('app-rust-demangled-nm.txt', demangled);
+          if (!/(?:type metadata(?: accessor)?|nominal type descriptor) for KineSyncRustLyrics\.KineSyncRustLyricsModule\s*$/m.test(demangled) &&
+              !/\b_OBJC_CLASS_\$_(?:_TtC18KineSyncRustLyrics24)?KineSyncRustLyricsModule\s*$/m.test(nm)) {
+            throw new Error('Release app Mach-O lacks the Swift or Objective-C identity of KineSyncRustLyricsModule');
+          }
+          for (const symbol of symbols) {
+            if (!new RegExp(`\\b[Tt]\\s+_${symbol}$`, 'm').test(nm)) {
+              throw new Error(`Release app Mach-O lacks defined Rust FFI symbol ${symbol}`);
+            }
+          }
+
+          const loads = new Map();
+          const system = file => file.startsWith('/usr/lib/') || file.startsWith('/System/Library/');
+          function expand(file, loader) {
+            return path.normalize(file.replace(/^@loader_path\//, `${path.dirname(loader)}/`)
+              .replace(/^@executable_path\//, `${app}/`));
+          }
+          function resolve(file) {
+            if (system(file)) return file;
+            if (!file.startsWith(`${app}/`) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return;
+            const real = fs.realpathSync(file);
+            if (real.startsWith(`${app}/`)) return real;
+          }
+          function verifyLoads(loader, inheritedRpaths = [], chain = []) {
+            if (chain.includes(loader)) return;
+            if (!loads.has(loader)) {
+              const output = run('xcrun', ['otool', '-arch', 'arm64', '-l', loader]);
+              fs.appendFileSync(path.join(evidence, 'app-load-commands.txt'), output + '\n');
+              const blocks = output.split(/\nLoad command \d+\n/).slice(1);
+              if (!blocks.length) throw new Error(`No arm64 Mach-O load commands in ${loader}`);
+              const rpaths = [];
+              const dependencies = [];
+              for (const block of blocks) {
+                const command = block.match(/^\s*cmd (LC_\S+)/)?.[1];
+                const isRpath = command === 'LC_RPATH';
+                if (!isRpath && !/^LC_(?:LOAD(?:_WEAK|_UPWARD)?|REEXPORT|LAZY_LOAD)_DYLIB$/.test(command)) continue;
+                const value = block.match(/^\s*(?:path|name) (.+) \(offset \d+\)$/m)?.[1];
+                if (!value) throw new Error(`Cannot read ${command} in ${loader}`);
+                if (isRpath) rpaths.push(expand(value, loader));
+                else dependencies.push(value);
+              }
+              loads.set(loader, { rpaths, dependencies });
+            }
+            const { rpaths: ownRpaths, dependencies } = loads.get(loader);
+            const rpaths = [...ownRpaths, ...inheritedRpaths];
+            for (const dependency of dependencies) {
+              const candidates = dependency.startsWith('@rpath/')
+                ? rpaths.map(rpath => path.join(rpath, dependency.slice('@rpath/'.length)))
+                : [expand(dependency, loader)];
+              const resolved = candidates.map(resolve).find(Boolean);
+              if (!resolved) throw new Error(`Missing dylib dependency ${dependency} loaded by ${loader}`);
+              if (!system(resolved)) verifyLoads(resolved, rpaths, [...chain, loader]);
+            }
+          }
+          verifyLoads(image);
+          NODE
+
       - name: Package IPA (Payload + zip)
         run: |
           set -euo pipefail
@@ -284,6 +376,7 @@ jobs:
           path: |
             ExpoLyrics/KineSync-iOS-unsigned.ipa
             ExpoLyrics/ios-release-version.txt
+            ExpoLyrics/ios-release-evidence/
           if-no-files-found: error
           # The IPA is already a zip; recompressing only burns minutes.
           compression-level: 0

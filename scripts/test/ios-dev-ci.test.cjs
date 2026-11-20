@@ -9,14 +9,36 @@ const { resolvePaths, cacheKeys, rustIdentity, buildArgs, config } = require('..
 const repo = path.resolve(__dirname, '../..');
 const cli = path.join(repo, 'scripts/ios-dev-ci/ci.cjs');
 const workflow = fs.readFileSync(path.join(repo, '.github/workflows/ios-development-build.yml'), 'utf8');
+const release = fs.readFileSync(path.join(repo, '.github/workflows/ios-unsigned-ipa.yml'), 'utf8');
 const identity = { xcode: 'Xcode 27.0\nBuild version 27A1', sdk: '27.0', sdkBuild: '27A1', runnerArch: 'ARM64', pod: '1.16.2', ccache: '4.13' };
 test('iOS Release prepares the validated device framework before CocoaPods', () => {
-  const release = fs.readFileSync(path.join(repo, '.github/workflows/ios-unsigned-ipa.yml'), 'utf8');
   const build = release.indexOf('bash scripts/ios-dev-ci/build-rust-device.sh');
   const validate = release.indexOf('node scripts/ios-dev-ci/rust-device.cjs validate');
   const prebuild = release.indexOf('expo prebuild --clean --platform ios');
   assert.ok(build >= 0 && validate > build && prebuild > validate);
   assert.match(release, /rustup toolchain install .*--target .*config target/);
+});
+test('iOS Release registers Rust lyrics and verifies the packaged app linkage', () => {
+  const { apple } = JSON.parse(fs.readFileSync(path.join(repo,
+    'ExpoLyrics/modules/kinesync-rust-lyrics/expo-module.config.json'), 'utf8'));
+  assert.ok(apple.modules.includes('KineSyncRustLyricsModule'));
+  assert.ok(!apple.debugOnly, 'Rust lyrics must be registered in Release');
+
+  const build = release.indexOf('- name: Build Release and locate .app');
+  const verify = release.indexOf('- name: Verify Release Rust lyrics registration and linkage');
+  const packaging = release.indexOf('- name: Package IPA');
+  assert.ok(build >= 0 && verify > build && packaging > verify);
+  const proof = release.slice(verify, packaging);
+  assert.match(proof, /\.ci_built_app/);
+  assert.match(proof, /ExpoModulesProvider\.swift/);
+  assert.match(proof, /branches\.every[\s\S]*KineSyncRustLyricsModule/);
+  assert.match(proof, /\['nm', [^\n]*image\]/);
+  assert.match(proof, /Swift or Objective-C identity/);
+  assert.match(proof, /for \(const symbol of symbols\)/);
+  assert.match(proof, /\['otool', [^\n]*'-l', loader\]/);
+  assert.match(proof, /verifyLoads\(image\)/);
+  assert.match(proof, /throw new Error\(`Missing dylib dependency/);
+  assert.match(release, /- name: Upload IPA artifact[\s\S]*?ExpoLyrics\/ios-release-evidence\//);
 });
 function temp(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ios-dev-ci-test-'));
