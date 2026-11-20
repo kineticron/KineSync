@@ -273,7 +273,7 @@ export default function VaultScreen() {
       <LyricsGlassDialog visible={Boolean(restrictedExport) && restrictedConfirm} onClose={closeRestrictedExport} closeLabel="Cancel lrc.red export">
         <LyricsDialogTitle>Export from lrc.red</LyricsDialogTitle>
         <Text style={dialogStyles.description}>This export comes from lrc.red, NOT Spicy Lyrics.</Text>
-        <Text style={dialogStyles.description}>The file is lrc.red's version and may differ from the lyrics on screen.</Text>
+        <Text style={dialogStyles.description}>The file is lrc.red&apos;s version and may differ from the lyrics on screen.</Text>
         {!!lrcRedMessage && <Text accessibilityRole="alert" style={dialogStyles.description}>{lrcRedMessage}</Text>}
         <LyricsDialogAction label={lrcRedBusy ? 'Fetching lrc.red...' : 'Export lrc.red lyrics'} disabled={lrcRedBusy} onPress={() => void exportIndependentLrcRed()} />
         <LyricsDialogAction label="Cancel" onPress={closeRestrictedExport} />
