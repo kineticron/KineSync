@@ -7,9 +7,10 @@ import { ungzip } from 'pako';
 const result = await build({ stdin: { contents: `export {SpotifyDetector,SpotifyPlaybackUnavailableError} from './lib/spotify-detector/client';
 export {sampleFrom,decodeDealer,decodeStateBody,observerBody,trackHex,metadataFrom} from './lib/spotify-detector/protocol';
 export {detectorPacket} from './lib/spotify-detector/packet';
+export {registerSpotifyPlayerActions,resolveSpotifyTrackIsrc} from './lib/spotify-player-actions';
 export {bootstrap,bootstrapAndroidObserver} from './lib/spotify-detector/bootstrap';`, resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'esm', write: false });
-const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom, bootstrap, bootstrapAndroidObserver } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom, bootstrap, bootstrapAndroidObserver, registerSpotifyPlayerActions, resolveSpotifyTrackIsrc } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const trackId = '4uLU6hMCjMI75M1A2tKUQC';
 const uri = `spotify:track:${trackId}`;
 const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -17,9 +18,34 @@ const expectedGid = [...trackId].reduce((n, c) => n * 62n + BigInt(alphabet.inde
 assert.equal(trackHex(uri), expectedGid);
 assert.equal(trackHex(`spotify:track:${'0'.repeat(21)}1`), '0'.repeat(31) + '1');
 assert.throws(() => trackHex(`spotify:track:${'Z'.repeat(22)}`));
-const metadata = { gid: expectedGid, name: 'Test', artist: [{ name: 'Artist' }, { name: 'Guest' }], album: { name: 'Album' } };
+const metadata = { gid: expectedGid, name: 'Test', artist: [{ name: 'Artist' }, { name: 'Guest' }], album: { name: 'Album' },
+  external_id: [{ type: 'upc', id: 'KRMIM2011544' }, { type: 'isrc', id: 'invalid' }, { type: 'ISRC', id: 'kr-mim 20-11544' }] };
 assert.equal(metadataFrom(uri, { ...metadata, gid: Buffer.from(expectedGid, 'hex').toString('base64') }).artist, 'Artist, Guest');
+assert.equal(metadataFrom(uri, metadata).isrc, 'KRMIM2011544');
+assert.equal(metadataFrom(uri, { ...metadata, external_id: metadata.external_id.slice(0, 2) }).isrc, undefined);
+assert.equal(metadataFrom(uri, { ...metadata, external_id: undefined }).isrc, undefined);
 assert.throws(() => metadataFrom(uri, { ...metadata, gid: '0'.repeat(32) }));
+for (const replace of [false, true]) {
+  let completeMetadata;
+  const pendingMetadata = new Promise(resolve => { completeMetadata = resolve; });
+  const actions = { reload() {}, open() {}, logout() {} };
+  const unregister = registerSpotifyPlayerActions({
+    ...actions,
+    resolveTrackMetadata: () => pendingMetadata,
+  });
+  const pendingIsrc = resolveSpotifyTrackIsrc(trackId);
+  const unregisterReplacement = replace ? registerSpotifyPlayerActions({
+    ...actions,
+    resolveTrackMetadata: async () => ({ isrc: 'KRMIM2011544' }),
+  }) : undefined;
+  unregister();
+  completeMetadata({ isrc: 'KRMIM2011544' });
+  assert.equal(await pendingIsrc, '', replace ? 'replacement invalidates the pending lookup' : 'unregister invalidates the pending lookup');
+  if (unregisterReplacement) {
+    assert.equal(await resolveSpotifyTrackIsrc(trackId), 'KRMIM2011544', 'old cleanup preserves the replacement');
+    unregisterReplacement();
+  }
+}
 const epoch = Date.now();
 const state = (position = 1000, timestamp = epoch, paused = false, uri = `spotify:track:${trackId}`) => ({
   active_device_id: 'iphone', devices: { iphone: { name: 'iPhone' } }, player_state: {
@@ -256,13 +282,22 @@ try {
   assert.equal(JSON.parse(requests[0].body).device.device_info.capabilities.can_be_player, false);
   assert.equal(samples.length, 1);
   const metadataRequests = requests.length;
-  const matches = await Promise.all([detector.metadata(uri), detector.metadata(uri)]);
+  const unregister = registerSpotifyPlayerActions({
+    reload() {}, open() {}, logout() {},
+    resolveTrackMetadata: id => detector.metadata(`spotify:track:${id}`),
+  });
+  assert.equal(await resolveSpotifyTrackIsrc(trackId + '\n'), '');
+  assert.equal(requests.length, metadataRequests);
+  const matches = await Promise.all([detector.metadata(uri), detector.metadata(uri), resolveSpotifyTrackIsrc(trackId)]);
   assert.equal(matches[0].artist, 'Artist, Guest');
+  assert.equal(matches[2], 'KRMIM2011544');
   assert.equal(requests.length, metadataRequests + 1, 'metadata deduplicates concurrent lookups');
   assert.equal(requests.at(-1).url, `https://guc3-spclient.spotify.com/metadata/4/track/${expectedGid}?market=from_token`);
   assert.equal(requests.at(-1).headers.authorization, 'Bearer verified');
   await detector.metadata(uri);
   assert.equal(requests.length, metadataRequests + 1, 'metadata is cached');
+  unregister();
+  assert.equal(await resolveSpotifyTrackIsrc(trackId), '');
   const command = async value => {
     await detector.control(value);
     const last = detector.lastSample;

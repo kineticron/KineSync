@@ -36,6 +36,7 @@ const client=load('mobile-lyrics-client.ts',{
  '@/lib/mobile-lyrics-vault':{lookupMobileVaultLyrics:async()=>null,startMobileVaultRefresh(){},refreshMobileVault:async()=>{}},
  'react-native':{AppState:{addEventListener(){return {remove(){}};}}},
  '@/lib/mobile-lyrics-settings':{getCachedMobileLyricsSettings:()=>settings,getMobileLyricsSettings:async()=>settings},
+ '@/lib/spotify-player-actions':{resolveSpotifyTrackIsrc:async()=>''},
  '@/store/playback-store':{usePlaybackStore:{getState:()=>state}},
  '../../DesktopBridge/src/spicyLyricsConfig.json':{publishableKey:''},
  '@/lib/mobile-musixmatch-token':{refreshMobileMusixmatchToken:async()=>'fixture-token',invalidateMobileMusixmatchToken:async()=>{},resolveMobileMusixmatchToken:async()=>'fixture-token'},

@@ -67,6 +67,83 @@ const kugouMaydaySong = {
 for (const mobile of [false, true]) {
   const label = mobile ? "mobile" : "desktop";
 
+  const phoneMayday = {
+    title: "Mayday (Feat. Joy)",
+    artist: "Crush, JOY",
+    durationMs: 199267,
+    isrc: null,
+    spotifyTrackId: "37cXQzQaHR7zMk8G360Vke",
+  };
+
+  for (const fixture of [
+    { name: "resolves missing ISRC", resolve: () => "kr-mim 20-11544", expectedCalls: 1, native: true },
+    { name: "uses existing ISRC", input: { isrc: "KRMIM2011544" }, expectedCalls: 0, native: true },
+    { name: "skips tracks without a Spotify ID", input: { spotifyTrackId: "" }, expectedCalls: 0 },
+    { name: "ignores invalid ISRC", resolve: () => "invalid", expectedCalls: 1 },
+    { name: "ignores non-string ISRC", resolve: () => ["KRMIM2011544"], expectedCalls: 1 },
+    { name: "falls back after metadata failure", resolve: async () => { throw new Error("metadata unavailable"); }, expectedCalls: 1 },
+    { name: "falls back after metadata timeout", resolve: () => new Promise(() => {}), expectedCalls: 1, timeout: true },
+  ]) {
+    test(`${label}: Kugou ${fixture.name}`, async () => {
+      const queries = [], isrcLookups = [], probedIsrcs = [];
+      const ctx = load(async (url) => {
+        const request = new URL(url);
+        if (request.hostname === "api.deezer.com") {
+          isrcLookups.push(request.pathname);
+          return new Response(JSON.stringify({ title: "자나깨나" }));
+        }
+        assert.equal(request.hostname, "mobileservice.kugou.com");
+        const query = request.searchParams.get("keyword");
+        queries.push(query);
+        const info = query.includes("자나깨나")
+          ? [{ ...kugouMaydaySong, songname_suffix: "", filename: "" }]
+          : [];
+        return new Response(JSON.stringify({ data: { info } }));
+      }, mobile);
+      ctx.fetchKugouKaraokeLyricsForSong = async (track) => {
+        probedIsrcs.push(track.isrc);
+        return { lyrics: [{}], source: "kugou-krc", coverage: 1, coverageRatio: 1 };
+      };
+      const lazyTimers = new Set();
+      const timeoutMs = vm.runInContext("KUGOU_TRACK_ISRC_TIMEOUT_MS", ctx);
+      ctx.setTimeout = (fn, ms) => {
+        if (ms !== timeoutMs) return setTimeout(fn, ms);
+        const timer = {};
+        lazyTimers.add(timer);
+        if (fixture.timeout) queueMicrotask(fn);
+        return timer;
+      };
+      ctx.clearTimeout = (timer) => {
+        if (!lazyTimers.delete(timer)) clearTimeout(timer);
+      };
+      let calls = 0;
+      const track = Object.freeze({
+        ...phoneMayday,
+        ...fixture.input,
+        resolveIsrc: async () => {
+          calls += 1;
+          return fixture.resolve?.();
+        },
+      });
+      const result = await ctx.fetchFromKugou(track);
+      assert.equal(calls, fixture.expectedCalls);
+      assert.equal(lazyTimers.size, 0);
+      assert.equal(track.isrc, fixture.input?.isrc ?? null);
+      assert.equal(track.nativeTitle, undefined);
+      if (fixture.native) {
+        assert.equal(result?.source, "kugou-krc");
+        assert.deepEqual(isrcLookups, ["/track/isrc:KRMIM2011544"]);
+        assert.deepEqual(probedIsrcs, ["KRMIM2011544"]);
+        assert.ok(queries.some(query => query.includes("자나깨나")));
+      } else {
+        assert.equal(result, null);
+        assert.deepEqual(isrcLookups, []);
+        assert.ok(queries.some(query => query.includes("Mayday")));
+        assert.ok(queries.every(query => !query.includes("자나깨나")));
+      }
+    });
+  }
+
   test(`${label}: normalizeKugouSong incorporates songname_suffix and bracketed filename aliases`, () => {
     const ctx = load(null, mobile);
 

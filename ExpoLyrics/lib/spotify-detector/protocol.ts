@@ -21,7 +21,7 @@ export function trackHex(uri: string): string {
   }
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
-export type TrackMetadata = Pick<Sample, 'artist' | 'album' | 'artworkUrl' | 'title'>;
+export type TrackMetadata = Pick<Sample, 'artist' | 'album' | 'artworkUrl' | 'title'> & { isrc?: string };
 export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
   const o = payload as Record<string, any>;
   if (!o || typeof o !== 'object') throw new Error('Spotify metadata is missing.');
@@ -32,7 +32,17 @@ export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
   if (!artist) throw new Error('Spotify metadata contains no artist names.');
   const images = Array.isArray(o.album?.cover_group?.image) ? o.album.cover_group.image : [];
   const cover = images.find((i: any) => i.size === 'LARGE') ?? images[images.length - 1];
+  let isrc: string | undefined;
+  for (const entry of Array.isArray(o.external_id) ? o.external_id : []) {
+    if (typeof entry?.type !== 'string' || entry.type.toLowerCase() !== 'isrc' || typeof entry.id !== 'string') continue;
+    const normalized = entry.id.replace(/[-\s]/g, '').toUpperCase();
+    if (/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(normalized)) {
+      isrc = normalized;
+      break;
+    }
+  }
   return { artist, album: String(o.album?.name ?? ''), title: String(o.name ?? ''),
+    ...(isrc ? { isrc } : {}),
     artworkUrl: /^[a-fA-F0-9]{40}$/.test(cover?.file_id ?? '') ? `https://i.scdn.co/image/${cover.file_id}` : '' };
 }
 

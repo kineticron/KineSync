@@ -241,7 +241,9 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     mounted.current = true;
     logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
-    const unregister = registerSpotifyPlayerActions({ open: openBrowser, reload: () => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } }, logout: () => {
+    const unregister = registerSpotifyPlayerActions({
+      resolveTrackMetadata: id => canIngest() ? detector.metadata(`spotify:track:${id}`) : undefined,
+      open: openBrowser, reload: () => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } }, logout: () => {
       detector.clear(); enrichmentRun.current++; enriched.current.clear(); lastSample.current = null;
       metadataAttempts.current.clear(); metadataPending.current = '';
       setBrowserOpen(false); setLoggingOut(true);
@@ -252,7 +254,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       if (lyricsTimer.current !== null) clearTimeout(lyricsTimer.current);
       lyricsTimer.current = null;
     };
-  }, [detector, openBrowser, remount]);
+  }, [canIngest, detector, openBrowser, remount]);
   useEffect(() => registerNativeRendererReadyResync({ canResync: canIngest, resyncPlayback }), [canIngest, resyncPlayback]);
   useEffect(() => {
     if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }

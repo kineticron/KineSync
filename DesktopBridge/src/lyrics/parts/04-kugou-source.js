@@ -21,6 +21,7 @@ const KUGOU_HANGUL_TEXT_RE = /[\uac00-\ud7a3\u3130-\u318f]/u;
 const KUGOU_ISRC_CACHE_MAX_SIZE = 256;
 const KUGOU_ISRC_CACHE_TTL_MS = 60 * 60 * 1000;
 const KUGOU_ISRC_TIMEOUT_MS = 2_500;
+const KUGOU_TRACK_ISRC_TIMEOUT_MS = 2_000;
 const KUGOU_ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
 
 const kugouIsrcCache = new Map();
@@ -792,8 +793,24 @@ async function fetchFromKugou(
   track,
   { timeoutMs = KUGOU_ISRC_TIMEOUT_MS } = {},
 ) {
-  const isrc = isValidIsrc(track?.isrc);
-  let nativeTitle = track?.nativeTitle;
+  let isrc = isValidIsrc(track?.isrc);
+  let lookupTrack = track;
+  if (!isrc && track?.spotifyTrackId && typeof track.resolveIsrc === "function") {
+    let timer;
+    try {
+      const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(""), KUGOU_TRACK_ISRC_TIMEOUT_MS);
+      });
+      const resolved = await Promise.race([track.resolveIsrc(), deadline]);
+      isrc = typeof resolved === "string" ? isValidIsrc(resolved) : "";
+      if (isrc) lookupTrack = { ...track, isrc };
+    } catch {
+      // Continue with the ordinary catalog search.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  let nativeTitle = lookupTrack?.nativeTitle;
   if ((nativeTitle === undefined || nativeTitle === "") && isrc) {
     try {
       nativeTitle = await resolveIsrcNativeTitle(isrc, { timeoutMs });
@@ -802,7 +819,7 @@ async function fetchFromKugou(
     }
   }
   nativeTitle = nativeTitle || null;
-  const trackToUse = { ...track, nativeTitle };
+  const trackToUse = { ...lookupTrack, nativeTitle };
   const ranked = await collectRankedKugouSearchCandidates(trackToUse, {
     timeoutMs,
   });
@@ -826,7 +843,7 @@ async function fetchFromKugou(
   const probes = createRankedProbePool(likelyCandidates, 4, async (candidate) => {
     try {
       return await fetchKugouKaraokeLyricsForSong(
-        track,
+        lookupTrack,
         candidate.song,
         candidate.score,
       );
