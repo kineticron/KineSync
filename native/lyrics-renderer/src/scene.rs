@@ -157,6 +157,33 @@ pub(crate) fn shape(
     words: &[crate::typography::WordRange],
     spacing: f32,
 ) -> parley::Layout<()> {
+    shape_with_wrap(
+        text,
+        fonts,
+        layouts,
+        size,
+        line_height,
+        weight,
+        family,
+        words,
+        spacing,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shape_with_wrap(
+    text: &str,
+    fonts: &mut parley::FontContext,
+    layouts: &mut LayoutContext<()>,
+    size: f32,
+    line_height: f32,
+    weight: f32,
+    family: &str,
+    words: &[crate::typography::WordRange],
+    spacing: f32,
+    wrap_anywhere: bool,
+) -> parley::Layout<()> {
     #[cfg(target_os = "android")]
     let family = crate::android_fonts::family_stack(fonts, family);
     #[cfg(target_os = "android")]
@@ -166,6 +193,9 @@ pub(crate) fn shape(
     builder.push_default(StyleProperty::FontSize(size));
     builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight)));
     builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(line_height)));
+    if wrap_anywhere {
+        builder.push_default(StyleProperty::OverflowWrap(parley::OverflowWrap::Anywhere));
+    }
     for word in words {
         if word.gap && text.get(word.bytes.end..word.bytes.end + 1) == Some(" ") {
             builder.push(
@@ -822,29 +852,32 @@ impl TrackScene {
                     atoms = fragments(&layout, &words);
                 }
                 let content_height = layout.height() as f64;
-                let translation = if let (Some(settings), Some(geometry), Some(text)) = (
+                let translation = if let (Some(settings), Some(text)) = (
                     settings,
-                    geometry.as_ref(),
                     line.voice(index)
                         .and_then(|v| v.translation.as_deref())
                         .filter(|t| !t.is_empty()),
                 ) {
                     let policy = crate::auxiliary::Policy::voice(
                         settings,
-                        geometry,
                         scale,
                         voice_box.background,
                         voice_box.geometry.font_size,
                         voice_box.geometry.text_width,
                     );
+                    // Spicy translations inherit the physical edge of the source's
+                    // logical Start/End alignment. AMLL keeps its logical flag.
+                    let right = voice_box.geometry.right
+                        ^ (settings.style == crate::typography::Style::Spicy && layout.is_rtl());
                     let t = crate::auxiliary::Translation::prepare(
                         text,
                         &policy,
-                        voice_box.geometry.right,
+                        right,
                         f64::from(voice_box.padding) + content_height,
                         fonts,
                         &mut layouts,
                         collect_diagnostics,
+                        line.voice(index),
                     );
                     glyph_count += t.glyph_count;
                     missing_glyphs += t.missing_glyphs;
@@ -1321,6 +1354,11 @@ impl TrackScene {
     ) -> crate::scheduling::FrameSchedule {
         let (interlude_row, extra) = self.interlude_shift(time);
         let mut visible_changes = scroll_animating;
+        let mut next_cue = if advancing {
+            self.cues.next(time)
+        } else {
+            None
+        };
         for i in self.drawing_rows(time, scroll, adjust) {
             let row = &self.cached[i];
             let y = self.scroll_anchor() + self.prefix[i] - scroll
@@ -1329,10 +1367,29 @@ impl TrackScene {
             if y + row.height < -40.0 || y > f64::from(self.height) + 40.0 {
                 continue;
             }
-            visible_changes |= state.row(i).is_some_and(|r| r.animating)
-                || (advancing
-                    && time >= self.lines[i].start
-                    && time <= self.lines[i].background_end);
+            let line = &self.lines[i];
+            visible_changes = visible_changes
+                || state.row(i).is_some_and(|r| r.animating)
+                || (advancing && time >= line.start && time <= line.background_end);
+            if advancing && !visible_changes {
+                for (voice, source) in row.voices.iter().zip(line.voices()) {
+                    let Some((start, finish)) = voice
+                        .translation
+                        .as_ref()
+                        .and_then(|t| t.animation_window(source))
+                    else {
+                        continue;
+                    };
+                    if time < start {
+                        next_cue = Some(next_cue.map_or(start, |cue| cue.min(start)));
+                    } else if time < finish {
+                        // A frame inside the window requests the next frame.
+                        // The first sample at or after finish paints the settled mask before idling.
+                        visible_changes = true;
+                        break;
+                    }
+                }
+            }
         }
         let interlude = self.interlude_at(time);
         if let Some((i, _)) = interlude {
@@ -1356,11 +1413,7 @@ impl TrackScene {
         crate::scheduling::FrameSchedule {
             visible_changes,
             continuous: visible_changes || retained_changes,
-            next_cue: if advancing {
-                self.cues.next(time)
-            } else {
-                None
-            },
+            next_cue,
         }
     }
 
@@ -1546,7 +1599,14 @@ impl LayoutCache {
             .and_then(|i| self.entries.remove(i))
             .map(|(_, scene)| scene)
     }
-    pub fn insert(&mut self, key: String, scene: TrackScene) {
+    pub fn insert(&mut self, key: String, mut scene: TrackScene) {
+        for row in &mut scene.cached {
+            for voice in &mut row.voices {
+                if let Some(translation) = &mut voice.translation {
+                    translation.reset_word_fill();
+                }
+            }
+        }
         if let Some(i) = self.entries.iter().position(|(k, _)| *k == key) {
             self.entries.remove(i);
         }
@@ -2017,8 +2077,8 @@ mod lazy_tests {
     #[test]
     fn diagnostics_snapshot_matches_pre_deferral_receipts() {
         use sha2::{Digest, Sha256};
-        let mut hashes = Vec::new();
         for style in [Style::Spicy, Style::Amll] {
+            let mut hashes = Vec::new();
             let mut lines = source(100);
             for line in &mut lines {
                 line.paint.as_mut().unwrap().translation = Some("Translation office".into());
@@ -2058,6 +2118,18 @@ mod lazy_tests {
                     "{:x}",
                     Sha256::digest(track.layout_json().unwrap())
                 ));
+                if style == Style::Spicy && stage > 0 {
+                    for cached in track.cached.iter().filter(|row| row.layout_ready()) {
+                        for (voice, weight) in cached.voices.iter().zip([900.0, 700.0]) {
+                            let translation = voice.translation.as_ref().unwrap();
+                            assert_eq!(translation.diagnostics["text"], "Translation office");
+                            assert_eq!(
+                                translation.diagnostics["policy"]["weight"].as_f64(),
+                                Some(weight)
+                            );
+                        }
+                    }
+                }
                 let address = track.layout_json().unwrap().as_ptr();
                 let allocations = crate::allocation_probe::measure(|| {
                     assert_eq!(track.layout_json().unwrap().as_ptr(), address);
@@ -2067,25 +2139,111 @@ mod lazy_tests {
                     "repeat receipt requests must reuse the snapshot"
                 );
             }
+            if style == Style::Amll {
+                // Captured at d6c1b2a before deferring receipts.
+                assert_eq!(
+                    hashes,
+                    [
+                        "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945",
+                        "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
+                        "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
+                        "24da06445c39d3eb1a765707e59a0a238cd934391289d66400ab1581202f9253",
+                        "b2e189e13e03d8e4fe0520c923a0cc21314c13aa6ea6009c1045b49fa9edbd83",
+                        "b4d4f697bdcfd0ff0ae535fb6b980c9822506699cd50b6af3f16d9b27524f317",
+                    ]
+                );
+            } else {
+                assert_eq!(
+                    hashes[0],
+                    "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945"
+                );
+                assert_eq!(hashes[1], hashes[2]);
+                assert_ne!(hashes[2], hashes[3]);
+                assert_ne!(hashes[3], hashes[4]);
+                assert_ne!(hashes[4], hashes[5]);
+            }
         }
-        // Captured at d6c1b2a before deferring receipts. Covers both styles,
-        // lead/background/subtitles, promotion, distant viewport and eviction.
-        let expected = [
-            "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945",
-            "39bbf26afe6a3b5ce514dd7cfaff0eba363c7df274ad15a801abf74d3a20643c",
-            "39bbf26afe6a3b5ce514dd7cfaff0eba363c7df274ad15a801abf74d3a20643c",
-            "73c6549488c894b42d2d96586d33ae943540e39b4fa93ed9260fc3c019a111c5",
-            "a8f985950e626f73384b8306749e8665e316addda8122a039116dc0988b5da4b",
-            "9b20e90c76d7c0acc60d878a5db2d6fbd8182bd7a4b02efefffb853e03196c95",
-            "8dc04e3207f48ae3e8cbc228c61c12bcd1a489f214b10a715eaf41823d00b945",
-            "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
-            "981e4d29dc1c913aefa28868b6f9b92f25561f60ca73efe2b29a09e97c2f1adb",
-            "24da06445c39d3eb1a765707e59a0a238cd934391289d66400ab1581202f9253",
-            "b2e189e13e03d8e4fe0520c923a0cc21314c13aa6ea6009c1045b49fa9edbd83",
-            "b4d4f697bdcfd0ff0ae535fb6b980c9822506699cd50b6af3f16d9b27524f317",
-        ];
-        assert_eq!(hashes, expected);
     }
+
+    #[test]
+    fn spicy_translation_follows_physical_source_edge_in_both_directions() {
+        let mut lines = source(6);
+        for line in &mut lines {
+            line.paint.as_mut().unwrap().translation = Some("Latin translation".into());
+        }
+        let rtl = "שלום";
+        for i in [0, 3, 4] {
+            let line = &mut lines[i];
+            line.text = rtl.into();
+            line.atoms[0].bytes = 0..rtl.len();
+            let voice = line.paint.as_mut().unwrap();
+            voice.text = rtl.into();
+            voice.words[0].text = rtl.into();
+            voice.words[0].graphemes = rtl.chars().map(|c| c.to_string()).collect();
+        }
+        for i in [1, 3, 4] {
+            lines[i].paint.as_mut().unwrap().opposite = true;
+        }
+        for i in [4, 5] {
+            lines[i].paint.as_mut().unwrap().translation = Some("שלום translation".into());
+        }
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        track.prepare(500.0).unwrap();
+        track.layout_json().unwrap();
+        let inset = |i: usize| {
+            track.cached[i]
+                .lead()
+                .translation
+                .as_ref()
+                .unwrap()
+                .diagnostics["policy"]["x"]
+                .as_f64()
+                .unwrap()
+        };
+        for i in [0, 3, 4] {
+            assert!(track.cached[i].lead().layout.as_ref().unwrap().is_rtl());
+        }
+        assert!(inset(0) > 0.0);
+        assert_eq!(inset(0), inset(1));
+        for i in [2, 3, 4, 5] {
+            assert_eq!(inset(i), 0.0, "row {i} must stay left-aligned");
+        }
+    }
+
+    #[test]
+    fn spicy_translation_schedule_wakes_at_early_background_start_and_runs_to_settle() {
+        let mut lines = source(2);
+        lines.remove(0);
+        let line = &mut lines[0];
+        let mut background = line.paint.as_ref().unwrap().clone();
+        background.start = 600.0;
+        background.words[0].start = 700.0;
+        background.translation = Some("Background translation".into());
+        line.backgrounds.push(background);
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        track.prepare(599.0).unwrap();
+        let state = crate::appearance::AppearanceState::default();
+        let scroll = track.scroll_target(599.0);
+        let schedule = |time| track.frame_schedule(time, scroll, &[], &state, false, true);
+        assert_eq!(schedule(599.0).next_cue, Some(600.0));
+        assert!(schedule(600.0).continuous);
+        assert!(schedule(651.0).visible_changes);
+        assert!(schedule(2295.0).continuous);
+        assert!(!schedule(2312.0).continuous);
+    }
+
     #[test]
     #[ignore = "GPU pixel equivalence across explicit diagnostics request; requires Vulkan"]
     fn diagnostics_request_preserves_pixels_and_render_geometry() {

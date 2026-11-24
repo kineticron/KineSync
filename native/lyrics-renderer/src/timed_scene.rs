@@ -19,11 +19,11 @@ pub(crate) struct Slice {
     amll_x: f64,
     clip: bool,
 }
-struct Glyphs {
-    font: parley::FontData,
-    size: f32,
-    coords: Vec<i16>,
-    glyphs: Vec<vello::Glyph>,
+pub(crate) struct Glyphs {
+    pub(crate) font: parley::FontData,
+    pub(crate) size: f32,
+    pub(crate) coords: Vec<i16>,
+    pub(crate) glyphs: Vec<vello::Glyph>,
 }
 fn slice_glyphs(layout: &parley::Layout<()>, rects: &[Rect]) -> (Vec<Glyphs>, bool) {
     let mut result = Vec::new();
@@ -340,8 +340,10 @@ impl TrackScene {
                     1.0
                 };
                 for (voice_index, voice) in cached.voices.iter().enumerate() {
-                    let voice_end = line.voice(voice_index).map_or(line.end, |v| v.interval().1);
-                    let sung = time > voice_end;
+                    let interval = line
+                        .voice(voice_index)
+                        .map_or((line.start, line.end), |v| v.interval());
+                    let sung = time > interval.1;
                     let pre_active = time < line.start
                         && active.is_some_and(|(start, end)| index >= start && index <= end);
                     let outer = row.map_or(
@@ -393,7 +395,15 @@ impl TrackScene {
                     scene.append(paragraph, Some(transform));
                     scene.pop_layer();
                     if let Some(t) = &voice.translation {
-                        t.draw(scene, transform, outer * voice.alpha);
+                        t.draw(
+                            scene,
+                            transform,
+                            outer * voice.alpha,
+                            time,
+                            interval,
+                            effect.glow(),
+                            line.voice(voice_index).map(|source| (source, None)),
+                        );
                     }
                 }
                 continue;
@@ -420,8 +430,8 @@ impl TrackScene {
                 else {
                     continue;
                 };
-                let voice_end = paint.interval().1;
-                let sung = time > voice_end;
+                let interval = paint.interval();
+                let sung = time > interval.1;
                 let background = voice.background;
                 let outer = row.outer * voice.alpha;
                 let size = voice.size;
@@ -579,7 +589,15 @@ impl TrackScene {
                     }
                 }
                 if let Some(t) = &voice.translation {
-                    t.draw(scene, base * line_transform, outer);
+                    t.draw(
+                        scene,
+                        base * line_transform,
+                        outer,
+                        time,
+                        interval,
+                        effect.glow(),
+                        Some((paint, Some(row_words))),
+                    );
                 }
             }
         }
