@@ -53,6 +53,8 @@ test('QQ starts bounded independent searches immediately and reuses first deskto
 test('Kugou title corroboration and query variants share one operation-local request', async () => {
   const starts = [], gates = new Map();
   const context = adapter('04-kugou-source.js', {
+    lyricsTrackMetadata: Symbol('lyricsTrackMetadata'),
+    lyricsRecordingAliasStates: new WeakMap(),
     getSpotifyPrimaryArtist:x => x, normalizeCoreTitle:x => x,
     needsExactShortTextMatch:() => true, buildQueryVariants:() => [],
     start:q => { starts.push(q); const gate = deferred(); gates.set(q,gate); return gate.promise; },

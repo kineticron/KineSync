@@ -7308,7 +7308,7 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-async function searchQQDirectSongPool(track) {
+async function searchQQDirectSongPool(track, verifyRecording = null) {
   const accessors = createQQDirectSongAccessors();
   const allQueryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const desktopRequests = new Map();
@@ -7317,7 +7317,7 @@ async function searchQQDirectSongPool(track) {
   const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests);
   const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants);
   let songs;
-  if (trackNeedsFeaturedVariantVerification(track)) {
+  if (verifyRecording || trackNeedsFeaturedVariantVerification(track)) {
     const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
     songs = [...desktopSongs, ...legacySongs];
   } else {
@@ -7327,6 +7327,9 @@ async function searchQQDirectSongPool(track) {
       const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
       songs = [...desktopSongs, ...legacySongs];
     }
+  }
+  if (verifyRecording) {
+    songs = reconcileRecordingAliasRows(songs, accessors.getSongMid, song => verifyRecording(song, accessors));
   }
   return { ranked: rankQQDirectSearchSongs(track, songs, accessors), accessors };
 }
@@ -8081,6 +8084,32 @@ async function fetchFromQQMeting(track) {
   return null;
 }
 
+async function fetchQQRecordingAliasLyrics(track, options) {
+  const { foldCatalogText, stripFeaturing } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  track = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], options);
+  const aliases = await resolveVerifiedRecordingAliases(track);
+  for (const alias of aliases) {
+    // Only the search and scoring title changes. Verify credits and version
+    // against the original recording before allowing any lyric probe.
+    const queryTrack = { ...track, title: alias.title };
+    const { ranked, accessors } = await searchQQDirectSongPool(queryTrack, (song, accessors) => {
+      const { getSongTitle, getSongArtist, getSongInterval } = accessors;
+      const title = getSongTitle(song);
+      const artists = Array.isArray(song.singer)
+        ? song.singer.map(singer => String(singer?.name || "").trim()).filter(Boolean)
+        : recordingAliasArtistNames(getSongArtist(song));
+      const durationMs = getQqCandidateDurationMs(getSongInterval, song);
+      if (foldCatalogText(stripFeaturing(title)) !== foldCatalogText(alias.title) ||
+          !recordingAliasCandidateMatches(track, song, title, artists, durationMs)) return null;
+      return recordingAliasRowEvidence(song, song, title, artists, durationMs);
+    });
+    const { earlyExit, state } = await fetchQQDirectCandidateLyricsParallel(queryTrack, ranked.slice(0, MAX_QQ_DIRECT_CANDIDATES), accessors);
+    const result = earlyExit || resolveQQDirectAggregatedResults(queryTrack, state);
+    if (result?.lyrics?.length) return result;
+  }
+  return null;
+}
+
 // QQ's Musicu endpoint, public search endpoint, and public mirrors each have
 // intermittent catalog gaps. Keep the desktop-compatible direct flow first,
 // then try the existing compatible fallbacks before reporting no match.
@@ -8098,7 +8127,11 @@ async function fetchFromQQ(track, { spotifyAccessToken = "" } = {}) {
       // A provider failure should not prevent the other QQ-compatible paths.
     }
   }
-  return null;
+  try {
+    return await fetchQQRecordingAliasLyrics(track, { spotifyAccessToken });
+  } catch {
+    return null;
+  }
 }
 
 async function previewQQDirectSearchCandidates(track) {
@@ -9459,6 +9492,131 @@ async function searchKugouSongs(query, { timeoutMs = 10_000 } = {}) {
   });
 }
 
+function searchKugouRecordingCatalog(track, query) {
+  const searches = lyricsRecordingAliasStates.get(track?.[lyricsTrackMetadata])?.searches;
+  if (!searches) return searchKugouSongs(query);
+  const key = query.trim().toLowerCase();
+  if (!searches.has(key)) {
+    const request = searchKugouSongs(query);
+    if (searches.size >= 2 * KUGOU_MAX_QUERY_VARIANTS + 1) return request;
+    searches.set(key, request);
+  }
+  return searches.get(key);
+}
+
+function recordingAliasVersionMatches(originalTitle, candidateTitle) {
+  const { versionKey, stripFeaturing } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const original = stripFeaturing(originalTitle);
+  const candidate = stripFeaturing(candidateTitle);
+  const edition = /\b(?:explicit|clean|deluxe|alternate|reprise|re-recorded)\b|伴奏|[纯純]音[乐樂]|翻唱|カラオケ|ライブ|라이브|반주/iu;
+  return (original.match(edition)?.[0] || "").toLowerCase() ===
+      (candidate.match(edition)?.[0] || "").toLowerCase() &&
+    versionKey(original) === versionKey(candidate) &&
+    !hasRecordingVersionMismatch(original, candidate) &&
+    collectLanguageVariantHints(original).join("|") === collectLanguageVariantHints(candidate).join("|") &&
+    KUGOU_EXPLICIT_VERSION_PATTERNS.every(({ re }) => re.test(original) === re.test(candidate));
+}
+
+function recordingAliasArtistNames(artist) {
+  return String(artist || "").split(/[,、，/;&|]+/u).map(name => name.trim()).filter(Boolean);
+}
+
+function recordingAliasFeaturedArtists(title) {
+  const clause = String(title || "").match(/(?:^|[\s([{,/-])(?:feat\.?|ft\.?|featuring)\s+([^\])}]+)/i);
+  return recordingAliasArtistNames(clause?.[1]);
+}
+
+function recordingAliasCandidateMatches(track, raw, title, artists, durationMs) {
+  const { artistIdentityMatches } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  if (recordingAliasIdentitiesConflict(recordingAliasIdentityFields(track), recordingAliasIdentityFields(raw)) ||
+      !recordingAliasVersionMatches(track.title, title) ||
+      !Number.isFinite(durationMs) || durationMs <= 0 ||
+      !Number.isFinite(Number(track.durationMs)) || Number(track.durationMs) <= 0 ||
+      Math.abs(track.durationMs - durationMs) > 3_000) return false;
+
+  const originalFeatures = recordingAliasFeaturedArtists(track.title);
+  const expectedArtists = [
+    ...recordingAliasArtistNames(track.artist),
+    ...(Array.isArray(track.artists) ? track.artists.filter(Boolean) : []),
+    ...originalFeatures,
+  ];
+  return expectedArtists.length > 0 && artists.length > 0 &&
+    featuredArtistHintsPresentInCandidate(track.title, title, artists.join(" ")) &&
+    expectedArtists.every(name => artists.some(artist => artistIdentityMatches(name, artist))) &&
+    artists.every(artist => expectedArtists.some(name => artistIdentityMatches(name, artist))) &&
+    recordingAliasFeaturedArtists(title).every(name =>
+      originalFeatures.some(feature => artistIdentityMatches(name, feature)));
+}
+
+function recordingAliasRowEvidence(value, raw, title, artists, durationMs) {
+  const { foldCatalogText, stripFeaturing } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const signature = JSON.stringify([
+    foldCatalogText(stripFeaturing(title)),
+    [...new Set(artists.map(foldCatalogText))].sort(),
+    durationMs,
+  ]);
+  return { value, signature, ids: recordingAliasIdentityFields(raw) };
+}
+
+function extractKugouRecordingAlias(track, raw) {
+  const { foldCatalogText, stripFeaturing } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const suffix = raw?.songname_suffix;
+  const nestedSuffix = raw?.trans_param?.songname_suffix;
+  if (suffix && nestedSuffix && foldCatalogText(suffix) !== foldCatalogText(nestedSuffix)) return null;
+  const song = normalizeKugouSong({ ...raw, songname_suffix: suffix || nestedSuffix });
+  const original = foldCatalogText(stripFeaturing(track.title));
+  const base = String(raw?.songname || raw?.songname_original || "").trim();
+  const filenameTitle = String(raw?.filename || "").trim().replace(/^.*?\s+-\s+/, "");
+  const artists = recordingAliasArtistNames(song.artist);
+  const displays = [song.title, filenameTitle];
+  if (!song.hash || !original || !base ||
+      !recordingAliasVersionMatches(track.title, base) ||
+      (raw?.songname_original && !recordingAliasVersionMatches(track.title, raw.songname_original)) ||
+      !recordingAliasCandidateMatches(track, raw, song.title, artists, song.durationMs)) return null;
+
+  let aliasTitle = "";
+  for (const display of displays) {
+    const pair = String(display || "").match(/^(.+?)\s*[（(]([^()（）]+)[)）]$/u);
+    if (!pair || !recordingAliasVersionMatches(track.title, display)) continue;
+    const left = pair[1].trim();
+    const right = pair[2].trim();
+    const baseKey = foldCatalogText(base);
+    const leftKey = foldCatalogText(left);
+    const rightKey = foldCatalogText(right);
+    if (baseKey !== leftKey && baseKey !== rightKey && baseKey !== foldCatalogText(display)) continue;
+    const title = leftKey === original ? right : rightKey === original ? left : "";
+    if (!title || title.length > 256 || foldCatalogText(title) === original ||
+        /[()\[\]{}（）]/u.test(title) || !recordingAliasVersionMatches(track.title, title)) continue;
+    if (aliasTitle && foldCatalogText(aliasTitle) !== foldCatalogText(title)) return null;
+    aliasTitle = title;
+  }
+  if (!aliasTitle) return null;
+  const alias = Object.freeze({ title: aliasTitle, source: "kugou", hash: song.hash, albumAudioId: song.albumAudioId });
+  return recordingAliasRowEvidence(alias, raw, aliasTitle, artists, song.durationMs);
+}
+
+async function discoverKugouRecordingAliases(track) {
+  const { foldCatalogText, stripFeaturing } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const title = stripFeaturing(track.title);
+  if (!title || !track.artist || !(track.durationMs > 0)) return Object.freeze([]);
+  const queries = [...new Set([
+    `${title} ${getSpotifyPrimaryArtist(track.artist)}`.trim(), title,
+    ...buildKugouQueryVariants({ ...track, nativeTitle: null }),
+  ].map(query => query.toLowerCase()))].slice(0, KUGOU_MAX_QUERY_VARIANTS);
+  const payloads = await Promise.all(queries.map(query => searchKugouRecordingCatalog(track, query).catch(() => null)));
+  const rows = payloads.flatMap(payload => {
+    const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
+    return flattenKugouSearchResults(songs.slice(0, 30)).slice(0, 60);
+  });
+  const verified = reconcileRecordingAliasRows(
+    rows,
+    row => String(row?.hash || row?.FileHash || "").trim().toLowerCase(),
+    row => extractKugouRecordingAlias(track, row),
+  );
+  const aliases = new Map(verified.map(alias => [foldCatalogText(alias.title), alias]));
+  return Object.freeze(aliases.size === 1 ? [...aliases.values()] : []);
+}
+
 async function searchKugouLyricCandidates(song, { timeoutMs = 8_000 } = {}) {
   return fetchJsonFromAnyEndpoint(KUGOU_LYRIC_SEARCH_ENDPOINTS, {
     params: {
@@ -9571,7 +9729,7 @@ async function collectRankedKugouSearchCandidates(
   );
   const searches = new Map();
   const searchSongs = (query) => {
-    if (!searches.has(query)) searches.set(query, searchKugouSongs(query));
+    if (!searches.has(query)) searches.set(query, searchKugouRecordingCatalog(track, query));
     return searches.get(query);
   };
   const firstQueryPromise = queryVariants[0]
@@ -13013,6 +13171,7 @@ async function fetchFromLocalVault(_track) {
 
 const lyricsTrackMetadata = Symbol("lyricsTrackMetadata");
 const directLyricsTrackMetadata = new WeakMap();
+const lyricsRecordingAliasStates = new WeakMap();
 const lyricsTextMatchFields = ["title", "artist", "durationMs"];
 
 function normalizeLyricsTrackIsrc(value) {
@@ -13025,18 +13184,84 @@ function hasLyricsTrackMetadata(track, field) {
   return Boolean(typeof track[field] === "string" ? track[field].trim() : track[field]);
 }
 
+function recordingAliasIdentityFields(raw) {
+  const { normalizeIsrc, normalizeSpotifyTrackId } = require("../../DesktopBridge/src/lyricsRecordingIdentity");
+  const metadata = raw?.metadata;
+  const sources = [raw, metadata, metadata?.fetchOrigin, raw?.external_ids];
+  const collect = (values, normalize) => [...new Set(values
+    .filter(value => value != null && String(value).trim())
+    .map(value => normalize(value) || String(value).trim()))].sort();
+  return {
+    isrc: collect(sources.flatMap(source => [
+      source?.isrc, source?.trackIsrc, source?.track_isrc,
+      ...(Array.isArray(source?.track_isrcs) ? source.track_isrcs : []),
+    ]), normalizeIsrc),
+    spotifyTrackId: collect(sources.flatMap(source => [
+      source?.spotifyTrackId, source?.spotify_track_id, source?.spotifyId,
+    ]), normalizeSpotifyTrackId),
+  };
+}
+
+function recordingAliasIdentitiesConflict(left, right) {
+  return new Set([...left.isrc, ...right.isrc]).size > 1 ||
+    new Set([...left.spotifyTrackId, ...right.spotifyTrackId]).size > 1;
+}
+
+function reconcileRecordingAliasRows(rows, getSourceId, getEvidence) {
+  const groups = new Map();
+  for (const row of rows) {
+    const id = getSourceId(row);
+    if (!id || groups.get(id) === null) continue;
+    const previous = groups.get(id);
+    const evidence = getEvidence(row);
+    if (!evidence || (previous && (
+      previous.signature !== evidence.signature ||
+      recordingAliasIdentitiesConflict(previous.ids, evidence.ids)
+    ))) {
+      groups.set(id, null);
+      continue;
+    }
+    if (previous) {
+      // Keep populated fields from either row so a later row cannot mask them.
+      previous.ids.isrc = previous.ids.isrc.length ? previous.ids.isrc : evidence.ids.isrc;
+      previous.ids.spotifyTrackId = previous.ids.spotifyTrackId.length
+        ? previous.ids.spotifyTrackId : evidence.ids.spotifyTrackId;
+    } else {
+      groups.set(id, evidence);
+    }
+  }
+  return [...groups.values()].filter(Boolean).map(evidence => evidence.value);
+}
+
+function lyricsRecordingInputKey(track) {
+  return JSON.stringify([
+    track?.trackId, String(track?.spotifyTrackId || "").trim(),
+    normalizeLyricsTrackIsrc(track?.isrc) || normalizeLyricsTrackIsrc(track?.external_ids?.isrc),
+    recordingAliasIdentityFields(track),
+    String(track?.title || "").trim(), String(track?.artist || "").trim(),
+    track?.artists, Number(track?.durationMs || 0),
+  ]);
+}
+
 function attachLyricsTrackMetadata(track, { spotifyAccessToken = "", getSpotifyAccessToken = null } = {}) {
   const spotifyTrackId = String(track?.spotifyTrackId || "").trim();
   const attached = track?.[lyricsTrackMetadata];
-  if (attached?.base.spotifyTrackId === spotifyTrackId && attached.base.trackId === track.trackId) return track;
+  if (attached) {
+    const key = lyricsRecordingInputKey(track);
+    if (key === attached.inputKey || key === attached.snapshotKey) return track;
+  }
 
   const base = {
     ...track,
     spotifyTrackId,
     isrc: normalizeLyricsTrackIsrc(track?.isrc) || normalizeLyricsTrackIsrc(track?.external_ids?.isrc),
     ...(Array.isArray(track?.artists) ? { artists: Object.freeze([...track.artists]) } : {}),
+    ...(track?.external_ids ? { external_ids: Object.freeze({ ...track.external_ids }) } : {}),
   };
   const context = { base, snapshot: base, details: null, pending: null, spotifyAccessToken, getSpotifyAccessToken };
+  context.inputKey = lyricsRecordingInputKey(base);
+  context.snapshotKey = context.inputKey;
+  lyricsRecordingAliasStates.set(context, { searches: new Map(), pending: null });
   base[lyricsTrackMetadata] = context;
   return Object.freeze(base);
 }
@@ -13073,7 +13298,14 @@ async function loadLyricsTrackMetadata(context) {
     });
     const metadata = await Promise.race([request, deadline]);
     if (!metadata || typeof metadata !== "object") return;
-    if ([metadata.spotifyTrackId, metadata.id].some(id => id != null && id !== requestedSpotifyId)) return;
+    if (recordingAliasIdentitiesConflict(recordingAliasIdentityFields(base), recordingAliasIdentityFields(metadata))) {
+      context.recordingIdentityConflict = true;
+    }
+    if ([metadata.spotifyTrackId, metadata.id].some(id => id != null && id !== requestedSpotifyId) ||
+        require("../../DesktopBridge/src/lyricsRecordingIdentity").compareAuthoritativeIdentity(base, metadata) === false) {
+      context.recordingIdentityConflict = true;
+      return;
+    }
     const details = {};
     for (const field of ["title", "artist", "album", "artworkUrl"]) {
       if (typeof metadata[field] === "string" && metadata[field].trim()) details[field] = metadata[field].trim();
@@ -13091,6 +13323,7 @@ async function loadLyricsTrackMetadata(context) {
     if (!Object.keys(details).length) return;
     context.details = Object.freeze(details);
     context.snapshot = mergeLyricsTrackMetadata(base, context.details);
+    context.snapshotKey = lyricsRecordingInputKey(context.snapshot);
   } catch {
     // A failed lookup is shared for this record. Providers can still match by text or ID.
   } finally {
@@ -13108,22 +13341,20 @@ function mergeLyricsTrackMetadata(track, details) {
 
 async function resolveLyricsTrackMetadata(track, requiredFields, options = {}) {
   let wrapped = track?.[lyricsTrackMetadata] ? attachLyricsTrackMetadata(track, options) : null;
-  if (!wrapped && track && requiredFields.every(field => hasLyricsTrackMetadata(track, field))) {
-    return attachLyricsTrackMetadata(track, options);
-  }
   if (!wrapped) {
     // Standalone provider calls can share an input object without retaining it.
     const previous = track && directLyricsTrackMetadata.get(track);
     const inputs = track && Object.entries(track);
+    const inputKey = lyricsRecordingInputKey(track);
     if (previous && previous.token === (options.spotifyAccessToken || "") &&
         inputs.length === previous.inputs.length &&
         inputs.every(([key, value], index) => key === previous.inputs[index][0] && value === previous.inputs[index][1]) &&
-        previous.externalIsrc === track.external_ids?.isrc) {
+        previous.inputKey === inputKey) {
       wrapped = previous.wrapped;
     } else {
       wrapped = attachLyricsTrackMetadata(track, options);
       if (track && typeof track === "object") directLyricsTrackMetadata.set(track, {
-        wrapped, inputs, token: options.spotifyAccessToken || "", externalIsrc: track.external_ids?.isrc,
+        wrapped, inputs, token: options.spotifyAccessToken || "", inputKey,
       });
     }
   }
@@ -13145,6 +13376,16 @@ async function resolveLyricsTrackMetadata(track, requiredFields, options = {}) {
   context.pending ||= loadLyricsTrackMetadata(context);
   await context.pending;
   return current();
+}
+
+async function resolveVerifiedRecordingAliases(snapshot) {
+  const context = snapshot[lyricsTrackMetadata];
+  const ids = recordingAliasIdentityFields(snapshot);
+  if (context.recordingIdentityConflict || recordingAliasIdentitiesConflict(ids, ids)) return [];
+  const state = lyricsRecordingAliasStates.get(context);
+  state.pending ||= discoverKugouRecordingAliases(snapshot).catch(() => Object.freeze([]));
+  const aliases = await state.pending;
+  return context.recordingIdentityConflict ? [] : aliases;
 }
 
 const SOURCE_FETCHERS = {

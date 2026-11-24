@@ -590,6 +590,131 @@ async function searchKugouSongs(query, { timeoutMs = 10_000 } = {}) {
   });
 }
 
+function searchKugouRecordingCatalog(track, query) {
+  const searches = lyricsRecordingAliasStates.get(track?.[lyricsTrackMetadata])?.searches;
+  if (!searches) return searchKugouSongs(query);
+  const key = query.trim().toLowerCase();
+  if (!searches.has(key)) {
+    const request = searchKugouSongs(query);
+    if (searches.size >= 2 * KUGOU_MAX_QUERY_VARIANTS + 1) return request;
+    searches.set(key, request);
+  }
+  return searches.get(key);
+}
+
+function recordingAliasVersionMatches(originalTitle, candidateTitle) {
+  const { versionKey, stripFeaturing } = require("./lyricsRecordingIdentity");
+  const original = stripFeaturing(originalTitle);
+  const candidate = stripFeaturing(candidateTitle);
+  const edition = /\b(?:explicit|clean|deluxe|alternate|reprise|re-recorded)\b|伴奏|[纯純]音[乐樂]|翻唱|カラオケ|ライブ|라이브|반주/iu;
+  return (original.match(edition)?.[0] || "").toLowerCase() ===
+      (candidate.match(edition)?.[0] || "").toLowerCase() &&
+    versionKey(original) === versionKey(candidate) &&
+    !hasRecordingVersionMismatch(original, candidate) &&
+    collectLanguageVariantHints(original).join("|") === collectLanguageVariantHints(candidate).join("|") &&
+    KUGOU_EXPLICIT_VERSION_PATTERNS.every(({ re }) => re.test(original) === re.test(candidate));
+}
+
+function recordingAliasArtistNames(artist) {
+  return String(artist || "").split(/[,、，/;&|]+/u).map(name => name.trim()).filter(Boolean);
+}
+
+function recordingAliasFeaturedArtists(title) {
+  const clause = String(title || "").match(/(?:^|[\s([{,/-])(?:feat\.?|ft\.?|featuring)\s+([^\])}]+)/i);
+  return recordingAliasArtistNames(clause?.[1]);
+}
+
+function recordingAliasCandidateMatches(track, raw, title, artists, durationMs) {
+  const { artistIdentityMatches } = require("./lyricsRecordingIdentity");
+  if (recordingAliasIdentitiesConflict(recordingAliasIdentityFields(track), recordingAliasIdentityFields(raw)) ||
+      !recordingAliasVersionMatches(track.title, title) ||
+      !Number.isFinite(durationMs) || durationMs <= 0 ||
+      !Number.isFinite(Number(track.durationMs)) || Number(track.durationMs) <= 0 ||
+      Math.abs(track.durationMs - durationMs) > 3_000) return false;
+
+  const originalFeatures = recordingAliasFeaturedArtists(track.title);
+  const expectedArtists = [
+    ...recordingAliasArtistNames(track.artist),
+    ...(Array.isArray(track.artists) ? track.artists.filter(Boolean) : []),
+    ...originalFeatures,
+  ];
+  return expectedArtists.length > 0 && artists.length > 0 &&
+    featuredArtistHintsPresentInCandidate(track.title, title, artists.join(" ")) &&
+    expectedArtists.every(name => artists.some(artist => artistIdentityMatches(name, artist))) &&
+    artists.every(artist => expectedArtists.some(name => artistIdentityMatches(name, artist))) &&
+    recordingAliasFeaturedArtists(title).every(name =>
+      originalFeatures.some(feature => artistIdentityMatches(name, feature)));
+}
+
+function recordingAliasRowEvidence(value, raw, title, artists, durationMs) {
+  const { foldCatalogText, stripFeaturing } = require("./lyricsRecordingIdentity");
+  const signature = JSON.stringify([
+    foldCatalogText(stripFeaturing(title)),
+    [...new Set(artists.map(foldCatalogText))].sort(),
+    durationMs,
+  ]);
+  return { value, signature, ids: recordingAliasIdentityFields(raw) };
+}
+
+function extractKugouRecordingAlias(track, raw) {
+  const { foldCatalogText, stripFeaturing } = require("./lyricsRecordingIdentity");
+  const suffix = raw?.songname_suffix;
+  const nestedSuffix = raw?.trans_param?.songname_suffix;
+  if (suffix && nestedSuffix && foldCatalogText(suffix) !== foldCatalogText(nestedSuffix)) return null;
+  const song = normalizeKugouSong({ ...raw, songname_suffix: suffix || nestedSuffix });
+  const original = foldCatalogText(stripFeaturing(track.title));
+  const base = String(raw?.songname || raw?.songname_original || "").trim();
+  const filenameTitle = String(raw?.filename || "").trim().replace(/^.*?\s+-\s+/, "");
+  const artists = recordingAliasArtistNames(song.artist);
+  const displays = [song.title, filenameTitle];
+  if (!song.hash || !original || !base ||
+      !recordingAliasVersionMatches(track.title, base) ||
+      (raw?.songname_original && !recordingAliasVersionMatches(track.title, raw.songname_original)) ||
+      !recordingAliasCandidateMatches(track, raw, song.title, artists, song.durationMs)) return null;
+
+  let aliasTitle = "";
+  for (const display of displays) {
+    const pair = String(display || "").match(/^(.+?)\s*[（(]([^()（）]+)[)）]$/u);
+    if (!pair || !recordingAliasVersionMatches(track.title, display)) continue;
+    const left = pair[1].trim();
+    const right = pair[2].trim();
+    const baseKey = foldCatalogText(base);
+    const leftKey = foldCatalogText(left);
+    const rightKey = foldCatalogText(right);
+    if (baseKey !== leftKey && baseKey !== rightKey && baseKey !== foldCatalogText(display)) continue;
+    const title = leftKey === original ? right : rightKey === original ? left : "";
+    if (!title || title.length > 256 || foldCatalogText(title) === original ||
+        /[()\[\]{}（）]/u.test(title) || !recordingAliasVersionMatches(track.title, title)) continue;
+    if (aliasTitle && foldCatalogText(aliasTitle) !== foldCatalogText(title)) return null;
+    aliasTitle = title;
+  }
+  if (!aliasTitle) return null;
+  const alias = Object.freeze({ title: aliasTitle, source: "kugou", hash: song.hash, albumAudioId: song.albumAudioId });
+  return recordingAliasRowEvidence(alias, raw, aliasTitle, artists, song.durationMs);
+}
+
+async function discoverKugouRecordingAliases(track) {
+  const { foldCatalogText, stripFeaturing } = require("./lyricsRecordingIdentity");
+  const title = stripFeaturing(track.title);
+  if (!title || !track.artist || !(track.durationMs > 0)) return Object.freeze([]);
+  const queries = [...new Set([
+    `${title} ${getSpotifyPrimaryArtist(track.artist)}`.trim(), title,
+    ...buildKugouQueryVariants({ ...track, nativeTitle: null }),
+  ].map(query => query.toLowerCase()))].slice(0, KUGOU_MAX_QUERY_VARIANTS);
+  const payloads = await Promise.all(queries.map(query => searchKugouRecordingCatalog(track, query).catch(() => null)));
+  const rows = payloads.flatMap(payload => {
+    const songs = Array.isArray(payload?.data?.info) ? payload.data.info : [];
+    return flattenKugouSearchResults(songs.slice(0, 30)).slice(0, 60);
+  });
+  const verified = reconcileRecordingAliasRows(
+    rows,
+    row => String(row?.hash || row?.FileHash || "").trim().toLowerCase(),
+    row => extractKugouRecordingAlias(track, row),
+  );
+  const aliases = new Map(verified.map(alias => [foldCatalogText(alias.title), alias]));
+  return Object.freeze(aliases.size === 1 ? [...aliases.values()] : []);
+}
+
 async function searchKugouLyricCandidates(song, { timeoutMs = 8_000 } = {}) {
   return fetchJsonFromAnyEndpoint(KUGOU_LYRIC_SEARCH_ENDPOINTS, {
     params: {
@@ -702,7 +827,7 @@ async function collectRankedKugouSearchCandidates(
   );
   const searches = new Map();
   const searchSongs = (query) => {
-    if (!searches.has(query)) searches.set(query, searchKugouSongs(query));
+    if (!searches.has(query)) searches.set(query, searchKugouRecordingCatalog(track, query));
     return searches.get(query);
   };
   const firstQueryPromise = queryVariants[0]

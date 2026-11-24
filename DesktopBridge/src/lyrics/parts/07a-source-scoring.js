@@ -6,6 +6,7 @@
 
 const lyricsTrackMetadata = Symbol("lyricsTrackMetadata");
 const directLyricsTrackMetadata = new WeakMap();
+const lyricsRecordingAliasStates = new WeakMap();
 const lyricsTextMatchFields = ["title", "artist", "durationMs"];
 
 function normalizeLyricsTrackIsrc(value) {
@@ -18,18 +19,84 @@ function hasLyricsTrackMetadata(track, field) {
   return Boolean(typeof track[field] === "string" ? track[field].trim() : track[field]);
 }
 
+function recordingAliasIdentityFields(raw) {
+  const { normalizeIsrc, normalizeSpotifyTrackId } = require("./lyricsRecordingIdentity");
+  const metadata = raw?.metadata;
+  const sources = [raw, metadata, metadata?.fetchOrigin, raw?.external_ids];
+  const collect = (values, normalize) => [...new Set(values
+    .filter(value => value != null && String(value).trim())
+    .map(value => normalize(value) || String(value).trim()))].sort();
+  return {
+    isrc: collect(sources.flatMap(source => [
+      source?.isrc, source?.trackIsrc, source?.track_isrc,
+      ...(Array.isArray(source?.track_isrcs) ? source.track_isrcs : []),
+    ]), normalizeIsrc),
+    spotifyTrackId: collect(sources.flatMap(source => [
+      source?.spotifyTrackId, source?.spotify_track_id, source?.spotifyId,
+    ]), normalizeSpotifyTrackId),
+  };
+}
+
+function recordingAliasIdentitiesConflict(left, right) {
+  return new Set([...left.isrc, ...right.isrc]).size > 1 ||
+    new Set([...left.spotifyTrackId, ...right.spotifyTrackId]).size > 1;
+}
+
+function reconcileRecordingAliasRows(rows, getSourceId, getEvidence) {
+  const groups = new Map();
+  for (const row of rows) {
+    const id = getSourceId(row);
+    if (!id || groups.get(id) === null) continue;
+    const previous = groups.get(id);
+    const evidence = getEvidence(row);
+    if (!evidence || (previous && (
+      previous.signature !== evidence.signature ||
+      recordingAliasIdentitiesConflict(previous.ids, evidence.ids)
+    ))) {
+      groups.set(id, null);
+      continue;
+    }
+    if (previous) {
+      // Keep populated fields from either row so a later row cannot mask them.
+      previous.ids.isrc = previous.ids.isrc.length ? previous.ids.isrc : evidence.ids.isrc;
+      previous.ids.spotifyTrackId = previous.ids.spotifyTrackId.length
+        ? previous.ids.spotifyTrackId : evidence.ids.spotifyTrackId;
+    } else {
+      groups.set(id, evidence);
+    }
+  }
+  return [...groups.values()].filter(Boolean).map(evidence => evidence.value);
+}
+
+function lyricsRecordingInputKey(track) {
+  return JSON.stringify([
+    track?.trackId, String(track?.spotifyTrackId || "").trim(),
+    normalizeLyricsTrackIsrc(track?.isrc) || normalizeLyricsTrackIsrc(track?.external_ids?.isrc),
+    recordingAliasIdentityFields(track),
+    String(track?.title || "").trim(), String(track?.artist || "").trim(),
+    track?.artists, Number(track?.durationMs || 0),
+  ]);
+}
+
 function attachLyricsTrackMetadata(track, { spotifyAccessToken = "", getSpotifyAccessToken = null } = {}) {
   const spotifyTrackId = String(track?.spotifyTrackId || "").trim();
   const attached = track?.[lyricsTrackMetadata];
-  if (attached?.base.spotifyTrackId === spotifyTrackId && attached.base.trackId === track.trackId) return track;
+  if (attached) {
+    const key = lyricsRecordingInputKey(track);
+    if (key === attached.inputKey || key === attached.snapshotKey) return track;
+  }
 
   const base = {
     ...track,
     spotifyTrackId,
     isrc: normalizeLyricsTrackIsrc(track?.isrc) || normalizeLyricsTrackIsrc(track?.external_ids?.isrc),
     ...(Array.isArray(track?.artists) ? { artists: Object.freeze([...track.artists]) } : {}),
+    ...(track?.external_ids ? { external_ids: Object.freeze({ ...track.external_ids }) } : {}),
   };
   const context = { base, snapshot: base, details: null, pending: null, spotifyAccessToken, getSpotifyAccessToken };
+  context.inputKey = lyricsRecordingInputKey(base);
+  context.snapshotKey = context.inputKey;
+  lyricsRecordingAliasStates.set(context, { searches: new Map(), pending: null });
   base[lyricsTrackMetadata] = context;
   return Object.freeze(base);
 }
@@ -66,7 +133,14 @@ async function loadLyricsTrackMetadata(context) {
     });
     const metadata = await Promise.race([request, deadline]);
     if (!metadata || typeof metadata !== "object") return;
-    if ([metadata.spotifyTrackId, metadata.id].some(id => id != null && id !== requestedSpotifyId)) return;
+    if (recordingAliasIdentitiesConflict(recordingAliasIdentityFields(base), recordingAliasIdentityFields(metadata))) {
+      context.recordingIdentityConflict = true;
+    }
+    if ([metadata.spotifyTrackId, metadata.id].some(id => id != null && id !== requestedSpotifyId) ||
+        require("./lyricsRecordingIdentity").compareAuthoritativeIdentity(base, metadata) === false) {
+      context.recordingIdentityConflict = true;
+      return;
+    }
     const details = {};
     for (const field of ["title", "artist", "album", "artworkUrl"]) {
       if (typeof metadata[field] === "string" && metadata[field].trim()) details[field] = metadata[field].trim();
@@ -84,6 +158,7 @@ async function loadLyricsTrackMetadata(context) {
     if (!Object.keys(details).length) return;
     context.details = Object.freeze(details);
     context.snapshot = mergeLyricsTrackMetadata(base, context.details);
+    context.snapshotKey = lyricsRecordingInputKey(context.snapshot);
   } catch {
     // A failed lookup is shared for this record. Providers can still match by text or ID.
   } finally {
@@ -101,22 +176,20 @@ function mergeLyricsTrackMetadata(track, details) {
 
 async function resolveLyricsTrackMetadata(track, requiredFields, options = {}) {
   let wrapped = track?.[lyricsTrackMetadata] ? attachLyricsTrackMetadata(track, options) : null;
-  if (!wrapped && track && requiredFields.every(field => hasLyricsTrackMetadata(track, field))) {
-    return attachLyricsTrackMetadata(track, options);
-  }
   if (!wrapped) {
     // Standalone provider calls can share an input object without retaining it.
     const previous = track && directLyricsTrackMetadata.get(track);
     const inputs = track && Object.entries(track);
+    const inputKey = lyricsRecordingInputKey(track);
     if (previous && previous.token === (options.spotifyAccessToken || "") &&
         inputs.length === previous.inputs.length &&
         inputs.every(([key, value], index) => key === previous.inputs[index][0] && value === previous.inputs[index][1]) &&
-        previous.externalIsrc === track.external_ids?.isrc) {
+        previous.inputKey === inputKey) {
       wrapped = previous.wrapped;
     } else {
       wrapped = attachLyricsTrackMetadata(track, options);
       if (track && typeof track === "object") directLyricsTrackMetadata.set(track, {
-        wrapped, inputs, token: options.spotifyAccessToken || "", externalIsrc: track.external_ids?.isrc,
+        wrapped, inputs, token: options.spotifyAccessToken || "", inputKey,
       });
     }
   }
@@ -138,6 +211,16 @@ async function resolveLyricsTrackMetadata(track, requiredFields, options = {}) {
   context.pending ||= loadLyricsTrackMetadata(context);
   await context.pending;
   return current();
+}
+
+async function resolveVerifiedRecordingAliases(snapshot) {
+  const context = snapshot[lyricsTrackMetadata];
+  const ids = recordingAliasIdentityFields(snapshot);
+  if (context.recordingIdentityConflict || recordingAliasIdentitiesConflict(ids, ids)) return [];
+  const state = lyricsRecordingAliasStates.get(context);
+  state.pending ||= discoverKugouRecordingAliases(snapshot).catch(() => Object.freeze([]));
+  const aliases = await state.pending;
+  return context.recordingIdentityConflict ? [] : aliases;
 }
 
 const SOURCE_FETCHERS = {

@@ -506,7 +506,7 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-async function searchQQDirectSongPool(track) {
+async function searchQQDirectSongPool(track, verifyRecording = null) {
   const accessors = createQQDirectSongAccessors();
   const allQueryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const desktopRequests = new Map();
@@ -515,7 +515,7 @@ async function searchQQDirectSongPool(track) {
   const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests);
   const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants);
   let songs;
-  if (trackNeedsFeaturedVariantVerification(track)) {
+  if (verifyRecording || trackNeedsFeaturedVariantVerification(track)) {
     const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
     songs = [...desktopSongs, ...legacySongs];
   } else {
@@ -525,6 +525,9 @@ async function searchQQDirectSongPool(track) {
       const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
       songs = [...desktopSongs, ...legacySongs];
     }
+  }
+  if (verifyRecording) {
+    songs = reconcileRecordingAliasRows(songs, accessors.getSongMid, song => verifyRecording(song, accessors));
   }
   return { ranked: rankQQDirectSearchSongs(track, songs, accessors), accessors };
 }
@@ -1279,6 +1282,32 @@ async function fetchFromQQMeting(track) {
   return null;
 }
 
+async function fetchQQRecordingAliasLyrics(track, options) {
+  const { foldCatalogText, stripFeaturing } = require("./lyricsRecordingIdentity");
+  track = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], options);
+  const aliases = await resolveVerifiedRecordingAliases(track);
+  for (const alias of aliases) {
+    // Only the search and scoring title changes. Verify credits and version
+    // against the original recording before allowing any lyric probe.
+    const queryTrack = { ...track, title: alias.title };
+    const { ranked, accessors } = await searchQQDirectSongPool(queryTrack, (song, accessors) => {
+      const { getSongTitle, getSongArtist, getSongInterval } = accessors;
+      const title = getSongTitle(song);
+      const artists = Array.isArray(song.singer)
+        ? song.singer.map(singer => String(singer?.name || "").trim()).filter(Boolean)
+        : recordingAliasArtistNames(getSongArtist(song));
+      const durationMs = getQqCandidateDurationMs(getSongInterval, song);
+      if (foldCatalogText(stripFeaturing(title)) !== foldCatalogText(alias.title) ||
+          !recordingAliasCandidateMatches(track, song, title, artists, durationMs)) return null;
+      return recordingAliasRowEvidence(song, song, title, artists, durationMs);
+    });
+    const { earlyExit, state } = await fetchQQDirectCandidateLyricsParallel(queryTrack, ranked.slice(0, MAX_QQ_DIRECT_CANDIDATES), accessors);
+    const result = earlyExit || resolveQQDirectAggregatedResults(queryTrack, state);
+    if (result?.lyrics?.length) return result;
+  }
+  return null;
+}
+
 // QQ's Musicu endpoint, public search endpoint, and public mirrors each have
 // intermittent catalog gaps. Keep the desktop-compatible direct flow first,
 // then try the existing compatible fallbacks before reporting no match.
@@ -1296,7 +1325,11 @@ async function fetchFromQQ(track, { spotifyAccessToken = "" } = {}) {
       // A provider failure should not prevent the other QQ-compatible paths.
     }
   }
-  return null;
+  try {
+    return await fetchQQRecordingAliasLyrics(track, { spotifyAccessToken });
+  } catch {
+    return null;
+  }
 }
 
 async function previewQQDirectSearchCandidates(track) {
