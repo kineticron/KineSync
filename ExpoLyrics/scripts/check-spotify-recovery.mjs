@@ -165,7 +165,7 @@ for(const body of [{},[],{player_state:{}},{player_state:[]},{player_state:{is_p
 });
 await check('background detaches silent socket; old callbacks and cached replay cannot enable controls',async()=>{
  const h=setup();h.start();const ws=await h.identify();const late=ws.onmessage;assert(h.d.health.controlsEnabled);
- h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.d.health.phase,'renewingSession');h.recapture();assert.equal(h.sockets.length,2);await allDisabled(h);
+ h.d.setEnabled(false);assert.equal(h.clock.timers.size,0);h.d.setEnabled(true);assert.equal(h.d.health.phase,'connecting');assert.equal(h.sockets.length,2);await allDisabled(h);
  late({data:JSON.stringify({payloads:[state()]})});assert.equal(h.d.health.observerConfirmed,false);await h.identify();assert(h.d.health.controlsEnabled);h.d.clear();
 });
 for (const elapsed of [0, 1000, 30000]) await check(`review: inactive-only resume revalidates the same OPEN socket (${elapsed}ms)`,async()=>{
@@ -225,7 +225,102 @@ await check('review: repeated explicit Retry coalesces with the bounded session 
   h.credentials();await h.identify();assert(h.d.health.controlsEnabled);
  }finally{h.d.clear();}
 });
-for (const cause of ['Retry', 'socket error', 'socket close', 'registration error', 'path change', 'offline recovery', 'resume of closed socket']) {
+await check('review: path changes during renewing health start a replacement capture', async () => {
+ const h = setup();
+ try {
+  h.d.setReachability('online', 'WIFI');
+  const publish = h.d.callbacks.health;
+  let changed = false;
+  h.d.callbacks.health = health => {
+   publish(health);
+   if (health.phase === 'renewingSession' && !changed) {
+    changed = true;
+    h.d.setReachability('online', 'CELLULAR');
+   }
+  };
+  h.d.setEnabled(true);
+  await flush();
+  assert(changed);
+  assert.equal(h.needed, 1, 'only the replacement capture reaches the browser');
+  h.recapture();
+  await h.identify();
+  assert(h.d.health.controlsEnabled);
+ } finally { h.d.clear(); }
+});
+await check('review: inactive-active reentry during renewing health restarts the capture', async () => {
+ const h = setup();
+ try {
+  const finished = [];
+  h.d.callbacks.sessionFinished = id => finished.push(id);
+  const publish = h.d.callbacks.health;
+  let resumed = false;
+  h.d.callbacks.health = health => {
+   publish(health);
+   if (health.phase === 'renewingSession' && !resumed) {
+    resumed = true;
+    h.d.setActivity('inactive');
+    h.d.setActivity('active');
+   }
+  };
+  h.d.setEnabled(true);
+  await flush();
+  assert(resumed);
+  assert.equal(h.needed, 1, 'only the replacement capture reaches the browser');
+  assert.equal(h.clock.timers.size, 1, 'only the replacement capture owns a deadline');
+  assert.equal(finished.length, 1);
+  assert.notEqual(h.captureId, finished[0]);
+  assert.equal(h.capture({ type: 'session', state: 'anonymous' }, finished[0]), false);
+  h.recapture();
+  await h.identify();
+  assert(h.d.health.controlsEnabled);
+ } finally { h.d.clear(); }
+});
+await check('review: clear completes before sessionFinished can start a replacement connection', async () => {
+ const h = setup();
+ try {
+  h.d.setEnabled(true);
+  const retiredCapture = h.captureId;
+  let retiredNotifications = 0;
+  h.d.callbacks.sessionFinished = id => {
+   if (id !== retiredCapture) return;
+   retiredNotifications++;
+   assert.equal(h.d.health.phase, 'idle');
+   assert.equal(h.clock.timers.size, 0);
+   h.d.setEnabled(true);
+   h.recapture('after-clear');
+  };
+  h.d.clear();
+  assert.equal(retiredNotifications, 1);
+  assert.equal(h.needed, 2);
+  assert.notEqual(h.captureId, retiredCapture);
+  assert.equal(h.sockets.length, 1);
+  assert.equal(h.d.health.phase, 'connecting', 'clear cannot overwrite the replacement phase');
+  assert.equal(h.d.health.observerConfirmed, false);
+  await h.identify();
+  assert(h.d.health.controlsEnabled);
+ } finally { h.d.clear(); }
+});
+await check('review: sessionFinished reentry cannot install credentials over a newer capture', async () => {
+ const h = setup();
+ try {
+  let authentications = 0;
+  h.d.callbacks.authenticated = () => { authentications++; };
+  h.d.setEnabled(true);
+  const firstCapture = h.captureId;
+  h.d.callbacks.sessionFinished = id => {
+   if (id === firstCapture) h.d.setEnabled(true);
+  };
+  h.recapture();
+  assert.equal(h.needed, 2);
+  assert.equal(authentications, 0);
+  assert.equal(h.sockets.length, 0);
+  h.recapture('replacement');
+  await h.identify();
+  assert.equal(authentications, 1);
+  assert(h.d.health.controlsEnabled);
+ } finally { h.d.clear(); }
+});
+for (const cause of ['Retry', 'socket error', 'socket close', 'registration error']) {
  await check(`review: ${cause} waits for a fresh Spotify credential and route capture`, async () => {
   const h = setup();
   try {
@@ -242,22 +337,7 @@ for (const cause of ['Retry', 'socket error', 'socket close', 'registration erro
    }
    if (cause === 'socket error') old.onerror();
    if (cause === 'socket close') old.onclose();
-   if (cause === 'path change') h.d.setReachability('online', 'CELLULAR');
-   if (cause === 'offline recovery') {
-    h.d.setReachability('offline', 'WIFI');
-    h.d.refresh(true);
-    await h.clock.advance(30000);
-    assert.equal(h.needed, needed);
-    h.d.setReachability('online', 'CELLULAR');
-   }
-   if (cause === 'resume of closed socket') { h.d.setActivity('inactive'); old.readyState=3; h.d.setActivity('active'); }
    assert.equal(h.capture({type:'credentials',authenticated:true,token:'dead-token'}, retiredCapture), false, 'late capture cannot seed the next attempt');
-   if (cause === 'offline recovery') {
-    await h.clock.advance(499);
-    assert.equal(h.needed, needed);
-    assert.equal(h.sockets.length, 1);
-    await h.clock.advance(1);
-   }
    assert.equal(old.readyState, 3);
    assert.equal(h.needed, needed + 1);
    assert.equal(h.d.health.phase, 'renewingSession');
@@ -282,6 +362,475 @@ for (const cause of ['Retry', 'socket error', 'socket close', 'registration erro
    assert.equal(registration.headers.authorization, 'Bearer fresh-token');
    assert.equal(registration.headers['client-token'], cause === 'Retry' ? 'fresh-client' : undefined);
    assert(h.d.health.controlsEnabled);
+  } finally { h.d.clear(); }
+ });
+}
+for (const cause of ['path change', 'offline recovery', 'resume of closed socket']) {
+ await check(`review: cached reconnect on ${cause} skips session capture and gates commands`, async () => {
+  const h = setup();
+  try {
+   h.d.setReachability('online', 'WIFI');
+   h.start('cached-bearer', 'cached-client');
+   const old = await h.identify();
+   const previousScope = h.samples.at(-1).sourceClockScope;
+   const needed = h.needed;
+   if (cause === 'path change') h.d.setReachability('online', 'CELLULAR');
+   if (cause === 'offline recovery') {
+    h.d.setReachability('offline', 'WIFI');
+    h.d.refresh(true);
+    await h.clock.advance(30000);
+    h.d.setReachability('online', 'CELLULAR');
+    await h.clock.advance(499);
+    assert.equal(h.sockets.length, 1, 'offline recovery retains its debounce');
+    await h.clock.advance(1);
+   }
+   if (cause === 'resume of closed socket') {
+    h.d.setActivity('inactive');
+    old.readyState = 3;
+    h.d.setActivity('active');
+   }
+   assert.equal(old.readyState, 3);
+   assert.equal(h.needed, needed);
+   assert.equal(h.sockets.length, 2);
+   assert.equal(h.d.health.phase, 'connecting');
+   assert.equal(h.d.health.observerConfirmed, false);
+   assert.equal(h.requests.length, 1);
+   await allDisabled(h);
+   const replacement = await h.identify();
+   assert.equal(h.needed, needed);
+   assert(replacement.url === old.url, 'reuses the captured Dealer route and bearer');
+   assert(h.requests[1].url === h.requests[0].url, 'reuses the validated observer route');
+   assert(h.requests[1].headers.authorization === h.requests[0].headers.authorization);
+   assert(h.requests[1].headers['client-token'] === h.requests[0].headers['client-token']);
+   assert(h.d.health.controlsEnabled);
+   assert.notEqual(h.samples.at(-1).sourceClockScope, previousScope);
+  } finally { h.d.clear(); }
+ });
+}
+for (const remaining of [30001, 30000, -1]) {
+ await check(`review: reconnect cache expiry with ${remaining}ms remaining`, async () => {
+  const h = setup();
+  try {
+   h.start();
+   await h.identify();
+   h.d.setEnabled(false);
+   await h.clock.advance(3600000 - remaining);
+   h.d.setEnabled(true);
+   if (remaining > 30000) {
+    assert.equal(h.needed, 1);
+    assert.equal(h.sockets.length, 2);
+    const cached = h.sockets.at(-1);
+    await h.clock.advance(1);
+    assert.equal(cached.readyState, 3, 'expiry cutoff retires the cached socket before Dealer identification');
+    assert.equal(h.d.health.phase, 'renewingSession');
+    assert.equal(h.needed, 2);
+    h.response = { status: 401 };
+    h.recapture('replacement');
+    await h.identify();
+    assert.equal(h.d.health.phase, 'signInRequired');
+    assert.equal(h.d.health.reason, 'freshTokenRejected');
+    await h.clock.advance(120000);
+    assert.equal(h.needed, 2, 'fresh rejection cannot start another capture');
+    assert.equal(h.sockets.length, 3);
+    return;
+   }
+   assert.equal(h.needed, 2);
+   assert.equal(h.sockets.length, 1);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   h.recapture('replacement');
+   await h.identify();
+   assert(h.d.health.controlsEnabled);
+  } finally { h.d.clear(); }
+ });
+}
+for (const [cachedStatus, freshStatus] of [[401, 200], [403, 200], [401, 401], [403, 401], [403, 403]]) {
+ await check(`review: cached HTTP ${cachedStatus} permits one capture with fresh HTTP ${freshStatus}`, async () => {
+  const h = setup();
+  try {
+   h.start();
+   await h.identify();
+   h.d.setActivity('background');
+   h.d.setActivity('active');
+   h.d.setEnabled(true);
+   h.response = { status: cachedStatus };
+   const cached = await h.identify();
+   assert.equal(cached.readyState, 3);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   assert.equal(h.d.health.lastError?.httpStatus, cachedStatus);
+   assert.equal(h.needed, 2);
+   await allDisabled(h);
+   h.response = { status: freshStatus, body: state('replacement') };
+   h.recapture('new-bearer');
+   await h.identify();
+   assert(h.requests.at(-1).headers.authorization !== h.requests.at(-2).headers.authorization);
+   const phase = freshStatus === 200 ? 'ready' : freshStatus === 401 ? 'signInRequired' : 'denied';
+   assert.equal(h.d.health.phase, phase);
+   if (freshStatus === 200) {
+    assert(h.d.health.controlsEnabled);
+   } else {
+    h.d.setEnabled(false);
+    h.d.setEnabled(true);
+    h.d.refresh();
+    await h.clock.advance(120000);
+    assert.equal(h.d.health.phase, phase);
+    assert.equal(h.d.health.reason, freshStatus === 401 ? 'freshTokenRejected' : 'denied');
+    await allDisabled(h);
+   }
+   assert.equal(h.needed, 2);
+   assert.equal(h.sockets.length, 3);
+  } finally { h.d.clear(); }
+ });
+}
+await check('review: stale cached registration leaves controls gated until current restrictions arrive', async () => {
+ const h = setup();
+ try {
+  const current = state('phone', uri, h.clock.wall + 1000);
+  current.player_state.restrictions = { disallow_skipping_next_reasons: ['restricted'] };
+  h.response = { status: 200, body: current };
+  h.start();
+  await h.identify();
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.d.health.allowed.next, false);
+  h.d.setEnabled(false);
+  h.d.setEnabled(true);
+  h.response = { status: 200, body: state() };
+  const cached = await h.identify();
+  assert.equal(h.d.health.phase, 'registering');
+  assert.equal(h.d.health.observerConfirmed, false);
+  assert.equal(h.d.health.target, 'unknown');
+  await allDisabled(h);
+  cached.event({ payloads: [current] });
+  assert(h.d.health.observerConfirmed);
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.d.health.allowed.next, false);
+  await assert.rejects(h.d.control({ type: 'next' }), /restricted/);
+  assert.equal(h.posts().length, 0);
+  assert.equal(h.needed, 1);
+ } finally { h.d.clear(); }
+});
+for (const confirmWith of ['idle', 'deadline']) {
+ await check(`review: stale cached Dealer state and empty registration wait for ${confirmWith}`, async () => {
+  const h = setup();
+  try {
+   h.response = { status: 200, body: state('phone', uri, h.clock.wall + 1000) };
+   h.start();
+   await h.identify();
+   h.d.setEnabled(false);
+   h.d.setEnabled(true);
+   const body = deferred();
+   h.response = { status: 200, bodyPromise: body.promise };
+   const cached = await h.identify();
+   cached.event({ payloads: [state()] });
+   body.resolve(new ArrayBuffer(0));
+   await flush();
+   assert.equal(h.d.health.phase, 'registering');
+   assert.equal(h.d.health.observerConfirmed, false);
+   await allDisabled(h);
+   if (confirmWith === 'idle') {
+    cached.event({ payloads: [{ player_state: { is_paused: true } }] });
+    assert.equal(h.d.health.phase, 'ready');
+    assert(h.d.health.observerConfirmed);
+    assert.equal(h.d.health.target, 'absent');
+    await allDisabled(h);
+    await h.clock.advance(5000);
+    assert.equal(h.needed, 1);
+   } else {
+    await h.clock.advance(4999);
+    assert.equal(h.needed, 1);
+    await h.clock.advance(1);
+    assert.equal(cached.readyState, 3);
+    assert.equal(h.d.health.phase, 'renewingSession');
+    assert.equal(h.needed, 2);
+    h.recapture('fallback');
+    h.response = { status: 200, body: state() };
+    const fresh = await h.identify();
+    assert.equal(h.d.health.observerConfirmed, false, 'fresh capture still needs current state after cache failure');
+    await allDisabled(h);
+    fresh.event({ payloads: [state('phone', uri, h.clock.wall)] });
+    assert(h.d.health.controlsEnabled);
+   }
+  } finally { h.d.clear(); }
+ });
+}
+for (const failure of ['error', 'close', 'open timeout', 'ID timeout']) {
+ await check(`review: cached socket ${failure} falls back to fresh capture`, async () => {
+  const h = setup();
+  try {
+   h.start();
+   await h.identify();
+   h.d.setEnabled(false);
+   h.d.setEnabled(true);
+   assert.equal(h.sockets.length, 2);
+   assert.equal(h.needed, 1);
+   const cached = h.sockets.at(-1);
+   if (failure === 'error') cached.onerror();
+   else if (failure === 'close') cached.onclose();
+   else {
+    if (failure === 'ID timeout') { await h.clock.advance(1000); cached.open(); }
+    await h.clock.advance(1499 - h.clock.mono);
+    assert.equal(h.d.socket, cached);
+    assert.equal(h.needed, 1);
+    await h.clock.advance(1);
+   }
+   assert.equal(cached.readyState, 3);
+   assert.equal(h.needed, 2);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   assert.equal(h.d.health.lastError?.category, failure.endsWith('timeout') ? 'timeout' : 'transport');
+   if (failure === 'ID timeout') h.response = { status: 401 };
+   h.recapture('replacement');
+   await h.identify();
+   if (failure === 'ID timeout') {
+    assert.equal(h.d.health.phase, 'signInRequired');
+    await h.clock.advance(120000);
+    assert.equal(h.d.health.reason, 'freshTokenRejected');
+   } else assert(h.d.health.controlsEnabled);
+   assert.equal(h.sockets.length, 3);
+   assert.equal(h.needed, 2);
+  } finally { h.d.clear(); }
+ });
+}
+for (const previous401 of [false, true]) {
+ await check(`review: successful cache fallback preserves live 401 budget (previous 401: ${previous401})`, async () => {
+  const h = setup();
+  try {
+   if (previous401) h.response = { status: 401 };
+   h.start();
+   await h.identify();
+   if (previous401) {
+    assert.equal(h.d.health.phase, 'renewingSession');
+    h.recapture('after-initial-401');
+    h.response = { status: 200, body: state() };
+    await h.identify();
+   }
+   assert(h.d.health.controlsEnabled);
+   h.d.setEnabled(false);
+   h.d.setEnabled(true);
+   const cached = h.sockets.at(-1);
+   await h.clock.advance(1500);
+   assert.equal(cached.readyState, 3);
+   assert.equal(h.d.health.phase, 'renewingSession');
+   assert.equal(h.needed, previous401 ? 3 : 2);
+   h.recapture('fallback');
+   await h.identify();
+   assert(h.d.health.controlsEnabled);
+   const needed = h.needed;
+   h.response = { status: 401 };
+   await h.clock.advance(15000);
+   if (previous401) {
+    assert.equal(h.needed, needed, 'successful cache fallback retains the earlier live 401 bound');
+   } else {
+    assert.equal(h.needed, needed + 1, 'first live 401 after successful fallback gets one refresh');
+    assert.equal(h.d.health.phase, 'renewingSession');
+    h.recapture('after-live-401');
+    await h.identify();
+    assert.equal(h.needed, needed + 1);
+   }
+   assert.equal(h.d.health.phase, 'signInRequired');
+   assert.equal(h.d.health.reason, 'freshTokenRejected');
+  } finally { h.d.clear(); }
+ });
+}
+await check('review: a verified fresh observer still stops on a periodic registration 403', async () => {
+ const h = setup();
+ try {
+  h.start();
+  const ws = await h.identify();
+  assert(h.d.health.controlsEnabled);
+  h.response = { status: 403 };
+  await h.clock.advance(15000);
+  assert.equal(ws.readyState, 3);
+  assert.equal(h.d.health.phase, 'denied');
+  assert.equal(h.d.health.lastError?.httpStatus, 403);
+  h.d.setEnabled(false);
+  h.d.setEnabled(true);
+  await h.clock.advance(120000);
+  assert.equal(h.d.health.phase, 'denied');
+  assert.equal(h.needed, 1);
+  assert.equal(h.sockets.length, 1);
+ } finally { h.d.clear(); }
+});
+for (const failure of ['unavailable', 'timeout']) {
+ await check(`review: ${failure} during cached reconnect fallback surfaces health error and preserves backoff`, async () => {
+  const h = setup();
+  try {
+   h.start();
+   await h.identify();
+   h.d.setEnabled(false);
+   h.d.setEnabled(true);
+   h.response = { status: 401 };
+   await h.identify();
+   const failedCapture = h.captureId;
+   h.d.callbacks.sessionFinished = id => {
+    if (id === failedCapture) h.d.setEnabled(true);
+   };
+   if (failure === 'unavailable') assert(h.capture({ type: 'session', state: failure }));
+   else await h.clock.advance(20000);
+   assert.equal(h.d.health.lastError?.category, failure === 'timeout' ? 'timeout' : 'transport');
+   assert.equal(h.d.health.lastError?.occurredAtWall, h.clock.wall);
+   assert.equal(h.d.health.phase, 'retryWait');
+   assert.equal(h.needed, 2, 'capture completion cannot bypass backoff');
+   assert.equal(h.sockets.length, 2);
+   assert.equal(h.d.health.observerConfirmed, false);
+   h.d.setEnabled(false);
+   h.d.setEnabled(true);
+   await h.clock.advance(1999);
+   assert.equal(h.needed, 2);
+   await h.clock.advance(1);
+   assert.equal(h.needed, 3);
+   assert.equal(h.sockets.length, 2, 'capture retry cannot reuse the rejected cache');
+   assert.equal(h.capture({ type: 'session', state: 'anonymous' }, failedCapture), false);
+   assert.equal(h.d.health.phase, 'renewingSession');
+  } finally { h.d.clear(); }
+ });
+}
+await check('review: retired cached socket callbacks and registration cannot override a fresh observer', async () => {
+ const h = setup();
+ try {
+  h.d.setReachability('online', 'WIFI');
+  h.start();
+  await h.identify();
+  h.d.setEnabled(false);
+  h.d.setEnabled(true);
+  assert.equal(h.sockets.length, 2);
+  const late = deferred();
+  h.response = () => late.promise;
+  const cached = await h.identify();
+  const { onopen, onmessage, onerror, onclose } = cached;
+  onerror();
+  const retiredRequest = h.requests.at(-1);
+  assert.equal(retiredRequest.signal.aborted, true);
+  assert.equal(h.d.health.phase, 'renewingSession');
+  const emitLate = () => {
+   onopen();
+   onmessage({ data: JSON.stringify({ headers: { 'Spotify-Connection-Id': 'obsolete' }, payloads: [state('obsolete')] }) });
+   onerror();
+   onclose();
+  };
+  emitLate();
+  assert.equal(h.d.health.phase, 'renewingSession');
+  h.response = { status: 200, body: state('fresh') };
+  h.recapture('fresh-bearer');
+  const fresh = await h.identify();
+  const generation = h.d.health.generation;
+  late.resolve({ status: 403 });
+  emitLate();
+  await flush();
+  assert.equal(h.d.health.generation, generation);
+  assert.equal(h.d.socket, fresh);
+  assert.equal(h.samples.at(-1).activeDeviceId, 'fresh');
+  assert(h.d.health.controlsEnabled);
+  assert.equal(h.needed, 2);
+  assert.equal(h.requests.length, 3);
+  h.d.setReachability('online', 'CELLULAR');
+  assert.equal(h.sockets.length, 4);
+  await h.identify();
+  assert.equal(h.needed, 2);
+  assert(h.requests.at(-1).headers.authorization === h.requests.at(-2).headers.authorization);
+ } finally { h.d.clear(); }
+});
+await check('review: network change during cached socket creation keeps only the latest attempt', async () => {
+ const h = setup();
+ try {
+  h.d.setReachability('online', 'WIFI');
+  h.start();
+  await h.identify();
+  const socket = h.d.runtime.socket;
+  h.d.runtime.socket = url => {
+   const superseded = socket(url);
+   h.d.runtime.socket = socket;
+   h.d.setReachability('online', 'CELLULAR');
+   return superseded;
+  };
+  h.d.setEnabled(false);
+  h.d.setEnabled(true);
+  await flush();
+  assert.equal(h.needed, 1);
+  assert.equal(h.sockets.length, 3);
+  assert.equal(h.sockets[1].readyState, 3);
+  assert.equal(h.d.health.observerConfirmed, false);
+  await h.identify();
+  assert(h.d.health.controlsEnabled);
+ } finally { h.d.clear(); }
+});
+await check('review: explicit signout clears reconnect cache and retires pending callbacks', async () => {
+ const h = setup();
+ try {
+  h.start();
+  await h.identify();
+  h.d.setEnabled(false);
+  h.d.setEnabled(true);
+  assert.equal(h.sockets.length, 2);
+  const late = deferred();
+  h.response = () => late.promise;
+  const cached = await h.identify();
+  const staleMessage = cached.onmessage;
+  h.d.clear();
+  assert.equal(h.d.health.session, 'unknown');
+  h.d.setEnabled(true);
+  assert.equal(h.needed, 2);
+  assert.equal(h.sockets.length, 2);
+  staleMessage({ data: JSON.stringify({ payloads: [state('signed-out')] }) });
+  late.resolve({ status: 200, body: state('signed-out') });
+  await flush();
+  assert.equal(h.d.health.phase, 'renewingSession');
+  assert.equal(h.d.health.observerConfirmed, false);
+  await allDisabled(h);
+ } finally { h.d.clear(); }
+});
+for (const trigger of ['resume', 'path change']) {
+ await check(`review: SIMULATED reconnect latency for ${trigger}`, async () => {
+  const h = setup();
+  try {
+   h.d.setReachability('online', 'WIFI');
+   h.start();
+   const initialSocket = await h.identify();
+   assert(h.d.health.controlsEnabled);
+   const sessionNeeded = h.d.callbacks.sessionNeeded;
+   h.d.callbacks.sessionNeeded = id => {
+    sessionNeeded(id);
+    h.clock.set(() => h.recapture('simulated-fresh'), 1200);
+   };
+   const socket = h.d.runtime.socket;
+   h.d.runtime.socket = url => {
+    const ws = socket(url);
+    h.clock.set(() => {
+     ws.open();
+     ws.event({ headers: { 'Spotify-Connection-Id': 'simulated-reconnect' } });
+    }, 10);
+    return ws;
+   };
+   h.response = () => new Promise(resolve => {
+    h.clock.set(() => resolve({ status: 200, body: state() }), 30);
+   });
+   const initialGeneration = h.d.health.generation;
+   const publish = h.d.callbacks.health;
+   let readyAt;
+   h.d.callbacks.health = health => {
+    publish(health);
+    // A path change can publish the old socket's health before retiring it.
+    if (health.generation > initialGeneration && health.controlsEnabled) readyAt ??= h.clock.mono;
+   };
+   const started = h.clock.mono;
+   if (trigger === 'resume') {
+    h.d.setActivity('background');
+    h.d.setActivity('active');
+    h.d.setEnabled(true);
+   } else h.d.setReachability('online', 'CELLULAR');
+   assert.equal(initialSocket.readyState, 3, 'the lifecycle event retires the original socket');
+   assert.equal(h.d.health.controlsEnabled, false);
+   await h.clock.advance(1240);
+   assert.notEqual(readyAt, undefined, 'a replacement confirmed playback observation');
+   const replacement = h.d.health;
+   assert(replacement.generation > initialGeneration);
+   assert(replacement.observerConfirmed);
+   assert.equal(replacement.lastStateGeneration, replacement.generation);
+   const latency = readyAt - started;
+   const probes = h.needed - 1;
+   console.log(`SIMULATED ${baseline ? 'baseline' : 'current'} ${trigger} reconnect: ${latency}ms (session captures: ${probes})`);
+   assert.equal(latency, baseline ? 1240 : 40);
+   assert.equal(probes, baseline ? 1 : 0);
+   assert.equal(h.sockets.length, 2);
+   assert.equal(h.requests.filter(r => r.method === 'PUT').length, 2);
   } finally { h.d.clear(); }
  });
 }
@@ -360,7 +909,8 @@ for (const result of ['unavailable','timeout','anonymous','401','offline','backg
 });
 await check('renewal episode has hard deadline and backoff for network stalls; explicit anonymous needs sign-in',async()=>{
  const h=setup();h.d.setEnabled(true);await h.clock.advance(20000);assert.equal(h.d.health.phase,'renewingSession');await h.clock.advance(20000);assert.equal(h.d.health.phase,'retryWait');assert.equal(h.d.health.attempt,2);h.d.clear();
- const a=setup();a.d.setEnabled(true);a.capture({type:'session',state:'anonymous'});assert.equal(a.d.health.phase,'signInRequired');assert.equal(a.clock.timers.size,0);a.d.clear();
+ const a=setup();a.d.setEnabled(true);a.capture({type:'session',state:'anonymous'});assert.equal(a.d.health.phase,'signInRequired');assert.equal(a.clock.timers.size,0);
+ a.d.setEnabled(false);a.d.setEnabled(true);assert.equal(a.d.health.reason,'sessionChallenge');assert.equal(a.needed,1);a.d.clear();
 });
 await check('403 denied has no automatic loop across lifecycle/renderer/credentials; explicit retry is debounced',async()=>{
  const h=setup();h.response={status:403,bodyPromise:new Promise(()=>{})};h.start();await h.identify();assert.equal(h.d.health.phase,'denied');
@@ -411,7 +961,6 @@ for (const mode of ['headers', 'body', 'unusable']) for (const resumed of [false
    h.d.setActivity('background'); h.d.setActivity('active'); h.d.setEnabled(true);
    assert.equal(h.samples.length, before + 1, 'resume replays display cache');
    assert.equal(h.d.health.observerConfirmed, false, 'display cache cannot confirm replacement registration');
-   h.recapture();
   }
   h.response = mode === 'headers' ? () => late.promise : mode === 'body'
    ? { status: 200, bodyPromise: late.promise } : { status: 200, body: {} };
@@ -491,7 +1040,7 @@ await check('track/target change invalidates seek confirmation; current observat
  const h=setup();h.start();const ws=await h.identify();await h.d.control({type:'seek',positionMs:500});ws.event({payloads:[state('other','spotify:track:0000000000000000000001',1900000001000)]});await flush();assert.equal(h.d.health.command,'idle');await h.clock.advance(5000);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);h.d.clear();
 });
 await check('late old command finally cannot clear or recover newer command gate',async()=>{
- const h=setup();h.start();await h.identify();const old=deferred();h.response=()=>old.promise;const first=h.d.control({type:'next'});const rejected=assert.rejects(first);h.d.setEnabled(false);h.d.setEnabled(true);h.recapture();h.response={status:200,body:state()};await h.identify();const newer=deferred();h.response=()=>newer.promise;const second=h.d.control({type:'previous'});const id=h.d.commandPending;old.resolve({status:200,body:{}});await rejected;assert.equal(h.d.commandPending,id);newer.resolve({status:200,body:{}});await second;assert.equal(h.posts().length,2);h.d.clear();
+ const h=setup();h.start();await h.identify();const old=deferred();h.response=()=>old.promise;const first=h.d.control({type:'next'});const rejected=assert.rejects(first);h.d.setEnabled(false);h.d.setEnabled(true);h.response={status:200,body:state()};await h.identify();const newer=deferred();h.response=()=>newer.promise;const second=h.d.control({type:'previous'});const id=h.d.commandPending;old.resolve({status:200,body:{}});await rejected;assert.equal(h.d.commandPending,id);newer.resolve({status:200,body:{}});await second;assert.equal(h.posts().length,2);h.d.clear();
 });
 await check('offline suppresses periodic work; unknown attempts; online/active/renderer/manual events coalesce',async()=>{
  const h=setup();h.d.setReachability('offline');h.start();await h.clock.advance(120000);assert.equal(h.sockets.length,0);h.d.setReachability('online');h.d.setEnabled(true);h.d.refresh();h.d.refresh(true);await h.clock.advance(500);h.recapture();assert.equal(h.sockets.length,1);await h.identify();h.d.setActivity('inactive');await allDisabled(h);h.d.setActivity('active');assert.equal(h.d.health.phase,'registering');await flush();assert(h.d.health.controlsEnabled);assert.equal(h.sockets.length,1);h.d.clear();
@@ -932,9 +1481,11 @@ for(const stage of ['connect','snapshot','command'])await check('review: lossy W
  if(stage==='snapshot'){h.response={status:200,bodyPromise:pending.promise};await h.clock.advance(15000);}
  if(stage==='command'){h.response=()=>pending.promise;command=assert.rejects(h.d.control({type:'next'}),/unknown/);await flush();}
  const late=old.onmessage;h.d.setReachability('online','CELLULAR');
- assert.equal(old.readyState,3);assert.equal(h.sockets.length,1);assert.equal(h.d.health.attempt,0);assert(!h.d.health.controlsEnabled);
- h.d.setReachability('online','CELLULAR');assert.equal(h.sockets.length,1);
- h.recapture();assert.equal(h.sockets.length,2);
+ const count = stage === 'connect' ? 1 : 2;
+ assert.equal(old.readyState,3);assert.equal(h.sockets.length,count);assert.equal(h.d.health.attempt,0);assert(!h.d.health.controlsEnabled);
+ h.d.setReachability('online','CELLULAR');assert.equal(h.sockets.length,count);
+ if(stage==='connect')h.recapture();
+ assert.equal(h.sockets.length,2);
  h.response={status:200,body:state('fresh',uri,h.clock.wall+1)};await h.identify();
  pending.resolve(stage==='snapshot'?new TextEncoder().encode(JSON.stringify(state('obsolete'))).buffer:{status:204});
  if(command)await command;late({data:JSON.stringify({payloads:[state('obsolete')]})});await flush();
@@ -943,10 +1494,10 @@ for(const stage of ['connect','snapshot','command'])await check('review: lossy W
 });
 await check('review: lossy path flapping coalesces without parallel sockets or bypassing offline/auth guards',async()=>{
  const h=setup();try{h.d.setReachability('online','WIFI');h.start();await h.identify();
- h.d.setReachability('online','CELLULAR');h.recapture();h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');
- assert.equal(h.sockets.length,2);assert.equal(h.d.socket,null);await h.clock.advance(999);assert.equal(h.sockets.length,2);await h.clock.advance(1);h.recapture();assert.equal(h.sockets.length,3);
+ h.d.setReachability('online','CELLULAR');h.d.setReachability('online','WIFI');h.d.setReachability('online','CELLULAR');
+ assert.equal(h.sockets.length,2);assert.equal(h.d.socket,null);await h.clock.advance(999);assert.equal(h.sockets.length,2);await h.clock.advance(1);assert.equal(h.sockets.length,3);
  h.d.setReachability('offline','WIFI');await h.clock.advance(60000);assert.equal(h.sockets.length,3);
- h.d.setReachability('online','CELLULAR');await h.clock.advance(500);h.recapture();await h.identify();
+ h.d.setReachability('online','CELLULAR');await h.clock.advance(500);await h.identify();
  h.response={status:403};h.d.refresh(true);h.recapture();await h.identify();assert.equal(h.d.health.phase,'denied');const n=h.sockets.length;
  h.d.setReachability('online','WIFI');await h.clock.advance(60000);assert.equal(h.sockets.length,n);assert.equal(h.d.health.phase,'denied');
  }finally{h.d.clear();}

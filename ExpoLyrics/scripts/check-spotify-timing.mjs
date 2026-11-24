@@ -58,9 +58,10 @@ function reset() {
 function publish(sample) { const packet = api.detectorPacket(sample); store.getState().ingestPacket(packet, 'mobile'); return packet; }
 function position() { const s = store.getState(); return s.anchorPositionMs + (s.isPlaying ? Math.max(0, mono - s.anchorMonotonicMs) : 0); }
 async function connect(sample) {
-  let pendingBootstrap, captureId;
+  let pendingBootstrap, captureId, bootstrapRequests = 0;
   const detector = new api.SpotifyDetector({ sample, ready() {}, status() {}, authenticated() {},
     sessionNeeded(id) {
+      bootstrapRequests++;
       assert.equal(pendingBootstrap, undefined, 'only one browser bootstrap is pending');
       pendingBootstrap = captureId = id;
     },
@@ -86,6 +87,25 @@ async function connect(sample) {
       assert.equal(new URL(this.socket.url).searchParams.get('access_token'), token);
       this.socket.event({ headers: { 'Spotify-Connection-Id': id } });
       await flush();
+    },
+    async resumeCached(id) {
+      const retiredSocket = this.socket;
+      const previousSockets = sockets.length;
+      const previousBootstraps = bootstrapRequests;
+      assert.equal(retiredSocket.readyState, 3, 'suspension retires the old socket');
+      detector.setEnabled(true);
+      assert.equal(sockets.length, previousSockets + 1);
+      this.socket = sockets.at(-1);
+      assert(this.socket.url === retiredSocket.url, 'replacement reuses the verified Dealer route and credentials');
+      assert.equal(detector.health.observerConfirmed, false);
+      assert.equal(detector.health.controlsEnabled, false);
+      this.socket.event({ headers: { 'Spotify-Connection-Id': id } });
+      await flush();
+      assert.equal(detector.health.phase, 'registering');
+      assert(detector.registered, 'replacement completed observer registration');
+      assert.equal(detector.health.observerConfirmed, false, 'empty registration waits for playback observation');
+      assert.equal(detector.health.controlsEnabled, false);
+      assert.equal(bootstrapRequests, previousBootstraps, 'foreground reconnect skips browser bootstrap');
     },
   };
   detector.setEnabled(true);
@@ -193,10 +213,13 @@ assert.notEqual(accepted.at(-1).timingProvenance.device, first.timingProvenance.
 assert.notEqual(accepted.at(-1).timingProvenance.session, first.timingProvenance.session);
 at(1200); const buffering = raw(3500, wall, true); buffering.player_state.is_buffering = true;
 live.socket.event({ payloads: [buffering] }); at(1300); assert.equal(position(), 3500, 'buffering never extrapolates');
-live.detector.setEnabled(false); at(2000); live.detector.setEnabled(true);
+live.detector.setEnabled(false); at(2000);
+await live.resumeCached('foreground-reconnected');
 assert.equal(accepted.at(-1).timingProvenance.receipt.wallMs, epoch + 1200);
 assert.equal(receipt.wallMs, epoch + 50);
-await live.register('foreground-reconnected');
+live.socket.event({ payloads: [{ player_state: { is_paused: true } }] });
+assert(live.detector.health.observerConfirmed);
+assert.equal(live.detector.health.target, 'absent');
 live.detector.clear();
 // Wall jump changes new wall-projected packets, not an already monotonic store.
 const beforeJump = position(); wall += 60000; assert.equal(position(), beforeJump);
@@ -227,12 +250,14 @@ for (const diagnostics of [false, true]) {
   send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, 6);
   send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, 6);
   const oldSocket = live.socket;
-  live.detector.setEnabled(false); live.detector.setEnabled(true);
-  await live.register('reconnected');
+  live.detector.setEnabled(false);
+  await live.resumeCached('reconnected');
   const count = seen.length;
   oldSocket.event({ payloads: [raw(10000, epoch + 100000)] }); assert.equal(seen.length, count, 'old generation callback ignored');
   send(999, 'device-C', 'session-D', 12000); assert.equal(seen.length, count, 'reconnect retains same-source watermark');
+  assert.equal(live.detector.health.observerConfirmed, false, 'stale state cannot confirm the replacement');
   send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1, 'new connection confirms equal state once');
+  assert(live.detector.health.controlsEnabled);
   send(1000, 'device-C', 'session-D', 12000); assert.equal(seen.length, count + 1);
   live.detector.refresh();
   await live.register('refreshed');

@@ -11,6 +11,7 @@ import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureAct
 const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 let nextSourceClockScope = 0;
 const TRANSPORT_DEADLINE_MS = 5000;
+const CACHED_CONNECT_DEADLINE_MS = 1500;
 const SESSION_DEADLINE_MS = 20000;
 const HEARTBEAT_INTERVAL_MS = 10000;
 const PONG_DEADLINE_MS = 5000;
@@ -31,11 +32,14 @@ type Callbacks = {
   health?: (health: SpotifyHealth) => void;
 };
 
+type Credentials = { token: string; clientToken: string; expiresAt: number };
+type ReconnectSession = Credentials & { route: string; dealer: string };
+type SignInReason = Extract<SpotifyReason, 'freshTokenRejected' | 'sessionChallenge'>;
 type PendingSession = {
   id: number;
   soft: boolean;
   resetOrdering: boolean;
-  credentials?: { token: string; clientToken: string; expiresAt: number };
+  credentials?: Credentials;
   route?: string;
   dealer?: string;
 };
@@ -123,6 +127,9 @@ export class SpotifyDetector {
   private expiresAt = 0;
   private route = '';
   private dealer = '';
+  private reconnectSession: ReconnectSession | null = null;
+  private connectingWithCachedSession = false;
+  private cachedFallbackPending = false;
   private readonly deviceId: string;
   private connectionId = '';
   private socket: WebSocket | null = null;
@@ -144,7 +151,7 @@ export class SpotifyDetector {
   private observed = false;
   private currentTarget: string | undefined;
   private blocked = false;
-  private sessionRequired = false;
+  private signInReason: SignInReason | null = null;
   private deviceRestricted = false;
   private payloadRestrictions: SpotifyRestrictions = {};
   private blockedOperations = new Set<Operation>();
@@ -223,7 +230,7 @@ export class SpotifyDetector {
 
     return { ...initialSpotifyHealth, phase: this.phase, reason: this.reason, generation: this.generation, attempt: this.reconnects,
       phaseStartedMono: this.phaseStarted, nextRetryAtWall: this.nextRetry, retryNotBeforeWall: this.cooldownWall,
-      reachability: this.reachability, appActivity: this.activity, session: this.blocked ? 'denied' : this.sessionRequired ? 'signInRequired' : this.phase === 'renewingSession' ? 'renewing' : this.token ? 'valid' : 'unknown',
+      reachability: this.reachability, appActivity: this.activity, session: this.blocked ? 'denied' : this.signInReason ? 'signInRequired' : this.phase === 'renewingSession' ? 'renewing' : this.token ? 'valid' : 'unknown',
       transportConfirmed: !!this.socket && this.socket.readyState === 1, observerConfirmed: this.registered && this.observed,
       lastContactMono: this.lastContact, lastStateReceiptMono: this.lastState, lastStateGeneration: this.observed ? this.generation : -1,
       target, targetVersion: this.targetVersion, command: this.commandPhase, controlsEnabled,
@@ -235,7 +242,6 @@ export class SpotifyDetector {
   private transition(phase: SpotifyPhase, reason: SpotifyReason = phase) {
     if (this.phase !== phase) this.phaseStarted = this.runtime.mono();
     this.phase = phase; this.reason = reason;
-    if (phase === 'signInRequired') this.sessionRequired = true;
     if (phase !== 'retryWait' && phase !== 'rateLimited') this.nextRetry = 0;
     this.publishHealth();
   }
@@ -255,7 +261,7 @@ export class SpotifyDetector {
     if (previous !== 'active' && this.enabled) {
       const ws = this.socket;
       if (ws) {
-        if (ws.readyState > 1) { this.retryObservation(); return; }
+        if (ws.readyState > 1) { this.retryObservation(undefined, true); return; }
         if (this.runtime.wall() >= this.expiresAt - CONTROL_EXPIRY_MARGIN_MS) {
           this.needSession('Refreshing Spotify session…'); return;
         }
@@ -301,6 +307,12 @@ export class SpotifyDetector {
   private stateConfirmed(target: string | undefined, positive = true) {
     if (positive) this.stateRevision++;
     this.observed = true; this.currentTarget = target; this.lastState = this.runtime.mono();
+    // Only a capture with validated routes and a confirmed observation can
+    // seed reconnect. Each replacement still has to prove its own authority.
+    this.reconnectSession ??= { token: this.token, clientToken: this.clientToken, expiresAt: this.expiresAt,
+      route: this.route, dealer: this.dealer };
+    this.connectingWithCachedSession = false;
+    this.cachedFallbackPending = false;
     if (this.phaseDeadline) this.runtime.clearTimeout(this.phaseDeadline); this.phaseDeadline = null;
     if (this.healthySince === null) this.healthySince = this.runtime.mono();
     if ((positive || this.reconciling) && this.commandPhase !== 'sending' &&
@@ -334,9 +346,7 @@ export class SpotifyDetector {
       }
       if (e.type === 'session' && ['anonymous', 'denied', 'unavailable'].includes(e.state)) {
         if (e.state === 'unavailable') this.captureFailed(pending);
-        else {
-          this.disconnect(); this.transition('signInRequired', 'sessionChallenge');
-        }
+        else this.requireSignIn('sessionChallenge');
         return true;
       }
       if (e.type === 'credentials' && e.authenticated === true && typeof e.token === 'string' && e.token.length > 0 && e.token.length < 4096) {
@@ -373,12 +383,14 @@ export class SpotifyDetector {
     // before opening the replacement. Registration must prove state again.
     const run = this.generation + 1;
     const routeChanged = route !== this.route || dealer !== this.dealer;
+    this.reconnectSession = null;
     this.disconnect();
-    if (run !== this.generation || !this.enabled || this.reachability === 'offline') return;
+    // sessionFinished can synchronously start a replacement capture.
+    if (run !== this.generation || !this.enabled || this.activity !== 'active' ||
+        this.reachability === 'offline' || this.pendingSession) return;
     if (routeChanged) this.deliveryRouteEpoch++;
     if (pending.resetOrdering) this.resetOrdering();
-    this.token = credentials.token; this.clientToken = credentials.clientToken; this.expiresAt = credentials.expiresAt;
-    this.route = route; this.dealer = dealer;
+    this.installSession({ ...credentials, route, dealer });
     this.callbacks.authenticated(this.token, this.expiresAt);
     if (run === this.generation) this.connectIfReady();
   }
@@ -396,7 +408,11 @@ export class SpotifyDetector {
           sourceClockScope: this.lastSample.sourceClockScope === this.sourceClockScope ? this.sourceClockScope : undefined });
       }
       this.connectIfReady();
-    } else { this.disconnect(); this.transition('suspended'); }
+    } else {
+      const run = this.generation + 1;
+      this.disconnect();
+      if (run === this.generation && !this.enabled) this.transition('suspended');
+    }
   }
   refresh(explicit = false) {
     if (this.startingConnection || !this.enabled || this.activity !== 'active' || this.reachability === 'offline') return;
@@ -405,32 +421,43 @@ export class SpotifyDetector {
     if (this.pendingSession || this.runtime.mono() < this.observationRetryAt) return;
     if (explicit) {
       if (this.runtime.mono() - this.manualAt < 2000) return;
-      this.manualAt = this.runtime.mono(); this.rejectedFreshToken = false; this.sessionRequired = false;
+      this.manualAt = this.runtime.mono(); this.rejectedFreshToken = false; this.signInReason = null;
+      this.cachedFallbackPending = false;
       this.blocked = false;
     }
     if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
       generation: this.generation, reason: 'explicit-refresh', registered: this.registered,
       ...this.deliveryBaseline.diagnosticSummary() });
     if (this.canRenewLive()) this.startCapture(true, true);
-    else { this.resetOrdering(); this.disconnect(); this.connectIfReady(); }
+    else {
+      this.reconnectSession = null;
+      this.resetOrdering(); this.disconnect(); this.connectIfReady();
+    }
   }
   beginSignIn() {
     if (this.pendingSession || this.runtime.mono() - this.manualAt < 2000 || this.runtime.mono() < this.observationRetryAt) return;
     if (!this.enabled || this.activity !== 'active' || this.reachability === 'offline' || this.cooldownRemaining() > 0) return;
     this.manualAt = this.runtime.mono();
-    this.blocked = false; this.rejectedFreshToken = false; this.sessionRequired = false;
+    this.blocked = false; this.rejectedFreshToken = false; this.signInReason = null;
+    this.cachedFallbackPending = false;
     this.needSession('Refreshing Spotify session…');
   }
   clear() {
-    this.enabled = false; this.disconnect(); this.lastSample = null;
+    const retiredCaptureId = this.detachCapture();
+    this.reconnectSession = null;
+    this.cachedFallbackPending = false;
+    this.enabled = false; this.lastSample = null; this.disconnect();
     this.resetOrdering();
-    this.blocked = false; this.sessionRequired = false; this.cooldownWall = 0; this.cooldownMono = 0; this.rateLimits = 0;
+    this.blocked = false; this.signInReason = null; this.cooldownWall = 0; this.cooldownMono = 0; this.rateLimits = 0;
     this.metadataCache.clear(); this.metadataPending.clear();
     this.reconnects = 0; this.observationRetryAt = 0; this.rejectedFreshToken = false; this.commandPhase = 'idle';
     this.deviceRestricted = false;
     this.payloadRestrictions = {};
     this.blockedOperations.clear();
-    this.transition('idle');
+    // A sessionFinished callback can enable the detector and supply credentials.
+    // Deliver it after the clear has finished changing detector state.
+    try { this.transition('idle'); }
+    finally { if (retiredCaptureId !== undefined) this.callbacks.sessionFinished?.(retiredCaptureId); }
   }
   async metadata(uri: string): Promise<TrackMetadata> {
     const cached = this.metadataCache.get(uri);
@@ -552,6 +579,7 @@ export class SpotifyDetector {
   private disconnect() {
     this.generation++; this.reconciling = false; this.commandConfirmed = null;
     this.token = ''; this.clientToken = ''; this.expiresAt = 0; this.route = ''; this.dealer = '';
+    this.connectingWithCachedSession = false;
     this.deliveryAuthEpoch++;
     if (this.commandPending || this.commandPhase === 'awaitingConfirmation') this.commandPhase = 'outcomeUnknown';
     this.commandPending = null;
@@ -579,14 +607,30 @@ export class SpotifyDetector {
     this.restrictionSignature = ''; this.acceptedAuthority = '';
     this.cancelCapture();
   }
-  private needSession(message: string, unauthorized = false) {
-    if (unauthorized) this.lastError = { category: 'authentication', httpStatus: 401, occurredAtWall: this.runtime.wall() };
-    if (unauthorized && this.rejectedFreshToken) {
-      this.disconnect(); this.transition('signInRequired', 'freshTokenRejected'); return;
-    }
-    if (unauthorized) this.rejectedFreshToken = true;
+  private requireSignIn(reason: SignInReason) {
+    this.signInReason = reason;
+    this.reconnectSession = null;
+    this.cachedFallbackPending = false;
+    const run = this.generation + 1;
     this.disconnect();
-    if (!this.enabled || this.reachability === 'offline') return;
+    if (run === this.generation && this.enabled) this.transition('signInRequired', reason);
+  }
+  private needSession(message: string, unauthorized = false) {
+    if (unauthorized) {
+      const error = { category: 'authentication' as const, httpStatus: 401, occurredAtWall: this.runtime.wall() };
+      if (this.connectingWithCachedSession) { this.retryObservation(error); return; }
+      this.lastError = error;
+      if (this.cachedFallbackPending || this.rejectedFreshToken) {
+        this.requireSignIn('freshTokenRejected');
+        return;
+      }
+      this.rejectedFreshToken = true;
+    }
+    if (this.connectingWithCachedSession) this.cachedFallbackPending = true;
+    this.reconnectSession = null;
+    const run = this.generation + 1;
+    this.disconnect();
+    if (run !== this.generation || !this.enabled || this.reachability === 'offline') return;
     this.startCapture(false, false, message);
   }
   private canRenewLive() {
@@ -598,7 +642,7 @@ export class SpotifyDetector {
     const pending: PendingSession = { id: ++this.captureId, soft, resetOrdering };
     this.pendingSession = pending;
     this.renewalTimer = this.runtime.setTimeout(() => {
-      if (this.pendingSession === pending) this.captureFailed(pending);
+      if (this.pendingSession === pending) this.captureFailed(pending, 'timeout');
     }, SESSION_DEADLINE_MS);
     if (!soft) {
       this.transition('renewingSession');
@@ -607,18 +651,22 @@ export class SpotifyDetector {
     if (this.pendingSession === pending) this.callbacks.sessionNeeded(pending.id);
   }
   private cancelCapture() {
-    const pending = this.pendingSession;
+    const captureId = this.detachCapture();
+    if (captureId !== undefined) this.callbacks.sessionFinished?.(captureId);
+  }
+  private detachCapture() {
+    const captureId = this.pendingSession?.id;
     this.pendingSession = null;
     if (this.renewalTimer) this.runtime.clearTimeout(this.renewalTimer);
     this.renewalTimer = null;
-    if (pending) this.callbacks.sessionFinished?.(pending.id);
+    return captureId;
   }
-  private captureFailed(pending: PendingSession) {
+  private captureFailed(pending: PendingSession, category: 'timeout' | 'transport' = 'transport') {
     if (pending.soft && this.socket?.readyState === 1 && this.runtime.wall() < this.expiresAt - CONTROL_EXPIRY_MARGIN_MS) {
       // Keep the live authority. If this was the expiry probe, try again at
       // the existing safety cutoff, when the old token must be retired.
       this.cancelCapture();
-    } else this.retryObservation();
+    } else this.retryObservation({ category, occurredAtWall: this.runtime.wall() });
   }
   private scheduleRenewal(margin = SESSION_RENEWAL_MARGIN_MS) {
     if (this.expiry) this.runtime.clearTimeout(this.expiry);
@@ -676,15 +724,19 @@ export class SpotifyDetector {
     // Unknown identity is not evidence of a handoff. Keep the known scope and
     // its watermark; only a positive identity change can reset source ordering.
     if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
-      const restoreRegisteredTarget = timing.origin === 'registration' &&
-        this.registered && !this.observed && !this.currentTarget &&
-        timing.generation === this.generation && timing.connectionId === this.connectionId &&
-        !!device && device === this.orderingDeviceId;
-      // Fresh registration proves the replacement connection, not the old command outcome.
-      // Its old command promise still settles independently, with no playback replay.
-      if (restoreRegisteredTarget && !this.commandPending && this.commandPhase === 'outcomeUnknown') this.commandPhase = 'idle';
-      if (!this.reconciling || restoreRegisteredTarget || this.observed) {
-        this.stateConfirmed(restoreRegisteredTarget ? this.orderingDeviceId : this.currentTarget, false);
+      // Cache recovery needs accepted observation and current restrictions.
+      // A stale sample leaves its deadline armed.
+      if (!this.connectingWithCachedSession && !this.cachedFallbackPending) {
+        const restoreRegisteredTarget = timing.origin === 'registration' &&
+          this.registered && !this.observed && !this.currentTarget &&
+          timing.generation === this.generation && timing.connectionId === this.connectionId &&
+          !!device && device === this.orderingDeviceId;
+        // Fresh registration proves the replacement connection, not the old command outcome.
+        // Its old command promise still settles independently, with no playback replay.
+        if (restoreRegisteredTarget && !this.commandPending && this.commandPhase === 'outcomeUnknown') this.commandPhase = 'idle';
+        if (!this.reconciling || restoreRegisteredTarget || this.observed) {
+          this.stateConfirmed(restoreRegisteredTarget ? this.orderingDeviceId : this.currentTarget, false);
+        }
       }
       this.logDeliveryRejection(s, timing.origin, 'source-timestamp-older-than-watermark');
       logDevelopmentTiming('stale', s);
@@ -771,22 +823,37 @@ export class SpotifyDetector {
   }
   private connectIfReady() {
     if (this.startingConnection) { this.connectionRequested = true; return; }
+    const previousRun = this.generation;
+    const previousCaptureId = this.captureId;
     this.startingConnection = true; this.connectionRequested = false;
     try { this.connectAttempt(); }
     finally {
       this.startingConnection = false;
-      // A synchronous credential source may finish capture during callbacks.
-      // Drain only an eligible, socket-less attempt, never status-only reentry.
-      if (this.connectionRequested && this.enabled && !this.socket && this.token) {
-        void Promise.resolve().then(() => this.connectIfReady());
+      // Capture completion, suspension or a network change can leave a
+      // replacement to start once the previous attempt releases ownership.
+      if (this.connectionRequested && this.enabled && !this.socket && !this.pendingSession && !this.reconnect && !this.onlineTimer &&
+          !this.blocked && !this.signInReason && this.activity === 'active' && this.reachability !== 'offline' &&
+          (this.token || this.generation !== previousRun || this.captureId !== previousCaptureId)) {
+        const run = this.generation;
+        const captureId = this.captureId;
+        void Promise.resolve().then(() => {
+          if (run === this.generation && captureId === this.captureId) this.connectIfReady();
+        });
       }
       this.connectionRequested = false;
     }
   }
+  private installSession({ token, clientToken, expiresAt, route, dealer }: ReconnectSession) {
+    this.token = token; this.clientToken = clientToken; this.expiresAt = expiresAt;
+    this.route = route; this.dealer = dealer;
+  }
   private connectAttempt() {
     if (!this.enabled || this.activity !== 'active') return;
     if (this.blocked) { if (this.phase !== 'denied') this.transition('denied'); return; }
-    if (this.sessionRequired) { if (this.phase !== 'signInRequired') this.transition('signInRequired'); return; }
+    if (this.signInReason) {
+      if (this.phase !== 'signInRequired' || this.reason !== this.signInReason) this.transition('signInRequired', this.signInReason);
+      return;
+    }
     if (this.socket || this.reconnect || this.pendingSession || this.onlineTimer) return;
     if (this.reachability === 'offline') { this.transition('offline'); return; }
     const wait = this.cooldownRemaining();
@@ -797,7 +864,16 @@ export class SpotifyDetector {
       return;
     }
     if (this.waitForObservationRetry()) return;
-    if (!this.token) { this.startCapture(false, false); return; }
+    if (!this.token) {
+      const cached = this.reconnectSession;
+      if (!cached || cached.expiresAt <= this.runtime.wall() + CONTROL_EXPIRY_MARGIN_MS) {
+        this.reconnectSession = null;
+        this.startCapture(false, false);
+        return;
+      }
+      this.installSession(cached);
+      this.connectingWithCachedSession = true;
+    }
     if (this.runtime.wall() >= this.expiresAt - CONTROL_EXPIRY_MARGIN_MS) { this.needSession('Refreshing Spotify session…'); return; }
     const run = ++this.generation;
     const sourceClockScope = this.sourceClockScope;
@@ -826,12 +902,17 @@ export class SpotifyDetector {
         if (++this.missedPongs >= 2) this.retryObservation();
       }, PONG_DEADLINE_MS);
       this.pongDeadline = deadline;
-      try { ws.send(JSON.stringify({ type: 'ping' })); } catch { this.retryObservation(); }
+      try { ws.send(JSON.stringify({ type: 'ping' })); } catch { if (alive()) this.retryObservation(); }
     };
     this.scheduleRenewal(this.expiresAt - this.runtime.wall() <= SESSION_RENEWAL_MARGIN_MS
       ? CONTROL_EXPIRY_MARGIN_MS : SESSION_RENEWAL_MARGIN_MS);
     this.heartbeat = this.runtime.setInterval(ping, HEARTBEAT_INTERVAL_MS);
-    ws.onopen = () => { if (alive() && this.activity === 'active') { this.armPhaseDeadline(); ping(); } };
+    ws.onopen = () => {
+      if (!alive() || this.activity !== 'active') return;
+      // The cached budget covers both socket open and Dealer identification.
+      if (!this.connectingWithCachedSession || !this.phaseDeadline) this.armPhaseDeadline();
+      ping();
+    };
     ws.onmessage = e => {
       if (!alive() || this.activity !== 'active') return;
       const receivedAt = this.runtime.wall();
@@ -918,21 +999,28 @@ export class SpotifyDetector {
       if (this.phaseDeadline !== deadline) return;
       this.phaseDeadline = null;
       if (this.activity === 'active') this.retryObservation({ category: 'timeout', occurredAtWall: this.runtime.wall() });
-    }, TRANSPORT_DEADLINE_MS);
+    }, this.connectingWithCachedSession && !this.connectionId ? CACHED_CONNECT_DEADLINE_MS : TRANSPORT_DEADLINE_MS);
     this.phaseDeadline = deadline;
   }
-  private retryObservation(error: SpotifyHealth['lastError'] = { category: 'transport', occurredAtWall: this.runtime.wall() }) {
+  private retryObservation(error: SpotifyHealth['lastError'] = { category: 'transport', occurredAtWall: this.runtime.wall() }, reuseSession = false) {
     this.lastError = error;
+    // A 401 before fallback confirmation ends this recovery. Once confirmed,
+    // live 401s use the existing authentication retry budget.
+    if (this.connectingWithCachedSession) this.cachedFallbackPending = true;
+    if (!reuseSession || this.connectingWithCachedSession) this.reconnectSession = null;
+    if (this.enabled && !this.blocked && !this.signInReason && this.reachability !== 'offline') {
+      // Reserve backoff before sessionFinished can request another connection.
+      const attempt = this.reconnects++;
+      const delay = attempt === 0 ? 0 : attempt <= 5
+        ? Math.min(30000, 2000 * 2 ** (attempt - 1) * (0.8 + this.runtime.random() * 0.4)) : 60000;
+      this.observationRetryAt = this.runtime.mono() + delay;
+    }
+    const run = this.generation + 1;
     this.disconnect();
-    if (!this.enabled || this.blocked || this.sessionRequired) return;
+    if (run !== this.generation || !this.enabled || this.blocked || this.signInReason) return;
     if (this.reachability === 'offline') { this.transition('offline'); return; }
-    const attempt = this.reconnects++;
-    const delay = attempt === 0 ? 0 : attempt <= 5
-      ? Math.min(30000, 2000 * 2 ** (attempt - 1) * (0.8 + this.runtime.random() * 0.4)) : 60000;
-    this.observationRetryAt = this.runtime.mono() + delay;
     if (this.startingConnection) {
       // A socket factory may throw while connectIfReady still owns the attempt.
-      const run = this.generation;
       void Promise.resolve().then(() => { if (run === this.generation) this.connectIfReady(); });
     } else this.connectIfReady();
   }
@@ -954,6 +1042,7 @@ export class SpotifyDetector {
     this.cooldownWall = Math.max(this.cooldownWall, this.runtime.wall() + duration);
     this.cooldownMono = Math.max(this.cooldownMono, this.runtime.mono() + duration);
     this.nextRetry = this.cooldownWall;
+    this.reconnectSession = null;
     this.disconnect(); this.lastError = { category: 'rateLimit', httpStatus: 429, occurredAtWall: this.runtime.wall() }; this.transition('rateLimited');
     this.callbacks.status('Spotify HTTP 429: limiting requests; waiting before reconnecting.');
     this.connectIfReady();
@@ -989,9 +1078,24 @@ export class SpotifyDetector {
       if (this.clientToken) headers['client-token'] = this.clientToken;
       const response = await this.bounded(this.runtime.fetch(this.route, { method: 'PUT', headers, body: JSON.stringify(observerBody()), signal: controller.signal }), controller);
       if (!alive()) return;
+      if (this.connectingWithCachedSession && response.status === 403) {
+        this.retryObservation({ category: 'authentication', httpStatus: response.status, occurredAtWall: this.runtime.wall() });
+        return;
+      }
       if (response.status === 401) { this.needSession('Spotify session expired. Refreshing login…', true); return; }
       if (response.status === 429) { this.rateLimited(response); return; }
-      if (response.status === 403) { this.blocked = true; this.disconnect(); this.lastError = { category: 'denied', httpStatus: 403, occurredAtWall: this.runtime.wall() }; this.transition('denied'); return; }
+      if (response.status === 403) {
+        this.reconnectSession = null;
+        this.cachedFallbackPending = false;
+        this.blocked = true;
+        const deniedRun = this.generation + 1;
+        this.disconnect();
+        if (deniedRun === this.generation && this.enabled) {
+          this.lastError = { category: 'denied', httpStatus: 403, occurredAtWall: this.runtime.wall() };
+          this.transition('denied');
+        }
+        return;
+      }
       const headersAt = nativeDiagnosticsEnabled ? this.runtime.mono() : 0;
       if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-headers', { endpoint: 'connect-state-registration', status: response.status,
         requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,

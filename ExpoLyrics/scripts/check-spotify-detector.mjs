@@ -360,16 +360,32 @@ try {
   ws.event({ payloads: [state(70000, epoch + 1500)] });
   assert.equal(samples.length, count, 'disposed sockets cannot publish');
   assert.equal(timers.size, 0, 'background/disable cleans timers');
+  const beforeResume = requests.length;
   detector.setEnabled(true);
-  assert.equal(sockets.length, 1, 'foreground waits for a new browser capture');
-  const ws2 = finishRenewal();
+  assert.equal(sockets.length, 2, 'foreground opens a replacement from the verified session cache');
+  assert.equal(needs, 1, 'foreground skips browser capture while the cached session is valid');
+  const ws2 = sockets.at(-1);
+  assert(ws2.url === ws.url, 'foreground reuses the verified Dealer route and bearer');
+  assert.equal(detector.health.controlsEnabled, false);
+  await assert.rejects(detector.control({ type: 'next' }), SpotifyPlaybackUnavailableError);
+  assert.equal(requests.length, beforeResume, 'foreground replay cannot dispatch playback commands');
   holdResponse = true; responseState = state(61000, epoch + 2000);
   ws2.event({ headers: { 'spotify-connection-id': 'second' } }); await flush();
-  assert.equal(new URL(requests.at(-1).url).hostname, 'guc2-spclient.spotify.com');
-  assert.equal(requests.at(-1).headers.authorization, 'Bearer verified-2');
-  assert.equal(requests.at(-1).headers['client-token'], 'client-2');
+  assert.equal(requests.length, beforeResume + 1);
+  const resumedRegistration = requests.at(-1);
+  assert.equal(resumedRegistration.method, 'PUT');
+  assert(resumedRegistration.url === requests[0].url, 'foreground reuses the verified observer route');
+  assert(resumedRegistration.headers.authorization === requests[0].headers.authorization, 'foreground reuses the verified bearer');
+  assert.equal(resumedRegistration.headers['x-spotify-connection-id'], 'second');
   ws2.event({ payloads: [state(62000, epoch + 3000, true)] });
+  assert.equal(detector.health.controlsEnabled, false);
+  for (const type of ['toggle', 'next', 'previous', 'seek']) {
+    await assert.rejects(detector.control({ type, positionMs: 100 }), SpotifyPlaybackUnavailableError);
+  }
+  assert.equal(requests.length, beforeResume + 1, 'Dealer state alone cannot authorize playback commands');
   releaseResponse(); await flush(); holdResponse = false;
+  assert(detector.health.controlsEnabled, 'replacement registration restores playback commands');
+  assert.equal(needs, 1);
   assert.equal(samples.at(-1).positionMs, 62000, 'Dealer event during registration beats older HTTP response');
   assert.equal(samples.at(-1).playing, false);
   // A new identity immediately revokes permission to dispatch, even on the same socket.
