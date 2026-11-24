@@ -1086,7 +1086,7 @@ async function fetchBestSyncedLyrics(
       const pendingWinner = best && [...pending].some(source => autoCandidateCouldOutrank(track, best, source));
       if (best && !pendingWinner) {
         const transientSuperiorFailure = [...outcomes.values()].some(outcome => !outcome.ok &&
-          !outcome.instrumental && outcome.failureReason !== `${outcome.source}:no-match` &&
+          !outcome.instrumental && !outcome.permanentNoMatch && outcome.failureReason !== `${outcome.source}:no-match` &&
           autoCandidateCouldOutrank(track, best, outcome.source));
         if (!finalCached && !transientSuperiorFailure) {
           finalCached = true;
@@ -1128,7 +1128,10 @@ async function fetchBestSyncedLyrics(
           if (!isValidLyricsCandidate(track, candidate)) return { source, ok: false, failureReason: `${source}:invalid-candidate` };
           cacheSourceResult(source, candidate);
           return { source, ok: true, result: candidate };
-        } catch (error) { return { source, ok: false, failureReason: classifySourceFailure(source, error) }; }
+        } catch (error) {
+          return { source, ok: false, failureReason: classifySourceFailure(source, error),
+            permanentNoMatch: error?.sourceFailureKind === "permanent-no-match" && error.sourceFailureSource === source };
+        }
       }).then(outcome => {
         clearTimeout(timer);
         pending.delete(source);

@@ -181,11 +181,96 @@ function extractLegacyLyricFields(xmlText) {
   ].filter(Boolean);
 }
 
-async function fetchFromQQLegacyDownload(track) {
+async function fetchQQText(url, { headers, timeoutMs }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json,text/plain,*/*",
+        "User-Agent": "KineSyncDesktopBridge/1.0",
+        ...headers,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    // Keep the abort timer active while the XML or lyric body is read.
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function createQQRequestOperation() {
+  const requests = new Map();
+  const waiting = [];
+  let active = 0;
+  let lastRequestError = null;
+  const sortedEntries = object => Object.entries(object || {}).sort(([a], [b]) => a.localeCompare(b));
+
+  function request(kind, endpoint, options = {}, body) {
+    const params = Object.fromEntries(sortedEntries(options.params));
+    const headers = sortedEntries(options.headers).map(([name, value]) => [name.toLowerCase(), value]);
+    const url = buildUrlWithParams(endpoint, params);
+    const key = JSON.stringify([kind, url, headers, body]);
+    if (requests.has(key)) return requests.get(key);
+    const timeoutMs = Math.min(options.timeoutMs ?? 8_000, 5_000);
+    const transport = { headers: options.headers, timeoutMs };
+
+    const pending = new Promise((resolve, reject) => {
+      const start = async () => {
+        active++;
+        try {
+          const result = kind === "post" ? await fetchJsonPost(url, body, transport)
+            : kind === "text" ? await fetchQQText(url, transport)
+              : await fetchJson(endpoint, { ...transport, params });
+          resolve(result);
+        } catch (error) {
+          // Keep failures for this operation. A later track or refresh retries.
+          if (!/^HTTP 404\b/.test(String(error?.message || ""))) lastRequestError = error;
+          reject(error);
+        } finally {
+          active--;
+          waiting.shift()?.();
+        }
+      };
+      if (active < 6) void start();
+      else waiting.push(start);
+    });
+    requests.set(key, pending);
+    return pending;
+  }
+  async function any(kind, endpoints, options, body) {
+    const start = endpoint => request(kind, endpoint, options, body)
+      .then(value => ({ value }), error => ({ error }));
+    // Keep the primary Musicu response authoritative and avoid contacting its
+    // alternate host on successful searches and downloads.
+    const pending = kind === "post" ? endpoints : endpoints.map(start);
+    let lastError;
+    for (const endpoint of pending) {
+      const result = await (kind === "post" ? start(endpoint) : endpoint);
+      if (!result.error) return result.value;
+      lastError = result.error;
+    }
+    throw lastError || new Error("All QQ endpoints failed");
+  }
+  return {
+    get lastRequestError() { return lastRequestError; },
+    json: (endpoint, options) => request("json", endpoint, options),
+    text: (endpoint, options) => request("text", endpoint, options),
+    anyJson: (endpoints, options) => any("json", endpoints, options),
+    anyText: (endpoints, options) => any("text", endpoints, options),
+    anyPost: (endpoints, body, options) => any("post", endpoints, options, body),
+    mirror: (path, options) => any("json", JSOSOSO_BASE_URLS.map(base => `${base}${path}`), options),
+  };
+}
+
+async function fetchFromQQLegacyDownload(track, operation = createQQRequestOperation()) {
   const rankedSongs = [];
-  for (const query of buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS)) {
+  await Promise.all(buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS).map(async query => {
     try {
-      const searchXml = await fetchTextFromAnyEndpoint(
+      const searchXml = await operation.anyText(
         QQ_LEGACY_SEARCH_ENDPOINTS,
         {
           params: {
@@ -206,7 +291,7 @@ async function fetchFromQQLegacyDownload(track) {
     } catch {
       // Try next query variant.
     }
-  }
+  }));
 
   const seenSongIds = new Set();
   const ranked = rankedSongs
@@ -248,24 +333,18 @@ async function fetchFromQQLegacyDownload(track) {
 
   let bestLegacySelection = null;
 
-  for (const candidate of likelyLegacyCandidates) {
-    if (!candidate.song.songid) {
-      continue;
-    }
+  const downloads = likelyLegacyCandidates.map(candidate =>
+    operation.anyText(QQ_LEGACY_DOWNLOAD_ENDPOINTS, {
+      params: {
+        version: "15", miniversion: "82", lrctype: "4",
+        musicid: String(candidate.song.songid),
+      },
+      timeoutMs: 12_000,
+      headers: { Referer: "https://y.qq.com/", Origin: "https://y.qq.com" },
+    }).catch(() => ""));
+  for (const [index, candidate] of likelyLegacyCandidates.entries()) {
     try {
-      const xml = await fetchTextFromAnyEndpoint(QQ_LEGACY_DOWNLOAD_ENDPOINTS, {
-        params: {
-          version: "15",
-          miniversion: "82",
-          lrctype: "4",
-          musicid: String(candidate.song.songid),
-        },
-        timeoutMs: 12_000,
-        headers: {
-          Referer: "https://y.qq.com/",
-          Origin: "https://y.qq.com",
-        },
-      });
+      const xml = await downloads[index];
       const fields = extractLegacyLyricFields(xml);
       for (const encryptedHex of fields) {
         const karaokeBody = decodeQQKaraokePayload(encryptedHex);
@@ -306,7 +385,7 @@ async function fetchFromQQLegacyDownload(track) {
   return best;
 }
 
-async function fetchQQDesktopSearchSongs(query) {
+async function fetchQQDesktopSearchSongs(query, operation = createQQRequestOperation()) {
   const body = {
     comm: {
       cv: 4747474,
@@ -329,7 +408,7 @@ async function fetchQQDesktopSearchSongs(query) {
     },
   };
 
-  const payload = await fetchJsonPostFromAnyEndpoint(
+  const payload = await operation.anyPost(
     QQ_MUSICU_ENDPOINTS,
     body,
     {
@@ -364,12 +443,12 @@ function createQQDirectSongAccessors() {
   return { getSongMid, getSongId, getSongTitle, getSongArtist, getSongInterval };
 }
 
-async function collectQQSongsFromDesktopSearch(queryVariants, requests = new Map()) {
+async function collectQQSongsFromDesktopSearch(queryVariants, requests = new Map(), operation = createQQRequestOperation()) {
   const desktopSongs = [];
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        if (!requests.has(query)) requests.set(query, fetchQQDesktopSearchSongs(query));
+        if (!requests.has(query)) requests.set(query, fetchQQDesktopSearchSongs(query, operation));
         desktopSongs.push(...(await requests.get(query)));
       } catch {
         // Try next query variant.
@@ -379,12 +458,12 @@ async function collectQQSongsFromDesktopSearch(queryVariants, requests = new Map
   return desktopSongs;
 }
 
-async function collectQQSongsFromLegacyClientSearch(queryVariants) {
+async function collectQQSongsFromLegacyClientSearch(queryVariants, operation = createQQRequestOperation()) {
   const legacySongs = [];
   await Promise.all(
     queryVariants.map(async (query) => {
       try {
-        const searchData = await fetchJsonFromAnyEndpoint(QQ_SEARCH_ENDPOINTS, {
+        const searchData = await operation.anyJson(QQ_SEARCH_ENDPOINTS, {
           params: { p: 1, n: 60, w: query, format: "json" },
           timeoutMs: 8_000,
           headers: {
@@ -506,16 +585,31 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-async function searchQQDirectSongPool(track, verifyRecording = null) {
+function rankVerifiedQQSongs(track, songs, accessors, verifyRecording) {
+  const verified = reconcileRecordingAliasRows(songs, accessors.getSongMid,
+    song => verifyRecording(song, accessors));
+  return rankQQDirectSearchSongs(track, verified, accessors);
+}
+
+async function searchQQFeaturedDesktopSongPool(track, operation, verifyRecording) {
+  const accessors = createQQDirectSongAccessors();
+  const queries = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
+  const songs = await collectQQSongsFromDesktopSearch(queries, new Map(), operation);
+  return { ranked: rankVerifiedQQSongs(track, songs, accessors, verifyRecording), accessors };
+}
+
+async function searchQQDirectSongPool(track, verifyRecording = null, operation = createQQRequestOperation()) {
   const accessors = createQQDirectSongAccessors();
   const allQueryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const desktopRequests = new Map();
   // Search variants and the legacy supplement are independent. Start the same
   // bounded query set once, while retaining the original supplement decision.
-  const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests);
-  const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants);
+  const desktopSearch = collectQQSongsFromDesktopSearch(allQueryVariants, desktopRequests, operation);
+  const legacySearch = collectQQSongsFromLegacyClientSearch(allQueryVariants, operation);
   let songs;
   if (verifyRecording || trackNeedsFeaturedVariantVerification(track)) {
+    // Verified aliases require the union of both catalogs. A legacy row can
+    // invalidate a Musicu MID even when its own lyric payload is unusable.
     const [desktopSongs, legacySongs] = await Promise.all([desktopSearch, legacySearch]);
     songs = [...desktopSongs, ...legacySongs];
   } else {
@@ -526,15 +620,15 @@ async function searchQQDirectSongPool(track, verifyRecording = null) {
       songs = [...desktopSongs, ...legacySongs];
     }
   }
-  if (verifyRecording) {
-    songs = reconcileRecordingAliasRows(songs, accessors.getSongMid, song => verifyRecording(song, accessors));
-  }
-  return { ranked: rankQQDirectSearchSongs(track, songs, accessors), accessors };
+  const ranked = verifyRecording
+    ? rankVerifiedQQSongs(track, songs, accessors, verifyRecording)
+    : rankQQDirectSearchSongs(track, songs, accessors);
+  return { ranked, accessors };
 }
 
-async function resolveQQLegacyDownloadFallback(track) {
+async function resolveQQLegacyDownloadFallback(track, operation = createQQRequestOperation()) {
   try {
-    return await fetchFromQQLegacyDownload(track);
+    return await fetchFromQQLegacyDownload(track, operation);
   } catch {
     return null;
   }
@@ -656,7 +750,7 @@ function shouldEarlyExitQQDirectCandidate(
   );
 }
 
-async function probeQQDirectCandidate(track, candidate, accessors) {
+async function probeQQDirectCandidate(track, candidate, accessors, operation = createQQRequestOperation()) {
   const { getSongMid, getSongId, getSongTitle, getSongArtist, getSongInterval } =
     accessors;
   const songMid = getSongMid(candidate.song);
@@ -683,7 +777,7 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
   };
 
   try {
-    const musicuData = await fetchJsonPostFromAnyEndpoint(
+    const musicuData = await operation.anyPost(
       QQ_MUSICU_ENDPOINTS,
       {
         comm: {
@@ -740,7 +834,7 @@ async function probeQQDirectCandidate(track, candidate, accessors) {
 
   if (!probe.karaokeResult && candidate.score >= MATCH_CONFIDENCE_SCORE) {
     try {
-      const lyricData = await fetchJsonFromAnyEndpoint(QQ_LYRIC_ENDPOINTS, {
+      const lyricData = await operation.anyJson(QQ_LYRIC_ENDPOINTS, {
         params: {
           format: "json",
           nobase64: 1,
@@ -774,6 +868,7 @@ async function fetchQQDirectCandidateLyricsParallel(
   likelyDirectCandidates,
   accessors,
   seededKaraokeResult = null,
+  operation = createQQRequestOperation(),
 ) {
   const state = createQQDirectAggregateState(track, seededKaraokeResult);
   const candidatesToProbe = likelyDirectCandidates.slice(
@@ -817,7 +912,7 @@ async function fetchQQDirectCandidateLyricsParallel(
   if (topCandidateIsClearWinner) {
     considerProbe(
       topCandidate,
-      await probeQQDirectCandidate(track, topCandidate, accessors),
+      await probeQQDirectCandidate(track, topCandidate, accessors, operation),
     );
   }
 
@@ -836,7 +931,7 @@ async function fetchQQDirectCandidateLyricsParallel(
       if (shared.earlyExit) {
         return;
       }
-      const probe = await probeQQDirectCandidate(track, candidate, accessors);
+      const probe = await probeQQDirectCandidate(track, candidate, accessors, operation);
       considerProbe(candidate, probe);
     },
   );
@@ -856,14 +951,23 @@ function resolveQQDirectAggregatedResults(track, state) {
   return bestResult || null;
 }
 
-async function fetchFromQQDirect(track) {
-  const { ranked, accessors } = await searchQQDirectSongPool(track);
+async function fetchFromQQDirect(track, operation, desktopOnly = false) {
+  const verify = desktopOnly ? (song, accessors) => {
+    const title = accessors.getSongTitle(song);
+    const artist = accessors.getSongArtist(song);
+    const durationMs = getQqCandidateDurationMs(accessors.getSongInterval, song);
+    const artists = Array.isArray(song.singer)
+      ? song.singer.map(singer => String(singer?.name || "").trim()).filter(Boolean)
+      : recordingAliasArtistNames(artist);
+    const { titleKey } = require("./lyricsRecordingIdentity");
+    if (titleKey(track.title) !== titleKey(title) ||
+        !recordingAliasCandidateMatches(track, song, title, artists, durationMs)) return null;
+    return recordingAliasRowEvidence(song, song, title, artists, durationMs);
+  } : null;
+  const { ranked, accessors } = verify
+    ? await searchQQFeaturedDesktopSongPool(track, operation, verify)
+    : await searchQQDirectSongPool(track, null, operation);
   const { getSongTitle, getSongArtist, getSongInterval } = accessors;
-
-  if (!ranked.length) {
-    const seededKaraokeResult = await resolveQQLegacyDownloadFallback(track);
-    return seededKaraokeResult?.lyrics?.length ? seededKaraokeResult : null;
-  }
 
   const likelyDirectCandidates = filterLikelyQqRankedCandidates(
     track,
@@ -880,68 +984,32 @@ async function fetchFromQQDirect(track) {
     .sort((left, right) => compareCandidateMatchQuality(track, left, right))
     .slice(0, MAX_QQ_DIRECT_CANDIDATES);
 
-  const desktopSearchReady = likelyDirectCandidates.length > 0;
-  let seededKaraokeResult = null;
-  let seededKaraokeCoverageScore = -1;
-
-  if (!desktopSearchReady) {
-    seededKaraokeResult = await resolveQQLegacyDownloadFallback(track);
-    if (seededKaraokeResult?.lyrics?.length) {
-      seededKaraokeCoverageScore = scoreLyricsCoverage(
-        seededKaraokeResult.lyrics,
-        track.durationMs,
-      );
-      if (
-        getLyricsCoverageRatio(seededKaraokeResult.lyrics, track.durationMs) >=
-        EARLY_RETURN_COVERAGE_RATIO
-      ) {
-        return seededKaraokeResult;
-      }
-    } else {
-      seededKaraokeResult = null;
-    }
-  }
-
   const parallelFetch = await fetchQQDirectCandidateLyricsParallel(
-    track,
-    likelyDirectCandidates,
-    accessors,
-    seededKaraokeResult,
+    track, likelyDirectCandidates, accessors, null, operation,
   );
   if (parallelFetch.earlyExit) {
     return parallelFetch.earlyExit;
   }
-  const bestResult = resolveQQDirectAggregatedResults(track, parallelFetch.state);
-
-  if (!bestResult?.lyrics?.length) {
-    const legacyFallback = await resolveQQLegacyDownloadFallback(track);
-    if (legacyFallback?.lyrics?.length) {
-      return legacyFallback;
-    }
-  }
-
-  return bestResult || null;
+  return desktopOnly ? null : resolveQQDirectAggregatedResults(track, parallelFetch.state);
 }
 
-async function fetchFromQQOpenApiMirrorFallback(track) {
-  const songs = [];
-  for (const query of buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS)) {
-    try {
-      const searchData = await fetchJsonFromAnyEndpoint(QQ_SEARCH_ENDPOINTS, {
-        params: { p: 1, n: 60, w: query, format: "json" },
-        timeoutMs: 10_000,
-        headers: {
-          Referer: "https://y.qq.com/",
-          Origin: "https://y.qq.com",
-        },
-      });
-      const searchSongs =
-        searchData?.data?.song?.list || searchData?.data?.list || [];
-      songs.push(...(Array.isArray(searchSongs) ? searchSongs : []));
-    } catch {
-      // Try next query variant.
+async function findQQFallbackLyrics(candidates, probe) {
+  const pool = createRankedProbePool(candidates, QQ_DIRECT_CANDIDATE_PARALLELISM, probe);
+  try {
+    for (let index = 0; index < candidates.length; index++) {
+      const result = await pool.read(index);
+      if (result) return result;
     }
+    return null;
+  } finally {
+    pool.stop();
   }
+}
+
+async function fetchFromQQOpenApiMirrorFallback(track, operation = createQQRequestOperation()) {
+  const songs = await collectQQSongsFromLegacyClientSearch(
+    buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS), operation,
+  );
 
   if (!songs.length) {
     return null;
@@ -998,7 +1066,7 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
     getSongInterval,
   ).slice(0, 8);
 
-  for (const candidate of likelyFallbackCandidates) {
+  const result = await findQQFallbackLyrics(likelyFallbackCandidates, async candidate => {
     const songMid = getSongMid(candidate.song);
     const title = getSongTitle(candidate.song);
     const artist = getSongArtist(candidate.song);
@@ -1006,11 +1074,11 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
     const candidateDurationMs =
       interval > 0 && interval < 1_000 ? interval * 1000 : interval;
     if (!songMid || candidate.score < MATCH_ACCEPTANCE_THRESHOLD) {
-      continue;
+      return null;
     }
 
     try {
-      const lyricData = await fetchJsonFromAnyEndpoint(QQ_LYRIC_ENDPOINTS, {
+      const lyricData = await operation.anyJson(QQ_LYRIC_ENDPOINTS, {
         params: {
           format: "json",
           nobase64: 1,
@@ -1032,33 +1100,30 @@ async function fetchFromQQOpenApiMirrorFallback(track) {
     } catch {
       // Try next candidate.
     }
-  }
+    return null;
+  });
 
-  return null;
+  return result;
 }
 
-async function fetchFromQQMirror(track) {
+async function fetchFromQQMirror(track, operation = createQQRequestOperation()) {
   const query = `${normalizeText(track.title)} ${normalizeText(track.artist)}`;
   let searchData = null;
   let lastSearchError = null;
-  for (const searchPath of ["/search/quick", "/search"]) {
-    try {
-      searchData = await fetchJsososoWithFallback(
-        searchPath,
-        {
-          params: { key: query },
-          timeoutMs: 12_000,
-        },
-        { attempts: 3, backoffMs: 500 },
-      );
+  const searches = ["/search/quick", "/search"].map(path =>
+    operation.mirror(path, { params: { key: query }, timeoutMs: 12_000 })
+      .then(data => ({ data }), error => ({ error })));
+  for (const search of searches) {
+    const { data, error } = await search;
+    if (!error) {
+      searchData = data;
       break;
-    } catch (error) {
-      lastSearchError = error;
     }
+    lastSearchError = error;
   }
   if (!searchData) {
     // JSOSOSO public mirrors are often unstable; fall back to direct QQ open APIs.
-    const openApiFallback = await fetchFromQQOpenApiMirrorFallback(track);
+    const openApiFallback = await fetchFromQQOpenApiMirrorFallback(track, operation);
     if (openApiFallback) {
       return openApiFallback;
     }
@@ -1111,7 +1176,7 @@ async function fetchFromQQMirror(track) {
     getScore: (candidate) => candidate.score,
   }).slice(0, 6);
 
-  for (const candidate of likelyMirrorCandidates) {
+  const result = await findQQFallbackLyrics(likelyMirrorCandidates, async candidate => {
     const candidateId =
       candidate.song?.id ||
       candidate.song?.songid ||
@@ -1139,10 +1204,10 @@ async function fetchFromQQMirror(track) {
     const candidateDurationMs =
       rawDuration > 0 && rawDuration < 1_000 ? rawDuration * 1000 : rawDuration;
     if (!songmid || candidate.score < MATCH_ACCEPTANCE_THRESHOLD) {
-      continue;
+      return null;
     }
     try {
-      const lyricData = await fetchJsososoWithFallback(
+      const lyricData = await operation.mirror(
         "/lyric",
         {
           params: {
@@ -1152,7 +1217,6 @@ async function fetchFromQQMirror(track) {
           },
           timeoutMs: 12_000,
         },
-        { attempts: 2, backoffMs: 450 },
       );
       const lyricText = extractJsososoLyricText(lyricData);
       const lyrics = parseLrc(lyricText);
@@ -1162,9 +1226,11 @@ async function fetchFromQQMirror(track) {
     } catch {
       // Try next candidate.
     }
-  }
+    return null;
+  });
 
-  const openApiFallback = await fetchFromQQOpenApiMirrorFallback(track);
+  if (result) return result;
+  const openApiFallback = await fetchFromQQOpenApiMirrorFallback(track, operation);
   if (openApiFallback) {
     return openApiFallback;
   }
@@ -1172,63 +1238,56 @@ async function fetchFromQQMirror(track) {
   return null;
 }
 
-async function fetchFromQQMeting(track) {
+async function fetchFromQQMeting(track, operation = createQQRequestOperation()) {
   const query = `${track.title} ${track.artist}`.trim();
   const searchParamVariants = [{ id: query }, { s: query }];
   let candidates = [];
   let lastError = null;
 
-  for (const endpoint of METING_SEARCH_ENDPOINTS) {
-    for (const variant of searchParamVariants) {
-      try {
-        const data = await fetchJson(endpoint, {
-          params: {
-            server: "tencent",
-            type: "search",
-            ...variant,
-          },
-          timeoutMs: 8_000,
-        });
-        const nextCandidates = Array.isArray(data) ? data : [];
-        if (!nextCandidates.length) {
-          continue;
-        }
-        if (nextCandidates.length >= 5) {
-          const maxSimilarity = nextCandidates.reduce(
-            (max, item) =>
-              Math.max(
-                max,
-                scoreCandidate(track, item?.title || "", item?.author || ""),
-              ),
-            -Infinity,
-          );
-          const topTitle = String(nextCandidates[0]?.title || "")
-            .toLowerCase()
-            .trim();
-          const topAuthor = String(nextCandidates[0]?.author || "")
-            .toLowerCase()
-            .trim();
-          const appearsStaticDefault =
-            topTitle === "hello" && topAuthor === "adele";
-          if (
-            appearsStaticDefault &&
-            maxSimilarity < MATCH_ACCEPTANCE_THRESHOLD - 1
-          ) {
-            lastError = new Error(
-              "Meting endpoint returned unrelated static results (stale catalog)",
-            );
-            continue;
-          }
-        }
-        candidates = nextCandidates;
-        break;
-      } catch (error) {
-        lastError = error;
+  const searches = METING_SEARCH_ENDPOINTS.flatMap(endpoint => searchParamVariants.map(variant =>
+    operation.json(endpoint, {
+      params: { server: "tencent", type: "search", ...variant },
+      timeoutMs: 8_000,
+    }).then(data => ({ data }), error => ({ error }))));
+  for (const search of searches) {
+    const { data, error } = await search;
+    if (error) {
+      lastError = error;
+      continue;
+    }
+    const nextCandidates = Array.isArray(data) ? data : [];
+    if (!nextCandidates.length) {
+      continue;
+    }
+    if (nextCandidates.length >= 5) {
+      const maxSimilarity = nextCandidates.reduce(
+        (max, item) =>
+          Math.max(
+            max,
+            scoreCandidate(track, item?.title || "", item?.author || ""),
+          ),
+        -Infinity,
+      );
+      const topTitle = String(nextCandidates[0]?.title || "")
+        .toLowerCase()
+        .trim();
+      const topAuthor = String(nextCandidates[0]?.author || "")
+        .toLowerCase()
+        .trim();
+      const appearsStaticDefault =
+        topTitle === "hello" && topAuthor === "adele";
+      if (
+        appearsStaticDefault &&
+        maxSimilarity < MATCH_ACCEPTANCE_THRESHOLD - 1
+      ) {
+        lastError = new Error(
+          "Meting endpoint returned unrelated static results (stale catalog)",
+        );
+        continue;
       }
     }
-    if (candidates.length) {
-      break;
-    }
+    candidates = nextCandidates;
+    break;
   }
 
   if (!candidates.length) {
@@ -1254,12 +1313,12 @@ async function fetchFromQQMeting(track) {
     getScore: (candidate) => candidate.score,
   }).slice(0, 6);
 
-  for (const candidate of likelyMetingCandidates) {
+  const result = await findQQFallbackLyrics(likelyMetingCandidates, async candidate => {
     if (candidate.score < MATCH_ACCEPTANCE_THRESHOLD || !candidate.item?.lrc) {
-      continue;
+      return null;
     }
     try {
-      const lyricText = await fetchText(candidate.item.lrc, {
+      const lyricText = await operation.text(candidate.item.lrc, {
         timeoutMs: 8_000,
       });
       if (
@@ -1269,7 +1328,7 @@ async function fetchFromQQMeting(track) {
           lyricText,
         )
       ) {
-        continue;
+        return null;
       }
       const lyrics = parseLrc(lyricText);
       if (lyrics.length) {
@@ -1278,11 +1337,12 @@ async function fetchFromQQMeting(track) {
     } catch {
       // Try next candidate.
     }
-  }
-  return null;
+    return null;
+  });
+  return result;
 }
 
-async function fetchQQRecordingAliasLyrics(track, options) {
+async function fetchQQRecordingAliasLyrics(track, options, operation) {
   const { foldCatalogText, stripFeaturing } = require("./lyricsRecordingIdentity");
   track = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], options);
   const aliases = await resolveVerifiedRecordingAliases(track);
@@ -1300,8 +1360,8 @@ async function fetchQQRecordingAliasLyrics(track, options) {
       if (foldCatalogText(stripFeaturing(title)) !== foldCatalogText(alias.title) ||
           !recordingAliasCandidateMatches(track, song, title, artists, durationMs)) return null;
       return recordingAliasRowEvidence(song, song, title, artists, durationMs);
-    });
-    const { earlyExit, state } = await fetchQQDirectCandidateLyricsParallel(queryTrack, ranked.slice(0, MAX_QQ_DIRECT_CANDIDATES), accessors);
+    }, operation);
+    const { earlyExit, state } = await fetchQQDirectCandidateLyricsParallel(queryTrack, ranked.slice(0, MAX_QQ_DIRECT_CANDIDATES), accessors, null, operation);
     const result = earlyExit || resolveQQDirectAggregatedResults(queryTrack, state);
     if (result?.lyrics?.length) return result;
   }
@@ -1314,22 +1374,26 @@ async function fetchQQRecordingAliasLyrics(track, options) {
 async function fetchFromQQ(track, { spotifyAccessToken = "" } = {}) {
   track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
   if (!track.title?.trim() || !track.artist?.trim()) return null;
-  const fetchers = [fetchFromQQDirect, fetchFromQQMirror, fetchFromQQMeting];
-  for (const fetcher of fetchers) {
-    try {
-      const result = await fetcher(track);
-      if (result?.lyrics?.length) {
-        return result;
-      }
-    } catch {
-      // A provider failure should not prevent the other QQ-compatible paths.
-    }
+  const operation = createQQRequestOperation();
+  if (trackNeedsFeaturedVariantVerification(track)) {
+    const direct = await fetchFromQQDirect(track, operation, true).catch(() => null);
+    if (direct?.lyrics?.length) return direct;
   }
-  try {
-    return await fetchQQRecordingAliasLyrics(track, { spotifyAccessToken });
-  } catch {
-    return null;
+  const direct = await fetchFromQQDirect(track, operation).catch(() => null);
+  if (direct?.lyrics?.length) return direct;
+  const alias = await fetchQQRecordingAliasLyrics(track, { spotifyAccessToken }, operation).catch(() => null);
+  if (alias?.lyrics?.length) return alias;
+
+  // These routes are independent. Preserve route preference while the bounded
+  // request queue shares duplicate catalog and lyric requests across them.
+  const fallbacks = [resolveQQLegacyDownloadFallback, fetchFromQQMirror, fetchFromQQMeting]
+    .map(fetcher => fetcher(track, operation).catch(() => null));
+  for (const fallback of fallbacks) {
+    const result = await fallback;
+    if (result?.lyrics?.length) return result;
   }
+  if (operation.lastRequestError) throw operation.lastRequestError;
+  return null;
 }
 
 async function previewQQDirectSearchCandidates(track) {

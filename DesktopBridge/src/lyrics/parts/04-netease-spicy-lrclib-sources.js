@@ -142,6 +142,13 @@ function createSpicyFetchProfiler() {
   };
 }
 
+function createSpicyNoMatch(stage) {
+  const error = createSourceStageNoMatchError("spicy", stage);
+  error.sourceFailureKind = "permanent-no-match";
+  error.sourceFailureSource = "spicy-lyrics";
+  return error;
+}
+
 async function fetchFromSpicyLyrics(
   track,
   { spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "" } = {},
@@ -165,7 +172,7 @@ async function fetchFromSpicyLyrics(
       candidateCount: 0,
     });
     profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
-    throw createSourceStageNoMatchError("spicy", "spotify-track-lookup");
+    throw createSpicyNoMatch("spotify-track-lookup");
   }
 
   spicyDebugLog("Spicy source candidate Spotify IDs", {
@@ -196,7 +203,7 @@ async function fetchFromSpicyLyrics(
       continue;
     }
     if (!spicyLyricsData) {
-      lastNoMatchError = createSourceStageNoMatchError("spicy", "backend");
+      lastNoMatchError = createSpicyNoMatch("backend");
       continue;
     }
 
@@ -213,10 +220,7 @@ async function fetchFromSpicyLyrics(
       elapsedMs: Date.now() - parseStartedAt,
     });
     if (!lyrics.length) {
-      lastNoMatchError = createSourceStageNoMatchError(
-        "spicy",
-        "payload-parse",
-      );
+      lastHardError = createSourceStageError("spicy", "payload-parse", new Error("No parseable lyrics"));
       continue;
     }
     const songwriters = extractSpicySongwriters(spicyLyricsData);
@@ -239,10 +243,7 @@ async function fetchFromSpicyLyrics(
         mismatch: true,
         identityConflict: true,
       });
-      lastNoMatchError = createSourceStageNoMatchError(
-        "spicy",
-        "identity-conflict",
-      );
+      lastNoMatchError = createSpicyNoMatch("identity-conflict");
       continue;
     }
     const variantStartedAt = Date.now();
@@ -268,10 +269,7 @@ async function fetchFromSpicyLyrics(
           160,
         ),
       });
-      lastNoMatchError = createSourceStageNoMatchError(
-        "spicy",
-        "featured-variant-mismatch",
-      );
+      lastNoMatchError = createSpicyNoMatch("featured-variant-mismatch");
       continue;
     }
     profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
@@ -313,10 +311,7 @@ async function fetchFromSpicyLyrics(
             track,
           ).slice(0, 160),
         });
-        lastNoMatchError = createSourceStageNoMatchError(
-          "spicy",
-          "featured-variant-mismatch",
-        );
+        lastNoMatchError = createSpicyNoMatch("featured-variant-mismatch");
         continue;
       }
     } else {
@@ -412,7 +407,7 @@ async function fetchFromSpicyLyrics(
   if (lastNoMatchError) {
     throw lastNoMatchError;
   }
-  throw createSourceStageNoMatchError("spicy", "backend");
+  throw createSpicyNoMatch("backend");
 }
 
 function parseLyricsFile(text) {
@@ -492,12 +487,6 @@ function parseLyricsFile(text) {
 async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
   track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
   if (!track.title?.trim() || !track.artist?.trim()) return null;
-  const endpoints = [
-    { url: "https://lrclib.net/api/search", mode: "search" },
-    { url: "https://www.lrclib.net/api/search", mode: "search" },
-    { url: "https://lrclib.net/api/get", mode: "get" },
-    { url: "https://www.lrclib.net/api/get", mode: "get" },
-  ];
   const rawTitle = String(track?.title || "").trim();
   const rawArtist = String(track?.artist || "").trim();
   const titleWithoutCommonSuffix = rawTitle
@@ -583,75 +572,56 @@ async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
   const candidates = [];
   const seenCandidates = new Set();
   let lastError = null;
-  let sawSuccessfulResponse = false;
-  let sawNotFoundResponse = false;
-
-  for (const endpoint of endpoints) {
-    for (const query of queryVariants) {
-      if (endpoint.mode === "get" && (!query.track_name || !query.artist_name)) continue;
-      const params = endpoint.mode === "get" && track.durationMs > 0
-        ? { ...query, duration: track.durationMs / 1000 } : query;
-      try {
-        const payload = await fetchJsonWithRetry(
-          endpoint.url,
-          {
-            params,
-            timeoutMs: 12_000,
-            headers: {
-              Accept: "application/json",
-              "User-Agent":
-                "KineSyncDesktopBridge/1.0 (+https://github.com)",
-            },
-          },
-          { attempts: 3, backoffMs: 500 },
-        );
-        sawSuccessfulResponse = true;
-        const batch =
-          endpoint.mode === "get" ? (payload ? [payload] : []) : payload;
-        for (const item of Array.isArray(batch) ? batch : []) {
-          const key = `${String(item?.id || "")}|${normalizeText(
-            item?.trackName || item?.name || "",
-          )}|${normalizeText(item?.artistName || "")}|${String(
-            item?.durationMs || item?.duration || "",
-          )}`;
-          if (!key || seenCandidates.has(key)) {
-            continue;
-          }
-          seenCandidates.add(key);
-          candidates.push(item);
-        }
-      } catch (error) {
-        const message = String(error?.message || "").toLowerCase();
-        if (message.includes("http 404")) {
-          sawNotFoundResponse = true;
-          continue;
-        }
-        lastError = error;
-      }
-    }
-  }
-
-  if (
-    !candidates.length &&
-    !sawSuccessfulResponse &&
-    !sawNotFoundResponse &&
-    lastError
-  ) {
-    throw lastError || new Error("Failed to reach LrcLib API");
-  }
 
   const { recordingIdentityMatches } = require("./lyricsRecordingIdentity");
-  const candidateDurationMs = (item) => Number(item?.durationMs || Number(item?.duration) * 1000);
-  // Strong identity wins before scoring. The legacy scored path remains as a
-  // fallback so this narrow fix cannot regress catalogs that omit duration.
-  const identityMatches = candidates.filter(item => recordingIdentityMatches(
+  const candidateDurationMs = item => Number(item?.durationMs || Number(item?.duration) * 1000);
+  const matchesRecording = item => recordingIdentityMatches(
     track, item?.trackName || item?.name, item?.artistName, candidateDurationMs(item),
-  )).map(item => ({
+  );
+  const matchedTrack = item => ({
+    id: item.id, title: item.trackName || item.name, artist: item.artistName,
+    durationMs: candidateDurationMs(item),
+  });
+  const requests = ["search", "get"].flatMap(mode => queryVariants
+    .filter(query => mode === "search" || (query.track_name && query.artist_name))
+    .map(query => ({ mode, query })));
+  async function lookup({ mode, query }) {
+    const params = mode === "get" && track.durationMs > 0
+      ? { ...query, duration: track.durationMs / 1000 } : query;
+    try {
+      const payload = await fetchJsonWithRetry(
+        `https://lrclib.net/api/${mode}`,
+        { params, timeoutMs: 8_000, headers: {
+          Accept: "application/json",
+          "User-Agent": "KineSyncDesktopBridge/1.0 (+https://github.com)",
+        } },
+        { attempts: 1 },
+      );
+      return mode === "get" ? (payload ? [payload] : []) : Array.isArray(payload) ? payload : [];
+    } catch (error) {
+      if (!/^HTTP 404\b/i.test(String(error?.message))) lastError = error;
+      return [];
+    }
+  }
+  function addCandidates(batch) {
+    for (const item of batch) {
+      if (!item || typeof item !== "object") continue;
+      const key = `${String(item.id || "")}|${normalizeText(item.trackName || item.name || "")}|${normalizeText(item.artistName || "")}|${String(item.durationMs || item.duration || "")}`;
+      if (seenCandidates.has(key)) continue;
+      seenCandidates.add(key);
+      candidates.push(item);
+    }
+  }
+  // Keep canonical search-before-get order for deduplication and ranking,
+  // regardless of which requests finish first.
+  const batches = await mapWithConcurrency(requests, 4, lookup);
+  batches.forEach(addCandidates);
+
+  const identityMatches = candidates.filter(matchesRecording).map(item => ({
     item,
     delta: Math.abs(Number(track.durationMs || 0) - candidateDurationMs(item)),
   })).sort((a, b) => Number(!a.item.syncedLyrics) - Number(!b.item.syncedLyrics) ||
     a.delta - b.delta || Number(a.item.id) - Number(b.item.id));
-
   const ranked = candidates.map((item) => ({
     item,
     score: scoreCandidate(track, item?.trackName || item?.name || "", item?.artistName || ""),
@@ -664,22 +634,14 @@ async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
   ).slice(0, 8);
 
   const likelyLrcLibCandidates = identityMatches.length ? identityMatches : scoredFallback;
-  for (const entry of likelyLrcLibCandidates) {
-    const item = entry.item || entry;
-    if (
-      item?.instrumental === true ||
-      String(item?.instrumental || "").toLowerCase() === "true"
-    ) {
-      return {
-        lyrics: [],
-        source: "lrclib-instrumental",
-        metadata: { instrumental: true },
-      };
+  for (const { item } of likelyLrcLibCandidates) {
+    if (item.instrumental === true || String(item.instrumental || "").toLowerCase() === "true") {
+      return { lyrics: [], source: "lrclib-instrumental", metadata: { instrumental: true } };
     }
-    const wordLyrics = item?.hasWordSync === true ? parseLyricsFile(item.lyricsfile) : null;
-    const lyrics = wordLyrics || (item?.syncedLyrics ? parseLrc(item.syncedLyrics) : []);
+    const wordLyrics = item.hasWordSync === true ? parseLyricsFile(item.lyricsfile) : null;
+    const lyrics = wordLyrics || (item.syncedLyrics ? parseLrc(item.syncedLyrics) : []);
     if (lyrics.length) {
-      return { lyrics, source: wordLyrics ? "lrclib-word" : "lrclib-fallback", metadata: { matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
+      return { lyrics, source: wordLyrics ? "lrclib-word" : "lrclib-fallback", metadata: { matchedTrack: matchedTrack(item) } };
     }
   }
   // Plain lyrics are a last-resort candidate. They stay untimed so callers can
@@ -696,6 +658,7 @@ async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
         matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
     }
   }
+  if (lastError) throw lastError;
   return null;
 }
 

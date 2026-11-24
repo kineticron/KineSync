@@ -98,6 +98,8 @@ async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
           artist: candidate.artist || recording?.artist,
           durationMs: Number(candidate.durationMs || (Number(recording?.duration) * 1000)),
         });
+        const reportedIsrc = normalizeLyricsTrackIsrc(recording?.isrc);
+        if (candidate.isrc === directIsrc && reportedIsrc && reportedIsrc !== directIsrc) return null;
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (!identityMatch && recording?.title && !versionMatches(recording.title)) return null;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });
@@ -148,6 +150,7 @@ async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
   }
   const initial = validIsrc(directIsrc) ? [{ isrc: directIsrc }] : cached ? [{ isrc: cached.isrc }] : [];
   if (await tryCandidates(initial)) return bestResult;
+  // Keep a direct line result as the fallback while looking for karaoke.
   if (!bestResult && String(track?.title || "").trim()) {
     try {
       if (await tryCandidates(await catalogCandidates())) return bestResult;

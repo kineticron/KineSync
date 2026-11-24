@@ -15,6 +15,8 @@ const KUGOU_LYRIC_DOWNLOAD_ENDPOINTS = [
 ];
 const MAX_KUGOU_CANDIDATES = 8;
 const KUGOU_MAX_QUERY_VARIANTS = 6;
+// Raw, enriched, and verified-alias variants share the recording's catalog.
+const KUGOU_MAX_SHARED_CATALOG_QUERIES = 3 * KUGOU_MAX_QUERY_VARIANTS + 1;
 const KUGOU_ARTIST_LISTING_SPLIT = /[、，/;&|]+/u;
 const KUGOU_HANGUL_TEXT_RE = /[\uac00-\ud7a3\u3130-\u318f]/u;
 
@@ -593,10 +595,10 @@ async function searchKugouSongs(query, { timeoutMs = 10_000 } = {}) {
 function searchKugouRecordingCatalog(track, query) {
   const searches = lyricsRecordingAliasStates.get(track?.[lyricsTrackMetadata])?.searches;
   if (!searches) return searchKugouSongs(query);
-  const key = query.trim().toLowerCase();
+  const key = query.trim().toLowerCase().replace(/\s+/g, " ");
   if (!searches.has(key)) {
     const request = searchKugouSongs(query);
-    if (searches.size >= 2 * KUGOU_MAX_QUERY_VARIANTS + 1) return request;
+    if (searches.size >= KUGOU_MAX_SHARED_CATALOG_QUERIES) return request;
     searches.set(key, request);
   }
   return searches.get(key);
@@ -808,53 +810,29 @@ async function fetchKugouKaraokeLyricsForSong(track, song, matchScore) {
 
 async function collectRankedKugouSearchCandidates(
   track,
-  { timeoutMs = KUGOU_ISRC_TIMEOUT_MS } = {},
+  { timeoutMs = KUGOU_ISRC_TIMEOUT_MS, onNativeTitle = null } = {},
 ) {
+  const rawQueries = buildKugouQueryVariants(track).slice(0, KUGOU_MAX_QUERY_VARIANTS);
+  const searches = new Map();
+  const searchSongs = (query) => {
+    const key = query.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!searches.has(key)) searches.set(key, searchKugouRecordingCatalog(track, query).catch(() => null));
+    return searches.get(key);
+  };
+  const rawSearches = rawQueries.map(searchSongs);
+  const titleLinkedKeysPromise = collectKugouTitleLinkedKeys(track, searchSongs);
   const isrc = isValidIsrc(track?.isrc);
   let nativeTitle = track?.nativeTitle;
   if ((nativeTitle === undefined || nativeTitle === "") && isrc) {
-    try {
-      nativeTitle = await resolveIsrcNativeTitle(isrc, { timeoutMs });
-    } catch {
-      nativeTitle = null;
-    }
+    nativeTitle = await resolveIsrcNativeTitle(isrc, { timeoutMs }).catch(() => null);
   }
-  nativeTitle = nativeTitle || null;
-
-  const queryVariants = buildKugouQueryVariants(track, nativeTitle).slice(
-    0,
-    KUGOU_MAX_QUERY_VARIANTS,
-  );
-  const searches = new Map();
-  const searchSongs = (query) => {
-    if (!searches.has(query)) searches.set(query, searchKugouRecordingCatalog(track, query));
-    return searches.get(query);
-  };
-  const firstQueryPromise = queryVariants[0]
-    ? searchSongs(queryVariants[0])
-    : null;
-  const titleLinkedKeysPromise = collectKugouTitleLinkedKeys(
-    track,
-    searchSongs,
-  );
-  const rawSongs = [];
-
-  await Promise.all(
-    queryVariants.map(async (query, idx) => {
-      try {
-        const payload =
-          idx === 0 && firstQueryPromise
-            ? await firstQueryPromise
-            : await searchSongs(query);
-        const songs = Array.isArray(payload?.data?.info)
-          ? payload.data.info
-          : [];
-        rawSongs.push(...flattenKugouSearchResults(songs));
-      } catch {
-        // Try next query variant.
-      }
-    }),
-  );
+  nativeTitle ||= null;
+  onNativeTitle?.(nativeTitle);
+  const nativeQueries = nativeTitle ? buildKugouQueryVariants(track, nativeTitle).slice(0, KUGOU_MAX_QUERY_VARIANTS) : [];
+  const payloads = await Promise.all([...new Set([...nativeQueries.map(searchSongs), ...rawSearches])]);
+  const rawSongs = payloads.flatMap(payload => flattenKugouSearchResults(
+    Array.isArray(payload?.data?.info) ? payload.data.info : [],
+  ));
   const titleLinkedKeys = await titleLinkedKeysPromise;
 
   const deduped = [];
@@ -918,21 +896,24 @@ async function fetchFromKugou(
   track,
   { timeoutMs = KUGOU_ISRC_TIMEOUT_MS, spotifyAccessToken = "" } = {},
 ) {
-  const lookupTrack = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], { spotifyAccessToken });
-  const isrc = lookupTrack.isrc;
-  let nativeTitle = lookupTrack?.nativeTitle;
-  if ((nativeTitle === undefined || nativeTitle === "") && isrc) {
-    try {
-      nativeTitle = await resolveIsrcNativeTitle(isrc, { timeoutMs });
-    } catch {
-      nativeTitle = null;
-    }
-  }
-  nativeTitle = nativeTitle || null;
-  const trackToUse = { ...lookupTrack, nativeTitle };
-  const ranked = await collectRankedKugouSearchCandidates(trackToUse, {
-    timeoutMs,
+  const options = { spotifyAccessToken };
+  const textTrack = resolveLyricsTrackMetadata(track, lyricsTextMatchFields, options);
+  const enrichedTrack = resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], options);
+  // Prime the shared catalog while ISRC metadata is still resolving.
+  const rawLookup = textTrack.then(snapshot => {
+    const title = String(snapshot.title || "").trim();
+    const artist = getSpotifyPrimaryArtist(snapshot.artist || "");
+    if (title && artist) return searchKugouRecordingCatalog(snapshot, `${title} ${artist}`).catch(() => null);
   });
+  // Keep the speculative request handled if metadata resolution fails.
+  void rawLookup.catch(() => {});
+  const lookupTrack = await enrichedTrack;
+  let nativeTitle = null;
+  const ranked = await collectRankedKugouSearchCandidates(lookupTrack, {
+    timeoutMs,
+    onNativeTitle: title => { nativeTitle = title; },
+  });
+  const trackToUse = { ...lookupTrack, nativeTitle };
   if (!ranked.length) {
     return null;
   }

@@ -207,20 +207,25 @@ for (const mobile of [false, true]) {
     assert.equal(yamlLoads, 0);
   });
 
-  test(`${platform}: lyricsfile uses the existing LRCLIB search and get requests`, async () => {
+  test(`${platform}: word and line sync use the same deduplicated canonical requests`, async () => {
     const ctx = load(mobile);
     const word = await fetchFixture(ctx, record);
     const line = await fetchFixture(ctx, { ...record, hasWordSync: false });
     assert.equal(word.packet.source, "lrclib-word");
     assert.equal(line.packet.source, "lrclib-fallback");
-    assert.deepEqual(word.requests, line.requests);
     const query = { track_name: "Mayday", artist_name: "Artist" };
-    assert.deepEqual(JSON.parse(JSON.stringify(word.requests.map(({ url, params }) => [url, params]))), [
-      ...["lrclib.net", "www.lrclib.net"].flatMap(host =>
-        [query, { track_name: "Mayday" }, { q: "Mayday" }]
-          .map(params => [`https://${host}/api/search`, params])),
-      ...["lrclib.net", "www.lrclib.net"].map(host =>
-        [`https://${host}/api/get`, { ...query, duration: 8 }]),
-    ]);
+    const pairs = requests => JSON.parse(JSON.stringify(requests.map(({ url, params }) => [url, params])));
+    const search = "https://lrclib.net/api/search";
+    const first = [search, query];
+    const linePairs = pairs(line.requests);
+    assert.deepEqual(pairs(word.requests), linePairs);
+    assert.deepEqual(linePairs[0], first);
+    const requestKeys = requests => requests.map(request => JSON.stringify(request)).sort();
+    assert.deepEqual(requestKeys(linePairs), requestKeys([
+      first,
+      [search, { track_name: "Mayday" }],
+      [search, { q: "Mayday" }],
+      ["https://lrclib.net/api/get", { ...query, duration: 8 }],
+    ]));
   });
 }

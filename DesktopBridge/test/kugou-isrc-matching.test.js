@@ -845,14 +845,20 @@ for (const mobile of [false, true]) {
     assert.equal(getCache().get("KRABC2000007").value, "Retry Title", "Cache must store retry result");
   });
 
-  test(`${label}: collectRankedKugouSearchCandidates offline integration with native first query and noISRC bypass`, async () => {
+  test(`${label}: collectRankedKugouSearchCandidates offline integration with raw search during enrichment, native supplement, and noISRC bypass`, async () => {
     const executedQueries = [];
     let deezerFetches = 0;
+    let releaseNative;
+    const nativeResponse = new Promise(resolve => { releaseNative = resolve; });
+    let notifyEnrichmentStarted;
+    const enrichmentStarted = new Promise(resolve => { notifyEnrichmentStarted = resolve; });
 
     const mockFetch = async (url) => {
       const urlStr = String(url);
       if (urlStr.includes("api.deezer.com/track/isrc:KRMIM2011544")) {
         deezerFetches++;
+        notifyEnrichmentStarted();
+        await nativeResponse;
         return new Response(
           JSON.stringify({
             title: "자나깨나",
@@ -879,10 +885,19 @@ for (const mobile of [false, true]) {
 
     const ctx = load(mockFetch, mobile);
 
-    // 1. With valid ISRC: resolves native title and uses native title first
-    const rankedWithIsrc = await ctx.collectRankedKugouSearchCandidates(spotifyMayday);
-    assert(deezerFetches > 0, "Deezer ISRC lookup must be executed");
-    assert.equal(executedQueries[0], "자나깨나 Crush", "First query must be native title with primary artist");
+    const pendingRanked = ctx.collectRankedKugouSearchCandidates(spotifyMayday);
+    await enrichmentStarted;
+    try {
+      assert(deezerFetches > 0, "Deezer ISRC lookup must be executed");
+      assert.equal(executedQueries[0], "Mayday (feat. JOY) Crush",
+        "Raw search starts while native title enrichment is pending");
+      assert.ok(!executedQueries.includes("자나깨나 Crush"));
+    } finally {
+      releaseNative();
+    }
+    const rankedWithIsrc = await pendingRanked;
+    assert.ok(executedQueries.includes("자나깨나 Crush"),
+      "Resolved native title is still queried with the primary artist");
     assert(rankedWithIsrc.length > 0);
     assert.equal(rankedWithIsrc[0].hash, "45f36318eacf3a6776405c4f0e7e28af");
     assert.equal(rankedWithIsrc[0].title, "자나깨나 (Mayday)");
