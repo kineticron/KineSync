@@ -427,7 +427,9 @@ function createLyricsService({
         translationLanguage = "English",
       } = {},
     ) {
-      if (!track?.trackId || !track?.title) {
+      const hasTitle = Boolean(String(track?.title || "").trim());
+      const hasValidSpotifyId = /^[A-Za-z0-9]{22}$/.test(String(track?.spotifyTrackId || "").trim());
+      if (!track?.trackId || (!hasTitle && !hasValidSpotifyId)) {
         return {
           trackId: "",
           lyrics: [],
@@ -435,10 +437,17 @@ function createLyricsService({
           statusMessage: "No active track.",
         };
       }
+      track = { ...track };
       const cacheKey = track.trackId;
       setActiveTrack(cacheKey);
       const normalizedPreferredSource = sanitizePreferredSource(preferredSource);
-      const recordingIdentity = [track.spotifyTrackId || "", track.isrc || "", track.title || "", track.artist || "", Number(track.durationMs || 0)].join("|");
+      const recordingIdentity = JSON.stringify([
+        String(track.spotifyTrackId || "").trim(),
+        normalizeLyricsTrackIsrc(track.isrc) || normalizeLyricsTrackIsrc(track.external_ids?.isrc),
+        track.title || "",
+        track.artist || "",
+        Number(track.durationMs || 0),
+      ]);
       let sourceRecord = getSourceRecord(cacheKey);
       if (force || (sourceRecord.identity && sourceRecord.identity !== recordingIdentity)) {
         sourceRecord = { bySource: new Map(), identity: recordingIdentity };
@@ -450,7 +459,7 @@ function createLyricsService({
       if (force || selectionKey !== requestKey) { selectionKey = requestKey; invalidateSelection(); }
       const requestGeneration = selectionGeneration;
       const isCurrentSelection = () => selectionGeneration === requestGeneration && selectionKey === requestKey;
-      let matchTrack = { ...track };
+      let matchTrack = track;
 
       if (!force && normalizedPreferredSource !== "auto") {
         const cachedSourcePacket = getCachedSourceLyricsPacket(
@@ -798,27 +807,18 @@ function createLyricsService({
         }
       };
 
-      let resolvedSpotifyAccessToken = "";
-      try {
-        resolvedSpotifyAccessToken = String(
-          (typeof getSpotifyAccessToken === "function"
-            ? await getSpotifyAccessToken()
-            : "") || "",
-        ).trim();
-      } catch {
-        // Spotify OAuth token unavailable; continue without it.
-      }
-
-      matchTrack = await buildLyricsMatchTrack(track, {
-        spotifyAccessToken: resolvedSpotifyAccessToken,
-      });
-
       const resolvedSpicyLyricsPublishableKey = await getSpicyLyricsPublishableKey();
-      // Credential/catalog setup can outlive a force refresh or source/track
+      // Credential setup can outlive a force refresh or source/track
       // switch. It must not replace the newer run's in-flight registry entry.
       if (!isCurrentSelection() || sourceCachesByTrack.get(cacheKey) !== sourceRecord) {
         return { trackId: cacheKey, lyrics: [], source: "stale-lyrics-request" };
       }
+      sourceRecord.metadataTrack ||= attachLyricsTrackMetadata(
+        { ...track, [lyricsTrackMetadata]: undefined },
+        { getSpotifyAccessToken },
+      );
+      const metadataContext = sourceRecord.metadataTrack[lyricsTrackMetadata];
+      matchTrack = { ...track, [lyricsTrackMetadata]: metadataContext };
       let flight = !force ? sourceFetchesInFlight.get(requestKey) : null;
       if (!flight || flight.record !== sourceRecord) {
         flight = { record: sourceRecord, listeners: new Set(), releases: new Set(), settled: false, latest: null, initial: null };
@@ -847,7 +847,6 @@ function createLyricsService({
           refreshMusixmatchUserToken,
           invalidateMusixmatchUserToken,
           spotifyWebToken: String(getSpotifyWebToken() || "").trim(),
-          spotifyAccessToken: resolvedSpotifyAccessToken,
           spicyLyricsPublishableKey: resolvedSpicyLyricsPublishableKey,
           waitForAutoCompletion: false,
         });

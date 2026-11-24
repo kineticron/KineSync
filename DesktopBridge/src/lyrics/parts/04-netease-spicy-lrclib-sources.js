@@ -4,7 +4,9 @@
 // This file is evaluated by ../index.js in a shared compatibility context.
 // Keep behavior changes deliberate; most code here was moved verbatim from src/lyricsService.js.
 
-async function fetchFromNetease(track) {
+async function fetchFromNetease(track, { spotifyAccessToken = "" } = {}) {
+  track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
+  if (!track.title?.trim() || !track.artist?.trim()) return null;
   const queryVariants = buildQueryVariants(track).slice(0, MAX_QUERY_VARIANTS);
   const rawSongs = [];
   await Promise.all(queryVariants.map(async query => {
@@ -144,6 +146,7 @@ async function fetchFromSpicyLyrics(
   track,
   { spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "" } = {},
 ) {
+  track = await resolveLyricsTrackMetadata(track, ["spotifyTrackId"]);
   const profile = createSpicyFetchProfiler();
   const publishableKey = spicyLyricsPublishableKey;
 
@@ -412,7 +415,9 @@ async function fetchFromSpicyLyrics(
   throw createSourceStageNoMatchError("spicy", "backend");
 }
 
-async function fetchFromLrcLib(track) {
+async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
+  track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
+  if (!track.title?.trim() || !track.artist?.trim()) return null;
   const endpoints = [
     { url: "https://lrclib.net/api/search", mode: "search" },
     { url: "https://www.lrclib.net/api/search", mode: "search" },

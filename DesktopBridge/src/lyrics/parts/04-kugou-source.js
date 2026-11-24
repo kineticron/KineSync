@@ -791,25 +791,10 @@ async function previewKugouSearchCandidates(track) {
 
 async function fetchFromKugou(
   track,
-  { timeoutMs = KUGOU_ISRC_TIMEOUT_MS } = {},
+  { timeoutMs = KUGOU_ISRC_TIMEOUT_MS, spotifyAccessToken = "" } = {},
 ) {
-  let isrc = isValidIsrc(track?.isrc);
-  let lookupTrack = track;
-  if (!isrc && track?.spotifyTrackId && typeof track.resolveIsrc === "function") {
-    let timer;
-    try {
-      const deadline = new Promise((resolve) => {
-        timer = setTimeout(() => resolve(""), KUGOU_TRACK_ISRC_TIMEOUT_MS);
-      });
-      const resolved = await Promise.race([track.resolveIsrc(), deadline]);
-      isrc = typeof resolved === "string" ? isValidIsrc(resolved) : "";
-      if (isrc) lookupTrack = { ...track, isrc };
-    } catch {
-      // Continue with the ordinary catalog search.
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  const lookupTrack = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], { spotifyAccessToken });
+  const isrc = lookupTrack.isrc;
   let nativeTitle = lookupTrack?.nativeTitle;
   if ((nativeTitle === undefined || nativeTitle === "") && isrc) {
     try {

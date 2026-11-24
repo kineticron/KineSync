@@ -4,10 +4,10 @@
 const lrcRedIsrcCache = new Map();
 const lrcRedHeaders = { "User-Agent": "KineSync/1.3.0 (https://github.com/Kineticron/KineSync; kineticrondev@gmail.com)", "X-Client-ID": "KineSync/1.3.0 (https://github.com/Kineticron/KineSync; kineticrondev@gmail.com)" };
 
-async function fetchFromLrcRed(track) {
+async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
+  track = await resolveLyricsTrackMetadata(track, ["isrc", ...lyricsTextMatchFields], { spotifyAccessToken });
   const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");
-  const directIsrc = String(track?.isrc || track?.external_ids?.isrc || "")
-    .replace(/[-\s]/g, "").toUpperCase();
+  const directIsrc = normalizeLyricsTrackIsrc(track.isrc);
   const validIsrc = (value) => /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(value);
   const cacheKey = JSON.stringify([normalizeText(track?.title), normalizeArtistText(track?.artist), Number(track?.durationMs || 0)]);
   const cached = lrcRedIsrcCache.get(cacheKey);

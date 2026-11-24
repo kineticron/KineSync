@@ -1282,7 +1282,9 @@ async function fetchFromQQMeting(track) {
 // QQ's Musicu endpoint, public search endpoint, and public mirrors each have
 // intermittent catalog gaps. Keep the desktop-compatible direct flow first,
 // then try the existing compatible fallbacks before reporting no match.
-async function fetchFromQQ(track) {
+async function fetchFromQQ(track, { spotifyAccessToken = "" } = {}) {
+  track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
+  if (!track.title?.trim() || !track.artist?.trim()) return null;
   const fetchers = [fetchFromQQDirect, fetchFromQQMirror, fetchFromQQMeting];
   for (const fetcher of fetchers) {
     try {

@@ -1048,7 +1048,7 @@ async function fetchMusixmatchSubtitleForCandidate(candidate, track, requestOpti
   } catch (error) { return { subtitleBody: "", lastError: error }; }
 }
 
-async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
+async function fetchFromMusixmatch(track, { musixmatchUserToken = "", spotifyAccessToken = "" } = {}) {
   const rawToken = String(musixmatchUserToken || "").trim();
   if (!rawToken) {
     throw new Error("No Musixmatch user token is currently available.");
@@ -1076,6 +1076,9 @@ async function fetchFromMusixmatch(track, { musixmatchUserToken = "" } = {}) {
       `Musixmatch cooldown active (${reason}). Retry in ${remainingSec}s.`,
     );
   }
+
+  track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
+  if (!track.title?.trim() || !track.artist?.trim()) return null;
 
   let lastError = null;
   let sawNoMatchPath = false;

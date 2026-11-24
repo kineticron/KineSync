@@ -8,7 +8,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const mobileFile = path.join(root, 'ExpoLyrics/lib/mobile-lyrics-service.js');
 const parts = ['03-qq-sources.js', '04-netease-spicy-lrclib-sources.js', '04-kugou-source.js',
-  '07a-source-scoring.js', '07b-service-orchestration.js'];
+  '04-lrc-red-source.js', '07a-source-scoring.js', '07b-service-orchestration.js'];
 function generate(input) {
   let output = input;
   for (const name of parts) {
@@ -23,6 +23,23 @@ function generate(input) {
     source = source.replaceAll('require("./lyricsRecordingIdentity")', 'require("../../DesktopBridge/src/lyricsRecordingIdentity")');
     source = source.replaceAll('require("./lyricsAutoPicker")', 'require("../../DesktopBridge/src/lyricsAutoPicker")')
       .replaceAll('require("./lyricsTtmlTranslations")', 'require("../../DesktopBridge/src/lyricsTtmlTranslations")');
+    if (name === '04-lrc-red-source.js') {
+      source = '"use strict";\n\n' + source.replaceAll(
+        'const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");',
+        `const parseTtmlToLyrics = parseLrcRedTtml;
+  const parseTtmlTimeExpression = parseLrcRedTime;
+  const extractTtmlMetadata = extractLrcRedTtmlMetadata;`,
+      ).replace(
+        '        const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });',
+        `        const tracePacket = {};
+        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'lrc-red') : undefined;
+        const content = await fetchText(\`https://lrc.red/s/\${candidate.isrc}.ttml\`, { headers: lrcRedHeaders, arrivalTrace: trace });`,
+      ).replace(
+        '        const parsed = parseTtmlToLyrics(content);',
+        `        const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
+        if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);`,
+      );
+    }
     if (name === '07b-service-orchestration.js') {
       source = source.replaceAll('|desktop', '|mobile').replaceAll('desktop-bridge', 'mobile-app').replaceAll('on desktop.', 'on mobile.')
         .replaceAll('require("./lyricsVault")', 'mobileLyricsVaultShim').replaceAll('require("./lyricsTtmlImport")', 'mobileTtmlImportShim')

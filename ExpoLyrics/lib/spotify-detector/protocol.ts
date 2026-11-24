@@ -21,14 +21,15 @@ export function trackHex(uri: string): string {
   }
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
-export type TrackMetadata = Pick<Sample, 'artist' | 'album' | 'artworkUrl' | 'title'> & { isrc?: string };
+export type TrackMetadata = Pick<Sample, 'artist' | 'album' | 'artworkUrl' | 'title'> & { isrc?: string; artists?: string[]; durationMs?: number; id?: string; spotifyTrackId?: string };
 export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
   const o = payload as Record<string, any>;
   if (!o || typeof o !== 'object') throw new Error('Spotify metadata is missing.');
   const expected = trackHex(uri);
   const gid = typeof o.gid === 'string' ? (/^[a-fA-F0-9]{32}$/.test(o.gid) ? o.gid.toLowerCase() : Buffer.from(o.gid, 'base64').toString('hex')) : '';
   if (!gid || gid !== expected) throw new Error('Spotify metadata identity mismatch.');
-  const artist = (Array.isArray(o.artist) ? o.artist : []).map((a: any) => typeof a?.name === 'string' ? a.name.trim() : '').filter(Boolean).join(', ');
+  const artists = (Array.isArray(o.artist) ? o.artist : []).map((a: any) => typeof a?.name === 'string' ? a.name.trim() : '').filter(Boolean);
+  const artist = artists.join(', ');
   if (!artist) throw new Error('Spotify metadata contains no artist names.');
   const images = Array.isArray(o.album?.cover_group?.image) ? o.album.cover_group.image : [];
   const cover = images.find((i: any) => i.size === 'LARGE') ?? images[images.length - 1];
@@ -41,7 +42,8 @@ export function metadataFrom(uri: string, payload: unknown): TrackMetadata {
       break;
     }
   }
-  return { artist, album: String(o.album?.name ?? ''), title: String(o.name ?? ''),
+  const durationMs = o.duration;
+  return { artist, artists, ...(Number.isSafeInteger(durationMs) && durationMs > 0 ? { durationMs } : {}), album: String(o.album?.name ?? ''), title: String(o.name ?? ''),
     ...(isrc ? { isrc } : {}),
     artworkUrl: /^[a-fA-F0-9]{40}$/.test(cover?.file_id ?? '') ? `https://i.scdn.co/image/${cover.file_id}` : '' };
 }

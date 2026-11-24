@@ -4,6 +4,142 @@
 // This file is evaluated by ../index.js in a shared compatibility context.
 // Keep behavior changes deliberate; most code here was moved verbatim from src/lyricsService.js.
 
+const lyricsTrackMetadata = Symbol("lyricsTrackMetadata");
+const directLyricsTrackMetadata = new WeakMap();
+const lyricsTextMatchFields = ["title", "artist", "durationMs"];
+
+function normalizeLyricsTrackIsrc(value) {
+  return typeof value === "string" ? isValidIsrc(value) : "";
+}
+
+function hasLyricsTrackMetadata(track, field) {
+  if (field === "isrc") return Boolean(normalizeLyricsTrackIsrc(track.isrc));
+  if (field === "durationMs") return Number.isFinite(Number(track.durationMs)) && Number(track.durationMs) > 0;
+  return Boolean(typeof track[field] === "string" ? track[field].trim() : track[field]);
+}
+
+function attachLyricsTrackMetadata(track, { spotifyAccessToken = "", getSpotifyAccessToken = null } = {}) {
+  const spotifyTrackId = String(track?.spotifyTrackId || "").trim();
+  const attached = track?.[lyricsTrackMetadata];
+  if (attached?.base.spotifyTrackId === spotifyTrackId && attached.base.trackId === track.trackId) return track;
+
+  const base = {
+    ...track,
+    spotifyTrackId,
+    isrc: normalizeLyricsTrackIsrc(track?.isrc) || normalizeLyricsTrackIsrc(track?.external_ids?.isrc),
+    ...(Array.isArray(track?.artists) ? { artists: Object.freeze([...track.artists]) } : {}),
+  };
+  const context = { base, snapshot: base, details: null, pending: null, spotifyAccessToken, getSpotifyAccessToken };
+  base[lyricsTrackMetadata] = context;
+  return Object.freeze(base);
+}
+
+async function loadLyricsTrackMetadata(context) {
+  const { base, spotifyAccessToken, getSpotifyAccessToken } = context;
+  const requestedSpotifyId = base.spotifyTrackId;
+  let timer;
+  let expired = false;
+  try {
+    const deadline = new Promise(resolve => {
+      timer = setTimeout(() => {
+        expired = true;
+        resolve(null);
+      }, KUGOU_TRACK_ISRC_TIMEOUT_MS);
+    });
+    const request = Promise.resolve().then(async () => {
+      if (typeof base.resolveTrackMetadata === "function") return base.resolveTrackMetadata(requestedSpotifyId);
+      if (typeof base.resolveIsrc === "function") return { isrc: await base.resolveIsrc() };
+      // Read the raw ID before accepting metadata (Spotify can relink tracks).
+      const token = spotifyAccessToken || (typeof getSpotifyAccessToken === "function" ? await getSpotifyAccessToken() : "");
+      if (!token || expired) return null;
+      const catalog = await fetchSpotifyWebApiTrackById(requestedSpotifyId, token);
+      if (!catalog) return null;
+      return {
+        id: catalog.id,
+        title: catalog.name,
+        artist: formatSpotifyWebApiTrackArtists(catalog),
+        artists: Array.isArray(catalog.artists) ? catalog.artists.map(artist => artist?.name) : [],
+        album: catalog.album?.name,
+        durationMs: catalog.duration_ms,
+        isrc: catalog.external_ids?.isrc,
+      };
+    });
+    const metadata = await Promise.race([request, deadline]);
+    if (!metadata || typeof metadata !== "object") return;
+    if ([metadata.spotifyTrackId, metadata.id].some(id => id != null && id !== requestedSpotifyId)) return;
+    const details = {};
+    for (const field of ["title", "artist", "album", "artworkUrl"]) {
+      if (typeof metadata[field] === "string" && metadata[field].trim()) details[field] = metadata[field].trim();
+    }
+    if (hasLyricsTrackMetadata(metadata, "durationMs")) details.durationMs = Number(metadata.durationMs);
+    const isrc = normalizeLyricsTrackIsrc(metadata.isrc);
+    if (isrc) details.isrc = isrc;
+    if (Array.isArray(metadata.artists)) {
+      const artists = metadata.artists.filter(name => typeof name === "string" && name.trim()).map(name => name.trim());
+      if (artists.length) {
+        details.artists = Object.freeze(artists);
+        details.artist ||= artists.join(", ");
+      }
+    }
+    if (!Object.keys(details).length) return;
+    context.details = Object.freeze(details);
+    context.snapshot = mergeLyricsTrackMetadata(base, context.details);
+  } catch {
+    // A failed lookup is shared for this record. Providers can still match by text or ID.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mergeLyricsTrackMetadata(track, details) {
+  const snapshot = { ...track, metadataEnrichment: details };
+  for (const field of Object.keys(details)) {
+    if (!hasLyricsTrackMetadata(snapshot, field)) snapshot[field] = details[field];
+  }
+  return Object.freeze(snapshot);
+}
+
+async function resolveLyricsTrackMetadata(track, requiredFields, options = {}) {
+  let wrapped = track?.[lyricsTrackMetadata] ? attachLyricsTrackMetadata(track, options) : null;
+  if (!wrapped && track && requiredFields.every(field => hasLyricsTrackMetadata(track, field))) {
+    return attachLyricsTrackMetadata(track, options);
+  }
+  if (!wrapped) {
+    // Standalone provider calls can share an input object without retaining it.
+    const previous = track && directLyricsTrackMetadata.get(track);
+    const inputs = track && Object.entries(track);
+    if (previous && previous.token === (options.spotifyAccessToken || "") &&
+        inputs.length === previous.inputs.length &&
+        inputs.every(([key, value], index) => key === previous.inputs[index][0] && value === previous.inputs[index][1]) &&
+        previous.externalIsrc === track.external_ids?.isrc) {
+      wrapped = previous.wrapped;
+    } else {
+      wrapped = attachLyricsTrackMetadata(track, options);
+      if (track && typeof track === "object") directLyricsTrackMetadata.set(track, {
+        wrapped, inputs, token: options.spotifyAccessToken || "", externalIsrc: track.external_ids?.isrc,
+      });
+    }
+  }
+
+  const context = wrapped[lyricsTrackMetadata];
+  const current = () => {
+    if (wrapped === context.base) return context.snapshot;
+    const { details } = context;
+    const isrc = normalizeLyricsTrackIsrc(wrapped.isrc) || normalizeLyricsTrackIsrc(wrapped.external_ids?.isrc);
+    const input = isrc === wrapped.isrc ? wrapped : { ...wrapped, isrc };
+    return details ? mergeLyricsTrackMetadata(input, details) : input;
+  };
+  const snapshot = current();
+  if (requiredFields.every(field => hasLyricsTrackMetadata(snapshot, field))) return snapshot;
+  if (!context.base.spotifyTrackId ||
+      !(typeof context.base.resolveTrackMetadata === "function" ||
+        typeof context.base.resolveIsrc === "function" || context.spotifyAccessToken ||
+        typeof context.getSpotifyAccessToken === "function")) return snapshot;
+  context.pending ||= loadLyricsTrackMetadata(context);
+  await context.pending;
+  return current();
+}
+
 const SOURCE_FETCHERS = {
   "local-vault": fetchFromLocalVault,
   "lrc-red": fetchFromLrcRed,
@@ -115,14 +251,15 @@ async function probeLyricsSource(
 
   try {
     const safeTrack = {
-      trackId: String(track?.trackId || "probe-track"),
+      ...track,
+      trackId: track?.[lyricsTrackMetadata] ? track.trackId : String(track?.trackId || "probe-track"),
       title: String(track?.title || "").trim(),
       artist: String(track?.artist || "").trim(),
       durationMs: Number(track?.durationMs || 0),
       spotifyTrackId: String(track?.spotifyTrackId || "").trim(),
       album: String(track?.album || "").trim(),
     };
-    if (!safeTrack.title || !safeTrack.artist) {
+    if ((!safeTrack.title || !safeTrack.artist) && !safeTrack.spotifyTrackId) {
       return {
         ok: false,
         requestedSource: String(source || ""),
@@ -133,7 +270,7 @@ async function probeLyricsSource(
       };
     }
 
-    const matchTrack = await buildLyricsMatchTrack(safeTrack, {
+    const matchTrack = attachLyricsTrackMetadata(safeTrack, {
       spotifyAccessToken: String(spotifyAccessToken || "").trim(),
     });
 
@@ -701,6 +838,7 @@ async function fetchBestSyncedLyrics(
   let safeMusixmatchUserToken = String(musixmatchUserToken || "").trim();
   const safeSpotifyWebToken = String(spotifyWebToken || "").trim();
   const safeSpotifyAccessToken = String(spotifyAccessToken || "").trim();
+  track = attachLyricsTrackMetadata(track, { spotifyAccessToken: safeSpotifyAccessToken });
   const hasSpotifyTrackId = Boolean(String(track?.spotifyTrackId || "").trim());
   const attemptOrder = getSourceAttemptOrder(preferredSource, {
     hasMusixmatchUserToken: Boolean(safeMusixmatchUserToken) || typeof resolveMusixmatchUserToken === "function",

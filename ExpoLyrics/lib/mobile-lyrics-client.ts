@@ -14,7 +14,7 @@ import { usePlaybackStore } from '@/store/playback-store';
 import spicyLyricsConfig from '../../DesktopBridge/src/spicyLyricsConfig.json';
 import type { LyricsPacket, Track } from "@/types/bridge";
 import type { LyricsSourcePreference } from "@/lib/lyrics-sync";
-import { resolveSpotifyTrackIsrc } from "@/lib/spotify-player-actions";
+import { resolveSpotifyTrackMetadata } from "@/lib/spotify-player-actions";
 import {
   refreshMobileMusixmatchToken,
   invalidateMobileMusixmatchToken,
@@ -169,7 +169,6 @@ function toMobileTrack(track: Track) {
   const album = cleanTrackMetadata(track.album);
   const durationMs = Number(track.durationMs || 0);
   const spotifyTrackId = String(track.spotifyTrackId || "").trim();
-  const hasValidIsrc = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(String(track.isrc || "").replace(/[-\s]/g, "").toUpperCase());
   return {
     trackId: buildMobileTrackCacheKey({
       title,
@@ -184,8 +183,9 @@ function toMobileTrack(track: Track) {
     durationMs,
     spotifyTrackId,
     isrc: track.isrc,
-    ...(!hasValidIsrc && spotifyTrackId
-      ? { resolveIsrc: () => resolveSpotifyTrackIsrc(spotifyTrackId) }
+    ...(spotifyTrackId
+      ? { resolveTrackMetadata: (requestedSpotifyId: string) =>
+          requestedSpotifyId === spotifyTrackId ? resolveSpotifyTrackMetadata(spotifyTrackId) : undefined }
       : {}),
   };
 }
