@@ -93,6 +93,7 @@ export function detectLyricsTimingMode(
     source.includes("qrc") ||
     source.includes("yrc") ||
     source.includes("kugou-krc") ||
+    source === "lrclib-word" ||
     source.includes("spicy-lyrics-syllable")
   ) {
     return "karaoke";

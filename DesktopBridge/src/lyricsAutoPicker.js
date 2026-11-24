@@ -64,6 +64,7 @@ function sourcePriority(packetOrSource) {
   if (source.includes("musixmatch-richsync")) return 520
   if (source.includes("spicy-lyrics-line")) return 360
   if (source.includes("spicy-lyrics-static")) return 180
+  if (source.includes("lrclib-word")) return 500
   if (source.includes("lrclib-plain")) return 40
   if (source.includes("lrclib")) return 320
   if (source.includes("netease-lrc")) return 300
@@ -97,7 +98,7 @@ function shouldPreferAutoCandidate(track, current, candidate) {
     return pickAutoLyrics(lrc, spicy).result === candidate
   }
   const karaoke = source => !source.includes("netease-lrc") &&
-    /spicy-lyrics-syllable|kugou-krc|qq-musicu-qrc|richsync|karaoke|yrc/.test(source)
+    /spicy-lyrics-syllable|kugou-krc|qq-musicu-qrc|richsync|lrclib-word|karaoke|yrc/.test(source)
   const currentKaraoke = karaoke(currentSource)
   const candidateKaraoke = karaoke(candidateSource)
   const currentSpicyLine = currentSource.includes("spicy-lyrics-line")
@@ -117,7 +118,7 @@ function autoCandidateCouldOutrank(track, current, source) {
   if (isCommunitySpicy(current)) return normalized === "local-vault"
   // Pending Spicy can be community syllable, or non-equivalent Apple Music.
   if (normalized === "spicy-lyrics") return true
-  const bounds = { "local-vault": 720, "lrc-red": 700, kugou: 620, "qq-direct": 600, netease: 560, musixmatch: 520, lrclib: 320 }
+  const bounds = { "local-vault": 720, "lrc-red": 700, kugou: 620, "qq-direct": 600, netease: 560, musixmatch: 520, lrclib: 500 }
   return (bounds[normalized] ?? 200) >= sourcePriority(current)
 }
 

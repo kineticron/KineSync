@@ -415,6 +415,80 @@ async function fetchFromSpicyLyrics(
   throw createSourceStageNoMatchError("spicy", "backend");
 }
 
+function parseLyricsFile(text) {
+  // Bound the source and expanded line text in UTF-16 code units.
+  const maxTextLength = 1024 * 1024;
+  if (typeof text !== "string" || text.length > maxTextLength || !text.trim()) return null;
+
+  let document;
+  try {
+    const { load, CORE_SCHEMA } = require("js-yaml");
+    document = load(text, { schema: CORE_SCHEMA, maxDepth: 32, maxTotalMergeKeys: 0 });
+  } catch {
+    return null;
+  }
+
+  // Inspect only the supported record shape. Collection aliases in scalar
+  // fields and recursive or unsupported structures fail these shape checks.
+  const isMapping = value => value && typeof value === "object" && !Array.isArray(value);
+  const hasOnlyKeys = (value, keys) => isMapping(value) &&
+    Object.keys(value).every(key => keys.includes(key));
+  const isTime = value => Number.isFinite(value) && value >= 0;
+  if (!hasOnlyKeys(document, ["version", "metadata", "lines", "plain"]) ||
+      document.version !== "1.0" ||
+      (document.plain !== undefined && typeof document.plain !== "string") ||
+      (document.metadata !== undefined && (!isMapping(document.metadata) ||
+        Object.values(document.metadata).some(value => value !== null && typeof value === "object"))) ||
+      !Array.isArray(document.lines) || !document.lines.length || document.lines.length > 4000) {
+    return null;
+  }
+
+  const lyrics = [];
+  let previousLineStart = 0;
+  let wordCount = 0;
+  let textLength = 0;
+  let hasFinerTiming = false;
+  for (const line of document.lines) {
+    if (!hasOnlyKeys(line, ["text", "start_ms", "end_ms", "words"])) return null;
+    const { text: lineText, start_ms: lineStartTime, end_ms: lineEndTime, words } = line;
+    if (typeof lineText !== "string") return null;
+    textLength += lineText.length;
+    if (textLength > maxTextLength || !lineText.trim() ||
+        !isTime(lineStartTime) || lineStartTime < previousLineStart ||
+        !isTime(lineEndTime) || lineEndTime <= lineStartTime ||
+        !Array.isArray(words) || !words.length) {
+      return null;
+    }
+    wordCount += words.length;
+    if (wordCount > 20000) return null;
+
+    const syllables = [];
+    let offset = 0;
+    let previousEnd = lineStartTime;
+    for (let index = 0; index < words.length; index++) {
+      const word = words[index];
+      if (!hasOnlyKeys(word, ["text", "start_ms", "end_ms"]) ||
+          typeof word.text !== "string" || !word.text.length ||
+          !lineText.startsWith(word.text, offset) || !word.text.trim() ||
+          !isTime(word.start_ms) || word.start_ms < previousEnd) {
+        return null;
+      }
+      const endTime = word.end_ms === undefined
+        ? (index + 1 < words.length ? words[index + 1]?.start_ms : lineEndTime)
+        : word.end_ms;
+      if (!isTime(endTime) || endTime <= word.start_ms || endTime > lineEndTime) return null;
+      syllables.push({ text: word.text, startTime: word.start_ms, endTime });
+      hasFinerTiming ||= word.start_ms !== lineStartTime || endTime !== lineEndTime;
+      previousEnd = endTime;
+      offset += word.text.length;
+    }
+    if (offset !== lineText.length) return null;
+    previousLineStart = lineStartTime;
+    lyrics.push({ lineStartTime, lineEndTime, syllables });
+  }
+  return hasFinerTiming ? lyrics : null;
+}
+
 async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
   track = await resolveLyricsTrackMetadata(track, lyricsTextMatchFields, { spotifyAccessToken });
   if (!track.title?.trim() || !track.artist?.trim()) return null;
@@ -602,12 +676,10 @@ async function fetchFromLrcLib(track, { spotifyAccessToken = "" } = {}) {
         metadata: { instrumental: true },
       };
     }
-    if (!item?.syncedLyrics) {
-      continue;
-    }
-    const lyrics = parseLrc(item.syncedLyrics);
+    const wordLyrics = item?.hasWordSync === true ? parseLyricsFile(item.lyricsfile) : null;
+    const lyrics = wordLyrics || (item?.syncedLyrics ? parseLrc(item.syncedLyrics) : []);
     if (lyrics.length) {
-      return { lyrics, source: "lrclib-fallback", metadata: { matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
+      return { lyrics, source: wordLyrics ? "lrclib-word" : "lrclib-fallback", metadata: { matchedTrack: { id: item.id, title: item.trackName || item.name, artist: item.artistName, durationMs: candidateDurationMs(item) } } };
     }
   }
   // Plain lyrics are a last-resort candidate. They stay untimed so callers can

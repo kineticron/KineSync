@@ -615,7 +615,8 @@ async function finalizeFetchedLyricsResult(result) {
   if (!result) {
     return null;
   }
-  if (result.metadata?.untimed) return result;
+  // Validated lyricsfile syllables already reconstruct each line exactly.
+  if (result.metadata?.untimed || result.source === "lrclib-word") return result;
 
   if (result.lyrics?.length) {
     mergeCensorshipSyllablesInLyrics(result.lyrics);
@@ -643,6 +644,7 @@ function getLyricsTimingTier(sourceLabel) {
     return 1;
   }
   if (
+    source.includes("lrclib-word") ||
     source.includes("richsync") ||
     source.includes("musicu-qrc") ||
     source.includes("kugou-krc") ||
@@ -749,6 +751,9 @@ function getSourcePriorityBucket(sourceLabel) {
   }
   if (source.includes("spicy-lyrics-static")) {
     return 180;
+  }
+  if (source.includes("lrclib-word")) {
+    return 500;
   }
   if (source.includes("lrclib-plain")) {
     return 40;

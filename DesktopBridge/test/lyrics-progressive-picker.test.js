@@ -133,6 +133,15 @@ for (const mobile of [false, true]) {
     wins(line, packet('lrclib'));
     wins(line, packet('other'));
     for (const source of ['lrc-red-karaoke','kugou-krc','qq-musicu-qrc','netease-yrc','musixmatch-richsync']) wins(packet(source), line);
+    const lrclibWord = packet('lrclib-word');
+    assert.equal(context.getSourcePriorityBucket('lrclib-word'), 500);
+    assert.equal(picker.sourcePriority(lrclibWord), 500);
+    assert.equal(picker.sourcePriority('lrclib-fallback'), 320);
+    wins(lrclibWord, line);
+    wins(lrclibWord, packet('lrc-red-line'));
+    wins(packet('musixmatch-richsync'), lrclibWord);
+    assert.equal(picker.autoCandidateCouldOutrank(baseTrack, line, 'lrclib'), true);
+    assert.equal(picker.autoCandidateCouldOutrank(baseTrack, packet('musixmatch-richsync'), 'lrclib'), false);
     const community = packet('spicy-lyrics-syllable', 'community', {source:'spicy_lyrics'});
     wins(packet('local-vault-karaoke'), community);
     for (const source of ['lrc-red-karaoke','kugou-krc']) wins(packet(source), packet('local-vault-line'));
