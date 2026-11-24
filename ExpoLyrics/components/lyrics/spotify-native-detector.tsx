@@ -32,6 +32,11 @@ const USER_AGENT = Platform.OS === 'android'
   ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
   : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
 
+function hasUsableTitle(title: string) {
+  const trimmed = title.trim();
+  return !!trimmed && !/^unknown track$/i.test(trimmed);
+}
+
 /** Native mobile-only: WebView bootstraps/renews login, Dealer owns detection.
  * Controls and metadata use the captured spclient session directly. */
 export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(function SpotifyNativeDetector(_props, ref) {
@@ -50,6 +55,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const captureRequest = useRef<{ id: number; warm: boolean } | null>(null);
   const lastSample = useRef<Sample | null>(null);
   const lyricsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lyricsDispatchedRun = useRef(-1);
   const enriched = useRef(new Map<string, TrackMetadata>());
   const enrichmentRun = useRef(0);
   const metadataPending = useRef('');
@@ -98,39 +104,49 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       logDevelopmentTiming('store-track-change', s);
       enrichmentRun.current++;
       metadataPending.current = '';
-      if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
+      if (lyricsTimer.current !== null) clearTimeout(lyricsTimer.current);
+      lyricsTimer.current = null;
       store.setLyricsStatusMessage('Spotify detected. Loading mobile lyrics…');
     }
-    const needsMetadata = !packet.artist.trim() || !packet.album || !packet.title.trim() || /^unknown track$/i.test(packet.title.trim()) || !packet.artworkUrl;
+    const run = enrichmentRun.current;
+    const uri = s.uri;
+    const ownsSample = () => canIngest() && run === enrichmentRun.current && lastSample.current?.uri === uri &&
+      usePlaybackStore.getState().currentTrack?.id === packet.trackId;
+    const currentTrack = usePlaybackStore.getState().currentTrack;
+    // A complete observation can start lyrics while catalog enrichment runs.
+    // Sparse observations pass through here again when enrichment is published.
+    if (lyricsTimer.current === null && lyricsDispatchedRun.current !== run && ownsSample() &&
+        currentTrack && hasUsableTitle(currentTrack.title) && currentTrack.artist.trim()) {
+      const timer = setTimeout(() => {
+        if (lyricsTimer.current !== timer) return;
+        lyricsTimer.current = null;
+        const track = usePlaybackStore.getState().currentTrack;
+        if (!ownsSample() || !track || !hasUsableTitle(track.title) || !track.artist.trim()) return;
+        lyricsDispatchedRun.current = run;
+        void refreshLyricsForCurrentTrack('auto');
+      }, 100);
+      lyricsTimer.current = timer;
+    }
+    const needsMetadata = !packet.artist.trim() || !packet.album || !hasUsableTitle(packet.title) || !packet.artworkUrl;
     if ((result.trackChanged || (!metadata && needsMetadata)) && metadataPending.current !== s.uri && (metadataAttempts.current.get(s.uri) ?? 0) < 3) {
       metadataPending.current = s.uri;
       if (metadataAttempts.current.size >= 32) metadataAttempts.current.clear();
       metadataAttempts.current.set(s.uri, (metadataAttempts.current.get(s.uri) ?? 0) + 1);
-      const run = enrichmentRun.current;
-      const uri = s.uri;
       // This bearer is scoped for spclient, not the public Web API. Resolve
       // the exact track GID, with no artist-dependent search prerequisite.
       void detector.metadata(uri).then(match => {
-        if (!match || !canIngest() || run !== enrichmentRun.current || lastSample.current?.uri !== uri) return;
+        if (!match || !ownsSample()) return;
         if (enriched.current.size >= 32) enriched.current.clear();
         enriched.current.set(uri, match);
         if (lastSample.current) publish(lastSample.current, 'metadata-publish');
       }).catch(error => {
-        if (canIngest() && run === enrichmentRun.current) {
+        if (ownsSample()) {
           const message = error instanceof Error ? error.message : 'Spotify metadata lookup failed.';
           diagnostics.current.status = message;
           if (!usePlaybackStore.getState().currentTrack?.artist) store.setLyricsStatusMessage(`${message} Reconnect Spotify to retry artist lookup.`);
         }
       }).finally(() => {
         if (run === enrichmentRun.current && metadataPending.current === uri) metadataPending.current = '';
-        if (!canIngest() || run !== enrichmentRun.current) return;
-        // Artist-less title searches can pick the wrong song or fail entirely.
-        // Keep detection running, but wait for metadata before lyrics search.
-        if (!usePlaybackStore.getState().currentTrack?.artist?.trim()) return;
-        lyricsTimer.current = setTimeout(() => {
-          lyricsTimer.current = null;
-          if (canIngest() && usePlaybackStore.getState().currentTrack?.id === packet.trackId) void refreshLyricsForCurrentTrack('auto');
-        }, 100);
       });
     }
   };
@@ -233,7 +249,8 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     } });
     return () => {
       mounted.current = false; unregister(); detector.clear(); enrichmentEpoch.current++;
-      if (lyricsTimer.current) clearTimeout(lyricsTimer.current);
+      if (lyricsTimer.current !== null) clearTimeout(lyricsTimer.current);
+      lyricsTimer.current = null;
     };
   }, [detector, openBrowser, remount]);
   useEffect(() => registerNativeRendererReadyResync({ canResync: canIngest, resyncPlayback }), [canIngest, resyncPlayback]);

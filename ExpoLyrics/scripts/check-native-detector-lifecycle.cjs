@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const React = require('react');
 const platform = process.argv.includes('--android') ? 'android' : 'ios';
+const baselineHost = process.env.SPOTIFY_DETECTOR_BASELINE_HOST;
 const alerts = [], openedUrls = [];
 const development = process.argv.includes('--development');
 const developmentLogs = [], publishedSamples = [];
@@ -26,13 +27,40 @@ const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
 const captures = [];
-const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [], scheduled = [];
+const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [];
+const scheduled = new Map(), metadataCalls = [];
+let now = 0, nextTimerId = 0, nextMetadata;
+function advance(ms) {
+  const end = now + ms;
+  while (true) {
+    const next = [...scheduled].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > end) break;
+    const [id, timer] = next;
+    scheduled.delete(id);
+    now = timer.at;
+    timer.fn();
+  }
+  now = end;
+}
+async function flush() {
+  for (let n = 0; n < 10; n++) await Promise.resolve();
+}
+function holdMetadata() {
+  assert.equal(nextMetadata, undefined);
+  let resolve, reject;
+  nextMetadata = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { resolve, reject };
+}
+const resolvedMetadata = { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' };
+const sampleFor = (track, fields = {}) => ({
+  uri: `spotify:track:${track}`, title: 'Observer Title', artist: 'Observer Artist', positionMs: 1000, ...fields,
+});
 let cursor = 0, dirty = false, actions, instance;
 let tour = { active: false, pending: false };
 const session = { signedIn: true, loggedOut: false, setSignedIn(value) { this.signedIn = value; } };
 const playback = { playbackMode: 'mobile', connectionStatus: 'disconnected', currentTrack: null,
   ingestPacket(packet, source) { assert.equal(source, 'mobile'); packets.push(packet); const changed = this.currentTrack?.id !== packet.trackId;
-    this.currentTrack = { id: packet.trackId, artist: packet.artist }; return { trackChanged: changed }; }, setLyricsStatusMessage() {} };
+    this.currentTrack = { id: packet.trackId, title: packet.title, artist: packet.artist }; return { trackChanged: changed }; }, setLyricsStatusMessage() {} };
 const ReactMock = { ...React, forwardRef: fn => fn,
   useRef(value) { const i = cursor++; return hooks[i] ??= { current: value }; },
   useState(value) { const i = cursor++; if (!hooks[i]) hooks[i] = { value };
@@ -51,7 +79,12 @@ class Detector {
   setEnabled(value) { this.enabled = value; }
   capture(raw, origin, id) { captures.push({ raw, origin, id }); return true; }
   refresh() {}
-  async metadata() { return { title: 'Resolved Title', artist: 'Resolved Artist', album: 'Album', artworkUrl: 'https://i.scdn.co/image/resolved' }; }
+  async metadata(uri) {
+    metadataCalls.push(uri);
+    const response = nextMetadata;
+    nextMetadata = undefined;
+    return response ?? resolvedMetadata;
+  }
   async control(command) { commands.push(command); if (controlError) throw controlError; }
   clear() { this.enabled = false; this.clears++; }
 }
@@ -78,7 +111,12 @@ const mocks = {
     isTrustedSpotifyWebViewMessageUrl: url => /^https:\/\/open\.spotify\.com\//.test(url) },
   '@/lib/spotify-player-actions': { registerSpotifyPlayerActions: a => { actions = a; return () => { actions = null; }; } },
   '@/lib/mobile-lyrics-settings': { saveMobileLyricsSettings: async () => {} },
-  '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack: async () => { assert(playback.currentTrack.artist); searches.push(playback.currentTrack); } },
+  '@/lib/lyrics-sync': { refreshLyricsForCurrentTrack: () => {
+    const track = playback.currentTrack;
+    assert(track.artist.trim());
+    assert(track.title.trim() && !/^unknown track$/i.test(track.title.trim()));
+    searches.push({ ...track, at: now });
+  } },
   './native/native-renderer-ready-refresh': nativeRendererReadyRefresh,
   '@/store/playback-store': { usePlaybackStore: callableStore(playback) },
   '@/store/spotify-session-store': { useSpotifySessionStore: callableStore(session) },
@@ -86,8 +124,13 @@ const mocks = {
 };
 const context = { exports: {}, require: name => { assert(name in mocks, name); return mocks[name]; },
   __DEV__: development, console: { debug() {} },
-  Date, setTimeout: fn => { scheduled.push(fn); return scheduled.length; }, clearTimeout() {} };
-vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../components/lyrics/spotify-native-detector.tsx'), 'utf8'), {
+  Date, setTimeout: (fn, delay) => {
+    const id = ++nextTimerId;
+    scheduled.set(id, { fn, at: now + delay });
+    return id;
+  }, clearTimeout: id => scheduled.delete(id) };
+const hostPath = baselineHost || path.join(__dirname, '../components/lyrics/spotify-native-detector.tsx');
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(hostPath, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
 }).outputText, context);
 const ref = { current: null };
@@ -149,13 +192,33 @@ const evidence = developmentTiming.developmentTimingAnchor({ playerPath: '$.play
 const firstSample = { uri: 'spotify:track:test', title: 'Test', artist: 'Artist', positionMs: 1000,
   playing: true, receivedAt: receipt.wallMs, positionTimestampMs: receipt.wallMs - 100,
   sourceServerTimestampMs: receipt.wallMs, positionObservedAt: receipt, developmentTiming: evidence };
+const held = holdMetadata();
+const benchmarkStart = now;
 instance.callbacks.sample(firstSample);
-for (let n = 0; n < 10; n++) await Promise.resolve();
+assert.equal(packets.length, 1, 'playback publishes while metadata is held');
+assert.deepEqual(metadataCalls, [firstSample.uri]);
+advance(99);
+assert.equal(searches.length, 0);
+advance(1);
+assert.equal(searches.length, baselineHost ? 0 : 1);
+advance(3900);
+assert.equal(packets.length, 1, 'metadata remains outstanding for 4000 mock ms');
+held.resolve(resolvedMetadata);
+await flush();
+advance(99);
+assert.equal(searches.length, baselineHost ? 0 : 1);
+advance(1);
+assert.equal(searches.length, 1, 'enrichment does not trigger a duplicate lyrics lookup');
+const benchmarkMs = searches[0].at - benchmarkStart;
+assert.equal(benchmarkMs, baselineHost ? 4100 : 100);
+assert.deepEqual(metadataCalls, [firstSample.uri]);
+console.log(`Mock sample-to-lyrics-dispatch (${baselineHost ? 'baseline host' : 'optimized host'}, metadata held 4000 ms): ${benchmarkMs} ms.`);
+if (baselineHost) return;
 instance.callbacks.ready();
 render(); assert(find(tree), 'a verified foreground session keeps its capture page warm');
 assert.equal(tree.props.pointerEvents, 'none');
 assert.equal(packets.length, 2, 'sample and asynchronous metadata publication');
-for (let n = 0; n < 10; n++) await Promise.resolve();
+await flush();
 assert.equal(publishedSamples.at(-1).developmentTiming, evidence, 'actual metadata publication preserves anchor');
 assert.equal(publishedSamples.at(-1).positionObservedAt, receipt);
 if (development) {
@@ -191,13 +254,12 @@ web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: '{"type":"ready"}', url: 'https://open.spotify.com/' } });
 assert.equal(JSON.parse(injected.at(-1)).enabled, false, 'browser playback polling is disabled');
 ref.current.togglePlayPause(); assert.equal(commands.at(-1).type, 'toggle', 'mounted browser does not receive transport commands');
-for (let n = 0; n < 10; n++) await Promise.resolve();
-scheduled.splice(0).forEach(fn => fn());
+await flush();
 instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Unknown track', artist: '', artworkUrl: 'https://i.scdn.co/image/stale', positionMs: 1000 });
 assert.equal(playback.currentTrack.artist, '', 'raw observer may omit artist');
 const searchesBefore = searches.length;
-assert.equal(scheduled.length, 0, 'missing artist cannot launch a lyrics search');
-for (let n = 0; n < 10; n++) await Promise.resolve();
+assert.equal(scheduled.size, 0, 'missing artist cannot launch a lyrics search');
+await flush();
 assert.equal(playback.currentTrack.artist, 'Resolved Artist', 'native metadata fills artist before searching');
 assert.equal(packets.at(-1).title, 'Resolved Title', 'ID-only snapshots receive the exact catalog title');
 assert.equal(packets.at(-1).artworkUrl, 'https://i.scdn.co/image/resolved', 'catalog artwork replaces stale observer artwork');
@@ -205,15 +267,95 @@ instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Unknown
 assert.equal(packets.at(-1).title, 'Resolved Title', 'subsequent sparse anchors retain the enriched title');
 assert.equal(packets.at(-1).artworkUrl, 'https://i.scdn.co/image/resolved', 'subsequent sparse anchors retain the enriched cover');
 assert.equal(packets.at(-1).positionMs, 2000, 'enrichment preserves native position anchors');
-scheduled.splice(0).forEach(fn => fn());
+advance(100);
 assert.equal(searches.length, searchesBefore + 1);
+
+const placeholder = sampleFor('placeholder', { title: '  UnKnOwN TrAcK  ' });
+const beforePlaceholder = searches.length;
+const failedPlaceholder = holdMetadata();
+instance.callbacks.sample(placeholder);
+advance(100);
+failedPlaceholder.reject(new Error('metadata unavailable'));
+await flush();
+advance(100);
+assert.equal(searches.length, beforePlaceholder, 'a known artist cannot make a placeholder title searchable');
+const pendingPlaceholder = holdMetadata();
+instance.callbacks.sample(placeholder);
+advance(100);
+assert.equal(searches.length, beforePlaceholder);
+pendingPlaceholder.resolve(resolvedMetadata);
+await flush();
+advance(99);
+assert.equal(searches.length, beforePlaceholder);
+advance(1);
+assert.equal(searches.length, beforePlaceholder + 1, 'metadata supplies the first usable title');
+
+const noArtist = sampleFor('missing-artist-failure', { artist: '  ' });
+const beforeMissingArtist = searches.length;
+const beforeRetries = metadataCalls.length;
+for (let attempt = 0; attempt < 3; attempt++) {
+  const failed = holdMetadata();
+  instance.callbacks.sample(noArtist);
+  failed.reject(new Error('metadata unavailable'));
+  await flush();
+  advance(100);
+}
+instance.callbacks.sample(noArtist);
+await flush();
+advance(100);
+assert.equal(metadataCalls.length - beforeRetries, 3, 'metadata retries remain bounded');
+assert.equal(searches.length, beforeMissingArtist, 'missing artist with failed metadata cannot dispatch');
+
+const a = sampleFor('epoch-a');
+const beforeEpochSearches = searches.length;
+const oldA = holdMetadata();
+instance.callbacks.sample(a);
+const [oldTimerId, oldTimer] = scheduled.entries().next().value;
+instance.callbacks.sample(sampleFor('epoch-b'));
+const newA = holdMetadata();
+instance.callbacks.sample(a);
+assert.equal(scheduled.has(oldTimerId), false, 'changing tracks cancels the old timer');
+oldTimer.fn(); // Simulate a callback already queued when cancellation occurred.
+oldA.resolve({ ...resolvedMetadata, title: 'Obsolete A Title' });
+await flush();
+assert.equal(playback.currentTrack.title, a.title, 'the stale A metadata cannot publish into the new A epoch');
+assert.equal(searches.length, beforeEpochSearches);
+advance(100);
+assert.equal(searches.length, beforeEpochSearches + 1);
+assert.equal(searches.at(-1).id, a.uri);
+newA.resolve(resolvedMetadata);
+await flush();
+advance(100);
+assert.equal(playback.currentTrack.title, resolvedMetadata.title);
+assert.equal(searches.length, beforeEpochSearches + 1, 'new A enrichment does not redispatch lyrics');
+
+function queueLifecycleSample(track) {
+  const pending = holdMetadata();
+  const searchesBefore = searches.length;
+  instance.callbacks.sample(sampleFor(track));
+  assert.equal(scheduled.size, 1);
+  const packetsBefore = packets.length;
+  return async () => {
+    advance(100);
+    pending.resolve(resolvedMetadata);
+    await flush();
+    advance(100);
+    assert.equal(packets.length, packetsBefore, `${track} suppresses late enrichment`);
+    assert.equal(searches.length, searchesBefore, `${track} suppresses late lyrics dispatch`);
+  };
+}
+
+const finishTour = queueLifecycleSample('tour');
 const acceptedPackets = packets.length;
 tour.pending = true;
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 2000 });
 assert.equal(packets.length, acceptedPackets, 'pending tour suppresses queued native events');
+await finishTour();
 tour.pending = false;
+const finishBackground = queueLifecycleSample('background');
 AppState.currentState = 'background'; listeners.forEach(fn => fn('background'));
 assert.equal(instance.enabled, false);
+await finishBackground();
 // Consume the event value, even if the host's cached currentState lags it.
 listeners.forEach(fn => fn('active'));
 assert.equal(instance.enabled, true, 'foreground event resumes observation with a stale background snapshot');
@@ -221,11 +363,20 @@ AppState.currentState = 'active';
 listeners.forEach(fn => fn('active'));
 assert.equal(instance.enabled, true, 'duplicate active remains enabled');
 // Cached transport mocked; real Detector.setEnabled replay is tested by check-spotify-timing.
-const replay = { ...firstSample, receivedAt: Date.now() + 1000 };
+const replay = { ...firstSample, title: 'Unknown track', artist: '', receivedAt: Date.now() + 1000 };
+const cachedReplayMetadata = holdMetadata();
+const beforeReplay = searches.length;
 instance.callbacks.sample(replay);
 assert.equal(publishedSamples.at(-1).developmentTiming, evidence);
 assert.equal(publishedSamples.at(-1).positionObservedAt, receipt);
 assert.equal(publishedSamples.at(-1).receivedAt, replay.receivedAt);
+advance(100);
+assert.equal(searches.length, beforeReplay + 1, 'cached enrichment allows an initial lookup in a returning track epoch');
+assert.equal(searches.at(-1).title, resolvedMetadata.title);
+cachedReplayMetadata.resolve(resolvedMetadata);
+await flush();
+advance(100);
+assert.equal(searches.length, beforeReplay + 1);
 if (development) {
   assert(developmentLogs.some(l => l.stage === 'js-startup' && l.version === 3 && l.buildBase === '0453f4e'));
   assert(developmentLogs.some(l => l.stage === 'cold-mount'));
@@ -234,16 +385,26 @@ if (development) {
   assert(developmentLogs.some(l => l.stage === 'observation-policy' && l.enabled));
   assert(!/private-|spotify:track:|Resolved Title/.test(JSON.stringify(developmentLogs)));
 } else assert.equal(developmentLogs.length, 0);
-const packetsAfterReplay = packets.length;
+const finishLogout = queueLifecycleSample('logout');
+const packetsBeforeLogout = packets.length;
 session.loggedOut = true; actions.logout(); render(); web = find(tree);
 assert.equal(web.props.source.uri, 'https://accounts.spotify.com/logout', 'logout clears browser cookies even after unmount');
 instance.callbacks.authenticated('late-token', 123);
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 3000 });
-assert.equal(packets.length, packetsAfterReplay, 'logout suppresses late auth/state callbacks');
+assert.equal(packets.length, packetsBeforeLogout, 'logout suppresses late auth/state callbacks');
+await finishLogout();
 web.props.onLoadEnd(); render(); assert.equal(tree, null, 'logout browser is temporary');
+session.loggedOut = false;
+render();
+const finishUnmount = queueLifecycleSample('unmount');
+const packetsBeforeUnmount = packets.length;
+const queuedOnUnmount = scheduled.values().next().value;
 for (const hook of hooks) hook?.cleanup?.();
 assert.equal(listeners.size, 0); assert.equal(actions, null);
+assert.equal(scheduled.size, 0, 'unmount cancels the lyrics timer');
+queuedOnUnmount.fn();
+await finishUnmount();
 instance.callbacks.sample({ uri: 'spotify:track:test', positionMs: 4000 });
-assert.equal(packets.length, packetsAfterReplay, 'unmounted detector cannot write playback');
+assert.equal(packets.length, packetsBeforeUnmount, 'unmounted detector cannot write playback');
 console.log(`Native detector lifecycle checks passed (${platform}): shared login, warm capture, single state source, native controls, tour/background cleanup and logout.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
