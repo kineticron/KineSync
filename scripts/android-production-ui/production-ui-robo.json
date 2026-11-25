@@ -1,0 +1,241 @@
+[
+  {
+    "eventType": "WAIT",
+    "delayTime": 7000
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "01-first-screen"
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "text": "Skip"
+      }
+    ],
+    "optional": true
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^Skip player tour$"
+      }
+    ],
+    "optional": true
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^Open player menu$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^AMLL lyrics renderer(?:, selected)?$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "02-amll-option"
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^Spicy Lyrics lyrics renderer(?:, selected)?$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "03-spicy-option"
+  },
+  {
+    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.ScrollView"
+      }
+    ],
+    "childElementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Settings(?:\\s*,.*)?$"
+      }
+    ]
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Settings(?:\\s*,.*)?$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "04-settings"
+  },
+  {
+    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.ScrollView"
+      }
+    ],
+    "childElementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescription": "Advanced"
+      }
+    ]
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescription": "Advanced"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.ScrollView"
+      }
+    ],
+    "childElementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Rust$"
+      }
+    ]
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Rust$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "05-rust-option"
+  },
+  {
+    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.ScrollView"
+      }
+    ],
+    "childElementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Skia$"
+      }
+    ]
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescriptionRegex": "^(?:.*,\\s*)?Skia$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "06-skia-option"
+  },
+  {
+    "eventType": "PRESSED_BACK"
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^Open player menu$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.Button",
+        "contentDescriptionRegex": "^Close player menu$"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "TAKE_SCREENSHOT",
+    "screenshotName": "07-player-return"
+  }
+]
