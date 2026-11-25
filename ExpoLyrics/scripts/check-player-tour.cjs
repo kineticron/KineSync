@@ -12,7 +12,7 @@ const compiled = ts.transpileModule(fs.readFileSync(path.join(root, 'store/playe
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 vm.runInNewContext(compiled, context);
-const { usePlayerTourStore: store, getTourPosition } = context.exports;
+const { usePlayerTourStore: store, getTourPosition, TOUR_STEPS } = context.exports;
 store.getState().requestStart();
 assert.equal(store.getState().active, false, 'sample waits for the main player to receive focus');
 assert.equal(store.getState().pending, true);
@@ -98,4 +98,57 @@ assert.equal(store.getState().step, 'welcome');
 assert.equal(store.getState().translated, false);
 assert.equal(store.getState().autoHideControls, false, 'replay resets the demo setting');
 store.getState().finish();
-console.log('Player tour checks passed: actual player handlers, ordered lessons, sample seek/pause/translation, replay, and live playback isolation.');
+
+const overlayFile = path.join(root, 'components/onboarding/player-tour-overlay.tsx');
+const overlayCode = ts.transpileModule(fs.readFileSync(overlayFile, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+}).outputText;
+// Execute the production wrapper and retain its rendered host for assertions.
+const jsx = (type, props) => typeof type === 'function' ? type(props) : { type, props };
+const entrance = {};
+function loadOverlay(platform) {
+  const mocks = {
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'react-native': { Platform: { OS: platform }, StyleSheet: { create: styles => styles }, Text: 'Text', View: 'View' },
+    'react-native-reanimated': {
+      __esModule: true,
+      default: { View: 'Animated.View' },
+      FadeIn: { duration: () => ({ reduceMotion: () => entrance }) },
+      ReduceMotion: { System: 'system' },
+    },
+    'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
+    'expo-blur': { BlurView: 'BlurView' },
+    'expo-linear-gradient': { LinearGradient: 'LinearGradient' },
+    '@/components/ui/motion-pressable': { MotionPressable: 'Button' },
+    '@/constants/design': { Design: {} },
+    '@/store/player-tour-store': { usePlayerTourStore: store.getState, TOUR_STEPS },
+  };
+  const overlayContext = { exports: {}, require: name => {
+    assert.ok(Object.hasOwn(mocks, name), `Missing overlay mock for ${name}`);
+    return mocks[name];
+  } };
+  vm.runInNewContext(overlayCode, overlayContext, { filename: overlayFile });
+  return overlayContext.exports.PlayerTourOverlay;
+}
+
+const renderAndroidOverlay = loadOverlay('android');
+const renderIosOverlay = loadOverlay('ios');
+const overlayProps = { controlsHeight: 180, transitioning: false, landscape: false, fullscreen: false };
+store.getState().start();
+for (const step of TOUR_STEPS) {
+  store.setState({ step });
+  const android = renderAndroidOverlay(overlayProps);
+  assert.equal(android.type, 'View', `Android ${step} must use a plain View`);
+  assert.equal(Object.hasOwn(android.props, 'entering'), false);
+  if (step === 'welcome' || step === 'done') {
+    assert.equal(android.props.accessibilityViewIsModal, true);
+  } else {
+    assert.equal(android.props.pointerEvents, 'box-none');
+    assert.equal(android.props.children.props.accessibilityLiveRegion, 'polite');
+  }
+  const ios = renderIosOverlay(overlayProps);
+  assert.equal(ios.type, 'Animated.View');
+  assert.equal(ios.props.entering, entrance);
+}
+store.getState().finish();
+console.log('Player tour checks passed: player handlers, ordered lessons, playback isolation, and Android overlays without entering animations.');

@@ -1,13 +1,22 @@
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View, type ViewProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { MotionPressable as Button } from "@/components/ui/motion-pressable";
 import { Design } from "@/constants/design";
 import { TOUR_STEPS, usePlayerTourStore } from "@/store/player-tour-store";
 
-const overlayEntrance = FadeIn.duration(240).reduceMotion(ReduceMotion.System);
+// Keep Android tour prompts independent of native entering animations.
+const overlayEntrance = Platform.OS === "android"
+  ? null
+  : FadeIn.duration(240).reduceMotion(ReduceMotion.System);
+
+function OverlayView(props: ViewProps) {
+  return overlayEntrance === null
+    ? <View {...props} />
+    : <Animated.View {...props} entering={overlayEntrance} />;
+}
 
 const COPY = {
   welcome: ["Let's show you around", "Explore the app, or skip."],
@@ -127,9 +136,8 @@ export function PlayerTourOverlay({
   // presentation controller (status bar, Dynamic Island and orientation).
   if (dialog)
     return (
-      <Animated.View
+      <OverlayView
         key={step}
-        entering={overlayEntrance}
         style={[
           StyleSheet.absoluteFill,
           styles.overlay,
@@ -139,14 +147,13 @@ export function PlayerTourOverlay({
         accessibilityViewIsModal
       >
         {card}
-      </Animated.View>
+      </OverlayView>
     );
   // Keep instructions away from the current lyric, which sits near the top of the player.
   const bottom = !landscape && step !== "lyrics";
   return (
-    <Animated.View
+    <OverlayView
       key={step}
-      entering={overlayEntrance}
       pointerEvents="box-none"
       style={_stableStyle4}
     >
@@ -164,7 +171,7 @@ export function PlayerTourOverlay({
       >
         {card}
       </View>
-    </Animated.View>
+    </OverlayView>
   );
 }
 
