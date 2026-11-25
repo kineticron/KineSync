@@ -16,8 +16,7 @@ const React = require('react');
     clearLyrics() {}, setLyricsStatusMessage() {} };
   const mocks = {
     react: { ...React, forwardRef: component => component, useRef: value => ({ current: value }), useCallback: value => value,
-      useState: value => [value, () => {}], useEffect: effect => effects.push(effect),
-      useLayoutEffect: effect => effects.push(effect), useImperativeHandle() {} },
+      useState: value => [value, () => {}], useEffect: effect => effects.push(effect), useImperativeHandle() {} },
     'react/jsx-runtime': require('react/jsx-runtime'),
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', ActivityIndicator: 'Spinner', Platform: { OS: 'android', select: options => options.android ?? options.default },
       StyleSheet: { create: value => value, absoluteFill: {} }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
@@ -101,7 +100,14 @@ const React = require('react');
     { active: false, pending: false, onboardingVisible: false },
   ]) {
     tour = session;
-    const rootNodes = nodes(RootLayout()), playerNodes = nodes(PlayerLayout());
+    const root = RootLayout();
+    const safeArea = root.props.children;
+    assert.equal(safeArea.type, 'SafeAreaProvider');
+    assert.equal(safeArea.props.initialMetrics, undefined, 'the nested provider uses inherited insets');
+    assert.equal(safeArea.props.initialSafeAreaInsets, undefined, 'the legacy initial insets prop leaves inheritance in place');
+    assert.equal(safeArea.props.onInsetsChange, undefined, 'the provider owns its native insets handler');
+    assert.ok(nodes(safeArea).some(node => node.type === 'BridgeProvider'), 'setup stays under the app safe-area provider');
+    const rootNodes = nodes(root), playerNodes = nodes(PlayerLayout());
     for (const stack of [...rootNodes, ...playerNodes].filter(node => node.type === Stack)) {
       assert.equal(stack.props.screenOptions.statusBarHidden, false, 'native status bar stays visible independently of tour or orientation');
       assert.equal(stack.props.screenOptions.orientation,

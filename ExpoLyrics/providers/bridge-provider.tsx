@@ -19,10 +19,6 @@ import { router, usePathname } from 'expo-router';
 
 const ONBOARDING_COMPLETED_KEY = 'kinesync_onboarding_completed';
 
-function traceSetup(stage: string, event: 'start' | 'complete' | 'failed') {
-  if (Platform.OS === 'android') console.info('[BridgeProvider]', Date.now(), stage, event);
-}
-
 // ponytail: module-level callback so explore.tsx can trigger re-show without re-mounting
 let _showOnboardingCb: (() => void) | null = null;
 export function requestShowOnboarding() {
@@ -34,7 +30,7 @@ async function getOnboardingCompleted(): Promise<boolean> {
     const value = await AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY);
     return value === 'true';
   } catch {
-    traceSetup('onboarding marker read', 'failed');
+    console.warn('[BridgeProvider] Could not read onboarding completion');
     return false;
   }
 }
@@ -140,12 +136,10 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let active = true;
     void (async () => {
-      traceSetup('playback defaults', 'start');
       try {
         await initPlaybackStoreDefaults();
-        if (active) traceSetup('playback defaults', 'complete');
       } catch {
-        if (active) traceSetup('playback defaults', 'failed');
+        if (active) console.warn('[BridgeProvider] Failed to load persisted playback settings');
       }
       if (!active) return;
 
@@ -156,23 +150,18 @@ export function BridgeProvider({ children }: PropsWithChildren) {
         usePlayerTourStore.getState().requestStart();
         setShowOnboarding(false);
         setOnboardingChecked(true);
-        traceSetup('benchmark ready', 'complete');
         return;
       }
 
-      let stage = 'onboarding marker';
+      let stage = 'reading bridge settings';
       try {
-        traceSetup(stage, 'start');
         const completed = await getOnboardingCompleted();
         if (!active) return;
-        traceSetup(stage, 'complete');
-        stage = 'bridge settings';
-        traceSetup(stage, 'start');
         const bridgeSettings = await getBridgeSettings();
         if (!active) return;
-        traceSetup(stage, 'complete');
 
         let state = usePlaybackStore.getState();
+        stage = 'resolving the default bridge URL';
         const defaultBridgeUrl = inferDefaultBridgeUrl();
 
         if (
@@ -181,8 +170,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
           !bridgeSettings.serverUrl &&
           state.serverUrl === defaultBridgeUrl
         ) {
-          stage = 'legacy bridge cleanup';
-          traceSetup(stage, 'start');
+          stage = 'clearing the legacy bridge configuration';
           state.setServerUrl("");
           state.setHandshakeKey("");
           await saveBridgeSettings({
@@ -191,7 +179,6 @@ export function BridgeProvider({ children }: PropsWithChildren) {
             onboardingCompleted: true,
           }, { isCurrent: () => active });
           if (!active) return;
-          traceSetup(stage, 'complete');
           state = usePlaybackStore.getState();
         }
 
@@ -199,20 +186,15 @@ export function BridgeProvider({ children }: PropsWithChildren) {
           setShowOnboarding(true);
         }
         if (bridgeSettings.playbackMode === 'desktop' && state.serverUrl) {
-          stage = 'bridge connect';
-          traceSetup(stage, 'start');
+          stage = 'connecting to the desktop bridge';
           bridgeClient.connect();
-          traceSetup(stage, 'complete');
         }
       } catch {
         if (!active) return;
-        traceSetup(stage, 'failed');
+        console.warn(`[BridgeProvider] Setup restore failed while ${stage}`);
         setShowOnboarding(true);
       } finally {
-        if (active) {
-          setOnboardingChecked(true);
-          traceSetup('onboarding readiness', 'complete');
-        }
+        if (active) setOnboardingChecked(true);
       }
     })();
     return () => { active = false; };

@@ -43,16 +43,9 @@ type LaunchRun = {
   deadline: ReturnType<typeof setTimeout>;
   measurement?: ReturnType<typeof setTimeout>;
   reveal?: ReturnType<typeof setTimeout>;
-  finish: (reason: string) => void;
-  releaseSplash: (reason: string) => void;
+  finish: () => void;
+  releaseSplash: () => void;
 };
-
-function trace(event: string, data: Record<string, unknown> = {}) {
-  if (Platform.OS === 'android') {
-    console.info('[LaunchTransition]', Date.now(), event, JSON.stringify(data, (_, value) =>
-      typeof value === 'number' && !Number.isFinite(value) ? String(value) : value));
-  }
-}
 
 function positiveMetric(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -66,23 +59,19 @@ export function getLaunchCameraFocus(scale: number, travel: number) {
 }
 
 function Wordmark({ onMetrics }: { onMetrics?: (metrics: WordmarkMetrics) => void }) {
-  const measure = (key: 'width' | 'prefix' | 'throughE', { width, height }: { width: number; height: number }) => {
-    trace('text layout', { key, width, height });
+  const measure = (key: 'width' | 'prefix' | 'throughE', width: number) => {
     onMetrics?.({ [key]: width });
   };
   return <View style={styles.wordmark} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     <Text allowFontScaling={false} style={styles.name}
-      onLayout={onMetrics && (event => measure('width', event.nativeEvent.layout))}
+      onLayout={onMetrics && (event => measure('width', event.nativeEvent.layout.width))}
       onTextLayout={onMetrics && (event => {
-        const lines = event.nativeEvent.lines ?? [];
-        const first = lines[0];
-        const line = first ? { y: first.y, ascender: first.ascender, xHeight: first.xHeight } : null;
-        trace('text lines', { count: lines.length, line, width: first?.width, height: first?.height });
-        onMetrics({ line });
+        const first = event.nativeEvent.lines?.[0];
+        onMetrics({ line: first ? { y: first.y, ascender: first.ascender, xHeight: first.xHeight } : null });
       })}>KineSync</Text>
     {onMetrics && <View style={styles.measurements}>
-      <Text allowFontScaling={false} style={styles.name} onLayout={event => measure('prefix', event.nativeEvent.layout)}>Kin</Text>
-      <Text allowFontScaling={false} style={styles.name} onLayout={event => measure('throughE', event.nativeEvent.layout)}>Kine</Text>
+      <Text allowFontScaling={false} style={styles.name} onLayout={event => measure('prefix', event.nativeEvent.layout.width)}>Kin</Text>
+      <Text allowFontScaling={false} style={styles.name} onLayout={event => measure('throughE', event.nativeEvent.layout.width)}>Kine</Text>
     </View>}
   </View>;
 }
@@ -125,22 +114,20 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
   // cancel a running animation or start it again.
   useEffect(() => {
     let splashRetry: ReturnType<typeof setTimeout> | undefined;
-    const releaseSplash = (reason: string) => {
+    const releaseSplash = () => {
       const release = splashRelease.current;
       if (runRef.current !== run || release.acknowledged || splashRetry !== undefined || release.attempts >= 2) return;
       const attempt = ++release.attempts;
-      trace('splash release requested', { reason, attempt });
       try {
         // Expo's native hideAsync wrapper calls this synchronous operation.
         SplashScreen.hide();
         release.acknowledged = true;
-        trace('splash release acknowledged', { attempt });
       } catch {
-        console.warn('[LaunchTransition]', Date.now(), 'splash release failed', attempt);
+        console.warn(`[LaunchTransition] Native splash release failed (attempt ${attempt} of 2)`);
         if (attempt === 1) {
           splashRetry = setTimeout(() => {
             splashRetry = undefined;
-            releaseSplash('retry');
+            releaseSplash();
           }, SPLASH_RETRY_MS);
         }
       }
@@ -154,17 +141,16 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
     const run: LaunchRun = {
       started: false,
       finished: false,
-      deadline: setTimeout(() => run.finish('startup timeout'), STARTUP_TIMEOUT_MS),
+      deadline: setTimeout(() => run.finish(), STARTUP_TIMEOUT_MS),
       releaseSplash,
-      finish: reason => {
+      finish: () => {
         if (runRef.current !== run || run.finished) return;
         run.finished = true;
         clearTimeout(run.measurement);
         clearTimeout(run.deadline);
         clearTimeout(run.reveal);
-        releaseSplash(reason);
+        releaseSplash();
         if (run.started) stopMotion();
-        trace('transition finished', { reason });
         setFinished(true);
       },
     };
@@ -181,16 +167,12 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
 
   useEffect(() => {
     const hasCrossbar = validCrossbarY !== undefined;
-    trace('gates', {
-      laidOut, ready, wordWidth, prefix, throughE, rawCrossbarY, hasWidths, hasCrossbar, measurementExpired, reduceMotion, finished,
-      originalGate: !!(laidOut && ready && wordWidth && prefix && throughE && rawCrossbarY),
-    });
     const run = runRef.current;
     if (!run || !laidOut) return;
-    if (android) run.releaseSplash('root layout');
+    if (android) run.releaseSplash();
     if (finished || run.started || run.finished) return;
     if (motionStarted.current) {
-      run.finish('animation interrupted');
+      run.finish();
       return;
     }
     if (android && !measurementExpired && run.measurement === undefined) {
@@ -200,11 +182,11 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
     }
     if (!ready) return;
     if (reduceMotion) {
-      run.finish('reduced motion');
+      run.finish();
       return;
     }
     if (!hasWidths) {
-      if (android && measurementExpired) run.finish('missing wordmark widths');
+      if (android && measurementExpired) run.finish();
       return;
     }
     if (!hasCrossbar && (!android || (line === undefined && !measurementExpired))) return;
@@ -213,17 +195,14 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
     motionStarted.current = true;
     clearTimeout(run.measurement);
     clearTimeout(run.deadline);
-    run.deadline = setTimeout(() => run.finish('animation timeout'), DURATION_MS + ANIMATION_GRACE_MS);
+    run.deadline = setTimeout(() => run.finish(), DURATION_MS + ANIMATION_GRACE_MS);
     setCameraTarget({
       focusX: -wordWidth / 2 + (prefix + throughE) / 2,
       focusY: (validCrossbarY ?? FALLBACK_CROSSBAR_Y) - 21,
     });
-    run.releaseSplash('animation start');
-    trace('animation started', { fallbackCrossbar: !hasCrossbar });
+    run.releaseSplash();
     const complete = (completed: boolean) => {
-      if (runRef.current !== run || run.finished) return;
-      trace('animation callback', { completed });
-      if (completed) run.finish('animation complete');
+      if (completed) run.finish();
     };
     run.reveal = setTimeout(() => {
       if (runRef.current === run && !run.finished) setContentVisible(true);
@@ -241,7 +220,7 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
     ));
     focus.value = withDelay(REVEAL_MS + COMPRESS_MS, withTiming(1, { duration: ZOOM_MS, easing: Easing.in(Easing.cubic) }));
   }, [android, brandScale, contentOffset, finished, focus, hasWidths, laidOut, line, measurementExpired,
-    prefix, progress, rawCrossbarY, ready, reduceMotion, throughE, validCrossbarY, wordWidth, zoomScale]);
+    prefix, progress, ready, reduceMotion, throughE, validCrossbarY, wordWidth, zoomScale]);
 
   const wordmarkStyle = useAnimatedStyle(() => {
     const cameraFocus = getLaunchCameraFocus(brandScale.value, focus.value);
@@ -292,7 +271,6 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
   return (
     <View style={styles.root} onLayout={event => {
       const { width, height } = event.nativeEvent.layout;
-      trace('root layout', { width, height });
       if (positiveMetric(width) && positiveMetric(height)) setLaidOut(true);
     }}>
       <Animated.View

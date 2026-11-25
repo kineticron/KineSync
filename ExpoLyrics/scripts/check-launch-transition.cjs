@@ -17,9 +17,9 @@ function interpolate(value, input, output) {
   return output.at(-1);
 }
 
-function load(file, mocks, globals) {
+function load(file, mocks, globals, source = fs.readFileSync(path.join(__dirname, '..', file), 'utf8')) {
   const scope = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, ...globals };
-  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
+  vm.runInNewContext(ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText, scope);
   return scope.exports;
@@ -108,44 +108,10 @@ function timerHarness() {
   };
 }
 
-for (const [os, initialWindowMetrics] of [['android', null], ['android', { frame: {}, insets: {} }], ['ios', null]]) {
-  const hooks = hookHarness();
-  const logs = [];
-  const { default: RootLayout } = load('app/_layout.tsx', {
-    react: hooks.react,
-    'react/jsx-runtime': require('react/jsx-runtime'),
-    'react-native': { Platform: { OS: os } },
-    'expo-router/react-navigation': { DarkTheme: { colors: {} }, ThemeProvider: 'ThemeProvider' },
-    'expo-router': { Stack: Object.assign(() => null, { Screen: 'Screen' }) },
-    'expo-status-bar': { StatusBar: 'StatusBar' },
-    'react-native-gesture-handler': { GestureHandlerRootView: 'GestureHandlerRootView' },
-    'react-native-safe-area-context': { SafeAreaProvider: 'SafeAreaProvider', initialWindowMetrics },
-    'react-native-reanimated': {},
-    '@/providers/bridge-provider': { BridgeProvider: 'BridgeProvider' },
-    '@/constants/design': { Design: {} },
-    '@/store/player-tour-store': { usePlayerTourStore: () => false },
-  }, { console: { info: (...args) => logs.push(args) } });
-  const provider = hooks.render(RootLayout).props.children;
-  assert.equal(provider.type, 'SafeAreaProvider');
-  assert.equal(provider.props.initialMetrics, undefined, 'leave Expo Router’s inherited insets in place');
-  assert.equal(provider.props.onInsetsChange, undefined, 'preserve the internal insets handler');
-  if (os === 'android') {
-    provider.props.onLayout({ nativeEvent: { layout: { width: 0, height: 844 } } });
-    assert.deepEqual(logs.map(entry => entry[2]), ['module loaded', 'mounted', 'safe area provider layout']);
-    assert.ok(logs.every(entry => typeof entry[1] === 'number'));
-    assert.equal(JSON.parse(logs[0][3]).initialWindowMetricsAvailable, initialWindowMetrics !== null);
-    assert.equal(JSON.parse(logs[2][3]).width, 0);
-  } else {
-    assert.equal(provider.props.onLayout, undefined);
-    assert.equal(logs.length, 0);
-  }
-  hooks.unmount();
-}
-
-function launchHarness({ os = 'android', reduceMotion = false, width = 390, height = 844, splashFailures = 0, beforeEffects } = {}) {
+function launchHarness({ os = 'android', reduceMotion = false, width = 390, height = 844, splashFailures = 0, beforeEffects, source } = {}) {
   const hooks = hookHarness();
   const timers = timerHarness();
-  const values = [], styles = [], completions = [], logs = [];
+  const values = [], styles = [], completions = [], warnings = [];
   const calls = { hide: 0, cancel: 0, reload: 0 };
   let valueIndex, styleIndex;
   const { LaunchTransition, launchTiming } = load('components/ui/launch-transition.tsx', {
@@ -158,6 +124,7 @@ function launchHarness({ os = 'android', reduceMotion = false, width = 390, heig
     expo: { reloadAppAsync: async () => { calls.reload++; } },
     'expo-splash-screen': {
       preventAutoHideAsync: () => Promise.resolve(),
+      hideAsync: async () => { calls.hide++; },
       hide: () => {
         if (++calls.hide <= splashFailures) throw Error('native hide failed');
       },
@@ -179,8 +146,8 @@ function launchHarness({ os = 'android', reduceMotion = false, width = 390, heig
     './launch-visibility': { LaunchVisibilityContext: { Provider: 'VisibilityProvider' } },
   }, {
     setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
-    console: { info: (...args) => logs.push(args), warn: (...args) => logs.push(args) },
-  });
+    console: { warn: message => warnings.push(message) },
+  }, source);
   let tree, ready = false;
   const render = (nextReady = ready, beforeCommitEffects) => {
     ready = nextReady;
@@ -203,7 +170,7 @@ function launchHarness({ os = 'android', reduceMotion = false, width = 390, heig
     return element.type(element.props);
   };
   const launch = {
-    render, timers, values, styles, timing: launchTiming, calls, completions, logs,
+    render, timers, values, styles, timing: launchTiming, calls, completions, warnings,
     unmount: hooks.unmount,
     replayEffects: hooks.replayEffects,
     layout: (w = width, h = height) => tree.props.onLayout(nativeLayout(w, h)),
@@ -295,14 +262,6 @@ for (const [line, targetY] of [
   launch.render(true);
   assert.equal(launch.calls.hide, 1, 'native splash releases at root layout');
   assert.equal(launch.completions.length, 1);
-  const raw = launch.logs.find(entry => entry[2] === 'text lines');
-  assert.equal(typeof raw[1], 'number');
-  assert.equal(JSON.parse(raw[3]).line?.xHeight, line?.xHeight);
-  if (line?.xHeight === 0) {
-    const measuredGate = launch.logs.find(entry => entry[2] === 'gates' && JSON.parse(entry[3]).ready);
-    assert.equal(JSON.parse(measuredGate[3]).originalGate, line.ascender !== 0,
-      'the original gate evidence is independent of the animation fallback');
-  }
   const [, scale, focus] = launch.values;
   scale.value = 1;
   focus.value = 0;
@@ -381,9 +340,6 @@ for (const reduceMotion of [false, true]) {
   launch.timers.advance(400);
   launch.render();
   assert.equal(launch.calls.hide, 0, 'zero-size root does not begin the launch animation');
-  const root = launch.logs.find(entry => entry[2] === 'root layout');
-  assert.equal(typeof root[1], 'number');
-  assert.equal(JSON.parse(root[3]).width, 0, 'log callback entry even when dimensions are rejected');
   launch.timers.advance(4600);
   launch.render();
   assert.equal(launch.calls.hide, 1, 'missing root layout still has a deadline');
@@ -506,8 +462,8 @@ for (const failures of [1, 2]) {
   launch.timers.advance(150);
   launch.render();
   assert.equal(launch.calls.hide, 2);
-  assert.equal(launch.logs.filter(entry => entry[2] === 'splash release acknowledged').length, failures === 1 ? 1 : 0);
-  assert.equal(launch.logs.filter(entry => entry[2] === 'splash release failed').length, failures);
+  assert.equal(launch.warnings.length, failures);
+  launch.warnings.forEach((message, index) => assert.match(message, new RegExp(`attempt ${index + 1} of 2`)));
   launch.timers.advance(10000);
   assert.equal(launch.calls.hide, 2, 'native release retry is bounded');
   assert.equal(launch.timers.pending, 0);
@@ -523,13 +479,94 @@ for (const failures of [1, 2]) {
   assert.equal(launch.calls.hide, 1, 'unmount cancels pending native splash retry');
 }
 
-async function checkSetupReadiness() {
-  for (const outcome of ['fresh', 'completed', 'defaults rejected', 'restore rejected', 'unmounted']) {
+// Opt-in experiments load the exact baseline source from stdin, with the same
+// hook, clock and native mocks as the production regression checks.
+function compareBaselineLaunch(baseline) {
+  for (const source of [baseline, undefined]) {
+    const isBaseline = source === baseline;
+    const control = launchHarness({ source, reduceMotion: true });
+    sendLayoutFacts(control);
+    control.render(true);
+    assert.equal(control.calls.hide, 1);
+    assert.ok(control.interactive, 'complete layout and setup allow both reduced-motion paths to finish');
+    control.unmount();
+
+    const missingLine = launchHarness({ source, reduceMotion: true });
+    missingLine.layout();
+    missingLine.widths();
+    missingLine.render(true);
+    missingLine.timers.advance(5000);
+    missingLine.render();
+    assert.equal(missingLine.calls.hide, isBaseline ? 0 : 1);
+    assert.equal(missingLine.interactive, !isBaseline, 'only the baseline reduced-motion path requires the missing line');
+    missingLine.unmount();
+
+    const interrupted = launchHarness({ source });
+    sendLayoutFacts(interrupted);
+    interrupted.render(true);
+    interrupted.widths(155); // A late layout changes only the full wordmark width.
+    interrupted.render(true);
+    assert.equal(interrupted.calls.cancel, isBaseline ? 4 : 0);
+    assert.equal(interrupted.completions.length, isBaseline ? 2 : 1);
+    interrupted.completions[0](false); // No successful worklet completion is delivered.
+    interrupted.timers.advance(interrupted.timing.duration + 400);
+    interrupted.render();
+    assert.equal(Boolean(interrupted.overlay), isBaseline, 'the animation deadline removes a stalled overlay');
+    assert.equal(interrupted.interactive, !isBaseline);
+    interrupted.unmount();
+  }
+  console.log('Baseline comparison passed for the missing-line gate and gate-change cleanup.');
+}
+
+function checkSafeAreaOrdering() {
+  const frame = { x: 0, y: 0, width: 390, height: 844 };
+  const insets = { top: 24, right: 0, bottom: 24, left: 0 };
+  function mountProvider(parent, props) {
     const hooks = hookHarness();
-    let resolveDefaults, rejectDefaults, connects = 0, legacyReads = 0;
+    const { SafeAreaProvider, SafeAreaInsetsContext } = load('node_modules/react-native-safe-area-context/src/SafeAreaContext.tsx', {
+      react: {
+        ...hooks.react,
+        useContext: context => context === SafeAreaInsetsContext ? parent?.insets : parent?.frame,
+      },
+      'react/jsx-runtime': require('react/jsx-runtime'),
+      'react-native': { Dimensions: { get: () => frame }, StyleSheet: { create: value => value } },
+      './NativeSafeAreaProvider': { NativeSafeAreaProvider: 'NativeSafeAreaProvider' },
+    }, { process: { env: { NODE_ENV: 'production' } } });
+    return () => hooks.render(SafeAreaProvider, props);
+  }
+
+  // Expo Router supplies no initial metrics on native production. Mount the
+  // nested provider only after the installed outer provider exposes its child.
+  const route = 'RootLayout';
+  const outer = mountProvider(null, { children: route });
+  const beforeInsets = outer();
+  assert.equal(beforeInsets.props.children, null);
+  beforeInsets.props.onInsetsChange({ nativeEvent: { frame, insets } });
+  const inherited = outer().props.children.props.children;
+  assert.equal(inherited.props.children, route);
+  assert.deepEqual(inherited.props.value, insets);
+
+  const nested = mountProvider({ insets: inherited.props.value, frame }, { children: 'BridgeProvider' });
+  assert.equal(nested().props.children.props.children.props.children, 'BridgeProvider');
+  console.log('Safe-area ordering passed with simulated outer insets and a delayed nested event.');
+}
+
+if (process.argv.includes('--compare-baseline-launch')) {
+  compareBaselineLaunch(fs.readFileSync(0, 'utf8'));
+  checkSafeAreaOrdering();
+}
+
+async function checkSetupReadiness() {
+  for (const outcome of ['fresh', 'completed', 'defaults rejected', 'restore rejected', 'unmounted', 'tour-amll', 'tour-spicy']) {
+    const benchmark = outcome === 'tour-amll' || outcome === 'tour-spicy';
+    const hooks = hookHarness();
+    let resolveDefaults, rejectDefaults, connects = 0, legacyReads = 0, settingsReads = 0, tourStarts = 0, style;
     let marker = outcome === 'completed' || outcome === 'defaults rejected' ? 'true' : null;
     const defaults = new Promise((resolve, reject) => { resolveDefaults = resolve; rejectDefaults = reject; });
-    const state = { serverUrl: outcome === 'defaults rejected' || outcome === 'unmounted' ? 'ws://bridge' : '' };
+    const state = {
+      serverUrl: outcome === 'defaults rejected' || outcome === 'unmounted' ? 'ws://bridge' : '',
+      setLyricsStyle: value => { style = value; },
+    };
     const { BridgeProvider, requestShowOnboarding } = load('providers/bridge-provider.tsx', {
       react: hooks.react,
       'react/jsx-runtime': require('react/jsx-runtime'),
@@ -539,12 +576,20 @@ async function checkSetupReadiness() {
         BackHandler: { addEventListener: () => ({ remove() {} }) },
       },
       '@react-native-async-storage/async-storage': {
-        getItem: async () => { legacyReads++; return marker; },
-        setItem: async (_, value) => { marker = value; },
+        getItem: async key => {
+          assert.equal(key, 'kinesync_onboarding_completed');
+          legacyReads++;
+          return marker;
+        },
+        setItem: async (key, value) => {
+          assert.equal(key, 'kinesync_onboarding_completed');
+          marker = value;
+        },
       },
       '@/lib/bridge-client': { bridgeClient: { connect: () => connects++, disconnect() {} } },
       '@/lib/bridge-settings': {
         getBridgeSettings: async () => {
+          settingsReads++;
           if (outcome === 'restore rejected') throw Error('setup restore failed');
           return {
             onboardingCompleted: false,
@@ -553,7 +598,7 @@ async function checkSetupReadiness() {
           };
         },
       },
-      '@/lib/network': { extractHost: () => undefined },
+      '@/lib/network': { extractHost: () => undefined, isPrivateIpv4: () => false },
       '@/store/playback-store': {
         initPlaybackStoreDefaults: () => defaults, stopPlaybackClock() {},
         usePlaybackStore: { getState: () => state },
@@ -561,18 +606,19 @@ async function checkSetupReadiness() {
       '@/components/onboarding/onboarding-screen': { Onboarding: 'Onboarding' },
       '@/lib/live-activity': { startLiveActivitySync() {} },
       '@/components/ui/launch-transition': { LaunchTransition: 'LaunchTransition' },
-      '@/store/player-tour-store': { usePlayerTourStore: { setState() {}, getState: () => ({ requestStart() {} }) } },
+      '@/store/player-tour-store': { usePlayerTourStore: { setState() {}, getState: () => ({ requestStart: () => tourStarts++ }) } },
       'expo-router': { usePathname: () => '/' },
       'expo-constants': { default: {} },
     }, {
-      process: { env: {} }, console: { info() {}, warn() {} },
+      process: { env: benchmark ? { EXPO_PUBLIC_PERFORMANCE_SCENARIO: outcome } : {} },
+      console: { warn() {} },
     });
     const render = () => hooks.render(BridgeProvider, { children: 'App' });
     const initial = render();
     assert.equal(initial.props.ready, false);
     assert.equal(initial.props.children[1], false);
     if (outcome === 'unmounted') hooks.unmount();
-    if (outcome === 'defaults rejected') rejectDefaults(Error('defaults failed'));
+    if (outcome === 'defaults rejected' || outcome === 'tour-spicy') rejectDefaults(Error('defaults failed'));
     else resolveDefaults();
     for (let i = 0; i < 10; i++) await Promise.resolve();
     if (outcome === 'unmounted') {
@@ -583,14 +629,19 @@ async function checkSetupReadiness() {
     const settled = render();
     assert.equal(settled.props.ready, true);
     assert.equal(Boolean(settled.props.children[1]), outcome === 'fresh' || outcome === 'restore rejected');
-    assert.equal(legacyReads, 1, 'existing marker precedence is preserved');
+    assert.equal(legacyReads, benchmark ? 0 : 1, 'benchmark skips onboarding persistence reads');
+    assert.equal(settingsReads, benchmark ? 0 : 1, 'benchmark skips bridge restore');
+    assert.equal(style, benchmark ? outcome.slice('tour-'.length) : undefined);
+    assert.equal(tourStarts, benchmark ? 1 : 0);
     assert.equal(connects, outcome === 'defaults rejected' ? 1 : 0, 'configured desktop setup restores after defaults rejection');
     if (outcome === 'completed') {
+      marker = null; // Settings clears the stored completion before opening setup again.
       requestShowOnboarding();
       const onboarding = render().props.children[1].props.children;
       await onboarding.props.onDismiss();
       assert.equal(render().props.children[1], false, 'explicit replay dismiss restores the player');
       assert.equal(marker, 'true');
+      assert.equal(tourStarts, 1);
     }
     hooks.unmount();
   }
