@@ -1,9 +1,10 @@
 import { DarkTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Platform } from 'react-native';
+import { useLayoutEffect } from 'react';
+import { Platform, type LayoutChangeEvent } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { BridgeProvider } from '@/providers/bridge-provider';
@@ -12,16 +13,30 @@ import { usePlayerTourStore } from '@/store/player-tour-store';
 
 const appTheme = { ...DarkTheme, colors: { ...DarkTheme.colors, background: Design.background, card: Design.background, primary: Design.accent } };
 
+if (Platform.OS === 'android') {
+  console.info('[RootLayout]', Date.now(), 'module loaded', JSON.stringify({
+    initialWindowMetricsAvailable: initialWindowMetrics != null,
+  }));
+}
+
+function traceSafeAreaLayout({ nativeEvent: { layout: { width, height } } }: LayoutChangeEvent) {
+  console.info('[RootLayout]', Date.now(), 'safe area provider layout', JSON.stringify({ width, height }));
+}
+
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
 export default function RootLayout() {
+  useLayoutEffect(() => {
+    if (Platform.OS === 'android') console.info('[RootLayout]', Date.now(), 'mounted');
+  }, []);
+
   const touring = usePlayerTourStore(state => state.active || state.pending);
   const portraitOnly = usePlayerTourStore(state => state.active || state.pending);
   return (
     <GestureHandlerRootView style={_stableStyle1}>
-      <SafeAreaProvider>
+      <SafeAreaProvider onLayout={Platform.OS === 'android' ? traceSafeAreaLayout : undefined}>
         <ThemeProvider value={appTheme}>
           <BridgeProvider>
             <Stack screenOptions={{ orientation: portraitOnly ? 'portrait' : 'default', statusBarHidden: false, statusBarStyle: 'light', contentStyle: { backgroundColor: Design.background } }}>

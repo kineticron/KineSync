@@ -16,7 +16,8 @@ const React = require('react');
     clearLyrics() {}, setLyricsStatusMessage() {} };
   const mocks = {
     react: { ...React, forwardRef: component => component, useRef: value => ({ current: value }), useCallback: value => value,
-      useState: value => [value, () => {}], useEffect: effect => effects.push(effect), useImperativeHandle() {} },
+      useState: value => [value, () => {}], useEffect: effect => effects.push(effect),
+      useLayoutEffect: effect => effects.push(effect), useImperativeHandle() {} },
     'react/jsx-runtime': require('react/jsx-runtime'),
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', ActivityIndicator: 'Spinner', Platform: { OS: 'android', select: options => options.android ?? options.default },
       StyleSheet: { create: value => value, absoluteFill: {} }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },

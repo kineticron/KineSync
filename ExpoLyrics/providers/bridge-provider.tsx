@@ -19,6 +19,10 @@ import { router, usePathname } from 'expo-router';
 
 const ONBOARDING_COMPLETED_KEY = 'kinesync_onboarding_completed';
 
+function traceSetup(stage: string, event: 'start' | 'complete' | 'failed') {
+  if (Platform.OS === 'android') console.info('[BridgeProvider]', Date.now(), stage, event);
+}
+
 // ponytail: module-level callback so explore.tsx can trigger re-show without re-mounting
 let _showOnboardingCb: (() => void) | null = null;
 export function requestShowOnboarding() {
@@ -30,6 +34,7 @@ async function getOnboardingCompleted(): Promise<boolean> {
     const value = await AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY);
     return value === 'true';
   } catch {
+    traceSetup('onboarding marker read', 'failed');
     return false;
   }
 }
@@ -95,7 +100,6 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   useEffect(startLiveActivitySync, []);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [initialized, setInitialized] = useState(false);
 
   // Keep setup portrait-only, including the handoff from onboarding to the tour.
   useEffect(() => {
@@ -115,17 +119,6 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    // Initialize store with persisted settings
-    (async () => {
-      try {
-        await initPlaybackStoreDefaults();
-        // Store defaults are already loaded into the store via initPlaybackStoreDefaults
-      } catch (error) {
-        console.warn('[BridgeProvider] Failed to load persisted settings:', error);
-      }
-      setInitialized(true);
-    })();
-
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         const playbackState = usePlaybackStore.getState();
@@ -145,24 +138,40 @@ export function BridgeProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    if (!initialized) return;
-
-    // Explicit benchmark builds use the same production renderer and looping
-    // tour fixture without a network/login dependency. Normal builds omit it.
-    const performanceScenario = process.env.EXPO_PUBLIC_PERFORMANCE_SCENARIO;
-    if (performanceScenario === 'tour-amll' || performanceScenario === 'tour-spicy') {
-      usePlaybackStore.getState().setLyricsStyle(performanceScenario === 'tour-amll' ? 'amll' : 'spicy');
-      usePlayerTourStore.getState().requestStart();
-      setShowOnboarding(false);
-      setOnboardingChecked(true);
-      return;
-    }
-
-    // Check if onboarding was completed before, then connect only when desktop mode is configured.
-    (async () => {
+    let active = true;
+    void (async () => {
+      traceSetup('playback defaults', 'start');
       try {
+        await initPlaybackStoreDefaults();
+        if (active) traceSetup('playback defaults', 'complete');
+      } catch {
+        if (active) traceSetup('playback defaults', 'failed');
+      }
+      if (!active) return;
+
+      // Keep the benchmark path available even if optional defaults fail.
+      const performanceScenario = process.env.EXPO_PUBLIC_PERFORMANCE_SCENARIO;
+      if (performanceScenario === 'tour-amll' || performanceScenario === 'tour-spicy') {
+        usePlaybackStore.getState().setLyricsStyle(performanceScenario === 'tour-amll' ? 'amll' : 'spicy');
+        usePlayerTourStore.getState().requestStart();
+        setShowOnboarding(false);
+        setOnboardingChecked(true);
+        traceSetup('benchmark ready', 'complete');
+        return;
+      }
+
+      let stage = 'onboarding marker';
+      try {
+        traceSetup(stage, 'start');
         const completed = await getOnboardingCompleted();
+        if (!active) return;
+        traceSetup(stage, 'complete');
+        stage = 'bridge settings';
+        traceSetup(stage, 'start');
         const bridgeSettings = await getBridgeSettings();
+        if (!active) return;
+        traceSetup(stage, 'complete');
+
         let state = usePlaybackStore.getState();
         const defaultBridgeUrl = inferDefaultBridgeUrl();
 
@@ -172,31 +181,42 @@ export function BridgeProvider({ children }: PropsWithChildren) {
           !bridgeSettings.serverUrl &&
           state.serverUrl === defaultBridgeUrl
         ) {
+          stage = 'legacy bridge cleanup';
+          traceSetup(stage, 'start');
           state.setServerUrl("");
           state.setHandshakeKey("");
           await saveBridgeSettings({
             serverUrl: "",
             handshakeKey: "",
             onboardingCompleted: true,
-          });
+          }, { isCurrent: () => active });
+          if (!active) return;
+          traceSetup(stage, 'complete');
           state = usePlaybackStore.getState();
         }
 
         if (!completed && (!state.serverUrl || state.serverUrl === defaultBridgeUrl)) {
           setShowOnboarding(true);
         }
-
         if (bridgeSettings.playbackMode === 'desktop' && state.serverUrl) {
+          stage = 'bridge connect';
+          traceSetup(stage, 'start');
           bridgeClient.connect();
+          traceSetup(stage, 'complete');
         }
-      } catch (error) {
-        console.warn('[BridgeProvider] Failed to restore setup:', error);
+      } catch {
+        if (!active) return;
+        traceSetup(stage, 'failed');
         setShowOnboarding(true);
       } finally {
-        setOnboardingChecked(true);
+        if (active) {
+          setOnboardingChecked(true);
+          traceSetup('onboarding readiness', 'complete');
+        }
       }
     })();
-  }, [initialized]);
+    return () => { active = false; };
+  }, []);
 
   const handleOnboardingDismiss = async () => {
     await setOnboardingCompleted(true);
@@ -210,7 +230,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       <View style={_stableStyle1} aria-hidden={showOnboarding} accessibilityElementsHidden={showOnboarding} importantForAccessibility={showOnboarding ? 'no-hide-descendants' : 'auto'}>
         {children}
       </View>
-      {showOnboarding && (
+      {onboardingChecked && showOnboarding && (
         <View style={StyleSheet.absoluteFill} accessibilityViewIsModal>
           <Onboarding onDismiss={handleOnboardingDismiss} />
         </View>
