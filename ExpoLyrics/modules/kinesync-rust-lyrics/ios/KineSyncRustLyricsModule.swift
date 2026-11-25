@@ -10,12 +10,18 @@ public final class KineSyncRustLyricsModule: Module {
     Function("abiVersion") { kr_abi_version() }
     Function("monotonicMs") { CACurrentMediaTime() * 1000 }
     View(KineSyncRustLyricsView.self) {
+      #if DEBUG
       Events("onStatus", "onMetrics")
+      #else
+      Events("onStatus")
+      #endif
       Prop("trackJson") { (view: KineSyncRustLyricsView, value: String) in view.setTrack(value) }
       Prop("active") { (view: KineSyncRustLyricsView, value: Bool) in view.setActive(value) }
+      #if DEBUG
       AsyncFunction("copyLayout") { (view: KineSyncRustLyricsView, promise: Promise) in
         MainActor.assumeIsolated { view.copyLayout(promise) }
       }
+      #endif
       AsyncFunction("setAnchor") { (view: KineSyncRustLyricsView, value: String) in
         // Expo's ViewDefinitionBuilder routes owner AsyncFunctions to main.
         MainActor.assumeIsolated { view.setAnchor(value) }
@@ -70,7 +76,9 @@ private final class RustOwner: @unchecked Sendable {
   private var anchor: Anchor?
   private var size = CGSize.zero
   private var scale: CGFloat = 1
+  #if DEBUG
   private var lastMetrics = 0.0
+  #endif
   // Bundle bytes are cached once, loaded on the worker, never resolved via Metro per frame.
   private static let fontBundle: Bundle? = {
     let url = [Bundle.main, Bundle(for: KineSyncRustLyricsModule.self)].compactMap { $0.url(forResource: "KineSyncLyricsFonts", withExtension: "bundle") }.first
@@ -113,6 +121,7 @@ private final class RustOwner: @unchecked Sendable {
     if result < 0 { failure(); return false }
     return true
   }
+  #if DEBUG
   private func layoutReceipt() -> String {
     let capacity = kr_copy_layout_json(handle, nil, 0)
     guard capacity > 0, capacity <= 8_000_000 else { return "" }
@@ -121,6 +130,7 @@ private final class RustOwner: @unchecked Sendable {
     guard actual == capacity else { return "" }
     return String(decoding: bytes.dropLast(), as: UTF8.self)
   }
+  #endif
   private struct SurfaceInput {
     let track: String
     let anchor: Anchor?
@@ -149,11 +159,15 @@ private final class RustOwner: @unchecked Sendable {
     DispatchQueue.main.async { self.report(snapshot) }
   }
   private func failure() {
+    failed = true
+    #if DEBUG
     var bytes = [CChar](repeating: 0, count: 2048)
     let capacity = bytes.count
     bytes.withUnsafeMutableBufferPointer { buffer in kr_copy_error(buffer.baseAddress, capacity) }
-    failed = true
     emit(["state": "error", "message": String(cString: bytes)])
+    #else
+    emit(["state": "error", "message": "Lyrics renderer unavailable."])
+    #endif
   }
   private func applyAnchor(forceSnap: Bool = false) {
     guard handle != 0, let anchor else { return }
@@ -197,12 +211,14 @@ private final class RustOwner: @unchecked Sendable {
       DispatchQueue.main.async { completion(index) }
     }
   }
+  #if DEBUG
   func copyLayout(_ completion: @escaping @MainActor (String?) -> Void) {
     queue.async {
       let receipt = self.permitted() && self.handle != 0 ? self.layoutReceipt() : ""
       DispatchQueue.main.async { completion(receipt.isEmpty ? nil : receipt) }
     }
   }
+  #endif
   private func enqueue(update: SurfaceInput? = nil, anchor: Anchor? = nil) {
     gate.lock()
     guard !retired else { gate.unlock(); return }
@@ -311,6 +327,7 @@ private final class RustOwner: @unchecked Sendable {
       if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
       animating = m.animating != 0
       nextCue = m.next_cue_native_ms
+      #if DEBUG
       let now = CACurrentMediaTime()
       if result == 0 && now - self.lastMetrics >= 1 {
         self.lastMetrics = now
@@ -333,6 +350,7 @@ private final class RustOwner: @unchecked Sendable {
                    "layoutMs": m.layout_ms, "width": m.width, "height": m.height,
                    "note": "CPU wall costs only. GPU completed counts blit work callbacks; present-call rate is not scanout. Submit cost is final blit submit only; Vello internal submits remain in encode."])
       }
+      #endif
     }
   }
   func dispose() {
@@ -361,7 +379,9 @@ private final class DisplayTarget: NSObject {
 
 final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   let onStatus = EventDispatcher()
+  #if DEBUG
   let onMetrics = EventDispatcher()
+  #endif
   private let metal = MetalHost()
   private let target = DisplayTarget()
   private var owner: RustOwner?
@@ -479,6 +499,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       owner = RustOwner(layer: metal.layer as! CAMetalLayer) { [weak self] event in
         guard let self, self.session == epoch,
               (event["generation"] as? UInt64) == self.generation else { return }
+        #if DEBUG
         if event["state"] as? String == "metrics" {
           var metrics = event
           metrics["uiTickMs"] = self.tickMs
@@ -503,17 +524,18 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
           self.windowCallbacks = self.callbacks; self.windowPresentCalls = self.presentCalls
           self.windowBusyCallbacks = self.busyCallbacks; self.windowMissedEstimate = self.missedObservedEstimate
           self.onMetrics(metrics)
-        } else {
-          if event["state"] as? String == "error" {
-            self.failed = true; self.metal.isHidden = true
-            self.link?.invalidate(); self.link = nil
-          }
-          if event["state"] as? String == "ready" {
-            self.markDirty()
-            self.lifecycle()
-          }
-          self.onStatus(event)
+          return
         }
+        #endif
+        if event["state"] as? String == "error" {
+          self.failed = true; self.metal.isHidden = true
+          self.link?.invalidate(); self.link = nil
+        }
+        if event["state"] as? String == "ready" {
+          self.markDirty()
+          self.lifecycle()
+        }
+        self.onStatus(event)
       }
       refresh()
     }
@@ -545,6 +567,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     track = value; markDirty()
     refresh(); lifecycle()
   }
+  #if DEBUG
   func copyLayout(_ promise: Promise) {
     guard let owner else { promise.reject("ERR_RUST_LAYOUT", "Rust owner unavailable"); return }
     owner.copyLayout { receipt in
@@ -552,6 +575,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       else { promise.reject("ERR_RUST_LAYOUT", "No prepared Rust layout receipt") }
     }
   }
+  #endif
   func setAnchor(_ value: String) {
     guard let data = value.data(using: .utf8), let next = try? JSONDecoder().decode(Anchor.self, from: data) else {
       failed = true; metal.isHidden = true

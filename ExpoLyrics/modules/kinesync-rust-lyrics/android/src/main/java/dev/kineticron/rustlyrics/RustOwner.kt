@@ -70,7 +70,8 @@ internal class RustOwner(
   }
   private fun failure() {
     failed = true
-    emit(mapOf("state" to "error", "message" to RustBridge.lastError()))
+    val message = if (BuildConfig.DEBUG) RustBridge.lastError() else "Lyrics renderer unavailable."
+    emit(mapOf("state" to "error", "message" to message))
   }
   private fun applyAnchor(forceSnap: Boolean = false) {
     val a = anchor ?: return
@@ -179,8 +180,9 @@ internal class RustOwner(
       if (m == null) { failure(); return@post }
       animating = m[RustBridge.M_ANIMATING] != 0.0
       nextCue = m[RustBridge.M_NEXT_CUE]
-      val now = RustBridge.nowMs() / 1000
-      if (result == 0 && now - lastMetrics >= 1) {
+      if (BuildConfig.DEBUG && result == 0) {
+        val now = RustBridge.nowMs() / 1000
+        if (now - lastMetrics < 1) return@post
         lastMetrics = now
         val caps = m[RustBridge.M_CAPS].toLong()
         emit(mapOf(

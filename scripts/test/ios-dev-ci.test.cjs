@@ -34,7 +34,11 @@ test('iOS Release registers Rust lyrics and verifies the packaged app linkage', 
   assert.match(proof, /branches\.every[\s\S]*KineSyncRustLyricsModule/);
   assert.match(proof, /\['nm', [^\n]*image\]/);
   assert.match(proof, /Swift or Objective-C identity/);
-  assert.match(proof, /for \(const symbol of symbols\)/);
+  assert.match(proof, /for \(const symbol of releaseSymbols\)/);
+  const { symbols, releaseSymbols } = require('../ios-dev-ci/rust-device.cjs');
+  const debugOnlySymbols = ['kr_copy_layout_json', 'kr_copy_error'];
+  assert.ok(debugOnlySymbols.every(symbol => symbols.includes(symbol)));
+  assert.deepEqual(releaseSymbols, symbols.filter(symbol => !debugOnlySymbols.includes(symbol)));
   assert.match(proof, /\['otool', [^\n]*'-l', loader\]/);
   assert.match(proof, /verifyLoads\(image\)/);
   assert.match(proof, /throw new Error\(`Missing dylib dependency/);

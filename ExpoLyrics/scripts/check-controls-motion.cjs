@@ -338,7 +338,7 @@ assert.match(source, /collapsable=\{false\}\s+style=\{\[styles.lyricsWrap, lyric
 assert.match(source, /position: 'absolute', left: 0, right: 0, top: 0, height: Math.max\(0, screenHeight - lyricTop\)/);
 const portraitMask = source.match(/<MaskedView\b[^<>]*\bandroidRenderingMode="hardware"\s+maskElement=[\s\S]*?<\/MaskedView>/)?.[0];
 assert.ok(portraitMask, 'the portrait lyrics mask uses hardware composition');
-assert.match(portraitMask, /style=\{\[styles\.lyricsContentInner, lyricsChromeOpacityStyle\]\}\s*>[\s\S]*?<RustLyricsView\b/, 'the hardware mask contains the native Rust lyrics view');
+assert.match(portraitMask, /style=\{\[styles\.lyricsContentInner, lyricsChromeOpacityStyle\]\}\s*>[\s\S]*?: lyricsRenderer\}/, 'the hardware mask contains the selected lyrics view');
 assert.doesNotMatch(source, /\bandroidRenderingMode\s*=\s*\{?\s*["']software["']/, 'the player never requests software mask composition');
 assert.ok(!source.includes('foregroundClipStyle'));
 assert.doesNotMatch(callback('lyricsEdgeMaskSolidStyle'), /translate|scale/);
@@ -504,35 +504,34 @@ const dockComponent = clipContent.children.find(node => ts.isJsxSelfClosingEleme
 // Resolve the actual JSX policy, including stale stored lyrics in the empty
 // player and an active track whose lyrics have not arrived yet.
 let revealOpening, revealPress;
-const lyricInteractions = [];
 function inspectReveal(node) {
   if (ts.isJsxOpeningElement(node) && node.attributes.getText(ast).includes('styles.controlsRevealZone')) {
     revealOpening = node;
     revealPress = node.parent.children.find(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(ast) === 'Pressable');
   }
-  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === 'RustLyricsView') {
-    lyricInteractions.push(node.attributes.properties.find(property => property.name?.text === 'onUserInteraction').initializer.expression.getText(ast));
-  }
   ts.forEachChild(node, inspectReveal);
 }
 inspectReveal(ast);
-assert.ok(lyricInteractions.length === 2);
-assert.ok(lyricInteractions.every(expression => expression === 'handleControlsInteraction'));
 assert.ok(revealOpening && revealPress);
 let revealCondition = revealOpening.parent;
 while (revealCondition && !ts.isBinaryExpression(revealCondition)) revealCondition = revealCondition.parent;
 assert.ok(revealCondition);
 const overlayEnabled = evaluate(`(fullscreenAlbumMode, controlsVisible, rustHandlesReveal) => (${revealCondition.left.getText(ast)})`, {});
 for (const scenario of [
-  { rustLyricsAvailable: true, isLandscape: false, empty: false, overlay: false },
-  { rustLyricsAvailable: false, isLandscape: false, empty: false, overlay: true },
-  { rustLyricsAvailable: true, isLandscape: true, empty: false, overlay: true },
-  { rustLyricsAvailable: true, isLandscape: false, empty: true, overlay: true },
+  { overlay: false },
+  { rustOwnsReveal: false, overlay: true },
+  { isLandscape: true, overlay: true },
+  { showEmptyState: true, overlay: true },
+  { lyricsRendererBackend: 'skia', overlay: true },
+  { lyricsRendererBackendHydrated: false, overlay: true },
+  { lyricsMounted: false, overlay: true },
+  { tour: { onboardingVisible: true }, overlay: true },
 ]) {
-  const handles = evaluate(declarations.rustHandlesReveal.getText(ast), {
-    rustLyricsAvailable: scenario.rustLyricsAvailable, isLandscape: scenario.isLandscape,
-    showEmptyState: scenario.empty,
-  });
+  const context = { rustOwnsReveal: true, isLandscape: false, showEmptyState: false,
+    lyricsMounted: true, lyricsRendererBackend: 'rust', lyricsRendererBackendHydrated: true,
+    tour: { onboardingVisible: false }, ...scenario };
+  context.showLyricsRenderer = evaluate(declarations.showLyricsRenderer.getText(ast), context);
+  const handles = evaluate(declarations.rustHandlesReveal.getText(ast), context);
   assert.equal(overlayEnabled(false, false, handles), scenario.overlay,
     'only portrait Rust replaces the hit-testing sibling with renderer touch policy');
 }

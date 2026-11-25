@@ -253,14 +253,14 @@ const storeRequire = (name) => {
   if (name.startsWith('@/lib/')) return load(name.replace('@/', '') + '.ts');
   return require(name);
 };
-vm.runInThisContext(`(function(require,module,exports,Date,performance,setInterval,clearInterval){${storeCode}\n})`)(
+vm.runInThisContext(`(function(require,module,exports,Date,performance,setInterval,clearInterval,__DEV__){${storeCode}\n})`)(
   storeRequire, storeModule, storeModule.exports, { now: () => packetTime.wall },
   { now: () => packetTime.mono }, (callback, intervalMs) => {
     lastClockTick = callback;
     scheduledClockIntervals++;
     lastClockIntervalMs = intervalMs;
     return 1;
-  }, () => {},
+  }, () => {}, false,
 );
 const actualStore = storeModule.exports.usePlaybackStore;
 const ingest = (patch = {}) => actualStore.getState().ingestPacket({

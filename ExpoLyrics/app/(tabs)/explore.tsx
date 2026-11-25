@@ -160,6 +160,10 @@ export default function BridgeSettingsScreen() {
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
   const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
   const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
+  const lyricsRendererBackend = usePlaybackStore(s => s.lyricsRendererBackend);
+  const lyricsRendererBackendHydrated = usePlaybackStore(s => s.lyricsRendererBackendHydrated);
+  const lyricsRendererBackendSaveFailed = usePlaybackStore(s => s.lyricsRendererBackendSaveFailed);
+  const setLyricsRendererBackend = usePlaybackStore(s => s.setLyricsRendererBackend);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
@@ -177,7 +181,7 @@ export default function BridgeSettingsScreen() {
   const packetDropRate = usePlaybackStore((s) => s.packetDropRate);
   const playbackCompensationMs = usePlaybackStore((s) => s.playbackCompensationMs);
   const bridgeTiming = usePlaybackStore((s) => s.bridgeTiming);
-  const driftOffset = usePlaybackStore((s) => s.driftOffset);
+  const driftOffset = usePlaybackStore((s) => __DEV__ ? s.driftOffset : 0);
   const setSimulatedLatencyMs = usePlaybackStore((s) => s.setSimulatedLatencyMs);
   const setPacketDropRate = usePlaybackStore((s) => s.setPacketDropRate);
   const setPlaybackCompensationMs = usePlaybackStore((s) => s.setPlaybackCompensationMs);
@@ -424,17 +428,18 @@ export default function BridgeSettingsScreen() {
     setCompensationInput(String(recommended));
   }, [bridgeTiming.recommendedPhoneCompensationMs, setPlaybackCompensationMs]);
 
-  const applyDiagnostics = useCallback(() => {
+  const applyPlaybackTiming = useCallback(() => {
     const compensation = Math.round(sanitizeNumberInput(compensationInput, playbackCompensationMs));
-    const latency = Math.max(0, Math.round(sanitizeNumberInput(latencyInput, simulatedLatencyMs)));
-    const dropRate = Math.max(0, Math.min(0.9, sanitizeNumberInput(dropRateInput, packetDropRate)));
-
     setPlaybackCompensationMs(compensation);
-    setSimulatedLatencyMs(latency);
-    setPacketDropRate(dropRate);
     setCompensationInput(String(compensation));
-    setLatencyInput(String(latency));
-    setDropRateInput(String(dropRate));
+    if (__DEV__) {
+      const latency = Math.max(0, Math.round(sanitizeNumberInput(latencyInput, simulatedLatencyMs)));
+      const dropRate = Math.max(0, Math.min(0.9, sanitizeNumberInput(dropRateInput, packetDropRate)));
+      setSimulatedLatencyMs(latency);
+      setPacketDropRate(dropRate);
+      setLatencyInput(String(latency));
+      setDropRateInput(String(dropRate));
+    }
   }, [
     compensationInput,
     dropRateInput,
@@ -652,6 +657,29 @@ export default function BridgeSettingsScreen() {
                 <View style={styles.divider} />
               </> : null}
 
+              <SettingSection title="Advanced" collapsible>
+                <Text style={styles.fieldLabel}>Lyrics renderer</Text>
+                {(['rust', 'skia'] as const).map(backend => {
+                  const checked = lyricsRendererBackendHydrated && lyricsRendererBackend === backend;
+                  const label = backend === 'rust' ? 'Rust' : 'Skia';
+                  return (
+                    <Pressable key={backend} style={styles.secondaryButton}
+                      accessibilityRole="radio" accessibilityState={{ checked, disabled: !lyricsRendererBackendHydrated }}
+                      disabled={!lyricsRendererBackendHydrated} onPress={() => setLyricsRendererBackend(backend)}>
+                      <Ionicons name={checked ? 'radio-button-on' : 'radio-button-off'} size={18} color="#FFFFFF" />
+                      <Text style={styles.secondaryButtonText}>{label}</Text>
+                    </Pressable>
+                  );
+                })}
+                {lyricsRendererBackendSaveFailed && <>
+                  <Text accessibilityRole="alert" style={styles.fieldLabel}>Could not save your lyrics renderer choice.</Text>
+                  <Pressable style={styles.secondaryButton} accessibilityRole="button" onPress={() => setLyricsRendererBackend(lyricsRendererBackend)}>
+                    <Text style={styles.secondaryButtonText}>Retry save</Text>
+                  </Pressable>
+                </>}
+              </SettingSection>
+              <View style={styles.divider} />
+
               {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
                 {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
                   <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
@@ -695,8 +723,8 @@ export default function BridgeSettingsScreen() {
 
               <View style={styles.divider} />
 
-              {playbackMode === 'desktop' ? <SettingSection title="Timing diagnostics" collapsible>
-                <View style={styles.timingDiagnostics}>
+              {playbackMode === 'desktop' ? <SettingSection title={__DEV__ ? 'Timing diagnostics' : 'Playback timing'} collapsible>
+                {__DEV__ && <View style={styles.timingDiagnostics}>
                   <Text style={styles.timingDiagnosticsTitle}>Bridge timing (live)</Text>
                   <Text style={styles.timingDiagnosticsLine}>
                     Pipeline: {Math.max(0, Number(bridgeTiming.measuredPipelineMs || 0))} ms
@@ -716,7 +744,7 @@ export default function BridgeSettingsScreen() {
                   <Text style={styles.timingDiagnosticsLine}>
                     Phone network latency: {Math.max(0, Number(driftOffset || 0))} ms
                   </Text>
-                </View>
+                </View>}
                 <Pressable
                   style={({ pressed }) => [
                     styles.secondaryButton,
@@ -737,26 +765,28 @@ export default function BridgeSettingsScreen() {
                   keyboardType="numeric"
                   placeholder="0"
                 />
-                <FieldRow
-                  label="Simulated Latency"
-                  value={latencyInput}
-                  onChangeText={setLatencyInput}
-                  keyboardType="numeric"
-                  placeholder="0"
-                />
-                <FieldRow
-                  label="Packet Drop Rate"
-                  value={dropRateInput}
-                  onChangeText={setDropRateInput}
-                  keyboardType="decimal-pad"
-                  placeholder="0"
-                />
+                {__DEV__ && <>
+                  <FieldRow
+                    label="Simulated Latency"
+                    value={latencyInput}
+                    onChangeText={setLatencyInput}
+                    keyboardType="numeric"
+                    placeholder="0"
+                  />
+                  <FieldRow
+                    label="Packet Drop Rate"
+                    value={dropRateInput}
+                    onChangeText={setDropRateInput}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                  />
+                </>}
                 <Pressable
                   style={({ pressed }) => [
                     styles.secondaryButton,
                     pressed && styles.buttonPressed,
                   ]}
-                  onPress={applyDiagnostics}>
+                  onPress={applyPlaybackTiming}>
                   <Ionicons name="speedometer" size={17} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>Apply timing</Text>
                 </Pressable>

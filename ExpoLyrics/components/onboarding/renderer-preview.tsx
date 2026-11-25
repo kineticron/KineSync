@@ -9,6 +9,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
+import { NativeAmllLyricsView } from "@/components/lyrics/native-amll-lyrics-view";
+import { NativeSpicyLyricsView } from "@/components/lyrics/native-spicy-lyrics-view";
 import { MotionPressable } from "@/components/ui/motion-pressable";
 import { BlurView } from 'expo-blur';
 import { Design } from "@/constants/design";
@@ -22,6 +24,8 @@ const PREVIEW_DURATION_MS = 25000;
 export function RendererPreview({ active, sideBySide = false }: { active: boolean; sideBySide?: boolean }) {
   const selected = usePlaybackStore((s) => s.lyricsStyle);
   const select = usePlaybackStore((s) => s.setLyricsStyle);
+  const backend = usePlaybackStore((s) => s.lyricsRendererBackend);
+  const backendHydrated = usePlaybackStore((s) => s.lyricsRendererBackendHydrated);
   const [playback, setPlayback] = useState<PreviewPlaybackAnchor | null>(null);
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
@@ -29,7 +33,7 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
   const { width, height } = useWindowDimensions();
   const landscape = width > height;
   const insets = useSafeAreaInsets();
-  const running = active && foreground;
+  const running = active && foreground && backendHydrated;
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) =>
       setForeground(state === "active"),
@@ -50,6 +54,16 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
     restart();
     return () => clearTimeout(timer);
   }, [running]);
+  const SkiaLyricsView = selected === 'amll' ? NativeAmllLyricsView : NativeSpicyLyricsView;
+  const previewProps = playback && {
+    demoLyrics: DEMO_LYRICS,
+    demoPlayback: playback,
+    demoDurationMs: PREVIEW_DURATION_MS,
+    active: true,
+    tapToSeekEnabled: false,
+    showTranslatedText: true,
+    fontScale: 0.82,
+  };
   return (
     <View style={styles.comparison}>
       <View style={[styles.panels, sideBySide && styles.panelsSideBySide]}>
@@ -95,17 +109,10 @@ export function RendererPreview({ active, sideBySide = false }: { active: boolea
               />
             </MotionPressable>
             <View style={styles.lyrics}>
-              {running && playback && selected === style ? (
-                <RustLyricsView
-                  demoStyle={style}
-                  demoLyrics={DEMO_LYRICS}
-                  demoPlayback={playback}
-                  demoDurationMs={PREVIEW_DURATION_MS}
-                  active
-                  tapToSeekEnabled={false}
-                  showTranslatedText
-                  fontScale={0.82}
-                />
+              {running && previewProps && selected === style ? (
+                backend === 'rust'
+                  ? <RustLyricsView {...previewProps} demoStyle={style} />
+                  : <SkiaLyricsView {...previewProps} demoLayout="preview" />
               ) : (
                 <View style={styles.sample}>
                   {DEMO_LYRICS.slice(0, 2).map((line) => (

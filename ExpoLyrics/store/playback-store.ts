@@ -56,6 +56,9 @@ function sourceAnchorKey(packet: PlaybackPacket, source: PlaybackMode): string |
 }
 
 export type LyricsStyle = 'spicy' | 'amll';
+export type LyricsRendererBackend = 'rust' | 'skia';
+
+const LYRICS_RENDERER_BACKEND_KEY = 'kinesync_lyrics_renderer_backend';
 
 // Cached persisted defaults (fetched once at startup)
 let _cachedBridgeUrl: string | null = null;
@@ -157,6 +160,10 @@ type PlaybackState = {
   setTranslationLanguage: (value: TranslationLanguage) => void;
   autoHidePlaybackControls: boolean;
   lyricsStyle: LyricsStyle;
+  lyricsRendererBackend: LyricsRendererBackend;
+  lyricsRendererBackendHydrated: boolean;
+  lyricsRendererBackendSaveFailed: boolean;
+  setLyricsRendererBackend: (backend: LyricsRendererBackend) => void;
   bridgeTiming: BridgeTimingDiagnostics;
   clockSkewBaselineMs: number;
   lastSourceClockMs: number;
@@ -184,6 +191,8 @@ type PlaybackState = {
 };
 
 let lyricsStyleChanged = false;
+let lyricsRendererBackendRevision = 0;
+let lyricsRendererBackendWrite = Promise.resolve();
 let translationSettingsChanged = false;
 let spotifyStatusBarSettingChanged = false;
 let rustDebugOverlaySettingChanged = false;
@@ -272,11 +281,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
-  showRustDebugOverlay: true,
+  showRustDebugOverlay: __DEV__,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
   lyricsStyle: 'spicy',
+  lyricsRendererBackend: 'rust',
+  lyricsRendererBackendHydrated: false,
+  lyricsRendererBackendSaveFailed: false,
   bridgeTiming: {},
   clockSkewBaselineMs: Number.NaN,
   lastSourceClockMs: 0,
@@ -461,10 +473,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       return { currentTrack: { ...currentTrack, artworkUrl: nextArtworkUrl } };
     }),
   setSimulatedLatencyMs: (ms) => {
+    if (!__DEV__) return;
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ simulatedLatencyMs: Math.max(0, Math.min(3000, Math.floor(safe))) });
   },
   setPacketDropRate: (rate) => {
+    if (!__DEV__) return;
     const safe = Number.isFinite(rate) ? rate : 0;
     set({ packetDropRate: Math.max(0, Math.min(0.9, safe)) });
   },
@@ -479,6 +493,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
   setShowRustDebugOverlay: (value) => {
+    if (!__DEV__) return;
     rustDebugOverlaySettingChanged = true;
     const showRustDebugOverlay = Boolean(value);
     set({ showRustDebugOverlay });
@@ -500,6 +515,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const lyricsStyle = mode === 'amll' ? 'amll' : 'spicy';
     set({ lyricsStyle });
     void AsyncStorage.setItem('kinesync_lyrics_style', lyricsStyle).catch(() => {});
+  },
+  setLyricsRendererBackend: (backend) => {
+    const lyricsRendererBackend = backend === 'skia' ? 'skia' : 'rust';
+    const revision = ++lyricsRendererBackendRevision;
+    lyricsRendererBackendWrite = lyricsRendererBackendWrite
+      .then(() => AsyncStorage.setItem(LYRICS_RENDERER_BACKEND_KEY, lyricsRendererBackend))
+      .catch(() => {
+        if (revision === lyricsRendererBackendRevision) set({ lyricsRendererBackendSaveFailed: true });
+      });
+    set({ lyricsRendererBackend, lyricsRendererBackendHydrated: true, lyricsRendererBackendSaveFailed: false });
   },
 }));
 
@@ -528,15 +553,25 @@ void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {
   usePlaybackStore.setState({ showSpotifyStatusBar: value === 'true' });
 }).catch(() => {});
 
-// The backend preference is obsolete. Keep the independently saved visual style.
+void AsyncStorage.getItem(LYRICS_RENDERER_BACKEND_KEY).catch(() => null).then(value => {
+  if (lyricsRendererBackendRevision !== 0) return;
+  usePlaybackStore.setState({
+    lyricsRendererBackend: value === 'skia' ? 'skia' : 'rust',
+    lyricsRendererBackendHydrated: true,
+  });
+});
+
+// The old opt-in flag predates the independent backend choice.
 void AsyncStorage.getItem('kinesync_use_rust_renderer').then(value => {
   if (value !== null) return AsyncStorage.removeItem('kinesync_use_rust_renderer');
 }).catch(() => {});
 
-void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
-  if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;
-  usePlaybackStore.setState({ showRustDebugOverlay: value === 'true' });
-}).catch(error => console.error('Could not load Rust debug overlay setting', error));
+if (__DEV__) {
+  void AsyncStorage.getItem('kinesync_rust_debug_overlay').then(value => {
+    if (rustDebugOverlaySettingChanged || (value !== 'true' && value !== 'false')) return;
+    usePlaybackStore.setState({ showRustDebugOverlay: value === 'true' });
+  }).catch(error => console.error('Could not load Rust debug overlay setting', error));
+}
 
 void AsyncStorage.getItem('kinesync_translation_settings').then(raw => {
   if (!raw || translationSettingsChanged) return;

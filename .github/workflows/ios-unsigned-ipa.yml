@@ -264,7 +264,7 @@ jobs:
           const { execFileSync } = require('node:child_process');
           const fs = require('node:fs');
           const path = require('node:path');
-          const { symbols } = require('./scripts/ios-dev-ci/rust-device.cjs');
+          const { releaseSymbols } = require('./scripts/ios-dev-ci/rust-device.cjs');
 
           const ios = 'ExpoLyrics/ios';
           const app = fs.realpathSync(fs.readFileSync(path.join(ios, '.ci_built_app'), 'utf8').trim());
@@ -297,7 +297,7 @@ jobs:
               !/\b_OBJC_CLASS_\$_(?:_TtC18KineSyncRustLyrics24)?KineSyncRustLyricsModule\s*$/m.test(nm)) {
             throw new Error('Release app Mach-O lacks the Swift or Objective-C identity of KineSyncRustLyricsModule');
           }
-          for (const symbol of symbols) {
+          for (const symbol of releaseSymbols) {
             if (!new RegExp(`\\b[Tt]\\s+_${symbol}$`, 'm').test(nm)) {
               throw new Error(`Release app Mach-O lacks defined Rust FFI symbol ${symbol}`);
             }

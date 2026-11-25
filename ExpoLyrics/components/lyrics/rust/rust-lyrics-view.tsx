@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';
@@ -45,13 +45,14 @@ function generation() {
   return nextGeneration;
 }
 
-export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, shouldRevealTap, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction,
+export const RustLyricsView = memo(function RustLyricsView({ active, previewPositionMs, tapToSeekEnabled, shouldRevealTap, onRevealOwnershipChange, autoFollowEnabled, resumeAutoFollowSignal, onLinePress, onLineLongPress, onAutoFollowChange, onCreditsTimestampPress, onUserInteraction,
   demoLyrics, demoPlayback, demoDurationMs = 25000, demoStyle = 'spicy', demoInteractive = false, fontScale: demoFontScale, showTranslatedText }: {
   active: boolean; previewPositionMs?: number | null; tapToSeekEnabled: boolean; autoFollowEnabled?: boolean; resumeAutoFollowSignal?: number;
   demoLyrics?: LyricLine[]; demoPlayback?: PreviewPlaybackAnchor; demoDurationMs?: number; demoStyle?: LyricsStyle;
   demoInteractive?: boolean;
   fontScale?: number; showTranslatedText?: boolean;
   shouldRevealTap?: (pageY: number) => boolean;
+  onRevealOwnershipChange?: (ownsReveal: boolean) => void;
   onLinePress?: (line: LyricLine) => void; onLineLongPress?: (line: LyricLine) => void;
   onCreditsTimestampPress?: (position: number) => void;
   onAutoFollowChange?: (enabled: boolean) => void; onUserInteraction?: () => void;
@@ -115,6 +116,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const [showMetrics, setShowMetrics] = useState(false);
   const [status, setStatus] = useState('Preparing Rust Metal renderer');
   const [failed, setFailed] = useState(false);
+  const [readySurface, setReadySurface] = useState<{ generation: number; surfaceEpoch: number } | null>(null);
   const [metrics, setMetrics] = useState<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
@@ -127,6 +129,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const commandFailed = useCallback((error: unknown) => {
     if (!mounted.current || STALE_VIEW.test(String(error))) return;
     setFailed(true);
+    setReadySurface(null);
     setStatus(String(error));
   }, []);
   const send = useCallback((run: (view: NativeRef) => Promise<unknown>) => {
@@ -242,7 +245,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     }
     setStatus(nativeEvent.message);
     setFailed(nativeEvent.state === 'error');
+    if (nativeEvent.state === 'error') setReadySurface(null);
     if (nativeEvent.state === 'ready') {
+      setReadySurface({ generation: revision.generation, surfaceEpoch });
       if (arrival) arrivalEvent(arrival, revision.generation, 'rust-track-ready-not-presentation');
       // A handoff sent before the native owner existed is replayed by the owner
       // now. Reassert the current intent rather than a render-captured value.
@@ -270,9 +275,19 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     setFailed(false);
   }, [revision.generation]);
   useEffect(() => {
-    if (!showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
+    if (__DEV__ && !showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
   }, [isDemo, unavailable, failed, status, showStaticLyrics]);
   const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
+  const nativeGestureReady = active && interactive && rustLyricsAvailable && !!payload.json &&
+    !unavailable && !failed && readySurface?.generation === revision.generation &&
+    readySurface.surfaceEpoch === surfaceEpoch;
+  const ownsReveal = !!shouldRevealTap && !!onUserInteraction &&
+    ((showStaticLyrics && interactive) || nativeGestureReady);
+  useLayoutEffect(() => {
+    if (!ownsReveal || !onRevealOwnershipChange) return;
+    onRevealOwnershipChange(true);
+    return () => onRevealOwnershipChange(false);
+  }, [ownsReveal, onRevealOwnershipChange]);
   const visibleError = unavailable || (failed ? status : '');
   if (showStaticLyrics) {
     return <StaticLyricsView key={trackId} lines={rawLyrics} fontScale={fontScale} landscape={landscape}
@@ -285,7 +300,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {currentMetrics ? `${currentMetrics.presentCallRate.toFixed(0)} presents/s · cb ${currentMetrics.displayIntervalMs.toFixed(1)}ms · busy ${currentMetrics.busyCallbacksInWindow ?? 0} · gaps~${currentMetrics.missedIntervalsInWindow ?? 0}` : 'presents/s · awaiting native sample'}
       </Text>
     </View> : null}
-    {showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
+    {__DEV__ && showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
       <Text style={styles.caption}>{unavailable || (failed ? `Rust error: ${status}` : status)}</Text>
       <View style={styles.actions}>
       {!unavailable ? <Pressable accessibilityRole="button" onPress={() => { setSurfaceEpoch(value => value + 1); setFailed(false); setMetrics(null); setStatus('Recreating Rust surface'); }}>
@@ -314,9 +329,13 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
         {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
       </Text> : null}
     </ScrollView> : null}
-    <View style={styles.gestureWrap} pointerEvents={interactive ? undefined : 'none'} {...(interactive && rustLyricsAvailable ? panResponder.panHandlers : {})}>
-      {visibleError && !showRustDebugOverlay ? <Text style={styles.rendererError}>{isDemo ? 'Lyrics preview unavailable.' : 'Lyrics renderer unavailable.'} {visibleError}</Text> : null}
-      {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={showRustDebugOverlay ? onMetrics : undefined} /> : null}
+    <View style={styles.gestureWrap} pointerEvents={interactive ? undefined : 'none'} {...(nativeGestureReady ? panResponder.panHandlers : {})}>
+      {(unavailable || failed) && !showRustDebugOverlay ? <Text style={styles.rendererError}>
+        {isDemo && !demoInteractive ? 'Lyrics preview unavailable.' : 'Lyrics renderer unavailable.'}
+        {' Choose Skia in Settings → Advanced → Lyrics renderer.'}
+        {__DEV__ && visibleError ? ` ${visibleError}` : null}
+      </Text> : null}
+      {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={__DEV__ && showRustDebugOverlay ? onMetrics : undefined} /> : null}
     </View>
   </View>;
 });

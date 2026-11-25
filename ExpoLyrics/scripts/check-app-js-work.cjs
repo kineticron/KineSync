@@ -93,12 +93,15 @@ function checkDemoClocks() {
   assert.equal(h.timers.size, 0); h.unmount();
 
   const p = hooks();
-  const selection = { lyricsStyle: 'spicy', setLyricsStyle(style) { selection.lyricsStyle = style; } };
+  const selection = { lyricsStyle: 'spicy', lyricsRendererBackend: 'rust', lyricsRendererBackendHydrated: false,
+    setLyricsStyle(style) { selection.lyricsStyle = style; } };
   const demoLyrics = [{ lineStartTime: 0, syllables: [{ text: 'Follow the lyrics' }] }];
   const { RendererPreview } = load('components/onboarding/renderer-preview.tsx', { ...p.mocks,
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-blur': { BlurView: 'BlurView' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/components/lyrics/rust/rust-lyrics-view': { RustLyricsView: 'Rust' },
+    '@/components/lyrics/native-amll-lyrics-view': { NativeAmllLyricsView: 'SkiaAMLL' },
+    '@/components/lyrics/native-spicy-lyrics-view': { NativeSpicyLyricsView: 'SkiaSpicy' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' }, '@/constants/design': { Design: {} },
     '@/store/playback-store': { usePlaybackStore: selector => selector(selection) },
     '@/lib/onboarding-demo-lyrics': { DEMO_LYRICS: demoLyrics },
@@ -106,7 +109,26 @@ function checkDemoClocks() {
   const render = (active = true) => p.run(() => RendererPreview({ active }));
   let tree = render();
   const previews = () => nodes(tree, 'Rust');
+  assert.equal(previews().length, 0, 'pending hydration cannot mount the default Rust preview');
+  assert.equal(p.timers.size, 0);
+  selection.lyricsRendererBackend = 'skia';
+  selection.lyricsRendererBackendHydrated = true;
+  tree = render();
+  assert.equal(previews().length, 0);
+  const [skia] = nodes(tree, 'SkiaSpicy');
+  assert.equal(skia.props.demoLayout, 'preview');
+  assert.equal(skia.props.demoPlayback.anchorMonotonicMs, 1000);
+  assert.ok(nodes(tree, 'Text').some(node => node.props.children === 'Follow the lyrics'));
+  nodes(tree, 'Button').find(node => node.props.accessibilityLabel === 'Choose AMLL').props.onPress();
+  tree = render();
+  assert.equal(nodes(tree, 'SkiaSpicy').length, 0);
+  assert.equal(nodes(tree, 'SkiaAMLL')[0].props.demoPlayback, skia.props.demoPlayback);
+  selection.lyricsRendererBackend = 'rust';
+  selection.setLyricsStyle('spicy');
+  tree = render();
   assert.equal(previews().length, 1);
+  assert.equal(nodes(tree, 'SkiaAMLL').length, 0);
+  assert.equal(previews()[0].props.demoPlayback, skia.props.demoPlayback, 'backend switches keep the demo clock');
   assert.equal(previews()[0].props.demoStyle, 'spicy');
   assert.equal(previews()[0].props.demoLyrics, demoLyrics);
   assert.ok(nodes(tree, 'Text').some(node => node.props.children === 'Follow the lyrics'));
@@ -132,38 +154,137 @@ function checkDemoClocks() {
 }
 
 async function checkRendererPreferenceMigration() {
-  for (const [saved, legacyBackend, expected, pendingChoice] of [
-    ['amll', 'false', 'amll'],
-    ['spicy', 'true', 'spicy'],
-    ['native', 'false', 'amll'],
-    ['webview', 'false', 'spicy'],
-    ['native', 'false', 'spicy', 'spicy'],
-    [null, 'false', 'spicy'],
-  ]) {
-    const values = new Map([['kinesync_lyrics_style', saved], ['kinesync_use_rust_renderer', legacyBackend]]);
+  const styleKey = 'kinesync_lyrics_style';
+  const backendKey = 'kinesync_lyrics_renderer_backend';
+  const legacyKey = 'kinesync_use_rust_renderer';
+  const debugKey = 'kinesync_rust_debug_overlay';
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  function loadStore(values, { readBackend, writeBackend, development = false } = {}) {
+    const reads = [];
     const create = initialize => {
       const set = patch => { state = { ...state, ...patch }; };
       let state = initialize(set);
       return { getState: () => state, setState: set };
     };
-    const { usePlaybackStore: store } = load('store/playback-store.ts', {
+    const { usePlaybackStore } = load('store/playback-store.ts', {
       'react-native': { Platform: { OS: 'web' }, AppState: { currentState: 'active' } },
       '@react-native-async-storage/async-storage': {
-        getItem: key => Promise.resolve(values.get(key) ?? null),
-        setItem: async (key, value) => { values.set(key, value); },
+        getItem: async key => {
+          reads.push(key);
+          return key === backendKey && readBackend ? readBackend() : values.get(key) ?? null;
+        },
+        setItem: async (key, value) => {
+          if (key === backendKey && writeBackend) await writeBackend(value);
+          values.set(key, value);
+        },
         removeItem: async key => { values.delete(key); },
       },
       zustand: { create },
       '@/lib/lyrics-arrival-trace': {}, '@/lib/translation-settings': {}, '@/lib/lyrics-enrich': {},
       '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/artwork': {},
       '@/lib/spotify-detector/timing-diagnostics': {}, '@/lib/playback-source': {},
-    }, { performance, console });
-    if (pendingChoice) store.getState().setLyricsStyle(pendingChoice);
-    await Promise.resolve();
-    assert.equal(store.getState().lyricsStyle, expected);
+    }, { performance, console, __DEV__: development });
+    return { store: usePlaybackStore, reads };
+  }
+
+  for (const [savedStyle, legacyBackend, savedBackend, expectedStyle, expectedBackend, pendingStyle] of [
+    [null, null, null, 'spicy', 'rust'],
+    ['amll', 'false', null, 'amll', 'rust'],
+    ['spicy', 'true', 'skia', 'spicy', 'skia'],
+    ['native', 'false', 'skia', 'amll', 'skia'],
+    ['webview', 'false', 'rust', 'spicy', 'rust'],
+    ['native', 'false', 'webview', 'spicy', 'rust', 'spicy'],
+  ]) {
+    const values = new Map([[styleKey, savedStyle], [backendKey, savedBackend], [debugKey, 'true']]);
+    if (legacyBackend !== null) values.set(legacyKey, legacyBackend);
+    const { store, reads } = loadStore(values);
+    assert.equal(store.getState().lyricsRendererBackendHydrated, false);
+    if (pendingStyle) store.getState().setLyricsStyle(pendingStyle);
+    await flush();
+    assert.equal(store.getState().lyricsStyle, expectedStyle);
+    assert.equal(store.getState().lyricsRendererBackend, expectedBackend);
+    assert.equal(store.getState().lyricsRendererBackendHydrated, true);
     assert.equal(Object.hasOwn(store.getState(), 'useRustRenderer'), false);
-    assert.equal(values.has('kinesync_use_rust_renderer'), false);
-    assert.equal(values.get('kinesync_lyrics_style'), saved === null ? null : expected);
+    assert.equal(values.has(legacyKey), false);
+    assert.equal(values.get(styleKey), savedStyle === null ? null : expectedStyle);
+    assert.equal(values.get(backendKey), savedBackend, 'style migration cannot rewrite the backend');
+    assert.equal(reads.includes(debugKey), false);
+    store.getState().setShowRustDebugOverlay(false);
+    assert.equal(store.getState().showRustDebugOverlay, false);
+    assert.equal(values.get(debugKey), 'true', 'Release cannot write the debug overlay choice');
+    store.getState().setSimulatedLatencyMs(400);
+    store.getState().setPacketDropRate(0.25);
+    store.getState().setPlaybackCompensationMs(125);
+    assert.equal(store.getState().simulatedLatencyMs, 0);
+    assert.equal(store.getState().packetDropRate, 0);
+    assert.equal(store.getState().playbackCompensationMs, 125);
+  }
+
+  const failedRead = loadStore(new Map(), { readBackend: async () => { throw new Error('read failure'); } }).store;
+  await flush();
+  assert.equal(failedRead.getState().lyricsRendererBackendHydrated, true);
+  assert.equal(failedRead.getState().lyricsRendererBackend, 'rust');
+
+  let resolveRead, releaseFirstWrite;
+  const pendingRead = new Promise(resolve => { resolveRead = resolve; });
+  const firstWrite = new Promise(resolve => { releaseFirstWrite = resolve; });
+  const writes = [];
+  const values = new Map([[styleKey, 'amll'], [debugKey, 'false']]);
+  let failWrite = false;
+  const { store, reads } = loadStore(values, { development: true, readBackend: () => pendingRead,
+    writeBackend: async backend => {
+      writes.push(backend);
+      if (writes.length === 1) await firstWrite;
+      if (failWrite) throw new Error('write failure');
+    },
+  });
+  store.getState().setLyricsRendererBackend('skia');
+  resolveRead('rust');
+  await flush();
+  assert.equal(store.getState().lyricsRendererBackend, 'skia', 'late hydration cannot replace a selection');
+  assert.equal(store.getState().lyricsRendererBackendHydrated, true);
+  store.getState().setLyricsRendererBackend('rust');
+  store.getState().setLyricsRendererBackend('skia');
+  await flush();
+  assert.deepEqual(writes, ['skia'], 'only one backend write may be in flight');
+  releaseFirstWrite();
+  await flush();
+  assert.deepEqual(writes, ['skia', 'rust', 'skia']);
+  assert.equal(values.get(backendKey), 'skia');
+  assert.equal(values.get(styleKey), 'amll');
+  failWrite = true;
+  store.getState().setLyricsRendererBackend('rust');
+  await flush();
+  assert.equal(store.getState().lyricsRendererBackendSaveFailed, true);
+  assert.equal(store.getState().lyricsRendererBackend, 'rust', 'save failure keeps the running selection');
+  assert.equal(values.get(backendKey), 'skia');
+  failWrite = false;
+  store.getState().setLyricsRendererBackend(store.getState().lyricsRendererBackend);
+  await flush();
+  assert.equal(store.getState().lyricsRendererBackendSaveFailed, false);
+  assert.equal(values.get(backendKey), 'rust');
+  assert.ok(reads.includes(debugKey));
+  assert.equal(store.getState().showRustDebugOverlay, false);
+  store.getState().setShowRustDebugOverlay(true);
+  assert.equal(values.get(debugKey), 'true');
+}
+
+function checkRendererLabGate() {
+  for (const development of [false, true]) {
+    let labLoads = 0;
+    const route = load('app/renderer-lab.tsx', {
+      react: {}, 'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
+      'expo-router': { Redirect: 'Redirect' },
+      get '@/components/lyrics/native/renderer-lab'() {
+        labLoads++;
+        return { RendererLab: 'RendererLab' };
+      },
+    }, { __DEV__: development, process: { env: { EXPO_PUBLIC_LYRICS_LAB: '1' } } }).default;
+    assert.equal(labLoads, 0);
+    const result = route();
+    assert.equal(result.type, development ? 'RendererLab' : 'Redirect');
+    assert.equal(labLoads, Number(development));
+    if (!development) assert.equal(result.props.href, '/');
   }
 }
 
@@ -358,5 +479,5 @@ function checkCanvasPresentation() {
   console.log('Native canvas: 100 line cues issue scroll/active notifications with zero React presentation updates; clip fallback and stale packets passed.');
 }
 
-(async () => { checkDemoClocks(); await checkRendererPreferenceMigration(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerSharingAndCatalogMerge(); checkCanvasPresentation(); })()
+(async () => { checkDemoClocks(); await checkRendererPreferenceMigration(); checkRendererLabGate(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerSharingAndCatalogMerge(); checkCanvasPresentation(); })()
   .catch(error => { console.error(error); process.exitCode = 1; });

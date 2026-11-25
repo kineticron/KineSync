@@ -27,7 +27,7 @@ function load(available, live) {
   const mocks = {
     react: {
       memo: fn => fn, useMemo: fn => fn(), useCallback: fn => fn, useRef: current => ({ current }),
-      useState: initial => [initial, () => {}], useEffect: fn => effects.push(fn),
+      useState: initial => [initial, () => {}], useEffect: fn => effects.push(fn), useLayoutEffect: () => {},
     },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'react-native': {

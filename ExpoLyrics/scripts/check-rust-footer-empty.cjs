@@ -25,14 +25,36 @@ const opened = [];
 const jsx = (type, props) => ({ type, props: props || {} });
 const gestureModule = require('../lib/rust-lyrics-gesture.js');
 const { createRustLyricsGesture } = gestureModule;
+let hooks = [];
+let hookIndex = 0;
+const react = {
+  memo: fn => fn,
+  useMemo(fn, deps) {
+    const index = hookIndex++;
+    const previous = hooks[index];
+    if (!previous || !deps || previous.deps?.length !== deps.length ||
+      deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+      hooks[index] = { value: fn(), deps };
+    }
+    return hooks[index].value;
+  },
+  useCallback: fn => fn,
+  useRef(current) { return hooks[hookIndex++] ??= { current }; },
+  useState(initial) {
+    const slot = hooks[hookIndex++] ??= { value: initial };
+    return [slot.value, next => { slot.value = typeof next === 'function' ? next(slot.value) : next; }];
+  },
+  useEffect: () => {},
+  useLayoutEffect: () => {},
+};
 const imports = {
-  react: { memo: f => f, useMemo: f => f(), useCallback: f => f, useRef: current => ({ current }), useState: current => [current, () => {}], useEffect: () => {} },
+  react,
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Platform: { OS: 'ios' }, AppState: {},
     StyleSheet: { create: x => x }, useWindowDimensions: () => ({ width: 390, height: 640 }),
     Linking: { openURL: url => { opened.push(url); return Promise.resolve(); } }, PanResponder: { create: handlers => ({ panHandlers: handlers }) } },
   'expo-modules-core': { requireOptionalNativeModule: () => ({ abiVersion: () => 11, monotonicMs: () => 1000 }), requireNativeViewManager: () => 'NativeView' },
-  '@/store/playback-store': { usePlaybackStore: select => select(state) },
+  '@/store/playback-store': { usePlaybackStore: Object.assign(select => select(state), { getState: () => state }) },
   '@/lib/rust-lyrics-protocol': require('../lib/rust-lyrics-protocol.js'),
   '@/lib/rust-lyrics-preparation': prepared.exports,
   '@/lib/rust-lyrics-follow': require('../lib/rust-lyrics-follow.js'),
@@ -58,7 +80,13 @@ const line = { lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'Word', 
 const initial = { currentTrack: { id: 'fixture' }, lyrics: [], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '', lyricsStyle: 'spicy', showTranslatedText: true, showRustDebugOverlay: false };
 const staticLine = { lineStartTime: 0, lineEndTime: 0, syllables: [{ text: 'Plain text', startTime: 0, endTime: 0 }] };
 const partialLine = { lineStartTime: 0, lineEndTime: 4000, syllables: [{ text: 'First', startTime: 0, endTime: 4000 }] };
-const render = () => nodes(mod.exports.RustLyricsView({ active: true, tapToSeekEnabled: false, onCreditsTimestampPress: position => seek.push(position) }));
+let renderedState;
+const render = () => {
+  if (renderedState !== state) hooks = [];
+  renderedState = state;
+  hookIndex = 0;
+  return nodes(mod.exports.RustLyricsView({ active: true, tapToSeekEnabled: false, onCreditsTimestampPress: position => seek.push(position) }));
+};
 assert.equal(timing.exports.shouldHideTimedRenderer([staticLine], 'spicy-lyrics-static', undefined), true, 'zero timing hides without an untimed flag');
 assert.equal(timing.exports.shouldHideTimedRenderer([partialLine, staticLine], 'spicy-lyrics-syllable', undefined), false, 'one valid line keeps partial timing usable');
 assert.equal(timing.exports.selectTimedLyricLines([partialLine, staticLine]).length, 1, 'invalid rows are filtered from partial timing');
@@ -105,8 +133,17 @@ async function tap(target, url) {
   assert.equal(packet.credits.attribution.maker_url, url);
   assert.equal(packet.credits.attribution.uploader_url, url);
   let point;
-  view.props.ref.current = { hitTest: (x, y) => { point = [x, y]; return Promise.resolve(target); }, setFollowing: () => Promise.resolve() };
-  const wrap = rendered.find(n => n.props.onPanResponderGrant);
+  assert.ok(!rendered.some(n => n.props.onPanResponderGrant), 'gestures wait for native readiness');
+  view.props.ref.current = {
+    hitTest: (x, y) => { point = [x, y]; return Promise.resolve(target); },
+    setFollowing: () => Promise.resolve(),
+    setAnchor: () => Promise.resolve(),
+  };
+  view.props.onStatus({ nativeEvent: { state: 'ready', generation: packet.generation, message: 'ready' } });
+  const ready = render();
+  assert.equal(JSON.parse(ready.find(n => n.type === 'NativeView').props.trackJson).generation, packet.generation);
+  const wrap = ready.find(n => n.props.onPanResponderGrant);
+  assert.ok(wrap, 'the ready surface accepts gestures');
   wrap.props.onPanResponderGrant({ nativeEvent: { locationX: 45, locationY: 120 } });
   wrap.props.onPanResponderRelease();
   await Promise.resolve(); await Promise.resolve(); await Promise.resolve();

@@ -1,6 +1,8 @@
 import MaskedView from "@react-native-masked-view/masked-view";
 import { controlsAppIsForeground, controlsShowEdge } from '@/lib/controls-motion';
-import { RustLyricsView, rustLyricsAvailable } from "@/components/lyrics/rust/rust-lyrics-view";
+import { RustLyricsView } from "@/components/lyrics/rust/rust-lyrics-view";
+import { NativeAmllLyricsView } from "@/components/lyrics/native-amll-lyrics-view";
+import { NativeSpicyLyricsView } from "@/components/lyrics/native-spicy-lyrics-view";
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-strip';
 import { BlurView } from "expo-blur";
@@ -60,6 +62,7 @@ import {
 import {
   getLandscapeLayoutMetrics,
   isLandscapeLayout,
+  LANDSCAPE_FONT_SCALE,
   LANDSCAPE_LEFT_PANE_PADDING,
   LANDSCAPE_LYRICS_PADDING,
   LYRICS_EDGE_FADE_HEIGHT,
@@ -475,8 +478,16 @@ export default function HomeScreen() {
   } : undefined, [tour.active, tour.anchorPositionMs, tour.anchorMonotonicMs, tour.isPlaying]);
   const lyricsStyle = usePlaybackStore((s) => s.lyricsStyle);
   const setLyricsStyle = usePlaybackStore((s) => s.setLyricsStyle);
+  const lyricsRendererBackend = usePlaybackStore((s) => s.lyricsRendererBackend);
+  const lyricsRendererBackendHydrated = usePlaybackStore((s) => s.lyricsRendererBackendHydrated);
   const [autoFollowEnabled, setAutoFollowEnabled] = useState(true);
   const [resumeAutoFollowSignal, setResumeAutoFollowSignal] = useState(0);
+  const [previousLyricsRendererBackend, setPreviousLyricsRendererBackend] = useState(lyricsRendererBackend);
+  // Reset follow before the new surface mounts. Its clock reads the current playback anchor.
+  if (previousLyricsRendererBackend !== lyricsRendererBackend) {
+    setPreviousLyricsRendererBackend(lyricsRendererBackend);
+    setAutoFollowEnabled(true);
+  }
   // Manual ownership belongs to one track. A new track identity restores
   // follow in the parent so a stale false from the previous song cannot win.
   const autoFollowTrackId = useRef<string | null>(null);
@@ -1275,11 +1286,43 @@ export default function HomeScreen() {
     [handleControlsInteraction],
   );
 
-  const rustHandlesReveal = !isLandscape && rustLyricsAvailable && !showEmptyState;
+  const showLyricsRenderer = lyricsMounted && !showEmptyState && !tour.onboardingVisible && lyricsRendererBackendHydrated;
+  const [rustOwnsReveal, setRustOwnsReveal] = useState(false);
+  const rustHandlesReveal = !isLandscape && showLyricsRenderer && lyricsRendererBackend === 'rust' && rustOwnsReveal;
   const shouldRevealRustTap = useCallback((pageY: number) =>
     !isLandscapeRef.current && !fullscreenAlbumModeRef.current && controlsTarget.get() === 0 &&
     pageY >= screenOriginY.current + screenHeight * 0.6,
   [controlsTarget, screenHeight]);
+
+  const SkiaLyricsView = lyricsStyle === 'amll' ? NativeAmllLyricsView : NativeSpicyLyricsView;
+  const lyricsRendererProps = {
+    active: isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground),
+    demoLyrics: tour.active ? DEMO_LYRICS : undefined,
+    demoPlayback: previewPlayback,
+    demoDurationMs: TOUR_DURATION_MS,
+    showTranslatedText,
+    previewPositionMs: scrubPreviewPositionMs,
+    tapToSeekEnabled,
+    autoFollowEnabled,
+    resumeAutoFollowSignal,
+    onLinePress: handleLyricLinePress,
+    onLineLongPress: handleLineLongPress,
+    onAutoFollowChange: handleAutoFollowChange,
+    onCreditsTimestampPress: handleSeek,
+    onUserInteraction: handleControlsInteraction,
+  };
+  const lyricsRenderer = showLyricsRenderer ? (
+    lyricsRendererBackend === 'rust' ? (
+      <RustLyricsView {...lyricsRendererProps} shouldRevealTap={shouldRevealRustTap} onRevealOwnershipChange={setRustOwnsReveal} demoStyle={lyricsStyle} demoInteractive />
+    ) : (
+      <SkiaLyricsView {...lyricsRendererProps}
+        demoLayout="player"
+        selectedLineKeys={selectedLineKeys}
+        landscapeMode={isLandscape}
+        fontScale={isLandscape ? LANDSCAPE_FONT_SCALE : 1}
+      />
+    )
+  ) : null;
 
   const lyricTop = insets.top + TOP_BAR_CONTENT_HEIGHT + LYRICS_WRAP_MARGIN_TOP;
   // The native renderer viewport stays full size. A masked band travels with
@@ -1571,27 +1614,7 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : !tour.onboardingVisible ? (
-                <RustLyricsView
-                  shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
-                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoPlayback={previewPlayback}
-                  demoDurationMs={TOUR_DURATION_MS}
-                  demoStyle={lyricsStyle}
-                  demoInteractive
-                  showTranslatedText={showTranslatedText}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                />
-              ) : null}
+              ) : lyricsRenderer}
             </SafeAreaView>
           ) : null}
         </View>
@@ -1808,27 +1831,7 @@ export default function HomeScreen() {
             >
               {showEmptyState ? (
                 <ListeningEmptyState mobile={playbackMode === 'mobile'} connected={connectionStatus === 'connected'} signedIn={spotifySignedIn} onConnect={() => router.push({ pathname: '/explore', params: { action: 'scan' } })} onSignIn={() => router.push({ pathname: '/explore', params: { action: 'login' } })} />
-              ) : !tour.onboardingVisible ? (
-                <RustLyricsView
-                  shouldRevealTap={shouldRevealRustTap}
-                  active={isScreenFocused && (isLandscape || !fullscreenAlbumMode) && (!tour.active || tour.foreground)}
-                  demoLyrics={tour.active ? DEMO_LYRICS : undefined}
-                  demoPlayback={previewPlayback}
-                  demoDurationMs={TOUR_DURATION_MS}
-                  demoStyle={lyricsStyle}
-                  demoInteractive
-                  showTranslatedText={showTranslatedText}
-                  previewPositionMs={scrubPreviewPositionMs}
-                  tapToSeekEnabled={tapToSeekEnabled}
-                  autoFollowEnabled={autoFollowEnabled}
-                  resumeAutoFollowSignal={resumeAutoFollowSignal}
-                  onLinePress={handleLyricLinePress}
-                  onLineLongPress={handleLineLongPress}
-                  onAutoFollowChange={handleAutoFollowChange}
-                  onCreditsTimestampPress={handleSeek}
-                  onUserInteraction={handleControlsInteraction}
-                />
-              ) : null}
+              ) : lyricsRenderer}
             </Reanimated.View>
           </Reanimated.View>
           </View>

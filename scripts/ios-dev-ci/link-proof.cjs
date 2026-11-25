@@ -56,9 +56,11 @@ function prove({ app, executable, linkMap, ios, evidence }) {
   const sources = sourceMapSources(JSON.parse(fs.readFileSync(sourcemap, 'utf8')));
   const requiredSources = ['rust-lyrics-view.tsx', 'app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx'];
   if (!source.includes('KineSyncRustLyrics') || !source.includes('Lyrics renderer unavailable.') ||
-      !requiredSources.every(required => sources.some(name => name.includes(required))) ||
-      sources.some(name => /(?:amll|spicy)-(?:webview-|lyrics-view)/.test(name))) {
-    throw new Error('Compiled development JS does not contain the Rust-only player and onboarding path');
+      !requiredSources.every(required => sources.some(name => name.includes(required)))) {
+    throw new Error('Compiled development JS does not contain the Rust player and onboarding path');
+  }
+  if (sources.some(name => /(?:^|[\\/])(?:amll|spicy)-(?:webview-[^\\/]+|lyrics-view(?:\.native)?\.[jt]sx?)$/.test(name))) {
+    throw new Error('Compiled development JS includes a legacy alias or WebView path that invalidates Rust-only player evidence');
   }
   const font_resources = inspectFonts(app);
   const report = { font_resources, app_image: path.join(app, executable), sha256: digest(path.join(app, executable)), symbols: matched,

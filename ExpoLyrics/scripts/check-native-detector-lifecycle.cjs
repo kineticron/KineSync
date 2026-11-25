@@ -141,8 +141,9 @@ function render() {
     while (effects.length) effects.shift()(); assert(++cycles < 15, 'render must settle'); } while (dirty);
   return tree;
 }
-const find = node => !node || typeof node !== 'object' ? null : node.type === 'WebView' ? node :
-  React.Children.toArray(node.props?.children).map(find).find(Boolean);
+const findNode = (node, matches) => !node || typeof node !== 'object' ? null : matches(node) ? node :
+  React.Children.toArray(node.props?.children).map(child => findNode(child, matches)).find(Boolean);
+const find = node => findNode(node, child => child.type === 'WebView');
 (async () => {
 render();
 let web = find(tree); assert(web, 'cold launch bootstraps shared login cookies');
@@ -227,15 +228,22 @@ if (development) {
   assert(developmentLogs.some(l => l.stage === 'store-track-change' && l.track.startsWith('track-')));
 } else assert.equal(developmentLogs.length, 0);
 assert.equal(timingCalls.length, 0, 'timing capture is off until explicit opt-in');
+const alertsBeforeDiagnostics = alerts.length;
 ref.current.runDiagnostics();
-assert.equal(alerts.at(-1)[0], 'Spotify timing diagnostics');
-assert.equal(timingCalls.length, 0, 'opening the dialog does not start capture');
-alerts.at(-1)[2][0].onPress();
-assert.deepEqual(timingCalls, ['start']);
-alerts.at(-1)[2][1].onPress();
-assert.deepEqual(JSON.parse(timingShares.at(-1).message), { active: false, records: [] }, 'share only the safe timing snapshot');
-alerts.at(-1)[2][2].onPress();
-assert.deepEqual(timingCalls, ['start', 'clear']);
+if (development) {
+  assert.equal(alerts.at(-1)[0], 'Spotify timing diagnostics');
+  assert.equal(timingCalls.length, 0, 'opening the dialog does not start capture');
+  alerts.at(-1)[2][0].onPress();
+  assert.deepEqual(timingCalls, ['start']);
+  alerts.at(-1)[2][1].onPress();
+  assert.deepEqual(JSON.parse(timingShares.at(-1).message), { active: false, records: [] }, 'share only the safe timing snapshot');
+  alerts.at(-1)[2][2].onPress();
+  assert.deepEqual(timingCalls, ['start', 'clear']);
+} else {
+  assert.equal(alerts.length, alertsBeforeDiagnostics, 'Release cannot open timing capture through the imperative handle');
+  assert.deepEqual(timingCalls, []);
+  assert.deepEqual(timingShares, []);
+}
 ref.current.togglePlayPause();
 assert.equal(commands.at(-1).type, 'toggle', 'controls target the native device with the warm browser hidden');
 const alertsBeforeFailure = alerts.length;
@@ -250,6 +258,7 @@ assert.equal(commands.length, disabledCommands, 'every imperative native transpo
 instance.health.controlsEnabled = true;
 controlError = undefined;
 ref.current.openBrowser(); render(); web = find(tree); assert(web, 'browser remains available on demand');
+assert.equal(Boolean(findNode(tree, child => child.type === 'Button' && child.props.title === 'Diagnostics')), development);
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: '{"type":"ready"}', url: 'https://open.spotify.com/' } });
 assert.equal(JSON.parse(injected.at(-1)).enabled, false, 'browser playback polling is disabled');

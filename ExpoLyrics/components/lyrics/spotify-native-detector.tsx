@@ -203,6 +203,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     setBrowserOpen(true);
   }, [detector]);
   const runDiagnostics = useCallback(() => {
+    if (!__DEV__) return;
     Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
       { text: 'Start capture', onPress: startTimingCapture },
       { text: 'Share capture', onPress: () => { void Share.share({ message: JSON.stringify(timingSnapshot(), null, 2) }).catch(() => {}); } },
@@ -292,7 +293,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     {browserOpen && <SafeAreaView edges={_stableEdges1} style={styles.header}>
       <Text style={styles.title}>Spotify</Text><Text style={styles.status}>{status}</Text>
       <View style={styles.buttons}><Button title="Reconnect" onPress={() => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } }} />
-        <Button title="Diagnostics" onPress={runDiagnostics} /><Button title="Close" onPress={() => setBrowserOpen(false)} /></View>
+        {__DEV__ && <Button title="Diagnostics" onPress={runDiagnostics} />}<Button title="Close" onPress={() => setBrowserOpen(false)} /></View>
     </SafeAreaView>}
     <WebView<object> key={`spotify-detector-${browserGeneration}`} ref={web}
       source={loggingOut ? LOGOUT_SOURCE : PLAYER_SOURCE}

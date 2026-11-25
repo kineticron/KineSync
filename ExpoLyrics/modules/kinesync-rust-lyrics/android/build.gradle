@@ -13,6 +13,9 @@ def reactNativeArchitectures() {
 
 android {
   namespace "dev.kineticron.rustlyrics"
+  buildFeatures {
+    buildConfig = true
+  }
   defaultConfig {
     versionCode 1
     versionName "1.0.0"

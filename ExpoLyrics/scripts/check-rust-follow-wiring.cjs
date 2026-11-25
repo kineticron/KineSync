@@ -105,8 +105,30 @@ const followModule = require('../lib/rust-lyrics-follow.js');
 const line = { lineStartTime: 0, lineEndTime: 1000, syllables: [{ text: 'Word', startTime: 0, endTime: 1000 }] };
 let store;
 let parentFollow = true;
+let hooks = [];
+let hookIndex = 0;
+const react = {
+  memo: fn => fn,
+  useMemo(fn, deps) {
+    const index = hookIndex++;
+    const previous = hooks[index];
+    if (!previous || !deps || previous.deps?.length !== deps.length ||
+      deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+      hooks[index] = { value: fn(), deps };
+    }
+    return hooks[index].value;
+  },
+  useCallback: fn => fn,
+  useRef(current) { return hooks[hookIndex++] ??= { current }; },
+  useState(initial) {
+    const slot = hooks[hookIndex++] ??= { value: initial };
+    return [slot.value, next => { slot.value = typeof next === 'function' ? next(slot.value) : next; }];
+  },
+  useEffect: () => {},
+  useLayoutEffect: () => {},
+};
 const imports = {
-  react: { memo: f => f, useMemo: f => f(), useCallback: f => f, useRef: current => ({ current }), useState: current => [current, () => {}], useEffect: () => {} },
+  react,
   'react/jsx-runtime': { jsx, jsxs: jsx },
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', Platform: { OS: 'ios' }, AppState: {},
     StyleSheet: { create: x => x }, useWindowDimensions: () => ({ width: 390, height: 640 }),
@@ -138,11 +160,19 @@ function createWiring(style = 'spicy') {
     lyricsStyle: style, showTranslatedText: true, showRustDebugOverlay: false, anchorPositionMs: 0, anchorMonotonicMs: 0, isPlaying: false,
   };
   parentFollow = true;
-  const rendered = nodes(RustLyricsView({ active: true, tapToSeekEnabled: true, autoFollowEnabled: true,
-    onAutoFollowChange: enabled => { parentFollow = enabled; }, onUserInteraction: () => {}, resumeAutoFollowSignal: 0 }));
+  hooks = [];
+  const props = { active: true, tapToSeekEnabled: true, autoFollowEnabled: true,
+    onAutoFollowChange: enabled => { parentFollow = enabled; }, onUserInteraction: () => {}, resumeAutoFollowSignal: 0 };
+  const render = () => {
+    hookIndex = 0;
+    return nodes(RustLyricsView(props));
+  };
+  const findPan = rendered => rendered.find(node => node.props?.onPanResponderGrant);
+  const rendered = render();
   const nativeView = rendered.find(node => node.type === 'NativeView');
-  const pan = rendered.find(node => node.props?.onPanResponderGrant);
-  assert.ok(nativeView && pan);
+  assert.ok(nativeView);
+  assert.equal(findPan(rendered), undefined, 'gestures wait for native readiness');
+  let pan;
   const generation = JSON.parse(nativeView.props.trackJson).generation;
   const native = nativeHarness(generation);
   const commands = [];
@@ -158,7 +188,15 @@ function createWiring(style = 'spicy') {
     generation, native, commands, status,
     grant: () => pan.props.onPanResponderGrant({ nativeEvent: { locationX: 20, locationY: 80 } }),
     release: () => pan.props.onPanResponderRelease(),
-    ready: () => status({ state: 'ready', generation, message: 'ready', ownershipEpoch: 0 }),
+    ready: () => {
+      status({ state: 'ready', generation: generation - 1, message: 'stale ready', ownershipEpoch: 0 });
+      assert.equal(findPan(render()), undefined, 'a stale ready event cannot enable gestures');
+      status({ state: 'ready', generation, message: 'ready', ownershipEpoch: 0 });
+      const ready = render();
+      assert.equal(JSON.parse(ready.find(node => node.type === 'NativeView').props.trackJson).generation, generation);
+      pan = findPan(ready);
+      assert.ok(pan, 'the ready surface accepts gestures');
+    },
     follow: epoch => status({ state: 'follow', generation, ownershipEpoch: epoch, message: 'follow' }),
   };
 }

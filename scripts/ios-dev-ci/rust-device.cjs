@@ -88,4 +88,7 @@ if (require.main === module) {
   else if (process.argv[2] === 'validate') validate();
   else throw new Error('Expected seal or validate');
 }
-module.exports = { symbols, inspect, inventory, inspectFonts };
+// Release can dead-strip diagnostics that are only called in Debug.
+const releaseSymbols = symbols.filter(symbol => symbol !== 'kr_copy_layout_json' && symbol !== 'kr_copy_error');
+
+module.exports = { symbols, releaseSymbols, inspect, inventory, inspectFonts };
