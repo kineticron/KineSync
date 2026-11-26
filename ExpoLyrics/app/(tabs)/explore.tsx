@@ -33,7 +33,7 @@ import { requestShowOnboarding } from '@/providers/bridge-provider';
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from '@/lib/network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { SpotifyLoginWebView } from '@/components/spotify-login-webview';
+import { SpotifyLoginModal } from '@/components/spotify-login-modal';
 
 import {
   isTrustedSpotifyWebViewMessageUrl,
@@ -848,37 +848,23 @@ export default function BridgeSettingsScreen() {
         </View>
       </Modal>
 
-      <Modal
-        animationType="slide"
+      <SpotifyLoginModal
         visible={loginOpen}
-        onRequestClose={() => setLoginOpen(false)}>
-        <View style={styles.loginModal}>
-          <SafeAreaView style={styles.loginHeader}>
-            <Text style={styles.loginTitle}>Sign in with Spotify</Text>
-            <Pressable
-              hitSlop={10}
-              onPress={() => setLoginOpen(false)}
-              style={styles.loginCloseButton}>
-              <Ionicons name="close" size={21} color="#FFFFFF" />
-            </Pressable>
-          </SafeAreaView>
-          <SpotifyLoginWebView
-            onMessage={({ nativeEvent }) => {
-              if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || '')) return;
-              const event = parseBrowserEvent(nativeEvent.data);
-              if (event?.type === 'spotifyToken' && event.token) {
-                void saveMobileLyricsSettings({
-                  spotifyWebToken: event.token,
-                  spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
-                });
-              }
-              if (event?.type === 'signedIn' && event.signedIn) {
-                completeSpotifySignIn();
-              }
-            }}
-          />
-        </View>
-      </Modal>
+        onClose={() => setLoginOpen(false)}
+        onMessage={({ nativeEvent }) => {
+          if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || '')) return;
+          const event = parseBrowserEvent(nativeEvent.data);
+          if (event?.type === 'spotifyToken' && event.token) {
+            void saveMobileLyricsSettings({
+              spotifyWebToken: event.token,
+              spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
+            });
+          }
+          if (event?.type === 'signedIn' && event.signedIn) {
+            completeSpotifySignIn();
+          }
+        }}
+      />
     </View>
   );
 }
@@ -1211,29 +1197,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 13,
     fontWeight: '600',
-  },
-  loginModal: {
-    flex: 1,
-    backgroundColor: '#090A11',
-  },
-  loginHeader: {
-    minHeight: 58,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#11131C',
-  },
-  loginTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  loginCloseButton: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });
 

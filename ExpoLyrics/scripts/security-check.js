@@ -13,6 +13,7 @@ const fallback = read('components/lyrics/spotify-browser-fallback.tsx');
 const bridgeSettings = read('lib/bridge-settings.ts');
 const explore = read('app/(tabs)/explore.tsx');
 const onboarding = read('components/onboarding/onboarding-screen.tsx');
+const loginModal = read('components/spotify-login-modal.tsx');
 const login = read('components/spotify-login-webview.tsx');
 const rustLyrics = read('components/lyrics/rust/rust-lyrics-view.tsx');
 const signingPlugin = read('plugins/with-release-signing.js');
@@ -66,8 +67,26 @@ for (const webView of [fallback]) {
   );
 }
 assert(login.includes('isAllowedSpotifyLoginNavigation(url, isTopFrame)'), 'Login must retain its exact challenge host filter');
-for (const screen of [explore, onboarding]) {
-  assert(screen.includes('<SpotifyLoginWebView'), 'Both login entry points must use the guarded native login WebView');
+assert(login.includes('if (url && isTrustedSpotifyWebViewMessageUrl(url)) onMessage?.(event);'),
+  'Login must validate the message URL before forwarding auth events');
+assert.match(loginModal, /import \{ SpotifyLoginWebView \} from ['"]\.\/spotify-login-webview['"]/,
+  'The shared modal must import the guarded login WebView');
+assert.match(loginModal, /<SpotifyLoginWebView\s+onMessage=\{onMessage\}\s*\/>/,
+  'The shared modal must forward auth messages through the guarded login WebView');
+for (const [name, screen] of [['Settings', explore], ['Onboarding', onboarding]]) {
+  assert.match(screen, /import \{ SpotifyLoginModal \} from ['"]@\/components\/spotify-login-modal['"]/,
+    name + ' must import the shared login modal');
+  assert.doesNotMatch(screen, /\bSpotifyLoginWebView\b/, name + ' must use the shared modal for login');
+  const modalProps = screen.match(/<SpotifyLoginModal\b([\s\S]*?)^\s*\/>/m)?.[1];
+  assert(modalProps, name + ' login must use the shared modal');
+  assert.match(modalProps,
+    /onMessage=\{\(\{ nativeEvent \}\) => \{\s*if \(!isTrustedSpotifyWebViewMessageUrl\(nativeEvent\.url \|\| ['"]{2}\)\)\s*return;\s*const event = parseBrowserEvent\(nativeEvent\.data\);/,
+    name + ' login must reject untrusted messages before parsing auth data');
+  assert.match(modalProps,
+    /if \(event\?\.type === ['"]spotifyToken['"] && event\.token\) \{\s*void saveMobileLyricsSettings\(\{\s*spotifyWebToken: event\.token,\s*spotifyWebTokenExpiresAt: Number\(event\.expiresAt \|\| 0\),/,
+    name + ' login must only save tokens from parsed Spotify token events');
+  assert.match(modalProps, /if \(event\?\.type === ['"]signedIn['"] && event\.signedIn\) \{\s*completeSpotifySignIn\(\);/,
+    name + ' login must only complete sign-in on a confirmed event');
 }
 assert(
   fallback.includes('resumedFromBackground &&') &&
