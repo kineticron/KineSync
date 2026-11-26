@@ -34,7 +34,7 @@ import Reanimated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { SpotifyLoginWebView } from '@/components/spotify-login-webview';
+import { SpotifyLoginModal } from '@/components/spotify-login-modal';
 
 import { bridgeClient } from "@/lib/bridge-client";
 import {
@@ -722,40 +722,24 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
         </View>
 
         {/* Spotify sign-in — cookies are shared with the background player */}
-        <Modal
-          animationType="slide"
+        <SpotifyLoginModal
           visible={loginOpen}
-          onRequestClose={() => setLoginOpen(false)}
-        >
-          <GestureHandlerRootView style={styles.loginModalRoot}>
-            <View style={[styles.loginHeader, { paddingTop: insets.top + 10 }]}>
-              <Text style={styles.loginTitle}>Sign in to Spotify</Text>
-              <Pressable
-                hitSlop={10}
-                onPress={() => setLoginOpen(false)}
-                style={styles.closeButton}
-              >
-                <Ionicons name="close" size={20} color="#F8F8FE" />
-              </Pressable>
-            </View>
-            <SpotifyLoginWebView
-              onMessage={({ nativeEvent }) => {
-                if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || ""))
-                  return;
-                const event = parseBrowserEvent(nativeEvent.data);
-                if (event?.type === "spotifyToken" && event.token) {
-                  void saveMobileLyricsSettings({
-                    spotifyWebToken: event.token,
-                    spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
-                  });
-                }
-                if (event?.type === "signedIn" && event.signedIn) {
-                  completeSpotifySignIn();
-                }
-              }}
-            />
-          </GestureHandlerRootView>
-        </Modal>
+          onClose={() => setLoginOpen(false)}
+          onMessage={({ nativeEvent }) => {
+            if (!isTrustedSpotifyWebViewMessageUrl(nativeEvent.url || ""))
+              return;
+            const event = parseBrowserEvent(nativeEvent.data);
+            if (event?.type === "spotifyToken" && event.token) {
+              void saveMobileLyricsSettings({
+                spotifyWebToken: event.token,
+                spotifyWebTokenExpiresAt: Number(event.expiresAt || 0),
+              });
+            }
+            if (event?.type === "signedIn" && event.signedIn) {
+              completeSpotifySignIn();
+            }
+          }}
+        />
 
         {/* QR Code Scanner Modal */}
         <Modal
@@ -1106,17 +1090,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 2,
   },
-  closeButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.09)",
-  },
-  closeButtonPressed: {
-    opacity: 0.75,
-  },
   settingsScroll: {
     paddingHorizontal: 14,
     paddingBottom: 10,
@@ -1213,22 +1186,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: "500",
-  },
-  loginModalRoot: {
-    flex: 1,
-    backgroundColor: "#090A11",
-  },
-  loginHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingBottom: 12,
-  },
-  loginTitle: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "800",
   },
   scannerModalRoot: {
     flex: 1,

@@ -51,19 +51,29 @@ assert(posted.some(event => event.type === 'signedIn' && event.signedIn));
 const changes = [];
 let index = 0;
 const jsx = (type, props, key) => ({ type, props, key });
-const source = fs.readFileSync('components/spotify-login-webview.tsx', 'utf8');
+const jsxRuntime = { jsx, jsxs: jsx };
+const loadComponent = (file, modules) => {
+  const source = fs.readFileSync(file, 'utf8');
+  const context = {
+    exports: {},
+    require: name => { assert(name in modules, name); return modules[name]; },
+  };
+  vm.runInNewContext(ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText, context);
+  return context.exports;
+};
 const modules = {
   react: { useRef: current => ({ current }), useState: initial => { const id = index++; return [initial, value => changes.push({ id, value })]; } },
-  'react/jsx-runtime': { jsx, jsxs: jsx },
+  'react/jsx-runtime': jsxRuntime,
   'react-native': { Platform: { OS: 'ios' }, View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
   'react-native-webview': { WebView: 'WebView' },
   '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
 };
-const context = { exports: {}, require: name => { assert(name in modules, name); return modules[name]; } };
-vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+const { SpotifyLoginWebView } = loadComponent('components/spotify-login-webview.tsx', modules);
 let delivered = 0;
 const handler = () => { delivered++; };
-const tree = context.exports.SpotifyLoginWebView({ onMessage: handler });
+const tree = SpotifyLoginWebView({ onMessage: handler });
 const flatten = node => !node || typeof node !== 'object' ? [] : [node, ...[node.props?.children].flat().flatMap(flatten)];
 const nodes = flatten(tree);
 const webview = nodes.find(node => node.type === 'WebView');
@@ -86,7 +96,7 @@ retry.props.onPress();
 assert(changes.some(change => change.id === 0 && typeof change.value === 'function' && change.value(0) === 1));
 modules['react-native'].Platform.OS = 'android';
 index = 0;
-const androidWebView = flatten(context.exports.SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
+const androidWebView = flatten(SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
 assert.equal(androidWebView.props.userAgent, undefined, 'Android Accounts keeps its native identity for challenges');
 assert.equal(androidWebView.props.onShouldStartLoadWithRequest({ url: 'https://open.spotify.com/', isTopFrame: true }), false,
   'Android must remount the desktop player before the unsupported mobile player loads');
@@ -95,9 +105,51 @@ assert(androidWebView.props.onShouldStartLoadWithRequest({ url: 'https://challen
   'Accounts challenges remain native on Android');
 index = 0;
 modules.react.useState = initial => [index++ === 2 ? true : initial, () => {}];
-const desktopPlayer = flatten(context.exports.SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
+const desktopPlayer = flatten(SpotifyLoginWebView({ onMessage: handler })).find(node => node.type === 'WebView');
 assert.equal(desktopPlayer.props.source.uri, 'https://open.spotify.com/');
 assert.match(desktopPlayer.props.userAgent, /Windows NT.*Chrome\/137/);
 assert.equal(desktopPlayer.props.contentMode, 'desktop');
 assert.equal(desktopPlayer.props.sharedCookiesEnabled, true);
-console.log('Spotify login checks passed: challenge frames, native browser identity, player-only probes, confirmed sign-in, and process recovery.');
+
+const { SpotifyLoginModal } = loadComponent('components/spotify-login-modal.tsx', {
+  'react/jsx-runtime': jsxRuntime,
+  'react-native': { Modal: 'Modal', View: 'View', Text: 'Text', StyleSheet: { create: value => value } },
+  'react-native-gesture-handler': { GestureHandlerRootView: 'GestureHandlerRootView' },
+  'react-native-safe-area-context': { SafeAreaProvider: 'SafeAreaProvider', SafeAreaView: 'SafeAreaView' },
+  '@react-native-vector-icons/ionicons': { default: 'Ionicons' },
+  '@/components/ui/motion-pressable': { MotionPressable: 'MotionPressable' },
+  './spotify-login-webview': { SpotifyLoginWebView },
+});
+let closeCount = 0;
+const onClose = () => { closeCount++; };
+const modal = SpotifyLoginModal({ visible: true, onClose, onMessage: handler });
+assert.equal(modal.type, 'Modal');
+assert.equal(modal.props.visible, true);
+assert.equal(SpotifyLoginModal({ visible: false, onClose, onMessage: handler }).props.visible, false);
+assert.deepEqual(Array.from(modal.props.supportedOrientations), ['portrait', 'landscape-left', 'landscape-right']);
+assert.equal(modal.props.onRequestClose, onClose);
+const gestureRoot = modal.props.children;
+assert.equal(gestureRoot.type, 'GestureHandlerRootView');
+assert.equal(gestureRoot.props.style.flex, 1);
+const provider = gestureRoot.props.children;
+assert.equal(provider.type, 'SafeAreaProvider');
+assert.equal(provider.props.initialMetrics, undefined, 'The modal provider measures its own window');
+const safeArea = provider.props.children;
+assert.equal(safeArea.type, 'SafeAreaView');
+assert.equal(safeArea.props.style.flex, 1);
+assert.deepEqual(Array.from(safeArea.props.edges), ['top', 'right', 'bottom', 'left']);
+
+const [header, modalWebView] = safeArea.props.children;
+const closeButton = header.props.children.find(child => child.type === 'MotionPressable');
+assert(closeButton, 'The close button must be inside the safe-area header');
+assert.equal(closeButton.props.accessibilityRole, 'button');
+assert.equal(closeButton.props.accessibilityLabel, 'Close Spotify sign in');
+assert(closeButton.props.style.width >= 44 && closeButton.props.style.height >= 44);
+assert.equal(closeButton.props.onPress, onClose);
+modal.props.onRequestClose();
+closeButton.props.onPress();
+assert.equal(closeCount, 2);
+assert.equal(modalWebView.type, SpotifyLoginWebView);
+assert.equal(modalWebView.props.onMessage, handler);
+
+console.log('Spotify login checks passed: modal safe-area wiring, challenge frames, native browser identity, player-only probes, confirmed sign-in, and process recovery.');
