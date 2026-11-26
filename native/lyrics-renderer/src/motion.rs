@@ -303,13 +303,15 @@ impl FollowScroll {
         self.drag_raw = self.position;
     }
 
-    /// Geometry may settle over several lazy preparation passes. Relocate the
-    /// same logical manual anchor without consuming an explicit seek snap.
+    /// Update the manual coordinate system without changing ownership or
+    /// momentum. Preserve any rubber-band displacement during measurement.
     pub(crate) fn relocate_manual(&mut self, position: f64, max: f64, viewport: f64) {
-        self.position = position.clamp(0.0, max);
-        self.max_offset = max;
-        self.viewport = viewport;
-        self.drag_raw = self.position;
+        if self.position != position || self.max_offset != max || self.viewport != viewport {
+            self.position = position;
+            self.max_offset = max;
+            self.viewport = viewport;
+            self.drag_raw = Self::unband(position, max, viewport);
+        }
     }
 
     pub fn animating(&self) -> bool {
@@ -1063,6 +1065,47 @@ mod tests {
         let middle = scroll.sample(&moved, 2_100.0, true);
         assert!(middle > 380.0 && middle < 1_000.0);
         assert_eq!(scroll.sample(&moved, 3_000.0, true), 1_000.0);
+    }
+
+    #[test]
+    fn tiny_drag_after_track_switch_and_idle_keeps_the_motion_baseline() {
+        for style in [Style::Amll, Style::Spicy] {
+            let mut scroll = FollowScroll::default();
+            scroll.configure(style, 1.0, 8);
+            let old = command(style, 300.0, 800.0, 1, 0);
+            scroll.sample(&old, 0.0, true);
+            scroll.drag(180.0, 4_000.0, 640.0);
+            scroll.fling(3.0, 4_000.0, 640.0);
+            scroll.sample(&old, 16.0, false);
+            assert!(scroll.animating());
+
+            scroll.reset();
+            let fresh = command(style, 1_200.0, 800.0, 2, 1);
+            scroll.sample(&fresh, 100.0, true);
+            let displayed = scroll.sample(&fresh, 116.0, true);
+            scroll.resume(60_100.0, 16.0);
+            scroll.set_manual_bounds(4_000.0, 640.0);
+            scroll.drag(5.0, 4_000.0, 640.0);
+            let input = scroll.position() - displayed;
+            let frame = scroll.sample(&fresh, 60_100.0, false) - displayed;
+            println!("{style:?} motion-only, input={input:+.3}px first_frame={frame:+.3}px");
+            assert_eq!((input, frame), (5.0, 5.0));
+
+            scroll.fling(0.0, 4_000.0, 640.0);
+            assert_eq!(scroll.sample(&fresh, 61_100.0, false) - displayed, 5.0);
+        }
+    }
+
+    #[test]
+    fn tiny_drag_keeps_its_rubber_band_when_manual_geometry_moves() {
+        let mut scroll = FollowScroll::default();
+        scroll.configure(Style::Spicy, 1.0, 8);
+        let cmd = command(Style::Spicy, 1_000.0, 800.0, 2, 1);
+        scroll.sample(&cmd, 0.0, true);
+        scroll.drag(40.0, 1_000.0, 640.0);
+        scroll.relocate_manual(scroll.position() + 80.0, 1_080.0, 640.0);
+        scroll.drag(5.0, 1_080.0, 640.0);
+        assert!((scroll.position() - FollowScroll::band(1_125.0, 1_080.0, 640.0)).abs() < 1e-9);
     }
 
     #[test]

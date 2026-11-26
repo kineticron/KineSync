@@ -888,15 +888,15 @@ struct PreparedDrawable<T> {
     drawable: T,
     native_ms: f64,
     preparation_ms: f64,
-    manual_scroll: Option<f64>,
 }
 
 /// Never shape with a drawable held. A stall crossing a geometry boundary
-/// retires that drawable before retrying. No animation state is sampled here.
+/// retires that drawable before retrying. Rebase a manual offset as soon as
+/// geometry changes, even if acquisition fails. No animation is sampled here.
 fn prepare_drawable<T>(
     layout: &mut TrackScene,
     timeline: &Timeline,
-    mut manual_scroll: Option<f64>,
+    mut manual_scroll: Option<&mut FollowScroll>,
     mut clock: impl FnMut() -> f64,
     mut acquire: impl FnMut() -> Result<Option<T>, String>,
 ) -> Result<Option<PreparedDrawable<T>>, String> {
@@ -904,13 +904,13 @@ fn prepare_drawable<T>(
     for _ in 0..2 {
         let position = timeline.position(clock());
         let started = Instant::now();
-        layout.prepare(position).map_err(|e| e.to_string())?;
-        if let Some(scroll) = manual_scroll {
-            manual_scroll = Some(
-                layout
-                    .prepare_manual_viewport(scroll)
-                    .map_err(|e| e.to_string())?,
-            );
+        if let Some(scroll) = manual_scroll.as_deref_mut() {
+            let offset = layout
+                .prepare_manual_frame(position, scroll.position())
+                .map_err(|e| e.to_string())?;
+            scroll.relocate_manual(offset, layout.max_scroll(), f64::from(layout.height));
+        } else {
+            layout.prepare(position).map_err(|e| e.to_string())?;
         }
         preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
         let key = layout.preparation_key(position);
@@ -923,7 +923,6 @@ fn prepare_drawable<T>(
                 drawable,
                 native_ms,
                 preparation_ms,
-                manual_scroll: manual_scroll.filter(|_| layout.has_manual_anchor()),
             }));
         }
         drop(drawable);
@@ -945,18 +944,15 @@ pub(crate) fn manual_frame_for_test(
     timeline
         .anchor(1, 1, time, native_ms, native_ms, false, 1.0)
         .unwrap();
-    let prepared = prepare_drawable(
+    prepare_drawable(
         layout,
         &timeline,
-        Some(scroll.position()),
+        Some(&mut *scroll),
         || native_ms,
         || Ok(Some(())),
     )
     .unwrap()
     .unwrap();
-    if let Some(offset) = prepared.manual_scroll {
-        scroll.relocate_manual(offset, layout.max_scroll(), f64::from(layout.height));
-    }
     scroll.sample(
         &layout.scroll_command(time, scroll.position()),
         native_ms,
@@ -1026,7 +1022,7 @@ pub extern "C" fn kr_render(
         let Some(prepared) = prepare_drawable(
             layout,
             &engine.timeline,
-            (!engine.following).then_some(engine.scroll.position()),
+            (!engine.following).then_some(&mut engine.scroll),
             || {
                 frame_clock(
                     native_ms,
@@ -1040,11 +1036,6 @@ pub extern "C" fn kr_render(
             return Ok(2);
         };
         let frame = prepared.drawable;
-        if let Some(scroll) = prepared.manual_scroll {
-            engine
-                .scroll
-                .relocate_manual(scroll, layout.max_scroll(), f64::from(layout.height));
-        }
         let native_ms = prepared.native_ms;
         engine.metrics.target_native_ms = native_ms;
         let position = engine.timeline.position(native_ms);
@@ -1335,16 +1326,22 @@ mod tests {
         timeline
             .anchor(1, 1, position, 0.0, 0.0, false, 1.0)
             .unwrap();
-        let result =
-            prepare_drawable::<()>(&mut layout, &timeline, Some(0.0), || 100_000.0, || Ok(None))
-                .unwrap();
+        let mut scroll = FollowScroll::default();
+        let result = prepare_drawable::<()>(
+            &mut layout,
+            &timeline,
+            Some(&mut scroll),
+            || 100_000.0,
+            || Ok(None),
+        )
+        .unwrap();
         assert!(result.is_none());
         assert!(layout.geometry_ready(0));
         assert_eq!(timeline.position(100_000.0), position);
         let prepared = prepare_drawable(
             &mut layout,
             &timeline,
-            Some(0.0),
+            Some(&mut scroll),
             || 200_000.0,
             || Ok(Some(())),
         )

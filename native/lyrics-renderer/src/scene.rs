@@ -1292,10 +1292,35 @@ impl TrackScene {
             .map_or(scroll, |a| self.manual_anchor_offset(a)))
     }
 
+    /// Preserve the manual viewport in the old geometry while both preparation
+    /// passes replace estimated row heights with measured ones.
+    pub(crate) fn prepare_manual_frame(&mut self, time: f64, scroll: f64) -> Result<f64, Error> {
+        if self.manual_anchor.is_some() {
+            self.prepare(time)?;
+            return self.prepare_manual_viewport(scroll);
+        }
+
+        let row = self.first_visible(scroll);
+        let old_max = self.max_scroll();
+        let origin = |scene: &Self| {
+            if scroll >= old_max {
+                scene.max_scroll()
+            } else {
+                scene.prefix[row]
+            }
+        };
+        let before = origin(self);
+        let rebase = |scene: &Self| scroll + (origin(scene) - before);
+        self.prepare(time)?;
+        self.prepare_viewport(rebase(self))?;
+        Ok(rebase(self))
+    }
+
     pub(crate) fn clear_manual_anchor(&mut self) {
         self.manual_anchor = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn has_manual_anchor(&self) -> bool {
         self.manual_anchor.is_some()
     }
@@ -2860,6 +2885,124 @@ mod lazy_tests {
                 top >= row_bottom - 1e-6,
                 "drawn footer top {top} overlaps final row bottom {row_bottom}"
             );
+        }
+    }
+
+    #[test]
+    fn tiny_drag_after_track_switch_and_idle_measures_row_travel() {
+        use crate::ffi::{manual_frame_for_test, replace_track_scroll};
+        use crate::motion::FollowScroll;
+
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../test/background-voices.json")).unwrap();
+        let packet = crate::live::TrackPacket::parse(
+            &serde_json::to_vec(&data["cases"][0]["packet"]).unwrap(),
+        )
+        .unwrap();
+        let prepared_voice = packet
+            .lines
+            .into_iter()
+            .filter_map(|line| line.paint)
+            .filter(|voice| voice.end > voice.start)
+            .max_by_key(|voice| voice.text.len())
+            .expect("styled fixture provides prepared paint");
+        let mut lines = source(90);
+        for line in lines.iter_mut().skip(1).step_by(2) {
+            let mut paint = prepared_voice.clone();
+            let start = paint.start;
+            let duration = paint.end - start;
+            let retime =
+                |time: f64| line.start + (time - start) / duration * (line.end - line.start);
+            for word in &mut paint.words {
+                word.start = retime(word.start);
+                word.end = retime(word.end);
+                word.appearance = None;
+            }
+            paint.start = line.start;
+            paint.end = line.end;
+            line.text.clone_from(&paint.text);
+            line.atoms[0].bytes = 0..line.text.len();
+            line.paint = Some(paint);
+        }
+
+        let row = 40;
+        let time = 40_500.0;
+        let viewport = 640.0;
+        for style in [Style::Amll, Style::Spicy] {
+            for (case, warm, estimate_error) in [
+                ("cold", false, 0.0),
+                ("warm", true, 0.0),
+                ("known height error", true, 80.0),
+            ] {
+                let settings = Settings {
+                    style,
+                    font_scale: 1.0,
+                    landscape: false,
+                };
+                let mut track = TrackScene::with_fonts(
+                    lines.clone(),
+                    390,
+                    640,
+                    1.0,
+                    Some(&settings),
+                    &mut fonts(),
+                )
+                .unwrap();
+                if warm {
+                    for index in 0..=row {
+                        track.prepare_viewport(track.prefix[index]).unwrap();
+                    }
+                }
+                track.prepare(time).unwrap();
+
+                // Recreate one cold row with a known estimation error. It is
+                // immediately above the viewport and measured on the manual pass.
+                if estimate_error > 0.0 {
+                    let previous = row - 1;
+                    assert!(track.geometry_ready(previous));
+                    track.cached[previous].height += estimate_error;
+                    for voice in &mut track.cached[previous].voices {
+                        voice.clear_geometry();
+                    }
+                    track.resident.remove(&previous);
+                    for top in &mut track.prefix[row..] {
+                        *top += estimate_error;
+                    }
+                }
+
+                let mut scroll = FollowScroll::default();
+                scroll.configure(style, 1.0, track.lines.len());
+                let old = track.scroll_command(1_100.0, 0.0);
+                scroll.sample(&old, 0.0, true);
+                replace_track_scroll(&mut scroll, None, &mut track, false, true, time).unwrap();
+
+                let command = track.scroll_command(time, 0.0);
+                let displayed = scroll.sample(&command, 100.0, true);
+                assert_eq!(command.index, row);
+                assert_eq!(displayed, track.prefix[row]);
+                let old_top = track.prefix[row];
+                let max = track.max_scroll();
+                scroll.set_manual_bounds(max, viewport);
+                track.clear_manual_anchor();
+                scroll.drag(5.0, max, viewport);
+                let input = scroll.position() - displayed;
+                let manual = manual_frame_for_test(&mut track, &mut scroll, time, 60_100.0);
+                let viewport_delta = manual - displayed;
+                let row_shift = track.prefix[row] - old_top;
+                let row_travel = viewport_delta - row_shift;
+                let uncorrected_travel = input - row_shift;
+                println!(
+                    "{style:?} {case}, input={input:+.3}px \
+                     viewport_delta={viewport_delta:+.3}px row_shift={row_shift:+.3}px \
+                     uncorrected_travel={uncorrected_travel:+.3}px row_travel={row_travel:+.3}px"
+                );
+                assert!((input - 5.0).abs() < 1e-6);
+                assert!((row_travel - 5.0).abs() < 1e-6, "{style:?} {case}");
+                if warm {
+                    assert!((row_shift + estimate_error).abs() < 1e-6);
+                    assert!((uncorrected_travel - (5.0 + estimate_error)).abs() < 1e-6);
+                }
+            }
         }
     }
 
