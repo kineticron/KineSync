@@ -105,7 +105,7 @@ fn credits_switch_preserves_manual_footer_and_fresh_follow_at_exact_fixture_end(
                 let mut spicy = track(Style::Spicy, width, height, scale);
                 spicy.prepare(time).unwrap();
                 let mut scroll = FollowScroll::default();
-                scroll.configure(Style::Spicy, f64::from(scale), spicy.lines.len());
+                scroll.configure(Style::Spicy, f64::from(scale), spicy.lines().len());
                 let command = spicy.scroll_command(time, 0.0);
                 scroll.sample(&command, 1000.0, true);
                 if !following {
@@ -176,14 +176,14 @@ fn credits_switch_keeps_user_row_and_clamps_without_restoring_follow_or_fling() 
     old.prepare(time).unwrap();
     old.prepare_viewport(0.0).unwrap();
     let mut scroll = FollowScroll::default();
-    scroll.configure(Style::Spicy, 1.0, old.lines.len());
+    scroll.configure(Style::Spicy, 1.0, old.lines().len());
     scroll.sample(&old.scroll_command(time, 0.0), 0.0, true);
-    let manual = old.prefix[2] + 0.25 * (old.prefix[3] - old.prefix[2]);
+    let manual = old.row_top(2) + 0.25 * (old.row_top(3) - old.row_top(2));
     scroll.drag(manual - scroll.position(), old.max_scroll(), 640.0);
     scroll.fling(0.5, old.max_scroll(), 640.0);
     let mut next = track(Style::Amll, 390, 640, 1.0);
     replace_track_scroll(&mut scroll, Some(&old), &mut next, true, false, time).unwrap();
-    let expected = next.prefix[2] + 0.25 * (next.prefix[3] - next.prefix[2]);
+    let expected = next.row_top(2) + 0.25 * (next.row_top(3) - next.row_top(2));
     assert!((scroll.position() - expected).abs() < 1e-8);
     assert!(scroll.position() < next.scroll_target(time));
     let command = next.scroll_command(time, scroll.position());
@@ -227,14 +227,14 @@ fn credits_switch_keeps_logical_anchor_through_lazy_preparation_and_pending_seek
     for footer in [false, true] {
         let mut old = track_variant(Style::Spicy, 320, 600, 1.0, true);
         old.prepare(time).unwrap();
-        old.prepare_viewport(old.prefix[40]).unwrap();
+        old.prepare_viewport(old.row_top(40)).unwrap();
         let mut scroll = FollowScroll::default();
-        scroll.configure(Style::Spicy, 1.0, old.lines.len());
+        scroll.configure(Style::Spicy, 1.0, old.lines().len());
         scroll.sample(&old.scroll_command(time, 0.0), 0.0, true);
         let manual = if footer {
             old.max_scroll()
         } else {
-            old.prefix[40] + 0.4 * (old.prefix[41] - old.prefix[40])
+            old.row_top(40) + 0.4 * (old.row_top(41) - old.row_top(40))
         };
         scroll.drag(manual - scroll.position(), old.max_scroll(), 600.0);
         scroll.sample(&old.scroll_command(time, manual), 16.0, false);
@@ -255,7 +255,7 @@ fn credits_switch_keeps_logical_anchor_through_lazy_preparation_and_pending_seek
             let expected = if footer {
                 next.max_scroll()
             } else {
-                next.prefix[40] + 0.4 * (next.prefix[41] - next.prefix[40])
+                next.row_top(40) + 0.4 * (next.row_top(41) - next.row_top(40))
             };
             assert!((scroll.position() - expected).abs() < 1e-7);
             assert!(
@@ -266,7 +266,7 @@ fn credits_switch_keeps_logical_anchor_through_lazy_preparation_and_pending_seek
                 assert_footer(&next, offset, time);
             }
             // Measure previously estimated tall translated rows before the anchor.
-            next.prepare_viewport(next.prefix[pass as usize]).unwrap();
+            next.prepare_viewport(next.row_top(pass as usize)).unwrap();
             measured_shift |= (previous - scroll.position()).abs() > 1.0;
             previous = scroll.position();
         }
@@ -289,7 +289,7 @@ fn credits_switch_manual_frame_without_anchor_preserves_rubber_band_and_fling() 
     let mut actual = FollowScroll::default();
     let mut control = FollowScroll::default();
     for scroll in [&mut actual, &mut control] {
-        scroll.configure(Style::Amll, 1.0, scene.lines.len());
+        scroll.configure(Style::Amll, 1.0, scene.lines().len());
         scroll.sample(&scene.scroll_command(3000.0, 0.0), 0.0, true);
         scroll.drag(-200.0, scene.max_scroll(), 640.0);
     }
@@ -326,7 +326,7 @@ fn credits_switch_cached_resize_uses_current_manual_anchor_not_cached_ownership(
     let mut b = track(Style::Amll, 560, 320, 1.0);
     a.prepare(time).unwrap();
     let mut scroll = FollowScroll::default();
-    scroll.configure(Style::Amll, 1.0, a.lines.len());
+    scroll.configure(Style::Amll, 1.0, a.lines().len());
     scroll.sample(&a.scroll_command(time, 0.0), 0.0, true);
     // A receives a logical footer anchor through a same-track replacement.
     let mut spicy = track(Style::Spicy, 390, 640, 1.0);
@@ -337,12 +337,12 @@ fn credits_switch_cached_resize_uses_current_manual_anchor_not_cached_ownership(
     assert!(a.has_manual_anchor());
     b.clear_manual_anchor();
     b.prepare_viewport(0.0).unwrap();
-    let manual = b.prefix[2] + 0.3 * (b.prefix[3] - b.prefix[2]);
+    let manual = b.row_top(2) + 0.3 * (b.row_top(3) - b.row_top(2));
     scroll.drag(manual - scroll.position(), b.max_scroll(), 320.0);
     resize_track_scroll(&mut scroll, &b, &mut a, false, time, 1.0).unwrap();
     for frame in 0..4 {
         manual_frame_for_test(&mut a, &mut scroll, time, 1000.0 + f64::from(frame) * 16.0);
-        let expected = a.prefix[2] + 0.3 * (a.prefix[3] - a.prefix[2]);
+        let expected = a.row_top(2) + 0.3 * (a.row_top(3) - a.row_top(2));
         assert!((scroll.position() - expected).abs() < 1e-7);
         assert!(scroll.position() < a.scroll_target(time));
     }
@@ -358,17 +358,32 @@ fn credits_switch_rejects_unrelated_rows_and_handles_empty_layouts() {
     old.prepare(time).unwrap();
     for revision in ["count", "order", "text", "empty"] {
         let mut scroll = FollowScroll::default();
-        scroll.configure(Style::Spicy, 1.0, old.lines.len());
+        scroll.configure(Style::Spicy, 1.0, old.lines().len());
         scroll.sample(&old.scroll_command(time, 0.0), 0.0, true);
-        let mut next = track(Style::Amll, 390, 640, 1.0);
+        let template = track(Style::Amll, 390, 640, 1.0);
+        let mut lines = template.lines().to_vec();
         match revision {
             "count" => {
-                next.lines.pop();
+                lines.pop();
             }
-            "order" => next.lines.swap(0, 1),
-            "text" => next.lines[0].text = "An unrelated lyric revision".into(),
+            "order" => lines.swap(0, 1),
+            "text" => lines[0].text = "An unrelated lyric revision".into(),
             _ => {}
         }
+        let mut fonts = Fonts::default();
+        fonts
+            .register(
+                include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf"),
+                include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"),
+            )
+            .unwrap();
+        let settings = crate::typography::Settings {
+            style: Style::Amll,
+            landscape: false,
+            font_scale: 1.0,
+        };
+        let mut next =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts).unwrap();
         replace_track_scroll(
             &mut scroll,
             if revision == "empty" {

@@ -1,9 +1,10 @@
 //! Shape whole lines once. Frames reuse encoded white glyph scenes and byte-range clips.
-use crate::{Line, focus, progress};
+use crate::{Line, progress};
 use parley::{
     Alignment, AlignmentOptions, FontFamily, FontWeight, LayoutContext, LineHeight,
     PositionedLayoutItem, StyleProperty,
 };
+use std::ops::Range;
 use vello::{
     Glyph, Scene,
     kurbo::{Affine, Rect},
@@ -110,18 +111,18 @@ impl CachedLine {
 }
 
 pub struct TrackScene {
-    pub lines: Vec<Line>,
+    lines: Vec<Line>,
     pub(crate) cached: Vec<CachedLine>,
     resident: std::collections::BTreeSet<usize>,
-    max_row_height: f64,
     cues: crate::scheduling::VisualCues,
     pub width: u32,
     pub height: u32,
     pub font_size: f64,
     pub glyph_count: usize,
     pub missing_glyphs: usize,
-    pub(crate) prefix: Vec<f64>,
-    pub(crate) interludes: Vec<Option<crate::interlude::Interlude>>,
+    prefix: RowOffsets,
+    interludes: Vec<(usize, crate::interlude::Interlude)>,
+    timing: TimingIndex,
     pub(crate) dot_glyph: Option<crate::interlude::DotGlyph>,
     /// Last explicitly requested receipts. Unprepared or evicted rows are null.
     pub diagnostics: Vec<serde_json::Value>,
@@ -132,8 +133,248 @@ pub struct TrackScene {
     pub plain_preparations: usize,
     pub detailed_preparations: usize,
     pub(crate) footer: Option<crate::credits::Footer>,
-    prepared_signature: Option<(usize, usize, usize, usize)>,
+    prepared_signature: Option<PreparationKey>,
+    return_timing_cache: Option<(usize, ReturnTiming)>,
+    #[cfg(test)]
+    return_timing_misses: usize,
     manual_anchor: Option<ManualAnchor>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FrameWork {
+    height_updates: usize,
+    geometry_steps: usize,
+    timing_steps: usize,
+    preparation_rows: usize,
+    retention_rows: usize,
+    drawing_rows: usize,
+    pub(crate) appearance_rows: usize,
+    pub(crate) cascade_rows: usize,
+    schedule_rows: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FRAME_WORK: std::cell::Cell<FrameWork> =
+        std::cell::Cell::new(FrameWork::default());
+}
+
+#[cfg(test)]
+pub(crate) fn count_frame_work(record: impl FnOnce(&mut FrameWork)) {
+    FRAME_WORK.with(|cell| {
+        let mut work = cell.get();
+        record(&mut work);
+        cell.set(work);
+    });
+}
+
+/// Fenwick tree of measured or estimated row heights. Row starts are
+/// exclusive sums. A measurement updates only the ancestors of its row.
+#[derive(Clone, Debug, PartialEq)]
+struct RowOffsets(Vec<f64>, f64);
+
+impl RowOffsets {
+    fn new(rows: &[CachedLine], gap: f64) -> Self {
+        let mut tree = vec![0.0; rows.len() + 1];
+        for (row, cached) in rows.iter().enumerate() {
+            let i = row + 1;
+            tree[i] += cached.height + gap;
+            let parent = i + (i & i.wrapping_neg());
+            if parent < tree.len() {
+                tree[parent] += tree[i];
+            }
+        }
+        Self(tree, gap)
+    }
+
+    fn add(&mut self, row: usize, delta: f64) {
+        #[cfg(test)]
+        count_frame_work(|work| work.height_updates += 1);
+        let mut i = row + 1;
+        while i < self.0.len() {
+            #[cfg(test)]
+            count_frame_work(|work| work.geometry_steps += 1);
+            self.0[i] += delta;
+            i += i & i.wrapping_neg();
+        }
+    }
+
+    fn top(&self, row: usize) -> f64 {
+        if row == 0 {
+            return 0.0;
+        }
+        #[cfg(test)]
+        count_frame_work(|work| work.geometry_steps += 1);
+        // Same addition order as the tree search at an exact row boundary.
+        self.top(row & (row - 1)) + self.0[row]
+    }
+
+    /// Count matching row starts by descending the tree in one pass.
+    fn partition_point(&self, matches: impl Fn(f64) -> bool) -> usize {
+        let count = self.0.len() - 1;
+        if count == 0 || !matches(0.0) {
+            return 0;
+        }
+        let mut bit = 1 << count.ilog2();
+        let mut row = 0;
+        let mut top = 0.0;
+        while bit > 0 {
+            #[cfg(test)]
+            count_frame_work(|work| work.geometry_steps += 1);
+            let next = row + bit;
+            if next < count && matches(top + self.0[next]) {
+                row = next;
+                top += self.0[next];
+            }
+            bit >>= 1;
+        }
+        row + 1
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TimingFacts {
+    window: crate::Window,
+    key: PreparationKey,
+    previous: i32,
+}
+
+/// Source-order facts change only at line, gap, and retention boundaries.
+/// Sweep once at layout creation so playback, appearance, and drawing share
+/// the same indexed window even for out-of-order and overlapping packages.
+struct TimingIndex {
+    boundaries: Vec<f64>,
+    facts: Vec<TimingFacts>,
+    song_end: f64,
+}
+
+impl TimingIndex {
+    fn new(lines: &[Line]) -> Self {
+        use std::collections::BTreeSet;
+
+        let mut starts: Vec<_> = (0..lines.len()).collect();
+        let mut ends = starts.clone();
+        starts.sort_by(|&a, &b| lines[a].start.total_cmp(&lines[b].start));
+        ends.sort_by(|&a, &b| lines[a].background_end.total_cmp(&lines[b].background_end));
+        let mut boundaries = Vec::with_capacity(4 * lines.len());
+        let mut song_end: f64 = 0.0;
+        for &row in &starts {
+            let line = &lines[row];
+            boundaries.extend([
+                line.start,
+                line.background_end,
+                (line.background_end + 1000.0).next_up(),
+            ]);
+            let gap = line.start - song_end;
+            if gap >= crate::LONG_PAUSE_THRESHOLD_MS {
+                let pause = (gap - crate::PAUSE_DOTS_EARLY_EXIT_MS).max(1.0);
+                boundaries.push(song_end + pause);
+            }
+            song_end = song_end.max(line.background_end);
+        }
+        boundaries.sort_unstable_by(f64::total_cmp);
+        boundaries.dedup();
+
+        let mut facts = Vec::with_capacity(boundaries.len() + 1);
+        let mut active = BTreeSet::new();
+        let mut expired = BTreeSet::new();
+        let (mut start, mut end, mut expire) = (0, 0, 0);
+        let mut previous = -1;
+        let mut covered_end: f64 = 0.0;
+        for time in std::iter::once(f64::NEG_INFINITY).chain(boundaries.iter().copied()) {
+            while let Some(&row) = starts.get(start).filter(|&&row| lines[row].start <= time) {
+                let line = &lines[row];
+                previous = previous.max(row as i32);
+                covered_end = covered_end.max(line.background_end);
+                if line.background_end > time {
+                    active.insert(row);
+                }
+                start += 1;
+            }
+            while let Some(&row) = ends
+                .get(end)
+                .filter(|&&row| lines[row].background_end <= time)
+            {
+                active.remove(&row);
+                end += 1;
+            }
+            while let Some(&row) = ends
+                .get(expire)
+                .filter(|&&row| lines[row].background_end + 1000.0 < time)
+            {
+                expired.insert(row);
+                expire += 1;
+            }
+
+            let window = if let (Some(&first), Some(&last)) = (active.first(), active.last()) {
+                crate::Window {
+                    active_start: first as i32,
+                    active_end: last as i32,
+                    focus: first as i32,
+                    ..crate::Window::default()
+                }
+            } else {
+                let next = starts.get(start).map(|&row| (row, lines[row].start));
+                crate::window_without_active(previous, next, covered_end, time)
+            };
+            let focus = window.focus.max(0) as usize;
+            let (first, last) = window.active().unwrap_or((focus, focus));
+            let detail_first = expired.range(..first).next_back().map_or(0, |row| row + 1);
+            let detail_end = (last + 2).min(lines.len().saturating_sub(1));
+            facts.push(TimingFacts {
+                window,
+                key: (focus, detail_first, first.min(detail_end), detail_end),
+                previous,
+            });
+        }
+        Self {
+            boundaries,
+            facts,
+            song_end,
+        }
+    }
+
+    fn boundary(&self, time: f64) -> usize {
+        self.boundaries.partition_point(|cue| {
+            #[cfg(test)]
+            count_frame_work(|work| work.timing_steps += 1);
+            *cue <= time
+        })
+    }
+
+    fn contains(&self, boundary: usize, time: f64) -> bool {
+        (boundary == 0 || time >= self.boundaries[boundary - 1])
+            && self.boundaries.get(boundary).is_none_or(|end| time < *end)
+    }
+
+    fn at(&self, time: f64) -> TimingFacts {
+        self.facts[self.boundary(time)]
+    }
+}
+
+pub(crate) type PreparationKey = (usize, usize, usize, usize);
+type InterludeSlot = Option<(usize, crate::interlude::Interlude)>;
+
+#[derive(Clone, Copy, Debug)]
+enum TargetRows {
+    Row(usize),
+    Lyrics(usize, usize),
+    Credits,
+}
+
+/// A target's timing identity survives measurements in the prefix table.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReturnTarget {
+    rows: TargetRows,
+    slot: InterludeSlot,
+    pub(crate) time: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReturnTiming {
+    pub key: PreparationKey,
+    pub target: ReturnTarget,
 }
 
 #[derive(Clone, Copy)]
@@ -384,8 +625,6 @@ impl TrackScene {
             return Err("Invalid lazy layout settings or fonts".into());
         }
         let mut cached = Vec::with_capacity(lines.len());
-        let mut prefix = Vec::with_capacity(lines.len());
-        let mut offset = 0.0;
         for line in &lines {
             let voice = line
                 .paint
@@ -412,8 +651,6 @@ impl TrackScene {
                 72.0
             } * settings.font_scale
                 * scale;
-            prefix.push(offset);
-            offset += f64::from(height);
             let mut cached_line = CachedLine {
                 voices,
                 height: height.into(),
@@ -429,7 +666,11 @@ impl TrackScene {
         }
         let count = lines.len();
         let cues = crate::scheduling::VisualCues::new(&lines);
-        let interludes = crate::interlude::slots(&lines);
+        let interludes = crate::interlude::slots(&lines)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(row, slot)| slot.map(|slot| (row, slot)))
+            .collect();
         let footer = credits
             .and_then(|credits| crate::credits::build(credits, settings, width, scale, fonts));
         let primary_size = settings
@@ -442,17 +683,17 @@ impl TrackScene {
         let dot_glyph = (settings.style == crate::typography::Style::Spicy)
             .then(|| crate::interlude::DotGlyph::prepare(fonts, f64::from(primary_size)));
         Ok(Self {
+            timing: TimingIndex::new(&lines),
             lines,
+            prefix: RowOffsets::new(&cached, 0.0),
             cached,
             resident: std::collections::BTreeSet::new(),
-            max_row_height: 0.0,
             cues,
             width,
             height,
             font_size: f64::from(primary_size),
             glyph_count: 0,
             missing_glyphs: 0,
-            prefix,
             interludes,
             dot_glyph,
             diagnostics: vec![serde_json::Value::Null; count],
@@ -464,49 +705,35 @@ impl TrackScene {
             detailed_preparations: 0,
             footer,
             prepared_signature: None,
+            return_timing_cache: None,
+            #[cfg(test)]
+            return_timing_misses: 0,
             manual_anchor: None,
         })
     }
 
     /// Immutable key for the geometry/retention window. Acquisition can test
     /// freshness without shaping, promoting rows, or advancing animation.
-    pub(crate) fn preparation_key(&self, time: f64) -> (usize, usize, usize, usize) {
-        // Overlap-safe window; long pauses prepare the previous package and the
-        // upcoming lyric, which is where Skia's interlude row and dots live.
-        let window = crate::window(&self.lines, time);
-        let active = window.focus.max(0) as usize;
-        let first = window.active().map_or(active, |(start, _)| start);
-        let last = window.active().map_or(first, |(_, end)| end);
-        let detail_end = (last + 2).min(self.lines.len() - 1);
-        // Skia retains an outgoing voice's exact animation owner after its cell
-        // was promoted (`NativeFastVoice`: retain until cell retirement), and
-        // keeps it within its own interval. Keep the previous package detailed
-        // for its AMLL bright/dark and spring release window; dropping the
-        // reveal gradient on the first inactive frame made the fill tail snap
-        // to flat grey instead of fading.
-        let retention_ms = 1000.0;
-        let mut detail_first = first;
-        while detail_first > 0 && self.lines[detail_first - 1].background_end + retention_ms >= time
-        {
-            detail_first -= 1;
-        }
-        (active, detail_first, first.min(detail_end), detail_end)
+    pub(crate) fn preparation_key(&self, time: f64) -> PreparationKey {
+        self.timing.at(time).key
     }
 
-    /// Static preparation only when a row enters the visible/near-active window.
-    /// Inactive rows retain a plain paragraph; only active + next2 build timed fragments.
-    pub fn prepare(&mut self, time: f64) -> Result<(), Error> {
-        if self.settings.is_none() {
-            return Ok(());
+    pub(crate) fn window(&self, time: f64) -> crate::Window {
+        let mut window = self.timing.at(time).window;
+        if window.long_pause {
+            window.pause_progress =
+                ((time - window.pause_start) / window.pause_duration).clamp(0.0, 1.0);
         }
-        let signature = self.preparation_key(time);
-        let (active, detail_first, first, detail_end) = signature;
-        if self.prepared_signature == Some(signature) {
-            return Ok(());
-        }
-        // Overscan covers scrolling into/out of the focused viewport. Plain rows are
-        // prepared only here, never the whole future track, and do not build slices.
-        let mut start = first;
+        window
+    }
+
+    fn playback_rows(&self, first: usize, detail_end: usize) -> std::ops::Range<usize> {
+        let viewport = f64::from(self.height);
+        // The two following rows are prepared for appearance, but must not
+        // move the playback band off a short active range above tall rows.
+        let last_active = detail_end.saturating_sub(2).max(first);
+        let target_band = self.first_visible(self.row_top(last_active) - viewport * 2.0);
+        let mut start = first.max(target_band);
         let mut extent = 0.0;
         while start > 0 && extent < f64::from(self.height) {
             start -= 1;
@@ -518,8 +745,31 @@ impl TrackScene {
             end += 1;
             extent += self.cached[end].height;
         }
-        let mut changed = false;
-        for i in start..=end {
+        start..end + 1
+    }
+
+    /// Static preparation only when a row enters the visible/near-active window.
+    /// Inactive rows retain a plain paragraph; only active + next2 build timed fragments.
+    pub fn prepare(&mut self, time: f64) -> Result<(), Error> {
+        if self.settings.is_none() {
+            return Ok(());
+        }
+        self.prepare_playback(self.preparation_key(time), &[])
+    }
+
+    fn prepare_playback(
+        &mut self,
+        signature: PreparationKey,
+        protected: &[Range<usize>],
+    ) -> Result<(), Error> {
+        let (active, detail_first, first, detail_end) = signature;
+        if self.prepared_signature == Some(signature) {
+            return Ok(());
+        }
+        let playback = self.playback_rows(first, detail_end);
+        for i in playback.clone() {
+            #[cfg(test)]
+            count_frame_work(|work| work.preparation_rows += 1);
             let detailed = i >= detail_first && i <= detail_end;
             if !self.cached[i].layout_ready() {
                 let mut prepared = Self::with_fonts_eager(
@@ -534,14 +784,16 @@ impl TrackScene {
                 )?;
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
-                self.cached[i] = prepared.cached.remove(0);
+                let measured = prepared.cached.remove(0);
+                if measured.height != self.cached[i].height {
+                    self.prefix.add(i, measured.height - self.cached[i].height);
+                }
+                self.cached[i] = measured;
                 self.resident.insert(i);
-                self.max_row_height = self.max_row_height.max(self.cached[i].height);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
                 self.diagnostics_json = None;
                 self.plain_preparations += 1;
                 self.detailed_preparations += usize::from(detailed);
-                changed = true;
             } else if detailed && !self.cached[i].lead().detailed {
                 self.detailed_preparations += 1;
                 let line = &self.lines[i];
@@ -573,28 +825,27 @@ impl TrackScene {
         }
         // Bound glyph/paragraph ownership while preserving measured row heights.
         // Cached track variants are bounded separately by the native owner.
-        for i in 0..self.cached.len() {
+        self.resident.retain(|&i| {
+            #[cfg(test)]
+            count_frame_work(|work| work.retention_rows += 1);
+            let voices = &mut self.cached[i].voices;
             if !(detail_first..=detail_end).contains(&i) {
-                for voice in &mut self.cached[i].voices {
+                for voice in &mut *voices {
                     voice.detailed = false;
                 }
             }
-            if i.abs_diff(active) > 32 && (i < start || i > end) && self.cached[i].layout_ready() {
-                for voice in &mut self.cached[i].voices {
+            let keep = i.abs_diff(active) <= 32
+                || playback.contains(&i)
+                || protected.iter().any(|rows| rows.contains(&i));
+            if !keep {
+                for voice in voices {
                     voice.clear_geometry();
                 }
-                self.resident.remove(&i);
                 self.diagnostics[i] = serde_json::Value::Null;
                 self.diagnostics_json = None;
             }
-        }
-        if changed {
-            let mut offset = 0.0;
-            for (i, cached) in self.cached.iter().enumerate() {
-                self.prefix[i] = offset;
-                offset += cached.height;
-            }
-        }
+            keep
+        });
         self.prepared_signature = Some(signature);
         Ok(())
     }
@@ -602,12 +853,21 @@ impl TrackScene {
     /// Manual scrolling can leave the playback overscan entirely. Prepare only
     /// the visible destination rows, not every row between it and playback.
     pub(crate) fn prepare_viewport(&mut self, scroll: f64) -> Result<(), Error> {
+        self.prepare_viewport_rows(self.visible_rows(scroll), &[])
+    }
+
+    fn prepare_viewport_rows(
+        &mut self,
+        visible: std::ops::Range<usize>,
+        protected: &[std::ops::Range<usize>],
+    ) -> Result<(), Error> {
         if self.settings.is_none() {
             return Ok(());
         }
-        let visible = self.visible_rows(scroll);
-        let mut changed = false;
+        let mut evicted = false;
         for i in visible.clone() {
+            #[cfg(test)]
+            count_frame_work(|work| work.preparation_rows += 1);
             if !self.cached[i].layout_ready() {
                 let mut prepared = Self::with_fonts_eager(
                     vec![self.lines[i].clone()],
@@ -621,37 +881,50 @@ impl TrackScene {
                 )?;
                 self.glyph_count += prepared.glyph_count;
                 self.missing_glyphs += prepared.missing_glyphs;
-                self.cached[i] = prepared.cached.remove(0);
+                let measured = prepared.cached.remove(0);
+                if measured.height != self.cached[i].height {
+                    self.prefix.add(i, measured.height - self.cached[i].height);
+                }
+                self.cached[i] = measured;
                 self.resident.insert(i);
-                self.max_row_height = self.max_row_height.max(self.cached[i].height);
                 self.diagnostics[i] = prepared.diagnostics.remove(0);
                 self.diagnostics_json = None;
                 self.plain_preparations += 1;
-                changed = true;
             }
         }
         // Bound retained manual-scroll geometry while keeping playback's cache.
         let focus = self.prepared_signature.map_or(0, |s| s.0);
-        for i in 0..self.cached.len() {
-            if !visible.contains(&i) && i.abs_diff(focus) > 32 && self.cached[i].layout_ready() {
+        self.resident.retain(|&i| {
+            #[cfg(test)]
+            count_frame_work(|work| work.retention_rows += 1);
+            let keep = visible.contains(&i)
+                || i.abs_diff(focus) <= 32
+                || protected.iter().any(|rows| rows.contains(&i));
+            if !keep {
+                evicted = true;
                 for voice in &mut self.cached[i].voices {
                     voice.clear_geometry();
                 }
-                self.resident.remove(&i);
                 self.diagnostics[i] = serde_json::Value::Null;
                 self.diagnostics_json = None;
             }
-        }
-        if changed {
-            let mut offset = 0.0;
-            for (i, cached) in self.cached.iter().enumerate() {
-                self.prefix[i] = offset;
-                offset += cached.height;
-            }
-            // Newly measured rows may change playback's overscan boundaries.
+            keep
+        });
+        // A return viewport protects the already measured playback band.
+        // Manual preparation can evict that band and must recheck it.
+        if protected.is_empty() && evicted {
             self.prepared_signature = None;
         }
         Ok(())
+    }
+
+    /// Source lines and their indexes are replaced together by constructing a layout.
+    pub fn lines(&self) -> &[Line] {
+        &self.lines
+    }
+
+    pub(crate) fn row_top(&self, row: usize) -> f64 {
+        self.prefix.top(row)
     }
 
     #[allow(
@@ -684,8 +957,6 @@ impl TrackScene {
         let mut cached = Vec::new();
         let mut glyph_count = 0;
         let mut missing_glyphs = 0;
-        let mut prefix = Vec::new();
-        let mut offset = 0.0;
         let mut diagnostics = Vec::new();
         for line in &lines {
             if settings.is_some() && line.paint.is_none() {
@@ -938,7 +1209,7 @@ impl TrackScene {
             let lead_lane = voices[0].lane;
             let lead_x = voices[0].x;
             let lead_right = voices[0].right;
-            let (height, top, gap) = if let Some(settings) = settings {
+            let (height, top) = if let Some(settings) = settings {
                 let row_padding = f64::from(boxes[0].geometry.row_padding);
                 let min = if settings.style == crate::typography::Style::Spicy {
                     84.0
@@ -952,12 +1223,10 @@ impl TrackScene {
                 } else {
                     row_padding
                 };
-                (height, top, 0.0)
+                (height, top)
             } else {
-                (cursor, 0.0, f64::from(font_size) * 0.7)
+                (cursor, 0.0)
             };
-            prefix.push(offset);
-            offset += height + gap;
             let mut row = voice_diagnostics
                 .first()
                 .cloned()
@@ -981,21 +1250,31 @@ impl TrackScene {
             });
         }
         // Keep drawable clusters and diagnostics when no installed face covers a glyph.
-        let interludes = crate::interlude::slots(&lines);
+        let interludes = crate::interlude::slots(&lines)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(row, slot)| slot.map(|slot| (row, slot)))
+            .collect();
         let resident = (0..cached.len()).collect();
-        let max_row_height = cached.iter().map(|row| row.height).fold(0.0, f64::max);
         Ok(Self {
+            timing: TimingIndex::new(&lines),
             lines,
+            prefix: RowOffsets::new(
+                &cached,
+                if settings.is_none() {
+                    f64::from(font_size) * 0.7
+                } else {
+                    0.0
+                },
+            ),
             cached,
             resident,
-            max_row_height,
             cues: crate::scheduling::VisualCues::default(),
             width,
             height,
             font_size: font_size as f64,
             glyph_count,
             missing_glyphs,
-            prefix,
             interludes,
             // Scratch row preparation does not own the interlude renderer.
             dot_glyph: None,
@@ -1008,6 +1287,9 @@ impl TrackScene {
             detailed_preparations: 0,
             footer: None,
             prepared_signature: None,
+            return_timing_cache: None,
+            #[cfg(test)]
+            return_timing_misses: 0,
             manual_anchor: None,
         })
     }
@@ -1135,19 +1417,16 @@ impl TrackScene {
     fn target_at(&self, window: &crate::Window, time: f64) -> Option<f64> {
         // Skia's `maxEndTimeByIndex[last]` gate: once the track is over the
         // list scrolls to the credits footer instead of holding the last row.
-        let song_end = self
-            .lines
-            .iter()
-            .map(|line| line.background_end)
-            .fold(0.0, f64::max);
-        if time >= song_end
+        if time >= self.timing.song_end
             && let Some(target) = self.credits_scroll()
         {
             return Some(target);
         }
         let (start, end) = crate::auto_scroll_range(window)?;
         let last = self.lines.len() - 1;
-        let start = crate::follow_index(&self.lines, start.min(last), time);
+        let start = self
+            .interlude_at(time)
+            .map_or(start.min(last), |(row, _)| row);
         let end = end.min(last).max(start);
         // The interlude slot is inside the upcoming row: its top stays put while
         // its content and every later row move down by the expanded height.
@@ -1162,19 +1441,23 @@ impl TrackScene {
             })
         };
         Some(self.fit_scroll(
-            self.prefix[start] + shifted(start, false),
-            self.prefix[end] + self.cached[end].height + shifted(end, true),
+            self.row_top(start) + shifted(start, false),
+            self.row_top(end) + self.cached[end].height + shifted(end, true),
         ))
     }
 
     /// Interlude whose break contains `time`, with the expanded slot height.
     pub(crate) fn interlude_at(&self, time: f64) -> Option<(usize, crate::interlude::Interlude)> {
         self.settings.as_ref()?;
-        self.interludes.iter().enumerate().find_map(|(row, slot)| {
-            slot.as_ref()
-                .filter(|slot| time >= slot.start && time < slot.end)
-                .map(|slot| (row, *slot))
-        })
+        self.interlude_slot_at(time)
+    }
+
+    fn interlude_slot_at(&self, time: f64) -> InterludeSlot {
+        let i = self
+            .interludes
+            .partition_point(|(_, slot)| slot.start <= time);
+        let entry = self.interludes.get(i.checked_sub(1)?)?;
+        (time < entry.1.end).then_some(*entry)
     }
 
     pub(crate) fn interlude_shift(&self, time: f64) -> (Option<usize>, f64) {
@@ -1193,24 +1476,24 @@ impl TrackScene {
 
     pub fn scroll_target(&self, time: f64) -> f64 {
         if self.settings.is_none() {
-            return self.prefix[focus(&self.lines, time)];
+            return self.row_top(self.timing.at(time).previous.max(0) as usize);
         }
-        let window = crate::window(&self.lines, time);
+        let window = self.window(time);
         self.target_at(&window, time)
-            .unwrap_or(self.prefix[window.focus.max(0) as usize])
+            .unwrap_or(self.row_top(window.focus.max(0) as usize))
     }
 
     /// Bottom of the final row using current (measured) heights.
     pub(crate) fn content_bottom(&self) -> f64 {
         let last = self.lines.len().saturating_sub(1);
-        self.prefix[last] + self.cached[last].height
+        self.row_top(last) + self.cached[last].height
     }
 
     /// Highest scroll offset Skia allows: the last row can reach the top
     /// anchor, and the credits footer can reach the bottom padding.
     pub fn max_scroll(&self) -> f64 {
         let last = self.lines.len().saturating_sub(1);
-        let mut max = self.prefix[last].max(0.0);
+        let mut max = self.row_top(last).max(0.0);
         if let Some(footer) = &self.footer {
             let padding = crate::ACTIVE_RANGE_BOTTOM_PADDING * f64::from(self.scale);
             max = max.max(
@@ -1230,13 +1513,13 @@ impl TrackScene {
         let target = self.scroll_anchor() + self.content_bottom() + footer.tail
             - f64::from(self.height)
             + padding;
-        Some(target.max(self.prefix[last]).clamp(0.0, self.max_scroll()))
+        Some(target.max(self.row_top(last)).clamp(0.0, self.max_scroll()))
     }
 
     /// First row intersecting `scroll` (Skia `getFirstVisibleIndex`).
     fn first_visible(&self, scroll: f64) -> usize {
         self.prefix
-            .partition_point(|top| *top <= scroll)
+            .partition_point(|top| top <= scroll)
             .saturating_sub(1)
             .min(self.lines.len() - 1)
     }
@@ -1253,12 +1536,12 @@ impl TrackScene {
         self.prepare(time)?;
         let scroll = scroll.clamp(0.0, previous.max_scroll());
         let row = previous.first_visible(scroll);
-        let old_top = previous.prefix[row];
-        let old_end = previous
-            .prefix
-            .get(row + 1)
-            .copied()
-            .unwrap_or_else(|| previous.max_scroll());
+        let old_top = previous.row_top(row);
+        let old_end = if row + 1 < previous.lines.len() {
+            previous.row_top(row + 1)
+        } else {
+            previous.max_scroll()
+        };
         let fraction = if old_end > old_top {
             ((scroll - old_top) / (old_end - old_top)).clamp(0.0, 1.0)
         } else {
@@ -1271,12 +1554,12 @@ impl TrackScene {
     }
 
     fn manual_anchor_offset(&self, anchor: ManualAnchor) -> f64 {
-        let top = self.prefix[anchor.row];
-        let end = self
-            .prefix
-            .get(anchor.row + 1)
-            .copied()
-            .unwrap_or_else(|| self.max_scroll());
+        let top = self.row_top(anchor.row);
+        let end = if anchor.row + 1 < self.lines.len() {
+            self.row_top(anchor.row + 1)
+        } else {
+            self.max_scroll()
+        };
         (top + anchor.fraction * (end - top)).clamp(0.0, self.max_scroll())
     }
 
@@ -1306,7 +1589,7 @@ impl TrackScene {
             if scroll >= old_max {
                 scene.max_scroll()
             } else {
-                scene.prefix[row]
+                scene.row_top(row)
             }
         };
         let before = origin(self);
@@ -1314,6 +1597,245 @@ impl TrackScene {
         self.prepare(time)?;
         self.prepare_viewport(rebase(self))?;
         Ok(rebase(self))
+    }
+
+    /// Match slopes at shared row boundaries. The harmonic mean adapts to
+    /// uneven heights while keeping both endpoint slopes below twice the
+    /// interval's secant, a monotone region for the Hermite cubic.
+    fn return_slopes(&self, row: usize) -> (f64, f64) {
+        let height = self.cached[row].height;
+        let slope = |adjacent: f64| 2.0 * height * adjacent / (height + adjacent);
+        let before = row
+            .checked_sub(1)
+            .map_or(height, |i| slope(self.cached[i].height));
+        let after = self
+            .cached
+            .get(row + 1)
+            .map_or(height, |other| slope(other.height));
+        (before, after)
+    }
+
+    fn return_row_pose(&self, row: usize, fraction: f64) -> (f64, f64) {
+        let height = self.cached[row].height;
+        let (first, last) = self.return_slopes(row);
+        if fraction <= 0.0 {
+            return (fraction * first, first);
+        }
+        if fraction >= 1.0 {
+            return (height + (fraction - 1.0) * last, last);
+        }
+        let t = fraction;
+        let u = 1.0 - t;
+        let offset = height * t * t * (3.0 - 2.0 * t) + first * t * u * u - last * t * t * u;
+        let slope = 6.0 * height * t * u + first * u * (1.0 - 3.0 * t) + last * t * (3.0 * t - 2.0);
+        (offset, slope)
+    }
+
+    /// Invert only the intersecting row, with linear overscroll at either end.
+    pub(crate) fn return_coordinate(&self, offset: f64) -> (f64, f64) {
+        let row = self.first_visible(offset);
+        let local = offset - self.row_top(row);
+        let height = self.cached[row].height;
+        let (first, last) = self.return_slopes(row);
+        let fraction = if local <= 0.0 {
+            local / first
+        } else if local >= height {
+            1.0 + (local - height) / last
+        } else {
+            let (mut lo, mut hi) = (0.0, 1.0);
+            for _ in 0..42 {
+                let mid = (lo + hi) * 0.5;
+                if self.return_row_pose(row, mid).0 < local {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            (lo + hi) * 0.5
+        };
+        (row as f64 + fraction, self.return_row_pose(row, fraction).1)
+    }
+
+    pub(crate) fn return_offset(&self, coordinate: f64) -> f64 {
+        let row = (coordinate.floor() as usize).min(self.lines.len() - 1);
+        self.row_top(row) + self.return_row_pose(row, coordinate - row as f64).0
+    }
+
+    pub(crate) fn return_anchor_row(&self, offset: f64) -> usize {
+        self.first_visible(offset)
+    }
+
+    pub(crate) fn painted_row_top(&self, time: f64, row: usize) -> f64 {
+        let (slot, extra) = self.interlude_shift(time);
+        let cached = &self.cached[row];
+        let lead = cached.lead();
+        self.scroll_anchor()
+            + self.row_top(row)
+            + cached.top
+            + lead.offset
+            + lead.padding
+            + if slot.is_some_and(|slot| row >= slot) {
+                extra
+            } else {
+                0.0
+            }
+    }
+
+    /// Word cues wake the renderer without invalidating playback geometry.
+    pub(crate) fn return_timing(&mut self, time: f64) -> ReturnTiming {
+        if let Some((cached, mut timing)) = self.return_timing_cache
+            && self.timing.contains(cached, time)
+        {
+            timing.target.time = time;
+            return timing;
+        }
+        #[cfg(test)]
+        {
+            self.return_timing_misses += 1;
+        }
+        let timing = ReturnTiming {
+            key: self.timing.at(time).key,
+            target: self.return_target_at(time),
+        };
+        self.return_timing_cache = Some((self.timing.boundary(time), timing));
+        timing
+    }
+
+    pub(crate) fn return_target_at(&self, time: f64) -> ReturnTarget {
+        let window = self.window(time);
+        let slot = self.interlude_at(time);
+        let last = self.lines.len() - 1;
+        let ended = self.footer.is_some() && time >= self.timing.song_end;
+        let rows = if ended {
+            TargetRows::Credits
+        } else if let Some((start, end)) = crate::auto_scroll_range(&window) {
+            let start = slot.map_or(start.min(last), |(row, _)| row);
+            TargetRows::Lyrics(start, end.min(last).max(start))
+        } else {
+            TargetRows::Row(window.focus.max(0) as usize)
+        };
+        ReturnTarget { rows, slot, time }
+    }
+
+    pub(crate) fn resolve_return_target(&self, target: ReturnTarget) -> f64 {
+        match target.rows {
+            TargetRows::Row(row) => self.row_top(row),
+            TargetRows::Lyrics(start, end) => {
+                let extra = self.return_interlude_height(target);
+                let slot_row = target.slot.map_or(usize::MAX, |(row, _)| row);
+                let top = self.row_top(start) + if start > slot_row { extra } else { 0.0 };
+                let bottom = self.row_top(end)
+                    + self.cached[end].height
+                    + if end >= slot_row { extra } else { 0.0 };
+                self.fit_scroll(top, bottom)
+            }
+            TargetRows::Credits => self.credits_scroll().unwrap_or_else(|| self.max_scroll()),
+        }
+    }
+
+    fn return_interlude_height(&self, target: ReturnTarget) -> f64 {
+        target.slot.map_or(0.0, |(row, slot)| {
+            crate::interlude::slot_height(
+                &slot,
+                false,
+                self.cached[row].size,
+                f64::from(self.width),
+                target.time,
+            )
+        })
+    }
+
+    /// Include the intersecting row above the window. Interlude displacement
+    /// can move rows into view, so extend the lower search by its full height.
+    fn return_rows(&self, extra: f64, scroll: f64, lookahead: f64) -> Range<usize> {
+        let origin = scroll - self.scroll_anchor();
+        let lower = origin - extra.max(0.0) - 40.0 - lookahead;
+        let upper = origin + f64::from(self.height) + 40.0 + lookahead;
+        let first = self
+            .prefix
+            .partition_point(|top| top < lower)
+            .saturating_sub(1);
+        let end = self.prefix.partition_point(|top| top <= upper).max(first);
+        first..end
+    }
+
+    pub(crate) fn prepare_return_resize(
+        &mut self,
+        time: f64,
+        row: usize,
+        screen_y: f64,
+    ) -> Result<(), Error> {
+        let timing = self.return_timing(time);
+        let offset = self.painted_row_top(time, row) - screen_y;
+        let playback = self.prepare_return_playback(timing, offset, offset)?;
+        let offset = self.painted_row_top(time, row) - screen_y;
+        self.prepare_return_viewport(timing, offset, offset, &playback, 0..0)
+    }
+
+    pub(crate) fn prepare_return_playback(
+        &mut self,
+        timing: ReturnTiming,
+        displayed: f64,
+        next: f64,
+    ) -> Result<Range<usize>, Error> {
+        let lookahead = f64::from(self.height) * 0.5;
+        let extra = self.return_interlude_height(timing.target);
+        let protected = [
+            self.return_rows(extra, displayed, lookahead),
+            self.return_rows(extra, next, lookahead),
+        ];
+        let (_, _, first, detail_end) = timing.key;
+        let playback = self.playback_rows(first, detail_end);
+        self.prepare_playback(timing.key, &protected)?;
+        Ok(playback)
+    }
+
+    pub(crate) fn prepare_return_endpoint(
+        &mut self,
+        target: ReturnTarget,
+        current: ReturnTiming,
+        displayed: f64,
+        transit: f64,
+        playback: &Range<usize>,
+    ) -> Result<Range<usize>, Error> {
+        let offset = self.resolve_return_target(target);
+        let extra = self.return_interlude_height(target);
+        let endpoint = self.return_rows(extra, offset, 0.0);
+        if !endpoint.clone().all(|row| self.geometry_ready(row)) {
+            let current_extra = self.return_interlude_height(current.target);
+            let protected = [
+                playback.clone(),
+                self.return_rows(current_extra, displayed, 0.0),
+                self.return_rows(current_extra, transit, 0.0),
+            ];
+            let band = self.return_rows(extra, offset, f64::from(self.height) * 0.5);
+            self.prepare_viewport_rows(band, &protected)?;
+        }
+        Ok(endpoint)
+    }
+
+    pub(crate) fn prepare_return_viewport(
+        &mut self,
+        timing: ReturnTiming,
+        displayed: f64,
+        next: f64,
+        playback: &Range<usize>,
+        endpoint: Range<usize>,
+    ) -> Result<(), Error> {
+        let lookahead = f64::from(self.height) * 0.5;
+        let extra = self.return_interlude_height(timing.target);
+        let visible = self.return_rows(extra, next, lookahead);
+        let protected = [
+            playback.clone(),
+            self.return_rows(extra, displayed, 0.0),
+            endpoint,
+        ];
+        self.prepare_viewport_rows(visible, &protected)
+    }
+
+    pub(crate) fn return_viewport_ready(&self, timing: ReturnTiming, scroll: f64) -> bool {
+        self.return_rows(self.return_interlude_height(timing.target), scroll, 0.0)
+            .all(|index| self.cached[index].layout_ready())
     }
 
     pub(crate) fn clear_manual_anchor(&mut self) {
@@ -1330,10 +1852,10 @@ impl TrackScene {
         let height = f64::from(self.height);
         let first = self
             .prefix
-            .partition_point(|top| *top + 200.0 < scroll - height);
+            .partition_point(|top| top + 200.0 < scroll - height);
         let last = self
             .prefix
-            .partition_point(|top| *top < scroll + height * 2.0)
+            .partition_point(|top| top < scroll + height * 2.0)
             .max(first + 1)
             .min(self.lines.len());
         first.min(self.lines.len() - 1)..last
@@ -1351,9 +1873,11 @@ impl TrackScene {
         time: f64,
         scroll: f64,
         adjust: &[f64],
-    ) -> impl Iterator<Item = usize> + '_ {
+    ) -> impl Iterator<Item = (usize, f64)> + '_ {
         let (mut min_adjust, mut max_adjust) = (0.0_f64, 0.0_f64);
         for &index in &self.resident {
+            #[cfg(test)]
+            count_frame_work(|work| work.retention_rows += 1);
             let value = adjust.get(index).copied().unwrap_or(0.0);
             min_adjust = min_adjust.min(value);
             max_adjust = max_adjust.max(value);
@@ -1361,11 +1885,28 @@ impl TrackScene {
         let extra = self.interlude_shift(time).1;
         let margin = (64.0 * f64::from(self.scale)).max(40.0);
         let origin = scroll - self.scroll_anchor();
-        let lower = origin - max_adjust - extra.max(0.0) - self.max_row_height - margin;
+        let lower = origin - max_adjust - extra.max(0.0) - margin;
         let upper = origin - min_adjust - extra.min(0.0) + f64::from(self.height) + margin;
-        let first = self.prefix.partition_point(|top| *top < lower);
-        let last = self.prefix.partition_point(|top| *top <= upper).max(first);
-        self.resident.range(first..last).copied()
+        let first = self
+            .prefix
+            .partition_point(|top| top < lower)
+            .saturating_sub(1);
+        let last = self.prefix.partition_point(|top| top <= upper).max(first);
+        let mut next = first;
+        let mut top = self.row_top(first);
+        self.resident.range(first..last).copied().map(move |row| {
+            // A cascade can expand the conservative range across cold rows.
+            // Jump over each gap and walk resident bands sequentially.
+            if row != next {
+                top = self.row_top(row);
+            }
+            let start = top;
+            top += self.cached[row].height + self.prefix.1;
+            next = row + 1;
+            #[cfg(test)]
+            count_frame_work(|work| work.drawing_rows += 1);
+            (row, start)
+        })
     }
 
     pub(crate) fn frame_schedule(
@@ -1384,9 +1925,11 @@ impl TrackScene {
         } else {
             None
         };
-        for i in self.drawing_rows(time, scroll, adjust) {
+        for (i, top) in self.drawing_rows(time, scroll, adjust) {
+            #[cfg(test)]
+            count_frame_work(|work| work.schedule_rows += 1);
             let row = &self.cached[i];
-            let y = self.scroll_anchor() + self.prefix[i] - scroll
+            let y = self.scroll_anchor() + top - scroll
                 + adjust.get(i).copied().unwrap_or(0.0)
                 + interlude_row.map_or(0.0, |r| if i >= r { extra } else { 0.0 });
             if y + row.height < -40.0 || y > f64::from(self.height) + 40.0 {
@@ -1418,7 +1961,7 @@ impl TrackScene {
         }
         let interlude = self.interlude_at(time);
         if let Some((i, _)) = interlude {
-            let top = self.scroll_anchor() + self.prefix[i] + self.cached[i].top - scroll
+            let top = self.scroll_anchor() + self.row_top(i) + self.cached[i].top - scroll
                 + adjust.get(i).copied().unwrap_or(0.0);
             visible_changes |= (advancing || state.interlude_animating())
                 && top + extra >= -40.0
@@ -1445,15 +1988,15 @@ impl TrackScene {
     /// Per-frame follow command. `position` is the current visual offset, used
     /// for Skia's first-visible row, duration interval and interlude flag.
     pub fn scroll_command(&self, time: f64, position: f64) -> crate::motion::Command {
-        let window = crate::window(&self.lines, time);
+        let window = self.window(time);
         let target = self
             .target_at(&window, time)
-            .unwrap_or(self.prefix[window.focus.max(0) as usize]);
+            .unwrap_or(self.row_top(window.focus.max(0) as usize));
         let index = crate::auto_scroll_range(&window)
             .map(|(start, _)| start)
             .unwrap_or_else(|| window.focus.max(0) as usize)
             .min(self.lines.len() - 1);
-        let index = crate::follow_index(&self.lines, index, time);
+        let index = self.interlude_slot_at(time).map_or(index, |(row, _)| row);
         let interval = if index > 0 {
             self.lines[index].start - self.lines[index - 1].start
         } else {
@@ -1477,7 +2020,7 @@ impl TrackScene {
         let anchor = self.scroll_anchor();
         let (interlude_row, extra) = self.interlude_shift(time);
         for (index, cached) in self.cached.iter().enumerate() {
-            let top = anchor + self.prefix[index] - scroll
+            let top = anchor + self.row_top(index) - scroll
                 + adjust.get(index).copied().unwrap_or(0.0)
                 + interlude_row.map_or(0.0, |row| if index > row { extra } else { 0.0 });
             let height = cached.height
@@ -1510,20 +2053,20 @@ impl TrackScene {
         scene: &mut Scene,
     ) -> (f32, f32) {
         scene.reset();
-        let window = crate::window(&self.lines, time);
+        let window = self.window(time);
         let active = window.active();
         let active_end = active.map_or(window.focus.max(0) as usize, |(_, end)| end);
         let scale = f64::from(self.scale);
         let anchor = self.scroll_anchor();
         let (interlude_row, extra) = self.interlude_shift(time);
-        let position = |index: usize| {
-            anchor + self.prefix[index] - scroll
+        let position = |index: usize, top| {
+            anchor + top - scroll
                 + adjust.get(index).copied().unwrap_or(0.0)
                 + interlude_row.map_or(0.0, |row| if index >= row { extra } else { 0.0 })
         };
-        for i in self.drawing_rows(time, scroll, adjust) {
+        for (i, top) in self.drawing_rows(time, scroll, adjust) {
             let cached = &self.cached[i];
-            let y = position(i);
+            let y = position(i, top);
             if y + cached.height < -40.0 || y > self.height as f64 + 40.0 {
                 continue;
             }
@@ -1571,8 +2114,9 @@ impl TrackScene {
         let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
         let last = active.map_or(first, |(_, end)| end);
         let next = (last.max(first) + 1).min(self.lines.len() - 1);
-        let band_top = position(first) - 10.0 * scale;
-        let band_bottom = position(next) + self.cached[next].height + 10.0 * scale;
+        let band_top = position(first, self.row_top(first)) - 10.0 * scale;
+        let band_bottom =
+            position(next, self.row_top(next)) + self.cached[next].height + 10.0 * scale;
         (band_top as f32, band_bottom as f32)
     }
 }
@@ -2033,7 +2577,7 @@ mod lazy_tests {
             for time in [500.0, 50_500.0, 80_500.0, 500.0] {
                 track.prepare(time).unwrap();
                 for index in [0, 50, 80, 999] {
-                    let scroll = track.prefix[index];
+                    let scroll = track.row_top(index);
                     track.prepare_viewport(scroll).unwrap();
                     let mut adjust = vec![0.0; track.lines.len()];
                     for &i in &track.resident {
@@ -2078,7 +2622,7 @@ mod lazy_tests {
         let (row, extra) = track.interlude_shift(time);
         let accepted = |i: usize| {
             let cached = &track.cached[i];
-            let y = track.scroll_anchor() + track.prefix[i] - scroll
+            let y = track.scroll_anchor() + track.row_top(i) - scroll
                 + adjust.get(i).copied().unwrap_or(0.0)
                 + row.map_or(0.0, |r| if i >= r { extra } else { 0.0 });
             cached.layout_ready()
@@ -2086,7 +2630,10 @@ mod lazy_tests {
                 && y <= f64::from(track.height) + 40.0
         };
         let old: Vec<_> = (0..track.lines.len()).filter(|&i| accepted(i)).collect();
-        let candidates: Vec<_> = track.drawing_rows(time, scroll, adjust).collect();
+        let candidates: Vec<_> = track
+            .drawing_rows(time, scroll, adjust)
+            .map(|(row, _)| row)
+            .collect();
         assert!(candidates.len() <= track.resident.len());
         assert!(candidates.iter().all(|i| track.resident.contains(i)));
         let selected: Vec<_> = candidates.into_iter().filter(|&i| accepted(i)).collect();
@@ -2136,7 +2683,7 @@ mod lazy_tests {
                     }
                     2 => track.prepare(1500.0).unwrap(),
                     3 => track.prepare(50_500.0).unwrap(),
-                    4 => track.prepare_viewport(track.prefix[80]).unwrap(),
+                    4 => track.prepare_viewport(track.row_top(80)).unwrap(),
                     _ => track.prepare(500.0).unwrap(),
                 }
                 hashes.push(format!(
@@ -2766,7 +3313,7 @@ mod lazy_tests {
         assert!(track.footer.is_some());
         let end = track.lines.last().unwrap().background_end;
         assert!((track.scroll_target(end + 1000.0) - track.max_scroll()).abs() < 1e-9);
-        assert!(track.max_scroll() >= track.prefix[track.lines.len() - 1]);
+        assert!(track.max_scroll() >= track.row_top(track.lines.len() - 1));
         let mut scene = Scene::new();
         let (_, bottom) = track.frame(end + 1000.0, &mut scene);
         assert!(bottom > 0.0);
@@ -2820,19 +3367,19 @@ mod lazy_tests {
             track.prepare_viewport(scroll).unwrap();
             let sum: f64 = track.cached.iter().map(|row| row.height).sum();
             let last = track.lines.len() - 1;
-            assert!((track.prefix[last] + track.cached[last].height - sum).abs() < 1e-6);
+            assert!((track.row_top(last) + track.cached[last].height - sum).abs() < 1e-6);
             assert!(
                 footer_top(&track) >= estimated,
                 "wrapped rows grow past the lazy estimate"
             );
             assert!(
-                footer_top(&track) >= track.prefix[last] + track.cached[last].height,
+                footer_top(&track) >= track.row_top(last) + track.cached[last].height,
                 "footer must stay below the final lyric row"
             );
             let tail = track.footer.as_ref().unwrap().tail;
             let expected = (track.scroll_anchor() + sum + tail - f64::from(track.height)
                 + crate::ACTIVE_RANGE_BOTTOM_PADDING)
-                .max(track.prefix[last]);
+                .max(track.row_top(last));
             assert!(
                 (track.max_scroll() - expected).abs() < 1e-6,
                 "max scroll must follow measured content plus footer tail"
@@ -2880,10 +3427,889 @@ mod lazy_tests {
             };
             let last = track.lines.len() - 1;
             let row_bottom =
-                track.scroll_anchor() + track.prefix[last] + track.cached[last].height - scroll;
+                track.scroll_anchor() + track.row_top(last) + track.cached[last].height - scroll;
             assert!(
                 top >= row_bottom - 1e-6,
                 "drawn footer top {top} overlaps final row bottom {row_bottom}"
+            );
+        }
+    }
+
+    fn cold_return_fixture(
+        count: usize,
+        start: usize,
+        destination: usize,
+    ) -> (TrackScene, crate::motion::FollowScroll, f64) {
+        cold_return_fixture_with_lines(source(count), start, destination)
+    }
+
+    fn cold_return_fixture_with_lines(
+        mut lines: Vec<Line>,
+        start: usize,
+        destination: usize,
+    ) -> (TrackScene, crate::motion::FollowScroll, f64) {
+        for line in lines.iter_mut().skip(2).step_by(3) {
+            line.paint.as_mut().unwrap().translation =
+                Some("A longer translated lyric that wraps on a narrow screen. ".repeat(2));
+        }
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        let time = track.lines[destination].start + 500.0;
+        track.prepare(time).unwrap();
+        assert!(!track.geometry_ready((start + destination) / 2));
+        let mut scroll = crate::motion::FollowScroll::default();
+        scroll.configure(Style::Amll, 1.0, track.lines.len());
+        let command = track.scroll_command(time, 0.0);
+        scroll.sample(&command, 0.0, true);
+        scroll.drag(
+            track.row_top(start) - scroll.position(),
+            track.max_scroll(),
+            640.0,
+        );
+        crate::ffi::manual_frame_for_test(&mut track, &mut scroll, time, 16.0);
+        (track, scroll, time)
+    }
+
+    #[test]
+    fn continuous_return_prepares_cold_intermediate_rows_at_60_and_120_hz() {
+        use crate::ffi::return_frame_for_test;
+
+        for hz in [60, 120] {
+            for (start, destination) in [(40, 310), (310, 40)] {
+                let (mut track, mut scroll, time) = cold_return_fixture(360, start, destination);
+                let mut measurements = Vec::new();
+                let mut peak_resident = track.resident.len();
+                let mut peak_prepared = 0;
+                let mut height_changes = 0;
+                let mut intermediate_frames = 0;
+                for sample in 0..=hz * 7 / 10 + 1 {
+                    let now = 100.0 + f64::from(sample) * 1000.0 / f64::from(hz);
+                    let timing = track.return_timing(time);
+                    let predicted = crate::ffi::preview_return(&track, &scroll, timing.target, now)
+                        .unwrap()
+                        .position;
+                    let logical_pose = track.return_coordinate(predicted).0;
+                    let count = track.plain_preparations;
+                    FRAME_WORK.with(|cell| cell.set(FrameWork::default()));
+                    let (offset, prep_ms, sampled_ms) = return_frame_for_test(
+                        &mut track,
+                        &mut scroll,
+                        time,
+                        || now,
+                        || Ok(Some(())),
+                    )
+                    .expect("a simulated frame must be drawable at every sample");
+                    assert_eq!(sampled_ms, now);
+                    assert!((track.return_coordinate(offset).0 - logical_pose).abs() < 1e-7);
+                    height_changes += FRAME_WORK.with(|cell| cell.get().height_updates);
+
+                    let anchor = track.scroll_anchor();
+                    let (interlude, extra) = track.interlude_shift(time);
+                    let mut visible = 0;
+                    for (row, cached) in track.cached.iter().enumerate() {
+                        let top = anchor + track.row_top(row) - offset
+                            + interlude.map_or(0.0, |index| if row >= index { extra } else { 0.0 });
+                        if top + cached.height >= -40.0 && top <= f64::from(track.height) + 40.0 {
+                            assert!(
+                                cached.layout_ready(),
+                                "unprepared visible row {row} at {now}ms"
+                            );
+                            assert!(track.resident.contains(&row));
+                            visible += 1;
+                        }
+                    }
+                    assert!(visible > 0);
+                    assert!(track.geometry_ready(destination));
+                    let row = track.first_visible(offset);
+                    if row > start.min(destination) + 10 && row < start.max(destination) - 10 {
+                        intermediate_frames += 1;
+                    }
+                    assert!(scroll.row_adjustments().iter().all(|&offset| offset == 0.0));
+                    measurements.push(prep_ms);
+                    peak_resident = peak_resident.max(track.resident.len());
+                    peak_prepared = peak_prepared.max(track.plain_preparations - count);
+                    if !scroll.animating() {
+                        break;
+                    }
+                }
+                assert!(
+                    !scroll.animating(),
+                    "fixed target still animating at {hz} Hz from {start} to {destination}, offset={}, target={}, motion={scroll:?}",
+                    scroll.position(),
+                    track.scroll_target(time)
+                );
+                assert!((scroll.position() - track.scroll_target(time)).abs() < 1e-7);
+                assert!(height_changes > 0 && intermediate_frames > 10);
+                assert!(peak_resident < 120 && peak_prepared < 120);
+                measurements.sort_unstable_by(f64::total_cmp);
+                let n = measurements.len();
+                println!(
+                    "{hz} Hz {start}->{destination}: peak resident={peak_resident}, \
+                     peak prepared/frame={peak_prepared}, preparation median={:.3}ms p95={:.3}ms",
+                    measurements[n / 2],
+                    measurements[(n * 95 / 100).min(n - 1)],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_return_keeps_the_start_row_on_screen_when_lazy_geometry_changes() {
+        use crate::ffi::return_frame_for_test;
+
+        let (mut track, mut scroll, time) = cold_return_fixture(360, 40, 310);
+        let row = track.first_visible(scroll.position());
+        let estimated_row = row - 1;
+        assert!(track.geometry_ready(estimated_row));
+        track.cached[estimated_row].height += 80.0;
+        for voice in &mut track.cached[estimated_row].voices {
+            voice.clear_geometry();
+        }
+        track.resident.remove(&estimated_row);
+        track.prefix.add(estimated_row, 80.0);
+        let start = scroll.position() + 80.0;
+        scroll.relocate_manual(start, track.max_scroll(), f64::from(track.height));
+        let old_top = track.row_top(row);
+        let (offset, _, _) =
+            return_frame_for_test(&mut track, &mut scroll, time, || 100.0, || Ok(Some(())))
+                .unwrap();
+        assert!(track.geometry_ready(estimated_row));
+        assert!((track.row_top(row) - old_top + 80.0).abs() < 1e-7);
+        assert!((track.row_top(row) - offset - (old_top - start)).abs() < 1e-7);
+    }
+
+    #[test]
+    fn continuous_return_late_height_update_preserves_visible_rows_and_deadline() {
+        use crate::ffi::return_frame_for_test;
+
+        let (mut track, mut scroll, time) = cold_return_fixture(360, 40, 310);
+        let frame = |track: &mut TrackScene, scroll: &mut crate::motion::FollowScroll, ms| {
+            return_frame_for_test(track, scroll, time, || ms, || Ok(Some(())))
+                .unwrap()
+                .0
+        };
+        frame(&mut track, &mut scroll, 100.0);
+        let before = frame(&mut track, &mut scroll, 792.0);
+        let rows = track.return_rows(0.0, before, 0.0);
+        let changed = rows.start - 1;
+        let relative_tops: Vec<_> = rows
+            .clone()
+            .map(|row| track.row_top(row) - before)
+            .collect();
+
+        // Inject the height update above all visible rows eight milliseconds
+        // before the deadline. Its pixel delta belongs to the coordinate map.
+        track.cached[changed].height += 80.0;
+        track.prefix.add(changed, 80.0);
+        let after = frame(&mut track, &mut scroll, 792.0);
+        assert!((after - before - 80.0).abs() < 1e-7);
+        for (row, old_top) in rows.zip(relative_tops) {
+            assert!((track.row_top(row) - after - old_top).abs() < 1e-7);
+        }
+
+        let final_offset = frame(&mut track, &mut scroll, 800.0);
+        assert!((final_offset - track.scroll_target(time)).abs() < 1e-7);
+        assert!(!scroll.animating());
+        assert!((final_offset - after).abs() < 16.0);
+    }
+
+    #[test]
+    fn continuous_return_resize_preserves_the_row_anchor_and_original_deadline() {
+        use crate::ffi::{resize_track_scroll, return_frame_for_test};
+
+        let (mut old, mut scroll, time) = cold_return_fixture(360, 40, 310);
+        for now in (100..=450).step_by(10) {
+            return_frame_for_test(
+                &mut old,
+                &mut scroll,
+                time,
+                || f64::from(now),
+                || Ok(Some(())),
+            )
+            .unwrap();
+        }
+        let row = old.return_anchor_row(scroll.position());
+        let old_y = old.painted_row_top(time, row) - scroll.position();
+        let mut resized = TrackScene::with_fonts(
+            old.lines.clone(),
+            650,
+            390,
+            1.0,
+            old.settings.as_ref(),
+            &mut fonts(),
+        )
+        .unwrap();
+        resize_track_scroll(&mut scroll, &old, &mut resized, true, time, 1.0).unwrap();
+        assert!(resized.plain_preparations < 100);
+        assert!(scroll.returning());
+        assert!((resized.scroll_anchor() - old.scroll_anchor()).abs() > 19.0);
+        assert!((resized.painted_row_top(time, row) - scroll.position() - old_y).abs() < 1e-7);
+        let same =
+            return_frame_for_test(&mut resized, &mut scroll, time, || 450.0, || Ok(Some(())))
+                .unwrap()
+                .0;
+        assert!((resized.painted_row_top(time, row) - same - old_y).abs() < 1e-7);
+        let moving =
+            return_frame_for_test(&mut resized, &mut scroll, time, || 460.0, || Ok(Some(())))
+                .unwrap()
+                .0;
+        assert!(moving > same && moving < resized.scroll_target(time));
+        let landed =
+            return_frame_for_test(&mut resized, &mut scroll, time, || 800.0, || Ok(Some(())))
+                .unwrap()
+                .0;
+        assert!((landed - resized.scroll_target(time)).abs() < 1e-7);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn return_pixel_velocity_is_continuous_across_unequal_rows() {
+        let (mut track, _, _) = cold_return_fixture(360, 40, 310);
+        for (row, height) in [(100, 72.0), (101, 152.0)] {
+            track.prefix.add(row, height - track.cached[row].height);
+            track.cached[row].height = height;
+        }
+        let row_boundary = 101.0;
+        let time_step = 0.001;
+        let rows_per_ms = 0.15;
+        let center = track.return_offset(row_boundary);
+        let left =
+            (center - track.return_offset(row_boundary - rows_per_ms * time_step)) / time_step;
+        let right =
+            (track.return_offset(row_boundary + rows_per_ms * time_step) - center) / time_step;
+        let expected = rows_per_ms * 2.0 * 72.0 * 152.0 / (72.0 + 152.0);
+        assert!((left - expected).abs() < 0.01, "{left} vs {expected}");
+        assert!((right - expected).abs() < 0.01, "{right} vs {expected}");
+        let mut previous = track.return_offset(99.0);
+        for i in 1..=400 {
+            let coordinate = 99.0 + f64::from(i) / 100.0;
+            let pixel = track.return_offset(coordinate);
+            assert!(pixel > previous);
+            assert!((track.return_coordinate(pixel).0 - coordinate).abs() < 1e-8);
+            previous = pixel;
+        }
+    }
+
+    #[test]
+    fn continuous_return_packet_reflow_preserves_the_painted_anchor_row_and_deadline() {
+        use crate::ffi::{replace_track_scroll, return_frame_for_test};
+
+        let (mut old, mut scroll, time) = cold_return_fixture(360, 40, 310);
+        let step =
+            |layout: &mut TrackScene, scroll: &mut crate::motion::FollowScroll, native_ms| {
+                return_frame_for_test(layout, scroll, time, || native_ms, || Ok(Some(())))
+                    .unwrap()
+                    .0
+            };
+        step(&mut old, &mut scroll, 100.0);
+        let previous = step(&mut old, &mut scroll, 440.0);
+        let dt = 0.0001;
+        let before = step(&mut old, &mut scroll, 440.0 + dt);
+        let row = old.return_anchor_row(before);
+        let old_y = old.painted_row_top(time, row) - before;
+        let old_height = old.cached[row].height;
+        let mut lines = old.lines().to_vec();
+        lines[row].paint.as_mut().unwrap().translation =
+            Some("An updated translation that wraps across several measured lines. ".repeat(12));
+        let credits = crate::credits_switch_tests::track(Style::Amll, 390, 640, 1.0);
+        assert!(credits.footer.is_some());
+        let mut next =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, old.settings.as_ref(), &mut fonts())
+                .unwrap();
+        next.footer = credits.footer;
+        replace_track_scroll(&mut scroll, Some(&old), &mut next, true, true, time).unwrap();
+        assert_eq!(scroll.return_deadline(), Some(800.0));
+        assert!(next.cached[row].height - old_height > 80.0);
+        let same = step(&mut next, &mut scroll, 440.0 + dt);
+        assert!((next.painted_row_top(time, row) - same - old_y).abs() < 1e-7);
+        let after = step(&mut next, &mut scroll, 440.0 + 2.0 * dt);
+        assert!(
+            ((after - same) - (before - previous)).abs() / dt < 0.01,
+            "before: {}, after: {}",
+            (before - previous) / dt,
+            (after - same) / dt
+        );
+        let landed = step(&mut next, &mut scroll, 800.0);
+        assert!((landed - next.scroll_target(time)).abs() < 1e-7);
+        assert!(!scroll.animating());
+    }
+
+    #[test]
+    fn continuous_return_lands_on_line_and_credits_cues_at_the_original_deadline() {
+        use crate::ffi::return_frame_with_timeline_for_test;
+        use crate::live::Timeline;
+
+        for credits in [false, true] {
+            let destination = if credits { 359 } else { 310 };
+            let (mut track, mut scroll, _) = cold_return_fixture(360, 40, destination);
+            if credits {
+                let credits = crate::live::Credits {
+                    songwriters: (1..=100).map(|i| format!("Songwriter {i:03}")).collect(),
+                    attribution: None,
+                };
+                track.footer = crate::credits::build(
+                    &credits,
+                    track.settings.as_ref().unwrap(),
+                    track.width,
+                    track.scale,
+                    &mut fonts(),
+                );
+            }
+            let boundary = track.lines[destination].background_end;
+            let mut timeline = Timeline::default();
+            timeline.replace(1);
+            timeline
+                .anchor(1, 1, boundary - 700.0, 100.0, 100.0, true, 1.0)
+                .unwrap();
+            assert_ne!(
+                track.scroll_target(boundary - 8.0),
+                track.scroll_target(boundary)
+            );
+            let frame =
+                |track: &mut TrackScene, scroll: &mut crate::motion::FollowScroll, native_ms| {
+                    return_frame_with_timeline_for_test(
+                        track,
+                        scroll,
+                        &timeline,
+                        || native_ms,
+                        || Ok(Some(())),
+                    )
+                    .unwrap()
+                    .0
+                };
+            frame(&mut track, &mut scroll, 100.0);
+            assert_eq!(scroll.return_deadline(), Some(800.0));
+            for at in (110..790).step_by(20) {
+                frame(&mut track, &mut scroll, f64::from(at));
+            }
+            let before = frame(&mut track, &mut scroll, 792.0);
+            let target_before = track.scroll_target(boundary);
+            let landed = frame(&mut track, &mut scroll, 800.0);
+            assert!((landed - track.scroll_target(boundary)).abs() < 1e-7);
+            assert!(
+                (landed - before).abs() < 35.0,
+                "credits={credits}, before={before}, target_before={target_before}, landed={landed}"
+            );
+            let timing = track.return_timing(boundary);
+            assert!(track.return_viewport_ready(timing, landed));
+            assert!(!scroll.animating());
+        }
+    }
+
+    #[test]
+    fn continuous_return_hands_off_cues_observed_after_the_deadline_to_ordinary_follow() {
+        use crate::ffi::return_frame_with_timeline_for_test;
+        use crate::live::Timeline;
+
+        for corrected in [false, true] {
+            let (mut track, mut scroll, _) = cold_return_fixture(360, 40, 310);
+            let cue = track.lines[311].start;
+            let mut timeline = Timeline::default();
+            timeline.replace(1);
+            timeline
+                .anchor(1, 1, cue - 704.0, 100.0, 100.0, true, 1.0)
+                .unwrap();
+            let frame = |track: &mut TrackScene,
+                         scroll: &mut crate::motion::FollowScroll,
+                         timeline: &Timeline,
+                         native_ms| {
+                return_frame_with_timeline_for_test(
+                    track,
+                    scroll,
+                    timeline,
+                    || native_ms,
+                    || Ok(Some(())),
+                )
+                .unwrap()
+                .0
+            };
+            frame(&mut track, &mut scroll, &timeline, 100.0);
+            assert_eq!(scroll.return_deadline(), Some(800.0));
+            for native_ms in (116..792).step_by(16) {
+                frame(&mut track, &mut scroll, &timeline, f64::from(native_ms));
+            }
+            let before = frame(&mut track, &mut scroll, &timeline, 792.0);
+            let arrival = timeline.position(800.0);
+            assert_eq!(arrival, cue - 4.0);
+            if corrected {
+                timeline
+                    .anchor(1, 2, cue + 1.0, 796.0, 796.0, true, 1.0)
+                    .unwrap();
+                assert!(timeline.position(800.0) > cue);
+            }
+            assert!(timeline.position(808.0) > cue);
+            let handoff = frame(&mut track, &mut scroll, &timeline, 808.0);
+            let endpoint = track.scroll_target(arrival);
+            let next = track.scroll_target(timeline.position(808.0));
+            assert!(next - endpoint > 40.0);
+            assert!((handoff - endpoint).abs() < 1e-7);
+            assert!((handoff - before).abs() < 35.0);
+            assert_eq!(scroll.return_deadline(), None);
+            assert!(scroll.animating());
+
+            let moving = frame(&mut track, &mut scroll, &timeline, 824.0);
+            assert!(moving > handoff && moving < next);
+            assert!(!scroll.returning());
+        }
+    }
+
+    #[test]
+    fn continuous_return_latches_covered_pose_after_a_slow_acquisition() {
+        use crate::ffi::return_frame_for_test;
+
+        let (mut track, mut scroll, time) = cold_return_fixture(1_000, 40, 900);
+        for ms in (100..400).step_by(10) {
+            return_frame_for_test(
+                &mut track,
+                &mut scroll,
+                time,
+                || f64::from(ms),
+                || Ok(Some(())),
+            )
+            .unwrap();
+        }
+        let mut clocks = [400.0, 420.0, 420.0, 440.0].into_iter();
+        let mut acquisitions = 0;
+        let (position, _, sampled_ms) = return_frame_for_test(
+            &mut track,
+            &mut scroll,
+            time,
+            || clocks.next().unwrap(),
+            || {
+                acquisitions += 1;
+                Ok(Some(()))
+            },
+        )
+        .expect("the acquired drawable can present the prepared viewport");
+        assert_eq!(acquisitions, 1);
+        assert_eq!(sampled_ms, 400.0);
+
+        let timing = track.return_timing(time);
+        let late = crate::ffi::preview_return(&track, &scroll, timing.target, 420.0)
+            .unwrap()
+            .position;
+        assert!(!track.return_viewport_ready(timing, late));
+        assert!(track.return_viewport_ready(timing, position));
+        let anchor = track.return_coordinate(position).0;
+        let (repeated, _, _) =
+            return_frame_for_test(&mut track, &mut scroll, time, || 400.0, || Ok(Some(())))
+                .unwrap();
+        assert!((track.return_coordinate(repeated).0 - anchor).abs() < 1e-7);
+    }
+
+    #[test]
+    fn continuous_return_drawable_stall_across_a_line_cue_keeps_the_prepared_frame() {
+        use crate::ffi::{return_frame_for_test, return_frame_with_timeline_for_test};
+        use crate::live::Timeline;
+
+        let (mut track, mut scroll, time) = cold_return_fixture(1_000, 40, 900);
+        return_frame_for_test(&mut track, &mut scroll, time, || 100.0, || Ok(Some(()))).unwrap();
+        let before = track.lines[900].background_end - 8.0;
+        let after = before + 20.0;
+        assert_ne!(track.preparation_key(before), track.preparation_key(after));
+        let mut timeline = Timeline::default();
+        timeline.replace(1);
+        timeline
+            .anchor(1, 1, before, 400.0, 400.0, true, 1.0)
+            .unwrap();
+        let mut times = [400.0, 420.0].into_iter();
+        let (offset, _, sampled) = return_frame_with_timeline_for_test(
+            &mut track,
+            &mut scroll,
+            &timeline,
+            || times.next().expect("one acquisition is sufficient"),
+            || Ok(Some(())),
+        )
+        .expect("the prepared pose and playback cue still match");
+        assert_eq!(sampled, 400.0);
+        let timing = track.return_timing(before);
+        assert!(track.return_viewport_ready(timing, offset));
+    }
+
+    #[test]
+    fn continuous_return_cached_timing_matches_playback_across_gap_and_retention_cues() {
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track = TrackScene::with_fonts(
+            long_gap_lines(),
+            390,
+            640,
+            1.0,
+            Some(&settings),
+            &mut fonts(),
+        )
+        .unwrap();
+        for time in [
+            500.0, 501.0, 1_500.0, 2_000.0, 2_001.0, 3_000.0, 3_001.0, 5_499.0, 5_500.0, 5_501.0,
+            5_999.0, 6_000.0, 6_001.0, 8_001.0, 500.0,
+        ] {
+            let timing = track.return_timing(time);
+            assert_eq!(timing.key, track.preparation_key(time), "at {time}ms");
+            assert_eq!(
+                track.resolve_return_target(timing.target),
+                track.scroll_target(time),
+                "at {time}ms"
+            );
+        }
+    }
+
+    #[test]
+    fn immutable_layout_sources_rebuild_indexes_and_keep_the_legacy_gap_command() {
+        let mut source = long_gap_lines();
+        let old = TrackScene::from_lines(source.clone(), 390, 640, 1.0).unwrap();
+        let time = 2_600.0;
+        let command = old.scroll_command(time, 0.0);
+        let expected = crate::interlude_index(old.lines(), time).unwrap();
+        assert_eq!(command.index, expected);
+        assert_eq!(
+            command.interval,
+            old.lines()[expected].start - old.lines()[expected - 1].start
+        );
+        source.reverse();
+        let revised = TrackScene::from_lines(source, 390, 640, 1.0).unwrap();
+        for time in [1_500.0, 2_600.0, 5_999.0, 6_001.0, 8_001.0] {
+            assert_eq!(revised.window(time), crate::window(revised.lines(), time));
+            let focus = crate::focus(revised.lines(), time);
+            assert_eq!(revised.scroll_target(time), revised.row_top(focus));
+        }
+        assert_ne!(old.lines()[0].start, revised.lines()[0].start);
+    }
+
+    #[test]
+    fn warm_manual_viewport_eviction_invalidates_playback_readiness() {
+        let mut lines = source(360);
+        lines[0].background_end = lines[310].background_end;
+        let time = lines[310].start + 500.0;
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        let manual = track.row_top(40);
+        track.prepare_viewport(manual).unwrap();
+        let key = track.preparation_key(time);
+        track
+            .prepare_playback(key, &[track.visible_rows(manual)])
+            .unwrap();
+        assert!(track.geometry_ready(310));
+        let shaped = track.plain_preparations;
+        track.prepare_viewport(manual).unwrap();
+        assert_eq!(track.plain_preparations, shaped);
+        assert!(!track.geometry_ready(310));
+        track.prepare(time).unwrap();
+        assert!(track.geometry_ready(310));
+        let timing = track.return_timing(time);
+        assert!(track.return_viewport_ready(timing, track.scroll_target(time)));
+    }
+
+    #[test]
+    fn ordinary_amll_far_follow_bounds_live_cascade_work() {
+        use crate::ffi::{compose_live_frame, return_frame_for_test};
+        use crate::motion::FollowScroll;
+
+        for count in [360, 36_000] {
+            let mut lines = source(count);
+            for line in &mut lines {
+                line.paint.as_mut().unwrap().words[0].appearance =
+                    Some(crate::typography::WordAppearance {
+                        emphasized: false,
+                        origin: 0.5,
+                        rtl: false,
+                        last: true,
+                        emphasis: None,
+                    });
+            }
+            let mut track = TrackScene::with_fonts(
+                lines,
+                390,
+                640,
+                1.0,
+                Some(&Settings {
+                    style: Style::Amll,
+                    font_scale: 1.0,
+                    landscape: false,
+                }),
+                &mut fonts(),
+            )
+            .unwrap();
+            let mut scroll = FollowScroll::default();
+            scroll.configure(Style::Amll, 1.0, count);
+            let time = track.lines[count - 50].start + 500.0;
+            return_frame_for_test(&mut track, &mut scroll, 500.0, || 0.0, || Ok(Some(()))).unwrap();
+            return_frame_for_test(&mut track, &mut scroll, time, || 20.0, || Ok(Some(()))).unwrap();
+            assert!(!scroll.returning());
+            let mut appearance = crate::appearance::AppearanceState::default();
+            let (mut scene, mut overlay) = (Scene::new(), Scene::new());
+            for now in [3_000_000.0, 3_000_016.0] {
+                scroll.resume(now, 16.0);
+                FRAME_WORK.with(|cell| cell.set(FrameWork::default()));
+                return_frame_for_test(&mut track, &mut scroll, time, || now, || Ok(Some(())))
+                    .unwrap();
+                compose_live_frame(
+                    &track,
+                    &scroll,
+                    &mut appearance,
+                    (&mut scene, &mut overlay),
+                    time,
+                    now,
+                    (true, 1.0),
+                );
+                assert!((scroll.position() - track.scroll_target(time)).abs() < 1e-7);
+                assert!(!scene.encoding().is_empty());
+                let work = FRAME_WORK.with(std::cell::Cell::get);
+                assert!(
+                    work.cascade_rows > 0 && work.cascade_rows < 60,
+                    "{count}: {work:?}"
+                );
+                assert!(work.geometry_steps < 500, "{count}: {work:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn playback_prepares_a_bounded_band_when_active_source_rows_are_far_apart() {
+        let mut lines = source(360);
+        lines[0].background_end = lines[310].background_end;
+        let time = lines[310].start + 500.0;
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        assert_eq!(track.window(time).active(), Some((0, 310)));
+        track.prepare(time).unwrap();
+        assert!(track.geometry_ready(310));
+        assert!(track.plain_preparations < 60);
+        assert!(!track.geometry_ready(180));
+    }
+
+    #[test]
+    fn indexed_timing_matches_source_order_for_overlaps_and_unsorted_gaps() {
+        let input = [
+            (0.0, 1_500.0),
+            (7_000.0, 8_000.0),
+            (900.0, 2_200.0),
+            (7_000.0, 7_600.0),
+            (12_000.0, 12_100.0),
+            (3_000.0, 3_500.0),
+        ];
+        let mut lines = source(input.len());
+        for (line, (start, end)) in lines.iter_mut().zip(input) {
+            line.start = start;
+            line.background_end = end;
+        }
+        let index = TimingIndex::new(&lines);
+        for time in (0..=15_000).step_by(25).map(f64::from).chain(
+            index
+                .boundaries
+                .iter()
+                .flat_map(|&time| [time.next_down(), time, time.next_up()]),
+        ) {
+            let expected = crate::window(&lines, time);
+            let mut actual = index.at(time).window;
+            if actual.long_pause {
+                actual.pause_progress =
+                    ((time - actual.pause_start) / actual.pause_duration).clamp(0.0, 1.0);
+            }
+            assert_eq!(actual, expected, "at {time}ms");
+            let focus = expected.focus.max(0) as usize;
+            let (first, last) = expected.active().unwrap_or((focus, focus));
+            let detail_first = (0..first)
+                .rev()
+                .find(|&row| lines[row].background_end + 1000.0 < time)
+                .map_or(0, |row| row + 1);
+            assert_eq!(
+                index.at(time).key,
+                (focus, detail_first, first, (last + 2).min(lines.len() - 1))
+            );
+        }
+    }
+
+    #[test]
+    fn continuous_return_timing_cache_ignores_word_cues() {
+        let mut lines = source(360);
+        let line = &mut lines[180];
+        let time = line.start + 100.0;
+        let paint = line.paint.as_mut().unwrap();
+        let mut word = paint.words[0].clone();
+        word.start = time + 5.0;
+        word.end = time + 10.0;
+        paint.words = vec![word];
+        let settings = Settings {
+            style: Style::Amll,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let mut track =
+            TrackScene::with_fonts(lines, 390, 640, 1.0, Some(&settings), &mut fonts()).unwrap();
+        assert_eq!(track.cues.next(time), Some(time + 5.0));
+        let first = track.return_timing(time);
+        for at in [time + 5.0, time + 10.0, time + 15.0, time - 1.0] {
+            let timing = track.return_timing(at);
+            assert_eq!(timing.key, first.key);
+            assert_eq!(timing.key, track.preparation_key(at));
+            assert_eq!(timing.target.time, at);
+        }
+        assert_eq!(track.return_timing_misses, 1);
+    }
+
+    #[test]
+    fn continuous_return_covers_a_late_far_reversal() {
+        use crate::ffi::return_frame_for_test;
+
+        for reverse_at in [310, 450, 660] {
+            let (mut track, mut scroll, time) = cold_return_fixture(360, 40, 310);
+            let reversed = track.lines[40].start + 500.0;
+            for ms in (100..=800).step_by(10) {
+                let playback = if ms < reverse_at { time } else { reversed };
+                let (offset, _, _) = return_frame_for_test(
+                    &mut track,
+                    &mut scroll,
+                    playback,
+                    || f64::from(ms),
+                    || Ok(Some(())),
+                )
+                .expect("every sampled return viewport must be drawable");
+                let timing = track.return_timing(playback);
+                assert!(track.return_viewport_ready(timing, offset), "at {ms}ms");
+            }
+            assert!((scroll.position() - track.scroll_target(reversed)).abs() < 1e-7);
+            assert!(!scroll.animating());
+        }
+    }
+
+    #[test]
+    fn continuous_return_full_live_cpu_work_stays_bounded_across_track_sizes() {
+        use crate::ffi::{compose_live_frame, return_frame_for_test};
+
+        for count in [360, 3_600, 36_000] {
+            let destination = count - 50;
+            let mut lines = source(count);
+            let line = &mut lines[destination];
+            let paint = line.paint.as_mut().unwrap();
+            let word = paint.words[0].clone();
+            let text = format!("{} ", word.text).repeat(40);
+            paint.words = (0..40)
+                .map(|i| PaintWord {
+                    offset: (word.text.len() + 1) * i as usize,
+                    start: line.start + 480.0 + f64::from(i),
+                    end: line.start + 480.5 + f64::from(i),
+                    ..word.clone()
+                })
+                .collect();
+            line.text.clone_from(&text);
+            line.atoms[0].bytes = 0..text.len();
+            paint.text = text;
+
+            let (mut track, mut scroll, time) =
+                cold_return_fixture_with_lines(lines, 40, destination);
+            let mut appearance = crate::appearance::AppearanceState::default();
+            let mut scene = Scene::new();
+            let mut overlay = Scene::new();
+            let mut step = |native_ms: f64, playback: f64| {
+                FRAME_WORK.with(|cell| cell.set(FrameWork::default()));
+                return_frame_for_test(
+                    &mut track,
+                    &mut scroll,
+                    playback,
+                    || native_ms,
+                    || Ok(Some(())),
+                )
+                .unwrap();
+                let (_, schedule) = compose_live_frame(
+                    &track,
+                    &scroll,
+                    &mut appearance,
+                    (&mut scene, &mut overlay),
+                    playback,
+                    native_ms,
+                    (true, 1.0),
+                );
+                assert!(schedule.continuous);
+                assert!(!scene.encoding().is_empty());
+                FRAME_WORK.with(std::cell::Cell::get)
+            };
+            step(100.0, time);
+            let cold = step(400.0, time);
+            eprintln!("{count} cold: {cold:?}");
+            assert!(
+                cold.height_updates > 0 && cold.preparation_rows > 0,
+                "{count}: {cold:?}"
+            );
+            for i in 1..=8 {
+                let warm = step(400.0 + f64::from(i) * 0.0001, time + f64::from(i));
+                if i == 1 {
+                    eprintln!("{count} warm: {warm:?}");
+                }
+                assert_eq!(warm.preparation_rows, 0, "{count}: {warm:?}");
+                assert_eq!(warm.height_updates, 0);
+                for work in [cold, warm] {
+                    assert!(work.preparation_rows < 100, "{count}: {work:?}");
+                    assert!(work.retention_rows < 250, "{count}: {work:?}");
+                    assert!(
+                        work.appearance_rows > 0 && work.appearance_rows < 100,
+                        "{count}: {work:?}"
+                    );
+                    assert!(
+                        work.schedule_rows > 0 && work.drawing_rows < 80,
+                        "{count}: {work:?}"
+                    );
+                    assert!(work.geometry_steps < 1800, "{count}: {work:?}");
+                    assert!(work.timing_steps < 250, "{count}: {work:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_return_warm_preparation_reuses_timing_across_track_sizes() {
+        use crate::ffi::return_frame_for_test;
+
+        for count in [360, 3_600, 36_000] {
+            let (mut track, mut scroll, time) = cold_return_fixture(count, 40, 310);
+            return_frame_for_test(&mut track, &mut scroll, time, || 100.0, || Ok(Some(())))
+                .unwrap();
+            let misses = track.return_timing_misses;
+            let shaped = track.plain_preparations;
+            let mut times = Vec::new();
+            for sample in 1..=16 {
+                let now = 100.0 + f64::from(sample);
+                let (_, prep_ms, _) = return_frame_for_test(
+                    &mut track,
+                    &mut scroll,
+                    time + f64::from(sample),
+                    || now,
+                    || Ok(Some(())),
+                )
+                .unwrap();
+                times.push(prep_ms);
+            }
+            assert_eq!(
+                track.return_timing_misses, misses,
+                "warm timing lookups for {count} rows"
+            );
+            assert_eq!(
+                track.plain_preparations, shaped,
+                "warm shaping for {count} rows"
+            );
+            times.sort_unstable_by(f64::total_cmp);
+            println!(
+                "{count} rows: {} cached frames, no timing scans or shaping, preparation median={:.3}ms p95={:.3}ms",
+                times.len(),
+                times[times.len() / 2],
+                times[times.len() * 95 / 100],
             );
         }
     }
@@ -2950,7 +4376,7 @@ mod lazy_tests {
                 .unwrap();
                 if warm {
                     for index in 0..=row {
-                        track.prepare_viewport(track.prefix[index]).unwrap();
+                        track.prepare_viewport(track.row_top(index)).unwrap();
                     }
                 }
                 track.prepare(time).unwrap();
@@ -2965,9 +4391,7 @@ mod lazy_tests {
                         voice.clear_geometry();
                     }
                     track.resident.remove(&previous);
-                    for top in &mut track.prefix[row..] {
-                        *top += estimate_error;
-                    }
+                    track.prefix.add(previous, estimate_error);
                 }
 
                 let mut scroll = FollowScroll::default();
@@ -2979,8 +4403,8 @@ mod lazy_tests {
                 let command = track.scroll_command(time, 0.0);
                 let displayed = scroll.sample(&command, 100.0, true);
                 assert_eq!(command.index, row);
-                assert_eq!(displayed, track.prefix[row]);
-                let old_top = track.prefix[row];
+                assert_eq!(displayed, track.row_top(row));
+                let old_top = track.row_top(row);
                 let max = track.max_scroll();
                 scroll.set_manual_bounds(max, viewport);
                 track.clear_manual_anchor();
@@ -2988,7 +4412,7 @@ mod lazy_tests {
                 let input = scroll.position() - displayed;
                 let manual = manual_frame_for_test(&mut track, &mut scroll, time, 60_100.0);
                 let viewport_delta = manual - displayed;
-                let row_shift = track.prefix[row] - old_top;
+                let row_shift = track.row_top(row) - old_top;
                 let row_travel = viewport_delta - row_shift;
                 let uncorrected_travel = input - row_shift;
                 println!(
@@ -3019,12 +4443,12 @@ mod lazy_tests {
                 .unwrap();
         track.prepare(500.0).unwrap();
         assert!(!track.geometry_ready(150));
-        let scroll = track.prefix[150];
+        let scroll = track.row_top(150);
         track.prepare_viewport(scroll).unwrap();
         assert!(track.geometry_ready(150));
-        track.prepare_viewport(track.prefix[150]).unwrap();
+        track.prepare_viewport(track.row_top(150)).unwrap();
         let count = track.plain_preparations;
-        track.prepare_viewport(track.prefix[150]).unwrap();
+        track.prepare_viewport(track.row_top(150)).unwrap();
         assert_eq!(track.plain_preparations, count);
         assert!(track.cached.iter().filter(|row| row.layout_ready()).count() < 60);
     }
@@ -3071,9 +4495,9 @@ mod lazy_tests {
         assert!(track.interlude_shift(2050.0).1 < full);
         assert_eq!(track.interlude_shift(6000.0), (None, 0.0));
         let target = track.scroll_target(2600.0);
-        assert!((target - track.prefix[2]).abs() < 1e-9);
+        assert!((target - track.row_top(2)).abs() < 1e-9);
         let anchor = track.scroll_anchor();
-        let top = anchor + track.prefix[2] - target;
+        let top = anchor + track.row_top(2) - target;
         // The expanded slot belongs to row 2; the row text starts one slot lower.
         assert_eq!(track.hit_test(top + 1.0, target, &[], 2600.0), Some(2));
         assert_eq!(
@@ -3232,7 +4656,7 @@ mod lazy_tests {
                         let layout_address = voice.layout.as_ref().unwrap() as *const _ as usize;
                         let target_y = if bottom { 580.0 } else { 320.0 };
                         let scroll =
-                            track.scroll_anchor() + track.prefix[index] + track.cached[index].top
+                            track.scroll_anchor() + track.row_top(index) + track.cached[index].top
                                 - target_y;
                         let height = voice.height;
                         let mut state = AppearanceState::default();
@@ -3358,7 +4782,7 @@ mod lazy_tests {
                 // Put only the dot slot in the middle of the output, away from
                 // fades. No lyric/translation ink can satisfy these comparisons.
                 let top = 160.0;
-                let scroll = track.scroll_anchor() + track.prefix[2] + cached.top - top;
+                let scroll = track.scroll_anchor() + track.row_top(2) + cached.top - top;
                 scene.reset();
                 track.draw_interlude_dots(time, scroll, &[], &state, &mut scene);
                 expected.reset();
@@ -3474,7 +4898,7 @@ mod lazy_tests {
                 // Priming-period alpha ratio is compared against the parent
                 // Animated.View opacity, independently of breathing/light-up.
                 if style == Style::Amll && time > 5500.0 && time < 5750.0 {
-                    state.rows[2].as_mut().unwrap().outer = 1.0;
+                    state.rows.get_mut(&2).unwrap().outer = 1.0;
                     scene.reset();
                     track.draw_interlude_dots(time, scroll, &[], &state, &mut scene);
                     gpu.render_appearance(&scene, band, true, true).unwrap();
@@ -3487,7 +4911,7 @@ mod lazy_tests {
                         (ratio - outer).abs() < 0.015,
                         "priming alpha ratio {ratio}, expected {outer}"
                     );
-                    state.rows[2].as_mut().unwrap().outer = outer;
+                    state.rows.get_mut(&2).unwrap().outer = outer;
                 }
             }
         }
@@ -3516,7 +4940,7 @@ mod lazy_tests {
         state.advance(&track, 2600.0, 1000.0, false, Effect::Motion);
         let mut scene = Scene::new();
         let target = track.scroll_target(2600.0);
-        assert!((target - track.prefix[2]).abs() < 1e-9);
+        assert!((target - track.row_top(2)).abs() < 1e-9);
         let band = track.frame_appearance(2600.0, target, &[], &state, &mut scene, Effect::Motion);
         assert!(band.1 > band.0);
         let allocations = crate::allocation_probe::measure(|| {

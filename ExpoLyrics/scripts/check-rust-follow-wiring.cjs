@@ -176,16 +176,26 @@ function createWiring(style = 'spicy') {
   const generation = JSON.parse(nativeView.props.trackJson).generation;
   const native = nativeHarness(generation);
   const commands = [];
+  const anchors = [];
   nativeView.props.ref.current = {
     setFollowing: (value, epoch, commandGeneration, gesture) => {
       commands.push({ value, epoch, generation: commandGeneration, gesture });
       return Promise.resolve();
     },
-    hitTest: () => Promise.resolve(2), setAnchor: () => Promise.resolve(), scrollBy: () => Promise.resolve(), fling: () => Promise.resolve(),
+    hitTest: () => Promise.resolve(2),
+    setAnchor: json => { anchors.push(JSON.parse(json)); return Promise.resolve(); },
+    scrollBy: () => Promise.resolve(), fling: () => Promise.resolve(),
   };
   const status = event => nativeView.props.onStatus({ nativeEvent: event });
   return {
-    generation, native, commands, status,
+    generation, native, commands, status, anchors,
+    readyReplacement: () => {
+      const next = render().find(node => node.type === 'NativeView');
+      const nextGeneration = JSON.parse(next.props.trackJson).generation;
+      next.props.onStatus({ nativeEvent: { state: 'ready', generation: nextGeneration, message: 'ready', ownershipEpoch: 0 } });
+      assert.equal(anchors.at(-1).generation, nextGeneration);
+      return anchors.at(-1);
+    },
     grant: () => pan.props.onPanResponderGrant({ nativeEvent: { locationX: 20, locationY: 80 } }),
     release: () => pan.props.onPanResponderRelease(),
     ready: () => {
@@ -342,6 +352,22 @@ for (const style of ['spicy', 'amll']) {
   parentFollow = false;
   next.follow(oldFalse.epoch);
   assert.equal(parentFollow, false, 'old generation event is ignored by the current view');
+}
+
+// Packet generations and playback discontinuities are independent.
+for (const style of ['amll', 'spicy']) {
+  const wiring = createWiring(style);
+  baseline(wiring);
+  assert.equal(wiring.anchors.at(-1).snap, true);
+  store.showTranslatedText = false;
+  const refreshed = wiring.readyReplacement();
+  assert.notEqual(refreshed.generation, wiring.generation);
+  assert.equal(refreshed.snap, style === 'spicy');
+  store.anchorPositionMs = 2000;
+  store.lyricsMetadata = { credits: { songwriters: ['Writer'] } };
+  assert.equal(wiring.readyReplacement().snap, true, 'a simultaneous seek must still snap');
+  store.currentTrack = { ...store.currentTrack, id: 'track-b' };
+  assert.equal(wiring.readyReplacement().snap, true, 'a different track must still snap');
 }
 
 assert.match(swift, /lateGestureOwnershipAllowed\(value, gesture: gesture, nextEpoch: nextEpoch, identity: UInt64\(commandGeneration\)\)/);

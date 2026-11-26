@@ -239,6 +239,15 @@ pub fn window(lines: &[Line], time: f64) -> Window {
     }
     let previous = last_started(lines, time);
     let next = first_upcoming(lines, time);
+    window_without_active(previous, next, covered_end, time)
+}
+
+pub(crate) fn window_without_active(
+    previous: i32,
+    next: Option<(usize, f64)>,
+    covered_end: f64,
+    time: f64,
+) -> Window {
     if previous >= 0
         && let Some((next_index, next_start)) = next
         && time >= covered_end

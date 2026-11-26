@@ -86,7 +86,7 @@ fn cold_spicy_overscan_and_seek_profile() {
                 } else {
                     let track = owner.as_mut().unwrap();
                     if time < 0.0 {
-                        track.prepare_viewport(track.prefix[100]).unwrap();
+                        track.prepare_viewport(track.row_top(100)).unwrap();
                     } else {
                         track.prepare(time).unwrap();
                     }

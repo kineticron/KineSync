@@ -78,7 +78,7 @@ fn setup(width: u32, height: u32) -> Result<(TrackScene, Gpu, f64), Error> {
     let layout_ms = start.elapsed().as_secs_f64() * 1000.0;
     println!(
         "Cached layout: {layout_ms:.2} ms, {} lines, {} glyphs, {} missing glyphs",
-        track.lines.len(),
+        track.lines().len(),
         track.glyph_count,
         track.missing_glyphs
     );

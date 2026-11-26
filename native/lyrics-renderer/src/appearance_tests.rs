@@ -153,7 +153,7 @@ fn mutable_timing_is_separate_pause_release_reset_and_zero_scene_allocations() {
             }
         });
         assert_eq!(count, 0, "timed scene must reuse all buffers");
-        let position = track.lines[0].end + 1.0;
+        let position = track.lines()[0].end + 1.0;
         track.prepare(position).unwrap();
         state.prepare(&track, position, 12000.0);
         state.advance(&track, position, 12000.0, false, Effect::Glow);
@@ -447,7 +447,7 @@ fn live_effect_interleaved_budget() {
 #[ignore = "GPU pixel transition regression; requires a GPU adapter"]
 fn spicy_primed_and_active_start_use_identical_glyph_geometry() {
     let (mut track, _) = track(11, Style::Spicy, false);
-    let start = track.lines[0].start;
+    let start = track.lines()[0].start;
     track.prepare(start - 1.0).unwrap();
     let mut state = AppearanceState::default();
     state.prepare(&track, start - 1.0, 1000.0);

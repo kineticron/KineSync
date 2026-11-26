@@ -1079,7 +1079,7 @@ mod tests {
         let item = d["packets"].as_array().unwrap().first().unwrap();
         assert_eq!(item["style"], "spicy");
         let (mut track, _, _) = track(item, true);
-        let interval = track.lines[0].voice(0).unwrap().interval();
+        let interval = track.lines()[0].voice(0).unwrap().interval();
         let time = interval.0 + 150.0;
         assert!(time < interval.1);
         track.prepare(time).unwrap();
@@ -1099,7 +1099,7 @@ mod tests {
         ] {
             // Keep the detailed path populated past the interval to test
             // translation release independently of the original word springs.
-            warm.rows[0].as_mut().unwrap().releasing = time >= interval.1;
+            warm.rows.get_mut(&0).unwrap().releasing = time >= interval.1;
             scene.reset();
             for state in [&cold, &warm] {
                 track.cached[0].voices[0]
@@ -1227,7 +1227,7 @@ mod tests {
     fn positioned_rtl_ligature_and_wrapped_inline_gradient() {
         let fixture = data();
         let (track, _, _) = track(&fixture["packets"][0], true);
-        let source = track.lines[0].voice(0).unwrap();
+        let source = track.lines()[0].voice(0).unwrap();
         let mut fonts = fonts();
         let font = include_bytes!("../tests/fonts/arabic-ligature-subset.ttf");
         assert!(
@@ -1368,7 +1368,7 @@ mod tests {
         use crate::style_timing::{WordSpec, WordState};
         let fixture = data();
         let (track, _, _) = track(&fixture["packets"][0], true);
-        let word = &track.lines[0].voice(0).unwrap().words[0];
+        let word = &track.lines()[0].voice(0).unwrap().words[0];
         let mut cached = WordState::new(WordSpec {
             start: word.start,
             end: word.end,
@@ -1386,7 +1386,7 @@ mod tests {
     fn translated_words_follow_ordinals_groups_and_seek() {
         let fixture = data();
         let (track, _, _) = track(&fixture["packets"][0], true);
-        let mut source = track.lines[0].voice(0).unwrap().clone();
+        let mut source = track.lines()[0].voice(0).unwrap().clone();
         source.text = "one two three".into();
         source.start = 1000.0;
         source.end = 3000.0;
@@ -1612,7 +1612,7 @@ mod tests {
         };
         let fixture = data();
         let (track, time, _) = track(&fixture["packets"][0], true);
-        let source = track.lines[0].voice(0).unwrap();
+        let source = track.lines()[0].voice(0).unwrap();
         let mut fonts = fonts();
         let mut layouts = LayoutContext::new();
         let mut scene = Scene::new();
@@ -1655,7 +1655,7 @@ mod tests {
 
         let fixture = data();
         let (track, time, _) = track(&fixture["packets"][0], true);
-        let source = track.lines[0].voice(0).unwrap();
+        let source = track.lines()[0].voice(0).unwrap();
         let p = Policy::voice(
             &Settings {
                 style: Style::Spicy,
@@ -1885,7 +1885,7 @@ mod tests {
             shown.layout_json().unwrap();
             let cached = &shown.cached[0];
             let t = cached.lead().translation.as_ref().unwrap();
-            let y = (shown.scroll_anchor() + shown.prefix[0] - shown.scroll_target(time)
+            let y = (shown.scroll_anchor() + shown.row_top(0) - shown.scroll_target(time)
                 + shown.interlude_shift(time).1
                 + cached.top
                 + cached.lead().offset

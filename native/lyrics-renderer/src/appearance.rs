@@ -43,8 +43,8 @@ pub struct RowState {
 }
 #[derive(Default)]
 pub struct AppearanceState {
-    pub(crate) rows: Vec<Option<RowState>>,
-    owners: Vec<usize>,
+    pub(crate) rows: std::collections::BTreeMap<usize, RowState>,
+    line_count: usize,
     pub(crate) interlude: crate::interlude::InterludeState,
     last_ms: Option<f64>,
     playing: bool,
@@ -52,7 +52,6 @@ pub struct AppearanceState {
 impl AppearanceState {
     pub fn reset(&mut self) {
         self.rows.clear();
-        self.owners.clear();
         self.interlude.reset();
         self.last_ms = None;
     }
@@ -69,17 +68,19 @@ impl AppearanceState {
     /// Invoked with static near-active geometry preparation; allocations only on window changes.
     pub fn prepare(&mut self, track: &TrackScene, time: f64, native_ms: f64) {
         let paused = self.last_ms.is_some() && !self.playing;
-        if self.rows.len() != track.lines.len() {
+        if self.line_count != track.lines().len() {
             self.reset();
-            self.rows.resize_with(track.lines.len(), || None);
+            self.line_count = track.lines().len();
         }
-        let primed = crate::window(&track.lines, time).active();
+        let primed = track.window(time).active();
         for i in track.resident_rows() {
-            let line = &track.lines[i];
+            #[cfg(test)]
+            crate::scene::count_frame_work(|work| work.appearance_rows += 1);
+            let line = &track.lines()[i];
             if !track.timed_ready(i) {
                 continue;
             }
-            if self.rows[i].is_none() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.rows.entry(i) {
                 if line.paint.is_none() {
                     continue;
                 }
@@ -102,8 +103,7 @@ impl AppearanceState {
                 } else {
                     1.0
                 };
-                self.owners.push(i);
-                self.rows[i] = Some(RowState {
+                entry.insert(RowState {
                     voices: line
                         .voices()
                         .map(|voice| RowVoice {
@@ -169,7 +169,7 @@ impl AppearanceState {
         // Skia's visual window promotes the upcoming line for the last 500 ms of
         // a long gap (and for a short gap after the previous line ends), so its
         // 200 ms opacity timing is already at full strength when it starts.
-        let primed = crate::window(&track.lines, time).active();
+        let primed = track.window(time).active();
         if effect.motion() && spicy {
             if let Some((row, slot)) = track.interlude_at(time) {
                 self.interlude.advance(row, slot, time, dt);
@@ -177,16 +177,13 @@ impl AppearanceState {
                 self.interlude.clear();
             }
         }
-        for &i in &self.owners {
-            let slot = &mut self.rows[i];
-            let Some(row) = slot else {
-                continue;
-            };
+        self.rows.retain(|&i, row| {
+            #[cfg(test)]
+            crate::scene::count_frame_work(|work| work.appearance_rows += 1);
             if !track.geometry_ready(i) {
-                *slot = None;
-                continue;
+                return false;
             }
-            let line = &track.lines[i];
+            let line = &track.lines()[i];
             let active = time >= line.start && time < line.background_end;
             let pre_active = !active
                 && time < line.start
@@ -289,18 +286,16 @@ impl AppearanceState {
                     } else {
                         row.releasing || row.scale.v != 0.0 || line_animating
                     });
-        }
-        self.owners.retain(|&i| self.rows[i].is_some());
+            true
+        });
     }
     pub fn playing(&self) -> bool {
         self.playing
     }
     pub fn animating(&self) -> bool {
-        self.owners
-            .iter()
-            .any(|&i| self.rows[i].as_ref().is_some_and(|r| r.animating))
+        self.rows.values().any(|row| row.animating)
     }
     pub fn row(&self, index: usize) -> Option<&RowState> {
-        self.rows.get(index).and_then(Option::as_ref)
+        self.rows.get(&index)
     }
 }

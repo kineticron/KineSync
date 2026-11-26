@@ -4,8 +4,8 @@ use crate::{
     Line,
     gpu::SurfaceRenderer,
     live::{Timeline, TrackPacket, frame_clock},
-    motion::FollowScroll,
-    scene::TrackScene,
+    motion::{FollowScroll, ReturnFrame},
+    scene::{ReturnTarget, ReturnTiming, TrackScene},
 };
 use std::{
     cell::RefCell,
@@ -533,7 +533,7 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
     })
 }
 
-/// Scene replacement resets animation history, not same-track manual ownership.
+/// Preserve a live return or a manual viewport for an equivalent lyric source.
 pub(crate) fn replace_track_scroll(
     scroll: &mut FollowScroll,
     previous: Option<&TrackScene>,
@@ -545,25 +545,38 @@ pub(crate) fn replace_track_scroll(
     // Cached variants must not retain an anchor from an earlier activation.
     next.clear_manual_anchor();
     let pending_snap = same_track && scroll.explicit_snap_pending();
-    let manual = previous
-        .filter(|old| {
-            same_track
-                && !following
-                && old.lines.len() == next.lines.len()
-                && old.lines.iter().zip(&next.lines).all(|(a, b)| {
-                    a.text == b.text
-                        && a.start == b.start
-                        && a.end == b.end
-                        && a.background_end == b.background_end
-                })
-        })
+    let matching = previous.filter(|old| {
+        same_track
+            && old.lines().len() == next.lines().len()
+            && old.lines().iter().zip(next.lines()).all(|(a, b)| {
+                a.text == b.text
+                    && a.start == b.start
+                    && a.end == b.end
+                    && a.background_end == b.background_end
+            })
+    });
+    if let Some(old) = matching
+        && following
+        && scroll.returning()
+        && old.style() == next.style()
+    {
+        remap_return_layout(scroll, old, next, time)?;
+        scroll.configure(
+            next.style().expect("return has an AMLL style"),
+            f64::from(next.scale),
+            next.lines().len(),
+        );
+        return Ok(());
+    }
+    let manual = matching
+        .filter(|_| !following)
         .map(|old| next.remap_manual_scroll(old, scroll.position(), time))
         .transpose()
         .map_err(|e| e.to_string())?;
     scroll.configure(
         next.style().unwrap_or(crate::typography::Style::Spicy),
         f64::from(next.scale),
-        next.lines.len(),
+        next.lines().len(),
     );
     scroll.reset();
     if let Some(position) = manual {
@@ -592,19 +605,79 @@ pub(crate) fn resize_track_scroll(
                 .map_err(|e| e.to_string())?,
         )
     };
-    scroll.remap(
-        previous.scroll_target(time),
-        next.scroll_target(time),
-        ratio,
-    );
+    if scroll.returning() {
+        remap_return_layout(scroll, previous, next, time)?;
+    } else {
+        scroll.remap(
+            previous.scroll_target(time),
+            next.scroll_target(time),
+            ratio,
+        );
+    }
     scroll.configure(
         next.style().unwrap_or(crate::typography::Style::Spicy),
         f64::from(next.scale),
-        next.lines.len(),
+        next.lines().len(),
     );
     if let Some(position) = manual {
         scroll.relocate_manual(position, next.max_scroll(), f64::from(next.height));
     }
+    Ok(())
+}
+
+/// The lyric origin is independent of the viewport's alignment anchor.
+/// Capture it and the pixel tangent before changing geometry.
+struct ReturnAnchor {
+    row: usize,
+    screen_y: f64,
+    velocity: f64,
+    offset: f64,
+    coordinate: f64,
+    slope: f64,
+}
+
+impl ReturnAnchor {
+    fn capture(layout: &TrackScene, scroll: &FollowScroll, time: f64) -> Self {
+        let offset = scroll.position();
+        let row = layout.return_anchor_row(offset);
+        let (coordinate, slope) = layout.return_coordinate(offset);
+        Self {
+            row,
+            screen_y: layout.painted_row_top(time, row) - offset,
+            velocity: scroll.return_tangent() * slope,
+            offset,
+            coordinate,
+            slope,
+        }
+    }
+
+    fn offset(&self, layout: &TrackScene, time: f64) -> f64 {
+        layout.painted_row_top(time, self.row) - self.screen_y
+    }
+
+    fn apply(&self, layout: &TrackScene, scroll: &mut FollowScroll, time: f64) {
+        let offset = self.offset(layout, time);
+        let (coordinate, slope) = layout.return_coordinate(offset);
+        scroll.relocate_return(offset, f64::from(layout.height));
+        if (offset - self.offset).abs() > 1e-8
+            || (coordinate - self.coordinate).abs() > 1e-8
+            || (slope - self.slope).abs() > 1e-8
+        {
+            scroll.rebase_return(coordinate, self.velocity / slope, slope);
+        }
+    }
+}
+
+fn remap_return_layout(
+    scroll: &mut FollowScroll,
+    previous: &TrackScene,
+    next: &mut TrackScene,
+    time: f64,
+) -> Result<(), String> {
+    let anchor = ReturnAnchor::capture(previous, scroll, time);
+    next.prepare_return_resize(time, anchor.row, anchor.screen_y)
+        .map_err(|e| e.to_string())?;
+    anchor.apply(next, scroll, time);
     Ok(())
 }
 
@@ -888,6 +961,79 @@ struct PreparedDrawable<T> {
     drawable: T,
     native_ms: f64,
     preparation_ms: f64,
+    return_frame: Option<ReturnFrame>,
+}
+
+pub(crate) fn preview_return(
+    layout: &TrackScene,
+    scroll: &FollowScroll,
+    destination: ReturnTarget,
+    native_ms: f64,
+) -> Option<ReturnFrame> {
+    let target = layout.resolve_return_target(destination);
+    let (coordinate, _) = layout.return_coordinate(target);
+    let (position, height) = layout.return_coordinate(scroll.position());
+    let mut frame = scroll.preview_return_in(
+        coordinate,
+        position,
+        target - scroll.position(),
+        height,
+        native_ms,
+    )?;
+    frame.position = layout.return_offset(frame.position);
+    Some(frame)
+}
+
+fn prepare_return_frame(
+    layout: &mut TrackScene,
+    scroll: &mut FollowScroll,
+    timing: ReturnTiming,
+    destination: ReturnTarget,
+    native_ms: f64,
+) -> Result<(bool, Option<ReturnFrame>), String> {
+    let displayed = scroll.position();
+    let time = timing.target.time;
+    let anchor = ReturnAnchor::capture(layout, scroll, time);
+    let preview = preview_return(layout, scroll, destination, native_ms);
+    let playback = layout
+        .prepare_return_playback(timing, displayed, preview.map_or(displayed, |p| p.position))
+        .map_err(|e| e.to_string())?;
+    let endpoint = if destination.time != time {
+        layout
+            .prepare_return_endpoint(
+                destination,
+                timing,
+                displayed,
+                preview.map_or(displayed, |p| p.position),
+                &playback,
+            )
+            .map_err(|e| e.to_string())?
+    } else {
+        0..0
+    };
+    anchor.apply(layout, scroll, time);
+
+    for _ in 0..2 {
+        let Some(next) = preview_return(layout, scroll, destination, native_ms) else {
+            return Ok((true, None));
+        };
+        if layout.return_viewport_ready(timing, next.position) {
+            return Ok((true, Some(next)));
+        }
+        layout
+            .prepare_return_viewport(
+                timing,
+                scroll.position(),
+                next.position,
+                &playback,
+                endpoint.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+        anchor.apply(layout, scroll, time);
+    }
+    let next = preview_return(layout, scroll, destination, native_ms);
+    let covered = next.is_none_or(|frame| layout.return_viewport_ready(timing, frame.position));
+    Ok((covered, next))
 }
 
 /// Never shape with a drawable held. A stall crossing a geometry boundary
@@ -896,33 +1042,109 @@ struct PreparedDrawable<T> {
 fn prepare_drawable<T>(
     layout: &mut TrackScene,
     timeline: &Timeline,
-    mut manual_scroll: Option<&mut FollowScroll>,
+    mut scroll: Option<(&mut FollowScroll, bool)>,
     mut clock: impl FnMut() -> f64,
     mut acquire: impl FnMut() -> Result<Option<T>, String>,
 ) -> Result<Option<PreparedDrawable<T>>, String> {
     let mut preparation_ms = 0.0;
     for _ in 0..2 {
-        let position = timeline.position(clock());
+        let prepared_ms = clock();
+        let position = timeline.position(prepared_ms);
         let started = Instant::now();
-        if let Some(scroll) = manual_scroll.as_deref_mut() {
-            let offset = layout
-                .prepare_manual_frame(position, scroll.position())
-                .map_err(|e| e.to_string())?;
-            scroll.relocate_manual(offset, layout.max_scroll(), f64::from(layout.height));
-        } else {
-            layout.prepare(position).map_err(|e| e.to_string())?;
-        }
+        let timing = match &scroll {
+            Some((scroll, true)) if scroll.may_prepare_return() => {
+                Some(layout.return_timing(position))
+            }
+            _ => None,
+        };
+        let (covered, return_frame) = match (&mut scroll, timing) {
+            (Some((scroll, true)), Some(timing)) => {
+                // Once the deadline has passed, a newly observed cue or clock
+                // correction belongs to ordinary follow. Resolve the return's
+                // last projected destination against the current geometry.
+                let arrival = scroll.return_deadline().map(|deadline| {
+                    if prepared_ms < deadline {
+                        timeline.position(deadline)
+                    } else {
+                        scroll
+                            .return_deadline_playback()
+                            .unwrap_or_else(|| timeline.position(deadline))
+                    }
+                });
+                let destination = arrival
+                    .filter(|arrive| *arrive != position)
+                    .map_or(timing.target, |arrive| layout.return_target_at(arrive));
+                let (covered, mut frame) =
+                    prepare_return_frame(layout, scroll, timing, destination, prepared_ms)?;
+                if let Some(frame) = &mut frame {
+                    frame.project_deadline(|deadline| timeline.position(deadline));
+                }
+                (covered, frame)
+            }
+            (Some((scroll, false)), _) => {
+                let offset = layout
+                    .prepare_manual_frame(position, scroll.position())
+                    .map_err(|e| e.to_string())?;
+                scroll.relocate_manual(offset, layout.max_scroll(), f64::from(layout.height));
+                (true, None)
+            }
+            _ => {
+                layout.prepare(position).map_err(|e| e.to_string())?;
+                (true, None)
+            }
+        };
         preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
-        let key = layout.preparation_key(position);
+        if !covered {
+            continue;
+        }
+        let key = timing.map_or_else(|| layout.preparation_key(position), |timing| timing.key);
         let Some(drawable) = acquire()? else {
             return Ok(None);
         };
-        let native_ms = clock();
-        if layout.preparation_key(timeline.position(native_ms)) == key {
+        let acquired_ms = clock();
+        if return_frame.is_some() {
+            // Draw exactly the prepared pose and playback instant. Even if
+            // acquisition crossed a cue, both still describe covered geometry.
+            return Ok(Some(PreparedDrawable {
+                drawable,
+                native_ms: prepared_ms,
+                preparation_ms,
+                return_frame,
+            }));
+        }
+        let acquired_position = timeline.position(acquired_ms);
+        let acquired_timing = timing.map(|timing| {
+            if acquired_position == position {
+                timing
+            } else {
+                layout.return_timing(acquired_position)
+            }
+        });
+        let acquired_key = if acquired_position == position {
+            key
+        } else {
+            acquired_timing.map_or_else(
+                || layout.preparation_key(acquired_position),
+                |timing| timing.key,
+            )
+        };
+        if acquired_key == key {
+            let begins_return = match (&scroll, acquired_timing) {
+                (Some((scroll, true)), Some(timing)) => {
+                    preview_return(layout, scroll, timing.target, acquired_ms).is_some()
+                }
+                _ => false,
+            };
+            let native_ms = if begins_return {
+                prepared_ms
+            } else {
+                acquired_ms
+            };
             return Ok(Some(PreparedDrawable {
                 drawable,
                 native_ms,
                 preparation_ms,
+                return_frame,
             }));
         }
         drop(drawable);
@@ -947,7 +1169,7 @@ pub(crate) fn manual_frame_for_test(
     prepare_drawable(
         layout,
         &timeline,
-        Some(&mut *scroll),
+        Some((&mut *scroll, false)),
         || native_ms,
         || Ok(Some(())),
     )
@@ -958,6 +1180,90 @@ pub(crate) fn manual_frame_for_test(
         native_ms,
         false,
     )
+}
+
+#[cfg(test)]
+pub(crate) fn return_frame_for_test(
+    layout: &mut TrackScene,
+    scroll: &mut FollowScroll,
+    time: f64,
+    clock: impl FnMut() -> f64,
+    acquire: impl FnMut() -> Result<Option<()>, String>,
+) -> Option<(f64, f64, f64)> {
+    let mut timeline = Timeline::default();
+    timeline.replace(1);
+    timeline.anchor(1, 1, time, 0.0, 0.0, false, 1.0).unwrap();
+    return_frame_with_timeline_for_test(layout, scroll, &timeline, clock, acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn return_frame_with_timeline_for_test(
+    layout: &mut TrackScene,
+    scroll: &mut FollowScroll,
+    timeline: &Timeline,
+    clock: impl FnMut() -> f64,
+    acquire: impl FnMut() -> Result<Option<()>, String>,
+) -> Option<(f64, f64, f64)> {
+    let prepared =
+        prepare_drawable(layout, timeline, Some((&mut *scroll, true)), clock, acquire).unwrap()?;
+    let offset = apply_prepared_scroll(
+        layout,
+        scroll,
+        prepared.return_frame,
+        timeline.position(prepared.native_ms),
+        prepared.native_ms,
+        true,
+    );
+    Some((offset, prepared.preparation_ms, prepared.native_ms))
+}
+
+fn apply_prepared_scroll(
+    layout: &TrackScene,
+    scroll: &mut FollowScroll,
+    frame: Option<ReturnFrame>,
+    position: f64,
+    native_ms: f64,
+    following: bool,
+) -> f64 {
+    if let Some(frame) = frame {
+        scroll.commit_return(frame, native_ms);
+        if scroll.returning() {
+            return scroll.position();
+        }
+        // Start ordinary follow at zero elapsed time on the covered pose.
+        // This frame still paints the landing while the spring schedules its
+        // first movement for the next display sample.
+    }
+    let command = layout.scroll_command(position, scroll.position());
+    scroll.sample(&command, native_ms, following)
+}
+
+/// The complete CPU composition path shared by the native owner and host tests.
+pub(crate) fn compose_live_frame(
+    layout: &TrackScene,
+    scroll: &FollowScroll,
+    appearance: &mut crate::appearance::AppearanceState,
+    (scene, overlay): (&mut vello::Scene, &mut vello::Scene),
+    time: f64,
+    native_ms: f64,
+    (playing, rate): (bool, f64),
+) -> ((f32, f32), crate::scheduling::FrameSchedule) {
+    let effect = crate::appearance::LIVE_EFFECT;
+    let offset = scroll.position();
+    let adjust = scroll.row_adjustments();
+    appearance.prepare(layout, time, native_ms);
+    appearance.advance(layout, time, native_ms, playing, effect);
+    let band = layout.frame_appearance(time, offset, adjust, appearance, scene, effect);
+    layout.frame_overlay(time, offset, overlay);
+    let schedule = layout.frame_schedule(
+        time,
+        offset,
+        adjust,
+        appearance,
+        scroll.animating(),
+        playing && rate > 0.0,
+    );
+    (band, schedule)
 }
 
 /// A missing layout after an anchor is transient readiness, not missing input.
@@ -1022,7 +1328,7 @@ pub extern "C" fn kr_render(
         let Some(prepared) = prepare_drawable(
             layout,
             &engine.timeline,
-            (!engine.following).then_some(&mut engine.scroll),
+            Some((&mut engine.scroll, engine.following)),
             || {
                 frame_clock(
                     native_ms,
@@ -1046,31 +1352,24 @@ pub extern "C" fn kr_render(
         }
         // Geometry changes reach the tween through `command.offset`; remapping
         // here would clear the spring history every frame.
-        let command = layout.scroll_command(position, engine.scroll.position());
-        let scroll = engine.scroll.sample(&command, native_ms, engine.following);
+        apply_prepared_scroll(
+            layout,
+            &mut engine.scroll,
+            prepared.return_frame,
+            position,
+            native_ms,
+            engine.following,
+        );
         let blur_animating = engine.blur.advance(native_ms);
         let blur = engine.blur.value;
-        let effect = crate::appearance::LIVE_EFFECT;
-        engine.appearance.prepare(layout, position, native_ms);
-        engine
-            .appearance
-            .advance(layout, position, native_ms, engine.timeline.playing, effect);
-        let band = layout.frame_appearance(
+        let (band, schedule) = compose_live_frame(
+            layout,
+            &engine.scroll,
+            &mut engine.appearance,
+            (&mut engine.scene, &mut engine.overlay),
             position,
-            scroll,
-            engine.scroll.row_adjustments(),
-            &engine.appearance,
-            &mut engine.scene,
-            effect,
-        );
-        layout.frame_overlay(position, scroll, &mut engine.overlay);
-        let schedule = layout.frame_schedule(
-            position,
-            scroll,
-            engine.scroll.row_adjustments(),
-            &engine.appearance,
-            engine.scroll.animating(),
-            engine.timeline.playing && engine.timeline.rate > 0.0,
+            native_ms,
+            (engine.timeline.playing, engine.timeline.rate),
         );
         engine.metrics.animating = u32::from(schedule.continuous || blur_animating);
         engine.metrics.visible_changes = u32::from(schedule.visible_changes);
@@ -1172,13 +1471,13 @@ mod tests {
                 .unwrap()
         );
         let mut scroll = FollowScroll::default();
-        scroll.configure(Style::Spicy, f64::from(scale), layout.lines.len());
+        scroll.configure(Style::Spicy, f64::from(scale), layout.lines().len());
         let command = layout.scroll_command(time, 0.0);
         let before_tap = scroll.sample(&command, 1000.0, true);
         assert!(before_tap > 0.0 && before_tap <= layout.max_scroll());
         let engine = Engine {
             timeline,
-            lines: layout.lines.clone(),
+            lines: layout.lines().to_vec(),
             fonts: crate::typography::Fonts::default(),
             settings: None,
             credits: None,
@@ -1273,8 +1572,8 @@ mod tests {
             }
         }
         let mut layout = preparation_track();
-        let before = layout.lines[0].start + 1.0;
-        let after = layout.lines[1].background_end + 2000.0;
+        let before = layout.lines()[0].start + 1.0;
+        let after = layout.lines()[1].background_end + 2000.0;
         assert_ne!(
             layout.preparation_key(before),
             layout.preparation_key(after)
@@ -1320,7 +1619,7 @@ mod tests {
     #[test]
     fn unavailable_drawable_prepares_without_sampling_animation_and_pause_holds_time() {
         let mut layout = preparation_track();
-        let position = layout.lines[0].start + 1.0;
+        let position = layout.lines()[0].start + 1.0;
         let mut timeline = Timeline::default();
         timeline.replace(1);
         timeline
@@ -1330,7 +1629,7 @@ mod tests {
         let result = prepare_drawable::<()>(
             &mut layout,
             &timeline,
-            Some(&mut scroll),
+            Some((&mut scroll, false)),
             || 100_000.0,
             || Ok(None),
         )
@@ -1341,7 +1640,7 @@ mod tests {
         let prepared = prepare_drawable(
             &mut layout,
             &timeline,
-            Some(&mut scroll),
+            Some((&mut scroll, false)),
             || 200_000.0,
             || Ok(Some(())),
         )
@@ -1386,7 +1685,7 @@ mod tests {
         assert_eq!(&bytes[capacity..], &[0xa5, 0xa5]);
         let receipt: serde_json::Value = serde_json::from_slice(&bytes[..capacity - 1]).unwrap();
         assert_eq!(receipt.as_array().unwrap().len(), 1);
-        assert_eq!(receipt[0]["text"], layout.lines[0].text);
+        assert_eq!(receipt[0]["text"], layout.lines()[0].text);
     }
     #[test]
     fn new_track_resets_manual_follow_ownership_and_snaps_to_its_target() {
@@ -1512,7 +1811,7 @@ mod tests {
     #[test]
     fn release_target_requires_ready_layout_anchor_and_matching_generation() {
         let track = preparation_track();
-        let position = track.lines[0].start + 1.0;
+        let position = track.lines()[0].start + 1.0;
         assert!(release_target(None, true, 1, 1, position).is_none());
         assert!(release_target(Some(&track), false, 1, 1, position).is_none());
         assert!(release_target(Some(&track), true, 1, 2, position).is_none());

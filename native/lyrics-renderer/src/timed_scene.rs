@@ -293,7 +293,7 @@ impl TrackScene {
             return self.frame_prepared_adjusted(time, scroll, adjust, scene);
         }
         scene.reset();
-        let window = crate::window(&self.lines, time);
+        let window = self.window(time);
         let active = window.active();
         let spicy = self.style() == Some(Style::Spicy);
         let scale = f64::from(self.scale);
@@ -306,11 +306,10 @@ impl TrackScene {
         // Skia paints the interlude group before the lead voice, so the
         // collapsing row text stays above the fading dots.
         self.draw_interlude_dots(time, scroll, adjust, state, scene);
-        for index in self.drawing_rows(time, scroll, adjust) {
+        for (index, top) in self.drawing_rows(time, scroll, adjust) {
             let cached = &self.cached[index];
-            let y = anchor + self.prefix[index] - scroll
-                + adjust.get(index).copied().unwrap_or(0.0)
-                + shift(index);
+            let y =
+                anchor + top - scroll + adjust.get(index).copied().unwrap_or(0.0) + shift(index);
             if y + cached.height < -40.0
                 || y > f64::from(self.height) + 40.0
                 || !cached.layout_ready()
@@ -318,7 +317,7 @@ impl TrackScene {
                 continue;
             }
             let row = state.row(index);
-            let line = &self.lines[index];
+            let line = &self.lines()[index];
             // Skia's `active` is the whole presentation package, so a line whose
             // lead has ended keeps its reveal and glow while a background voice
             // is still singing.
@@ -603,11 +602,11 @@ impl TrackScene {
         }
         let first = active.map_or(window.focus.max(0) as usize, |(start, _)| start);
         let last = active.map_or(first, |(_, end)| end);
-        let next = (last.max(first) + 1).min(self.lines.len() - 1);
+        let next = (last.max(first) + 1).min(self.lines().len() - 1);
         let adjust_at = |index: usize| adjust.get(index).copied().unwrap_or(0.0);
-        let mut band_top = (anchor + self.prefix[first] - scroll + adjust_at(first) + shift(first)
+        let mut band_top = (anchor + self.row_top(first) - scroll + adjust_at(first) + shift(first)
             - 10.0 * scale) as f32;
-        let band_bottom = (anchor + self.prefix[next] - scroll
+        let band_bottom = (anchor + self.row_top(next) - scroll
             + adjust_at(next)
             + shift(next)
             + self.cached[next].height
@@ -616,7 +615,7 @@ impl TrackScene {
         // the protected range to that row, keep the dots and their shadow in
         // the same unblurred group as Skia (AMLL has no dot blur at all).
         if let Some((row, _)) = self.interlude_at(time) {
-            let dot_top = anchor + self.prefix[row] + self.cached[row].top - scroll
+            let dot_top = anchor + self.row_top(row) + self.cached[row].top - scroll
                 + adjust_at(row)
                 - 32.0 * scale;
             band_top = band_top.min(dot_top as f32);
@@ -643,7 +642,7 @@ impl TrackScene {
             return;
         }
         let spicy = self.style() == Some(Style::Spicy);
-        let top = self.scroll_anchor() + self.prefix[row] + cached.top - scroll
+        let top = self.scroll_anchor() + self.row_top(row) + cached.top - scroll
             + adjust.get(row).copied().unwrap_or(0.0);
         let slot_height =
             crate::interlude::slot_height(&slot, spicy, font, f64::from(self.width), time);

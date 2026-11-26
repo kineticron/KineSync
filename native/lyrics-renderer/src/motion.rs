@@ -18,13 +18,8 @@ pub const AMLL_SETTLE_POSITION: f64 = 0.01;
 pub const AMLL_SETTLE_VELOCITY: f64 = 0.01;
 /// Bounded trajectory history; older segments only serve delayed rows.
 const MAX_SEGMENTS: usize = 8;
-const AMLL_RETURN_TRAVEL_FRACTION: f64 = 0.5;
-const AMLL_RETURN_MOVE_MS: f64 = 400.0;
-const AMLL_RETURN_ROW_STEP_MS: f64 = 40.0;
-const AMLL_RETURN_MAX_STAGGER_STEPS: usize = 2;
-const AMLL_RETURN_MS: f64 =
-    AMLL_RETURN_MOVE_MS + AMLL_RETURN_ROW_STEP_MS * AMLL_RETURN_MAX_STAGGER_STEPS as f64;
-const AMLL_RETURN_ROW_RELEASE_MS: f64 = 120.0;
+const AMLL_RETURN_MIN_MS: f64 = 500.0;
+const AMLL_RETURN_MAX_MS: f64 = 700.0;
 /// iOS `UIScrollView.DecelerationRate.normal`, applied per millisecond.
 const FLING_DECELERATION: f64 = 0.998;
 /// Velocity below which the fling hands over to the rebound spring (pt/ms).
@@ -85,18 +80,11 @@ pub fn amll_omega(interval: f64, interlude: bool) -> f64 {
 /// Skia `amllRowCascadeDelay`: rows below the first visible row start later;
 /// the step shrinks after the target row, so far rows catch up.
 pub fn amll_cascade_delay(first_visible: usize, target: usize, row: usize) -> f64 {
-    if row <= first_visible {
-        return 0.0;
-    }
-    let mut delay = 0.0;
-    let mut step = 0.05;
-    for index in first_visible..row {
-        delay += step;
-        if index >= target {
-            step /= 1.05;
-        }
-    }
-    delay
+    let count = row.saturating_sub(first_visible);
+    let linear = count.min(target.saturating_sub(first_visible));
+    let tail = (count - linear) as f64;
+    // The remaining delays form a geometric sum with ratio 1 / 1.05.
+    0.05 * linear as f64 - 1.05 * (-tail * 0.05_f64.ln_1p()).exp_m1()
 }
 
 /// Immutable per-frame layout facts for one follow command.
@@ -125,24 +113,61 @@ struct Segment {
 
 #[derive(Clone, Copy, Debug)]
 struct AmllReturn {
+    deadline_playback: Option<f64>,
+    from: f64,
+    target: f64,
     start_ms: f64,
-    travel: f64,
-    target_row: usize,
+    end_ms: f64,
+    velocity: f64,
+    brake_ms: f64,
 }
 
-#[derive(Debug)]
-enum AmllReengage {
-    Returning(AmllReturn),
-    ReleasingRows {
-        start_ms: Option<f64>,
-        visible: Range<usize>,
-        offsets: Vec<f64>,
-    },
+impl AmllReturn {
+    /// With a zero terminal slope, this range makes the cubic monotone.
+    fn can_retarget(velocity: f64, duration_ms: f64, distance: f64) -> bool {
+        let tangent = velocity * duration_ms;
+        tangent * distance >= 0.0 && tangent.abs() <= 3.0 * distance.abs()
+    }
+
+    fn pose(self, now_ms: f64) -> (f64, f64) {
+        let elapsed = (now_ms - self.start_ms).max(0.0);
+        if elapsed < self.brake_ms {
+            let progress = elapsed / self.brake_ms;
+            let travel = self.velocity * elapsed * (1.0 - 0.5 * progress);
+            return (self.from + travel, self.velocity * (1.0 - progress));
+        }
+        let duration = self.end_ms - self.start_ms - self.brake_ms;
+        let t = ((elapsed - self.brake_ms) / duration).min(1.0);
+        if t == 1.0 {
+            return (self.target, 0.0);
+        }
+        let from = self.from + 0.5 * self.velocity * self.brake_ms;
+        let velocity = if self.brake_ms > 0.0 {
+            0.0
+        } else {
+            self.velocity
+        };
+        let distance = self.target - from;
+        let position =
+            from + distance * t * t * (3.0 - 2.0 * t) + velocity * duration * t * (1.0 - t).powi(2);
+        let velocity =
+            6.0 * distance * t * (1.0 - t) / duration + velocity * (1.0 - t) * (1.0 - 3.0 * t);
+        (position, velocity)
+    }
 }
 
-fn smooth_progress(elapsed_ms: f64, duration_ms: f64) -> f64 {
-    let t = (elapsed_ms / duration_ms).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReturnFrame {
+    pub position: f64,
+    next: Option<AmllReturn>,
+}
+
+impl ReturnFrame {
+    pub(crate) fn project_deadline(&mut self, project: impl FnOnce(f64) -> f64) {
+        if let Some(curve) = &mut self.next {
+            curve.deadline_playback = Some(project(curve.end_ms));
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -163,13 +188,12 @@ pub struct FollowScroll {
     /// AMLL viewport and per-row trajectory.
     timeline: f64,
     segments: Vec<Segment>,
-    row_delay: Vec<f64>,
     adjust: Vec<f64>,
     last_visible: Range<usize>,
     last_first_visible: usize,
     last_index: usize,
     last_ms: Option<f64>,
-    amll_reengage: Option<AmllReengage>,
+    amll_return: Option<AmllReturn>,
     animating: bool,
     frozen: bool,
     /// Manual scroll: raw (unbanded) offset, iOS deceleration and rebound.
@@ -189,9 +213,8 @@ impl FollowScroll {
         let restyle = self.style != Some(style);
         self.style = Some(style);
         self.scale = scale;
-        if self.row_delay.len() != rows {
-            self.amll_reengage = None;
-            self.row_delay = vec![-1.0; rows];
+        if self.adjust.len() != rows {
+            self.amll_return = None;
             self.adjust = vec![0.0; rows];
             self.last_visible = 0..0;
         }
@@ -214,13 +237,13 @@ impl FollowScroll {
         self.duration_ms = 0.0;
         self.timeline = 0.0;
         self.segments.clear();
-        self.row_delay.fill(-1.0);
-        self.adjust.fill(0.0);
+
+        self.adjust[self.last_visible.clone()].fill(0.0);
         self.last_visible = 0..0;
         self.last_first_visible = 0;
         self.last_index = 0;
         self.last_ms = None;
-        self.amll_reengage = None;
+        self.amll_return = None;
         self.animating = false;
         self.frozen = false;
         self.dragging = false;
@@ -235,7 +258,7 @@ impl FollowScroll {
 
     /// Explicit seek/track replacement: the next sample teleports.
     pub fn snap_next(&mut self) {
-        self.clear_amll_reengage();
+        self.amll_return = None;
         self.armed = true;
         self.explicit_snap = true;
         self.start_ms = None;
@@ -284,7 +307,7 @@ impl FollowScroll {
     }
 
     pub(crate) fn set_manual_bounds(&mut self, max_offset: f64, viewport: f64) {
-        if self.amll_reengage.is_some() && !self.frozen && !self.dragging {
+        if self.amll_return.is_some() && !self.frozen && !self.dragging {
             self.freeze();
         }
         self.max_offset = max_offset.max(0.0);
@@ -294,7 +317,7 @@ impl FollowScroll {
     /// Restore a mapped manual viewport after replacing same-track geometry.
     /// Ownership stays manual, but old-layout momentum must not cross layouts.
     pub(crate) fn restore_manual(&mut self, position: f64, max: f64, viewport: f64) {
-        self.clear_amll_reengage();
+        self.amll_return = None;
         self.position = position.clamp(0.0, max);
         self.armed = false;
         self.freeze();
@@ -315,7 +338,7 @@ impl FollowScroll {
     }
 
     pub fn animating(&self) -> bool {
-        self.animating || self.amll_reengage.is_some()
+        self.animating || self.amll_return.is_some()
     }
 
     /// Age the analytic settled trajectory through sleep, preserving its
@@ -335,7 +358,7 @@ impl FollowScroll {
 
     /// Scale the relative scroll offset across a resize without a jump.
     pub fn remap(&mut self, old_target: f64, new_target: f64, ratio: f64) {
-        self.clear_amll_reengage();
+        self.amll_return = None;
         let remap = |value: f64| new_target + (value - old_target) * ratio;
         self.position = remap(self.position);
         self.target = remap(self.target);
@@ -395,7 +418,9 @@ impl FollowScroll {
     /// `dy` is in surface pixels; the offset follows the finger 1:1 inside the
     /// content and rubber-bands past either edge.
     pub fn drag(&mut self, dy: f64, max_offset: f64, viewport: f64) {
-        self.capture_amll_row_release();
+        if self.amll_return.take().is_some() {
+            self.frozen = true;
+        }
         let continuing = self.dragging;
         self.dragging = true;
         let max_offset = max_offset.max(0.0);
@@ -419,11 +444,9 @@ impl FollowScroll {
         self.timeline = 0.0;
         self.segments.clear();
         self.last_ms = None;
-        self.row_delay.fill(-1.0);
-        if self.amll_reengage.is_none() {
-            self.adjust.fill(0.0);
-            self.last_visible = 0..0;
-        }
+
+        self.adjust[self.last_visible.clone()].fill(0.0);
+        self.last_visible = 0..0;
         self.animating = false;
     }
 
@@ -611,12 +634,10 @@ impl FollowScroll {
     fn plan_rows(&mut self, command: &Command) {
         self.last_first_visible = command.first_visible;
         self.last_index = command.index;
-        self.row_delay.fill(-1.0);
-        for index in command.visible.clone() {
-            if let Some(delay) = self.row_delay.get_mut(index) {
-                *delay = amll_cascade_delay(command.first_visible, command.index, index);
-            }
-        }
+    }
+
+    fn row_delay(&self, index: usize) -> f64 {
+        amll_cascade_delay(self.last_first_visible, self.last_index, index)
     }
 
     /// Skia `sampleTrajectory`: last segment integrates forward; earlier
@@ -652,6 +673,13 @@ impl FollowScroll {
         });
         self.last_ms = Some(now_ms);
         self.timeline += dt;
+        if self.segments.is_empty() {
+            self.position = self.target;
+            self.adjust[self.last_visible.clone()].fill(0.0);
+            self.last_visible = 0..0;
+            self.animating = false;
+            return;
+        }
         let (viewport, velocity) = self.sample_amll(self.timeline);
         let settled = Self::settled_spring(viewport, velocity);
         let residual = if settled { 0.0 } else { viewport };
@@ -662,16 +690,9 @@ impl FollowScroll {
             *value = 0.0;
         }
         for index in command.visible.clone() {
-            let delay = match self.row_delay.get(index).copied() {
-                Some(delay) if delay >= 0.0 => delay,
-                _ => {
-                    let delay = amll_cascade_delay(self.last_first_visible, self.last_index, index);
-                    if let Some(slot) = self.row_delay.get_mut(index) {
-                        *slot = delay;
-                    }
-                    delay
-                }
-            };
+            #[cfg(test)]
+            crate::scene::count_frame_work(|work| work.cascade_rows += 1);
+            let delay = self.row_delay(index);
             let (row, row_velocity) = self.sample_amll(self.timeline - delay);
             let row = if Self::settled_spring(row, row_velocity) {
                 0.0
@@ -689,111 +710,171 @@ impl FollowScroll {
         self.animating = moving;
     }
 
-    fn clear_amll_reengage(&mut self) {
-        if self.amll_reengage.take().is_some() {
-            self.adjust.fill(0.0);
-            self.last_visible = 0..0;
+    fn return_duration(&self, distance: f64) -> f64 {
+        let viewports = distance.abs() / self.viewport;
+        AMLL_RETURN_MIN_MS
+            + (AMLL_RETURN_MAX_MS - AMLL_RETURN_MIN_MS) * ((viewports - 1.0) / 7.0).clamp(0.0, 1.0)
+    }
+
+    pub(crate) fn may_prepare_return(&self) -> bool {
+        !self.armed
+            && self.style == Some(Style::Amll)
+            && (self.frozen || self.amll_return.is_some())
+    }
+
+    /// The native owner supplies stable row coordinates while retaining pixel
+    /// distances for the release threshold and duration.
+    pub(crate) fn preview_return(&self, target: f64, now_ms: f64) -> Option<ReturnFrame> {
+        self.preview_return_in(target, self.position, target - self.position, 1.0, now_ms)
+    }
+
+    pub(crate) fn preview_return_in(
+        &self,
+        target: f64,
+        position: f64,
+        pixel_distance: f64,
+        pixels_per_unit: f64,
+        now_ms: f64,
+    ) -> Option<ReturnFrame> {
+        if !self.may_prepare_return() {
+            return None;
+        }
+        let Some(returning) = self.amll_return else {
+            if !self.frozen || pixel_distance.abs() <= self.viewport {
+                return None;
+            }
+            let duration = self.return_duration(pixel_distance);
+            let velocity = if self.settling {
+                self.settle_velocity
+            } else {
+                self.fling_velocity
+            } / pixels_per_unit;
+            return Some(ReturnFrame {
+                position,
+                next: Some(AmllReturn {
+                    deadline_playback: None,
+                    from: position,
+                    target,
+                    start_ms: now_ms,
+                    end_ms: now_ms + duration,
+                    velocity,
+                    brake_ms: Self::return_brake(
+                        velocity,
+                        duration,
+                        target - position,
+                        self.viewport / pixels_per_unit,
+                    ),
+                }),
+            });
+        };
+
+        let (position, velocity) = returning.pose(now_ms);
+        let remaining = returning.end_ms - now_ms;
+        if remaining <= 0.0 {
+            // The terminal frame owns the newest prepared destination.
+            return Some(ReturnFrame {
+                position: target,
+                next: None,
+            });
+        }
+        let next = if (target - returning.target).abs() > 1e-7 {
+            // Reversal starts with the sampled tangent. Brake away from the
+            // new endpoint briefly, then use the rest of the same deadline.
+            Some(AmllReturn {
+                deadline_playback: returning.deadline_playback,
+                from: position,
+                target,
+                start_ms: now_ms,
+                end_ms: returning.end_ms,
+                velocity,
+                brake_ms: Self::return_brake(
+                    velocity,
+                    remaining,
+                    target - position,
+                    self.viewport / pixels_per_unit,
+                ),
+            })
+        } else {
+            Some(returning)
+        };
+        Some(ReturnFrame { position, next })
+    }
+
+    fn return_brake(velocity: f64, remaining: f64, distance: f64, viewport: f64) -> f64 {
+        if AmllReturn::can_retarget(velocity, remaining, distance) {
+            0.0
+        } else {
+            (0.1 * viewport / velocity.abs())
+                .min(40.0)
+                .min(remaining / 3.0)
         }
     }
 
-    fn start_amll_return(&mut self, command: &Command, now_ms: f64) {
-        self.clear_amll_reengage();
-        let direction = (command.offset - self.position).signum();
-        let travel = direction * self.viewport * AMLL_RETURN_TRAVEL_FRACTION;
-        self.position = command.offset - travel;
-        self.target = command.offset;
-        self.command_offset = command.offset;
+    pub(crate) fn return_deadline(&self) -> Option<f64> {
+        self.amll_return.map(|curve| curve.end_ms)
+    }
+
+    pub(crate) fn return_deadline_playback(&self) -> Option<f64> {
+        self.amll_return?.deadline_playback
+    }
+
+    pub(crate) fn returning(&self) -> bool {
+        self.amll_return.is_some()
+    }
+
+    pub(crate) fn return_tangent(&self) -> f64 {
+        match (self.amll_return, self.last_ms) {
+            (Some(curve), Some(time)) => curve.pose(time).1,
+            _ => 0.0,
+        }
+    }
+
+    pub(crate) fn rebase_return(&mut self, position: f64, velocity: f64, pixels_per_unit: f64) {
+        let (Some(curve), Some(time)) = (&mut self.amll_return, self.last_ms) else {
+            return;
+        };
+        let (old_position, old_velocity) = curve.pose(time);
+        if (position - old_position).abs() < 1e-8 && (velocity - old_velocity).abs() < 1e-8 {
+            return;
+        }
+        let remaining = curve.end_ms - time;
+        if remaining <= 0.0 {
+            return;
+        }
+        curve.from = position;
+        curve.velocity = velocity;
+        curve.start_ms = time;
+        curve.brake_ms = Self::return_brake(
+            velocity,
+            remaining,
+            curve.target - position,
+            self.viewport / pixels_per_unit,
+        );
+    }
+
+    pub(crate) fn relocate_return(&mut self, position: f64, viewport: f64) {
+        self.position = position;
+        self.viewport = viewport.max(1.0);
+    }
+
+    pub(crate) fn commit_return(&mut self, frame: ReturnFrame, now_ms: f64) -> f64 {
+        if self.frozen {
+            self.freeze();
+        }
+        self.frozen = false;
+        self.dragging = false;
+        self.fling_velocity = 0.0;
+        self.fling_last_ms = None;
+        self.settling = false;
+        self.settle_velocity = 0.0;
+        self.position = frame.position;
+        self.amll_return = frame.next;
+        self.target = frame.position;
+        self.command_offset = self.target;
         self.has_command = true;
-        self.last_first_visible = command.index;
-        self.last_index = command.index;
-        self.amll_reengage = Some(AmllReengage::Returning(AmllReturn {
-            start_ms: now_ms,
-            travel,
-            target_row: command.index,
-        }));
-    }
-
-    fn advance_amll_return(&mut self, returning: AmllReturn, command: &Command, now_ms: f64) {
-        let elapsed_ms = now_ms - returning.start_ms;
-        if elapsed_ms >= AMLL_RETURN_MS {
-            self.clear_amll_reengage();
-            self.position = self.target;
-            self.last_ms = Some(now_ms);
-            // Changes during the return use the ordinary spring on the next
-            // frame, whose visible range will describe this settled viewport.
-            self.animating = command.offset != self.command_offset;
-            return;
-        }
-
-        let progress = smooth_progress(elapsed_ms, AMLL_RETURN_MOVE_MS);
-        self.position = self.target - returning.travel * (1.0 - progress);
-        self.adjust[self.last_visible.clone()].fill(0.0);
-        for index in command.visible.clone() {
-            // Delay trailing rows in either direction. Their signed adjustment
-            // increases with row index, so the stagger cannot reverse row order.
-            let steps = if returning.travel > 0.0 {
-                index.saturating_sub(returning.target_row)
-            } else {
-                returning.target_row.saturating_sub(index)
-            }
-            .min(AMLL_RETURN_MAX_STAGGER_STEPS);
-            let delay_ms = steps as f64 * AMLL_RETURN_ROW_STEP_MS;
-            let row_progress = smooth_progress(elapsed_ms - delay_ms, AMLL_RETURN_MOVE_MS);
-            self.adjust[index] = returning.travel * (progress - row_progress);
-        }
-        self.last_visible = command.visible.clone();
-    }
-
-    fn capture_amll_row_release(&mut self) {
-        // An ongoing drag or fling keeps the release already in progress.
-        if self.frozen || self.dragging {
-            return;
-        }
-        let visible = match &self.amll_reengage {
-            Some(AmllReengage::Returning(_)) => self.last_visible.clone(),
-            Some(AmllReengage::ReleasingRows { visible, .. }) => {
-                // Capture the composed frame, including the previous release
-                // band and any rows added by the ordinary follow spring.
-                self.last_visible.start.min(visible.start)..self.last_visible.end.max(visible.end)
-            }
-            None => return,
-        };
-        let offsets = &self.adjust[visible.clone()];
-        self.amll_reengage =
-            offsets
-                .iter()
-                .any(|&offset| offset != 0.0)
-                .then(|| AmllReengage::ReleasingRows {
-                    start_ms: None,
-                    visible,
-                    offsets: offsets.to_vec(),
-                });
-    }
-
-    fn advance_amll_row_release(&mut self, now_ms: f64, following: bool) {
-        let Some(AmllReengage::ReleasingRows {
-            start_ms,
-            visible,
-            offsets,
-        }) = &mut self.amll_reengage
-        else {
-            return;
-        };
-        // Start on the first drawable frame so an untimestamped touch event
-        // cannot drop an offset before that frame is displayed.
-        let elapsed_ms = now_ms - *start_ms.get_or_insert(now_ms);
-        let progress = smooth_progress(elapsed_ms, AMLL_RETURN_ROW_RELEASE_MS);
-        for (index, offset) in visible.clone().zip(offsets.iter().copied()) {
-            let follow_offset = if following && self.last_visible.contains(&index) {
-                self.adjust[index]
-            } else {
-                0.0
-            };
-            self.adjust[index] = offset * (1.0 - progress) + follow_offset * progress;
-        }
-        if elapsed_ms >= AMLL_RETURN_ROW_RELEASE_MS {
-            self.amll_reengage = None;
-        }
+        self.last_ms = Some(now_ms);
+        self.animating = false;
+        self.position
     }
 
     /// Apply the current command at `now_ms`. Returns the visual scroll offset.
@@ -803,8 +884,11 @@ impl FollowScroll {
                 self.freeze();
             }
             self.advance_manual(now_ms);
-            self.advance_amll_row_release(now_ms, false);
             return self.position;
+        }
+        // A frozen fling's velocity belongs to the first return sample.
+        if let Some(frame) = self.preview_return(command.offset, now_ms) {
+            return self.commit_return(frame, now_ms);
         }
         let was_frozen = self.frozen;
         if was_frozen {
@@ -822,7 +906,7 @@ impl FollowScroll {
         self.settling = false;
         self.settle_velocity = 0.0;
         if self.armed {
-            self.amll_reengage = None;
+            self.amll_return = None;
             self.position = command.offset;
             self.target = command.offset;
             self.command_offset = command.offset;
@@ -830,27 +914,14 @@ impl FollowScroll {
             self.start_ms = None;
             self.timeline = 0.0;
             self.segments.clear();
-            self.row_delay.fill(-1.0);
-            self.adjust.fill(0.0);
+
+            self.adjust[self.last_visible.clone()].fill(0.0);
             self.last_visible = 0..0;
             self.last_ms = None;
             self.has_command = true;
             self.armed = false;
             self.explicit_snap = false;
             self.animating = false;
-            return self.position;
-        }
-        if was_frozen
-            && command.style == Style::Amll
-            && (command.offset - self.position).abs() > self.viewport
-        {
-            // The visible range was measured before rebasing. The next frame
-            // will supply the destination band for the stagger.
-            self.start_amll_return(command, now_ms);
-            return self.position;
-        }
-        if let Some(AmllReengage::Returning(returning)) = self.amll_reengage {
-            self.advance_amll_return(returning, command, now_ms);
             return self.position;
         }
         let changed = !self.has_command || command.offset != self.command_offset;
@@ -874,13 +945,12 @@ impl FollowScroll {
             }
             Style::Amll => self.advance_amll(command, now_ms),
         }
-        self.advance_amll_row_release(now_ms, true);
         self.position
     }
 
     /// Skia manual-scroll takeover: keep the visual offset, stop following.
     fn freeze(&mut self) {
-        self.capture_amll_row_release();
+        self.amll_return = None;
         self.target = self.position;
         self.command_offset = self.position;
         self.has_command = false;
@@ -888,11 +958,9 @@ impl FollowScroll {
         self.timeline = 0.0;
         self.segments.clear();
         self.last_ms = None;
-        self.row_delay.fill(-1.0);
-        if self.amll_reengage.is_none() {
-            self.adjust.fill(0.0);
-            self.last_visible = 0..0;
-        }
+
+        self.adjust[self.last_visible.clone()].fill(0.0);
+        self.last_visible = 0..0;
         self.animating = false;
         self.frozen = true;
     }
@@ -1293,57 +1361,54 @@ mod tests {
     }
 
     fn assert_return_cleared(scroll: &FollowScroll) {
-        assert!(scroll.amll_reengage.is_none());
+        assert!(scroll.amll_return.is_none());
         assert!(scroll.segments.is_empty());
-        assert!(scroll.row_delay.iter().all(|&delay| delay == -1.0));
         assert!(scroll.row_adjustments().iter().all(|&adjust| adjust == 0.0));
         assert!(!scroll.animating());
     }
 
     #[test]
-    fn far_amll_return_rebases_and_staggers_destination_rows_in_both_directions() {
-        for (manual, target) in [(1_600.0, 12_000.0), (12_000.0, 1_600.0)] {
-            let (mut scroll, stale) = manual_return(Style::Amll, target, manual);
-            assert!(stale.first_visible.abs_diff(stale.index) >= 100);
-            let direction = (target - manual).signum();
-            let initial = scroll.sample(&stale, RETURN_START_MS, true);
-            assert_eq!(initial, target - direction * RETURN_VIEWPORT / 2.0);
-            assert!(scroll.animating());
-            assert!(scroll.row_adjustments().iter().all(|&adjust| adjust == 0.0));
-
-            for elapsed in (5..=480).step_by(5) {
-                let before = scroll.position();
-                let destination = return_command(Style::Amll, target, before);
-                let now = RETURN_START_MS + f64::from(elapsed);
-                let position = scroll.sample(&destination, now, true);
-                let adjust = scroll.row_adjustments();
-                let top = |row: usize| (row as f64) * 80.0 - position + adjust[row];
-                assert!((position - before) * direction >= 0.0);
-                assert!((target - position) * direction >= 0.0);
-                for row in destination.visible.start..destination.visible.end - 1 {
-                    assert!(
-                        top(row) < top(row + 1),
-                        "overlap at {elapsed} ms, row {row}"
-                    );
-                }
-                assert!(stale.visible.clone().all(|row| adjust[row] == 0.0));
-                if elapsed == 100 {
-                    let index = destination.index;
-                    let trailing = |steps| {
-                        if direction > 0.0 {
-                            index + steps
-                        } else {
-                            index - steps
+    fn continuous_return_traverses_the_full_distance_at_both_cadences() {
+        for distance in [801.0, 10_400.0] {
+            for direction in [-1.0, 1.0] {
+                let (manual, target) = if direction > 0.0 {
+                    (1_600.0, 1_600.0 + distance)
+                } else {
+                    (1_600.0 + distance, 1_600.0)
+                };
+                let mut midpoints = Vec::new();
+                for hz in [60, 120] {
+                    let (mut scroll, command) = manual_return(Style::Amll, target, manual);
+                    assert_eq!(scroll.sample(&command, RETURN_START_MS, true), manual);
+                    let curve = scroll.amll_return.unwrap();
+                    assert_eq!(curve.pose(RETURN_START_MS), (manual, 0.0));
+                    let duration = curve.end_ms - curve.start_ms;
+                    assert!((500.0..=700.0).contains(&duration));
+                    assert_eq!(duration == 700.0, distance > 8.0 * RETURN_VIEWPORT);
+                    let mut previous = manual;
+                    for frame in 1..=hz {
+                        let now = (RETURN_START_MS + f64::from(frame) * 1000.0 / f64::from(hz))
+                            .min(curve.end_ms);
+                        let position = scroll.sample(&command, now, true);
+                        let direction = (target - manual).signum();
+                        assert!((position - previous) * direction >= 0.0);
+                        assert!((target - position) * direction >= 0.0);
+                        assert!(scroll.row_adjustments().iter().all(|&offset| offset == 0.0));
+                        if frame == hz / 4 {
+                            midpoints.push(position);
+                            assert!(position != manual && position != target);
                         }
-                    };
-                    assert_eq!(adjust[index], 0.0);
-                    assert!(adjust[trailing(1)] * direction > 0.0);
-                    assert!(adjust[trailing(2)].abs() > adjust[trailing(1)].abs());
-                    assert_eq!(adjust[trailing(2)], adjust[trailing(3)]);
+                        if now == curve.end_ms {
+                            assert_eq!(curve.pose(now), (target, 0.0));
+                            break;
+                        }
+                        previous = position;
+                    }
+                    assert_eq!(scroll.position(), target);
+                    assert_return_cleared(&scroll);
                 }
+                assert_eq!(midpoints[0], midpoints[1]);
             }
-            assert_eq!(scroll.position(), target);
-            assert_return_cleared(&scroll);
         }
     }
 
@@ -1355,21 +1420,18 @@ mod tests {
             let (mut scroll, cmd) = manual_return(Style::Amll, target, manual);
             let initial = scroll.sample(&cmd, RETURN_START_MS, true);
             if distance > RETURN_VIEWPORT {
-                assert_eq!(initial, target + RETURN_VIEWPORT / 2.0);
-                assert!(matches!(
-                    scroll.amll_reengage,
-                    Some(AmllReengage::Returning(_))
-                ));
+                assert_eq!(initial, manual);
+                assert!(scroll.amll_return.is_some());
             } else {
                 assert_eq!(initial, manual);
-                assert!(scroll.amll_reengage.is_none());
+                assert!(scroll.amll_return.is_none());
                 let elapsed = 0.016;
                 let omega = amll_omega(800.0, false);
                 let expected =
                     target + distance * (1.0 + omega * elapsed) * (-omega * elapsed).exp();
                 let position = scroll.sample(&cmd, RETURN_START_MS + 16.0, true);
                 assert!((position - expected).abs() < 1e-9);
-                assert_eq!(scroll.row_delay[cmd.first_visible + 1], 0.05);
+                assert!((scroll.row_delay(cmd.first_visible + 1) - 0.05).abs() < 1e-12);
             }
         }
     }
@@ -1388,8 +1450,8 @@ mod tests {
         let expected =
             target - (target - from) * (1.0 + omega * elapsed) * (-omega * elapsed).exp();
         assert!((scroll.sample(&cmd, RETURN_START_MS, true) - expected).abs() < 1e-9);
-        assert_eq!(scroll.row_delay[cmd.first_visible + 3], 0.05 * 3.0);
-        assert!(scroll.amll_reengage.is_none());
+        assert_eq!(scroll.row_delay(cmd.first_visible + 3), 0.05 * 3.0);
+        assert!(scroll.amll_return.is_none());
         assert!(scroll.sample(&cmd, RETURN_START_MS + 480.0, true) < target);
     }
 
@@ -1413,199 +1475,128 @@ mod tests {
     }
 
     #[test]
-    fn far_amll_return_deadline_uses_native_time_at_low_cadence_and_after_sleep() {
-        for backgrounded in [false, true] {
-            let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
-            let initial = scroll.sample(&stale, RETURN_START_MS, true);
-            let cmd = return_command(Style::Amll, stale.offset, initial);
-            if backgrounded {
-                scroll.resume(20_000.0, 16.0);
-                assert_eq!(scroll.sample(&cmd, 20_000.0, true), cmd.offset);
-            } else {
-                let middle = scroll.sample(&cmd, RETURN_START_MS + 240.0, true);
-                assert!(middle > cmd.offset - 150.0 && middle < cmd.offset);
-                assert_eq!(
-                    scroll.sample(&cmd, RETURN_START_MS + 480.0, true),
-                    cmd.offset
-                );
-            }
-            assert_return_cleared(&scroll);
-        }
-    }
-
-    #[test]
-    fn amll_return_finishes_at_captured_target_then_follows_late_changes_normally() {
-        for deadline_offset in [12_600.0, 12_960.0, 1_600.0] {
-            let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
-            let initial = scroll.sample(&stale, RETURN_START_MS, true);
-            let cmd = return_command(Style::Amll, stale.offset, initial);
-            let at_100_ms = RETURN_START_MS + 100.0;
-            let before = scroll.sample(&cmd, at_100_ms, true);
-            let row = cmd.index + 1;
-            let adjustment = scroll.row_adjustments()[row];
-            let early = return_command(Style::Amll, cmd.offset + 80.0, before);
-            assert_eq!(scroll.sample(&early, at_100_ms, true), before);
-            assert_eq!(scroll.row_adjustments()[row], adjustment);
-
-            let late = return_command(Style::Amll, cmd.offset + 600.0, before);
-            assert_eq!(
-                scroll.sample(&late, RETURN_START_MS + 460.0, true),
-                cmd.offset
-            );
-            let latest = return_command(Style::Amll, deadline_offset, cmd.offset);
-            assert_eq!(
-                scroll.sample(&latest, RETURN_START_MS + 480.0, true),
-                cmd.offset
-            );
-            assert!(scroll.amll_reengage.is_none());
-            assert!(scroll.segments.is_empty());
-            assert!(scroll.row_adjustments().iter().all(|&adjust| adjust == 0.0));
-            assert!(scroll.animating(), "ordinary follow needs another frame");
-
-            let elapsed = 0.016;
-            let omega = amll_omega(latest.interval, latest.interlude);
-            let distance = latest.offset - cmd.offset;
-            let expected =
-                latest.offset - distance * (1.0 + omega * elapsed) * (-omega * elapsed).exp();
-            let position = scroll.sample(&latest, RETURN_START_MS + 496.0, true);
-            assert!((position - expected).abs() < 1e-9);
-            assert!(scroll.amll_reengage.is_none());
-        }
-    }
-
-    #[test]
-    fn manual_reinterrupt_preserves_displayed_rows_then_releases_their_offsets() {
-        for drag in [false, true] {
-            let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
-            let initial = scroll.sample(&stale, RETURN_START_MS, true);
-            let cmd = return_command(Style::Amll, stale.offset, initial);
-            let before = scroll.sample(&cmd, RETURN_START_MS + 50.0, true);
-            let row = cmd.index + 2;
-            let adjustment = scroll.row_adjustments()[row];
-            assert!(adjustment > 10.0);
-            let pan = if drag { 0.25 } else { 0.0 };
-            if drag {
-                scroll.drag(pan, 19_200.0, RETURN_VIEWPORT);
-            } else {
-                scroll.set_manual_bounds(19_200.0, RETURN_VIEWPORT);
-            }
-            assert_eq!(scroll.row_adjustments()[row], adjustment);
-            let first_manual_ms = RETURN_START_MS + 60.0;
-            let held = scroll.sample(&cmd, first_manual_ms, false);
-            assert_eq!(held, before + pan);
-            let top_change = (before - held) + (scroll.row_adjustments()[row] - adjustment);
-            assert_eq!(top_change, -pan);
-            assert!(scroll.animating());
-
-            if drag {
-                scroll.drag(2.0, 19_200.0, RETURN_VIEWPORT);
-            }
-            let midpoint = scroll.sample(&cmd, first_manual_ms + 60.0, false);
-            assert_eq!(midpoint, held + if drag { 2.0 } else { 0.0 });
-            assert_eq!(scroll.row_adjustments()[row], adjustment / 2.0);
-            assert!(scroll.animating());
-            if drag {
-                scroll.fling(1.0, 19_200.0, RETURN_VIEWPORT);
-            }
-            let position = scroll.sample(&cmd, first_manual_ms + 120.0, false);
-            assert!(scroll.amll_reengage.is_none());
-            assert!(scroll.row_adjustments().iter().all(|&adjust| adjust == 0.0));
-            if drag {
-                assert!(position > midpoint);
-                assert!(scroll.animating(), "the fling keeps its own schedule");
-            } else {
-                assert_eq!(position, held);
-                assert_return_cleared(&scroll);
-            }
-        }
-    }
-
-    #[test]
-    fn immediate_follow_after_manual_takeover_blends_into_the_ordinary_spring() {
-        let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
-        let initial = scroll.sample(&stale, RETURN_START_MS, true);
-        let cmd = return_command(Style::Amll, stale.offset, initial);
-        let held = scroll.sample(&cmd, RETURN_START_MS + 50.0, true);
-        let cmd = return_command(Style::Amll, stale.offset, held);
-        let row = cmd.index + 2;
-        let adjustment = scroll.row_adjustments()[row];
-        scroll.set_manual_bounds(19_200.0, RETURN_VIEWPORT);
-        assert_eq!(scroll.sample(&cmd, RETURN_START_MS + 60.0, true), held);
-        assert_eq!(scroll.row_adjustments()[row], adjustment);
-        assert!(scroll.sample(&cmd, RETURN_START_MS + 120.0, true) > held);
-        assert!(scroll.sample(&cmd, RETURN_START_MS + 180.0, true) < cmd.offset);
-        assert!(scroll.amll_reengage.is_none());
-        assert!(
-            scroll.animating(),
-            "ordinary follow continues after the row release"
+    fn continuous_return_uses_native_time_and_retries_do_not_advance_it() {
+        let (mut scroll, cmd) = manual_return(Style::Amll, 12_000.0, 1_600.0);
+        let displayed = scroll.sample(&cmd, RETURN_START_MS, true);
+        let now = RETURN_START_MS + 240.0;
+        let preview = scroll.preview_return(cmd.offset, now).unwrap();
+        assert_eq!(scroll.position(), displayed);
+        assert_eq!(
+            scroll.preview_return(cmd.offset, now).unwrap().position,
+            preview.position
         );
+        assert_eq!(scroll.sample(&cmd, now, true), preview.position);
+        assert_eq!(scroll.sample(&cmd, now, true), preview.position);
+        assert!(preview.position > displayed && preview.position < cmd.offset);
+        scroll.resume(20_000.0, 16.0);
+        assert_eq!(scroll.sample(&cmd, 20_000.0, true), cmd.offset);
+        assert_return_cleared(&scroll);
     }
 
     #[test]
-    fn second_manual_takeover_releases_the_composed_follow_offsets() {
-        for drag in [false, true] {
-            let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
-            let initial = scroll.sample(&stale, RETURN_START_MS, true);
-            let cmd = return_command(Style::Amll, stale.offset, initial);
-            let first_pan_ms = RETURN_START_MS + 50.0;
-            scroll.sample(&cmd, first_pan_ms, true);
-            let row = cmd.index + 2;
-            let original_offset = scroll.row_adjustments()[row];
-            scroll.note_manual_input(160.0, Some(cmd.offset), first_pan_ms);
-            scroll.drag(160.0, 19_200.0, RETURN_VIEWPORT);
-            assert!(scroll.release(
-                0.0,
-                19_200.0,
-                RETURN_VIEWPORT,
-                Some(cmd.offset),
-                first_pan_ms,
-            ));
-            scroll.resume_follow();
-            let resumed_ms = first_pan_ms + 10.0;
-            let cmd = return_command(Style::Amll, stale.offset, scroll.position());
-            scroll.sample(&cmd, resumed_ms, true);
-            let before = scroll.sample(&cmd, resumed_ms + 60.0, true);
-            let displayed = scroll.row_adjustments().to_vec();
-            assert!((displayed[row] - original_offset / 2.0).abs() > 10.0);
+    fn terminal_return_sample_uses_a_new_target_received_at_the_deadline() {
+        let (mut scroll, original) = manual_return(Style::Amll, 12_000.0, 1_600.0);
+        scroll.sample(&original, RETURN_START_MS, true);
+        let deadline = scroll.return_deadline().unwrap();
+        scroll.sample(&original, deadline - 8.0, true);
+        let latest = return_command(Style::Amll, 12_072.0, scroll.position());
+        assert_eq!(scroll.sample(&latest, deadline, true), latest.offset);
+        assert_return_cleared(&scroll);
+    }
 
-            let pan = if drag { 0.25 } else { 0.0 };
-            if drag {
-                scroll.drag(pan, 19_200.0, RETURN_VIEWPORT);
-            } else {
-                scroll.set_manual_bounds(19_200.0, RETURN_VIEWPORT);
+    #[test]
+    fn closed_form_cascade_preserves_the_reference_accumulation() {
+        for (first, target) in [(0, 0), (3, 1), (1, 36_000), (10, 40)] {
+            for row in [0, 4, 12, 42, 35_999, 36_001, 36_100] {
+                let (mut delay, mut step) = (0.0, 0.05);
+                for index in first..row {
+                    delay += step;
+                    if index >= target {
+                        step /= 1.05;
+                    }
+                }
+                assert!((amll_cascade_delay(first, target, row) - delay).abs() < 1e-8);
             }
-            let manual_ms = resumed_ms + 68.0;
-            assert_eq!(scroll.sample(&cmd, manual_ms, false), before + pan);
-            assert_eq!(scroll.row_adjustments(), displayed.as_slice());
-            assert!(scroll.animating());
+        }
+    }
 
-            if drag {
-                scroll.drag(pan, 19_200.0, RETURN_VIEWPORT);
-            }
-            scroll.sample(&cmd, manual_ms + 60.0, false);
-            assert_eq!(scroll.row_adjustments()[row], displayed[row] / 2.0);
-            if drag {
-                scroll.fling(0.0, 19_200.0, RETURN_VIEWPORT);
-            }
-            scroll.sample(&cmd, manual_ms + 120.0, false);
+    #[test]
+    fn continuous_return_reverses_from_the_sampled_tangent_at_the_original_deadline() {
+        for fraction in [0.3, 0.5, 0.8] {
+            let (mut scroll, cmd) = manual_return(Style::Amll, 12_000.0, 1_600.0);
+            scroll.sample(&cmd, RETURN_START_MS, true);
+            let original = scroll.amll_return.unwrap();
+            let now = original.start_ms + (original.end_ms - original.start_ms) * fraction;
+            let pose = original.pose(now);
+            let reversed = return_command(Style::Amll, 1_600.0, pose.0);
+            assert_eq!(scroll.sample(&reversed, now, true), pose.0);
+            let curve = scroll.amll_return.unwrap();
+            assert_eq!(curve.pose(now), pose);
+            assert_eq!(curve.end_ms, original.end_ms);
+            assert_eq!(curve.pose(original.end_ms), (reversed.offset, 0.0));
+            assert!(curve.pose(original.end_ms - 1.0).0 > reversed.offset);
+            assert_eq!(
+                scroll.sample(&reversed, original.end_ms, true),
+                reversed.offset
+            );
             assert_return_cleared(&scroll);
         }
     }
 
     #[test]
-    fn resize_seek_reset_and_restyle_clear_an_active_amll_return() {
-        for reset in ["resize", "seek", "reset", "restyle"] {
+    fn continuous_return_takes_fling_velocity_before_clearing_manual_state() {
+        for velocity in [-3.0, 3.0] {
+            let (mut scroll, cmd) = manual_return(Style::Amll, 12_000.0, 1_600.0);
+            scroll.fling(velocity, 19_200.0, RETURN_VIEWPORT);
+            let displayed = scroll.position();
+            assert_eq!(scroll.sample(&cmd, RETURN_START_MS, true), displayed);
+            let curve = scroll.amll_return.unwrap();
+            assert_eq!(curve.pose(RETURN_START_MS).1, velocity);
+            assert_eq!(scroll.fling_velocity, 0.0);
+            if velocity < 0.0 {
+                assert!(curve.brake_ms > 0.0);
+                let (position, velocity) = curve.pose(RETURN_START_MS + curve.brake_ms + 1e-9);
+                assert!(displayed - position <= RETURN_VIEWPORT * 0.05 + 1e-7);
+                assert!(velocity.abs() < 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_return_manual_takeover_holds_the_displayed_pose_and_tracks_the_finger() {
+        for drag in [false, true] {
+            let (mut scroll, cmd) = manual_return(Style::Amll, 12_000.0, 1_600.0);
+            scroll.sample(&cmd, RETURN_START_MS, true);
+            let displayed = scroll.sample(&cmd, RETURN_START_MS + 200.0, true);
+            let delta = if drag { 5.0 } else { 0.0 };
+            if drag {
+                scroll.drag(delta, 19_200.0, RETURN_VIEWPORT);
+            } else {
+                scroll.set_manual_bounds(19_200.0, RETURN_VIEWPORT);
+            }
+            assert_eq!(scroll.position(), displayed + delta);
+            assert_eq!(
+                scroll.sample(&cmd, RETURN_START_MS + 216.0, false),
+                displayed + delta
+            );
+            assert_eq!(
+                scroll.sample(&cmd, RETURN_START_MS + 600.0, false),
+                displayed + delta
+            );
+            assert_return_cleared(&scroll);
+        }
+    }
+
+    #[test]
+    fn seek_reset_and_restyle_clear_an_active_amll_return() {
+        for reset in ["seek", "reset", "restyle"] {
             let (mut scroll, stale) = manual_return(Style::Amll, 12_000.0, 1_600.0);
             let initial = scroll.sample(&stale, RETURN_START_MS, true);
             let cmd = return_command(Style::Amll, stale.offset, initial);
             let before = scroll.sample(&cmd, RETURN_START_MS + 90.0, true);
-            assert_ne!(scroll.row_adjustments()[cmd.index + 1], 0.0);
+            assert_ne!(initial, before);
+            assert!(scroll.row_adjustments().iter().all(|&offset| offset == 0.0));
             let next = match reset {
-                "resize" => {
-                    scroll.remap(cmd.offset, 6_000.0, 0.5);
-                    assert_eq!(scroll.position(), 6_000.0 + (before - cmd.offset) * 0.5);
-                    return_command(Style::Amll, 6_000.0, scroll.position())
-                }
                 "seek" => {
                     scroll.snap_next();
                     assert!(scroll.explicit_snap_pending());

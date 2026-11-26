@@ -97,9 +97,9 @@ fn background_voice_typography_follows_each_skia_source() {
     ] {
         let (mut track, _, item) = tracks(name);
         let expected = &item["expected"];
-        let background_voices = track.lines[0].backgrounds.len();
+        let background_voices = track.lines()[0].backgrounds.len();
         assert!(background_voices > 0, "{name}: fixture lost its BGV");
-        track.prepare(track.lines[0].start + 10.0).unwrap();
+        track.prepare(track.lines()[0].start + 10.0).unwrap();
         track.layout_json().unwrap();
         let row = &track.cached[0];
         assert_eq!(row.voices.len(), background_voices + 1, "{name}");
@@ -218,7 +218,7 @@ fn background_voice_typography_follows_each_skia_source() {
 fn background_voices_count_in_row_height_scroll_and_protection() {
     for name in ["spicy-speakers", "amll-single-block-duet"] {
         let (mut track, mut plain, item) = tracks(name);
-        let time = track.lines[0].start + 10.0;
+        let time = track.lines()[0].start + 10.0;
         track.prepare(time).unwrap();
         plain.prepare(time).unwrap();
         let row = &track.cached[0];
@@ -249,7 +249,7 @@ fn background_voices_count_in_row_height_scroll_and_protection() {
         // Auto-scroll uses the measured prefix/height, so a taller BGV row moves
         // the following row down and extends the reachable track.
         assert!(
-            track.prefix[1] > plain.prefix[1] + 15.0,
+            track.row_top(1) > plain.row_top(1) + 15.0,
             "{name}: following row prefix must include the BGV height"
         );
         assert!(track.max_scroll() > plain.max_scroll() + 15.0, "{name}");
@@ -280,14 +280,14 @@ fn background_voices_count_in_row_height_scroll_and_protection() {
 fn duet_alignment_and_source_order_survive_overlapping_starts() {
     let (mut track, _, _) = tracks("amll-single-block-duet");
     // `promise` by slayr: the second duet line starts 2 ms before the first.
-    assert!(track.lines[1].start < track.lines[0].start);
-    assert_eq!(track.lines[0].text, "left side");
-    assert_eq!(track.lines[1].text, "right side");
-    let overlap = crate::window(&track.lines, 2000.0);
+    assert!(track.lines()[1].start < track.lines()[0].start);
+    assert_eq!(track.lines()[0].text, "left side");
+    assert_eq!(track.lines()[1].text, "right side");
+    let overlap = crate::window(track.lines(), 2000.0);
     assert_eq!(overlap.active(), Some((0, 1)), "both duet rows stay active");
     assert_eq!(crate::auto_scroll_range(&overlap), Some((0, 1)));
     track.prepare(2000.0).unwrap();
-    for (index, line) in track.lines.iter().enumerate() {
+    for (index, line) in track.lines().iter().enumerate() {
         let row = &track.cached[index];
         let right = line.paint.as_ref().unwrap().opposite;
         assert_eq!(row.right, right, "portrait duet alignment");
@@ -302,7 +302,7 @@ fn duet_alignment_and_source_order_survive_overlapping_starts() {
     let (landscape, _, _) = tracks("spicy-duet-landscape");
     assert_eq!(
         landscape.cached[0].right,
-        !landscape.lines[0].paint.as_ref().unwrap().opposite,
+        !landscape.lines()[0].paint.as_ref().unwrap().opposite,
         "landscape flips the source duet side"
     );
     assert_eq!(
@@ -334,7 +334,7 @@ fn spicy_tail_keeps_reveal_through_lead_end_and_overlapping_next_main() {
             )
             .unwrap();
             track.prepare(time).unwrap();
-            let window = crate::window(&track.lines, time);
+            let window = crate::window(track.lines(), time);
             assert_eq!(window.focus, if time < 8000.0 { 0 } else { 1 });
             assert_eq!(
                 window.active(),
@@ -372,7 +372,7 @@ fn spicy_tail_keeps_reveal_through_lead_end_and_overlapping_next_main() {
             track.frame_appearance(time, scroll, &[], &state, &mut animated, effect);
             // Change only this BG's reveal. The actual encoded drawing must
             // consume it after the lead ends, including a cold seek into overlap.
-            state.rows[0].as_mut().unwrap().voices[2].words[0]
+            state.rows.get_mut(&0).unwrap().voices[2].words[0]
                 .motion
                 .gradient = -0.2;
             let mut unrevealed = vello::Scene::new();
@@ -426,7 +426,7 @@ fn background_voices_fill_and_move_with_their_own_timings() {
     let row = &track.cached[0];
     assert_eq!(row.voices.len(), 3);
     for (index, voice) in row.voices.iter().enumerate() {
-        let source = track.lines[0].voice(index).unwrap();
+        let source = track.lines()[0].voice(index).unwrap();
         assert_eq!(voice.words.len(), source.words.len());
         assert_eq!(voice.words[0].start, source.words[0].start);
         assert_eq!(
@@ -437,10 +437,10 @@ fn background_voices_fill_and_move_with_their_own_timings() {
     }
     // The package stays active through the background tail, exactly like Skia's
     // `endTimeByIndex` presentation window.
-    let window = crate::window(&track.lines, 6000.0);
+    let window = crate::window(track.lines(), 6000.0);
     assert_eq!(window.active(), Some((0, 0)));
     // The background voice's own interval drives its settled alpha, not the lead.
-    assert_eq!(track.lines[0].backgrounds[1].interval(), (4500.0, 8000.0));
+    assert_eq!(track.lines()[0].backgrounds[1].interval(), (4500.0, 8000.0));
     let mut state = AppearanceState::default();
     let mut scene = vello::Scene::new();
     state.prepare(&track, 6000.0, 12000.0);

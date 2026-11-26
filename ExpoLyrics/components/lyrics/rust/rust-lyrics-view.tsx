@@ -108,7 +108,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const native = useRef<NativeRef | null>(null);
   const mounted = useRef(true);
   const sequence = useRef(0);
-  const visual = useRef<(VisualAnchor & { generation: number }) | null>(null);
+  const visual = useRef<(VisualAnchor & { generation: number; surfaceEpoch: number; style: string }) | null>(null);
   const work = useRef({ renders: 0, anchors: 0, anchorMs: 0 });
   work.current.renders++;
   const [surfaceEpoch, setSurfaceEpoch] = useState(0);
@@ -211,9 +211,14 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       const positionMs = Math.max(0, Math.min(demoDurationMs, previewPositionMs ?? projected));
       next = { positionMs, nativeMs: api.monotonicMs(), playing: demoPlaying && previewPositionMs == null && positionMs < demoDurationMs, snap: true };
     } else {
-      const previous = visual.current?.generation === revision.generation ? visual.current : null;
+      const prior = visual.current;
+      // A same-track AMLL packet refresh can carry an in-flight Rust return.
+      // Keep the clock history so only a playback discontinuity requests a snap.
+      const previous = prior?.surfaceEpoch === surfaceEpoch &&
+        (prior.generation === revision.generation || (prior.style === 'amll' && style === 'amll'))
+        ? prior : null;
       const live = nextVisualAnchor(state, started, api.monotonicMs(), rate, previous, previewPositionMs);
-      visual.current = { ...live, generation: revision.generation };
+      visual.current = { ...live, generation: revision.generation, surfaceEpoch, style };
       next = live;
     }
     const { positionMs, nativeMs, playing, snap } = next;
@@ -224,7 +229,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       commandFailed(error);
     });
     work.current.anchorMs = performance.now() - started;
-  }, [api, commandFailed, demoDurationMs, demoPlayback, demoPlaying, isDemo, payload.error, previewPositionMs, rate, revision.generation, surfaceEpoch, trackId]);
+  }, [api, commandFailed, demoDurationMs, demoPlayback, demoPlaying, isDemo, payload.error, previewPositionMs, rate, revision.generation, style, surfaceEpoch, trackId]);
   useEffect(() => {
     if (showStaticLyrics) return;
     sendAnchor();
