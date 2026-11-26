@@ -14,6 +14,14 @@ import type {
 } from "@/types/bridge";
 import { isValidBridgeKey, parseBridgeWebSocketUrl } from "@/lib/network";
 import { validateInboundBridgePacket } from "@/lib/bridge-validation";
+import {
+  cancelPlaybackCommands,
+  playbackObservationEpoch,
+  refreshPlaybackCommands,
+  registerPlaybackCommandTransport,
+  submitPlaybackCommand,
+} from "@/lib/optimistic-playback";
+import type { PlaybackCommand, PlaybackCommandResult, PlaybackObservation } from "@/lib/playback-command-queue";
 
 type BridgeClientOptions = {
   onTrackChange?: (packet: PlaybackPacket) => void;
@@ -33,6 +41,7 @@ const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_JITTER_RATIO = 0.2;
 const TRACK_CHANGE_REFETCH_DELAY_MS = 1_000;
 const AUTH_TIMEOUT_MS = 10_000;
+const PLAYBACK_UPDATE_RESTRICTIONS = { pause: true, resume: true, next: true, previous: true, seek: true, resync: true };
 
 class BridgeClient {
   private vaultRequests = new Map<string, {
@@ -51,6 +60,18 @@ class BridgeClient {
   private pendingLyricsRefetch = false;
   private pendingArtworkRefetch = false;
   private authenticated = false;
+  private playbackObservation?: PlaybackObservation | null;
+  private playbackTarget?: string;
+  private supportsDesiredPlayback = false;
+  private playbackUpdateRequired = false;
+  private relaySeek?: boolean;
+  private supportsGuardedSeek = false;
+  private playbackClock = -Infinity;
+  private playbackRevision = 0;
+  private playbackSocketGeneration = 0;
+  private playbackTargetScope?: string;
+  private destination?: { serverUrl: string; handshakeKey: string };
+  private playbackAuthRejected = false;
   private gifRequests = new Map<
     string,
     {
@@ -69,6 +90,24 @@ class BridgeClient {
 
   constructor(options: BridgeClientOptions = {}) {
     this.options = options;
+    registerPlaybackCommandTransport('desktop', {
+      read: () => {
+        const { serverUrl, handshakeKey } = usePlaybackStore.getState();
+        const current = serverUrl === this.destination?.serverUrl && handshakeKey === this.destination?.handshakeKey;
+        return current && this.isAuthenticated()
+          ? { ready: !this.playbackUpdateRequired, observation: this.playbackObservation, targetId: this.playbackTargetScope,
+            blocked: this.playbackUpdateRequired ? PLAYBACK_UPDATE_RESTRICTIONS :
+              this.playbackObservation === undefined ? undefined : { seek: !this.canSeek() } }
+          : { ready: false };
+      },
+      canQueue: () => {
+        const { serverUrl, handshakeKey } = usePlaybackStore.getState();
+        const sameDestination = serverUrl === this.destination?.serverUrl && handshakeKey === this.destination?.handshakeKey;
+        return !!parseBridgeWebSocketUrl(serverUrl) && isValidBridgeKey(handshakeKey) &&
+          (!sameDestination || !this.playbackAuthRejected);
+      },
+      send: (command, observation, expiresAt) => this.sendPlaybackCommand(command, observation, expiresAt),
+    });
   }
 
   setOptions(options: BridgeClientOptions) {
@@ -92,13 +131,20 @@ class BridgeClient {
         .setErrorMessage("Scan the desktop pairing QR or enter its bridge key.");
       return;
     }
+    if (serverUrl !== this.destination?.serverUrl || handshakeKey !== this.destination?.handshakeKey) {
+      this.playbackAuthRejected = false;
+      this.playbackClock = -Infinity;
+    }
     this.cleanupSocket();
+    this.destination = { serverUrl, handshakeKey };
     usePlaybackStore.getState().setConnectionStatus("connecting");
 
     this.authenticated = false;
     const ws = new WebSocket(safeServerUrl);
     this.ws = ws;
     const alive = () => this.ws === ws;
+    const socketGeneration = ++this.playbackSocketGeneration;
+    let firstLegacyClock: number | undefined;
 
     ws.onopen = () => {
       if (!alive()) return;
@@ -128,10 +174,15 @@ class BridgeClient {
           this.clearAuthTimer();
           if (packet.ok !== true) {
             this.authenticated = false;
+            this.playbackAuthRejected = true;
+            refreshPlaybackCommands();
             this.ws?.close(1008, "Bridge authentication failed.");
             return;
           }
           this.authenticated = true;
+          this.relaySeek = packet.role === 'client' ? packet.guardedSeek === true : undefined;
+          this.playbackAuthRejected = false;
+          refreshPlaybackCommands();
           usePlaybackStore.getState().setConnectionStatus("connected");
           startPlaybackClock();
           this.requestLyricsRefetch();
@@ -168,10 +219,49 @@ class BridgeClient {
         if (Math.random() < packetDropRate) {
           return;
         }
+        const receiptEpoch = playbackObservationEpoch();
         const applyPacket = () => {
           if (!alive() || !this.authenticated) return;
           const state = usePlaybackStore.getState();
           const result = state.ingestPacket(packet, "desktop");
+          const clock = packet.capturedAtMs ?? packet.timestamp;
+          const legacy = packet.controlSnapshot === undefined;
+          // Older bridges do not label their relay join replay. Wait for
+          // another advancing frame before granting legacy dispatch authority.
+          if (legacy && !packet.playbackCached && result.accepted && Number.isFinite(clock)) firstLegacyClock ??= clock;
+          const sourceObserved = !packet.playbackCached &&
+            (packet.controlSnapshot === true || (legacy && firstLegacyClock !== undefined && clock > firstLegacyClock));
+          // Source loss can come in the same desktop clock tick as the last
+          // active read. Revoke authority even when those timestamps tie.
+          const becameIdle = packet.controlSnapshot === true && !packet.trackId && !!this.playbackObservation;
+          const windowsNative = packet.playbackSource === 'windows-media-session-native';
+          const windowsSession = windowsNative && packet.playbackSessionId;
+          const newWindowsSession = windowsSession && windowsSession !== this.playbackObservation?.sessionId;
+          if (sourceObserved && result.accepted && receiptEpoch === playbackObservationEpoch() &&
+              Number.isFinite(clock) && (clock > this.playbackClock ||
+                ((becameIdle || newWindowsSession) && clock === this.playbackClock))) {
+            this.playbackClock = clock;
+            this.playbackUpdateRequired = packet.scopedPlayback === false ||
+              (windowsNative && !legacy && (!windowsSession ||
+                (packet.scopedPlayback === undefined && packet.guardedSeek !== true)));
+            this.supportsDesiredPlayback = !this.playbackUpdateRequired && (packet.scopedPlayback === true || !legacy);
+            this.supportsGuardedSeek = !this.playbackUpdateRequired && packet.guardedSeek === true && this.relaySeek !== false;
+            this.playbackTarget = typeof packet.activeDeviceId === 'string' && packet.activeDeviceId ? packet.activeDeviceId : undefined;
+            this.playbackTargetScope = !packet.trackId ? 'idle' :
+              this.playbackUpdateRequired ? 'windows-update-required' :
+              windowsSession ? `windows-session:${windowsSession}` :
+              this.playbackTarget ? `device:${this.playbackTarget}` : `unidentified:${socketGeneration}:${receiptEpoch}`;
+            this.playbackObservation = packet.trackId ? {
+              revision: ++this.playbackRevision,
+              trackId: packet.trackId,
+              sessionId: typeof packet.playbackSessionId === 'string' ? packet.playbackSessionId : undefined,
+              playing: packet.isPlaying,
+              positionMs: packet.positionMs,
+              durationMs: packet.durationMs,
+              observedAt: performance.now(),
+            } : null;
+            refreshPlaybackCommands();
+          }
           if (result.trackChanged) {
             state.clearLyrics();
             state.setLyricsStatusMessage("Waiting for desktop lyrics...");
@@ -215,20 +305,22 @@ class BridgeClient {
     };
   }
 
-  disconnect() {
+  disconnect(preservePlaybackIntents = false) {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.reconnectAttempt = 0;
     this.cleanupSocket();
+    if (!preservePlaybackIntents) cancelPlaybackCommands('desktop');
     stopPlaybackClock();
     usePlaybackStore.getState().setConnectionStatus("disconnected");
   }
 
   reconnectNow() {
     this.reconnectAttempt = 0;
-    this.disconnect();
+    this.disconnect(true);
+    this.playbackAuthRejected = false;
     this.connect();
   }
 
@@ -269,44 +361,50 @@ class BridgeClient {
     this.pendingArtworkRefetch = true;
   }
 
-  togglePlayPause() {
-    const ws = this.getAuthenticatedSocket();
-    if (ws) {
-      ws.send(JSON.stringify({ type: "playback:playPause" }));
-    }
-  }
+  togglePlayPause() { this.submitDesktopCommand('toggle'); }
 
-  resyncPlayback() {
-    const ws = this.getAuthenticatedSocket();
-    if (ws) {
-      ws.send(JSON.stringify({ type: "playback:resync" }));
-    }
-  }
+  resyncPlayback() { this.submitDesktopCommand({ type: 'resync' }); }
 
-  skipNext() {
-    const ws = this.getAuthenticatedSocket();
-    if (ws) {
-      ws.send(JSON.stringify({ type: "playback:next" }));
-    }
-  }
+  skipNext() { this.submitDesktopCommand({ type: 'next' }); }
 
-  skipPrevious() {
-    const ws = this.getAuthenticatedSocket();
-    if (ws) {
-      ws.send(JSON.stringify({ type: "playback:previous" }));
-    }
-  }
+  skipPrevious() { this.submitDesktopCommand({ type: 'previous' }); }
 
   seekTo(positionMs: number, _currentPositionMs = 0) {
+    this.submitDesktopCommand({ type: 'seek', positionMs });
+  }
+
+  private submitDesktopCommand(command: PlaybackCommand | 'toggle') {
+    if (usePlaybackStore.getState().playbackMode === 'desktop') submitPlaybackCommand(command);
+  }
+
+  private canSeek() {
+    return !this.playbackUpdateRequired && (this.supportsGuardedSeek || !this.supportsDesiredPlayback);
+  }
+
+  private sendPlaybackCommand(command: PlaybackCommand, observation: PlaybackObservation, expiresAt: number): PlaybackCommandResult {
     const ws = this.getAuthenticatedSocket();
-    if (ws) {
-      ws.send(
-        JSON.stringify({
-          type: "playback:seek",
-          positionMs: Math.max(0, Math.floor(Number(positionMs) || 0)),
-        }),
-      );
-    }
+    const { serverUrl, handshakeKey } = usePlaybackStore.getState();
+    if (!ws || this.playbackUpdateRequired || performance.now() >= expiresAt || this.playbackObservation?.revision !== observation.revision ||
+        serverUrl !== this.destination?.serverUrl || handshakeKey !== this.destination?.handshakeKey) return 'rejected';
+    if (command.type === 'seek' && !this.canSeek()) return 'rejected';
+    const packet = command.type === 'play' ? {
+      type: 'playback:playPause',
+      ...(this.supportsDesiredPlayback && { desiredPlaying: command.playing }),
+    } :
+      command.type === 'seek' ? {
+        type: this.supportsGuardedSeek ? 'playback:seek:guarded' : 'playback:seek', positionMs: command.positionMs,
+      } :
+      { type: `playback:${command.type}` };
+    const expectedPlayback = this.supportsDesiredPlayback || this.supportsGuardedSeek ? {
+      deviceId: this.playbackTarget,
+      sessionId: observation.sessionId,
+      trackId: observation.trackId,
+    } : undefined;
+    // Map the mobile deadline to the desktop clock using the same observed
+    // packet. Transit time on that observation makes this bound conservative.
+    const expiresAtMs = Math.floor(this.playbackClock + expiresAt - observation.observedAt);
+    ws.send(JSON.stringify({ ...packet, expectedPlayback, expiresAtMs }));
+    return 'sent';
   }
 
   requestShareGif(
@@ -444,6 +542,14 @@ class BridgeClient {
     this.rejectAllGifRequests("Bridge disconnected during GIF generation.");
     this.rejectPendingVaultSave("Bridge disconnected during vault save.");
     this.authenticated = false;
+    this.playbackObservation = undefined;
+    this.playbackTarget = undefined;
+    this.playbackTargetScope = undefined;
+    this.supportsDesiredPlayback = false;
+    this.playbackUpdateRequired = false;
+    this.supportsGuardedSeek = false;
+    this.relaySeek = undefined;
+    refreshPlaybackCommands();
     this.clearAuthTimer();
     this.clearTrackChangeRefetchTimer();
     if (this.ws) {

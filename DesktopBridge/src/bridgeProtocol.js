@@ -17,6 +17,7 @@ const CLIENT_TYPES = new Set([
   "playback:next",
   "playback:previous",
   "playback:seek",
+  "playback:seek:guarded",
 ]);
 
 const DESKTOP_TYPES = new Set(["playback", "lyrics", "share:gif:result", "vault:save:result", "vault:list:result", "vault:get:result"]);
@@ -58,8 +59,33 @@ function sanitizeClientPacket(packet) {
     }
     return { type: packet.type, requestId: packet.requestId, query: typeof packet.query === "string" ? packet.query.slice(0, 200) : "", offset: Math.max(0, Math.floor(Number(packet.offset) || 0)) };
   }
-  if (packet.type === "playback:seek") {
-    return { type: packet.type, positionMs: Math.max(0, Math.floor(Number(packet.positionMs) || 0)) };
+  if (packet.type.startsWith("playback:")) {
+    const safe = { type: packet.type };
+    if (packet.expiresAtMs !== undefined) {
+      if (!Number.isSafeInteger(packet.expiresAtMs) || packet.expiresAtMs < 0) return null;
+      safe.expiresAtMs = packet.expiresAtMs;
+    }
+    if (packet.expectedPlayback !== undefined) {
+      const expected = packet.expectedPlayback;
+      if (!expected || typeof expected !== "object" || Array.isArray(expected)) return null;
+      safe.expectedPlayback = {};
+      for (const key of ["deviceId", "sessionId", "trackId"]) {
+        const value = expected[key];
+        if (value === undefined) continue;
+        if (typeof value !== "string" || !value || value.length > 512) return null;
+        safe.expectedPlayback[key] = value;
+      }
+    }
+    if (packet.type === "playback:playPause" && packet.desiredPlaying !== undefined) {
+      if (typeof packet.desiredPlaying !== "boolean") return null;
+      safe.desiredPlaying = packet.desiredPlaying;
+    }
+    if (packet.type === "playback:seek:guarded" && !safe.expectedPlayback?.trackId) return null;
+    if (packet.type === "playback:seek" || packet.type === "playback:seek:guarded") {
+      const position = Number(packet.positionMs);
+      safe.positionMs = Number.isFinite(position) ? Math.max(0, Math.floor(position)) : 0;
+    }
+    return safe;
   }
   return packet;
 }

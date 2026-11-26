@@ -27,9 +27,10 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { selectionAsync } from 'expo-haptics';
 
-import { usePlaybackTimelineClock, type PreviewPlaybackAnchor } from './use-playback-timeline-clock';
+import { usePlaybackTimelineClock, type PreviewPlaybackSource } from './use-playback-timeline-clock';
 import type { PlayerTourStep } from '@/store/player-tour-store';
 import type { PlaybackMode } from '@/lib/playback-source';
+import type { PlaybackCommandView } from '@/lib/playback-command-queue';
 import { hasLyricsTranslation } from '@/lib/lyrics-timing';
 
 const ReanimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
@@ -63,6 +64,7 @@ type PlaybackControlsProps = {
   nextDisabled?: boolean;
   playPauseDisabled?: boolean;
   seekDisabled?: boolean;
+  pendingCommands?: PlaybackCommandView;
   isPlaying: boolean;
   durationMs: number;
   shareSelectionCount?: number;
@@ -76,7 +78,7 @@ type PlaybackControlsProps = {
   onPlayPauseResync?: () => void;
   onNext: () => void;
   onPrevious: () => void;
-  onSeek: (positionMs: number) => void;
+  onSeek: (positionMs: number, expectedSeekEpoch?: number | null) => void;
   onRequestTranslate?: () => void;
   translationLoading?: boolean;
   autoHidePlaybackControls?: boolean;
@@ -90,13 +92,14 @@ type PlaybackControlsProps = {
   controlsProgress?: SharedValue<number>;
   controlsCoverage?: SharedValue<{ top: number; bottom: number; originY: number }>;
   layout?: PlaybackControlsLayout;
-  previewPlayback?: PreviewPlaybackAnchor;
+  previewPlaybackSource?: PreviewPlaybackSource;
   tourStep?: PlayerTourStep;
   previewTranslated?: boolean;
 };
 
 type TransportButtonProps = {
   disabled?: boolean;
+  pending?: boolean;
   accessibilityLabel: string;
   onPress: () => void;
   onLongPress?: () => void;
@@ -109,6 +112,7 @@ type TransportButtonProps = {
 
 function TransportButton({
   disabled = false,
+  pending = false,
   accessibilityLabel,
   onPress,
   onLongPress,
@@ -213,7 +217,7 @@ function TransportButton({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       disabled={disabled}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, busy: pending }}
       style={{ opacity: disabled ? 0.4 : 1 }}
       onPress={handlePress}
       onLongPress={onLongPress ? handleLongPress : undefined}
@@ -242,6 +246,7 @@ function TransportButton({
           style={[styles.transportButtonHalo, haloStyle]}
         />
         {children}
+        {pending ? <View pointerEvents="none" style={styles.transportPendingDot} /> : null}
       </Reanimated.View>
     </Pressable>
   );
@@ -270,6 +275,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   nextDisabled = false,
   playPauseDisabled = false,
   seekDisabled = false,
+  pendingCommands,
   isPlaying,
   durationMs,
   shareSelectionCount: _shareSelectionCount,
@@ -297,7 +303,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   controlsProgress,
   controlsCoverage,
   layout = 'default',
-  previewPlayback,
+  previewPlaybackSource,
   tourStep,
   previewTranslated,
 }: PlaybackControlsProps) {
@@ -525,7 +531,9 @@ onPressIn={onUserInteraction}
         style={[{ gap: isOverlay ? 2 : 10 }, timelineRevealStyle]}>
       <PlaybackTimeline
         controlsDisabled={controlsDisabled || seekDisabled}
-        previewPlayback={previewPlayback}
+        pending={pendingCommands?.seekPending}
+        previewPlaybackSource={previewPlaybackSource}
+        seekEpoch={pendingCommands?.seekEpoch ?? null}
         durationMs={durationMs}
         onScrubPreview={onScrubPreview}
         onSeek={onSeek}
@@ -541,6 +549,7 @@ onPressIn={onUserInteraction}
         style={[styles.controlsRow, isOverlay && styles.controlsRowOverlay, transportRevealStyle]}>
         <TransportButton
           disabled={controlsDisabled || previousDisabled}
+          pending={pendingCommands?.previousPending}
           accessibilityLabel="Previous track"
           onPress={onPrevious}
           onUserInteraction={onUserInteraction}
@@ -555,6 +564,7 @@ onPressIn={onUserInteraction}
 
         <TransportButton
           disabled={controlsDisabled || playPauseDisabled}
+          pending={pendingCommands?.playPending}
           accessibilityLabel={isPlaying ? 'Pause playback' : 'Play music'}
           onPress={onPlayPause}
           onLongPress={
@@ -594,6 +604,7 @@ onPressIn={onUserInteraction}
 
         <TransportButton
           disabled={controlsDisabled || nextDisabled}
+          pending={pendingCommands?.nextPending}
           accessibilityLabel="Next track"
           onPress={onNext}
           onUserInteraction={onUserInteraction}
@@ -636,6 +647,7 @@ onPressIn={onUserInteraction}
 
 const PlaybackTimeline = memo(function PlaybackTimeline({
   controlsDisabled = false,
+  pending = false,
   durationMs,
   onScrubPreview,
   onSeek,
@@ -643,25 +655,29 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   interactionAllowed,
   interactionCoverage,
   compact = false,
-  previewPlayback,
+  previewPlaybackSource,
+  seekEpoch,
 }: Pick<
   PlaybackControlsProps,
-  'controlsDisabled' | 'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlayback'
+  'controlsDisabled' | 'durationMs' | 'onScrubPreview' | 'onSeek' | 'onUserInteraction' | 'previewPlaybackSource'
 > & {
+  pending?: boolean;
+  seekEpoch: number | null;
   interactionAllowed?: SharedValue<boolean>;
   interactionCoverage?: SharedValue<{ top: number; bottom: number; originY: number }>;
   compact?: boolean;
 }) {
   const [trackWidth, setTrackWidth] = useState(1);
   const [isScrubbing, setIsScrubbing] = useState(false);
-  const scrubValueRef = useRef(0);
   const scrubProgress = useSharedValue(0);
+  const scrubEpoch = useSharedValue<number | null>(null);
   const trackScaleY = useSharedValue(1);
   const lastScrubJsCallAt = useSharedValue(0);
   const isScrubbingShared = useSharedValue(false);
   const pendingSeekPositionMsShared = useSharedValue<number | null>(null);
   const maxDuration = Math.max(1, durationMs || 1);
-  const playbackPositionShared = usePlaybackTimelineClock(maxDuration, previewPlayback);
+  const { position: playbackPositionShared, sync: syncTimelineClock } =
+    usePlaybackTimelineClock(maxDuration, previewPlaybackSource);
 
   useEffect(() => {
     if (!controlsDisabled) return;
@@ -685,7 +701,6 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
 
   const flushScrubPreview = useCallback(
     (ratio: number) => {
-      scrubValueRef.current = ratio;
       onScrubPreview?.(ratio * maxDuration);
     },
     [maxDuration, onScrubPreview],
@@ -704,22 +719,17 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
   }, [isScrubbing, onUserInteraction]);
 
   const finishScrub = useCallback(
-    (explicitRatio?: number) => {
+    (seekPositionMs: number, startedEpoch: number | null) => {
       if (controlsDisabled) { setIsScrubbing(false); pendingSeekPositionMsShared.value = null; onScrubPreview?.(null); return; }
       onUserInteraction?.();
-      if (explicitRatio !== undefined) {
-        scrubValueRef.current = explicitRatio;
-      }
       setIsScrubbing(false);
-      const seekPositionMs = scrubValueRef.current * maxDuration;
-      onSeek(seekPositionMs);
-      // The host updates the playback anchor synchronously in onSeek. The UI
-      // clock has now accepted it, so release the temporary gesture hold instead
-      // of freezing the thumb for another 1.2s while playback continues.
+      onSeek(seekPositionMs, startedEpoch);
+      // Read the published anchor before releasing the UI-thread hold.
+      syncTimelineClock();
       pendingSeekPositionMsShared.value = null;
       onScrubPreview?.(null);
     },
-    [controlsDisabled, maxDuration, onScrubPreview, onSeek, onUserInteraction, pendingSeekPositionMsShared],
+    [controlsDisabled, onScrubPreview, onSeek, onUserInteraction, pendingSeekPositionMsShared, syncTimelineClock],
   );
 
   const cancelScrub = useCallback(() => {
@@ -747,6 +757,7 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
             Math.min(1, event.x / Math.max(1, trackWidth)),
           );
           isScrubbingShared.value = true;
+          scrubEpoch.value = seekEpoch;
           scrubProgress.value = ratio;
           trackScaleY.value = 1.65;
           lastScrubJsCallAt.value = Date.now();
@@ -774,9 +785,10 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
             // Commit the release coordinate, even when the last JS preview
             // was throttled. Hold here until JS installs the new playback anchor.
             const ratio = Math.max(0, Math.min(1, event.x / Math.max(1, trackWidth)));
-            pendingSeekPositionMsShared.value = ratio * maxDuration;
+            const positionMs = ratio * maxDuration;
+            pendingSeekPositionMsShared.value = positionMs;
             isScrubbingShared.value = false;
-            runOnJS(finishScrub)(ratio);
+            runOnJS(finishScrub)(positionMs, scrubEpoch.value);
           } else {
             isScrubbingShared.value = false;
             runOnJS(cancelScrub)();
@@ -794,7 +806,9 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
       maxDuration,
       onUserInteraction,
       pendingSeekPositionMsShared,
+      scrubEpoch,
       scrubProgress,
+      seekEpoch,
       trackScaleY,
       trackWidth,
     ],
@@ -827,14 +841,16 @@ const PlaybackTimeline = memo(function PlaybackTimeline({
     <>
       <GestureDetector gesture={scrubGesture}>
         <View
-          accessibilityState={{ disabled: controlsDisabled }}
+          accessible
+          accessibilityLabel="Playback position"
+          accessibilityState={{ disabled: controlsDisabled, busy: pending }}
           style={[styles.timelineTouchTarget, controlsDisabled && { opacity: 0.4 }]}
           onLayout={(event) => {
             setTrackWidth(Math.max(1, event.nativeEvent.layout.width));
           }}>
           <Reanimated.View style={[styles.timelineTrack, animatedTrackStyle]}>
             <Reanimated.View
-              style={[styles.timelineFill, animatedFillStyle]}
+              style={[styles.timelineFill, pending && styles.timelineFillPending, animatedFillStyle]}
             />
           </Reanimated.View>
         </View>
@@ -927,6 +943,17 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.95)',
+  },
+  timelineFillPending: {
+    opacity: 0.64,
+  },
+  transportPendingDot: {
+    position: 'absolute',
+    bottom: 0,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.72)',
   },
   timeRow: {
     flexDirection: 'row',

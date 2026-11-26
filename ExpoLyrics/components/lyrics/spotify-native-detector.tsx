@@ -5,7 +5,11 @@ import { ActivityIndicator, Alert, AppState, Button, Platform, Share, StyleSheet
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { router } from 'expo-router';
-import { SpotifyDetector } from '@/lib/spotify-detector/client';
+import { SpotifyControlRejectedError, SpotifyDetector, SpotifyPlaybackUnavailableError } from '@/lib/spotify-detector/client';
+import {
+  registerPlaybackCommandTransport, schedulePlaybackCommandRefresh, submitPlaybackCommand,
+} from '@/lib/optimistic-playback';
+import type { PlaybackCommand } from '@/lib/playback-command-queue';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
 import { logDevelopmentLifecycle, logDevelopmentTiming } from '@/lib/spotify-detector/development-timing-log';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
@@ -13,7 +17,7 @@ import { clearTimingCapture, startTimingCapture, timingSnapshot } from '@/lib/sp
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
   isAllowedSpotifyWebViewNavigation, isTrustedSpotifyWebViewMessageUrl,
-  makeBrowserCommandScript, parseBrowserEvent, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST, type BrowserCommand } from '@/lib/spotify-browser';
+  makeBrowserCommandScript, parseBrowserEvent, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST } from '@/lib/spotify-browser';
 import { registerSpotifyPlayerActions } from '@/lib/spotify-player-actions';
 import { saveMobileLyricsSettings } from '@/lib/mobile-lyrics-settings';
 import { refreshLyricsForCurrentTrack } from '@/lib/lyrics-sync';
@@ -64,7 +68,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const callbacks = useRef({ sample: (_s: Sample) => {}, status: (_s: string) => {}, sessionNeeded: (_id: number) => {}, sessionFinished: (_id: number) => {}, authenticated: (_token: string, _expires: number) => {} });
   const detectorRef = useRef<SpotifyDetector | null>(null);
   if (!detectorRef.current) detectorRef.current = new SpotifyDetector({
-    health: health => useSpotifyConnectionStore.setState({ health }),
+    health: health => {
+      useSpotifyConnectionStore.setState({ health });
+      schedulePlaybackCommandRefresh();
+    },
     sample: s => callbacks.current.sample(s), status: s => callbacks.current.status(s),
     sessionNeeded: id => callbacks.current.sessionNeeded(id), sessionFinished: id => callbacks.current.sessionFinished(id), authenticated: (t, e) => callbacks.current.authenticated(t, e),
     ready: () => {},
@@ -150,7 +157,6 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       });
     }
   };
-  const publishRef = useRef(publish); publishRef.current = publish;
   const remount = useCallback(() => {
     metadataAttempts.current.clear();
     warmDocument.current = null;
@@ -210,30 +216,13 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       { text: 'Clear', style: 'destructive', onPress: clearTimingCapture },
     ]);
   }, []);
-  const sendCommand = useCallback((command: BrowserCommand) => {
+  const sendCommand = useCallback((command: PlaybackCommand | 'toggle') => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }
-    if (!['toggle', 'previous', 'next', 'seek'].includes(command.type) || !detector.health.controlsEnabled) return;
-    const h = detector.health;
-    if (h.allowed) {
-      const isPlaying = lastSample.current?.playing ?? false;
-      if (command.type === 'toggle' && (isPlaying ? !h.allowed.pause : !h.allowed.resume)) return;
-      if (command.type === 'previous' && !h.allowed.previous) return;
-      if (command.type === 'next' && !h.allowed.next) return;
-      if (command.type === 'seek' && !h.allowed.seek) return;
-    }
-    void detector.control(command as { type: 'toggle' | 'previous' | 'next' | 'seek'; positionMs?: number }).catch(error => {
-      if (!canIngest()) return;
-      const message = error instanceof Error ? error.message : 'Spotify command failed.';
-      diagnostics.current.status = message; setStatus(message);
-      // The persistent strip owns unavailable/unknown feedback; repeated taps
-      // do not stack dialogs. Restore a refused optimistic seek from observation.
-      if (command.type === 'seek' && lastSample.current) publishRef.current(lastSample.current);
-
-    });
-  }, [canIngest, detector, openBrowser]);
+    if (canIngest()) submitPlaybackCommand(command);
+  }, [canIngest, openBrowser]);
   const resyncPlayback = useCallback(() => { metadataAttempts.current.clear(); detector.refresh(); }, [detector]);
   useImperativeHandle(ref, () => ({ openBrowser, reload: () => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } },
-    togglePlayPause: () => sendCommand({ type: 'toggle' }), resyncPlayback,
+    togglePlayPause: () => sendCommand('toggle'), resyncPlayback,
     skipPrevious: () => sendCommand({ type: 'previous' }), skipNext: () => sendCommand({ type: 'next' }),
     seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }), runDiagnostics,
   }), [detector, openBrowser, remount, resyncPlayback, runDiagnostics, sendCommand]);
@@ -242,6 +231,21 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     mounted.current = true;
     logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
+    const unregisterTransport = registerPlaybackCommandTransport('mobile', {
+      accountVersion: () => detector.playbackAccountVersion,
+      canQueue: () => detector.health.session !== 'denied' && detector.health.session !== 'signInRequired',
+      read: () => canIngest() ? detector.playbackCommandState : { ready: false },
+      requestObservation: () => { if (canIngest()) detector.recheckPlaybackObservation(); },
+      send: async command => {
+        if (command.type === 'resync') return 'rejected';
+        try {
+          await detector.control(command, 'queue');
+          return 'sent';
+        } catch (error) {
+          return error instanceof SpotifyControlRejectedError || error instanceof SpotifyPlaybackUnavailableError ? 'rejected' : 'unknown';
+        }
+      },
+    });
     const unregister = registerSpotifyPlayerActions({
       resolveTrackMetadata: id => canIngest() ? detector.metadata(`spotify:track:${id}`) : undefined,
       open: openBrowser, reload: () => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } }, logout: () => {
@@ -251,7 +255,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
       browserRun.current++; setBrowserGeneration(browserRun.current);
     } });
     return () => {
-      mounted.current = false; unregister(); detector.clear(); enrichmentEpoch.current++;
+      mounted.current = false; unregister(); unregisterTransport(); detector.clear(); enrichmentEpoch.current++;
       if (lyricsTimer.current !== null) clearTimeout(lyricsTimer.current);
       lyricsTimer.current = null;
     };

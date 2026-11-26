@@ -26,6 +26,7 @@ const developmentTiming = diagnosticModule('development-timing-log');
 const timingCalls = [], timingShares = [];
 let controlError, rejectLaunch = false;
 class SpotifyPlaybackUnavailableError extends Error {}
+class SpotifyControlRejectedError extends Error {}
 const captures = [];
 const hooks = [], effects = [], listeners = new Set(), packets = [], injected = [], commands = [], searches = [];
 const scheduled = new Map(), metadataCalls = [];
@@ -73,6 +74,15 @@ const ReactMock = { ...React, forwardRef: fn => fn,
 };
 class Detector {
   enabled = false; clears = 0; health = { controlsEnabled: true, phase: 'ready' };
+  observation = { revision: 1, trackId: 'A', playing: true, positionMs: 1000, durationMs: 60_000, observedAt: 0 };
+  playbackAccountVersion = 0;
+  get playbackCommandState() {
+    return this.health.controlsEnabled ? { ready: true, targetId: 'iphone', observation: this.observation } : { ready: false };
+  }
+  observe(patch) {
+    this.observation = { ...this.observation, revision: this.observation.revision + 1, observedAt: now, ...patch };
+    this.callbacks.health?.(this.health);
+  }
   setActivity() {}
   setReachability() {}
   constructor(callbacks) { this.callbacks = callbacks; instance = this; }
@@ -90,6 +100,32 @@ class Detector {
 }
 const callableStore = state => Object.assign(fn => fn(state), { getState: () => state });
 const AppState = { currentState: 'active', addEventListener(_, fn) { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } };
+const queueExports = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../lib/playback-command-queue.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: queueExports });
+const commandQueue = new queueExports.PlaybackCommandQueue({
+  now: () => now,
+  setTimeout: () => ++nextTimerId,
+  clearTimeout() {},
+});
+let transport;
+const refreshCommands = () => {
+  if (transport) commandQueue.update(transport.read());
+};
+const optimisticPlayback = {
+  registerPlaybackCommandTransport(_source, adapter) {
+    transport = adapter;
+    commandQueue.setTransport(adapter, adapter.send);
+    refreshCommands();
+    return () => { transport = undefined; commandQueue.setTransport(undefined); };
+  },
+  schedulePlaybackCommandRefresh: refreshCommands,
+  submitPlaybackCommand(command) {
+    refreshCommands();
+    return command === 'toggle' ? commandQueue.toggle() : commandQueue.enqueue(command);
+  },
+};
 const mocks = {
   '@/store/spotify-connection-store': { useSpotifyConnectionStore: Object.assign(selector => selector({ health: { phase: 'ready' } }), { setState() {} }) },
   '@/lib/spotify-detector/reachability': { subscribeSpotifyReachability: () => () => {} },
@@ -101,7 +137,8 @@ const mocks = {
     StyleSheet: { create: x => x, absoluteFill: {} } },
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, 'react-native-webview': { WebView: 'WebView' },
   'expo-router': { router: { push() {} } },
-  '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
+  '@/lib/optimistic-playback': optimisticPlayback,
+  '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyControlRejectedError, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
   '@/lib/spotify-detector/development-timing-log': developmentTiming,
   '@/lib/spotify-detector/packet': { detectorPacket: s => { publishedSamples.push(s); return ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }); } },
   '@/lib/spotify-detector/timing-diagnostics': { startTimingCapture: () => timingCalls.push('start'), clearTimingCapture: () => timingCalls.push('clear'), timingSnapshot: () => ({ active: false, records: [] }) },
@@ -244,25 +281,47 @@ if (development) {
   assert.deepEqual(timingCalls, []);
   assert.deepEqual(timingShares, []);
 }
+assert.ok(transport, 'the actual component registers its playback transport');
 ref.current.togglePlayPause();
-assert.equal(commands.at(-1).type, 'toggle', 'controls target the native device with the warm browser hidden');
+assert.equal(commands.at(-1).type, 'play', 'the warm, hidden browser delegates controls to native');
+assert.equal(commands.at(-1).playing, false, 'the native command carries the desired play state');
+instance.observe({ playing: false });
+await flush();
 const alertsBeforeFailure = alerts.length;
 controlError = new SpotifyPlaybackUnavailableError('No device');
-ref.current.togglePlayPause(); await Promise.resolve();
+ref.current.togglePlayPause();
+await flush();
+assert.equal(commandQueue.getSnapshot().playPending, false, 'definite rejection clears the pending icon');
 assert.equal(alerts.length, alertsBeforeFailure, 'unavailable controls use persistent health, without modal flood');
 instance.health.controlsEnabled = false;
 const disabledCommands = commands.length;
 for (const action of ['togglePlayPause', 'skipNext', 'skipPrevious']) ref.current[action]();
 ref.current.seekTo(1234);
 assert.equal(commands.length, disabledCommands, 'every imperative native transport path is gated');
-instance.health.controlsEnabled = true;
+assert.equal(commandQueue.getSnapshot().nextPending, true, 'unverified taps still reach the queue');
+assert.equal(commandQueue.getSnapshot().seekPending, true);
 controlError = undefined;
+instance.health.controlsEnabled = true;
+instance.observe({});
+await flush();
+assert.equal(commands.at(-1).type, 'play');
+instance.observe({ playing: true });
+await flush();
+assert.equal(commands.at(-1).type, 'next');
+instance.observe({ trackId: 'B' });
+await flush();
+assert.equal(commands.at(-1).type, 'previous');
+assert.equal(commandQueue.getSnapshot().seekPending, false, 'track change invalidates the queued seek');
+instance.observe({ trackId: 'A' });
+await flush();
 ref.current.openBrowser(); render(); web = find(tree); assert(web, 'browser remains available on demand');
 assert.equal(Boolean(findNode(tree, child => child.type === 'Button' && child.props.title === 'Diagnostics')), development);
 web.props.ref.current = { injectJavaScript: script => injected.push(script) };
 web.props.onMessage({ nativeEvent: { data: '{"type":"ready"}', url: 'https://open.spotify.com/' } });
 assert.equal(JSON.parse(injected.at(-1)).enabled, false, 'browser playback polling is disabled');
-ref.current.togglePlayPause(); assert.equal(commands.at(-1).type, 'toggle', 'mounted browser does not receive transport commands');
+ref.current.togglePlayPause();
+assert.equal(commands.at(-1).type, 'play', 'mounted browser does not receive transport commands');
+instance.observe({ playing: false });
 await flush();
 instance.callbacks.sample({ uri: 'spotify:track:missing-artist', title: 'Unknown track', artist: '', artworkUrl: 'https://i.scdn.co/image/stale', positionMs: 1000 });
 assert.equal(playback.currentTrack.artist, '', 'raw observer may omit artist');

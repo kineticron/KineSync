@@ -4,10 +4,6 @@ const path = require("node:path");
 const { getDotnetExecutable } = require("./dotnetExecutable");
 const { resolvePackagedNativePath } = require("./nativeRuntimePaths");
 
-function escapePowerShellSingleQuotes(value) {
-  return String(value ?? "").replace(/'/g, "''");
-}
-
 const SEEK_HELPER_PROJECT_DIR = path.join(
   __dirname,
   "..",
@@ -23,118 +19,75 @@ const SEEK_HELPER_DLL_PATH = resolvePackagedNativePath(path.join(
 ));
 let seekHelperBuildPromise = null;
 
-function runPowerShell(script, timeoutMs = 6000, useSta = false) {
-  return new Promise((resolve, reject) => {
-    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
-    if (useSta) {
-      args.push("-Sta");
-    }
-    args.push("-Command", script);
-    const child = spawn("powershell.exe", args, {
-      windowsHide: true,
-    });
-
-    let stderr = "";
-    let stdout = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill();
-      reject(new Error(`Playback command timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          stderr.trim() ||
-            stdout.trim() ||
-            `PowerShell exited with code ${code}`,
-        ),
-      );
-    });
-  });
+class PlaybackProcessError extends Error {
+  constructor(message, beforeDispatch) {
+    super(message);
+    this.beforeDispatch = beforeDispatch;
+  }
 }
 
-function runDotnetCommand(args, timeoutMs = 12000) {
+function runPlaybackProcess(executable, args, options, timeoutMs, isPredispatchExit = () => false) {
   return new Promise((resolve, reject) => {
-    const child = spawn(getDotnetExecutable(), args, {
-      // Child processes cannot resolve Electron's app.asar virtual path.
-      // Build commands still run from the project; runtime commands use the
-      // physical unpacked output directory.
-      cwd: args[0] === "build" ? SEEK_HELPER_PROJECT_DIR : path.dirname(SEEK_HELPER_DLL_PATH),
-      windowsHide: true,
-    });
+    let child;
+    try {
+      child = spawn(executable, args, { ...options, windowsHide: true });
+    } catch (error) {
+      reject(new PlaybackProcessError(error.message, true));
+      return;
+    }
+
     let stderr = "";
     let stdout = "";
-    let settled = false;
+    let started = false;
+    let processError;
+    let timedOut = false;
     const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill();
-      reject(new Error(`dotnet command timed out after ${timeoutMs}ms`));
+      timedOut = true;
+      // The process can have dispatched before the timer fired. Retain the
+      // serialized slot until close, even if killing it emits an error.
+      try { child.kill(); } catch { /* Wait for close. */ }
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      if (settled) {
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("spawn", () => { started = true; });
+    child.on("error", (error) => { processError = error; });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new PlaybackProcessError(
+          `${executable} timed out after ${timeoutMs}ms; playback outcome unknown.`, false,
+        ));
         return;
       }
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
+      if (processError) {
+        reject(new PlaybackProcessError(processError.message, !started));
         return;
       }
-      settled = true;
-      clearTimeout(timer);
       if (code === 0) {
         resolve(stdout.trim());
         return;
       }
-      reject(
-        new Error(
-          stderr.trim() || stdout.trim() || `dotnet exited with code ${code}`,
-        ),
-      );
+      const message = stderr.trim() || stdout.trim() || `${executable} exited with code ${code}`;
+      reject(new PlaybackProcessError(message, isPredispatchExit(code, message)));
     });
   });
 }
 
-function ensureSeekHelperBuilt({ force = false } = {}) {
-  if (!force && fs.existsSync(SEEK_HELPER_DLL_PATH)) {
+function runPowerShell(script, timeoutMs = 6000, useSta = false, isPredispatchExit) {
+  const args = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
+  if (useSta) args.push("-Sta");
+  args.push("-Command", script);
+  return runPlaybackProcess("powershell.exe", args, {}, timeoutMs, isPredispatchExit);
+}
+
+function runDotnetCommand(args, timeoutMs, isPredispatchExit) {
+  // Electron's runtime helper lives outside app.asar.
+  const cwd = args[0] === "build" ? SEEK_HELPER_PROJECT_DIR : path.dirname(SEEK_HELPER_DLL_PATH);
+  return runPlaybackProcess(getDotnetExecutable(), args, { cwd }, timeoutMs, isPredispatchExit);
+}
+
+function ensureSeekHelperBuilt() {
+  if (fs.existsSync(SEEK_HELPER_DLL_PATH)) {
     return Promise.resolve();
   }
   if (!seekHelperBuildPromise) {
@@ -154,53 +107,71 @@ function ensureSeekHelperBuilt({ force = false } = {}) {
   });
 }
 
-async function runNativeSeek(targetPositionMs) {
-  const safeTarget = Number.isFinite(targetPositionMs)
-    ? Math.max(0, Math.floor(targetPositionMs))
-    : 0;
+function assertIntentCurrent(expiresAtMs) {
+  if (Date.now() >= expiresAtMs) throw new Error("Playback intent expired before dispatch.");
+}
+
+async function prepareBeforeIntentDeadline(expiresAtMs, prepare) {
+  assertIntentCurrent(expiresAtMs);
+  const controller = new AbortController();
+  const expiration = new Error("Playback intent expired before dispatch.");
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(expiration);
+      controller.abort(expiration);
+    }, Math.max(0, expiresAtMs - Date.now()));
+  });
   try {
-    await ensureSeekHelperBuilt();
-    await runDotnetCommand(
-      [SEEK_HELPER_DLL_PATH, "seek", String(safeTarget)],
-      8000,
-    );
-    return;
-  } catch (dotnetError) {
-    const message =
-      dotnetError instanceof Error ? dotnetError.message : String(dotnetError);
-    const looksLikeOldHelper =
-      message.includes("Usage: spotify-seek-helper <targetPositionMs>") ||
-      message.includes("Unsupported command");
-    if (looksLikeOldHelper) {
-      await ensureSeekHelperBuilt({ force: true });
-      await runDotnetCommand(
-        [SEEK_HELPER_DLL_PATH, "seek", String(safeTarget)],
-        8000,
-      );
-      return;
-    }
-    try {
-      await runPowerShell(buildSessionScript("seek", safeTarget), 8000, true);
-      return;
-    } catch {
-      throw dotnetError;
-    }
+    const result = await Promise.race([deadline, prepare(controller.signal)]);
+    assertIntentCurrent(expiresAtMs);
+    return result;
+  } finally {
+    clearTimeout(timer);
+    // A lookup can settle after expiry before the deadline timer gets to run.
+    if (Date.now() >= expiresAtMs) controller.abort(expiration);
   }
 }
 
-function buildSessionScript(action, positionMs = 0) {
-  const safeAction = escapePowerShellSingleQuotes(action);
-  const safePositionMs = Number.isFinite(positionMs)
-    ? Math.max(0, Math.floor(positionMs))
+async function runNativeSeek(targetPositionMs, expiresAtMs) {
+  const safeTarget = Number.isFinite(targetPositionMs)
+    ? Math.max(0, Math.floor(targetPositionMs))
     : 0;
-  const safePositionTicks = safePositionMs * 10_000;
+  // The shared build may finish for a future intent. Only this wait expires.
+  const helperAvailable = await prepareBeforeIntentDeadline(expiresAtMs, async () => {
+    try {
+      await ensureSeekHelperBuilt();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  assertIntentCurrent(expiresAtMs);
+  if (helperAvailable) {
+    try {
+      await runDotnetCommand(
+        [SEEK_HELPER_DLL_PATH, "seek-before", String(safeTarget), String(expiresAtMs)],
+        8000,
+        (code, message) => code === 2 || (code === 1 && message === "Unsupported command 'seek-before'."),
+      );
+      return;
+    } catch (error) {
+      if (!error.beforeDispatch) throw error;
+    }
+  }
+
+  assertIntentCurrent(expiresAtMs);
+  await runPowerShell(buildLegacySeekScript(safeTarget, expiresAtMs), 8000, true, code => code === 2);
+}
+
+function buildLegacySeekScript(positionMs, expiresAtMs) {
   return `
 $ErrorActionPreference = 'Stop'
 $managerType = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows, ContentType=WindowsRuntime')
-function Wait-WinRtResult($op, $timeoutMs = 2200) {
-  $started = [Environment]::TickCount64
+function Wait-WinRtResult($op, $timeoutMs) {
+  $timer = [Diagnostics.Stopwatch]::StartNew()
   while ([int]$op.Status -eq 0) {
-    if (([Environment]::TickCount64 - $started) -ge $timeoutMs) {
+    if ($timer.ElapsedMilliseconds -ge $timeoutMs) {
       throw 'WinRT operation timeout'
     }
     Start-Sleep -Milliseconds 5
@@ -208,83 +179,25 @@ function Wait-WinRtResult($op, $timeoutMs = 2200) {
   if ([int]$op.Status -ne 1) { throw "WinRT operation failed: $($op.Status)" }
   return $op.GetResults()
 }
-$action = '${safeAction}'
-function Send-MediaKey([byte]$vk) {
-  if (-not ([System.Management.Automation.PSTypeName]'MediaKey.NativeMethods').Type) {
-    Add-Type -Namespace MediaKey -Name NativeMethods -MemberDefinition @'
-      [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
-      public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);
-'@
-  }
-  [MediaKey.NativeMethods]::keybd_event($vk, 0, 0, [UIntPtr]::Zero)
-  Start-Sleep -Milliseconds 30
-  [MediaKey.NativeMethods]::keybd_event($vk, 0, 2, [UIntPtr]::Zero)
-}
-function Get-MediaSession() {
-  if (-not $managerType) {
-    return $null
-  }
+
+try {
+  if (-not $managerType) { throw 'No media session available for seek' }
   $manager = Wait-WinRtResult ($managerType::RequestAsync()) 2500
   $spotifySessions = @($manager.GetSessions() | Where-Object { $_.SourceAppUserModelId -like '*Spotify*' })
-  if ($spotifySessions.Count -gt 0) {
-    return $spotifySessions[0]
-  }
-  return $manager.GetCurrentSession()
-}
-
-if ($action -eq 'toggle') {
-  try {
-    $session = Get-MediaSession
-    if ($session) {
-      $playbackInfo = $session.TryGetPlaybackInfo()
-      if ($playbackInfo -and $playbackInfo.Controls.IsPlayPauseToggleEnabled) {
-        $ok = Wait-WinRtResult ($session.TryTogglePlayPauseAsync()) 2200
-        if (($ok -is [bool]) -and $ok) { exit 0 }
-      }
-    }
-  } catch {}
-  Send-MediaKey 0xB3
-  exit 0
-}
-if ($action -eq 'next') {
-  try {
-    $session = Get-MediaSession
-    if ($session) {
-      $playbackInfo = $session.TryGetPlaybackInfo()
-      if ($playbackInfo -and $playbackInfo.Controls.IsNextEnabled) {
-        $ok = Wait-WinRtResult ($session.TrySkipNextAsync()) 2200
-        if (($ok -is [bool]) -and $ok) { exit 0 }
-      }
-    }
-  } catch {}
-  Send-MediaKey 0xB0
-  exit 0
-}
-if ($action -eq 'previous') {
-  try {
-    $session = Get-MediaSession
-    if ($session) {
-      $playbackInfo = $session.TryGetPlaybackInfo()
-      if ($playbackInfo -and $playbackInfo.Controls.IsPreviousEnabled) {
-        $ok = Wait-WinRtResult ($session.TrySkipPreviousAsync()) 2200
-        if (($ok -is [bool]) -and $ok) { exit 0 }
-      }
-    }
-  } catch {}
-  Send-MediaKey 0xB1
-  exit 0
-}
-if ($action -eq 'seek') {
-  $session = Get-MediaSession
+  $session = if ($spotifySessions.Count -gt 0) { $spotifySessions[0] } else { $manager.GetCurrentSession() }
   if (-not $session) { throw 'No media session available for seek' }
-  $playbackInfo = $session.GetPlaybackInfo()
-  $controls = $playbackInfo.Controls
+  $controls = ($session.GetPlaybackInfo()).Controls
   if (-not $controls.IsPlaybackPositionEnabled) { throw 'Seek is not enabled for current media session' }
-  $ok = Wait-WinRtResult ($session.TryChangePlaybackPositionAsync([UInt64]${safePositionTicks})) 3000
-  if (($ok -is [bool]) -and (-not $ok)) { throw 'Seek command rejected by session' }
-  exit 0
+  if (([DateTimeOffset]::UtcNow).ToUnixTimeMilliseconds() -ge ${expiresAtMs}) {
+    throw 'Playback intent expired before dispatch'
+  }
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 2
 }
-throw 'Unsupported action'
+$ok = Wait-WinRtResult ($session.TryChangePlaybackPositionAsync([Int64]${positionMs * 10000})) 3000
+if (-not $ok) { throw 'Seek command rejected by session' }
+exit 0
 `;
 }
 
@@ -344,15 +257,13 @@ exit 0
 `;
 }
 
-async function seekViaSpotifyApi(targetPositionMs, accessToken) {
-  const safeTarget = Number.isFinite(targetPositionMs)
-    ? Math.max(0, Math.floor(targetPositionMs))
-    : 0;
+async function findSpotifySeekDevice(accessToken, signal, expiresAtMs) {
   let deviceId = "";
 
   try {
     const playerResponse = await fetch("https://api.spotify.com/v1/me/player", {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal,
     });
     if (playerResponse.ok) {
       const state = await playerResponse.json();
@@ -362,11 +273,15 @@ async function seekViaSpotifyApi(targetPositionMs, accessToken) {
     // Fall through to device list lookup.
   }
 
+  // Check the clock as well as the signal in case the deadline timer is still pending.
+  signal.throwIfAborted();
+  assertIntentCurrent(expiresAtMs);
   if (!deviceId) {
     const devicesResponse = await fetch(
       "https://api.spotify.com/v1/me/player/devices",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal,
       },
     );
     if (devicesResponse.ok) {
@@ -383,9 +298,17 @@ async function seekViaSpotifyApi(targetPositionMs, accessToken) {
     }
   }
 
+  return deviceId;
+}
+
+async function seekViaSpotifyApi(safeTarget, accessToken, expiresAtMs) {
+  const deviceId = await prepareBeforeIntentDeadline(
+    expiresAtMs, (signal) => findSpotifySeekDevice(accessToken, signal, expiresAtMs),
+  );
   const query = deviceId
     ? `/seek?position_ms=${safeTarget}&device_id=${encodeURIComponent(deviceId)}`
     : `/seek?position_ms=${safeTarget}`;
+  assertIntentCurrent(expiresAtMs);
   return spotifyApiRequest("PUT", query, accessToken);
 }
 
@@ -423,7 +346,7 @@ async function spotifyApiRequest(method, endpoint, accessToken, body = null) {
   }
 }
 
-function createPlaybackController() {
+function createPlaybackController({ executeWindowsPlayback } = {}) {
   let getSpotifyAccessToken = null;
   const requestedProvider = String(
     process.env.MEDIA_SESSION_PROVIDER || process.platform,
@@ -453,9 +376,98 @@ function createPlaybackController() {
     }
   };
 
-  return {
+  let commandTail = Promise.resolve();
+
+  async function dispatchCommand(packet, getSnapshot, expiresAtMs) {
+    const assertCurrent = () => assertIntentCurrent(expiresAtMs);
+    assertCurrent();
+    const guardedSeek = packet.type === "playback:seek:guarded";
+    const type = guardedSeek ? "playback:seek" : packet.type;
+    if (guardedSeek && !packet.expectedPlayback?.trackId) throw new Error("Guarded seek requires a track.");
+    const expected = packet.expectedPlayback;
+    const checkTarget = () => {
+      const snapshot = getSnapshot();
+      if (expected && (!snapshot?.trackId ||
+          (expected.deviceId && expected.deviceId !== snapshot.activeDeviceId) ||
+          (expected.sessionId && expected.sessionId !== snapshot.playbackSessionId) ||
+          (expected.trackId && expected.trackId !== snapshot.trackId))) {
+        throw new Error("Playback target changed before dispatch.");
+      }
+      return snapshot;
+    };
+    const snapshot = checkTarget();
+    const desired = type === "playback:playPause" && typeof packet.desiredPlaying === "boolean";
+    // Bind scoped API operations to the device that supplied the observation.
+    // Legacy commands keep their established provider and fallback behavior.
+    if ((expected || desired) && snapshot?.playbackSource === "spotify-api") {
+      const deviceId = snapshot.activeDeviceId;
+      if (!deviceId) throw new Error("Spotify did not identify the active playback device.");
+      const token = await getToken();
+      assertCurrent();
+      if (!token) throw new Error("Spotify playback authorization is unavailable.");
+      if (checkTarget()?.activeDeviceId !== deviceId) throw new Error("Playback target changed before dispatch.");
+      const query = `device_id=${encodeURIComponent(deviceId)}`;
+      if (type === "playback:next" || type === "playback:previous") {
+        return spotifyApiRequest("POST", `/${type.slice(9)}?${query}`, token);
+      }
+      if (type === "playback:seek") {
+        return spotifyApiRequest("PUT", `/seek?position_ms=${packet.positionMs}&${query}`, token);
+      }
+      if (desired) return spotifyApiRequest("PUT", `/${packet.desiredPlaying ? "play" : "pause"}?${query}`, token);
+      if (type === "playback:resync" && snapshot.isPlaying) {
+        await spotifyApiRequest("PUT", `/pause?${query}`, token);
+        await delay(RESYNC_PAUSE_MS);
+        checkTarget();
+        return spotifyApiRequest("PUT", `/play?${query}`, token);
+      }
+      if (type === "playback:resync") return;
+    }
+    if (expected && useMpris) {
+      const player = getMprisClient();
+      const deviceId = expected.deviceId;
+      if (type === "playback:seek") return player.seekTo(packet.positionMs, deviceId, expected.sessionId, assertCurrent);
+      if (type === "playback:next") return player.callOnPlayer(deviceId, "Next", [], assertCurrent);
+      if (type === "playback:previous") return player.callOnPlayer(deviceId, "Previous", [], assertCurrent);
+      if (desired) return player.callOnPlayer(deviceId, packet.desiredPlaying ? "Play" : "Pause", [], assertCurrent);
+      if (type === "playback:resync" && snapshot.isPlaying) {
+        await player.callOnPlayer(deviceId, "Pause", [], assertCurrent);
+        await delay(RESYNC_PAUSE_MS);
+        checkTarget();
+        return player.callOnPlayer(deviceId, "Play");
+      }
+      if (type === "playback:resync") return;
+    }
+    if ((expected || desired) && !useMpris) {
+      if (snapshot?.scopedPlayback === false) {
+        throw new Error("Update the Windows media session addon to enable scoped playback commands.");
+      }
+      if (!expected?.sessionId || typeof executeWindowsPlayback !== "function" || (type === "playback:playPause" && !desired)) {
+        throw new Error("Windows scoped playback requires the current native session and an explicit action.");
+      }
+      const action = desired ? (packet.desiredPlaying ? "play" : "pause") : type.slice(9);
+      return executeWindowsPlayback(expected, action, packet.positionMs ?? 0, expiresAtMs);
+    }
+    if (desired) {
+      return getMprisClient().callOnPlayer(undefined, packet.desiredPlaying ? "Play" : "Pause", [], assertCurrent);
+    }
+    switch (type) {
+      case "playback:playPause": return controller.togglePlayPause();
+      case "playback:resync": return controller.resyncPlayback();
+      case "playback:next": return controller.next();
+      case "playback:previous": return controller.previous();
+      case "playback:seek": return controller.seek(packet.positionMs, expiresAtMs);
+    }
+  }
+
+  const controller = {
     setSpotifyAccessTokenGetter(getter) {
       getSpotifyAccessToken = typeof getter === "function" ? getter : null;
+    },
+    executeCommand(packet, getSnapshot) {
+      const expiresAtMs = Math.min(packet.expiresAtMs ?? Infinity, Date.now() + 12_000);
+      const result = commandTail.then(() => dispatchCommand(packet, getSnapshot, expiresAtMs));
+      commandTail = result.catch(() => {});
+      return result;
     },
     async togglePlayPause() {
       if (useMpris) {
@@ -535,22 +547,22 @@ function createPlaybackController() {
       }
       return runPowerShell(buildMediaKeyScript("previous"), 2500);
     },
-    async seek(targetPositionMs) {
+    async seek(targetPositionMs, expiresAtMs = Date.now() + 12_000) {
       const safeTarget = Number.isFinite(targetPositionMs)
         ? Math.max(0, Math.floor(targetPositionMs))
         : 0;
       if (useMpris) {
-        return getMprisClient().seekTo(safeTarget);
+        return getMprisClient().seekTo(safeTarget, undefined, undefined, () => assertIntentCurrent(expiresAtMs));
       }
       let nativeError = null;
       try {
-        return await runNativeSeek(safeTarget);
+        return await runNativeSeek(safeTarget, expiresAtMs);
       } catch (error) {
-        nativeError =
-          error instanceof Error ? error : new Error(String(error || ""));
+        if (!error.beforeDispatch) throw error;
+        nativeError = error;
       }
 
-      const token = await getToken();
+      const token = await prepareBeforeIntentDeadline(expiresAtMs, getToken);
       if (!token) {
         throw new Error(
           `${nativeError.message} Sign in to Spotify in the desktop bridge for API seek fallback.`,
@@ -558,7 +570,7 @@ function createPlaybackController() {
       }
 
       try {
-        return await seekViaSpotifyApi(safeTarget, token);
+        return await seekViaSpotifyApi(safeTarget, token, expiresAtMs);
       } catch (apiError) {
         const apiMessage =
           apiError instanceof Error ? apiError.message : String(apiError);
@@ -566,6 +578,7 @@ function createPlaybackController() {
       }
     },
   };
+  return controller;
 }
 
 module.exports = {

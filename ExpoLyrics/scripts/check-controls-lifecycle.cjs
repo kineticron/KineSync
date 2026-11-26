@@ -55,7 +55,7 @@ function mount(initialAppState = 'active', overrides = {}) {
     isLandscapeRef: ref(state.isLandscape), fullscreenAlbumModeRef: ref(false),
     autoHidePlaybackControlsRef: ref(true), landscapeArtControlsVisibleRef: ref(false),
     CONTROLS_IDLE_TIMEOUT_MS: 2500, CONTROLS_EASE: 'configured cubic', ReanimatedEasing: { linear: 'linear' },
-    nativePlaybackUnavailable: () => false,
+    nativePlaybackBlocked: action => action === 'seek' && state.seekRestricted === true,
     setScrubPreviewPositionMs: value => set('scrubPreviewPositionMs', value),
     setControlsVisible: value => set('controlsVisible', value),
     setControlsInteractive: value => set('controlsInteractive', value),
@@ -244,6 +244,11 @@ assert.equal(discovering.state.scrubPreviewPositionMs, 123);
 assert.equal(discovering.context.controlsTouchActive.current, true);
 assert.equal(discovering.timers.size, 0);
 discovering.unmount();
+const restricted = mount('active', { seekRestricted: true });
+restricted.scrub(123);
+assert.equal(restricted.state.scrubPreviewPositionMs, null, 'the extracted handler blocks restricted seek previews');
+assert.equal(restricted.context.controlsScrubActive.current, false);
+restricted.unmount();
 // Superseded timers cannot hide early after policy reruns or release.
 for (const landscape of [false, true]) {
   const renewed = mount('active', { isLandscape: landscape, landscapeArtControlsVisible: landscape });

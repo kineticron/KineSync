@@ -13,23 +13,41 @@ function visit(node) {
 }
 visit(ast);
 assert.ok(callback);
-for (const connected of [false, true]) for (const position of [0, 2999, 3000, 3001, 120000]) {
-  const calls = [];
-  const context = { nativePlaybackUnavailable: () => false, useCallback: fn => fn, usePlayerTourStore: { getState: () => ({ active: false }) },
-    usePlaybackStore: { getState: () => ({ playbackPosition: position, connectionStatus: connected ? 'connected' : 'disconnected' }) },
-    handleSeek: ms => calls.push(['seek', ms]), bridgeClient: { skipPrevious: () => calls.push(['desktop']) },
-    spotifyBrowserRef: { current: { skipPrevious: () => calls.push(['browser']) } } };
-  vm.runInNewContext(`(${callback})()`, context);
-  assert.deepEqual(calls, position > 3000 ? [['seek', 0]] : [[connected ? 'desktop' : 'browser']],
-    'Previous restarts an ongoing song and only changes tracks near its beginning');
+const { outputText: invokePrevious } = ts.transpileModule(`(${callback})();`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+});
+for (const playbackMode of ['desktop', 'mobile']) {
+  for (const position of [0, 2999, 3000, 3001, 120000]) {
+    for (const previousPending of [false, true]) {
+      const calls = [];
+      const context = {
+        nativePlaybackBlocked: () => false,
+        useCallback: fn => fn,
+        usePlayerTourStore: { getState: () => ({ active: false }) },
+        usePlaybackStore: { getState: () => ({ playbackPosition: position, playbackMode, connectionStatus: 'disconnected' }) },
+        playbackCommands: { getSnapshot: () => ({ previousPending }) },
+        playbackControlPosition: positionMs => positionMs,
+        handleSeek: ms => calls.push(['seek', ms]),
+        bridgeClient: { skipPrevious: () => calls.push(['desktop']) },
+        spotifyBrowserRef: { current: { skipPrevious: () => calls.push(['mobile']) } },
+      };
+      vm.runInNewContext(invokePrevious, context);
+      assert.deepEqual(calls, position > 3000 && !previousPending ? [['seek', 0]] : [[playbackMode]],
+        'Previous restarts after three seconds, and repeated pending skips keep their order');
+    }
+  }
 }
 const unavailableCalls = [];
-vm.runInNewContext(`(${callback})()`, {
-  useCallback: fn => fn, nativePlaybackUnavailable: () => true,
+vm.runInNewContext(invokePrevious, {
+  useCallback: fn => fn,
+  nativePlaybackBlocked: () => true,
   usePlayerTourStore: { getState: () => ({ active: false }) },
-  usePlaybackStore: { getState: () => ({ playbackPosition: 120000, connectionStatus: 'disconnected' }) },
-  handleSeek: ms => unavailableCalls.push(ms), bridgeClient: { skipPrevious: () => unavailableCalls.push('bridge') },
+  usePlaybackStore: { getState: () => ({ playbackPosition: 120000, playbackMode: 'mobile' }) },
+  playbackCommands: { getSnapshot: () => ({ previousPending: false }) },
+  playbackControlPosition: positionMs => positionMs,
+  handleSeek: ms => unavailableCalls.push(ms),
+  bridgeClient: { skipPrevious: () => unavailableCalls.push('bridge') },
   spotifyBrowserRef: { current: { skipPrevious: () => unavailableCalls.push('native') } },
 });
-assert.equal(unavailableCalls.length, 0, 'unavailable Previous cannot restart or skip playback');
-console.log('Playback previous checks passed: restart after three seconds for desktop and browser sources.');
+assert.equal(unavailableCalls.length, 0, 'restricted Previous cannot restart or skip playback');
+console.log('Playback previous checks passed for desktop and mobile routing, restart and repeated skips.');

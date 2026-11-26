@@ -118,6 +118,13 @@ for (const isLandscape of [false, true]) for (const lyricsStyle of ['amll', 'spi
     'shouldRevealTap', 'onRevealOwnershipChange']) {
     assert.equal(view.props[prop], handler, `Rust receives ${prop}`);
   }
+  context.tour.active = false;
+  context.pendingCommands = { seekPreviewPositionMs: 18_000 };
+  assert.equal(vm.runInNewContext(routingCode, context).props.previewPositionMs, 7250, 'the live drag takes precedence');
+  context.scrubPreviewPositionMs = null;
+  assert.equal(vm.runInNewContext(routingCode, context).props.previewPositionMs, 18_000, 'lyrics retain the pending seek after release');
+  context.pendingCommands = {};
+  assert.equal(vm.runInNewContext(routingCode, context).props.previewPositionMs, undefined, 'confirmation returns lyrics to the source clock');
 }
 for (const style of ['amll', 'spicy']) for (const suffix of ['lyrics-view.tsx', 'lyrics-view.native.tsx', 'webview-entry.ts', 'webview-bundle.ts']) {
   assert.equal(fs.existsSync(path.resolve(root, `components/lyrics/${style}-${suffix}`)), false);

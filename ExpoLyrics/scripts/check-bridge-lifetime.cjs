@@ -25,6 +25,7 @@ function harness() {
     require:name=>({
       '@/store/playback-store':{usePlaybackStore:{getState:()=>state},startPlaybackClock(){},stopPlaybackClock(){}},
       '@/lib/network':{isValidBridgeKey:()=>true,parseBridgeWebSocketUrl:x=>x},
+      '@/lib/optimistic-playback': { registerPlaybackCommandTransport() {}, refreshPlaybackCommands() {}, cancelPlaybackCommands() {}, playbackObservationEpoch: () => 0 },
       '@/lib/bridge-validation':{validateInboundBridgePacket:raw=>JSON.parse(raw)},
     })[name],
   });

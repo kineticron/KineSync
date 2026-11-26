@@ -5,12 +5,13 @@ import { build } from 'esbuild';
 import { ungzip } from 'pako';
 
 const result = await build({ stdin: { contents: `export {SpotifyDetector,SpotifyPlaybackUnavailableError} from './lib/spotify-detector/client';
+export {PlaybackCommandQueue} from './lib/playback-command-queue';
 export {sampleFrom,decodeDealer,decodeStateBody,observerBody,trackHex,metadataFrom} from './lib/spotify-detector/protocol';
 export {detectorPacket} from './lib/spotify-detector/packet';
 export {registerSpotifyPlayerActions,resolveSpotifyTrackIsrc,resolveSpotifyTrackMetadata} from './lib/spotify-player-actions';
 export {bootstrap,bootstrapAndroidObserver} from './lib/spotify-detector/bootstrap';`, resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'esm', write: false });
-const { SpotifyDetector, SpotifyPlaybackUnavailableError, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom, bootstrap, bootstrapAndroidObserver, registerSpotifyPlayerActions, resolveSpotifyTrackIsrc, resolveSpotifyTrackMetadata } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { SpotifyDetector, SpotifyPlaybackUnavailableError, PlaybackCommandQueue, sampleFrom, decodeDealer, detectorPacket, trackHex, metadataFrom, bootstrap, bootstrapAndroidObserver, registerSpotifyPlayerActions, resolveSpotifyTrackIsrc, resolveSpotifyTrackMetadata } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const trackId = '4uLU6hMCjMI75M1A2tKUQC';
 const uri = `spotify:track:${trackId}`;
 const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -295,6 +296,9 @@ try {
   assert.notEqual(requests[0].url.split('/').pop(), `hobs_${'b'.repeat(35)}`);
   assert.equal(JSON.parse(requests[0].body).device.device_info.capabilities.can_be_player, false);
   assert.equal(samples.length, 1);
+  assert.equal(detector.playbackCommandState.ready, true);
+  assert.equal(detector.playbackCommandState.targetId, 'iphone');
+  assert.equal(detector.playbackCommandState.observation.playing, true);
   const metadataRequests = requests.length;
   const unregister = registerSpotifyPlayerActions({
     reload() {}, open() {}, logout() {},
@@ -322,7 +326,10 @@ try {
   };
   const lastCommand = () => requests.filter(r => r.method === 'POST').at(-1);
   const commandBody = () => JSON.parse(new TextDecoder().decode(ungzip(new Uint8Array(lastCommand().body))));
-  await command({ type: 'toggle' });
+  const beforeAlreadyPlaying = requests.length;
+  await detector.control({ type: 'play', playing: true });
+  assert.equal(requests.length, beforeAlreadyPlaying, 'desired play already matches detector authority');
+  await command({ type: 'play', playing: false });
   assert.equal(commandBody().command.endpoint, 'pause');
   assert.equal(lastCommand().headers['content-encoding'], 'gzip');
   assert.equal(lastCommand().headers['x-spotify-connection-id'], 'our-connection');
@@ -389,6 +396,7 @@ try {
   assert.equal(samples.at(-1).positionMs, 62000, 'Dealer event during registration beats older HTTP response');
   assert.equal(samples.at(-1).playing, false);
   // A new identity immediately revokes permission to dispatch, even on the same socket.
+  responseState = state(62000, epoch + 3001, true);
   holdResponse = true;
   ws2.event({ headers: { 'spotify-connection-id': 'rotated' } }); await flush();
   const beforeRotation = requests.length;
@@ -417,16 +425,26 @@ try {
   assert.equal(sockets.length, beforeTimeout, 'timer cannot reconnect before fresh capture');
   const recovered = finishRenewal();
   responseStatus = 200;
+  // The previous PUT fixture predates the accepted Dealer watermark.
+  // Establish current state before injecting a failure in a dispatched POST.
+  responseState = state(62000, epoch + mono, true);
   recovered.event({ headers: { 'spotify-connection-id': 'timeout-recovered' } }); await flush();
+  assert.equal(detector.playbackCommandState.ready, true, 'the replacement has verified dispatch authority');
   const normalFetch = globalThis.fetch;
-  globalThis.fetch = () => new Promise(() => {});
+  const hangingMethods = [];
+  globalThis.fetch = (_url, options) => {
+    hangingMethods.push(options.method);
+    return new Promise(() => {});
+  };
   const unknown = detector.control({ type: 'next' });
   const rejected = assert.rejects(unknown, /outcome unknown/);
+  assert.deepEqual(hangingMethods, ['POST'], 'the failure fixture must reach dispatch');
   const commandDeadlines = [...timers].filter(([, timer]) => timer.ms === 5000);
   assert(commandDeadlines.length > 0, 'hanging command owns a bounded request deadline');
   for (const [id, timer] of commandDeadlines) { timers.delete(id); timer.fn(); }
   await rejected; await flush();
   assert.equal(detector.commandPending, null, 'ignored fetch abort still settles command ownership');
+  assert.deepEqual(hangingMethods, ['POST'], 'the timed-out command is never replayed');
   globalThis.fetch = normalFetch;
   responseStatus = 429;
   fireTimer(detector.reconnect);
@@ -445,6 +463,195 @@ try {
   assert.equal(sockets.length, socketCount, 'logout clears credentials and routes');
   detector.setEnabled(false);
   assert.equal(timers.size, 0);
+
+  // Exercise the actual queue and detector together. Observe health after the
+  // detector event, as the native component does before draining its queue.
+  {
+    let now = 10_000, id, version;
+    const runtime = {
+      now: () => now, mono: () => now, wall: () => epoch + now, random: () => 0.5,
+      fetch: globalThis.fetch, socket: url => new Socket(url),
+      setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+      setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
+    };
+    const queue = new PlaybackCommandQueue(runtime);
+    const client = new SpotifyDetector({
+      sample() {}, status() {}, authenticated() {}, ready() {},
+      sessionNeeded(nextId) { id = nextId; },
+      health() { void Promise.resolve().then(refresh); },
+    }, runtime);
+    const send = async value => {
+      try {
+        await client.control(value, 'queue');
+        return 'sent';
+      } catch (error) {
+        if (error instanceof SpotifyPlaybackUnavailableError) return 'rejected';
+        return 'unknown';
+      }
+    };
+    const recheck = () => client.recheckPlaybackObservation();
+    function refresh() {
+      if (version !== client.playbackAccountVersion) {
+        version = client.playbackAccountVersion;
+        queue.setTransport(version, send, recheck);
+      }
+      queue.update(client.playbackCommandState);
+    }
+    const authenticate = token => {
+      const receive = event => assert(client.capture(JSON.stringify(event), 'https://open.spotify.com/', id));
+      receive({ type: 'observerEndpoint', url: observerUrl });
+      receive({ type: 'socket', url: 'wss://dealer.spotify.com/?access_token=browser-token' });
+      receive({ type: 'credentials', token, authenticated: true, expiresAt: epoch + now + 3_600_000 });
+      return sockets.at(-1);
+    };
+    const anchor = (position, timestamp = now, track = uri) => {
+      const snapshot = state(position, epoch + timestamp, true, track);
+      snapshot.player_state.session_id = 'same-session';
+      return snapshot;
+    };
+    const posts = () => requests.filter(request => request.method === 'POST').length;
+    responseStatus = 200;
+    responseState = anchor(6000);
+    client.setEnabled(true);
+    const socket = authenticate('queue-account-one');
+    socket.onopen();
+    socket.event({ headers: { 'spotify-connection-id': 'queued' } });
+    await flush();
+    const before = posts();
+    const initialRevision = client.playbackCommandState.observation.revision;
+    client.setActivity('inactive');
+    refresh();
+    queue.enqueue({ type: 'next' });
+    queue.enqueue({ type: 'previous' });
+    responseState = anchor(5000, now - 1000);
+    client.setActivity('active');
+    await flush();
+    assert.equal(client.playbackCommandState.ready, false, 'an older registration supplies no dispatch authority');
+    assert.equal(posts(), before);
+    assert.equal(queue.getSnapshot().nextPending, true);
+
+    socket.event({ payloads: [anchor(1500, ++now)] });
+    await flush();
+    assert(client.playbackCommandState.observation.revision > initialRevision);
+    assert.equal(posts(), before + 1);
+    assert.equal(client.health.command, 'idle', 'the queue alone waits for playback confirmation after HTTP');
+    const oldEpoch = queue.getSnapshot().seekEpoch;
+    queue.enqueue({ type: 'seek', positionMs: 20_000 });
+    socket.event({ payloads: [anchor(0, ++now)] });
+    await flush();
+    assert.equal(posts(), before + 2, 'a same-track, same-session restart from 1500ms drains the next queued tap');
+    assert.equal(queue.getSnapshot().nextPending, false);
+    assert.equal(queue.getSnapshot().previousPending, true);
+    assert.equal(queue.getSnapshot().seekPending, false);
+    assert.notEqual(queue.getSnapshot().seekEpoch, oldEpoch);
+
+    queue.enqueue({ type: 'next' });
+    const putsBeforeTimeout = requests.filter(request => request.method === 'PUT').length;
+    const confirmation = queue.timer;
+    const deadline = timers.get(confirmation);
+    assert.equal(deadline.ms, 5000);
+    now += deadline.ms;
+    timers.delete(confirmation);
+    responseState = anchor(1000, now - 6000);
+    holdResponse = true;
+    deadline.fn();
+    await flush();
+    assert.equal(requests.filter(request => request.method === 'PUT').length, putsBeforeTimeout + 1,
+      'missing confirmation requests a current observation before the next routine snapshot');
+    assert.equal(posts(), before + 2, 'the timed-out command is never replayed');
+    releaseResponse();
+    await flush();
+    holdResponse = false;
+    assert.equal(client.playbackCommandState.ready, false, 'a stale same-device response cannot reopen dispatch');
+    assert(timers.has(client.phaseDeadline), 'stale registration preserves the recovery deadline');
+    assert.equal(posts(), before + 2);
+    const retry = client.snapshotTimer;
+    const retryTimer = timers.get(retry);
+    assert(retryTimer.ms > 0 && retryTimer.ms < 2000, 'recovery schedules a short observation retry');
+    now += retryTimer.ms;
+    timers.delete(retry);
+    responseState = anchor(1000);
+    retryTimer.fn();
+    await flush();
+    assert.equal(requests.filter(request => request.method === 'PUT').length, putsBeforeTimeout + 2);
+    assert.equal(posts(), before + 3, 'the remaining tap drains within its TTL after the fresh response');
+
+    queue.enqueue({ type: 'previous' });
+    const firstAccount = version;
+    client.refresh(true);
+    const replacement = authenticate('queue-account-two');
+    assert.notEqual(replacement, socket);
+    responseState = anchor(8000, ++now);
+    replacement.onopen();
+    replacement.event({ headers: { 'spotify-connection-id': 'queue-replacement' } });
+    await flush();
+    assert.notEqual(version, firstAccount);
+    assert.equal(queue.getSnapshot().nextPending, false);
+    assert.equal(queue.getSnapshot().previousPending, false);
+    assert.equal(posts(), before + 3, 'new credentials do not inherit the previous account’s taps');
+
+    let observerSocket = replacement;
+    for (const [activity, timestampLess] of [
+      ['inactive', false], ['inactive', true], ['background', false], ['background', true],
+    ]) {
+      const replay = { ...responseState, player_state: { ...responseState.player_state } };
+      if (timestampLess) delete replay.player_state.timestamp;
+      client.setActivity(activity);
+      refresh();
+      queue.enqueue({ type: 'next' });
+      const beforeReplay = client.commandObservationRevision;
+      const targetId = `${activity}-speaker-${now}`;
+      responseState = { ...anchor(9000, ++now), active_device_id: targetId };
+      holdResponse = true;
+      client.setActivity('active');
+      if (activity === 'background') {
+        const previousSocket = observerSocket;
+        client.setEnabled(true);
+        observerSocket = sockets.at(-1);
+        assert.notEqual(observerSocket, previousSocket, 'background resume replaces the cached socket');
+        observerSocket.onopen();
+        observerSocket.event({ headers: { 'spotify-connection-id': 'queue-resumed' } });
+      }
+      await flush();
+      observerSocket.event({ payloads: [replay] });
+      releaseResponse();
+      await flush();
+      holdResponse = false;
+      assert.equal(client.playbackCommandState.targetId, targetId,
+        'a buffered Dealer replay with an equal or missing timestamp cannot suppress the current registration handoff');
+      assert.equal(client.playbackCommandState.observation.revision, beforeReplay + 1);
+      assert.equal(posts(), before + 3, 'the queued command cannot reach the former or replacement target');
+      assert.equal(queue.getSnapshot().nextPending, false);
+    }
+    const current = responseState;
+    const beforeRotation = client.playbackCommandState.observation.revision;
+    responseState = { ...current, player_state: { ...current.player_state, timestamp: epoch + now - 1000 } };
+    observerSocket.event({ headers: { 'spotify-connection-id': 'queue-rotation' } });
+    await flush();
+    assert.equal(client.playbackCommandState.ready, false);
+    assert.equal(client.playbackCommandState.observation, undefined,
+      'stale rotation registration publishes no command observation');
+    queue.enqueue({ type: 'next' });
+    assert.equal(posts(), before + 3, 'stale rotation registration cannot drain the queue');
+    assert.equal(queue.getSnapshot().nextPending, true);
+    const rotationRetry = client.snapshotTimer;
+    const retryAfterRotation = timers.get(rotationRetry);
+    assert.equal(retryAfterRotation.ms, 500);
+    now += retryAfterRotation.ms;
+    timers.delete(rotationRetry);
+    responseState = { ...current, player_state: { ...current.player_state, timestamp: epoch + now } };
+    retryAfterRotation.fn();
+    // The retry and the POST it dispatches both settle through microtasks.
+    // While the POST is sending, the detector intentionally reports not ready.
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(posts(), before + 4, 'a current registration can drain a rotated connection without Dealer');
+    assert.equal(client.playbackCommandState.observation.revision, beforeRotation + 1);
+    assert.equal(client.playbackCommandState.ready, true);
+    client.setEnabled(false);
+    queue.setTransport(undefined);
+    await flush();
+    assert.equal(timers.size, 0);
+  }
   const encoded = Buffer.from(JSON.stringify(state())).toString('base64');
   assert.equal(sampleFrom(decodeDealer({ payloads: [encoded] })).artist, 'Artist');
   console.log('Spotify detector checks passed: bootstrap fetch/XHR verification, verified session, independent observer, duplicate/stale suppression, pause/seek, monotonic handoff, registration race, lifecycle cleanup and rate limits.');

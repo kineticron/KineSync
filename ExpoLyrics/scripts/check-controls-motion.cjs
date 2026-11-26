@@ -798,6 +798,7 @@ const guardContext = {
   interactionAllowed: timelineInput, interactionCoverage: inputCoverageShared, controlsTouchIsCovered, Math, trackWidth: 200,
   isScrubbingShared: scrubActive, scrubProgress: { value: 0 }, trackScaleY: { value: 1 },
   lastScrubJsCallAt: { value: 0 }, pendingSeekPositionMsShared: { value: null }, maxDuration: 100000,
+  scrubEpoch: { value: null }, seekEpoch: 1,
   onUserInteraction: () => {}, setIsScrubbing: () => {}, flushScrubPreview: () => previews++,
   finishScrub: () => seeks++, cancelScrub: () => cancellations++,
   runOnJS: fn => fn, withTiming: value => value,

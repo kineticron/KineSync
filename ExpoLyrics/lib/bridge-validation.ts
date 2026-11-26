@@ -74,8 +74,10 @@ function validBase64(value: unknown) {
   return Math.floor(value.replace(/=+$/, '').length * 3 / 4) <= MAX_GIF_BYTES;
 }
 
+type BridgeHelloAck = { type: 'hello:ack'; ok: boolean; role?: 'client'; guardedSeek?: boolean };
+
 export function validateInboundBridgePacket(data: unknown):
-  | { type: 'hello:ack'; ok?: boolean }
+  | BridgeHelloAck
   | PlaybackPacket
   | LyricsPacket
   | ShareGifResultPacket
@@ -91,7 +93,7 @@ export function validateInboundBridgePacket(data: unknown):
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     packet = parsed as Record<string, unknown>;
   } catch { return null; }
-  if (packet.type === 'hello:ack') return typeof packet.ok === 'boolean' ? packet as { type: 'hello:ack'; ok: boolean } : null;
+  if (packet.type === 'hello:ack') return typeof packet.ok === 'boolean' ? packet as BridgeHelloAck : null;
   if (packet.type === 'playback') return validatePlayback(packet);
   if (packet.type === 'lyrics') return validateLyrics(packet);
   if (packet.type === 'vault:list:result' || packet.type === 'vault:get:result') {

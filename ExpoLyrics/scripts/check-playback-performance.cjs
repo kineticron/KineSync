@@ -13,8 +13,29 @@ const effects = [], focusEffects = [], timings = [], jsQueue = [], styles = [];
 const listeners = new Set(), appListeners = new Set();
 let state = { playbackPosition: 2000, anchorPositionMs: 2000, anchorMonotonicMs: 2000, isPlaying: true };
 let gesture;
-let cancellations = 0;
-const clock = { now: () => 3000 };
+let playbackTime = 3000;
+const clock = { now: () => playbackTime };
+const timing = Symbol('timing');
+function sharedValue(initial) {
+  let current = initial;
+  let animation;
+  return {
+    get value() {
+      if (!animation) return current;
+      const progress = Math.min(1, (clock.now() - animation.startAt) / animation.duration);
+      return animation.from + (animation.to - animation.from) * progress;
+    },
+    set value(next) {
+      // Assigning withTiming starts a tween at the current value on the UI thread.
+      if (next?.[timing]) {
+        animation = { from: this.value, to: next.value, duration: next.options.duration, startAt: clock.now() };
+      } else {
+        current = next;
+        animation = undefined;
+      }
+    },
+  };
+}
 const appState = { currentState: 'active', addEventListener: (_, cb) => {
   appListeners.add(cb);
   return { remove: () => appListeners.delete(cb) };
@@ -68,13 +89,16 @@ const mocks = {
     __esModule: true,
     default: { View: Primitive, createAnimatedComponent: () => Primitive },
     Easing: { linear: (x) => x },
-    useSharedValue: (value) => React.useRef({ value }).current,
+    useSharedValue: (value) => React.useRef(sharedValue(value)).current,
     useDerivedValue: (cb) => ({ get value() { return worklet(cb)(); } }),
     useAnimatedStyle: (cb) => { const compute = worklet(cb); styles.push(compute); return compute(); },
     useAnimatedProps: (cb) => worklet(cb)(),
     useEvent: (cb, events, rebuild) => { assert.deepEqual(events, ['onScrollBeginDrag']); assert.equal(rebuild, true); return worklet(cb); },
-    cancelAnimation: () => { cancellations++; },
-    withTiming: (value, options) => { timings.push({ value, options }); return value; },
+    cancelAnimation: (shared) => { shared.value = shared.value; },
+    withTiming: (value, options) => {
+      timings.push({ value, options });
+      return { [timing]: true, value, options };
+    },
     runOnJS: (cb) => (...args) => jsQueue.push(() => (cb.remote ?? cb)(...args)),
   },
 };
@@ -134,7 +158,7 @@ function load(relative) {
 // both lyrics styles are WebViews now and own their scroll natively.
 const { usePlaybackTimelineClock } = load('components/lyrics/use-playback-timeline-clock.ts');
 let position;
-renderToStaticMarkup(React.createElement(() => { position = usePlaybackTimelineClock(100000); return null; }));
+renderToStaticMarkup(React.createElement(() => { ({ position } = usePlaybackTimelineClock(100000)); return null; }));
 const stopClock = focusEffects.pop()();
 assert.equal(timings.at(-1).options.duration, 97000, 'project the anchor before starting the UI clock');
 const anchorAnimations = timings.length;
@@ -152,14 +176,24 @@ assert.equal(listeners.size + appListeners.size, 0, 'unfocused/unmounted timelin
 
 const { PlaybackTimeline } = load('components/lyrics/playback-controls.tsx');
 let sought = null, preview = null;
+let previewAnchor;
+const previewListeners = new Set();
+const previewPlaybackSource = {
+  getSnapshot: () => previewAnchor,
+  subscribe(listener) {
+    previewListeners.add(listener);
+    return () => previewListeners.delete(listener);
+  },
+};
 const interactionAllowed = { value: true };
 const interactionCoverage = { value: { originY: 0, top: 0, bottom: 100 } };
 styles.length = 0;
 renderToStaticMarkup(React.createElement(PlaybackTimeline, {
-  durationMs: 100000, interactionAllowed, interactionCoverage, onSeek: (value) => {
+  durationMs: 100000, seekEpoch: 4, previewPlaybackSource, interactionAllowed, interactionCoverage, onSeek: (value, epoch) => {
     sought = value;
-    // Match the real host's synchronous optimistic seek anchor.
-    update({ anchorPositionMs: value, anchorMonotonicMs: 3000, isPlaying: false });
+    assert.equal(epoch, 4, 'the transformed release carries the starting playback epoch');
+    previewAnchor = { anchorPositionMs: value, anchorMonotonicMs: clock.now(), isPlaying: true };
+    previewListeners.forEach(listener => listener());
   }, onScrubPreview: (value) => { preview = value; },
 }));
 const stopGestureClock = focusEffects.pop()();
@@ -197,8 +231,16 @@ assert.equal(styles[1]().transform[0].scaleX, 0.9, 'release is painted before th
 flushJS();
 assert.equal(sought, 90000, 'seek uses release position even when final preview was throttled');
 assert.equal(preview, null);
-update({ anchorPositionMs: 90100 });
-assert.equal(styles[1]().transform[0].scaleX, 0.901, 'accepted seeks immediately resume following playback without a 1.2s hold');
+assert.notEqual(state.anchorPositionMs, sought, 'seeking leaves the authoritative anchor alone');
+assert.equal(styles[1]().transform[0].scaleX, 0.9, 'the optimistic clock takes over without a React render');
+playbackTime += 100;
+assert.equal(styles[1]().transform[0].scaleX, 0.901, 'the optimistic clock advances while confirmation is pending');
+update({ anchorPositionMs: 90100, anchorMonotonicMs: clock.now() });
+previewAnchor = undefined;
+previewListeners.forEach(listener => listener());
+assert.equal(styles[1]().transform[0].scaleX, 0.901, 'confirmation hands off to the source clock at the same position');
+playbackTime += 100;
+assert.equal(styles[1]().transform[0].scaleX, 0.902, 'accepted seeks immediately resume following playback without a 1.2s hold');
 sought = null;
 assert.equal(beginGesture({ x: 0.2, absoluteY: 50 }), true);
 gesture.onFinalize({ x: 0.3 }, false);
@@ -211,6 +253,7 @@ assert.equal(sought, null, 'losing row eligibility cancels a native success inst
 assert.equal(preview, null);
 interactionAllowed.value = true;
 stopGestureClock();
+assert.equal(previewListeners.size, 0, 'the timeline unsubscribes from optimistic anchors on blur');
 // Exercise production-transformed disabled timeline callbacks as well as the
 // native gesture gate. A stale queued finalization must never submit a seek.
 sought = null;

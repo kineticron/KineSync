@@ -34,6 +34,14 @@ export type PlaybackPacket = {
   sourceServerTimestampMs?: number;
   activeDeviceId?: string;
   playbackSessionId?: string;
+  playbackSource?: string;
+  /** False marks a projection of the last observation. */
+  controlSnapshot?: boolean;
+  /** False means this source needs an update to execute scoped commands. */
+  scopedPlayback?: boolean;
+  guardedSeek?: boolean;
+  /** Relay join replay for display. */
+  playbackCached?: boolean;
   /** Detector instance/auth/route scope; contains no credentials. */
   sourceClockScope?: string;
   timing?: BridgeTimingDiagnostics;

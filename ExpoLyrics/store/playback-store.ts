@@ -169,7 +169,7 @@ type PlaybackState = {
   ingestPacket: (
     packet: PlaybackPacket,
     source: PlaybackMode,
-  ) => { trackChanged: boolean; seekDetected: boolean };
+  ) => { trackChanged: boolean; seekDetected: boolean; accepted: boolean };
   setLyrics: (lyrics: LyricLine[], source?: string, packet?: { metadata: LyricsMetadata; statusMessage: string }) => void;
   setLyricsMetadata: (metadata: LyricsMetadata) => void;
   beginTranslationRequest: () => void;
@@ -307,13 +307,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const prev = get();
     if (!shouldAcceptPlaybackPacket(prev.playbackMode, source)) {
       recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'mode' });
-      return { trackChanged: false, seekDetected: false };
+      return { trackChanged: false, seekDetected: false, accepted: false };
     }
     const sourceClockRaw = Number(packet.capturedAtMs ?? packet.timestamp ?? nowWall);
     const sourceClock = Number.isFinite(sourceClockRaw) ? sourceClockRaw : nowWall;
     if (sourceClock + 250 < prev.lastSourceClockMs) {
       recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'older-local-packet', storeSourceClockMs: numericEvidence(sourceClock) });
-      return { trackChanged: false, seekDetected: false };
+      return { trackChanged: false, seekDetected: false, accepted: false };
     }
     const observedDelta = Math.max(-60_000, Math.min(60_000, nowWall - sourceClock));
     const baseline = Number.isFinite(prev.clockSkewBaselineMs)
@@ -344,8 +344,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       prev.anchorPositionMs + (prev.isPlaying ? nowMono - prev.anchorMonotonicMs : 0);
     const sourceKey = sourceAnchorKey(packet, source);
     const proof = prev.sourceAnchorProof;
-    // An optimistic seek can replace the store clock without a source packet.
-    // Such a clock is not covered by the previous source proof.
+    // Reuse the proof only while it still describes the current source anchor.
     const sameSourceAnchor = !trackChanged && prev.isPlaying && sourceKey !== null &&
       proof?.key === sourceKey && proof.anchorPositionMs === prev.anchorPositionMs &&
       proof.anchorMonotonicMs === prev.anchorMonotonicMs &&
@@ -386,7 +385,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           lastSourceClockMs: Math.max(prev.lastSourceClockMs, sourceClock),
           ...(packet.timing ? { bridgeTiming: packet.timing } : {}) });
       }
-      return { trackChanged: false, seekDetected: false };
+      return { trackChanged: false, seekDetected: false, accepted: true };
     }
 
     set({
@@ -420,7 +419,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       clearPlaybackClockHandle();
     }
 
-    return { trackChanged, seekDetected };
+    return { trackChanged, seekDetected, accepted: true };
   },
   setLyrics: (lyrics, source = 'qq-music', packet) => {
     const parent = __DEV__ ? arrivalHandle(lyrics) : undefined;

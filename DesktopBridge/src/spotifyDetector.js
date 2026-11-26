@@ -20,6 +20,9 @@ const { getDotnetExecutable } = require("./dotnetExecutable");
 const { resolvePackagedNativePath } = require("./nativeRuntimePaths");
 
 const EMIT_INTERVAL_MS = 100;
+// GSMTC emits a steady-playing heartbeat every 8 seconds and polls every 2.
+// When its session disappears it can go silent without invoking onError.
+const WINDOWS_OBSERVATION_LEASE_MS = 12_000;
 const MAX_CAPTURE_DELAY_MS = 1_200;
 const HARD_RESYNC_DRIFT_MS = 900;
 const JITTER_RESISTANCE_MS = 500;
@@ -295,6 +298,8 @@ async function fetchSpotifyPlaybackState(accessToken) {
 }
 
 function createSpotifyDetector() {
+  let lastNativeObservationMono = -Infinity;
+  let nativeSeekIdentity;
   const emitter = new EventEmitter();
   let running = false;
   let statusError = "";
@@ -304,6 +309,7 @@ function createSpotifyDetector() {
     fallbackError: "",
   };
   let nativeWatcher = null;
+  let nativeWatcherRun = 0;
   let emitTimer = null;
   let spotifyApiTimer = null;
   let getSpotifyAccessToken = null;
@@ -362,6 +368,8 @@ function createSpotifyDetector() {
 
   const clearTrack = () => {
     track = createEmptyTrack();
+    lastNativeObservationMono = -Infinity;
+    nativeSeekIdentity = undefined;
     lastArtworkTrackId = "";
     lastArtworkValue = "";
     lastArtworkBroadcastAt = 0;
@@ -752,13 +760,15 @@ function createSpotifyDetector() {
   const applyNativeSnapshot = (snapshot) => {
     if (!snapshot || !snapshot.title) {
       clearTrack();
-      return;
+      return true;
     }
 
     const nowWall = Date.now();
     const nowMono = performance.now();
 
     const incomingTrackId = hashTrackId(snapshot.title, snapshot.artist || "");
+    const activeDeviceId = snapshot.activeDeviceId;
+    const playbackSessionId = snapshot.playbackSessionId;
     const incomingDuration = Number(snapshot.durationMs || 0);
     const incomingIsPlaying = Boolean(snapshot.isPlaying);
     const captureTimeMs = Number(snapshot.capturedAtMs || nowWall);
@@ -788,7 +798,8 @@ function createSpotifyDetector() {
       incomingPosition + (incomingIsPlaying ? pipelineDelayMs : 0),
       incomingDuration,
     );
-    const changedTrack = incomingTrackId !== track.trackId;
+    const changedTrack = incomingTrackId !== track.trackId ||
+      activeDeviceId !== track.activeDeviceId || playbackSessionId !== track.playbackSessionId;
     const projectedForSync = computeBiasFreeProjectedPosition(nowMono);
     const projectedNow = computeProjectedPosition(nowMono);
 
@@ -826,6 +837,8 @@ function createSpotifyDetector() {
       const incomingArtworkUrl = extractArtworkUrl(snapshot);
       track = {
         trackId: incomingTrackId,
+        activeDeviceId,
+        playbackSessionId,
         title: snapshot.title,
         artist: snapshot.artist || "",
         album: snapshot.album || "",
@@ -848,7 +861,7 @@ function createSpotifyDetector() {
         : { mode: "none", fallbackState: "checking", fallbackError: "" };
       requestArtworkResolution(incomingTrackId);
       requestCatalogEnrichment();
-      return;
+      return true;
     }
 
     if (
@@ -870,7 +883,7 @@ function createSpotifyDetector() {
             : 0) -
           NATIVE_STALE_POSITION_SLACK_MS,
       });
-      return;
+      return false;
     }
 
     const driftMs = correctedIncomingPosition - projectedForSync;
@@ -911,7 +924,7 @@ function createSpotifyDetector() {
       if (!track.spotifyTrackId || !String(track.album || "").trim()) {
         requestCatalogEnrichment();
       }
-      return;
+      return true;
     }
 
     let nextAnchorPosition = projectedForSync;
@@ -962,6 +975,7 @@ function createSpotifyDetector() {
     if (!track.spotifyTrackId || !String(track.album || "").trim()) {
       requestCatalogEnrichment();
     }
+    return true;
   };
 
   const applySpotifyApiState = (state) => {
@@ -981,6 +995,9 @@ function createSpotifyDetector() {
     const nowWall = Date.now();
     const nowMono = performance.now();
     const item = state.item;
+    const activeDeviceId = typeof state.device?.id === "string" ? state.device.id : undefined;
+    const sessionId = state.playback_session_id ?? state.session_id;
+    const playbackSessionId = typeof sessionId === "string" ? sessionId : undefined;
     const incomingTitle = item.name || "";
     const incomingArtist = (item.artists || []).map((a) => a.name).join(", ");
     const incomingAlbum = item.album?.name || "";
@@ -1015,7 +1032,9 @@ function createSpotifyDetector() {
     }, null);
     const incomingArtworkUrl = bestImage?.url || "";
 
-    const changedTrack = incomingTrackId !== track.trackId;
+    const changedTrack = incomingTrackId !== track.trackId || spotifyId !== track.spotifyTrackId ||
+      track.source !== "spotify-api" || activeDeviceId !== track.activeDeviceId ||
+      playbackSessionId !== track.playbackSessionId;
     const apiDelay = Math.max(
       0,
       Math.min(MAX_CAPTURE_DELAY_MS, SPOTIFY_API_POLL_MS / 2),
@@ -1029,6 +1048,8 @@ function createSpotifyDetector() {
       track = {
         trackId: incomingTrackId,
         spotifyTrackId: spotifyId,
+        activeDeviceId,
+        playbackSessionId,
         title: incomingTitle,
         artist: incomingArtist,
         album: incomingAlbum,
@@ -1147,7 +1168,7 @@ function createSpotifyDetector() {
         itemName: String(state?.item?.name || ""),
       });
       applySpotifyApiState(state);
-      emitPlayback();
+      emitPlayback(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       spotifyApiLastError = message;
@@ -1178,7 +1199,7 @@ function createSpotifyDetector() {
               },
             );
             applySpotifyApiState(state);
-            emitPlayback();
+            emitPlayback(true);
           }
         } catch {
           // Keep the original error message; refresh will be retried next poll.
@@ -1187,9 +1208,17 @@ function createSpotifyDetector() {
     }
   };
 
-  const emitPlayback = () => {
+  const supportsScopedPlayback = () => track.source !== "windows-media-session-native" ||
+    (Boolean(nativeSeekIdentity) && typeof nativeWatcher?.executeCommand === "function");
+
+  const emitPlayback = (observed = false) => {
     const nowWall = Date.now();
     const nowMono = performance.now();
+    if (track.trackId && track.source === "windows-media-session-native" &&
+        nowMono - lastNativeObservationMono >= WINDOWS_OBSERVATION_LEASE_MS) {
+      clearTrack();
+      observed = true;
+    }
     const elapsedMs = track.isPlaying
       ? Math.max(0, nowMono - track.anchorMonotonicMs)
       : 0;
@@ -1211,6 +1240,12 @@ function createSpotifyDetector() {
     emitter.emit("snapshot", {
       trackId: track.trackId,
       spotifyTrackId: track.spotifyTrackId || "",
+      activeDeviceId: track.activeDeviceId,
+      playbackSessionId: track.playbackSessionId,
+      playbackSource: track.source,
+      controlSnapshot: observed,
+      scopedPlayback: supportsScopedPlayback(),
+      guardedSeek: supportsScopedPlayback(),
       title: track.title,
       artist: track.artist,
       album: track.album,
@@ -1241,16 +1276,40 @@ function createSpotifyDetector() {
     if (spotifyApiActive && track.source === "spotify-api") {
       return;
     }
-    applyNativeSnapshot(snapshot);
-    emitPlayback();
+    const capturedAtMs = snapshot?.capturedAtMs;
+    const captureAgeMs = Number.isFinite(capturedAtMs) && capturedAtMs > 0 ? Math.max(0, Date.now() - capturedAtMs) : 0;
+    lastNativeObservationMono = performance.now() - captureAgeMs;
+    const observed = applyNativeSnapshot(snapshot);
+    if (observed) {
+      nativeSeekIdentity = track.source === "windows-media-session-native" && track.playbackSessionId ? {
+        sessionId: track.playbackSessionId, trackId: track.trackId,
+        title: snapshot.title, artist: snapshot.artist || "",
+      } : undefined;
+    }
+    emitPlayback(observed);
   };
 
   const onNativeError = (message) => {
     statusError = String(message || "Unknown native watcher error");
+    if (track.trackId && track.source === "linux-mpris") {
+      clearTrack();
+      emitPlayback(true);
+    }
     emitter.emit("error", new Error(statusError));
   };
 
   return Object.assign(emitter, {
+    async executeWindowsPlayback(expected, action, positionMs, expiresAtMs) {
+      const identity = nativeSeekIdentity;
+      if (!identity || expected.sessionId !== identity.sessionId || expected.trackId !== identity.trackId ||
+          typeof nativeWatcher?.executeCommand !== "function") {
+        throw new Error("Windows scoped playback requires the current native session.");
+      }
+      return new Promise((resolve, reject) => {
+        nativeWatcher.executeCommand(action, identity.sessionId, identity.title, identity.artist, positionMs, expiresAtMs,
+          (error) => error ? reject(error) : resolve());
+      });
+    },
     setSpotifyAccessTokenGetter(getter) {
       getSpotifyAccessToken = typeof getter === "function" ? getter : null;
     },
@@ -1265,8 +1324,13 @@ function createSpotifyDetector() {
 
       try {
         const WatcherClass = loadMediaSessionWatcherClass();
-        nativeWatcher = new WatcherClass(onNativeSnapshot, onNativeError);
-        nativeWatcher.start();
+        const run = ++nativeWatcherRun;
+        const watcher = new WatcherClass(
+          snapshot => { if (running && nativeWatcherRun === run) onNativeSnapshot(snapshot); },
+          error => { if (running && nativeWatcherRun === run) onNativeError(error); },
+        );
+        nativeWatcher = watcher;
+        watcher.start();
       } catch (error) {
         statusError =
           error instanceof Error
@@ -1314,7 +1378,9 @@ function createSpotifyDetector() {
       return {
         detectorRunning: running,
         source: track.source,
-        detectorError: statusError,
+        detectorError: statusError || (!supportsScopedPlayback()
+          ? "Update the Windows media session addon to enable playback controls on the phone."
+          : ""),
         spotifyApiActive,
         spotifyApiLastError: spotifyApiLastError,
         spotifyApiCooldownRemainingMs: Math.max(

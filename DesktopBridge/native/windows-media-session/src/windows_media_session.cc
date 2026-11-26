@@ -1,11 +1,17 @@
 #include <napi.h>
 
+#include "worker_lifecycle.h"
+
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -17,6 +23,7 @@
 #include <winrt/base.h>
 
 namespace wmc = winrt::Windows::Media::Control;
+namespace wf = winrt::Windows::Foundation;
 
 namespace {
 
@@ -128,6 +135,8 @@ struct SnapshotData {
   bool isPlaying = false;
   bool timelineSync = false;
   std::string source = "windows-media-session-native";
+  std::string deviceId;
+  std::string sessionId;
   int64_t capturedAtMs = 0;
   int64_t positionBasisMs = 0;
 };
@@ -143,9 +152,53 @@ Napi::Object SnapshotToJs(Napi::Env env, const SnapshotData& snapshot) {
   obj.Set("isPlaying", snapshot.isPlaying);
   obj.Set("timelineSync", snapshot.timelineSync);
   obj.Set("source", snapshot.source);
+  obj.Set("activeDeviceId", snapshot.deviceId);
+  obj.Set("playbackSessionId", snapshot.sessionId);
   obj.Set("capturedAtMs", static_cast<double>(snapshot.capturedAtMs));
   obj.Set("positionBasisMs", static_cast<double>(snapshot.positionBasisMs));
   return obj;
+}
+
+bool SameSession(wmc::GlobalSystemMediaTransportControlsSession const& left,
+                 wmc::GlobalSystemMediaTransportControlsSession const& right) {
+  if (!left || !right) return !left && !right;
+  return left.as<::IUnknown>().get() == right.as<::IUnknown>().get();
+}
+
+void SnapshotCallback(Napi::Env env, Napi::Function callback, void*, SnapshotData* data) {
+  std::unique_ptr<SnapshotData> snapshot(data);
+  if (env && !callback.IsEmpty()) callback.Call({SnapshotToJs(env, *snapshot)});
+}
+
+void ErrorCallback(Napi::Env env, Napi::Function callback, void*, std::string* data) {
+  std::unique_ptr<std::string> message(data);
+  if (env && !callback.IsEmpty()) callback.Call({Napi::String::New(env, *message)});
+}
+
+void CommandCallback(Napi::Env env, Napi::Function callback, void*, std::string* data) {
+  std::unique_ptr<std::string> error(data);
+  if (env && !callback.IsEmpty()) {
+    if (error->empty()) callback.Call({env.Null()});
+    else callback.Call({Napi::Error::New(env, *error).Value()});
+  }
+}
+
+using SnapshotFunction = Napi::TypedThreadSafeFunction<void, SnapshotData, SnapshotCallback>;
+using ErrorFunction = Napi::TypedThreadSafeFunction<void, std::string, ErrorCallback>;
+using CommandFunction = Napi::TypedThreadSafeFunction<void, std::string, CommandCallback>;
+
+struct CommandRequest {
+  std::string action;
+  std::string sessionId;
+  std::string title;
+  std::string artist;
+  int64_t positionMs;
+  int64_t expiresAtMs;
+  CallbackOwner<CommandFunction> complete;
+};
+
+void CompleteCommand(std::unique_ptr<CommandRequest> request, const std::string& error) {
+  request->complete.Send(error);
 }
 
 }  // namespace
@@ -157,7 +210,8 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
         DefineClass(env,
                     "WindowsMediaSessionWatcher",
                     {InstanceMethod("start", &WindowsMediaSessionWatcher::Start),
-                     InstanceMethod("stop", &WindowsMediaSessionWatcher::Stop)});
+                     InstanceMethod("stop", &WindowsMediaSessionWatcher::Stop),
+                     InstanceMethod("executeCommand", &WindowsMediaSessionWatcher::ExecuteCommand)});
 
     exports.Set("WindowsMediaSessionWatcher", func);
     return exports;
@@ -172,26 +226,197 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
       return;
     }
 
-    snapshotTsfn_ = Napi::ThreadSafeFunction::New(
-        env, info[0].As<Napi::Function>(), "WindowsMediaSessionSnapshotCallback", 0, 1);
-    errorTsfn_ = Napi::ThreadSafeFunction::New(
-        env, info[1].As<Napi::Function>(), "WindowsMediaSessionErrorCallback", 0, 1);
+    snapshotTsfn_.Reset(SnapshotFunction::New(
+        env, info[0].As<Napi::Function>(), "WindowsMediaSessionSnapshotCallback", 0, 1, nullptr));
+    errorTsfn_.Reset(ErrorFunction::New(
+        env, info[1].As<Napi::Function>(), "WindowsMediaSessionErrorCallback", 0, 1, nullptr));
   }
 
   ~WindowsMediaSessionWatcher() override { StopWorker(); }
 
  private:
+  struct EventGate {
+    std::mutex mutex;
+    WindowsMediaSessionWatcher* watcher = nullptr;
+  };
+
+  auto SnapshotEvent(bool forceMediaRefresh, bool timelineUpdated) {
+    return [gate = eventGate_, forceMediaRefresh, timelineUpdated](auto const&, auto const&) {
+      std::lock_guard<std::mutex> lock(gate->mutex);
+      if (gate->watcher) gate->watcher->ScheduleSnapshot(forceMediaRefresh, timelineUpdated);
+    };
+  }
+
   void Start(const Napi::CallbackInfo&) {
-    if (running_.exchange(true)) {
+    if (running_.load()) {
       return;
     }
+    StopWorker();
+    if (!snapshotTsfn_ || !errorTsfn_) return;
+    eventGate_ = std::make_shared<EventGate>();
+    eventGate_->watcher = this;
+    running_.store(true);
     worker_ = std::thread([this]() { RunWorkerLoop(); });
   }
 
   void Stop(const Napi::CallbackInfo&) { StopWorker(); }
 
+  void ExecuteCommand(const Napi::CallbackInfo& info) {
+    auto env = info.Env();
+    if (info.Length() != 7 || !info[0].IsString() || !info[1].IsString() ||
+        !info[2].IsString() || !info[3].IsString() || !info[4].IsNumber() ||
+        !info[5].IsNumber() || !info[6].IsFunction()) {
+      Napi::TypeError::New(env, "Invalid scoped playback command").ThrowAsJavaScriptException();
+      return;
+    }
+    const auto action = info[0].As<Napi::String>().Utf8Value();
+    if (action != "play" && action != "pause" && action != "next" &&
+        action != "previous" && action != "seek" && action != "resync") {
+      Napi::TypeError::New(env, "Unsupported scoped playback action").ThrowAsJavaScriptException();
+      return;
+    }
+    const double position = info[4].As<Napi::Number>().DoubleValue();
+    const double expires = info[5].As<Napi::Number>().DoubleValue();
+    if (!(position >= 0 && position <= 86400000 && expires > 0 && expires <= 9007199254740991.0)) {
+      Napi::RangeError::New(env, "Invalid playback command bounds").ThrowAsJavaScriptException();
+      return;
+    }
+    std::lock_guard<std::mutex> lock(workerMutex_);
+    if (!running_.load() || pendingCommand_) {
+      Napi::Error::New(env, "Windows playback watcher is unavailable").ThrowAsJavaScriptException();
+      return;
+    }
+    pendingCommand_ = std::make_unique<CommandRequest>(CommandRequest{
+        action, info[1].As<Napi::String>().Utf8Value(), info[2].As<Napi::String>().Utf8Value(),
+        info[3].As<Napi::String>().Utf8Value(), static_cast<int64_t>(position),
+        static_cast<int64_t>(expires),
+        CallbackOwner(CommandFunction::New(
+            env, info[6].As<Napi::Function>(), "WindowsScopedPlayback", 0, 1, nullptr))});
+    workerCv_.notify_one();
+  }
+
+  std::unique_ptr<CommandRequest> TakeCommand() {
+    std::lock_guard<std::mutex> lock(workerMutex_);
+    return std::move(pendingCommand_);
+  }
+
+  struct PlaybackOutcomeUnknown : std::runtime_error {
+    PlaybackOutcomeUnknown() : std::runtime_error("Windows playback outcome unknown; the command was not retried.") {}
+  };
+
+  template <typename T>
+  T AwaitOperation(wf::IAsyncOperation<T> const& operation, bool dispatched = false) {
+    using namespace std::chrono_literals;
+    const auto deadline = std::chrono::steady_clock::now() + (dispatched ? 3s : 2s);
+    // A WinRT operation allows a single waiter. Poll status instead of
+    // repeatedly calling wait_for, and wake promptly when the worker stops.
+    auto status = operation.Status();
+    while (status == wf::AsyncStatus::Started) {
+      {
+        std::unique_lock<std::mutex> lock(workerMutex_);
+        if (running_.load() && std::chrono::steady_clock::now() < deadline) {
+          workerCv_.wait_until(lock, (std::min)(deadline, std::chrono::steady_clock::now() + 25ms),
+                               [this]() { return !running_.load(); });
+        }
+      }
+      status = operation.Status();
+      if (status == wf::AsyncStatus::Started &&
+          (!running_.load() || std::chrono::steady_clock::now() >= deadline)) {
+        try { operation.Cancel(); } catch (...) {}
+        if (dispatched) throw PlaybackOutcomeUnknown();
+        throw std::runtime_error("Windows playback observation timed out or stopped.");
+      }
+    }
+    if (dispatched && status == wf::AsyncStatus::Canceled) throw PlaybackOutcomeUnknown();
+    return operation.GetResults();
+  }
+
+  void DispatchCommand(CommandRequest const& request) {
+    WireActiveSession();
+    const auto session = activeSession_;
+    if (!session || request.sessionId != sessionId_) {
+      throw std::runtime_error("Windows playback session changed before dispatch.");
+    }
+    const auto assertCurrent = [&]() {
+      if (!running_.load() || NowEpochMs() >= request.expiresAtMs) {
+        throw std::runtime_error("Playback intent expired before dispatch.");
+      }
+      if (!SameSession(session, PickSession(manager_))) {
+        throw std::runtime_error("Windows playback session changed before dispatch.");
+      }
+    };
+    const auto media = AwaitOperation(session.TryGetMediaPropertiesAsync());
+    if (HstringToUtf8(media.Title()) != request.title ||
+        HstringToUtf8(media.Artist()) != request.artist) {
+      throw std::runtime_error("Windows playback track changed before dispatch.");
+    }
+    const auto playback = session.GetPlaybackInfo();
+    const auto controls = playback.Controls();
+    const auto& action = request.action;
+    const bool playing = playback.PlaybackStatus() == wmc::GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing;
+    if ((action == "play" && playing) || ((action == "pause" || action == "resync") && !playing)) return;
+    assertCurrent();
+    bool accepted = false;
+    if (action == "seek" && controls.IsPlaybackPositionEnabled()) {
+      accepted = AwaitOperation(session.TryChangePlaybackPositionAsync(request.positionMs * 10000), true);
+    } else if (action == "next" && controls.IsNextEnabled()) {
+      accepted = AwaitOperation(session.TrySkipNextAsync(), true);
+    } else if (action == "previous" && controls.IsPreviousEnabled()) {
+      accepted = AwaitOperation(session.TrySkipPreviousAsync(), true);
+    } else if (action == "play" && controls.IsPlayEnabled()) {
+      accepted = AwaitOperation(session.TryPlayAsync(), true);
+    } else if ((action == "pause" || action == "resync") && controls.IsPauseEnabled()) {
+      accepted = AwaitOperation(session.TryPauseAsync(), true);
+      if (action == "resync" && accepted) {
+        {
+          std::unique_lock<std::mutex> lock(workerMutex_);
+          workerCv_.wait_for(lock, std::chrono::milliseconds(80), [this]() { return !running_.load(); });
+        }
+        // Finish a resync that already paused, using the same live session.
+        if (!running_.load() || !SameSession(session, PickSession(manager_))) throw PlaybackOutcomeUnknown();
+        try {
+          const auto currentMedia = AwaitOperation(session.TryGetMediaPropertiesAsync());
+          if (HstringToUtf8(currentMedia.Title()) != request.title ||
+              HstringToUtf8(currentMedia.Artist()) != request.artist ||
+              !running_.load() || !SameSession(session, PickSession(manager_))) {
+            throw PlaybackOutcomeUnknown();
+          }
+        } catch (...) {
+          throw PlaybackOutcomeUnknown();
+        }
+        accepted = session.GetPlaybackInfo().Controls().IsPlayEnabled() &&
+            AwaitOperation(session.TryPlayAsync(), true);
+      }
+    }
+    if (!accepted) throw std::runtime_error("Windows playback session rejected the command.");
+  }
+
+  void ProcessCommand() {
+    auto request = TakeCommand();
+    if (!request) return;
+    std::string error;
+    try {
+      DispatchCommand(*request);
+    } catch (const PlaybackOutcomeUnknown& failure) {
+      error = failure.what();
+      UnwireActiveSession();
+      snapshotRequested_.store(true);
+    } catch (const winrt::hresult_error& failure) {
+      error = winrt::to_string(failure.message());
+    } catch (const std::exception& failure) {
+      error = failure.what();
+    } catch (...) {
+      error = "Windows playback command failed.";
+    }
+    CompleteCommand(std::move(request), error);
+  }
+
   void StopWorker() {
     running_.store(false);
+    if (eventGate_) {
+      std::lock_guard<std::mutex> lock(eventGate_->mutex);
+      eventGate_->watcher = nullptr;
+    }
     {
       std::lock_guard<std::mutex> lock(workerMutex_);
       workerCv_.notify_all();
@@ -199,14 +424,14 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
     if (worker_.joinable()) {
       worker_.join();
     }
+    if (auto request = TakeCommand()) {
+      CompleteCommand(std::move(request), "Windows playback watcher stopped.");
+    }
   }
 
-  void ScheduleSnapshot(bool rewireSession, bool forceMediaRefresh, bool timelineUpdated) {
+  void ScheduleSnapshot(bool forceMediaRefresh, bool timelineUpdated) {
     if (!running_.load()) {
       return;
-    }
-    if (rewireSession) {
-      rewireSessionRequested_.store(true);
     }
     if (forceMediaRefresh) {
       forceMediaRefresh_.store(true);
@@ -222,92 +447,73 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
   }
 
   void RunWorkerLoop() {
+    struct Cleanup {
+      WindowsMediaSessionWatcher& watcher;
+      bool apartmentInitialized = false;
+      ~Cleanup() { watcher.FinishWorker(apartmentInitialized); }
+    } cleanup{*this};
+
     try {
       winrt::init_apartment(winrt::apartment_type::multi_threaded);
-      manager_ =
-          wmc::GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
-    } catch (const winrt::hresult_error& error) {
-      EmitError("Unable to initialize media session manager: " +
-                winrt::to_string(error.message()));
-      running_.store(false);
-      return;
-    } catch (const std::exception& error) {
-      EmitError(std::string("Unable to initialize media session manager: ") + error.what());
-      running_.store(false);
-      return;
+      cleanup.apartmentInitialized = true;
+      manager_ = AwaitOperation(wmc::GlobalSystemMediaTransportControlsSessionManager::RequestAsync());
+      managerSessionsToken_ = manager_.SessionsChanged(SnapshotEvent(false, false));
     } catch (...) {
-      EmitError("Unable to initialize media session manager");
-      running_.store(false);
+      if (running_.load()) ReportWorkerError("Unable to initialize media session watcher: ", std::current_exception());
       return;
     }
 
-    try {
-      managerSessionsToken_ = manager_.SessionsChanged(
-          [this](wmc::GlobalSystemMediaTransportControlsSessionManager const&,
-                 wmc::SessionsChangedEventArgs const&) {
-            ScheduleSnapshot(true, false, false);
+    // The first read is subject to the same timeout and retry policy as every
+    // later read. A slow media-properties request does not kill the watcher.
+    RunRecoveringPolls(
+        [this]() { return running_.load(); },
+        [this]() { PollOnce(); },
+        [this](std::exception_ptr error) { ReportWorkerError("Snapshot update: ", error); },
+        [this]() { ProcessCommand(); },
+        [this]() {
+          std::unique_lock<std::mutex> lock(workerMutex_);
+          workerCv_.wait_for(lock, std::chrono::milliseconds(kFallbackPollIntervalMs), [this]() {
+            return !running_.load() || snapshotRequested_.load() || pendingCommand_;
           });
-      WireActiveSession();
-      PollOnce();
-    } catch (const winrt::hresult_error& error) {
-      EmitError(std::string("Unable to wire GSMTC events: ") +
-                winrt::to_string(error.message()));
-      running_.store(false);
-      return;
-    } catch (const std::exception& error) {
-      EmitError(std::string("Unable to wire GSMTC events: ") + error.what());
-      running_.store(false);
-      return;
+          snapshotRequested_.store(false);
+        });
+  }
+
+  void ReportWorkerError(const char* prefix, std::exception_ptr error) {
+    try {
+      std::rethrow_exception(error);
+    } catch (const winrt::hresult_error& failure) {
+      EmitError(std::string(prefix) + winrt::to_string(failure.message()));
+    } catch (const std::exception& failure) {
+      EmitError(std::string(prefix) + failure.what());
     } catch (...) {
-      EmitError("Unable to wire GSMTC events");
+      EmitError(std::string(prefix) + "unknown native error");
+    }
+  }
+
+  void FinishWorker(bool apartmentInitialized) {
+    {
+      std::lock_guard<std::mutex> lock(workerMutex_);
       running_.store(false);
-      return;
     }
-
-    while (running_.load()) {
-      {
-        std::unique_lock<std::mutex> lock(workerMutex_);
-        workerCv_.wait_for(lock,
-                           std::chrono::milliseconds(kFallbackPollIntervalMs),
-                           [this]() {
-                             return !running_.load() || snapshotRequested_.load();
-                           });
-        snapshotRequested_.store(false);
-        if (!running_.load()) {
-          break;
-        }
-      }
-
-      try {
-        if (rewireSessionRequested_.exchange(false)) {
-          WireActiveSession();
-        }
-        PollOnce();
-      } catch (const winrt::hresult_error& error) {
-        EmitError(std::string("Snapshot update: ") + winrt::to_string(error.message()));
-      } catch (const std::exception& error) {
-        EmitError(std::string("Snapshot update std::exception: ") + error.what());
-      } catch (...) {
-        EmitError("Snapshot update unknown native error");
-      }
+    {
+      std::lock_guard<std::mutex> lock(eventGate_->mutex);
+      eventGate_->watcher = nullptr;
     }
-
     UnwireAll();
     manager_ = nullptr;
     cachedTitle_.clear();
+    if (auto request = TakeCommand()) {
+      CompleteCommand(std::move(request), "Windows playback watcher stopped.");
+    }
+    if (apartmentInitialized) winrt::uninit_apartment();
   }
 
   void UnwireActiveSession() {
-    if (!activeSession_) {
-      return;
-    }
-    try {
-      activeSession_.TimelinePropertiesChanged(sessionTimelineToken_);
-      activeSession_.PlaybackInfoChanged(sessionPlaybackToken_);
-      activeSession_.MediaPropertiesChanged(sessionMediaToken_);
-    } catch (...) {
-      // Session may already be gone.
-    }
+    if (!activeSession_) return;
+    RevokeEvent(sessionTimelineToken_, [this](auto token) { activeSession_.TimelinePropertiesChanged(token); });
+    RevokeEvent(sessionPlaybackToken_, [this](auto token) { activeSession_.PlaybackInfoChanged(token); });
+    RevokeEvent(sessionMediaToken_, [this](auto token) { activeSession_.MediaPropertiesChanged(token); });
     activeSession_ = nullptr;
     ResetEmittedSnapshot();
     ResetTimelineAnchor();
@@ -315,42 +521,42 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
 
   void UnwireAll() {
     UnwireActiveSession();
-    if (manager_) {
-      try {
-        manager_.SessionsChanged(managerSessionsToken_);
-      } catch (...) {
-        // Manager may already be gone.
-      }
-    }
+    RevokeEvent(managerSessionsToken_, [this](auto token) { manager_.SessionsChanged(token); });
   }
 
   void WireActiveSession() {
-    UnwireActiveSession();
     if (!manager_) {
       return;
     }
 
     wmc::GlobalSystemMediaTransportControlsSession session = PickSession(manager_);
+    if (SameSession(activeSession_, session)) return;
+    const bool hadSession = !!activeSession_;
+    UnwireActiveSession();
+    sessionId_.clear();
+    cachedTitle_.clear();
+    lastPositionMs_ = -1;
     if (!session) {
+      if (hadSession) {
+        SnapshotData idle;
+        idle.capturedAtMs = CaptureWallClockMs();
+        EmitSnapshot(idle);
+      }
       return;
     }
 
+    static std::atomic<uint64_t> nextSessionId{0};
+    sessionId_ = std::to_string(GetCurrentProcessId()) + ":" +
+        std::to_string(NowEpochMs()) + ":" + std::to_string(++nextSessionId);
     activeSession_ = session;
-    sessionTimelineToken_ = activeSession_.TimelinePropertiesChanged(
-        [this](wmc::GlobalSystemMediaTransportControlsSession const&,
-               wmc::TimelinePropertiesChangedEventArgs const&) {
-          ScheduleSnapshot(false, false, true);
-        });
-    sessionPlaybackToken_ = activeSession_.PlaybackInfoChanged(
-        [this](wmc::GlobalSystemMediaTransportControlsSession const&,
-               wmc::PlaybackInfoChangedEventArgs const&) {
-          ScheduleSnapshot(false, false, false);
-        });
-    sessionMediaToken_ = activeSession_.MediaPropertiesChanged(
-        [this](wmc::GlobalSystemMediaTransportControlsSession const&,
-               wmc::MediaPropertiesChangedEventArgs const&) {
-          ScheduleSnapshot(false, true, false);
-        });
+    try {
+      sessionTimelineToken_ = activeSession_.TimelinePropertiesChanged(SnapshotEvent(false, true));
+      sessionPlaybackToken_ = activeSession_.PlaybackInfoChanged(SnapshotEvent(false, false));
+      sessionMediaToken_ = activeSession_.MediaPropertiesChanged(SnapshotEvent(true, false));
+    } catch (...) {
+      UnwireActiveSession();
+      throw;
+    }
   }
 
   void ResetTimelineAnchor() {
@@ -406,18 +612,10 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
       return;
     }
 
-    wmc::GlobalSystemMediaTransportControlsSession session =
-        activeSession_ ? activeSession_ : PickSession(manager_);
+    WireActiveSession();
+    const auto session = activeSession_;
     if (!session) {
       return;
-    }
-
-    if (!activeSession_) {
-      WireActiveSession();
-      session = activeSession_;
-      if (!session) {
-        return;
-      }
     }
 
     auto timeline = session.GetTimelineProperties();
@@ -446,10 +644,15 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
                                      cachedTitle_.empty() || trackLikelyChanged;
 
       if (needsMediaRefresh) {
-        auto media = session.TryGetMediaPropertiesAsync().get();
-        cachedTitle_ = HstringToUtf8(media.Title());
-        cachedArtist_ = HstringToUtf8(media.Artist());
-        cachedAlbum_ = HstringToUtf8(media.AlbumTitle());
+        try {
+          auto media = AwaitOperation(session.TryGetMediaPropertiesAsync());
+          cachedTitle_ = HstringToUtf8(media.Title());
+          cachedArtist_ = HstringToUtf8(media.Artist());
+          cachedAlbum_ = HstringToUtf8(media.AlbumTitle());
+        } catch (...) {
+          forceMediaRefresh_.store(true);
+          throw;
+        }
       }
 
       lastPositionMs_ = rawPositionMs;
@@ -471,6 +674,8 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
     snapshot.title = title;
     snapshot.artist = artist;
     snapshot.album = album;
+    snapshot.deviceId = HstringToUtf8(session.SourceAppUserModelId());
+    snapshot.sessionId = sessionId_;
     snapshot.durationMs = durationMs;
     snapshot.positionMs = positionMs;
     snapshot.rawPositionMs = rawPositionMs;
@@ -536,34 +741,25 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
   void ResetEmittedSnapshot() { lastEmitted_.initialized = false; }
 
   void EmitSnapshot(const SnapshotData& snapshot) {
-    auto payload = new SnapshotData(snapshot);
-    snapshotTsfn_.BlockingCall(
-        payload,
-        [](Napi::Env env, Napi::Function callback, SnapshotData* data) {
-          callback.Call({SnapshotToJs(env, *data)});
-          delete data;
-        });
+    snapshotTsfn_.Send(snapshot);
+    if (!snapshotTsfn_) running_.store(false);
   }
 
   void EmitError(const std::string& message) {
-    auto payload = new std::string(message);
-    errorTsfn_.BlockingCall(
-        payload,
-        [](Napi::Env env, Napi::Function callback, std::string* data) {
-          callback.Call({Napi::String::New(env, *data)});
-          delete data;
-        });
+    errorTsfn_.Send(message);
+    if (!errorTsfn_) running_.store(false);
   }
 
-  Napi::ThreadSafeFunction snapshotTsfn_;
-  Napi::ThreadSafeFunction errorTsfn_;
+  CallbackOwner<SnapshotFunction> snapshotTsfn_;
+  CallbackOwner<ErrorFunction> errorTsfn_;
+  std::shared_ptr<EventGate> eventGate_;
   std::atomic<bool> running_{false};
   std::thread worker_;
 
   std::mutex workerMutex_;
   std::condition_variable workerCv_;
+  std::unique_ptr<CommandRequest> pendingCommand_;
   std::atomic<bool> snapshotRequested_{false};
-  std::atomic<bool> rewireSessionRequested_{false};
   std::atomic<bool> forceMediaRefresh_{false};
   std::atomic<bool> timelineUpdatedRequested_{false};
 
@@ -573,10 +769,11 @@ class WindowsMediaSessionWatcher : public Napi::ObjectWrap<WindowsMediaSessionWa
 
   wmc::GlobalSystemMediaTransportControlsSessionManager manager_{nullptr};
   wmc::GlobalSystemMediaTransportControlsSession activeSession_{nullptr};
-  winrt::event_token managerSessionsToken_{};
-  winrt::event_token sessionTimelineToken_{};
-  winrt::event_token sessionPlaybackToken_{};
-  winrt::event_token sessionMediaToken_{};
+  std::string sessionId_;
+  std::optional<winrt::event_token> managerSessionsToken_{};
+  std::optional<winrt::event_token> sessionTimelineToken_{};
+  std::optional<winrt::event_token> sessionPlaybackToken_{};
+  std::optional<winrt::event_token> sessionMediaToken_{};
 
   std::mutex mediaMutex_;
   std::string cachedTitle_;

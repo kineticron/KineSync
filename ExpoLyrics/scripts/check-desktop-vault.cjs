@@ -43,6 +43,7 @@ const state = { serverUrl: 'ws://localhost:1234', handshakeKey: 'test-key', setC
 const { bridgeClient } = load('lib/bridge-client.ts', {
   '@/store/playback-store': { usePlaybackStore: { getState: () => state }, startPlaybackClock() {}, stopPlaybackClock() {} },
   '@/lib/network': { isValidBridgeKey: () => true, parseBridgeWebSocketUrl: value => value },
+  '@/lib/optimistic-playback': { registerPlaybackCommandTransport() {}, refreshPlaybackCommands() {}, cancelPlaybackCommands() {} },
   '@/lib/bridge-validation': validation,
 }, { WebSocket: FakeSocket });
 const { transferDesktopVaultToMobile } = load('lib/desktop-vault-transfer.ts', { '@/lib/bridge-client': { bridgeClient }, '@/lib/mobile-lyrics-vault': vault });

@@ -139,6 +139,7 @@ function buildMprisSnapshot({ metadata, playbackStatus, positionUs, capturedAtMs
   const artist = firstText(metadataValue(metadata, "xesam:artist"));
   const album = firstText(metadataValue(metadata, "xesam:album"));
   const artworkUrl = firstText(metadataValue(metadata, "mpris:artUrl"));
+  const playbackSessionId = firstText(metadataValue(metadata, "mpris:trackid"));
   const durationMs = microsecondsToMilliseconds(
     metadataValue(metadata, "mpris:length", 0),
   );
@@ -146,6 +147,7 @@ function buildMprisSnapshot({ metadata, playbackStatus, positionUs, capturedAtMs
 
   return {
     title,
+    ...(playbackSessionId && { playbackSessionId }),
     artist,
     album,
     artworkUrl,
@@ -170,6 +172,14 @@ function callbackToPromise(register) {
       resolve(value);
     });
   });
+}
+
+function readPlayerProperty(player, name) {
+  const getter = player?.[name];
+  if (typeof getter !== "function") {
+    throw new Error(`Spotify MPRIS property is unavailable: ${name}`);
+  }
+  return callbackToPromise((callback) => getter.call(player, callback));
 }
 
 class MprisSpotifyClient {
@@ -220,8 +230,11 @@ class MprisSpotifyClient {
     );
   }
 
-  async getPlayerInterface() {
+  async getPlayerInterface(expectedPlayerName) {
     const playerName = await this.findPlayerName();
+    if (expectedPlayerName && playerName !== expectedPlayerName) {
+      throw new Error("Spotify MPRIS playback target changed.");
+    }
     if (!playerName) {
       this.playerName = "";
       this.playerInterface = null;
@@ -239,45 +252,51 @@ class MprisSpotifyClient {
     return this.playerInterface;
   }
 
-  async readProperty(name) {
-    const player = await this.getPlayerInterface();
-    const getter = player?.[name];
-    if (typeof getter !== "function") {
-      throw new Error(`Spotify MPRIS property is unavailable: ${name}`);
-    }
-    return callbackToPromise((callback) => getter(callback));
+  async readProperty(name, expectedPlayerName) {
+    return readPlayerProperty(await this.getPlayerInterface(expectedPlayerName), name);
   }
 
   async readSnapshot() {
+    const player = await this.getPlayerInterface();
+    const activeDeviceId = this.playerName;
     const [metadata, playbackStatus, positionUs] = await Promise.all([
-      this.readProperty("Metadata"),
-      this.readProperty("PlaybackStatus"),
-      this.readProperty("Position"),
+      readPlayerProperty(player, "Metadata"),
+      readPlayerProperty(player, "PlaybackStatus"),
+      readPlayerProperty(player, "Position"),
     ]);
     const snapshot = buildMprisSnapshot({ metadata, playbackStatus, positionUs });
+    snapshot.activeDeviceId = activeDeviceId;
     snapshot.artworkUrl = await makeMprisArtworkPortable(snapshot.artworkUrl);
     return snapshot;
   }
 
   async call(method, ...args) {
-    const player = await this.getPlayerInterface();
+    return this.callOnPlayer(undefined, method, args);
+  }
+
+  async callOnPlayer(expectedPlayerName, method, args = [], beforeDispatch) {
+    const player = await this.getPlayerInterface(expectedPlayerName);
     const fn = player?.[method];
     if (typeof fn !== "function") {
       throw new Error(`Spotify MPRIS method is unavailable: ${method}`);
     }
     // dbus-native generates proxy methods that dispatch through
     // `this.$callMethod`; preserve the interface receiver when invoking them.
+    beforeDispatch?.();
     return callbackToPromise((callback) => fn.call(player, ...args, callback));
   }
 
-  async seekTo(positionMs) {
-    const metadata = await this.readProperty("Metadata");
+  async seekTo(positionMs, expectedPlayerName, expectedSessionId, beforeDispatch) {
+    const metadata = await this.readProperty("Metadata", expectedPlayerName);
     const trackId = firstText(metadataValue(metadata, "mpris:trackid"));
     if (!trackId) {
       throw new Error("Spotify MPRIS metadata did not include a track id.");
     }
+    if (expectedSessionId && trackId !== expectedSessionId) {
+      throw new Error("Spotify MPRIS playback track changed.");
+    }
     const positionUs = Math.max(0, Math.floor(Number(positionMs) || 0)) * 1000;
-    return this.call("SetPosition", trackId, positionUs);
+    return this.callOnPlayer(expectedPlayerName, "SetPosition", [trackId, positionUs], beforeDispatch);
   }
 
   close() {
@@ -304,6 +323,7 @@ class LinuxMediaSessionWatcher {
     this.pollInFlight = false;
     this.lastError = "";
     this.lastSnapshotSignature = "";
+    this.lastSnapshotAt = 0;
   }
 
   reportError(error) {
@@ -330,6 +350,8 @@ class LinuxMediaSessionWatcher {
         .update(
           JSON.stringify({
             title: snapshot.title,
+            activeDeviceId: snapshot.activeDeviceId,
+            playbackSessionId: snapshot.playbackSessionId,
             artist: snapshot.artist,
             album: snapshot.album,
             artworkUrl: snapshot.artworkUrl,
@@ -339,8 +361,10 @@ class LinuxMediaSessionWatcher {
           }),
         )
         .digest("hex");
-      if (signature !== this.lastSnapshotSignature) {
+      const now = Date.now();
+      if (signature !== this.lastSnapshotSignature || now - this.lastSnapshotAt >= 1000) {
         this.lastSnapshotSignature = signature;
+        this.lastSnapshotAt = now;
         if (typeof this.onSnapshot === "function") {
           this.onSnapshot(snapshot);
         }

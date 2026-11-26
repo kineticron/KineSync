@@ -39,9 +39,11 @@ let liveCommands = 0;
 const liveCommand = () => { liveCommands++; };
 const setter = () => {};
 const handlers = {
-  nativePlaybackUnavailable: () => false,
+  nativePlaybackBlocked: () => false,
+  playbackCommands: { getSnapshot: () => ({}) },
+  finishSeekInteraction: setter,
   usePlayerTourStore: store,
-  usePlaybackStore: { getState: () => ({ connectionStatus: 'connected' }), setState: liveCommand },
+  usePlaybackStore: { getState: () => ({ playbackMode: 'desktop', connectionStatus: 'connected' }), setState: liveCommand },
   bridgeClient: { togglePlayPause: liveCommand, resyncPlayback: liveCommand, skipPrevious: liveCommand, skipNext: liveCommand },
   spotifyBrowserRef: { current: { togglePlayPause: liveCommand, resyncPlayback: liveCommand, skipPrevious: liveCommand, skipNext: liveCommand } },
   sendSeekToPlaybackSource: liveCommand, requestImmediateTranslationForCurrentSource: liveCommand,
@@ -58,6 +60,7 @@ for (const [name, callback] of Object.entries(callbacks)) {
 }
 assert.equal(Object.keys(handlers.result).length, names.length);
 const actions = handlers.result;
+handlers.handleSeek = actions.handleSeek;
 actions.handleShowFullscreenAlbum(); assert.equal(store.getState().step, 'lyrics');
 actions.handleShowLyrics(); assert.equal(store.getState().step, 'seek');
 actions.handleLyricLinePress({ lineStartTime: 5000 });

@@ -239,7 +239,7 @@ function createHostedRelayServer({
         socket.isAuthorized = true;
         clearTimeout(socket.authTimer);
         room.clients.add(socket);
-        send(socket, { type: "hello:ack", ok: true, authenticated: true, role: "client", bridgeId });
+        send(socket, { type: "hello:ack", ok: true, authenticated: true, role: "client", bridgeId, guardedSeek: true });
         sendRoomStatus(room);
         return;
       }

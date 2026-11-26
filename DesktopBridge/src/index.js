@@ -202,7 +202,7 @@ app.whenReady().then(() => {
       throw error;
     }
   });
-  const playbackController = createPlaybackController();
+  const playbackController = createPlaybackController({ executeWindowsPlayback: detector.executeWindowsPlayback });
   playbackController.setSpotifyAccessTokenGetter(spotifyAccessTokenGetter);
   const STATUS_PUSH_INTERVAL_MS = 250;
   let latestPlaybackStatus = {};
@@ -1573,7 +1573,7 @@ app.whenReady().then(() => {
       if (packet.type === "playback:playPause") {
         latestCommandStatus = "Sending play/pause...";
         void playbackController
-          .togglePlayPause()
+          .executeCommand(packet, () => latestSnapshot)
           .then(() => {
             latestCommandStatus = "Play/pause command sent.";
           })
@@ -1585,7 +1585,7 @@ app.whenReady().then(() => {
       if (packet.type === "playback:resync") {
         latestCommandStatus = "Resyncing playback timer...";
         void playbackController
-          .resyncPlayback()
+          .executeCommand(packet, () => latestSnapshot)
           .then(() => {
             latestCommandStatus = "Playback timer resync sent.";
           })
@@ -1597,7 +1597,7 @@ app.whenReady().then(() => {
       if (packet.type === "playback:next") {
         latestCommandStatus = "Sending next track...";
         void playbackController
-          .next()
+          .executeCommand(packet, () => latestSnapshot)
           .then(() => {
             latestCommandStatus = "Next track command sent.";
           })
@@ -1609,7 +1609,7 @@ app.whenReady().then(() => {
       if (packet.type === "playback:previous") {
         latestCommandStatus = "Sending previous track...";
         void playbackController
-          .previous()
+          .executeCommand(packet, () => latestSnapshot)
           .then(() => {
             latestCommandStatus = "Previous track command sent.";
           })
@@ -1618,19 +1618,22 @@ app.whenReady().then(() => {
           });
         return;
       }
-      if (packet.type === "playback:seek") {
+      if (packet.type === "playback:seek" || packet.type === "playback:seek:guarded") {
         const seekPositionMs = Math.max(
           0,
           Math.floor(Number(packet.positionMs || 0)),
         );
+        const seekSnapshot = latestSnapshot;
         latestCommandStatus = `Seeking to ${seekPositionMs}ms...`;
         console.log(`[playback] seek requested -> ${seekPositionMs}ms`);
         void playbackController
-          .seek(seekPositionMs)
+          .executeCommand(packet, () => latestSnapshot)
           .then(() => {
             latestCommandStatus = `Seek command sent (${seekPositionMs}ms).`;
             console.log(`[playback] seek ok -> ${seekPositionMs}ms`);
-            if (!latestSnapshot?.trackId) {
+            if (!latestSnapshot?.trackId || latestSnapshot.trackId !== seekSnapshot?.trackId ||
+                latestSnapshot.activeDeviceId !== seekSnapshot.activeDeviceId ||
+                latestSnapshot.playbackSessionId !== seekSnapshot.playbackSessionId) {
               return;
             }
             const forcedPacket = {
@@ -1638,6 +1641,7 @@ app.whenReady().then(() => {
               positionMs: seekPositionMs,
               timestamp: Date.now(),
               capturedAtMs: Date.now(),
+              controlSnapshot: false,
             };
             latestSnapshot = forcedPacket;
             latestPlaybackStatus = {

@@ -28,6 +28,7 @@ async function load(file, mocks = {}) {
   })).usePlaybackStore;
   const bridge = (await load('lib/bridge-client.ts', {
     '@/store/playback-store': { usePlaybackStore: store },
+    '@/lib/optimistic-playback': { registerPlaybackCommandTransport() {} },
     '@/lib/network': {}, '@/lib/bridge-validation': {},
   })).bridgeClient;
   const model = await load('components/lyrics/native/native-lyrics-model.ts');

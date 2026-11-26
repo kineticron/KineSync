@@ -125,9 +125,46 @@ await check('review: fresh observation supersedes ambiguous POST outcome without
 await check('review: unrelated unchanged state is not positive toggle confirmation, but no-op reconciliation preserves transport',async()=>{
  const h=setup();try {h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;const command=h.d.control({type:'toggle'});await flush();ws.event({payloads:[state()]});pending.resolve({status:204});await command;assert.equal(h.d.health.command,'awaitingConfirmation');ws.event({payloads:[state()]});assert.equal(h.d.health.command,'awaitingConfirmation');h.response={status:200,body:state()};await h.clock.advance(5000);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.posts().length,1);assert.equal(h.d.health.attempt,0);}finally{h.d.clear();}
 });
-await check('review: stale observation cannot positively settle a pending command',async()=>{
- const h=setup();try {h.start();const ws=await h.identify();const pending=deferred();h.response=()=>pending.promise;const command=h.d.control({type:'toggle'});await flush();ws.event({payloads:[state('phone',uri,1899999999000)]});pending.resolve({status:204});await command;assert.equal(h.d.health.command,'awaitingConfirmation');h.response={status:200,body:state('phone',uri,1899999999000)};await h.clock.advance(5000);assert.equal(h.d.health.command,'idle');assert.equal(h.sockets.length,1);assert.equal(h.d.socket,ws);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.d.health.attempt,0);}finally{h.d.clear();}
-});
+for (const catchesUp of [true, false]) {
+ await check(`review: stale observation keeps command recovery bounded (fresh retry: ${catchesUp})`, async () => {
+  const h = setup();
+  try {
+   h.start();
+   const ws = await h.identify();
+   const pending = deferred();
+   h.response = () => pending.promise;
+   const command = h.d.control({ type: 'toggle' });
+   await flush();
+   const stale = state('phone', uri, 1899999999000);
+   ws.event({ payloads: [stale] });
+   pending.resolve({ status: 204 });
+   await command;
+   assert.equal(h.d.health.command, 'awaitingConfirmation');
+   h.response = { status: 200, body: stale };
+   await h.clock.advance(5000);
+   assert.equal(h.d.health.phase, 'registering');
+   assert.equal(h.d.health.command, 'outcomeUnknown');
+   assert.equal(h.d.health.controlsEnabled, false);
+   assert.equal(h.d.socket, ws);
+   assert.equal(h.requests.filter(r => r.method === 'PUT').length, 2);
+
+   if (catchesUp) h.response = { status: 200, body: state('phone', uri, h.clock.wall) };
+   await h.clock.advance(500);
+   assert.equal(h.requests.filter(r => r.method === 'PUT').length, 3);
+   if (catchesUp) {
+    assert.equal(h.d.health.command, 'idle');
+    assert.equal(h.d.health.controlsEnabled, true);
+    assert.equal(h.d.socket, ws);
+    assert.equal(h.d.health.attempt, 0);
+   } else {
+    await h.clock.advance(4500);
+    assert.equal(h.d.health.phase, 'renewingSession', 'a second stale response cannot cancel the original deadline');
+    assert.equal(h.d.socket, null);
+   }
+   assert.equal(h.posts().length, 1);
+  } finally { h.d.clear(); }
+ });
+}
 await check('review: no-op confirmation timeout reconciles observation once without transport penalty',async()=>{
  const h=setup();try {h.start();const ws=await h.identify();const attempt=h.d.health.attempt;await h.d.control({type:'next'});await h.clock.advance(4999);assert.equal(h.requests.filter(r=>r.method==='PUT').length,1);await h.clock.advance(1);assert.equal(h.d.health.command,'idle');assert.equal(h.d.socket,ws);assert.equal(h.sockets.length,1);assert.equal(h.posts().length,1);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);assert.equal(h.d.health.attempt,attempt);assert.equal(h.d.health.lastError,undefined);await h.clock.advance(5001);assert.equal(h.requests.filter(r=>r.method==='PUT').length,2);}finally{h.d.clear();}
 });
@@ -543,11 +580,14 @@ for (const confirmWith of ['idle', 'deadline']) {
     assert.equal(h.needed, 2);
     h.recapture('fallback');
     h.response = { status: 200, body: state() };
+    const sampleCount = h.samples.length;
     const fresh = await h.identify();
     assert.equal(h.d.health.observerConfirmed, false, 'fresh capture still needs current state after cache failure');
+    assert.equal(h.samples.length, sampleCount, 'stale fallback registration cannot publish playback');
     await allDisabled(h);
     fresh.event({ payloads: [state('phone', uri, h.clock.wall)] });
     assert(h.d.health.controlsEnabled);
+    assert.equal(h.samples.at(-1).positionTimestampMs, h.clock.wall);
    }
   } finally { h.d.clear(); }
  });
@@ -878,6 +918,34 @@ await check('expiry stages fresh capture while the verified socket still accepts
   assert(h.d.health.controlsEnabled);assert.equal(h.posts().length,1);
  }finally{h.d.clear();}
 });
+await check('regular credential renewal retries a stale registration without waiting for Dealer', async () => {
+ const h = setup();
+ try {
+  h.d.setEnabled(true);
+  h.capture({ type: 'credentials', authenticated: true, token: 'expiring', expiresAt: h.clock.wall + 90000 });
+  h.capture({ type: 'observerEndpoint', url: 'https://spclient.spotify.com/connect-state/v1/devices/browser' });
+  h.capture({ type: 'socket', url: 'wss://dealer.spotify.com/' });
+  await h.identify();
+  await h.clock.advance(30000);
+  assert.equal(h.needed, 2, 'the scheduled soft renewal opened a capture');
+  const previousRevision = h.d.playbackCommandState.observation.revision;
+  h.recapture('replacement');
+  const previousPuts = h.requests.filter(request => request.method === 'PUT').length;
+  h.response = { status: 200, body: state('phone', uri, 1899999999000) };
+  const replacement = await h.identify();
+  assert.equal(h.d.health.phase, 'registering');
+  assert.equal(h.d.playbackCommandState.ready, false);
+  await allDisabled(h);
+
+  h.response = { status: 200, body: state('phone', uri, h.clock.wall) };
+  await h.clock.advance(500);
+  assert.equal(h.requests.filter(request => request.method === 'PUT').length, previousPuts + 2);
+  assert.equal(h.d.socket, replacement);
+  assert.equal(h.d.playbackCommandState.ready, true);
+  assert(h.d.playbackCommandState.observation.revision > previousRevision);
+  assert.equal(h.posts().length, 0);
+ } finally { h.d.clear(); }
+});
 for (const result of ['unavailable','timeout','anonymous','401','offline','background','signout']) await check(`staged acquisition handles ${result} without accepting late credentials`, async()=>{
  const h=setup();
  try {
@@ -1206,6 +1274,9 @@ await check('same-socket connection rotation invalidates prior403 even with olde
  await rotationDenied(h,'next');
  await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
  assert.equal(h.sockets.length,1);
+ await allDisabled(h);
+ h.response={status:200,body:state('phone',uri,rotationTS+1000)};
+ await h.clock.advance(500);
  assert.equal(h.d.health.allowed.next,true,'new connection cannot inherit prior connection HTTP denial');
  assert.equal(await rotationCan(h,'next'),true);
  assert.equal(h.posts().length,2);
@@ -1218,6 +1289,9 @@ await check('same-socket late old403 cannot deny rotated connection after stale 
  await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
  gate.resolve({status:403});await pending;await flush();
  assert.equal(h.sockets.length,1);
+ await allDisabled(h);
+ h.response={status:200,body:state('phone',uri,rotationTS+1000)};
+ await h.clock.advance(500);
  assert.equal(h.d.health.allowed.next,true);
  assert.equal(await rotationCan(h,'next'),true);
  assert.equal(h.posts().length,2);
@@ -1228,7 +1302,7 @@ for(const identity of ['omitted','empty'])await check('rotated registration '+id
  const snapshot=state('phone',uri,rotationTS-100);
  if(identity==='omitted')delete snapshot.active_device_id;else snapshot.active_device_id='';
  await rotateWithSnapshot(h,ws,snapshot);
- assert.equal(h.d.health.target,'absent');
+ assert.equal(h.d.health.target,'unknown');
  assert.equal(await rotationCan(h,'next'),false);assert.equal(h.posts().length,0);
  }finally{h.d.clear();}
 });
@@ -1239,20 +1313,27 @@ await check('pending Dealer idle before rotated stale registration prevents targ
  await flush();
  ws.event({payloads:[{active_device_id:'',player_state:{is_playing:false}}]});
  registration.resolve({status:200,body:state('phone',uri,rotationTS-100)});await flush();
+ assert.equal(h.d.health.target,'unknown');
+ await allDisabled(h);
+ h.response={status:200,body:{active_device_id:'',player_state:{is_playing:false}}};
+ await h.clock.advance(500);
  assert.equal(h.d.health.target,'absent');
  assert.equal(await rotationCan(h,'next'),false);assert.equal(h.posts().length,0);
  assert.equal(h.sockets.length,1);
  }finally{h.d.clear();}
 });
-await check('rotated stale registration restores known target without replacing playback or accepted watermark',async()=>{
+await check('rotated stale registration retains the watermark and recovers only with a current observation',async()=>{
  const {h,ws}=await rotationFresh();try{
  ws.event(rotationS({ts:rotationTS+100,position:8000}));await flush();
  const accepted=h.samples.at(-1),count=h.samples.length;
  await rotateWithSnapshot(h,ws,state('phone',uri,rotationTS-100));
- assert.equal(h.d.health.target,'available');
+ assert.equal(h.d.health.target,'unknown');
  assert.equal(h.samples.length,count);assert.equal(h.samples.at(-1),accepted);
  ws.event(rotationS({ts:rotationTS,position:2000}));await flush();
- assert.equal(h.samples.length,count,'restoration must not regress accepted watermark');
+ assert.equal(h.samples.length,count,'recovery must not regress accepted watermark');
+ await allDisabled(h);
+ h.response={status:200,body:state('phone',uri,rotationTS+1000)};
+ await h.clock.advance(500);
  assert.equal(await rotationCan(h,'next'),true);assert.equal(decodeURIComponent(new URL(h.posts().at(-1).url).pathname.split('/').at(-1)),'phone');
  }finally{h.d.clear();}
 });
@@ -1387,12 +1468,13 @@ await check('review: whole-episode deadline parks passive capture until intended
 await check('health presentation distinguishes no device, offline, denial and sign-in without routing mutation',async()=>{
  const h=setup();h.start();h.response={status:200,body:{player_state:{is_paused:true}}};await h.identify();assert.match(spotifyHealthMessage(h.d.health),/no active/);h.d.setReachability('offline');assert.match(spotifyHealthMessage(h.d.health),/Offline/);assert.equal(h.d.health.source,'nativeSpotify');h.d.clear();
  const source=readFileSync('components/lyrics/spotify-connection-strip.tsx','utf8');assert(source.includes("s.playbackMode === 'mobile' && s.connectionStatus !== 'connected'"));assert(!source.includes('setState'));
- const screen=readFileSync('app/(tabs)/index.tsx','utf8');
- for(const [handler,guard] of Object.entries({handleLyricLinePress:"nativePlaybackUnavailable('seek')",handleSeek:"nativePlaybackUnavailable('seek')",handlePlaybackPrevious:"nativePlaybackUnavailable(pos > 3000 ? 'seek' : 'previous')",sendSeekToPlaybackSource:"nativePlaybackUnavailable('seek')",handlePlaybackPlayPause:"nativePlaybackUnavailable(usePlaybackStore.getState().isPlaying ? 'pause' : 'resume')",handlePlaybackNext:"nativePlaybackUnavailable('next')",handleScrubPreview:"nativePlaybackUnavailable('seek')"})){
-  const start=screen.indexOf(`const ${handler} =`);assert(start>=0,handler);
-  assert(screen.slice(start,start+500).includes(guard),handler+' must gate the actual operation');
- }
- const controls=readFileSync('components/lyrics/playback-controls.tsx','utf8');assert(controls.includes('.enabled(!controlsDisabled)'));assert(controls.includes('accessibilityState={{ disabled }}'));assert(controls.includes('if (controlsDisabled) { setIsScrubbing(false)'));for(const operation of ['previousDisabled','nextDisabled','playPauseDisabled'])assert(controls.includes('disabled={controlsDisabled || '+operation+'}'));assert(controls.includes('controlsDisabled={controlsDisabled || seekDisabled}'));
+ const controls=readFileSync('components/lyrics/playback-controls.tsx','utf8');
+ assert(controls.includes('.enabled(!controlsDisabled)'));
+ assert(controls.includes('accessibilityState={{ disabled, busy: pending }}'));
+ assert(controls.includes('if (controlsDisabled) { setIsScrubbing(false)'));
+ for(const operation of ['previousDisabled','nextDisabled','playPauseDisabled']) assert(controls.includes('disabled={controlsDisabled || '+operation+'}'));
+ assert(controls.includes('controlsDisabled={controlsDisabled || seekDisabled}'));
+ for(const command of ['previous','next','play','seek']) assert(controls.includes('pending={pendingCommands?.'+command+'Pending}'));
 });
 
 for (const stage of ['connect','id','headers','body']) await check('review: lossy five-second deadline for '+stage, async()=>{

@@ -45,21 +45,39 @@ static async Task<GlobalSystemMediaTransportControlsSession?> GetPreferredSessio
     return manager.GetCurrentSession();
 }
 
-static async Task<int> RunSeekAsync(long targetMs)
+static async Task<int> RunSeekAsync(long targetMs, long? expiresAtMs = null)
 {
-    var session = await GetPreferredSessionAsync();
-    if (session is null)
+    // The deadline-aware protocol reserves exit 2 for definite predispatch
+    // failures. Keep the older seek command's exit status contract.
+    int BeforeDispatch(string message)
     {
-        return Fail("No media session available.");
+        Console.Error.WriteLine(message);
+        return expiresAtMs.HasValue ? 2 : 1;
     }
 
-    var playbackInfo = session.GetPlaybackInfo();
-    if (!playbackInfo.Controls.IsPlaybackPositionEnabled)
+    GlobalSystemMediaTransportControlsSession? session;
+    long targetTicks;
+    try
     {
-        return Fail("Seek is not enabled for current media session.");
+        session = await GetPreferredSessionAsync();
+        if (session is null)
+        {
+            return BeforeDispatch("No media session available.");
+        }
+        if (!session.GetPlaybackInfo().Controls.IsPlaybackPositionEnabled)
+        {
+            return BeforeDispatch("Seek is not enabled for current media session.");
+        }
+        targetTicks = TimeSpan.FromMilliseconds(targetMs).Ticks;
+        if (expiresAtMs.HasValue && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= expiresAtMs.Value)
+        {
+            return BeforeDispatch("Playback intent expired before dispatch.");
+        }
     }
-
-    var targetTicks = TimeSpan.FromMilliseconds(targetMs).Ticks;
+    catch (Exception ex)
+    {
+        return BeforeDispatch($"Unable to prepare seek: {ex.Message}");
+    }
 
     bool seekOk;
     try
@@ -307,6 +325,15 @@ if (args.Length == 0)
 }
 
 var command = args[0].Trim().ToLowerInvariant();
+if (command == "seek-before")
+{
+    if (args.Length != 3 || !long.TryParse(args[1], out var targetMs) ||
+        !long.TryParse(args[2], out var expiresAtMs) || expiresAtMs <= 0)
+    {
+        return Fail("Usage: spotify-seek-helper seek-before <targetPositionMs> <expiresAtMs>");
+    }
+    return await RunSeekAsync(Math.Max(0, targetMs), expiresAtMs);
+}
 if (command == "seek")
 {
     if (args.Length < 2 || !double.TryParse(args[1], out var targetMsDouble))

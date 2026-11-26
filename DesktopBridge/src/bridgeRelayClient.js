@@ -48,8 +48,11 @@ function createBridgeRelayClient({
   let rateLimiter = createRateLimiter();
   let latestPlaybackPacket = null;
   let lastPlaybackSentAt = 0;
+  let lastControlSentAt = 0;
   let lastPlaybackPositionMs = 0;
   let lastPlaybackTrackId = "";
+  let lastPlaybackDeviceId;
+  let lastPlaybackSessionId;
   let lastPlaybackIsPlaying = false;
   let lastArtworkKey = "";
   let lastKnownArtworkTrackId = "";
@@ -159,7 +162,7 @@ function createBridgeRelayClient({
       if (packet.type === "relay:status") {
         connectedClients = Math.max(0, Math.floor(Number(packet.clients) || 0));
         if (connectedClients > lastClientCount && latestPlaybackPacket) {
-          sendPlaybackPacket(latestPlaybackPacket, {
+          sendPlaybackPacket({ ...latestPlaybackPacket, playbackCached: true }, {
             force: true,
             includeArtwork: true,
           });
@@ -227,6 +230,8 @@ function createBridgeRelayClient({
     const isPlaying = Boolean(safePacket.isPlaying);
     const positionMs = Math.floor(Number(safePacket.positionMs) || 0);
     const trackChanged = trackId !== lastPlaybackTrackId;
+    const targetChanged = safePacket.activeDeviceId !== lastPlaybackDeviceId ||
+      safePacket.playbackSessionId !== lastPlaybackSessionId;
     const playStateChanged = isPlaying !== lastPlaybackIsPlaying;
     const seekDetected =
       !trackChanged &&
@@ -234,8 +239,10 @@ function createBridgeRelayClient({
     const artworkDue = includeArtwork || shouldSendArtwork(safePacket, now);
     const intervalDue =
       now - lastPlaybackSentAt >= Math.max(100, RELAY_PLAYBACK_INTERVAL_MS);
+    const controlDue = safePacket.controlSnapshot === true && !safePacket.playbackCached &&
+      now - lastControlSentAt >= Math.max(100, RELAY_PLAYBACK_INTERVAL_MS);
 
-    if (!force && !trackChanged && !playStateChanged && !seekDetected && !artworkDue && !intervalDue) {
+    if (!force && !trackChanged && !targetChanged && !playStateChanged && !seekDetected && !artworkDue && !intervalDue && !controlDue) {
       return false;
     }
 
@@ -248,7 +255,10 @@ function createBridgeRelayClient({
       return false;
     }
     lastPlaybackSentAt = now;
+    if (safePacket.controlSnapshot === true && !safePacket.playbackCached) lastControlSentAt = now;
     lastPlaybackTrackId = trackId;
+    lastPlaybackDeviceId = safePacket.activeDeviceId;
+    lastPlaybackSessionId = safePacket.playbackSessionId;
     lastPlaybackIsPlaying = isPlaying;
     lastPlaybackPositionMs = positionMs;
     const sentArtworkUrl =
