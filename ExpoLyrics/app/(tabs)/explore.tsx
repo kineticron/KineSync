@@ -160,10 +160,6 @@ export default function BridgeSettingsScreen() {
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
   const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
   const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
-  const lyricsRendererBackend = usePlaybackStore(s => s.lyricsRendererBackend);
-  const lyricsRendererBackendHydrated = usePlaybackStore(s => s.lyricsRendererBackendHydrated);
-  const lyricsRendererBackendSaveFailed = usePlaybackStore(s => s.lyricsRendererBackendSaveFailed);
-  const setLyricsRendererBackend = usePlaybackStore(s => s.setLyricsRendererBackend);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
@@ -525,6 +521,7 @@ export default function BridgeSettingsScreen() {
                   </Pressable>
                   <Pressable
                     accessibilityRole="radio"
+                    accessibilityLabel="Mobile-Only"
                     aria-checked={playbackMode === 'mobile'}
                     accessibilityState={{ checked: playbackMode === 'mobile' }}
                     style={({ pressed }) => [
@@ -657,30 +654,7 @@ export default function BridgeSettingsScreen() {
                 <View style={styles.divider} />
               </> : null}
 
-              <SettingSection title="Advanced" collapsible>
-                <Text style={styles.fieldLabel}>Lyrics renderer</Text>
-                {(['rust', 'skia'] as const).map(backend => {
-                  const checked = lyricsRendererBackendHydrated && lyricsRendererBackend === backend;
-                  const label = backend === 'rust' ? 'Rust' : 'Skia';
-                  return (
-                    <Pressable key={backend} style={styles.secondaryButton}
-                      accessibilityRole="radio" accessibilityState={{ checked, disabled: !lyricsRendererBackendHydrated }}
-                      disabled={!lyricsRendererBackendHydrated} onPress={() => setLyricsRendererBackend(backend)}>
-                      <Ionicons name={checked ? 'radio-button-on' : 'radio-button-off'} size={18} color="#FFFFFF" />
-                      <Text style={styles.secondaryButtonText}>{label}</Text>
-                    </Pressable>
-                  );
-                })}
-                {lyricsRendererBackendSaveFailed && <>
-                  <Text accessibilityRole="alert" style={styles.fieldLabel}>Could not save your lyrics renderer choice.</Text>
-                  <Pressable style={styles.secondaryButton} accessibilityRole="button" onPress={() => setLyricsRendererBackend(lyricsRendererBackend)}>
-                    <Text style={styles.secondaryButtonText}>Retry save</Text>
-                  </Pressable>
-                </>}
-              </SettingSection>
-              <View style={styles.divider} />
-
-              {playbackMode === 'mobile' ? <SettingSection title="Advanced lyrics settings" collapsible>
+              {playbackMode === 'mobile' ? <SettingSection title="Advanced" collapsible>
                 {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
                   <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>Spotify player</Text>
@@ -713,6 +687,8 @@ export default function BridgeSettingsScreen() {
                     styles.secondaryButton,
                     pressed && styles.buttonPressed,
                   ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save mobile API settings"
                   onPress={saveMobileLyricsApiSettings}>
                   <Ionicons name="key" size={17} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>
@@ -720,8 +696,6 @@ export default function BridgeSettingsScreen() {
                   </Text>
                 </Pressable>
               </SettingSection> : null}
-
-              <View style={styles.divider} />
 
               {playbackMode === 'desktop' ? <SettingSection title={__DEV__ ? 'Timing diagnostics' : 'Playback timing'} collapsible>
                 {__DEV__ && <View style={styles.timingDiagnostics}>

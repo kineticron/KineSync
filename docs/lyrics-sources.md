@@ -10,7 +10,7 @@ Among online providers, `lrc-red-karaoke` has the highest priority, above `spicy
 
 ## Spicy Lyrics
 
-Use a publishable `sl_pk_` client key from the [Spicy developer dashboard](https://developers.spicylyrics.org/dashboard). Enter it in Desktop Bridge's Lyrics Sources settings or the mobile app's Advanced lyrics settings. Never embed an `sl_sk_` server key. Spotify credentials are not sent to the Spicy API.
+Use a publishable `sl_pk_` client key from the [Spicy developer dashboard](https://developers.spicylyrics.org/dashboard). Enter it in Desktop Bridge's Lyrics Sources settings. Mobile builds use the shared configuration or the mobile environment variable described below. Never embed an `sl_sk_` server key. Spotify credentials are not sent to the Spicy API.
 
 Native requests need no-origin access enabled for the application. Web requests need the actual origin allowlisted. See the [API documentation](https://developers.spicylyrics.org/docs).
 

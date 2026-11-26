@@ -522,13 +522,11 @@ for (const scenario of [
   { rustOwnsReveal: false, overlay: true },
   { isLandscape: true, overlay: true },
   { showEmptyState: true, overlay: true },
-  { lyricsRendererBackend: 'skia', overlay: true },
-  { lyricsRendererBackendHydrated: false, overlay: true },
   { lyricsMounted: false, overlay: true },
   { tour: { onboardingVisible: true }, overlay: true },
 ]) {
   const context = { rustOwnsReveal: true, isLandscape: false, showEmptyState: false,
-    lyricsMounted: true, lyricsRendererBackend: 'rust', lyricsRendererBackendHydrated: true,
+    lyricsMounted: true,
     tour: { onboardingVisible: false }, ...scenario };
   context.showLyricsRenderer = evaluate(declarations.showLyricsRenderer.getText(ast), context);
   const handles = evaluate(declarations.rustHandlesReveal.getText(ast), context);

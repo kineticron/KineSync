@@ -93,15 +93,13 @@ function checkDemoClocks() {
   assert.equal(h.timers.size, 0); h.unmount();
 
   const p = hooks();
-  const selection = { lyricsStyle: 'spicy', lyricsRendererBackend: 'rust', lyricsRendererBackendHydrated: false,
+  const selection = { lyricsStyle: 'spicy',
     setLyricsStyle(style) { selection.lyricsStyle = style; } };
   const demoLyrics = [{ lineStartTime: 0, syllables: [{ text: 'Follow the lyrics' }] }];
   const { RendererPreview } = load('components/onboarding/renderer-preview.tsx', { ...p.mocks,
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-blur': { BlurView: 'BlurView' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/components/lyrics/rust/rust-lyrics-view': { RustLyricsView: 'Rust' },
-    '@/components/lyrics/native-amll-lyrics-view': { NativeAmllLyricsView: 'SkiaAMLL' },
-    '@/components/lyrics/native-spicy-lyrics-view': { NativeSpicyLyricsView: 'SkiaSpicy' },
     '@/components/ui/motion-pressable': { MotionPressable: 'Button' }, '@/constants/design': { Design: {} },
     '@/store/playback-store': { usePlaybackStore: selector => selector(selection) },
     '@/lib/onboarding-demo-lyrics': { DEMO_LYRICS: demoLyrics },
@@ -109,30 +107,13 @@ function checkDemoClocks() {
   const render = (active = true) => p.run(() => RendererPreview({ active }));
   let tree = render();
   const previews = () => nodes(tree, 'Rust');
-  assert.equal(previews().length, 0, 'pending hydration cannot mount the default Rust preview');
-  assert.equal(p.timers.size, 0);
-  selection.lyricsRendererBackend = 'skia';
-  selection.lyricsRendererBackendHydrated = true;
-  tree = render();
-  assert.equal(previews().length, 0);
-  const [skia] = nodes(tree, 'SkiaSpicy');
-  assert.equal(skia.props.demoLayout, 'preview');
-  assert.equal(skia.props.demoPlayback.anchorMonotonicMs, 1000);
-  assert.ok(nodes(tree, 'Text').some(node => node.props.children === 'Follow the lyrics'));
-  nodes(tree, 'Button').find(node => node.props.accessibilityLabel === 'Choose AMLL').props.onPress();
-  tree = render();
-  assert.equal(nodes(tree, 'SkiaSpicy').length, 0);
-  assert.equal(nodes(tree, 'SkiaAMLL')[0].props.demoPlayback, skia.props.demoPlayback);
-  selection.lyricsRendererBackend = 'rust';
-  selection.setLyricsStyle('spicy');
-  tree = render();
-  assert.equal(previews().length, 1);
-  assert.equal(nodes(tree, 'SkiaAMLL').length, 0);
-  assert.equal(previews()[0].props.demoPlayback, skia.props.demoPlayback, 'backend switches keep the demo clock');
+  assert.equal(previews().length, 1, 'the foreground preview mounts Rust without backend state');
+  assert.equal(p.timers.size, 1);
   assert.equal(previews()[0].props.demoStyle, 'spicy');
   assert.equal(previews()[0].props.demoLyrics, demoLyrics);
   assert.ok(nodes(tree, 'Text').some(node => node.props.children === 'Follow the lyrics'));
   const anchor = previews()[0].props.demoPlayback;
+  assert.equal(anchor.anchorMonotonicMs, 1000);
   const writes = p.writes;
   p.advance(24900); tree = render();
   assert.equal(p.writes, writes); assert.equal(previews()[0].props.demoPlayback, anchor);
@@ -153,14 +134,15 @@ function checkDemoClocks() {
   console.log('Tour/onboarding: zero 100ms position updates; one timer callback per 25s loop, pause/background cleanup passed.');
 }
 
-async function checkRendererPreferenceMigration() {
+async function checkLyricsStylePersistence() {
   const styleKey = 'kinesync_lyrics_style';
   const backendKey = 'kinesync_lyrics_renderer_backend';
   const legacyKey = 'kinesync_use_rust_renderer';
   const debugKey = 'kinesync_rust_debug_overlay';
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  function loadStore(values, { readBackend, writeBackend, development = false } = {}) {
+  function loadStore(values, development = false) {
     const reads = [];
+    const writes = [];
     const create = initialize => {
       const set = patch => { state = { ...state, ...patch }; };
       let state = initialize(set);
@@ -171,43 +153,48 @@ async function checkRendererPreferenceMigration() {
       '@react-native-async-storage/async-storage': {
         getItem: async key => {
           reads.push(key);
-          return key === backendKey && readBackend ? readBackend() : values.get(key) ?? null;
+          return values.get(key) ?? null;
         },
         setItem: async (key, value) => {
-          if (key === backendKey && writeBackend) await writeBackend(value);
+          writes.push(key);
           values.set(key, value);
         },
-        removeItem: async key => { values.delete(key); },
+        removeItem: async key => {
+          writes.push(key);
+          values.delete(key);
+        },
       },
       zustand: { create },
       '@/lib/lyrics-arrival-trace': {}, '@/lib/translation-settings': {}, '@/lib/lyrics-enrich': {},
       '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/artwork': {},
       '@/lib/spotify-detector/timing-diagnostics': {}, '@/lib/playback-source': {},
     }, { performance, console, __DEV__: development });
-    return { store: usePlaybackStore, reads };
+    return { store: usePlaybackStore, reads, writes };
   }
 
-  for (const [savedStyle, legacyBackend, savedBackend, expectedStyle, expectedBackend, pendingStyle] of [
-    [null, null, null, 'spicy', 'rust'],
-    ['amll', 'false', null, 'amll', 'rust'],
-    ['spicy', 'true', 'skia', 'spicy', 'skia'],
-    ['native', 'false', 'skia', 'amll', 'skia'],
-    ['webview', 'false', 'rust', 'spicy', 'rust'],
-    ['native', 'false', 'webview', 'spicy', 'rust', 'spicy'],
+  for (const [savedStyle, oldRustOptIn, savedBackend, expectedStyle, pendingStyle] of [
+    [null, null, null, 'spicy'],
+    ['amll', 'false', null, 'amll'],
+    ['spicy', 'true', 'skia', 'spicy'],
+    ['native', 'false', 'skia', 'amll'],
+    ['webview', 'false', 'rust', 'spicy'],
+    ['native', 'false', 'skia', 'spicy', 'spicy'],
   ]) {
-    const values = new Map([[styleKey, savedStyle], [backendKey, savedBackend], [debugKey, 'true']]);
-    if (legacyBackend !== null) values.set(legacyKey, legacyBackend);
-    const { store, reads } = loadStore(values);
-    assert.equal(store.getState().lyricsRendererBackendHydrated, false);
+    const values = new Map([[styleKey, savedStyle], [debugKey, 'true']]);
+    if (savedBackend !== null) values.set(backendKey, savedBackend);
+    if (oldRustOptIn !== null) values.set(legacyKey, oldRustOptIn);
+    const { store, reads, writes } = loadStore(values);
+    assert.equal(store.getState().lyricsStyle, 'spicy', 'the style default is available before storage resolves');
     if (pendingStyle) store.getState().setLyricsStyle(pendingStyle);
     await flush();
     assert.equal(store.getState().lyricsStyle, expectedStyle);
-    assert.equal(store.getState().lyricsRendererBackend, expectedBackend);
-    assert.equal(store.getState().lyricsRendererBackendHydrated, true);
-    assert.equal(Object.hasOwn(store.getState(), 'useRustRenderer'), false);
-    assert.equal(values.has(legacyKey), false);
+    assert.doesNotMatch(Object.keys(store.getState()).join(' '), /lyricsRendererBackend|useRustRenderer/i);
     assert.equal(values.get(styleKey), savedStyle === null ? null : expectedStyle);
-    assert.equal(values.get(backendKey), savedBackend, 'style migration cannot rewrite the backend');
+    for (const [key, original] of [[backendKey, savedBackend], [legacyKey, oldRustOptIn]]) {
+      assert.equal(reads.includes(key), false, `startup never reads ${key}`);
+      assert.equal(writes.includes(key), false, `startup and style changes never write or remove ${key}`);
+      assert.equal(values.get(key), original ?? undefined, `the saved value of ${key} stays untouched`);
+    }
     assert.equal(reads.includes(debugKey), false);
     store.getState().setShowRustDebugOverlay(false);
     assert.equal(store.getState().showRustDebugOverlay, false);
@@ -220,49 +207,9 @@ async function checkRendererPreferenceMigration() {
     assert.equal(store.getState().playbackCompensationMs, 125);
   }
 
-  const failedRead = loadStore(new Map(), { readBackend: async () => { throw new Error('read failure'); } }).store;
+  const values = new Map([[debugKey, 'false']]);
+  const { store, reads } = loadStore(values, true);
   await flush();
-  assert.equal(failedRead.getState().lyricsRendererBackendHydrated, true);
-  assert.equal(failedRead.getState().lyricsRendererBackend, 'rust');
-
-  let resolveRead, releaseFirstWrite;
-  const pendingRead = new Promise(resolve => { resolveRead = resolve; });
-  const firstWrite = new Promise(resolve => { releaseFirstWrite = resolve; });
-  const writes = [];
-  const values = new Map([[styleKey, 'amll'], [debugKey, 'false']]);
-  let failWrite = false;
-  const { store, reads } = loadStore(values, { development: true, readBackend: () => pendingRead,
-    writeBackend: async backend => {
-      writes.push(backend);
-      if (writes.length === 1) await firstWrite;
-      if (failWrite) throw new Error('write failure');
-    },
-  });
-  store.getState().setLyricsRendererBackend('skia');
-  resolveRead('rust');
-  await flush();
-  assert.equal(store.getState().lyricsRendererBackend, 'skia', 'late hydration cannot replace a selection');
-  assert.equal(store.getState().lyricsRendererBackendHydrated, true);
-  store.getState().setLyricsRendererBackend('rust');
-  store.getState().setLyricsRendererBackend('skia');
-  await flush();
-  assert.deepEqual(writes, ['skia'], 'only one backend write may be in flight');
-  releaseFirstWrite();
-  await flush();
-  assert.deepEqual(writes, ['skia', 'rust', 'skia']);
-  assert.equal(values.get(backendKey), 'skia');
-  assert.equal(values.get(styleKey), 'amll');
-  failWrite = true;
-  store.getState().setLyricsRendererBackend('rust');
-  await flush();
-  assert.equal(store.getState().lyricsRendererBackendSaveFailed, true);
-  assert.equal(store.getState().lyricsRendererBackend, 'rust', 'save failure keeps the running selection');
-  assert.equal(values.get(backendKey), 'skia');
-  failWrite = false;
-  store.getState().setLyricsRendererBackend(store.getState().lyricsRendererBackend);
-  await flush();
-  assert.equal(store.getState().lyricsRendererBackendSaveFailed, false);
-  assert.equal(values.get(backendKey), 'rust');
   assert.ok(reads.includes(debugKey));
   assert.equal(store.getState().showRustDebugOverlay, false);
   store.getState().setShowRustDebugOverlay(true);
@@ -479,5 +426,5 @@ function checkCanvasPresentation() {
   console.log('Native canvas: 100 line cues issue scroll/active notifications with zero React presentation updates; clip fallback and stale packets passed.');
 }
 
-(async () => { checkDemoClocks(); await checkRendererPreferenceMigration(); checkRendererLabGate(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerSharingAndCatalogMerge(); checkCanvasPresentation(); })()
+(async () => { checkDemoClocks(); await checkLyricsStylePersistence(); checkRendererLabGate(); checkNativeClock(); checkCueTimeline(); await checkVault(); checkClosedMenu(); checkTranslationSelector(); checkPlayerSharingAndCatalogMerge(); checkCanvasPresentation(); })()
   .catch(error => { console.error(error); process.exitCode = 1; });

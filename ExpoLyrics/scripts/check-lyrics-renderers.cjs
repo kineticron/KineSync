@@ -74,10 +74,10 @@ assert.match(settingsSource, /Lyrics style/);
 for (const style of ['amll', 'spicy']) assert.ok(settingsSource.includes(`id: "${style}"`));
 const homeSource = read('app/(tabs)/index.tsx');
 const settingsScreen = read('app/(tabs)/explore.tsx');
-assert.match(settingsScreen, /<SettingSection title="Advanced" collapsible>\s*<Text[^>]*>Lyrics renderer<\/Text>/);
-assert.match(settingsScreen, /<SettingSection title="Advanced" collapsible>[\s\S]*?onPress=\{\(\) => setLyricsRendererBackend\(backend\)\}/);
-assert.equal((homeSource.match(/: lyricsRenderer\}/g) ?? []).length, 2, 'both orientations render the shared backend selection');
-assert.doesNotMatch(homeSource, /useRustRenderer/);
+assert.match(settingsScreen, /playbackMode === 'mobile' \? <SettingSection title="Advanced" collapsible>/);
+assert.doesNotMatch(settingsScreen, /lyricsRendererBackend|Advanced lyrics settings|>Lyrics renderer<|>Retry save</i);
+assert.equal((homeSource.match(/: lyricsRenderer\}/g) ?? []).length, 2, 'both orientations render the same Rust surface');
+assert.doesNotMatch(homeSource, /useRustRenderer|lyricsRendererBackend|native-(amll|spicy)-lyrics-view/i);
 const home = ts.createSourceFile('index.tsx', homeSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const routingDeclarations = new Map();
 function readRouting(node) {
@@ -87,7 +87,7 @@ function readRouting(node) {
   ts.forEachChild(node, readRouting);
 }
 readRouting(home);
-const routingBody = ['showLyricsRenderer', 'SkiaLyricsView', 'lyricsRendererProps', 'lyricsRenderer']
+const routingBody = ['showLyricsRenderer', 'lyricsRenderer']
   .map(name => `const ${routingDeclarations.get(name)};`).join('\n');
 const routingCode = ts.transpileModule(
   `(() => {\n${routingBody}\nreturn lyricsRenderer;\n})();`,
@@ -97,39 +97,26 @@ for (const isLandscape of [false, true]) for (const lyricsStyle of ['amll', 'spi
   const handler = () => {};
   const context = {
     jsx: (type, props) => ({ type, props }),
-    RustLyricsView: 'rust', NativeAmllLyricsView: 'skia/amll', NativeSpicyLyricsView: 'skia/spicy',
+    RustLyricsView: 'rust',
     isLandscape, lyricsStyle, lyricsMounted: true, showEmptyState: false, isScreenFocused: true,
     fullscreenAlbumMode: false, tour: { active: true, foreground: true, onboardingVisible: false },
     showTranslatedText: true, scrubPreviewPositionMs: 7250, tapToSeekEnabled: true,
-    autoFollowEnabled: true, resumeAutoFollowSignal: 2, selectedLineKeys: new Set(['selected']),
-    previewPlayback: { anchorPositionMs: 7100 }, DEMO_LYRICS: lines, TOUR_DURATION_MS: 25000, LANDSCAPE_FONT_SCALE: 0.9,
+    autoFollowEnabled: true, resumeAutoFollowSignal: 2,
+    previewPlayback: { anchorPositionMs: 7100 }, DEMO_LYRICS: lines, TOUR_DURATION_MS: 25000,
     handleLyricLinePress: handler, handleLineLongPress: handler, handleAutoFollowChange: handler,
     handleSeek: handler, handleControlsInteraction: handler, shouldRevealRustTap: handler, setRustOwnsReveal: handler,
-    lyricsRendererBackendHydrated: false, lyricsRendererBackend: 'rust',
   };
-  assert.equal(vm.runInNewContext(routingCode, context), null, 'pending hydration cannot mount a surface');
-  context.lyricsRendererBackendHydrated = true;
-  for (const backend of ['rust', 'skia']) {
-    context.lyricsRendererBackend = backend;
-    const view = vm.runInNewContext(routingCode, context);
-    assert.equal(view.type, backend === 'rust' ? 'rust' : `skia/${lyricsStyle}`);
-    assert.equal(view.props.demoPlayback, context.previewPlayback);
-    assert.equal(view.props.previewPositionMs, 7250);
-    assert.equal(view.props.autoFollowEnabled, true);
-    assert.equal(view.props.showTranslatedText, true);
-    for (const prop of ['onLinePress', 'onLineLongPress', 'onAutoFollowChange', 'onCreditsTimestampPress', 'onUserInteraction']) {
-      assert.equal(view.props[prop], handler, `${backend} receives ${prop}`);
-    }
-    if (backend === 'skia') {
-      assert.equal(view.props.landscapeMode, isLandscape);
-      assert.equal(view.props.fontScale, isLandscape ? context.LANDSCAPE_FONT_SCALE : 1);
-      assert.equal(view.props.selectedLineKeys, context.selectedLineKeys);
-      assert.equal(view.props.demoLayout, 'player');
-    } else {
-      assert.equal(view.props.demoStyle, lyricsStyle);
-      assert.equal(view.props.shouldRevealTap, handler);
-      assert.equal(view.props.onRevealOwnershipChange, handler);
-    }
+  const view = vm.runInNewContext(routingCode, context);
+  assert.equal(view.type, 'rust', 'Rust mounts as soon as lyrics are visible without backend hydration');
+  assert.equal(view.props.active, true);
+  assert.equal(view.props.demoPlayback, context.previewPlayback);
+  assert.equal(view.props.previewPositionMs, 7250);
+  assert.equal(view.props.autoFollowEnabled, true);
+  assert.equal(view.props.showTranslatedText, true);
+  assert.equal(view.props.demoStyle, lyricsStyle);
+  for (const prop of ['onLinePress', 'onLineLongPress', 'onAutoFollowChange', 'onCreditsTimestampPress', 'onUserInteraction',
+    'shouldRevealTap', 'onRevealOwnershipChange']) {
+    assert.equal(view.props[prop], handler, `Rust receives ${prop}`);
   }
 }
 for (const style of ['amll', 'spicy']) for (const suffix of ['lyrics-view.tsx', 'lyrics-view.native.tsx', 'webview-entry.ts', 'webview-bundle.ts']) {

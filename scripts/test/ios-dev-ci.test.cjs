@@ -425,13 +425,13 @@ else if(process.argv.includes('nm')) console.log(process.env.TEST_NM || '');
   put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
   put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
-  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Use experimental Rust lyrics renderer');
+  put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
   put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
   put(evidence, 'rust-js-path.map', '{invalid JSON');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), SyntaxError);
   put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx', 'store/playback-store.ts', 'components/lyrics/rust/rust-lyrics-view.tsx'])));
-  put(evidence, 'rust-js-path.jsbundle', 'no renderer selection');
+  put(evidence, 'rust-js-path.jsbundle', 'Lyrics renderer unavailable.');
   assert.throws(() => prove({ app, executable: 'Final', linkMap: map, ios, evidence }), /Compiled development JS/);
   put(evidence, 'rust-js-path.jsbundle', 'KineSyncRustLyrics Lyrics renderer unavailable.');
   put(evidence, 'rust-js-path.map', JSON.stringify(flat(['app/(tabs)/index.tsx', 'components/onboarding/renderer-preview.tsx',

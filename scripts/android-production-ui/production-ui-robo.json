@@ -1,3 +1,4 @@
+"roboscript": {"executionMode":{"strict":true,"notify":false},"postscript":{"terminate":true}}
 [
   {
     "eventType": "WAIT",
@@ -109,8 +110,43 @@
     "delayTime": 1800
   },
   {
-    "eventType": "TAKE_SCREENSHOT",
-    "screenshotName": "04-settings"
+    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.ScrollView"
+      }
+    ],
+    "childElementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescription": "Mobile-Only"
+      }
+    ]
+  },
+  {
+    "eventType": "VIEW_CLICKED",
+    "elementDescriptors": [
+      {
+        "className": "android.widget.RadioButton",
+        "contentDescription": "Mobile-Only"
+      }
+    ]
+  },
+  {
+    "eventType": "WAIT",
+    "delayTime": 1800
+  },
+  {
+    "eventType": "ASSERTION",
+    "contextDescriptor": {
+      "condition": "element_checked",
+      "elementDescriptors": [
+        {
+          "className": "android.widget.RadioButton",
+          "contentDescription": "Mobile-Only"
+        }
+      ]
+    }
   },
   {
     "eventType": "ELEMENT_SCROLL_INTO_VIEW",
@@ -148,17 +184,8 @@
     ],
     "childElementDescriptors": [
       {
-        "className": "android.widget.RadioButton",
-        "contentDescriptionRegex": "^(?:.*,\\s*)?Rust$"
-      }
-    ]
-  },
-  {
-    "eventType": "VIEW_CLICKED",
-    "elementDescriptors": [
-      {
-        "className": "android.widget.RadioButton",
-        "contentDescriptionRegex": "^(?:.*,\\s*)?Rust$"
+        "className": "android.widget.Button",
+        "contentDescription": "Save mobile API settings"
       }
     ]
   },
@@ -167,39 +194,20 @@
     "delayTime": 1800
   },
   {
-    "eventType": "TAKE_SCREENSHOT",
-    "screenshotName": "05-rust-option"
-  },
-  {
-    "eventType": "ELEMENT_SCROLL_INTO_VIEW",
-    "elementDescriptors": [
-      {
-        "className": "android.widget.ScrollView"
-      }
-    ],
-    "childElementDescriptors": [
-      {
-        "className": "android.widget.RadioButton",
-        "contentDescriptionRegex": "^(?:.*,\\s*)?Skia$"
-      }
-    ]
-  },
-  {
-    "eventType": "VIEW_CLICKED",
-    "elementDescriptors": [
-      {
-        "className": "android.widget.RadioButton",
-        "contentDescriptionRegex": "^(?:.*,\\s*)?Skia$"
-      }
-    ]
-  },
-  {
-    "eventType": "WAIT",
-    "delayTime": 1800
+    "eventType": "ASSERTION",
+    "contextDescriptor": {
+      "condition": "element_present",
+      "elementDescriptors": [
+        {
+          "className": "android.widget.Button",
+          "contentDescription": "Save mobile API settings"
+        }
+      ]
+    }
   },
   {
     "eventType": "TAKE_SCREENSHOT",
-    "screenshotName": "06-skia-option"
+    "screenshotName": "04-advanced"
   },
   {
     "eventType": "PRESSED_BACK"
@@ -236,6 +244,6 @@
   },
   {
     "eventType": "TAKE_SCREENSHOT",
-    "screenshotName": "07-player-return"
+    "screenshotName": "05-player-return"
   }
 ]

@@ -1,21 +1,17 @@
 # Android production UI Robo script
 
-`production-ui-robo.json` is a single-session script for the English release UI in portrait. Start at a cold launch on a fresh installation or at the non-fullscreen player on an installation that has completed setup. The script allows the first-run Skip and Skip player tour actions to be absent. It requires the player menu, AMLL and Spicy style options, the Settings action, the Advanced section, both backend radio options, and the return to the player.
+`production-ui-robo.json` exercises the English release UI in portrait. Start on a fresh test installation or at the non-fullscreen player after setup. The first-run Skip and Skip player tour actions are optional.
 
-At the first missing-element event on both devices, the screenshots still show the player menu. The earlier exact-text tap on Settings had left that menu open, and the six coordinate swipes moved its content. Advanced is a button on the separate Settings screen with the explicit accessible name `Advanced`. The later `advanced-open.png` screenshots show that screen after navigation and expansion.
+The script selects the AMLL and Spicy Lyrics styles from the player menu, opens Settings, and selects Mobile-Only playback. It asserts that Mobile-Only is checked, expands Advanced, and scrolls to the Save mobile API settings button. The only Settings screenshot follows an assertion that this button is present. The script leaves the save button and the three masked credential fields untouched and returns to the player.
 
-The script uses `ELEMENT_SCROLL_INTO_VIEW` for the Settings action, Advanced, Rust, and Skia. Each step selects the ScrollView as the container and the control as its child, followed by a required click on that same control. Robo searches forward for up to 50 scrolls. The Settings button's accessible name may include icon glyphs. The Advanced step uses the exact accessible name `Advanced`. The radio selectors match the backend name at the end of the description, as seen on the recorded Skia radio. The script visits Rust then Skia in their display order for the forward search, so Skia is the final selection it attempts. Native matching and scroll behavior remain unverified on device. [Firebase Robo script reference](https://firebase.google.com/docs/test-lab/android/robo-scripts-reference)
+The Firebase execution header enables strict matching and ends the crawl when the script completes. The file consists of this header followed by the action array. Robo uses `ELEMENT_SCROLL_INTO_VIEW` to find the Settings action, Mobile-Only, Advanced, and Save mobile API settings inside their scroll views. The Settings button's accessible name can include icon glyphs. The other targets use exact accessible names. [Firebase Robo execution options](https://firebase.google.com/docs/test-lab/android/robo-scripts-reference#execution_options)
 
-The script exercises two backend taps in one process. The screenshots capture the displayed UI for review. To check selection, inspect the checked radio and confirm that the renderer save warning is absent. Playback and renderer output require a configured source and a separate check.
+## Separate device smoke tests
 
-## Separate device coverage
+The Robo script covers one session. Use a device with a configured playback source for these follow-up checks.
 
-Cold relaunch, backend persistence, rotation, and background resume are unverified by this Robo phase. Use a separate local device pass when authorized.
+1. Force-stop and reopen the app on the same installation with its data intact. Start playback and confirm that timed lyrics appear in Rust. Switch between AMLL and Spicy and confirm that both styles render.
+2. On a test installation of an older build, save Skia as the renderer and upgrade in place. Cold-launch the new build without clearing app data. Confirm that the Rust lyric surface appears when timed lyrics are ready and that changing the lyric style still uses Rust. Use Rust diagnostics on a development build to confirm renderer identity.
+3. Rotate from portrait to landscape and back during playback. Then background the app with Home and resume it. Confirm that lyrics stay visible and current and that player controls respond after each transition.
 
-1. On the same installation and Android user, select Skia and verify that its radio is checked. Finish the automation session. Force-stop and reopen KineSync externally while preserving its app data. Reopen Settings and confirm that Skia remains checked before tapping either option again.
-2. Repeat with Rust. For automated follow-up, start a new independent inspection session on the same installation after each external restart and assert the native checked state before any selection action. A new run with cleared storage cannot establish persistence.
-3. In an independent local pass, turn the screen to landscape and back to portrait, then background KineSync with Home and return to the existing app. Confirm the player is visible and interactive after each transition.
-
-Robo owns the accessibility session. Use its built-in interactions during a run. The earlier shell hierarchy dumps collided with that session, and force-stop terminated it before later actions could execute.
-
-The local script contract check is `node --test scripts/test/android-production-ui.test.cjs`. It checks source alignment and script scope. Device execution is needed to verify the scroll and selector behavior.
+The local script contract check is `node --test scripts/test/android-production-ui.test.cjs`. It checks the targets against app source. Scroll behavior and native accessibility matching require a device run.
