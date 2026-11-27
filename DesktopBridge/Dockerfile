@@ -12,9 +12,8 @@ FROM ubuntu:24.04@sha256:1e0a86e57d247923571b75e0aaf48a1449cf8c543d51fb3e07a4a7d
 
 ARG TARGETARCH
 ARG VCS_REF=unknown
-ARG SPOTIFY_VERSION=1.2.95.453.g0eeebbed
 ARG XPRA_VERSION=6.5.3-r0-1
-ARG SPICETIFY_VERSION=2.44.0
+ARG SPICETIFY_VERSION=2.46.7
 ARG ADBLOCKIFY_COMMIT=64cb2b8c235b13cf943e4c265c19199f69e5d170
 ARG SPICETIFY_MARKETPLACE_VERSION=1.0.9
 ARG SPICETIFY_MARKETPLACE_COMMIT=332cdeb2c82285be333fc6b203955fd38a912886
@@ -33,17 +32,17 @@ LABEL org.opencontainers.image.title="KineSync Desktop Bridge" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.licenses="GPL-3.0-only"
 
-ADD --checksum=sha256:256e2eb1ec96fbc0c51afab247298e4e6eabfabbafafd4617584f44cca2fb31f \
-    https://repository.spotify.com/pool/non-free/s/spotify-client/spotify-client_${SPOTIFY_VERSION}_amd64.deb \
-    /tmp/spotify-client.deb
-
-ADD --checksum=sha256:115045610a609a2084af389e65aa4f60351a4b8ef1497ce98bdbdf379544ef9b \
+ADD --checksum=sha256:be73b8c82c445f0d5425ef6044d5d46330fb7a3413d81031225c71bba55bb3e2 \
     https://github.com/spicetify/cli/releases/download/v${SPICETIFY_VERSION}/spicetify-${SPICETIFY_VERSION}-linux-amd64.tar.gz \
     /tmp/spicetify.tar.gz
 
 ADD --checksum=sha256:b607243a02a799bba8e40289ff1e5d8b632b885ddfee951aaaf1c3d733e8001b \
     https://raw.githubusercontent.com/rxri/spicetify-extensions/${ADBLOCKIFY_COMMIT}/adblock/adblock.js \
     /opt/kinesync-assets/adblock.js
+
+ADD --checksum=sha256:749fd8894f53a403e2a06ae8793a4318131443c7ca14f3656d841b7613c1cef3 \
+    https://raw.githubusercontent.com/rxri/spicetify-extensions/${ADBLOCKIFY_COMMIT}/LICENSE \
+    /opt/kinesync-assets/LICENSE-adblockify
 
 ADD --checksum=sha256:2713054703c2365e391658a58c782dd2ebdd8d573f2015b5a2bab58b7eee8685 \
     https://github.com/spicetify/marketplace/releases/download/v${SPICETIFY_MARKETPLACE_VERSION}/marketplace.zip \
@@ -55,7 +54,7 @@ ADD --checksum=sha256:802c83f4f822eb254f60ef34ea8c53ea9d97889b9e886ac532e42953b9
 
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates gnupg && \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
     rm -rf /var/lib/apt/lists/*
 
 ADD --checksum=sha256:4df3209ea4b759f0b5838b60baedb6893ec62df7abad9046462176a6e6a7ed7d \
@@ -68,9 +67,34 @@ ADD --checksum=sha256:43307ca6b67ebeeeafbb02f543643a4cfc94548da17e26b0ac07bfdd33
 RUN gpg --dearmor --yes --output /usr/share/keyrings/xpra.gpg /usr/share/keyrings/xpra.asc && \
     sed -i 's#xpra.asc#xpra.gpg#' /etc/apt/sources.list.d/xpra.sources
 
+ADD --checksum=sha256:5fcf07069e1ab0c8e823dbdf6fa16d7bdbe0bc4f224af8a42a2d3ec02f092773 \
+    https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.asc \
+    /usr/share/keyrings/spotify.asc
+
+RUN chmod 0644 /usr/share/keyrings/spotify.asc && \
+    printf '%s\n' 'deb [arch=amd64 signed-by=/usr/share/keyrings/spotify.asc] https://repository.spotify.com stable non-free' \
+      > /etc/apt/sources.list.d/spotify.list
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY scripts/resolve-spotify-version.js /tmp/resolve-spotify-version.js
+# CI supplies a new value per run to fetch a fresh APT index, then reuses it for export.
+ARG SPOTIFY_REPOSITORY_REFRESH
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN test "${TARGETARCH:-amd64}" = "amd64" && \
     export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update && \
+    mkdir -p /opt/spicetify && \
+    tar -xzf /tmp/spicetify.tar.gz -C /opt/spicetify && \
+    chmod 0755 /opt/spicetify/spicetify && \
+    ln -s /opt/spicetify/spicetify /usr/local/bin/spicetify && \
+    installed_spicetify="$(spicetify --version 2>&1)" && \
+    test "$installed_spicetify" = "$SPICETIFY_VERSION" && \
+    curl --fail --silent --show-error --location --retry 3 \
+      "https://api.github.com/repos/spicetify/cli/releases/tags/v${installed_spicetify}" \
+      --output /tmp/spicetify-release.json && \
+    apt-get update -o APT::Update::Error-Mode=any && \
+    spotify_version="$(apt-cache madison spotify-client:amd64 | \
+      node /tmp/resolve-spotify-version.js "$installed_spicetify" /tmp/spicetify-release.json)" && \
+    printf 'Installing Spotify %s for Spicetify %s\n' "$spotify_version" "$installed_spicetify" && \
     apt-get install -y --no-install-recommends \
       ca-certificates dbus-x11 findutils fonts-liberation libasound2t64 \
       libatk-bridge2.0-0t64 libatspi2.0-0t64 libcups2t64 libdrm2 libgbm1 \
@@ -80,23 +104,22 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" && \
       "xpra-client=${XPRA_VERSION}" "xpra-client-gtk3=${XPRA_VERSION}" \
       "xpra-server=${XPRA_VERSION}" "xpra-codecs=${XPRA_VERSION}" \
       "xpra-x11=${XPRA_VERSION}" \
-      /tmp/spotify-client.deb && \
+      "spotify-client:amd64=${spotify_version}" && \
+    installed_spotify="$(dpkg-query -W -f='${Version}' spotify-client:amd64)" && \
+    test "$installed_spotify" = "$spotify_version" && \
     groupadd --gid 568 abc && \
     useradd --uid 568 --gid 568 --create-home --home-dir /config --shell /bin/bash abc && \
     mkdir -p /opt/spicetify \
       /opt/kinesync-spicetify-home/.config/spicetify/Extensions \
       /opt/kinesync-spicetify-home/.config/spicetify/CustomApps \
       /opt/kinesync-spicetify-home/.config/spicetify/Themes/marketplace && \
-    tar -xzf /tmp/spicetify.tar.gz -C /opt/spicetify && \
-    chmod 0755 /opt/spicetify/spicetify && \
-    ln -s /opt/spicetify/spicetify /usr/local/bin/spicetify && \
     cp /opt/kinesync-assets/adblock.js /opt/kinesync-spicetify-home/.config/spicetify/Extensions/adblock.js && \
     unzip -q /tmp/spicetify-marketplace.zip -d /tmp/spicetify-marketplace && \
     mv /tmp/spicetify-marketplace/marketplace-dist \
       /opt/kinesync-spicetify-home/.config/spicetify/CustomApps/marketplace && \
     cp /opt/kinesync-assets/marketplace-color.ini \
       /opt/kinesync-spicetify-home/.config/spicetify/Themes/marketplace/color.ini && \
-    printf 'app.last-launched-version="%s"\n' "$SPOTIFY_VERSION" > /opt/kinesync-spicetify-home/spotify-prefs && \
+    printf 'app.last-launched-version="%s"\n' "${installed_spotify#*:}" > /opt/kinesync-spicetify-home/spotify-prefs && \
     HOME=/opt/kinesync-spicetify-home XDG_CONFIG_HOME=/opt/kinesync-spicetify-home/.config \
       spicetify --bypass-admin config spotify_path /usr/share/spotify \
         prefs_path /opt/kinesync-spicetify-home/spotify-prefs \
@@ -104,13 +127,15 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" && \
         inject_css 1 replace_colors 1 current_theme marketplace && \
     HOME=/opt/kinesync-spicetify-home XDG_CONFIG_HOME=/opt/kinesync-spicetify-home/.config \
       spicetify --bypass-admin backup apply && \
+    grep -Fq "src='extensions/adblock.js'" /usr/share/spotify/Apps/xpui/index.html && \
+    cmp /opt/kinesync-assets/adblock.js /usr/share/spotify/Apps/xpui/extensions/adblock.js && \
+    node --check /usr/share/spotify/Apps/xpui/extensions/adblock.js && \
     chmod -R a+rX /usr/share/spotify && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /tmp/spotify-client.deb /tmp/spicetify.tar.gz \
+    rm -rf /var/lib/apt/lists/* /tmp/spicetify.tar.gz /tmp/spicetify-release.json /tmp/resolve-spotify-version.js \
       /tmp/spicetify-marketplace.zip /tmp/spicetify-marketplace
 
 WORKDIR /opt/kinesync
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /opt/kinesync/node_modules ./node_modules
 COPY . .
 COPY docker/root /

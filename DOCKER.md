@@ -72,6 +72,23 @@ verify the adjacent `.sha256` file, extract it, and run `setup-docker.ps1` or
 
 The `/config` volume preserves the Spotify login across restarts and upgrades.
 Spicetify Marketplace and Adblockify are already installed in the image.
+The image build selects the newest compatible Spotify package from Spotify's
+signed APT index using the Linux range published for the installed Spicetify
+release. Adblockify is included from a checksum-verified upstream commit with
+its MIT license at `/opt/kinesync-assets/LICENSE-adblockify`. The CI smoke check
+observes Spotify and the extension during signed-out startup. A free-account
+playback session is needed to measure ad behavior. [Adblockify source and license](https://github.com/rxri/spicetify-extensions/tree/64cb2b8c235b13cf943e4c265c19199f69e5d170)
+
+## Docker release acceptance
+
+CI builds and starts a candidate on its runner. Image and setup asset publication
+is manual. Before publishing, verify the exact local image on a Free account and
+record its image ID, source revision, and Spotify package version. Confirm that
+Spicetify initializes and Adblockify executes without extension errors. Start
+playback and record the actual observation duration and any ads observed.
+Capture the bridge's Current Session reports throughout the window and confirm
+they show no ad session. Record coverage gaps and the limits of that observation.
+Release acceptance requires all three checks on the same image.
 
 ## Ports and data
 
