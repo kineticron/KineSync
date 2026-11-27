@@ -131,6 +131,9 @@ jobs:
           cache-targets: true
           cache-bin: false
           cache-all-crates: true
+          cache-on-failure: false
+          # The action's post condition enforces job success.
+          save-if: true
           lookup-only: ${{ env.CACHE_MODE == 'cold' }}
           # Cold checks availability without downloading an old registry/target.
 

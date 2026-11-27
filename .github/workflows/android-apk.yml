@@ -28,6 +28,15 @@ on:
           - x86
           - x86_64
           - arm64-v8a
+      cache_mode:
+        description: 'normal, cold (skip managed restores and seed), or warm (report managed hits)'
+        type: choice
+        options: [normal, cold, warm]
+        default: normal
+      cache_epoch:
+        description: 'Same fresh token for both runs of a cold/warm pair'
+        type: string
+        default: routine
 
 permissions:
   contents: read
@@ -45,6 +54,14 @@ jobs:
     name: Build signed Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      CACHE_MODE: ${{ inputs.cache_mode || 'normal' }}
+      CACHE_EPOCH: ${{ inputs.cache_epoch || 'routine' }}
+      RUST_ANDROID_TOOLCHAIN: "1.97.0"
+      RUST_ANDROID_PROFILE: release
+      RUST_ANDROID_PLATFORM: "24"
+      RUST_ANDROID_CARGO_NDK: "4.1.2"
+      RUST_CACHE_WITHIN_BUDGET: 'false'
 
     steps:
       - name: Checkout
@@ -52,11 +69,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select Android cache namespace
+        id: cache_namespace
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          case "$CACHE_MODE" in
+            normal) echo "CACHE_EPOCH=routine" >> "$GITHUB_ENV" ;;
+            cold|warm)
+              if [[ ! "$CACHE_EPOCH" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$ || "$CACHE_EPOCH" == routine ]]; then
+                echo 'Cold and warm runs require an epoch of 1–40 letters, digits, underscores or dashes, starting with a letter or digit and distinct from routine.' >&2
+                exit 2
+              fi
+              ;;
+            *) echo 'Unsupported cache mode.' >&2; exit 2 ;;
+          esac
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/kinesync-gradle" >> "$GITHUB_ENV"
+
       - name: Setup Node
+        id: node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: npm
+          cache: ${{ env.CACHE_MODE == 'normal' && 'npm' || '' }}
           cache-dependency-path: ExpoLyrics/package-lock.json
 
       - name: Install JS dependencies
@@ -90,12 +125,88 @@ jobs:
           sdkmanager_bin="$(command -v sdkmanager || true)"
           if [[ -z "${sdkmanager_bin}" ]]; then sdkmanager_bin="${sdk_root}/cmdline-tools/latest/bin/sdkmanager"; fi
           "${sdkmanager_bin}" --install "ndk;${ndk_version}"
-          echo "ANDROID_NDK_HOME=${sdk_root}/ndk/${ndk_version}" >> "$GITHUB_ENV"
-          rustup toolchain install 1.97.0 --profile minimal
-          cargo +1.97.0 install cargo-ndk --version 4.1.2 --locked
+          ndk_home="${sdk_root}/ndk/${ndk_version}"
+          rustup toolchain install "$RUST_ANDROID_TOOLCHAIN" --profile minimal
+          {
+            echo "ANDROID_NDK_HOME=$ndk_home"
+            echo "CARGO_HOME=$RUNNER_TEMP/kinesync-android-cargo"
+            echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/native/lyrics-renderer/target"
+            echo "KINESYNC_ORIGINAL_INCREMENTAL=${CARGO_INCREMENTAL:-}"
+          } >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/kinesync-android-cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Identify Android Rust caches
+        id: native
+        if: steps.cache_namespace.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ndk_identity=$( (cat "$ANDROID_NDK_HOME/source.properties" && "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version) | sha256sum | cut -d' ' -f1 )
+          rust_host=$(rustc "+$RUST_ANDROID_TOOLCHAIN" -vV | sha256sum | cut -d' ' -f1)
+          rust_inputs=$(sha256sum scripts/build-rust-lyrics-android.sh | cut -d' ' -f1)
+          echo "rust_prefix=android-rust-v1-${CACHE_EPOCH}-${rust_inputs}" >> "$GITHUB_OUTPUT"
+          echo "RUST_ANDROID_NDK_ID=$ndk_identity" >> "$GITHUB_ENV"
+          echo "key=cargo-ndk-v1-${RUNNER_OS}-${RUNNER_ARCH}-${CACHE_EPOCH}-${RUST_ANDROID_CARGO_NDK}-${rust_host}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo-ndk binaries
+        id: ndk_bin
+        if: env.CACHE_MODE != 'cold' && steps.native.outcome == 'success' && steps.native.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/kinesync-android-cargo/bin/cargo-ndk*
+          key: ${{ steps.native.outputs.key }}
+
+      - name: Clear incomplete cargo-ndk restore
+        if: steps.ndk_bin.outcome != 'skipped' && (steps.ndk_bin.outcome != 'success' || steps.ndk_bin.outputs.cache-matched-key == '')
+        run: rm -f -- "$CARGO_HOME"/bin/cargo-ndk*
+
+      - name: Install or verify cargo-ndk
+        run: |
+          set -euo pipefail
+          install_root="$CARGO_HOME"
+          if [[ ! -x "$install_root/bin/cargo-ndk" || ! -x "$install_root/bin/cargo-ndk-env" || ! -x "$install_root/bin/cargo-ndk-test" ]] ||
+             [[ $(cargo "+$RUST_ANDROID_TOOLCHAIN" ndk --version) != "cargo-ndk $RUST_ANDROID_CARGO_NDK" ]]; then
+            env -u CARGO_TARGET_DIR CARGO_HOME="$RUNNER_TEMP/kinesync-cargo-ndk-install" \
+              cargo "+$RUST_ANDROID_TOOLCHAIN" install cargo-ndk --version "$RUST_ANDROID_CARGO_NDK" --locked --root "$install_root" --force
+          fi
+          version=$(cargo "+$RUST_ANDROID_TOOLCHAIN" ndk --version)
+          [[ "$version" == "cargo-ndk $RUST_ANDROID_CARGO_NDK" ]]
+          echo "$version"
+
+      - name: Cache Android Rust dependencies and target work
+        id: rust
+        if: steps.native.outcome == 'success' && steps.native.outputs.key != ''
+        continue-on-error: true
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        env:
+          RUSTUP_TOOLCHAIN: ${{ env.RUST_ANDROID_TOOLCHAIN }}
+        with:
+          prefix-key: ${{ steps.native.outputs.rust_prefix }}
+          workspaces: native/lyrics-renderer -> target
+          env-vars: ANDROID_NDK_HOME ANDROID_NDK_ROOT ANDROID_NDK_VERSION ANDROID_PLATFORM AR ARFLAGS CPPFLAGS LDFLAGS KINESYNC_ORIGINAL_INCREMENTAL
+          cache-targets: true
+          cache-all-crates: true
+          cache-workspace-crates: true
+          cache-bin: false
+          cache-on-failure: false
+          # The runner evaluates action inputs again for the success-only post.
+          save-if: ${{ env.RUST_CACHE_WITHIN_BUDGET == 'true' }}
+          # Lookup can find an existing immutable entry without downloading it.
+          lookup-only: ${{ env.CACHE_MODE == 'cold' }}
+
+      - name: Clear unconfirmed Android Rust restore
+        if: env.CACHE_MODE != 'cold' && steps.rust.outcome != 'skipped' && (steps.rust.outcome != 'success' || steps.rust.outputs.cache-hit != 'true')
+        run: rm -rf -- "${CARGO_TARGET_DIR:?}" "${CARGO_HOME:?}/registry" "$CARGO_HOME/git"
 
       - name: Build Android Rust static libraries
-        run: bash scripts/build-rust-lyrics-android.sh "${RUST_ANDROID_ABIS}"
+        run: |
+          if [[ -n "$KINESYNC_ORIGINAL_INCREMENTAL" ]]; then
+            export CARGO_INCREMENTAL="$KINESYNC_ORIGINAL_INCREMENTAL"
+          else
+            unset CARGO_INCREMENTAL
+          fi
+          bash scripts/build-rust-lyrics-android.sh "${RUST_ANDROID_ABIS}"
 
       - name: Set shared release version
         working-directory: ExpoLyrics
@@ -106,6 +217,50 @@ jobs:
       - name: Expo prebuild (Android)
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform android
+
+      - name: Setup Gradle
+        continue-on-error: true
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          # Use explicit success-only saves after APK verification and upload.
+          cache-provider: external
+          validate-wrappers: false
+
+      - name: Identify Gradle downloads
+        id: gradle_key
+        if: steps.native.outcome == 'success' && env.GRADLE_USER_HOME != ''
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          wrapper=$(sha256sum ExpoLyrics/android/gradle/wrapper/* | sha256sum | cut -d' ' -f1)
+          dependencies=$(
+            {
+              git ls-files -z -- ExpoLyrics/package-lock.json ExpoLyrics/patches |
+                xargs -0 sha256sum &&
+              find ExpoLyrics/android -type f \( -name 'settings.gradle*' -o -name 'build.gradle*' -o -name gradle.properties -o -name libs.versions.toml \) -print0 |
+                sort -z | xargs -0 sha256sum
+            } | sha256sum | cut -d' ' -f1
+          )
+          java_identity=$(java -version 2>&1 | sha256sum | cut -d' ' -f1)
+          prefix="android-gradle-downloads-v2-${RUNNER_OS}-${RUNNER_ARCH}-${CACHE_EPOCH}-${java_identity}-${RUST_ANDROID_NDK_ID}-${wrapper}-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=${prefix}${dependencies}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Gradle downloads
+        id: gradle
+        if: env.CACHE_MODE != 'cold' && steps.gradle_key.outcome == 'success' && steps.gradle_key.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+            ${{ env.GRADLE_USER_HOME }}/wrapper/dists
+          key: ${{ steps.gradle_key.outputs.key }}
+          restore-keys: ${{ steps.gradle_key.outputs.prefix }}
+
+      - name: Clear incomplete Gradle restore
+        if: steps.gradle.outcome != 'skipped' && (steps.gradle.outcome != 'success' || steps.gradle.outputs.cache-matched-key == '')
+        run: rm -rf -- "${GRADLE_USER_HOME:?}/caches/modules-2" "$GRADLE_USER_HOME/wrapper/dists"
 
       - name: Configure release signing and version
         working-directory: ExpoLyrics
@@ -241,6 +396,98 @@ jobs:
             ExpoLyrics/KineSync-Android.apk
             ExpoLyrics/KineSync-Android.apk.sha256
           if-no-files-found: error
+
+      - name: Bound Android Rust and cargo-ndk caches
+        id: native_cache_size
+        if: success()
+        continue-on-error: true
+        env:
+          RUST_CACHE_RESTORED: ${{ steps.rust.outcome }}
+        run: |
+          set -euo pipefail
+          kib=0
+          for path in "$CARGO_TARGET_DIR" "$CARGO_HOME/registry" "$CARGO_HOME/git"; do
+            if [[ -d "$path" ]]; then
+              size=$(du -sk "$path" | cut -f1)
+              kib=$(( kib + size ))
+            fi
+          done
+          echo "Android Rust files before Rust Cache pruning: $kib KiB (save limit: 2621440 KiB)"
+          rust_kib=$kib
+          kib=$(du -sk "$CARGO_HOME"/bin/cargo-ndk* | awk '{sum += $1} END {print sum+0}')
+          echo "cargo-ndk binaries: $kib KiB (save limit: 65536 KiB)"
+          if (( kib <= 65536 )); then echo 'ndk=true' >> "$GITHUB_OUTPUT"; fi
+          if [[ "$RUST_CACHE_RESTORED" == success ]] && (( rust_kib <= 2621440 )); then echo 'RUST_CACHE_WITHIN_BUDGET=true' >> "$GITHUB_ENV"; fi
+
+      - name: Save cargo-ndk binaries
+        id: save_ndk
+        if: success() && steps.native_cache_size.outcome == 'success' && steps.native.outputs.key != '' && steps.native_cache_size.outputs.ndk == 'true' && steps.ndk_bin.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/kinesync-android-cargo/bin/cargo-ndk*
+          key: ${{ steps.native.outputs.key }}
+
+      - name: Bound Gradle download cache
+        id: gradle_size
+        continue-on-error: true
+        if: success() && steps.gradle_key.outputs.key != '' && steps.gradle.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          paths=()
+          for relative in caches/modules-2 wrapper/dists; do
+            target="$GRADLE_USER_HOME/$relative"
+            [[ -d "$target" ]] || continue
+            find "$target" -type f \( -name '*.lock' -o -name '*.lck' -o -name gc.properties \) -delete
+            paths+=("$target")
+          done
+          if (( ${#paths[@]} == 0 )); then exit 0; fi
+          kib=$(du -sk "${paths[@]}" | awk '{sum += $1} END {print sum+0}')
+          echo "Gradle downloads: $kib KiB (save limit: 1048576 KiB)"
+          if (( kib <= 1048576 )); then echo 'within-budget=true' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save Gradle downloads
+        id: save_gradle
+        if: success() && steps.gradle_size.outcome == 'success' && steps.gradle_key.outputs.key != '' && steps.gradle_size.outputs.within-budget == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.GRADLE_USER_HOME }}/caches/modules-2
+            ${{ env.GRADLE_USER_HOME }}/wrapper/dists
+          key: ${{ steps.gradle_key.outputs.key }}
+
+      - name: Summarize Android cache evidence
+        continue-on-error: true
+        if: always()
+        env:
+          NPM_HIT: ${{ steps.node.outputs.cache-hit }}
+          RUST_HIT: ${{ steps.rust.outputs.cache-hit }}
+          NDK_HIT: ${{ steps.ndk_bin.outputs.cache-hit }}
+          GRADLE_HIT: ${{ steps.gradle.outputs.cache-hit }}
+          GRADLE_MATCHED: ${{ steps.gradle.outputs.cache-matched-key }}
+          NDK_SAVE: ${{ steps.save_ndk.outcome }}
+          GRADLE_SAVE: ${{ steps.save_gradle.outcome }}
+        run: |
+          if [[ "$CACHE_MODE" == cold ]]; then
+            rust="skipped transfer (lookup exact hit: ${RUST_HIT:-unknown})"
+            ndk=skipped
+            gradle=skipped
+          else
+            rust="exact hit: ${RUST_HIT:-unknown}"
+            ndk="exact hit: ${NDK_HIT:-miss or unavailable}"
+            gradle="exact hit: ${GRADLE_HIT:-miss or unavailable}. Matched key: ${GRADLE_MATCHED:-none}"
+          fi
+          {
+            echo '### Android cache evidence'
+            printf 'Mode: %s | Epoch: %s | ABI set: %s\n\n' "$CACHE_MODE" "$CACHE_EPOCH" "${RUST_ANDROID_ABIS:-unavailable}"
+            echo '| Cache | Restore evidence | Save step |'
+            echo '| --- | --- | --- |'
+            printf '| npm | %s | setup-node post step in normal mode |\n' "${NPM_HIT:-unavailable or disabled}"
+            printf '| Rust registry and targets | %s | within size budget: %s. See Rust cache post step |\n' "$rust" "$RUST_CACHE_WITHIN_BUDGET"
+            printf '| cargo-ndk binaries | %s | %s |\n' "$ndk" "${NDK_SAVE:-unavailable}"
+            printf '| Gradle downloads | %s | %s |\n' "$gradle" "${GRADLE_SAVE:-unavailable}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   publish-android-apk:
     name: Publish Android APK

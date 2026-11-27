@@ -16,7 +16,8 @@ test('iOS Release prepares the validated device framework before CocoaPods', () 
   const validate = release.indexOf('node scripts/ios-dev-ci/rust-device.cjs validate');
   const prebuild = release.indexOf('expo prebuild --clean --platform ios');
   assert.ok(build >= 0 && validate > build && prebuild > validate);
-  assert.match(release, /rustup toolchain install .*--target .*config target/);
+  assert.match(release, /target=\$\(config target\)/);
+  assert.match(release, /rustup toolchain install "\$toolchain" --profile minimal --target "\$target"/);
 });
 test('iOS Release registers Rust lyrics and verifies the packaged app linkage', () => {
   const { apple } = JSON.parse(fs.readFileSync(path.join(repo,

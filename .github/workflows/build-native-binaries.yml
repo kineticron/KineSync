@@ -37,6 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
+        id: node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -47,6 +48,56 @@ jobs:
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "9.0.x"
+
+      - name: Identify Windows native downloads
+        id: downloads_key
+        continue-on-error: true
+        shell: pwsh
+        env:
+          NODE_VERSION: ${{ steps.node.outputs.node-version }}
+        run: |
+          $nuget = Join-Path $env:RUNNER_TEMP 'kinesync-nuget-packages'
+          $electron = Join-Path $env:LOCALAPPDATA 'electron/Cache'
+          $nodeGyp = Join-Path $env:LOCALAPPDATA 'node-gyp/Cache'
+          $dotnetVersion = dotnet --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dependencies = git rev-parse HEAD:DesktopBridge/package-lock.json HEAD:DesktopBridge/native/windows-media-session/package-lock.json HEAD:DesktopBridge/native/windows-media-session/rebuild-electron.cjs HEAD:DesktopBridge/native/spotify-seek-helper/spotify-seek-helper.csproj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!$dotnetVersion -or !$env:NODE_VERSION -or !$dependencies) { throw 'Windows download key inputs are missing.' }
+          $prefix = "windows-native-downloads-v1-$env:RUNNER_OS-$env:RUNNER_ARCH-$env:NODE_VERSION-$dotnetVersion-"
+          "NUGET_PACKAGES=$nuget" >> $env:GITHUB_ENV
+          "electron=$electron" >> $env:GITHUB_OUTPUT
+          "node_gyp=$nodeGyp" >> $env:GITHUB_OUTPUT
+          "prefix=$prefix" >> $env:GITHUB_OUTPUT
+          "key=${prefix}$($dependencies -join "-")" >> $env:GITHUB_OUTPUT
+
+      - name: Restore Windows native downloads
+        id: downloads
+        if: steps.downloads_key.outcome == 'success' && steps.downloads_key.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.NUGET_PACKAGES }}
+            ${{ steps.downloads_key.outputs.electron }}
+            ${{ steps.downloads_key.outputs.node_gyp }}
+          key: ${{ steps.downloads_key.outputs.key }}
+          restore-keys: ${{ steps.downloads_key.outputs.prefix }}
+
+      - name: Clear incomplete Windows download restore
+        if: steps.downloads.outcome != 'skipped' && (steps.downloads.outcome != 'success' || steps.downloads.outputs.cache-matched-key == '')
+        shell: pwsh
+        env:
+          ELECTRON_DOWNLOADS: ${{ steps.downloads_key.outputs.electron }}
+          NODE_GYP_DOWNLOADS: ${{ steps.downloads_key.outputs.node_gyp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @($env:NUGET_PACKAGES, $env:ELECTRON_DOWNLOADS, $env:NODE_GYP_DOWNLOADS)) {
+            if ([string]::IsNullOrWhiteSpace($path)) { throw 'Missing Windows download path for cleanup.' }
+            if (Test-Path -LiteralPath $path) {
+              Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+          }
 
       - name: Install root DesktopBridge deps
         working-directory: DesktopBridge
@@ -155,6 +206,54 @@ jobs:
           name: native-release-assets
           path: dist-native
           if-no-files-found: error
+
+      - name: Bound Windows native download cache
+        id: downloads_size
+        continue-on-error: true
+        if: success() && steps.downloads_key.outputs.key != '' && steps.downloads.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          ELECTRON_DOWNLOADS: ${{ steps.downloads_key.outputs.electron }}
+          NODE_GYP_DOWNLOADS: ${{ steps.downloads_key.outputs.node_gyp }}
+        run: |
+          $bytes = 0
+          foreach ($path in @($env:NUGET_PACKAGES, $env:ELECTRON_DOWNLOADS, $env:NODE_GYP_DOWNLOADS)) {
+            if (Test-Path -LiteralPath $path -PathType Container) {
+              $bytes += (Get-ChildItem -LiteralPath $path -Recurse -Force -File | Measure-Object -Property Length -Sum).Sum
+            }
+          }
+          Write-Host "Windows native downloads: $bytes bytes (save limit: 768 MiB)"
+          if ($bytes -gt 0 -and $bytes -le 768MB) {
+            'within-budget=true' >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Save Windows native downloads
+        id: save_downloads
+        if: success() && steps.downloads_size.outcome == 'success' && steps.downloads_key.outputs.key != '' && steps.downloads_size.outputs.within-budget == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.NUGET_PACKAGES }}
+            ${{ steps.downloads_key.outputs.electron }}
+            ${{ steps.downloads_key.outputs.node_gyp }}
+          key: ${{ steps.downloads_key.outputs.key }}
+
+      - name: Summarize Windows cache evidence
+        continue-on-error: true
+        if: always()
+        shell: pwsh
+        env:
+          NPM_HIT: ${{ steps.node.outputs.cache-hit }}
+          DOWNLOAD_HIT: ${{ steps.downloads.outputs.cache-hit || 'miss or unavailable' }}
+          DOWNLOAD_MATCHED: ${{ steps.downloads.outputs.cache-matched-key || 'none' }}
+          DOWNLOAD_SAVE: ${{ steps.save_downloads.outcome || 'unavailable' }}
+        run: |
+          @(
+            '### Windows cache evidence'
+            "npm exact hit: $env:NPM_HIT"
+            "NuGet, Electron and node-gyp downloads exact hit: $env:DOWNLOAD_HIT. Matched key: $env:DOWNLOAD_MATCHED. Save step: $env:DOWNLOAD_SAVE."
+          ) | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

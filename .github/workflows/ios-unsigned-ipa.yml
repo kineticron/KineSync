@@ -29,6 +29,8 @@ jobs:
   ios-unsigned-ipa:
     runs-on: xcode-27
     timeout-minutes: 120
+    env:
+      RUST_CACHE_WITHIN_BUDGET: 'false'
 
     steps:
       - name: Checkout
@@ -37,6 +39,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
+        id: node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -53,6 +56,22 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
           [[ $(xcrun --sdk iphoneos --show-sdk-version) == 27.* ]]
+          echo "DERIVED_DATA_PATH=$RUNNER_TEMP/kinesync-ios-release-derived" >> "$GITHUB_ENV"
+
+      - name: Identify CocoaPods release downloads
+        id: pod_key
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "CP_CACHE_DIR=$RUNNER_TEMP/kinesync-release-cocoapods" >> "$GITHUB_ENV"
+          version=$(pod --version)
+          [[ -n "$version" ]]
+          # Hash app.json before it receives the per-run iOS build number.
+          pod_inputs=$(git ls-files -z -- ExpoLyrics/package-lock.json ExpoLyrics/patches ExpoLyrics/app.json 'ExpoLyrics/modules/*.podspec' |
+            xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+          prefix="ios-release-pod-downloads-v2-${RUNNER_OS}-${RUNNER_ARCH}-${version}-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=${prefix}${pod_inputs}" >> "$GITHUB_OUTPUT"
 
       - name: Set shared release version
         working-directory: ExpoLyrics
@@ -60,19 +79,101 @@ jobs:
           version=$(node ../scripts/release-version.js)
           node scripts/stamp-ios-release-version.js "${version}" "${GITHUB_RUN_NUMBER}"
 
-      - name: Prepare Rust lyrics framework for iOS Release
+      - name: Set up the iOS Release Rust toolchain
+        id: rust_identity
         run: |
           set -euo pipefail
           config() { node -p 'require("./scripts/ios-dev-ci/config.json").rust[process.argv[1]]' "$1"; }
           toolchain=$(config toolchain)
-          rustup toolchain install "$toolchain" --profile minimal --target "$(config target)" --component llvm-tools-preview
-          export IPHONEOS_DEPLOYMENT_TARGET="$(config iosDeploymentTarget)"
-          export RUSTFLAGS="$(config rustflags)"
-          export CARGO_PROFILE_RELEASE_OPT_LEVEL="$(config optLevel)"
-          export CARGO_PROFILE_RELEASE_DEBUG="$(config debugInfo)"
-          export CARGO_PROFILE_RELEASE_LTO="$(config lto)"
-          export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS="$(config debugAssertions)"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/kinesync-release-cargo"
+          target=$(config target)
+          target_dir="$RUNNER_TEMP/kinesync-release-cargo"
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          rustup toolchain install "$toolchain" --profile minimal --target "$target" --component llvm-tools-preview
+          {
+            echo "toolchain=$toolchain"
+            echo "target=$target"
+            echo "target_dir=$target_dir"
+            echo "cargo_home=$RUNNER_TEMP/kinesync-release-cargo-home"
+            echo "sdk=$sdk"
+            echo "deployment=$(config iosDeploymentTarget)"
+            echo "rustflags=$(config rustflags)"
+            echo "opt_level=$(config optLevel)"
+            echo "debug_info=$(config debugInfo)"
+            echo "lto=$(config lto)"
+            echo "debug_assertions=$(config debugAssertions)"
+            echo "incremental=${CARGO_INCREMENTAL:-}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Identify iOS Release compiler caches
+        id: compiler_key
+        continue-on-error: true
+        env:
+          TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
+        run: |
+          set -euo pipefail
+          rust_inputs=$(shasum -a 256 scripts/ios-dev-ci/config.json scripts/ios-dev-ci/build-rust-device.sh | shasum -a 256 | cut -d' ' -f1)
+          relative_target_dir=$(node -p 'require("node:path").relative("native/lyrics-renderer", process.argv[1])' "$TARGET_DIR")
+          compiler_identity=$( (xcodebuild -version && xcrun --sdk iphoneos --show-sdk-build-version && xcrun --sdk iphoneos clang --version) | shasum -a 256 | cut -d' ' -f1 )
+          echo "relative_target_dir=$relative_target_dir" >> "$GITHUB_OUTPUT"
+          echo "compiler=$compiler_identity" >> "$GITHUB_OUTPUT"
+          echo "rust_prefix=ios-release-rust-v2-${compiler_identity}-${rust_inputs}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache iOS Release Rust dependencies and target work
+        id: rust
+        if: steps.compiler_key.outcome == 'success' && steps.compiler_key.outputs.rust_prefix != ''
+        continue-on-error: true
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.rust_identity.outputs.toolchain }}
+          RUST_DEVICE_TARGET: ${{ steps.rust_identity.outputs.target }}
+          CARGO_HOME: ${{ steps.rust_identity.outputs.cargo_home }}
+          CARGO_TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
+          SDKROOT: ${{ steps.rust_identity.outputs.sdk }}
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ steps.rust_identity.outputs.deployment }}
+          RUSTFLAGS: ${{ steps.rust_identity.outputs.rustflags }}
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ steps.rust_identity.outputs.opt_level }}
+          CARGO_PROFILE_RELEASE_DEBUG: ${{ steps.rust_identity.outputs.debug_info }}
+          CARGO_PROFILE_RELEASE_LTO: ${{ steps.rust_identity.outputs.lto }}
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ steps.rust_identity.outputs.debug_assertions }}
+          KINESYNC_ORIGINAL_INCREMENTAL: ${{ steps.rust_identity.outputs.incremental }}
+        with:
+          prefix-key: ${{ steps.compiler_key.outputs.rust_prefix }}
+          # Rust Cache resolves the RHS from the crate, even with an absolute LHS.
+          workspaces: native/lyrics-renderer -> ${{ steps.compiler_key.outputs.relative_target_dir }}
+          env-vars: SDKROOT IPHONEOS_DEPLOYMENT_TARGET DEVELOPER_DIR AR ARFLAGS CPPFLAGS LDFLAGS KINESYNC_ORIGINAL_INCREMENTAL
+          cache-targets: true
+          cache-all-crates: true
+          cache-workspace-crates: true
+          cache-bin: false
+          cache-on-failure: false
+          # The runner evaluates action inputs again for the success-only post.
+          save-if: ${{ env.RUST_CACHE_WITHIN_BUDGET == 'true' }}
+
+      - name: Clear unconfirmed iOS Release Rust restore
+        if: steps.rust.outcome != 'skipped' && (steps.rust.outcome != 'success' || steps.rust.outputs.cache-hit != 'true')
+        env:
+          CARGO_HOME: ${{ steps.rust_identity.outputs.cargo_home }}
+          CARGO_TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
+        run: rm -rf -- "${CARGO_TARGET_DIR:?}" "${CARGO_HOME:?}/registry" "$CARGO_HOME/git"
+
+      - name: Prepare Rust lyrics framework for iOS Release
+        env:
+          CARGO_HOME: ${{ steps.rust_identity.outputs.cargo_home }}
+          CARGO_TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
+          IPHONEOS_DEPLOYMENT_TARGET: ${{ steps.rust_identity.outputs.deployment }}
+          RUSTFLAGS: ${{ steps.rust_identity.outputs.rustflags }}
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ steps.rust_identity.outputs.opt_level }}
+          CARGO_PROFILE_RELEASE_DEBUG: ${{ steps.rust_identity.outputs.debug_info }}
+          CARGO_PROFILE_RELEASE_LTO: ${{ steps.rust_identity.outputs.lto }}
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ steps.rust_identity.outputs.debug_assertions }}
+          KINESYNC_ORIGINAL_INCREMENTAL: ${{ steps.rust_identity.outputs.incremental }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$KINESYNC_ORIGINAL_INCREMENTAL" ]]; then
+            export CARGO_INCREMENTAL="$KINESYNC_ORIGINAL_INCREMENTAL"
+          else
+            unset CARGO_INCREMENTAL
+          fi
           export CI_EVIDENCE_DIR="$RUNNER_TEMP/kinesync-release-evidence"
           export RUST_PREBUILT_DIR="$RUNNER_TEMP/kinesync-release-framework"
           export RUST_DEVICE_KEY="$GITHUB_SHA"
@@ -80,24 +181,26 @@ jobs:
           bash scripts/ios-dev-ci/build-rust-device.sh
           node scripts/ios-dev-ci/rust-device.cjs validate
 
+      - name: Restore CocoaPods release downloads
+        id: pods
+        if: steps.pod_key.outcome == 'success' && steps.pod_key.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.CP_CACHE_DIR }}/Pods/Release
+            ${{ env.CP_CACHE_DIR }}/Pods/Specs/Release
+            ${{ env.CP_CACHE_DIR }}/Pods/VERSION
+          key: ${{ steps.pod_key.outputs.key }}
+          restore-keys: ${{ steps.pod_key.outputs.prefix }}
+
+      - name: Clear incomplete CocoaPods restore
+        if: steps.pods.outcome != 'skipped' && (steps.pods.outcome != 'success' || steps.pods.outputs.cache-matched-key == '')
+        run: rm -rf -- "${CP_CACHE_DIR:?}/Pods"
+
       - name: Expo prebuild (iOS)
         working-directory: ExpoLyrics
         run: npx expo prebuild --clean --platform ios
-
-      # Prebuild wipes ios/ on every run, so pod downloads and the full native
-      # compile restart from zero without these. DerivedData lives outside ios/
-      # (see DERIVED_DATA_PATH below) at a path that is stable across fresh
-      # runner VMs, which is what makes the restore reusable.
-      - name: Restore DerivedData and CocoaPods caches
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ${{ github.workspace }}/../kinesync-ios-derived
-            ${{ env.HOME }}/.cocoapods
-            ${{ env.HOME }}/Library/Caches/CocoaPods
-          key: ios-caches-${{ runner.os }}-${{ hashFiles('ExpoLyrics/ios/Podfile.lock', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json') }}
-          restore-keys: |
-            ios-caches-${{ runner.os }}-
 
       - name: Verify Spotify login and app types
         working-directory: ExpoLyrics
@@ -106,9 +209,37 @@ jobs:
           npm run test:security
           npx tsc --noEmit
 
-      - name: Build Release and locate .app
+      - name: Identify Release DerivedData compiler cache
+        id: derived_key
+        if: steps.compiler_key.outcome == 'success' && steps.compiler_key.outputs.compiler != ''
+        continue-on-error: true
         env:
-          DERIVED_DATA_PATH: ${{ github.workspace }}/../kinesync-ios-derived
+          COMPILER: ${{ steps.compiler_key.outputs.compiler }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f ExpoLyrics/ios/Podfile.lock ]]; then exit 0; fi
+          inputs=(ExpoLyrics/ios/Podfile ExpoLyrics/ios/Podfile.lock)
+          if [[ -f ExpoLyrics/ios/Podfile.properties.json ]]; then inputs+=(ExpoLyrics/ios/Podfile.properties.json); fi
+          pod_inputs=$(shasum -a 256 "${inputs[@]}" | shasum -a 256 | cut -d' ' -f1)
+          echo "key=ios-release-derived-compiler-v1-${RUNNER_OS}-${RUNNER_ARCH}-${COMPILER}-${GITHUB_SHA}-${pod_inputs}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Release DerivedData compiler caches
+        id: derived
+        if: steps.derived_key.outcome == 'success' && steps.derived_key.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          # Compiler caches only. Xcode must produce all app and Pod products.
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: ${{ steps.derived_key.outputs.key }}
+
+      - name: Clear incomplete Release DerivedData restore
+        if: steps.derived.outcome != 'skipped' && (steps.derived.outcome != 'success' || steps.derived.outputs.cache-matched-key == '')
+        run: rm -rf -- "${DERIVED_DATA_PATH:?}/ModuleCache.noindex" "$DERIVED_DATA_PATH/SDKStatCaches.noindex"
+
+      - name: Build Release and locate .app
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -380,6 +511,96 @@ jobs:
           if-no-files-found: error
           # The IPA is already a zip; recompressing only burns minutes.
           compression-level: 0
+
+      - name: Bound iOS Release Rust cache
+        if: success() && steps.rust.outcome == 'success' && steps.compiler_key.outputs.rust_prefix != ''
+        continue-on-error: true
+        env:
+          CARGO_HOME: ${{ steps.rust_identity.outputs.cargo_home }}
+          CARGO_TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
+        run: |
+          set -euo pipefail
+          kib=0
+          for path in "$CARGO_TARGET_DIR" "$CARGO_HOME/registry" "$CARGO_HOME/git"; do
+            if [[ -d "$path" ]]; then
+              size=$(du -sk "$path" | cut -f1)
+              kib=$(( kib + size ))
+            fi
+          done
+          echo "iOS Release Rust files before Rust Cache pruning: $kib KiB (save limit: 1572864 KiB)"
+          if (( kib <= 1572864 )); then echo 'RUST_CACHE_WITHIN_BUDGET=true' >> "$GITHUB_ENV"; fi
+
+      - name: Bound CocoaPods download cache
+        id: pod_size
+        continue-on-error: true
+        if: success() && steps.pod_key.outputs.key != '' && steps.pods.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          root="${CP_CACHE_DIR:?}/Pods"
+          if [[ ! -d "$root/Release" || ! -d "$root/Specs/Release" || ! -f "$root/VERSION" ]]; then exit 0; fi
+          kib=$(du -sk "$root/Release" "$root/Specs/Release" "$root/VERSION" | awk '{sum += $1} END {print sum+0}')
+          echo "CocoaPods release downloads: $kib KiB (save limit: 393216 KiB)"
+          if (( kib <= 393216 )); then echo 'within-budget=true' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save CocoaPods release downloads
+        id: save_pods
+        if: success() && steps.pod_size.outcome == 'success' && steps.pod_key.outputs.key != '' && steps.pod_size.outputs.within-budget == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.CP_CACHE_DIR }}/Pods/Release
+            ${{ env.CP_CACHE_DIR }}/Pods/Specs/Release
+            ${{ env.CP_CACHE_DIR }}/Pods/VERSION
+          key: ${{ steps.pod_key.outputs.key }}
+
+      - name: Bound Release DerivedData compiler caches
+        id: derived_size
+        continue-on-error: true
+        if: success() && steps.derived_key.outputs.key != '' && steps.derived.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          kib=0
+          for path in "$DERIVED_DATA_PATH/ModuleCache.noindex" "$DERIVED_DATA_PATH/SDKStatCaches.noindex"; do
+            if [[ -d "$path" ]]; then
+              size=$(du -sk "$path" | cut -f1)
+              kib=$(( kib + size ))
+            fi
+          done
+          echo "Release DerivedData compiler caches: $kib KiB (save limit: 262144 KiB)"
+          if (( kib > 0 && kib <= 262144 )); then echo 'within-budget=true' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save Release DerivedData compiler caches
+        id: save_derived
+        if: success() && steps.derived_size.outcome == 'success' && steps.derived_key.outputs.key != '' && steps.derived_size.outputs.within-budget == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.DERIVED_DATA_PATH }}/ModuleCache.noindex
+            ${{ env.DERIVED_DATA_PATH }}/SDKStatCaches.noindex
+          key: ${{ steps.derived_key.outputs.key }}
+
+      - name: Summarize iOS Release cache evidence
+        continue-on-error: true
+        if: always()
+        env:
+          NPM_HIT: ${{ steps.node.outputs.cache-hit }}
+          RUST_HIT: ${{ steps.rust.outputs.cache-hit }}
+          POD_HIT: ${{ steps.pods.outputs.cache-hit }}
+          POD_MATCHED: ${{ steps.pods.outputs.cache-matched-key }}
+          POD_SAVE: ${{ steps.save_pods.outcome }}
+          DERIVED_HIT: ${{ steps.derived.outputs.cache-hit }}
+          DERIVED_SAVE: ${{ steps.save_derived.outcome }}
+        run: |
+          {
+            echo '### iOS Release cache evidence'
+            printf 'npm exact hit: %s\n\n' "${NPM_HIT:-unknown}"
+            printf 'Rust registry and targets exact hit: %s\n\n' "${RUST_HIT:-unknown}"
+            printf 'Rust save within size budget: %s. See Rust cache post step.\n\n' "$RUST_CACHE_WITHIN_BUDGET"
+            printf 'CocoaPods downloads exact hit: %s. Matched key: %s. Save step: %s.\n\n' "${POD_HIT:-miss or unavailable}" "${POD_MATCHED:-none}" "${POD_SAVE:-unavailable}"
+            printf 'Release DerivedData compiler cache exact hit: %s. Save step: %s.\n' "${DERIVED_HIT:-miss or unavailable}" "${DERIVED_SAVE:-unavailable}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   publish-ios-release:
     name: Publish iOS assets
