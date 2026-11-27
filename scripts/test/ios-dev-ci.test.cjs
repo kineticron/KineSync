@@ -348,7 +348,18 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
     assert.equal(state.dirty, true); assert.deepEqual(calls, ['dirty', 'refresh', 'lifecycle']);
   }
   const tick = body('tick'), retry = body('scheduleRetry'), mark = body('markDirty'), lifecycle = body('lifecycle');
-  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
+  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs(?:, trace: trace)?\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
+  assert.match(tick, /#if DEBUG\s+let trace = recordTrace\(display, start, \.request\)\s+#else\s+let trace: TraceFrameRequest\? = nil\s+#endif/);
+  assert.match(swift, /#if DEBUG\s+Prop\("traceSession"\)[^\n]+\s+Prop\("tracePanelVisible"\)/);
+  assert.match(swift, /#if DEBUG\s+if let trace, let capture = self\.traceCapture, capture\.token == trace\.token,\s+capture\.generation == self\.currentGeneration \{\s+result = kr_frame_trace_render/);
+  assert.match(body('syncTraceTimer'), /if tracePanelVisible, frameTrace != nil[\s\S]*?traceTimer\?\.invalidate\(\)/);
+  assert.match(swift, /#if DEBUG\s+Events\("onStatus", "onFrameTrace", "onFrameTraceReset"\)\s+#else\s+Events\("onStatus"\)/);
+  const attach = swift.slice(swift.indexOf('  override func didMoveToWindow()'), swift.indexOf('  override func layoutSubviews()'));
+  assert.match(attach, /if window == nil \{[\s\S]*?owner\?\.dispose\(\); owner = nil[\s\S]*?syncFrameTrace\(\)/);
+  const syncTrace = body('syncFrameTrace');
+  assert.match(syncTrace, /owner\.setFrameTrace\(capture\)\s+emitTraceReset\(capture, token: capture\.token, active: true\)/);
+  assert.match(syncTrace, /frameTrace = nil\s+owner\?\.setFrameTrace\(nil\)\s+CallbackTrace\.nextToken &\+= 1\s+emitTraceReset\(previous\.capture, token: CallbackTrace\.nextToken, active: false\)/);
+  assert.doesNotMatch(body('emitTraceReset'), /tracePanelVisible|tracePulse/);
   assert.match(tick, /self\.frameRevision == requestedRevision, renderedGeneration == self\.generation/);
   assert.match(tick, /if result == 2 \{\s*self\.scheduleRetry/);
   assert.match(tick, /else if result == 1[\s\S]*?self\.retryBlocked = true/);
@@ -445,11 +456,13 @@ for (const shell of new Set([process.env.BASH32 || '/bin/bash', '/bin/bash'])) {
     const version = execFileSync(shell, ['--version'], { encoding: 'utf8' }).split('\n')[0];
     t.diagnostic(version);
     if (shell === process.env.BASH32) assert.match(version, /version 3\.2\./, 'BASH32 must name a real Bash 3.2 interpreter');
-    for (const features of [[], ['metal-surface', 'metrics/trace']]) {
+    for (const [kind, features] of [['release', []], ['development', ['metal-surface', 'metrics/trace', 'dev-frame-trace']]]) {
       const root = temp(t), workspace = path.join(root, 'workspace with spaces'), bin = path.join(root, 'tools');
       fs.mkdirSync(workspace); fs.mkdirSync(bin);
-      const buildConfig = structuredClone(config); buildConfig.rust.features = features;
+      const buildConfig = structuredClone(config);
+      buildConfig.rust.features = features.filter(feature => feature !== 'dev-frame-trace');
       put(workspace, 'scripts/ios-dev-ci/config.json', JSON.stringify(buildConfig));
+      put(workspace, 'scripts/ios-dev-ci/rust-device.cjs', fs.readFileSync(path.join(repo, 'scripts/ios-dev-ci/rust-device.cjs')));
       put(workspace, 'native/lyrics-renderer/include/KineSyncLyrics.h', '/* fixture ABI header */');
       const tool = `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
@@ -458,9 +471,13 @@ fs.appendFileSync(process.env.TOOL_LOG, JSON.stringify({name,args,sdk:process.en
 const check = (value) => { if (!value) throw new Error('Unexpected '+name+' invocation: '+JSON.stringify(args)); };
 if (name === 'node') {
  if (args[0] === '-p') {
-  const rust = JSON.parse(fs.readFileSync('scripts/ios-dev-ci/config.json')).rust;
-  const field = args[1].match(/\\.rust\\.(toolchain|target|profile|features)/)?.[1];
-  check(field); console.log(field === 'features' ? rust.features.join(',') : rust[field]);
+  if (args[1].includes('.effectiveRust()')) {
+   console.log(require(path.resolve('scripts/ios-dev-ci/rust-device.cjs')).effectiveRust().features.join(','));
+  } else {
+   const rust = JSON.parse(fs.readFileSync('scripts/ios-dev-ci/config.json')).rust;
+   const field = args[1].match(/\\.rust\\.(toolchain|target|profile)/)?.[1];
+   check(field); console.log(rust[field]);
+  }
  } else {
   check(args[0] === 'scripts/ios-dev-ci/rust-device.cjs' && args[1] === 'seal');
   check(fs.existsSync(path.join(process.env.RUST_PREBUILT_DIR,'KineSyncLyrics.xcframework')));
@@ -488,7 +505,7 @@ if (name === 'node') {
 `;
       for (const name of ['cargo', 'node', 'xcrun', 'xcodebuild']) fs.writeFileSync(path.join(bin, name), tool, { mode: 0o755 });
       const evidence = path.join(root, 'evidence'); fs.mkdirSync(evidence);
-      const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, GITHUB_WORKSPACE: workspace,
+      const env = { ...process.env, KINESYNC_IOS_BUILD_KIND: kind, PATH: bin + path.delimiter + process.env.PATH, GITHUB_WORKSPACE: workspace,
         CI_EVIDENCE_DIR: evidence, RUST_PREBUILT_DIR: path.join(root, 'prebuilt with spaces'),
         RUST_DEVICE_KEY: 'fixture-key', CARGO_TARGET_DIR: path.join(root, 'target with spaces'),
         RUNNER_TEMP: path.join(root, 'runner temp'), TOOL_LOG: path.join(root, 'tools.jsonl') };
@@ -550,7 +567,7 @@ else {
   put(framework, 'Info.plist', JSON.stringify({ AvailableLibraries: [{ LibraryIdentifier: 'ios-arm64', LibraryPath: 'liblyrics_renderer.a', HeadersPath: 'Headers', SupportedPlatform: 'ios', SupportedArchitectures: ['arm64'] }] }));
   const evidence = path.join(root, 'evidence'); fs.mkdirSync(evidence);
   const destination = path.join(root, 'workspace/ExpoLyrics/modules/kinesync-rust-lyrics/ios/Frameworks');
-  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TEST_SYSROOT: sysroot,
+  const env = { ...process.env, KINESYNC_IOS_BUILD_KIND: 'release', PATH: bin + path.delimiter + process.env.PATH, TEST_SYSROOT: sysroot,
     TEST_NM: symbols.map(symbol => `0000 T _${symbol}`).join('\n'),
     CI_EVIDENCE_DIR: evidence, RUST_PREBUILT_DIR: root, RUST_DEVICE_KEY: 'key', GITHUB_WORKSPACE: path.join(root, 'workspace') };
   const run = (command, overrides = {}) => spawnSync(process.execPath, [path.join(repo, 'scripts/ios-dev-ci/rust-device.cjs'), command], { env: { ...env, ...overrides }, encoding: 'utf8' });
@@ -566,8 +583,21 @@ else {
     assert.equal(fs.readFileSync(path.join(evidence, 'rust-static-nm.txt'), 'utf8'), env.TEST_NM);
   }
   assert.ok(fs.existsSync(path.join(destination, config.rust.framework)));
+  const manifest = () => JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
+  assert.deepEqual(manifest().rust.features, []);
+  const dev = { KINESYNC_IOS_BUILD_KIND: 'development',
+    TEST_NM: env.TEST_NM + '\n0000 T _kr_frame_trace_build_marker' };
+  assert.match(run('validate', dev).stderr, /source\/config identity mismatch/);
+  assert.match(run('seal', { TEST_NM: dev.TEST_NM }).stderr, /trace feature mismatch/);
+  assert.match(run('seal', { ...dev, TEST_NM: env.TEST_NM }).stderr, /trace feature mismatch/);
+  const sealed = run('seal', dev);
+  assert.equal(sealed.status, 0, sealed.stderr);
+  assert.deepEqual(manifest().rust.features, ['dev-frame-trace']);
+  assert.match(run('validate').stderr, /source\/config identity mismatch/);
+  const validated = run('validate', dev);
+  assert.equal(validated.status, 0, validated.stderr);
   fs.unlinkSync(reader);
-  const absent = run('validate'); assert.notEqual(absent.status, 0); assert.match(absent.stderr, /ENOENT/);
+  const absent = run('validate', dev); assert.notEqual(absent.status, 0); assert.match(absent.stderr, /ENOENT/);
 });
 
 test('SourceMap v3 source collection accepts flat and nested Metro sections and fails closed on malformed maps', () => {
@@ -604,15 +634,17 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(needsFrame(false, false), false);
   assert.equal(needsFrame(false, true), true);
   assert.equal(needsFrame(true, false), true);
-  assert.ok(swift.indexOf('if busy { busyCallbacks') < swift.indexOf('owner.draw(targetMs:'));
-  assert.match(swift, /busy = true; dirty = false; submitted &\+= 1/);
+  const busy = swift.search(/if busy \{\s+#if DEBUG\s+_ = recordTrace\(display, start, \.busy\)\s+#endif\s+return\s+\}/);
+  const draw = swift.indexOf('owner.draw(targetMs:');
+  assert.ok(busy >= 0 && draw > busy);
+  assert.match(swift, /busy = true; dirty = false\s+let epoch = session\s+let requestedRevision = frameRevision/);
   assert.match(swift, /result = kr_render\(self.handle, frameTarget, sampled, resumeStepMs\)/);
   assert.match(swift, /let sampled = CACurrentMediaTime\(\) \* 1000/);
   assert.match(swift, /preferredFrameRateRange = CAFrameRateRange/);
   assert.match(swift, /min\(120, window\?\.screen.maximumFramesPerSecond \?\? 60\)/);
   assert.ok(!swift.includes('queue.sync'));
   assert.match(swift, /private static let worker = DispatchQueue/);
-  assert.match(swift, /guard elapsed >= 1 else \{ return \}/);
+  assert.match(swift, /if kr_metrics\(self\.handle, &m\) < 0 \{ self\.failure\(\); return \}\s+animating = m\.animating != 0\s+nextCue = m\.next_cue_native_ms/);
   assert.match(swift, /queue.async \{\s*if self.handle != 0 \{ _ = kr_destroy/);
   // Execute the actual coalescing body with only Swift syntax/queue primitives
   // translated. 10,000 input bursts must occupy one pending worker task.
@@ -632,7 +664,9 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.equal(pending.pendingSnap, true); // coalescing must retain an explicit seek's snap intent
   pending.retired = true; offer(pending, { generation: 10000 }, null);
   assert.equal(pending.pendingUpdate.generation, 9999);
-  for (const name of ['callbackTotal', 'submitted', 'idle', 'busy', 'inactive', 'noDrawable', 'missedObservedIntervalsEstimate', 'deliveredCallbackHz', 'presentCallRate']) assert.ok(swift.includes(`metrics["${name}"]`), name);
+  assert.doesNotMatch(swift, /onMetrics|lastMetrics|windowCallbacks|"state": "metrics"/);
+  assert.match(swift, /guard foreground, tracePanelVisible, let owner, let trace = frameTrace[\s\S]*?now - trace\.lastSummaryDeliveryMs >= 500 else \{ return \}/);
+  assert.match(swift, /guard self\.foreground, self\.tracePanelVisible, self\.traceSummaryRevision == summaryRevision/);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
   assert.match(gpu, /render_frame_with_overlay\(scene, overlay, band, blur, false, appearance, glow\)/);
   assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
@@ -702,7 +736,17 @@ test('Rust lyric surface keeps a full-size viewport, soft moving edge and real d
   assert.match(player, /style=\{\[styles\.fillTouchBlocker, fillTouchStyle\]\}/);
   assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
-  assert.ok(view.indexOf('<ScrollView') < view.indexOf('<NativeView'));
+  const overlay = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-fps-overlay.tsx'), 'utf8');
+  assert.match(view, /<NativeView\b[\s\S]*?\/> : null\}\s*<\/View>\s*\{__DEV__ && showRustDebugOverlay && !unavailable \? <RustFpsOverlay/);
+  assert.doesNotMatch(view, /<ScrollView|fpsStrip/);
+  assert.match(overlay, /<View pointerEvents="box-none" style=\{\[styles\.position,[^\n]+\]\} onLayout=\{measureBounds\}/);
+  assert.match(overlay, /position: \{ position: 'absolute'/);
+  assert.doesNotMatch(overlay, /<ScrollView|Show FPS/);
+  assert.match(overlay, /const scalarText = <Text[^>]*numberOfLines=\{1\} adjustsFontSizeToFit/);
+  assert.match(overlay, /showScalar \? <View pointerEvents="none">\{scalarText\}/);
+  assert.match(overlay, /inlineScalar && <View pointerEvents="none" style=\{styles\.inlineScalar\}>\{scalarText\}/);
+  assert.match(overlay, /page === 1 && showTable && stats/);
+  assert.match(overlay, /if \(update\.kind === 'reset'\) setSample\(null\)/);
   assert.match(view, /root: \{ flex: 1, minHeight: 0, overflow: 'hidden' \}/);
   assert.ok(!view.includes("position: 'absolute'"));
   assert.ok(!view.includes('GPU Vello+blur'));
@@ -880,4 +924,23 @@ test('device Rust uses release optimization without changing host dev profile', 
   assert.match(source, /CARGO_PROFILE_RELEASE_LTO/);
   assert.match(source, /CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS/);
   assert.doesNotMatch(source, /CARGO_PROFILE_DEV_OPT_LEVEL/);
+});
+
+test('only iOS development selects trace and its source, artifact and Cargo keys differ', t => {
+  const { effectiveRust } = require('../ios-dev-ci/rust-device.cjs');
+  assert.deepEqual(config.rust.features, []);
+  assert.deepEqual(effectiveRust(config, 'release').features, []);
+  assert.deepEqual(effectiveRust(config, 'development').features, ['dev-frame-trace']);
+  assert.throws(() => effectiveRust(config, 'debug'), /Invalid KINESYNC_IOS_BUILD_KIND/);
+  const bad = structuredClone(config);
+  bad.rust.features.push('dev-frame-trace');
+  assert.throws(() => effectiveRust(bad, 'release'), /development-only/);
+  assert.match(workflow, /KINESYNC_IOS_BUILD_KIND: development/);
+  assert.match(release, /KINESYNC_IOS_BUILD_KIND: release/);
+  assert.doesNotMatch(release, /KINESYNC_IOS_BUILD_KIND: development/);
+  const root = temp(t);
+  put(root, 'ExpoLyrics/ios/Podfile.lock');
+  const releaseKeys = cacheKeys(root, identity, 'test', 'branch', config, 'release');
+  const devKeys = cacheKeys(root, identity, 'test', 'branch', config, 'development');
+  for (const key of ['prebuilt', 'rust', 'rustShared', 'derived']) assert.notEqual(releaseKeys[key], devKeys[key], key);
 });

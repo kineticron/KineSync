@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync, execFileSync } = require('node:child_process');
 const config = require('./config.json');
+const { effectiveRust } = require('./rust-device.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const read = file => fs.readFileSync(file, 'utf8');
 const json = file => JSON.parse(read(file));
@@ -27,14 +28,14 @@ function digestInputs(root, inputs, ignored = new Set(['target', 'output', 'evid
   inputs.forEach(visit);
   return hash(JSON.stringify(entries));
 }
-function rustIdentity(root, identity, buildConfig = config) {
+function rustIdentity(root, identity, buildConfig = config, kind) {
   // Entire source directory includes WGSL, not only Rust modules. Include include_str! input.
   const source = digestInputs(root, ['native/lyrics-renderer/Cargo.toml', 'native/lyrics-renderer/Cargo.lock',
     'native/lyrics-renderer/src', 'native/lyrics-renderer/vendor', 'native/lyrics-renderer/include', 'native/lyrics-renderer/build.rs', 'native/lyrics-renderer/.cargo',
     'native/lyrics-renderer/rust-toolchain.toml', '.cargo', 'rust-toolchain.toml',
     'scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml',
     'DesktopBridge/test/fixtures/lrc-red/ZZA0P2622376.ttml']);
-  return hash(JSON.stringify({ source, rust: buildConfig.rust, xcode: identity.xcode, sdk: identity.sdk, arch: buildConfig.arch, configuration: buildConfig.configuration }));
+  return hash(JSON.stringify({ source, rust: effectiveRust(buildConfig, kind), xcode: identity.xcode, sdk: identity.sdk, arch: buildConfig.arch, configuration: buildConfig.configuration }));
 }
 function resolvePaths(workspace, home, temp) {
   for (const input of [workspace, home, temp]) if (!path.isAbsolute(input)) throw new Error('runner paths must be absolute');
@@ -49,13 +50,13 @@ function resolvePaths(workspace, home, temp) {
     ipa: path.resolve(workspace, 'ExpoLyrics/ExpoLyrics-development.ipa'),
   };
 }
-function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
+function cacheKeys(root, identity, epoch, branch, buildConfig = config, kind) {
   if (!/^[a-zA-Z0-9_-]{1,40}$/.test(epoch)) throw new Error('cache epoch must be 1..40 alphanumeric, dash or underscore characters');
   const env = hash(JSON.stringify({ identity, configuration: buildConfig.configuration, sdk: buildConfig.sdk, arch: buildConfig.arch })).slice(0, 24);
   const native = digestInputs(root, ['ExpoLyrics/package.json', 'ExpoLyrics/package-lock.json', 'ExpoLyrics/app.json',
     'ExpoLyrics/app.config.js', 'ExpoLyrics/plugins', 'ExpoLyrics/modules', 'ExpoLyrics/ios/Podfile',
     'ExpoLyrics/ios/Podfile.properties.json', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf', 'ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf']);
-  const rust = rustIdentity(root, identity, buildConfig);
+  const rust = rustIdentity(root, identity, buildConfig, kind);
   const lock = path.join(root, 'ExpoLyrics/ios/Podfile.lock');
   const podHash = fs.existsSync(lock) ? hash(fs.readFileSync(lock)) : null;
   const prefix = `ios-dev-v${buildConfig.schema}-${hash(branch).slice(0, 12)}-${epoch}-${env}`;
@@ -67,7 +68,7 @@ function cacheKeys(root, identity, epoch, branch, buildConfig = config) {
     ccache: podHash ? `${prefix}-ccache-${hash(native + podHash)}` : '',
     ccachePrefix: `${prefix}-ccache-`,
     prebuilt: `${prefix}-rust-device-${rust}`,
-    rustShared: `${prefix}-cargo-${hash(JSON.stringify({ rust: buildConfig.rust, scripts: digestInputs(root, ['scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml']) }))}`,
+    rustShared: `${prefix}-cargo-${hash(JSON.stringify({ rust: effectiveRust(buildConfig, kind), scripts: digestInputs(root, ['scripts/ios-dev-ci', '.github/workflows/ios-development-build.yml']) }))}`,
     native, rust, podHash,
   };
 }
@@ -113,7 +114,7 @@ function initialize(env = process.env) {
   }
   const branch = env.GITHUB_REF || 'local';
   const keys = cacheKeys(env.GITHUB_WORKSPACE, identity, epoch, branch);
-  writeJson(path.join(paths.evidence, 'state.json'), { schema: 1, sha: env.GITHUB_SHA, run_id: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, ref: branch, mode, epoch, identity, config, paths, preexisting, keys, started_at: new Date().toISOString() });
+  writeJson(path.join(paths.evidence, 'state.json'), { schema: 1, sha: env.GITHUB_SHA, run_id: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, ref: branch, mode, epoch, identity, config: { ...config, rust: effectiveRust() }, paths, preexisting, keys, started_at: new Date().toISOString() });
   const vars = {
     CI_EVIDENCE_DIR: paths.evidence, DERIVED_DATA_PATH: paths.derived, CCACHE_DIR: paths.ccache,
     CCACHE_BASEDIR: env.GITHUB_WORKSPACE, CCACHE_MAXSIZE: '2G', CCACHE_COMPILERCHECK: 'content',
@@ -239,6 +240,10 @@ function main(args) {
   switch (args[0]) {
     case 'init': return initialize();
     case 'keys': return keysAfterPrebuild();
+    case 'rust-key': return console.log(rustIdentity(process.env.GITHUB_WORKSPACE, {
+      xcode: run('xcodebuild', ['-version']),
+      sdk: run('xcrun', ['--sdk', 'iphoneos', '--show-sdk-version']),
+    }));
     case 'time': return stage(args[1], args[2], args.slice(3));
     case 'mark': return fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, `${args[1]}.start`), String(Date.now()));
     case 'span': {
@@ -260,7 +265,7 @@ function main(args) {
       return stage('package-and-verify-zip', 'python3', [path.join(__dirname, 'package.py'), read(path.join(current.paths.evidence, 'app-path.txt')).trim(), current.paths.ipa, path.join(current.paths.evidence, 'ipa-manifest.json')]);
     }
     case 'summary': return summary();
-    default: throw new Error('Expected init, keys, time, mark, span, assert-rust-disabled, build, package, summary');
+    default: throw new Error('Expected init, keys, rust-key, time, mark, span, rust-prepare, build, package, summary');
   }
 }
 if (require.main === module) {

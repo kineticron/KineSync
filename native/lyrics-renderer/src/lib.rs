@@ -9,6 +9,8 @@ mod credits;
 pub mod ffi;
 #[cfg(test)]
 mod fps_budget;
+#[cfg(feature = "dev-frame-trace")]
+mod frame_trace;
 pub mod gpu;
 mod interlude;
 #[cfg(any(target_os = "ios", test))]

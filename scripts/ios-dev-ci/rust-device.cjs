@@ -3,6 +3,23 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const config = require('./config.json');
+function effectiveRust(buildConfig = config, kind = process.env.KINESYNC_IOS_BUILD_KIND ?? 'release') {
+  if (kind !== 'release' && kind !== 'development') throw new Error('Invalid KINESYNC_IOS_BUILD_KIND');
+  if (buildConfig.rust.features.includes('dev-frame-trace')) throw new Error('dev-frame-trace must be development-only');
+  return { ...buildConfig.rust, features: kind === 'development'
+    ? [...new Set([...buildConfig.rust.features, ...buildConfig.developmentRustFeatures])]
+    : buildConfig.rust.features };
+}
+function validateRustIdentity(manifest, cacheKey, rust) {
+  if (!cacheKey || manifest.cache_key !== cacheKey || JSON.stringify(manifest.rust) !== JSON.stringify(rust)) {
+    throw new Error('Cached Rust source/config identity mismatch');
+  }
+}
+function validateTraceMarker(nm, rust) {
+  if (/\b_kr_frame_trace_build_marker\s*$/m.test(nm) !== rust.features.includes('dev-frame-trace')) {
+    throw new Error('Static library trace feature mismatch');
+  }
+}
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const symbols = ['kr_abi_version', 'kr_create', 'kr_set_fonts', 'kr_copy_layout_json', 'kr_set_track', 'kr_set_anchor', 'kr_resize', 'kr_set_following', 'kr_scroll_by', 'kr_fling', 'kr_hit_test', 'kr_render', 'kr_metrics', 'kr_destroy', 'kr_copy_error'];
 function inspect(framework) {
@@ -59,26 +76,30 @@ function inventory(library) {
   return execFileSync(reader, ['--extern-only', '--defined-only', library], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
 }
 function seal() {
+  const rust = effectiveRust();
   const root = process.env.RUST_PREBUILT_DIR;
   const framework = path.join(root, config.rust.framework);
   const checked = inspect(framework);
   const nm = inventory(checked.library);
   fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'rust-static-nm.txt'), nm);
   for (const symbol of symbols) if (!new RegExp(`\\b_${symbol}\\s*$`, 'm').test(nm)) throw new Error(`Static library missing ${symbol}`);
-  const manifest = { cache_key: process.env.RUST_DEVICE_KEY, rust: config.rust, files: checked.files,
+  validateTraceMarker(nm, rust);
+  const manifest = { cache_key: process.env.RUST_DEVICE_KEY, rust, files: checked.files,
     rustc: execFileSync('rustc', [`+${config.rust.toolchain}`, '-vV'], { encoding: 'utf8' }), symbols };
   fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 }
 function validate() {
+  const rust = effectiveRust();
   const root = process.env.RUST_PREBUILT_DIR;
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
-  if (manifest.cache_key !== process.env.RUST_DEVICE_KEY || JSON.stringify(manifest.rust) !== JSON.stringify(config.rust)) throw new Error('Cached Rust source/config identity mismatch');
+  validateRustIdentity(manifest, process.env.RUST_DEVICE_KEY, rust);
   const checked = inspect(path.join(root, config.rust.framework));
   if (JSON.stringify(checked.files) !== JSON.stringify(manifest.files)) throw new Error('Rust XCFramework content/header integrity mismatch');
   const nm = inventory(checked.library);
   fs.writeFileSync(path.join(process.env.CI_EVIDENCE_DIR, 'rust-static-nm.txt'), nm);
   for (const symbol of symbols) if (!new RegExp(`\\b_${symbol}\\s*$`, 'm').test(nm)) throw new Error(`Cached library missing ${symbol}`);
   const destination = path.join(process.env.GITHUB_WORKSPACE, 'ExpoLyrics/modules/kinesync-rust-lyrics/ios/Frameworks');
+  validateTraceMarker(nm, rust);
   fs.mkdirSync(destination, { recursive: true });
   fs.cpSync(path.join(root, config.rust.framework), path.join(destination, config.rust.framework), { recursive: true, verbatimSymlinks: true });
   fs.copyFileSync(path.join(root, 'manifest.json'), path.join(process.env.CI_EVIDENCE_DIR, 'rust-device-manifest.json'));
@@ -91,4 +112,4 @@ if (require.main === module) {
 // Release can dead-strip diagnostics that are only called in Debug.
 const releaseSymbols = symbols.filter(symbol => symbol !== 'kr_copy_layout_json' && symbol !== 'kr_copy_error');
 
-module.exports = { symbols, releaseSymbols, inspect, inventory, inspectFonts };
+module.exports = { symbols, releaseSymbols, inspect, inventory, inspectFonts, effectiveRust, validateRustIdentity };

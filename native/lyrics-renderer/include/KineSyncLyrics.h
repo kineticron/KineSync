@@ -53,6 +53,19 @@ int32_t kr_hit_test(uint64_t handle, double x_logical_points, double y_logical_p
 /* ABI9: resume_step_ms is one display interval on waking, zero otherwise. */
 int32_t kr_render(uint64_t handle, double target_native_ms, double sampled_native_ms, double resume_step_ms);
 int32_t kr_metrics(uint64_t handle, KRMetrics *out);
+/* Additive developer API. Available is false without dev-frame-trace.
+   Set 0 succeeds, 1 means unavailable. Render returns the kr_render status
+   when available and is a no-op returning 1 without the feature.
+   Copy writes UTF-8 JSON without a terminator, up to 512 KiB of caller capacity.
+   Copy returns the byte count, 0 when disabled, or -1 on invalid input/error. */
+bool kr_frame_trace_available(void);
+/* A zero token stops capture. */
+int32_t kr_frame_trace_set(uint64_t handle, uint64_t token, uint64_t generation,
+                           uint64_t surface, double started_native_ms);
+int32_t kr_frame_trace_render(uint64_t handle, double target_native_ms, double worker_native_ms,
+                              double resume_step_ms, uint64_t frame_id, uint64_t segment);
+int32_t kr_frame_trace_copy_json(uint64_t handle, double cutoff_native_ms, double worker_native_ms,
+                                 uint64_t active_segment, bool export_records, uint8_t *out, size_t capacity);
 int32_t kr_destroy(uint64_t handle);
 void kr_copy_error(char *out, size_t capacity);
 #ifdef __cplusplus

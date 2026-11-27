@@ -13,6 +13,9 @@ panic = "unwind"
 [profile.release]
 panic = "unwind"
 
+[features]
+dev-frame-trace = []
+
 [dependencies]
 vello = "=0.12.0"
 wgpu = "=30.0.0"

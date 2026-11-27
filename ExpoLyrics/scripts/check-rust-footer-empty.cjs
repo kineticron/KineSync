@@ -64,6 +64,8 @@ const imports = {
   '@/constants/player-layout': { LANDSCAPE_FONT_SCALE: 0.8 },
   '@/lib/lyrics-timing': timing.exports,
   '@/lib/lyrics-arrival-trace': { arrivalHandle: () => undefined },
+  '@/lib/rust-frame-trace': {},
+  './rust-fps-overlay': { RustFpsOverlay: 'RustFpsOverlay' },
 };
 const mod = { exports: {} };
 const staticView = { exports: {} };

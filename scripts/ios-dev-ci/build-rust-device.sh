@@ -10,7 +10,7 @@ TOOLCHAIN=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.toolchain'
 TARGET=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.target')
 PROFILE=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.profile')
 [[ "$TARGET" == aarch64-apple-ios && "$PROFILE" == release ]]
-FEATURES=$(node -p 'require("./scripts/ios-dev-ci/config.json").rust.features.join(",")')
+FEATURES=$(node -p 'require("./scripts/ios-dev-ci/rust-device.cjs").effectiveRust().features.join(",")')
 # Bash 3.2 treats an empty array expansion as unset under nounset.
 set -- "+${TOOLCHAIN}" build --locked --lib --manifest-path native/lyrics-renderer/Cargo.toml \
   --target "$TARGET" --profile "$PROFILE"

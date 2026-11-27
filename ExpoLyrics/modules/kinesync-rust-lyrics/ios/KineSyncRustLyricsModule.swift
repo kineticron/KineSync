@@ -9,15 +9,23 @@ public final class KineSyncRustLyricsModule: Module {
     Name("KineSyncRustLyrics")
     Function("abiVersion") { kr_abi_version() }
     Function("monotonicMs") { CACurrentMediaTime() * 1000 }
+    #if DEBUG
+    Function("frameTraceAvailable") { kr_frame_trace_available() }
+    #endif
     View(KineSyncRustLyricsView.self) {
       #if DEBUG
-      Events("onStatus", "onMetrics")
+      Events("onStatus", "onFrameTrace", "onFrameTraceReset")
       #else
       Events("onStatus")
       #endif
       Prop("trackJson") { (view: KineSyncRustLyricsView, value: String) in view.setTrack(value) }
       Prop("active") { (view: KineSyncRustLyricsView, value: Bool) in view.setActive(value) }
       #if DEBUG
+      Prop("traceSession") { (view: KineSyncRustLyricsView, value: String) in view.setFrameTrace(value) }
+      Prop("tracePanelVisible") { (view: KineSyncRustLyricsView, value: Bool) in view.setTracePanelVisible(value) }
+      AsyncFunction("exportFrameTrace") { (view: KineSyncRustLyricsView, session: String, promise: Promise) in
+        MainActor.assumeIsolated { view.exportFrameTrace(session, promise) }
+      }
       AsyncFunction("copyLayout") { (view: KineSyncRustLyricsView, promise: Promise) in
         MainActor.assumeIsolated { view.copyLayout(promise) }
       }
@@ -52,6 +60,20 @@ private struct Anchor: Decodable {
   let snap: Bool
 }
 private struct TrackIdentity: Decodable { let generation: UInt64; let track_id: String }
+private struct TraceFrameRequest: Sendable {
+  let token: UInt64
+  let id: UInt64
+  let segment: UInt64
+}
+#if DEBUG
+private struct TraceCapture: Sendable {
+  let token: UInt64
+  let generation: UInt64
+  let surface: UInt64
+  let startedMs: Double
+  let session: String
+}
+#endif
 
 // Only the serial queue touches Rust. Retirement is asynchronous and retains the
 // layer until the last bounded frame and surface destruction have completed.
@@ -77,7 +99,8 @@ private final class RustOwner: @unchecked Sendable {
   private var size = CGSize.zero
   private var scale: CGFloat = 1
   #if DEBUG
-  private var lastMetrics = 0.0
+  private var traceCapture: TraceCapture?
+  private var traceSummaryRevision: UInt64?
   #endif
   // Bundle bytes are cached once, loaded on the worker, never resolved via Metro per frame.
   private static let fontBundle: Bundle? = {
@@ -280,6 +303,9 @@ private final class RustOwner: @unchecked Sendable {
       }
       self.handle = kr_create(Unmanaged.passUnretained(self.layer).toOpaque(), width, height, Float(scale))
       if self.handle == 0 { self.failure(); return }
+      #if DEBUG
+      if let capture = self.traceCapture { self.applyFrameTrace(capture) }
+      #endif
       if !self.installFonts() { return }
     } else if self.size != size || self.scale != scale {
       if kr_resize(self.handle, width, height, Float(scale)) < 0 { self.failure(); return }
@@ -301,7 +327,57 @@ private final class RustOwner: @unchecked Sendable {
     // Immediate gate only; lifecycle never waits for GPU/worker completion on main.
     gate.lock(); visible = value; gate.unlock()
   }
-  func draw(targetMs: Double, resumeStepMs: Double, completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
+  #if DEBUG
+  private func applyFrameTrace(_ capture: TraceCapture?) {
+    _ = kr_frame_trace_set(handle, capture?.token ?? 0, capture?.generation ?? 0,
+                           capture?.surface ?? 0, capture?.startedMs ?? 0)
+  }
+
+  func setFrameTrace(_ capture: TraceCapture?) {
+    queue.async {
+      guard self.permitted(), self.traceCapture?.token != capture?.token else { return }
+      self.traceCapture = capture
+      if self.handle != 0 { self.applyFrameTrace(capture) }
+    }
+  }
+
+  func setTraceSummaryRevision(_ revision: UInt64?) {
+    gate.lock(); defer { gate.unlock() }
+    traceSummaryRevision = revision
+  }
+
+  private func canCopyTrace(_ summaryRevision: UInt64?) -> Bool {
+    gate.lock(); defer { gate.unlock() }
+    return !retired && (summaryRevision == nil || traceSummaryRevision == summaryRevision)
+  }
+
+  func copyFrameTrace(capture: TraceCapture, cutoff: Double, segment: UInt64, summaryRevision: UInt64?,
+                      completion: @escaping @MainActor (String?) -> Void) {
+    queue.async {
+      let now = CACurrentMediaTime() * 1000
+      var json: String?
+      if self.canCopyTrace(summaryRevision), self.handle != 0,
+         self.traceCapture?.token == capture.token, self.currentGeneration == capture.generation, !self.failed {
+        let export = summaryRevision == nil
+        let capacity = export ? 512 * 1024 : 8192
+        var bytes = Data(count: capacity)
+        let count = bytes.withUnsafeMutableBytes { buffer in
+          kr_frame_trace_copy_json(self.handle, cutoff, now, segment, export,
+                                   buffer.bindMemory(to: UInt8.self).baseAddress, capacity)
+        }
+        if count > 0 && Int(count) <= capacity {
+          bytes.count = Int(count)
+          json = String(data: bytes, encoding: .utf8)
+        }
+      }
+      let result = json
+      DispatchQueue.main.async { completion(result) }
+    }
+  }
+  #endif
+
+  func draw(targetMs: Double, resumeStepMs: Double, trace: TraceFrameRequest?,
+            completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
     queue.async {
       #if DEBUG
       dispatchPrecondition(condition: .onQueue(self.queue))
@@ -321,36 +397,21 @@ private final class RustOwner: @unchecked Sendable {
       let sampled = CACurrentMediaTime() * 1000
       // Never replay a target which became stale while input/resize work ran.
       let frameTarget = max(targetMs, sampled)
+      #if DEBUG
+      if let trace, let capture = self.traceCapture, capture.token == trace.token,
+         capture.generation == self.currentGeneration {
+        result = kr_frame_trace_render(self.handle, frameTarget, sampled, resumeStepMs, trace.id, trace.segment)
+      } else {
+        result = kr_render(self.handle, frameTarget, sampled, resumeStepMs)
+      }
+      #else
       result = kr_render(self.handle, frameTarget, sampled, resumeStepMs)
+      #endif
       if result < 0 { self.failure(); return }
       var m = KRMetrics()
       if kr_metrics(self.handle, &m) < 0 { self.failure(); return }
       animating = m.animating != 0
       nextCue = m.next_cue_native_ms
-      #if DEBUG
-      let now = CACurrentMediaTime()
-      if result == 0 && now - self.lastMetrics >= 1 {
-        self.lastMetrics = now
-        self.emit(["state": "metrics", "frames": m.frames, "generation": m.generation,
-                   "sampleNativeMs": sampled, "targetNativeMs": m.target_native_ms, "playing": self.anchor?.playing ?? false, "rate": self.anchor?.rate ?? 1,
-                   "positionMs": m.position_ms, "cpuSceneMs": m.cpu_scene_ms,
-                   "visibleChanges": m.visible_changes != 0, "nextCueNativeMs": m.next_cue_native_ms,
-                   "cpuEncodeMs": m.cpu_encode_ms, "gpuIntervalMs": m.gpu_interval_ms,
-                   "waitMs": m.wait_ms, "cpuBlitMs": m.cpu_blit_ms,
-                   "acquireMs": m.acquire_ms, "blitSubmitMs": m.blit_submit_ms,
-                   "pollMs": m.poll_ms, "presentCallMs": m.present_call_ms,
-                   "gpuCompleted": m.completed, "gpuOutstanding": m.outstanding, "gpuBusy": m.gpu_busy,
-                   "gpuRendering": (m.capabilities & 1) != 0, "computeBlur": (m.capabilities & 2) != 0,
-                   "adapterTimestampQuery": (m.capabilities & 4) != 0,
-                   "adapterEncoderTimestamp": (m.capabilities & 8) != 0,
-                   "enabledBracketFeatures": (m.capabilities & 16) != 0,
-                   "profilerReason": (m.capabilities & 4) == 0 ? "adapter has no timestamp queries" :
-                     (m.capabilities & 8) == 0 ? "adapter has no encoder timestamp feature (required by whole-Vello bracket)" :
-                     "live timestamp readback disabled to avoid an extra worker/GPU wait",
-                   "layoutMs": m.layout_ms, "width": m.width, "height": m.height,
-                   "note": "CPU wall costs only. GPU completed counts blit work callbacks; present-call rate is not scanout. Submit cost is final blit submit only; Vello internal submits remain in encode."])
-      }
-      #endif
     }
   }
   func dispose() {
@@ -375,12 +436,169 @@ private final class MetalHost: UIView {
 private final class DisplayTarget: NSObject {
   weak var view: KineSyncRustLyricsView?
   @objc func tick(_ link: CADisplayLink) { view?.tick(link) }
+  #if DEBUG
+  @objc func tracePulse(_ timer: Timer) { view?.tracePulse() }
+  #endif
 }
+
+#if DEBUG
+@MainActor
+private final class CallbackTrace {
+  enum Action: String, Hashable { case request, busy, idle, inactive }
+
+  private struct Sample {
+    let id: UInt64
+    let segment: UInt64
+    let arrivalMs: Double
+    let timestampMs: Double
+    let targetMs: Double
+    let requestedHz: Double
+    let action: Action
+    let warmup: Bool
+    let intervalMs: Double?
+    let missed: Int
+    let recordCpuMs: Double
+
+    func export() -> [String: Any] {
+      var result: [String: Any] = [
+        "id": id, "segment": segment, "arrivalMs": arrivalMs, "timestampMs": timestampMs,
+        "targetMs": targetMs, "requestedHz": requestedHz, "action": action.rawValue,
+        "warmup": warmup, "missedCallbackVsyncsEstimate": missed, "recordCpuMs": recordCpuMs
+      ]
+      if let intervalMs { result["intervalMs"] = intervalMs }
+      return result
+    }
+  }
+
+  private static let capacity = 1200
+  private static let windowMs = 5000.0
+  static var nextToken: UInt64 = 0
+  let capture: TraceCapture
+  private var samples = [Sample?](repeating: nil, count: CallbackTrace.capacity)
+  private var start = 0
+  private var count = 0
+  private var overwritten = 0
+  private var segment: UInt64 = 1
+  private var previousTimestamp: Double?
+  private var segmentPeriod = 0.0
+  private var stableCount = 0
+  private var summaryCpuMs = 0.0
+  var lastSummaryDeliveryMs = -Double.infinity
+  var summaryPending = false
+  var exportPending = false
+
+  init(capture: TraceCapture) { self.capture = capture }
+
+  func activeSegment(phase: String) -> UInt64 {
+    phase == "active" && stableCount == 3 ? segment : 0
+  }
+
+  func pause() {
+    if previousTimestamp != nil { segment &+= 1 }
+    previousTimestamp = nil
+    segmentPeriod = 0
+    stableCount = 0
+  }
+
+  private func popFirst() {
+    samples[start] = nil
+    start = (start + 1) % Self.capacity
+    count -= 1
+  }
+
+  private func evict(_ nowMs: Double) {
+    while count > 0, let first = samples[start], nowMs - first.arrivalMs > Self.windowMs { popFirst() }
+  }
+
+  func record(id: UInt64, display: CADisplayLink, arrival: Double, requestedHz: Double, action: Action) -> TraceFrameRequest {
+    let began = CACurrentMediaTime()
+    let timestamp = display.timestamp * 1000
+    let target = display.targetTimestamp * 1000
+    let period = target - timestamp
+    let active = (action == .request || action == .busy) && period.isFinite && period > 0
+    var interval: Double?
+    var missed = 0
+    if active {
+      if let previousTimestamp, abs(period - segmentPeriod) <= max(0.35, segmentPeriod * 0.08),
+         timestamp > previousTimestamp {
+        stableCount = min(stableCount + 1, 3)
+        interval = timestamp - previousTimestamp
+        if stableCount == 3, let interval {
+          let steps = interval / segmentPeriod
+          let rounded = steps.rounded()
+          if rounded <= 600, abs(steps - rounded) <= 0.20 { missed = Int(max(0, rounded - 1)) }
+        }
+      } else {
+        pause()
+        segmentPeriod = period
+      }
+      previousTimestamp = timestamp
+    } else {
+      pause()
+    }
+    let now = arrival * 1000
+    evict(now)
+    if count == Self.capacity {
+      popFirst()
+      overwritten += 1
+    }
+    let index = (start + count) % Self.capacity
+    count += 1
+    samples[index] = Sample(id: id, segment: segment, arrivalMs: now, timestampMs: timestamp, targetMs: target,
+                            requestedHz: requestedHz, action: action, warmup: active && stableCount < 3,
+                            intervalMs: interval, missed: missed, recordCpuMs: (CACurrentMediaTime() - began) * 1000)
+    return TraceFrameRequest(token: capture.token, id: id, segment: segment)
+  }
+
+  func snapshot(now: Double, requestedHz: Double, phase: String, export: Bool) -> [String: Any] {
+    let began = CACurrentMediaTime()
+    evict(now)
+    let window = (0..<count).compactMap { samples[(start + $0) % Self.capacity] }.filter { $0.arrivalMs <= now }
+    let active = activeSegment(phase: phase)
+    let intervals = window.filter { $0.segment == active && !$0.warmup }.compactMap(\.intervalMs)
+    let windowMs = min(Self.windowMs, max(0, now - capture.startedMs))
+    var actions: [Action: Int] = [:]
+    for sample in window { actions[sample.action, default: 0] += 1 }
+    var summary: [String: Any] = [
+      "requestedHz": requestedHz, "phase": phase == "active" && stableCount < 3 ? "warmup" : phase,
+      "deliveredCallbacks": window.count, "busyCallbacks": actions[.busy, default: 0],
+      "inactiveCallbacks": actions[.inactive, default: 0], "idleCallbacks": actions[.idle, default: 0],
+      "estimatedMissedCallbackVsyncs": window.reduce(0) { $0 + $1.missed }, "overwritten": overwritten,
+      "windowMs": windowMs, "activeSegment": active, "previousSummaryCpuMs": summaryCpuMs
+    ]
+    if windowMs > 0 { summary["windowCallbackHz"] = Double(window.count) * 1000 / windowMs }
+    if !intervals.isEmpty {
+      summary["activeCallbackHz"] = Double(intervals.count) * 1000 / intervals.reduce(0, +)
+      summary["callbackIntervalMs"] = distribution(intervals)
+    }
+    if active != 0 { summary["budgetMs"] = segmentPeriod }
+    if let value = distribution(window.map(\.recordCpuMs)) { summary["recordCpuMs"] = value }
+    let result: [String: Any] = export ? ["summary": summary, "callbacks": window.map { $0.export() }] : summary
+    summaryCpuMs = (CACurrentMediaTime() - began) * 1000
+    return result
+  }
+
+  private func distribution(_ values: [Double]) -> [String: Any]? {
+    let sorted = values.sorted()
+    guard let worst = sorted.last else { return nil }
+    return ["count": sorted.count, "p50": sorted[(sorted.count + 1) / 2 - 1],
+            "p95": sorted[(sorted.count * 95 + 99) / 100 - 1], "worst": worst]
+  }
+}
+#endif
 
 final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   let onStatus = EventDispatcher()
   #if DEBUG
-  let onMetrics = EventDispatcher()
+  let onFrameTrace = EventDispatcher()
+  let onFrameTraceReset = EventDispatcher()
+  private var requestedHz = 0.0
+  private var traceRequested = ""
+  private var tracePanelVisible = false
+  private var traceSummaryRevision: UInt64 = 0
+  private var traceCallbackID: UInt64 = 0
+  private var frameTrace: CallbackTrace?
+  private var traceTimer: Timer?
   #endif
   private let metal = MetalHost()
   private let target = DisplayTarget()
@@ -425,24 +643,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
   private var nextCueNativeMs = -1.0
   private var cueWork: DispatchWorkItem?
   private var cueDeadline = -1.0
-  private var callbacks: UInt64 = 0
-  private var submitted: UInt64 = 0
-  private var idle: UInt64 = 0
-  private var busyCallbacks: UInt64 = 0
-  private var inactive: UInt64 = 0
-  private var noDrawable: UInt64 = 0
-  private var presentCalls: UInt64 = 0
-  private var missedObservedEstimate: UInt64 = 0
-  private var requestedHz = 0.0
-  private var windowStart = 0.0
-  private var windowCallbacks: UInt64 = 0
-  private var windowPresentCalls: UInt64 = 0
-  private var windowBusyCallbacks: UInt64 = 0
-  private var windowMissedEstimate: UInt64 = 0
-  private var previousStep = 0.0
-  private var tickMs = 0.0
-  private var intervalMs = 0.0
-  private var previousTick = 0.0
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -499,34 +699,6 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       owner = RustOwner(layer: metal.layer as! CAMetalLayer) { [weak self] event in
         guard let self, self.session == epoch,
               (event["generation"] as? UInt64) == self.generation else { return }
-        #if DEBUG
-        if event["state"] as? String == "metrics" {
-          var metrics = event
-          metrics["uiTickMs"] = self.tickMs
-          metrics["displayIntervalMs"] = self.intervalMs
-          let elapsed = CACurrentMediaTime() - self.windowStart
-          // Never extrapolate a first/resume callback's tiny window into "fps".
-          guard elapsed >= 1 else { return }
-          metrics["callbackTotal"] = self.callbacks
-          metrics["submitted"] = self.submitted
-          metrics["idle"] = self.idle
-          metrics["busy"] = self.busyCallbacks
-          metrics["inactive"] = self.inactive
-          metrics["noDrawable"] = self.noDrawable
-          metrics["missedObservedIntervalsEstimate"] = self.missedObservedEstimate
-          metrics["requestedHz"] = self.requestedHz
-          metrics["windowSeconds"] = elapsed
-          metrics["deliveredCallbackHz"] = elapsed > 0 ? Double(self.callbacks - self.windowCallbacks) / elapsed : 0
-          metrics["busyCallbacksInWindow"] = self.busyCallbacks - self.windowBusyCallbacks
-          metrics["missedIntervalsInWindow"] = self.missedObservedEstimate - self.windowMissedEstimate
-          metrics["presentCallRate"] = elapsed > 0 ? Double(self.presentCalls - self.windowPresentCalls) / elapsed : 0
-          self.windowStart = CACurrentMediaTime()
-          self.windowCallbacks = self.callbacks; self.windowPresentCalls = self.presentCalls
-          self.windowBusyCallbacks = self.busyCallbacks; self.windowMissedEstimate = self.missedObservedEstimate
-          self.onMetrics(metrics)
-          return
-        }
-        #endif
         if event["state"] as? String == "error" {
           self.failed = true; self.metal.isHidden = true
           self.link?.invalidate(); self.link = nil
@@ -539,6 +711,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       }
       refresh()
     }
+    #if DEBUG
+    syncFrameTrace()
+    #endif
     lifecycle()
   }
   override func layoutSubviews() {
@@ -565,9 +740,141 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     }
     failed = false; metal.isHidden = true
     track = value; markDirty()
-    refresh(); lifecycle()
+    refresh()
+    #if DEBUG
+    syncFrameTrace()
+    #endif
+    lifecycle()
   }
   #if DEBUG
+  func setFrameTrace(_ session: String) {
+    traceRequested = session.utf8.count <= 80 && kr_frame_trace_available() ? session : ""
+    syncFrameTrace()
+  }
+
+  func setTracePanelVisible(_ visible: Bool) {
+    tracePanelVisible = visible
+    syncTraceTimer()
+  }
+
+  private func syncFrameTrace() {
+    let parts = traceRequested.split(separator: ":", omittingEmptySubsequences: false)
+    if parts.count == 3, UInt64(parts[0]) == generation, let surface = UInt64(parts[1]),
+       let run = UInt64(parts[2]), run > 0, window != nil, let owner {
+      if frameTrace?.capture.session != traceRequested {
+        CallbackTrace.nextToken &+= 1
+        let capture = TraceCapture(token: CallbackTrace.nextToken, generation: generation, surface: surface,
+                                   startedMs: CACurrentMediaTime() * 1000, session: traceRequested)
+        frameTrace = CallbackTrace(capture: capture)
+        owner.setFrameTrace(capture)
+        emitTraceReset(capture, token: capture.token, active: true)
+      }
+    } else if let previous = frameTrace {
+      frameTrace = nil
+      owner?.setFrameTrace(nil)
+      CallbackTrace.nextToken &+= 1
+      emitTraceReset(previous.capture, token: CallbackTrace.nextToken, active: false)
+    }
+    syncTraceTimer()
+  }
+
+  private func emitTraceReset(_ capture: TraceCapture, token: UInt64, active: Bool) {
+    onFrameTraceReset(["token": token, "session": capture.session, "generation": capture.generation,
+                       "surface": capture.surface, "active": active])
+  }
+
+  private func syncTraceTimer() {
+    if tracePanelVisible, frameTrace != nil, let owner {
+      guard traceTimer == nil else { return }
+      traceSummaryRevision &+= 1
+      owner.setTraceSummaryRevision(traceSummaryRevision)
+      let timer = Timer(timeInterval: 0.5, target: target, selector: #selector(DisplayTarget.tracePulse(_:)),
+                        userInfo: nil, repeats: true)
+      timer.tolerance = 0.05
+      RunLoop.main.add(timer, forMode: .common)
+      traceTimer = timer
+    } else if traceTimer != nil {
+      traceTimer?.invalidate()
+      traceTimer = nil
+      traceSummaryRevision &+= 1
+      owner?.setTraceSummaryRevision(nil)
+    }
+  }
+
+  private func recordTrace(_ display: CADisplayLink, _ start: Double, _ action: CallbackTrace.Action) -> TraceFrameRequest? {
+    guard let frameTrace else { return nil }
+    traceCallbackID &+= 1
+    return frameTrace.record(id: traceCallbackID, display: display, arrival: start, requestedHz: requestedHz, action: action)
+  }
+
+  private var tracePhase: String {
+    if !foreground || window == nil || !enabled || failed || bounds.isEmpty { return "inactive" }
+    if retryBlocked || retryWork != nil { return "waiting" }
+    if link == nil { return "idle" }
+    return "active"
+  }
+
+  fileprivate func tracePulse() {
+    let now = CACurrentMediaTime() * 1000
+    guard foreground, tracePanelVisible, let owner, let trace = frameTrace, !trace.summaryPending, !trace.exportPending,
+          now - trace.lastSummaryDeliveryMs >= 500 else { return }
+    let phase = tracePhase
+    let segment = trace.activeSegment(phase: phase)
+    let callbacks = trace.snapshot(now: now, requestedHz: requestedHz, phase: phase, export: false)
+    let summaryRevision = traceSummaryRevision
+    trace.summaryPending = true
+    owner.copyFrameTrace(capture: trace.capture, cutoff: now, segment: segment, summaryRevision: summaryRevision) { [weak self, weak trace] worker in
+      guard let self, let trace, self.frameTrace === trace else { return }
+      trace.summaryPending = false
+      guard self.foreground, self.tracePanelVisible, self.traceSummaryRevision == summaryRevision,
+            self.generation == trace.capture.generation else { return }
+      trace.lastSummaryDeliveryMs = CACurrentMediaTime() * 1000
+      self.onFrameTrace([
+        "worker": worker ?? "", "snapshotMs": now, "generation": trace.capture.generation,
+        "surface": trace.capture.surface, "token": trace.capture.token, "session": trace.capture.session,
+        "callbacks": callbacks
+      ])
+    }
+  }
+
+  func exportFrameTrace(_ session: String, _ promise: Promise) {
+    guard let owner, let trace = frameTrace, trace.capture.session == session, !trace.exportPending else {
+      promise.reject("ERR_RUST_TRACE", "Frame trace export is unavailable or already in progress.")
+      return
+    }
+    trace.exportPending = true
+    let now = CACurrentMediaTime() * 1000
+    let phase = tracePhase
+    let callbacks = trace.snapshot(now: now, requestedHz: requestedHz, phase: phase, export: true)
+    owner.copyFrameTrace(capture: trace.capture, cutoff: now, segment: trace.activeSegment(phase: phase),
+                         summaryRevision: nil) { [weak self, weak trace] worker in
+      guard let self, let trace, self.frameTrace === trace, self.generation == trace.capture.generation,
+            self.traceRequested == session, self.window != nil else {
+        promise.reject("ERR_RUST_TRACE", "The trace ended before export.")
+        return
+      }
+      trace.exportPending = false
+      guard let worker else {
+        promise.reject("ERR_RUST_TRACE", "The renderer could not export the trace.")
+        return
+      }
+      do {
+        let capture = ["token": trace.capture.token, "generation": trace.capture.generation, "surface": trace.capture.surface]
+        let payload: [String: Any] = ["capture": capture, "session": session, "records": callbacks]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let callbackJSON = String(decoding: data, as: UTF8.self)
+        let json = "{\"version\":2,\"snapshotMs\":\(now),\"callbacks\":\(callbackJSON),\"worker\":\(worker)}"
+        guard json.utf8.count <= 1024 * 1024 - 1024 else {
+          promise.reject("ERR_RUST_TRACE_SIZE", "Capture exceeds the share limit. Start a shorter capture and try again.")
+          return
+        }
+        promise.resolve(json)
+      } catch {
+        promise.reject("ERR_RUST_TRACE", "Callback records could not be encoded.")
+      }
+    }
+  }
+
   func copyLayout(_ promise: Promise) {
     guard let owner else { promise.reject("ERR_RUST_LAYOUT", "Rust owner unavailable"); return }
     owner.copyLayout { receipt in
@@ -719,16 +1026,18 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
       if link == nil {
         let next = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick(_:)))
         let maximum = Float(min(120, window?.screen.maximumFramesPerSecond ?? 60))
+        #if DEBUG
         requestedHz = Double(maximum)
+        #endif
         next.preferredFrameRateRange = CAFrameRateRange(minimum: maximum, maximum: maximum, preferred: maximum)
-        windowStart = CACurrentMediaTime()
-        windowCallbacks = callbacks; windowPresentCalls = presentCalls
-        windowBusyCallbacks = busyCallbacks; windowMissedEstimate = missedObservedEstimate
         next.add(to: .main, forMode: .common)
         link = next
       }
     } else {
-      link?.invalidate(); link = nil; previousTick = 0; previousStep = 0
+      #if DEBUG
+      if link != nil { frameTrace?.pause() }
+      #endif
+      link?.invalidate(); link = nil
       if visible && !busy && retryWork == nil && !retryBlocked {
         resumePending = anchor?.playing == true && (anchor?.rate ?? 0) > 0
         scheduleCue()
@@ -765,37 +1074,46 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
   fileprivate func tick(_ display: CADisplayLink) {
-    let start = CACurrentMediaTime()
-    defer { tickMs = (CACurrentMediaTime() - start) * 1000 }
-    callbacks &+= 1
+    #if DEBUG
+    let start = frameTrace == nil ? 0 : CACurrentMediaTime()
+    #endif
     guard window != nil, foreground, enabled, !failed, !retryBlocked, retryWork == nil else {
-      inactive &+= 1; lifecycle(); return
+      #if DEBUG
+      _ = recordTrace(display, start, .inactive)
+      #endif
+      lifecycle(); return
     }
-    if previousTick > 0 {
-      let gap = display.timestamp - previousTick
-      intervalMs = gap * 1000
-      // An estimate only: system cadence changes can also lengthen this gap.
-      if previousStep > 0 {
-        missedObservedEstimate &+= UInt64(max(0, (gap / previousStep).rounded() - 1))
-      }
+    if busy {
+      #if DEBUG
+      _ = recordTrace(display, start, .busy)
+      #endif
+      return
     }
-    previousTick = display.timestamp
-    previousStep = display.targetTimestamp - display.timestamp
-    if busy { busyCallbacks &+= 1; return }
     guard dirty || animating else {
-      idle &+= 1; lifecycle(); return
+      #if DEBUG
+      _ = recordTrace(display, start, .idle)
+      #endif
+      lifecycle(); return
     }
-    guard let owner else { inactive &+= 1; return }
-    busy = true; dirty = false; submitted &+= 1
+    guard let owner else {
+      #if DEBUG
+      _ = recordTrace(display, start, .inactive)
+      #endif
+      return
+    }
+    busy = true; dirty = false
     let epoch = session
     let requestedRevision = frameRevision
     let resumeStepMs = resumePending ? max(0, display.targetTimestamp - display.timestamp) * 1000 : 0
     resumePending = false
-    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs) { [weak self] result, renderedGeneration, settling, nextCue in
+    #if DEBUG
+    let trace = recordTrace(display, start, .request)
+    #else
+    let trace: TraceFrameRequest? = nil
+    #endif
+    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs, trace: trace) { [weak self] result, renderedGeneration, settling, nextCue in
       guard let self, self.session == epoch else { return }
       self.busy = false
-      if result == 0 { self.presentCalls &+= 1 }
-      if result == 2 { self.noDrawable &+= 1 }
       if result == 3 { self.dirty = true } // capacity retry at next fresh vsync
       guard self.frameRevision == requestedRevision, renderedGeneration == self.generation else {
         self.lifecycle(); return
@@ -856,6 +1174,9 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     cueWork?.cancel()
     retryWork?.cancel()
     link?.invalidate()
+    #if DEBUG
+    traceTimer?.invalidate()
+    #endif
     NotificationCenter.default.removeObserver(self)
     owner?.dispose()
   }

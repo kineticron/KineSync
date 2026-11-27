@@ -158,6 +158,7 @@ jobs:
 
       - name: Prepare Rust lyrics framework for iOS Release
         env:
+          KINESYNC_IOS_BUILD_KIND: release
           CARGO_HOME: ${{ steps.rust_identity.outputs.cargo_home }}
           CARGO_TARGET_DIR: ${{ steps.rust_identity.outputs.target_dir }}
           IPHONEOS_DEPLOYMENT_TARGET: ${{ steps.rust_identity.outputs.deployment }}
@@ -176,7 +177,7 @@ jobs:
           fi
           export CI_EVIDENCE_DIR="$RUNNER_TEMP/kinesync-release-evidence"
           export RUST_PREBUILT_DIR="$RUNNER_TEMP/kinesync-release-framework"
-          export RUST_DEVICE_KEY="$GITHUB_SHA"
+          export RUST_DEVICE_KEY="$(node scripts/ios-dev-ci/ci.cjs rust-key)"
           mkdir -p "$CI_EVIDENCE_DIR"
           bash scripts/ios-dev-ci/build-rust-device.sh
           node scripts/ios-dev-ci/rust-device.cjs validate

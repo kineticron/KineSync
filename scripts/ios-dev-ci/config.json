@@ -16,5 +16,6 @@
     "iosDeploymentTarget": "16.4",
     "lto": "thin",
     "debugAssertions": false
-  }
+  },
+  "developmentRustFeatures": ["dev-frame-trace"]
 }

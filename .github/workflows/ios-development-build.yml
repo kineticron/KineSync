@@ -39,6 +39,7 @@ defaults:
 env:
   CACHE_MODE: ${{ inputs.cache_mode || 'normal' }}
   CACHE_EPOCH: ${{ inputs.cache_epoch || 'routine' }}
+  KINESYNC_IOS_BUILD_KIND: development
 
 jobs:
   validate:

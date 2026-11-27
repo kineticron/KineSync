@@ -1404,7 +1404,24 @@ pub extern "C" fn kr_render(
     sampled_native_ms: f64,
     resume_step_ms: f64,
 ) -> i32 {
-    with(handle, |engine| {
+    render(
+        handle,
+        native_ms,
+        sampled_native_ms,
+        resume_step_ms,
+        #[cfg(feature = "dev-frame-trace")]
+        None,
+    )
+}
+
+fn render(
+    handle: u64,
+    native_ms: f64,
+    sampled_native_ms: f64,
+    resume_step_ms: f64,
+    #[cfg(feature = "dev-frame-trace")] request: Option<crate::frame_trace::Request>,
+) -> i32 {
+    let draw = |engine: &mut Engine| {
         let frame_started = Instant::now();
         if !native_ms.is_finite()
             || native_ms < 0.0
@@ -1493,7 +1510,139 @@ pub extern "C" fn kr_render(
         engine.metrics.completed = engine.surface.completed();
         engine.metrics.outstanding = engine.surface.outstanding();
         Ok(0)
+    };
+    with(handle, |engine| {
+        #[cfg(feature = "dev-frame-trace")]
+        if let Some(request) = request {
+            engine.surface.begin_frame_trace(request);
+        }
+        let result = draw(engine);
+        #[cfg(feature = "dev-frame-trace")]
+        if request.is_some() {
+            engine
+                .surface
+                .finish_frame_trace(result.as_ref().copied().unwrap_or(-1));
+        }
+        result
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_frame_trace_available() -> bool {
+    cfg!(feature = "dev-frame-trace")
+}
+
+// Checked in the static archive during sealing and cache validation.
+#[cfg(feature = "dev-frame-trace")]
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_frame_trace_build_marker() {}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_frame_trace_set(
+    handle: u64,
+    token: u64,
+    generation: u64,
+    surface: u64,
+    started_ms: f64,
+) -> i32 {
+    #[cfg(feature = "dev-frame-trace")]
+    {
+        if !started_ms.is_finite() || started_ms < 0.0 {
+            return -1;
+        }
+        with(handle, |engine| {
+            engine
+                .surface
+                .set_frame_trace((token != 0).then_some(crate::frame_trace::Capture {
+                    token,
+                    generation,
+                    surface,
+                    started_ms,
+                }));
+            Ok(0)
+        })
+    }
+    #[cfg(not(feature = "dev-frame-trace"))]
+    {
+        let _ = (handle, token, generation, surface, started_ms);
+        1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_frame_trace_render(
+    handle: u64,
+    target_ms: f64,
+    worker_ms: f64,
+    resume_step_ms: f64,
+    id: u64,
+    segment: u64,
+) -> i32 {
+    #[cfg(feature = "dev-frame-trace")]
+    {
+        render(
+            handle,
+            target_ms,
+            worker_ms,
+            resume_step_ms,
+            (worker_ms.is_finite() && worker_ms >= 0.0).then(|| crate::frame_trace::Request {
+                id,
+                segment,
+                worker_ms,
+                started: Instant::now(),
+            }),
+        )
+    }
+    #[cfg(not(feature = "dev-frame-trace"))]
+    {
+        let _ = (handle, target_ms, worker_ms, resume_step_ms, id, segment);
+        1
+    }
+}
+
+/// # Safety
+/// For a nonzero capacity, `out` must designate a writable, nonoverlapping
+/// caller buffer of that size. The buffer is never retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kr_frame_trace_copy_json(
+    handle: u64,
+    cutoff_ms: f64,
+    worker_ms: f64,
+    segment: u64,
+    export: bool,
+    out: *mut u8,
+    capacity: usize,
+) -> i32 {
+    #[cfg(feature = "dev-frame-trace")]
+    {
+        if out.is_null()
+            || capacity == 0
+            || capacity > crate::frame_trace::MAX_EXPORT_BYTES
+            || !cutoff_ms.is_finite()
+            || !worker_ms.is_finite()
+            || cutoff_ms < 0.0
+            || worker_ms < cutoff_ms
+        {
+            return -1;
+        }
+        with(handle, |engine| {
+            let data = engine
+                .surface
+                .trace_snapshot(cutoff_ms, worker_ms, segment, export)
+                .map_err(|error| error.to_string())?;
+            if data.len() > capacity {
+                return Err("Frame trace output buffer too small".into());
+            }
+            // SAFETY: the caller owns a writable buffer and we checked capacity.
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, data.len()) };
+            Ok(data.len() as i32)
+        })
+    }
+    #[cfg(not(feature = "dev-frame-trace"))]
+    {
+        let _ = (handle, cutoff_ms, worker_ms, segment, export, out, capacity);
+        0
+    }
 }
 /// # Safety
 /// `out` points to a writable Metrics value.
@@ -2197,6 +2346,41 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Metrics, next_cue_native_ms), 152);
         assert_eq!(std::mem::offset_of!(Metrics, visible_changes), 160);
     }
+
+    #[test]
+    fn frame_trace_ffi_reports_feature_and_preserves_rejected_output() {
+        assert_eq!(kr_frame_trace_available(), cfg!(feature = "dev-frame-trace"));
+        let mut bytes = [0xab_u8; 32];
+        let off = if kr_frame_trace_available() { -1 } else { 0 };
+        // SAFETY: bytes is a valid writable buffer of the declared capacity.
+        assert_eq!(
+            unsafe {
+                kr_frame_trace_copy_json(
+                    0,
+                    f64::NAN,
+                    100.0,
+                    0,
+                    true,
+                    bytes.as_mut_ptr(),
+                    bytes.len(),
+                )
+            },
+            off
+        );
+        // SAFETY: handle 0 is unknown and the caller buffer is valid.
+        assert_eq!(
+            unsafe {
+                kr_frame_trace_copy_json(0, 100.0, 100.0, 0, true, bytes.as_mut_ptr(), bytes.len())
+            },
+            off
+        );
+        assert_eq!(bytes, [0xab; 32]);
+        if !kr_frame_trace_available() {
+            assert_eq!(kr_frame_trace_set(0, 1, 1, 0, 0.0), 1);
+            assert_eq!(kr_frame_trace_render(0, 10.0, 10.0, 0.0, 1, 0), 1);
+        }
+    }
+
     fn preparation_fonts() -> crate::typography::Fonts {
         let mut fonts = crate::typography::Fonts::default();
         fonts

@@ -1,9 +1,9 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Dev diagnostics overlay sits inside the Rust view's PanResponder ownership
-import { AppState, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
+import { AppState, DevSettings, Linking, PanResponder, Platform, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';
-import { anchorChanged, nextVisualAnchor, projectPosition, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
+import { anchorChanged, nextVisualAnchor, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
+import { acceptsTraceSummary, applyTraceReset, type LegacyMetrics, type TraceEvent, type TraceExport, type TraceGate, type TraceReset, type TraceUpdate } from '@/lib/rust-frame-trace';
 import { createRustLyricsGesture } from '@/lib/rust-lyrics-gesture';
 import { createRustLyricsFollow, type FollowCommand } from '@/lib/rust-lyrics-follow';
 import type { LyricLine } from '@/types/bridge';
@@ -14,17 +14,17 @@ import { arrivalEvent, arrivalHandle, arrivalSpan } from '@/lib/lyrics-arrival-t
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 import { selectTimedLyricLines, shouldHideTimedRenderer } from '@/lib/lyrics-timing';
 import { getStaticLineText, StaticLyricsView } from './static-lyrics-view';
+import { RustFpsOverlay } from './rust-fps-overlay';
 
-type NativeApi = { abiVersion(): number; monotonicMs(): number };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number> };
-type Metrics = { nextCueNativeMs: number; visibleChanges: boolean; frames: number; generation: number; positionMs: number; sampleNativeMs: number; targetNativeMs: number; playing: boolean; rate: number;
-  cpuSceneMs: number; cpuEncodeMs: number; gpuIntervalMs: number; waitMs: number; cpuBlitMs: number; acquireMs: number; blitSubmitMs: number; pollMs: number; presentCallMs: number; gpuCompleted: number; gpuOutstanding: number; gpuBusy: number;
-  uiTickMs: number; displayIntervalMs: number; callbackTotal: number; submitted: number; idle: number; busy: number; inactive: number; noDrawable: number;
-  busyCallbacksInWindow: number; missedIntervalsInWindow: number; missedObservedIntervalsEstimate: number; requestedHz: number; deliveredCallbackHz: number; presentCallRate: number; windowSeconds: number;
-  gpuRendering: boolean; computeBlur: boolean; adapterTimestampQuery: boolean; adapterEncoderTimestamp: boolean; enabledBracketFeatures: boolean; profilerReason: string };
+type NativeApi = { abiVersion(): number; monotonicMs(): number; frameTraceAvailable?(): boolean };
+type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number>; exportFrameTrace?(session: string): Promise<string> };
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }): void;
-  onMetrics?(event: { nativeEvent: Metrics }): void };
+  traceSession?: string;
+  tracePanelVisible?: boolean;
+  onFrameTrace?(event: { nativeEvent: TraceEvent }): void;
+  onFrameTraceReset?(event: { nativeEvent: TraceReset }): void;
+  onMetrics?(event: { nativeEvent: LegacyMetrics }): void };
 // A view can be torn down while a command is in flight during a track switch.
 // Expo rejects the stale tag; that is a lifecycle race, not a renderer failure.
 const STALE_VIEW = /Unable to find[^\n]*KineSyncRustLyricsView[^\n]*tag/i;
@@ -39,6 +39,10 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
   } catch (error) { return { api: null, view: null, error: `Rust module unavailable: ${String(error)}` }; }
 }
 const { api, view: NativeView, error: moduleError } = loadNative();
+const frameTraceSupported = __DEV__ && Platform.OS === 'ios' && api?.frameTraceAvailable?.() === true;
+if (frameTraceSupported) {
+  DevSettings.addMenuItem('Show Rust debug overlay', () => usePlaybackStore.getState().setShowRustDebugOverlay(true));
+}
 export const rustLyricsAvailable = NativeView !== null;
 let nextGeneration = 0;
 function generation() {
@@ -110,15 +114,15 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const mounted = useRef(true);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number; surfaceEpoch: number; style: string }) | null>(null);
-  const work = useRef({ renders: 0, anchors: 0, anchorMs: 0 });
-  work.current.renders++;
   const [surfaceEpoch, setSurfaceEpoch] = useState(0);
   const [rate, setRate] = useState(1);
-  const [showMetrics, setShowMetrics] = useState(false);
+  const [traceRun, setTraceRun] = useState(0);
+  const nextTraceRun = useRef<number | null>(null);
+  const activeTrace = useRef<TraceGate | null>(null);
   const [status, setStatus] = useState('Preparing Rust Metal renderer');
   const [failed, setFailed] = useState(false);
   const [readySurface, setReadySurface] = useState<{ generation: number; surfaceEpoch: number } | null>(null);
-  const [metrics, setMetrics] = useState<{ native: Metrics; delta: number; deliveryMs: number } | null>(null);
+  const traceSubscription = useRef<((update: TraceUpdate) => void) | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
   const latest = useRef({ shouldRevealTap, tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics });
@@ -224,12 +228,10 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     }
     const { positionMs, nativeMs, playing, snap } = next;
     const command = { generation: revision.generation, sequence: ++sequence.current, positionMs, nativeMs, playing, rate, snap };
-    work.current.anchors++;
     void native.current.setAnchor(JSON.stringify(command)).catch(error => {
       if (identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch) return;
       commandFailed(error);
     });
-    work.current.anchorMs = performance.now() - started;
   }, [api, commandFailed, demoDurationMs, demoPlayback, demoPlaying, isDemo, payload.error, previewPositionMs, rate, revision.generation, style, surfaceEpoch, trackId]);
   useEffect(() => {
     if (showStaticLyrics) return;
@@ -262,14 +264,54 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       sendAnchor();
     }
   }, [arrival, follow, revision.generation, sendFollow, sendAnchor, surfaceEpoch]);
-  const onMetrics = useCallback(({ nativeEvent: value }: { nativeEvent: Metrics }) => {
-    if (isDemo || identity.current.generation !== revision.generation || identity.current.surfaceEpoch !== surfaceEpoch || value.generation !== revision.generation || !api) return;
-    const now = performance.now();
-    const deliveryMs = Math.max(0, api.monotonicMs() - value.sampleNativeMs);
-    const projected = value.positionMs + (value.playing ? (api.monotonicMs() - value.targetNativeMs) * value.rate : 0);
-    // Both diagnostic views share the native sample.
-    setMetrics({ native: value, delta: projected - projectPosition(usePlaybackStore.getState(), now), deliveryMs });
-  }, [api, isDemo, revision.generation, surfaceEpoch]);
+  const onFrameTrace = useCallback(({ nativeEvent }: { nativeEvent: TraceEvent }) => {
+    const capture = activeTrace.current;
+    if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
+        nativeEvent.generation !== identity.current.generation || !capture || !acceptsTraceSummary(capture, nativeEvent)) return;
+    traceSubscription.current?.({ kind: 'trace', event: nativeEvent });
+  }, [surfaceEpoch]);
+  const onFrameTraceReset = useCallback(({ nativeEvent }: { nativeEvent: TraceReset }) => {
+    const capture = activeTrace.current;
+    if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
+        nativeEvent.generation !== identity.current.generation || !capture || !applyTraceReset(capture, nativeEvent)) return;
+    traceSubscription.current?.({ kind: 'reset' });
+  }, [surfaceEpoch]);
+  const onMetrics = useCallback(({ nativeEvent }: { nativeEvent: LegacyMetrics }) => {
+    if (mounted.current && identity.current.surfaceEpoch === surfaceEpoch && nativeEvent.generation === identity.current.generation) {
+      traceSubscription.current?.({ kind: 'legacy', event: nativeEvent });
+    }
+  }, [surfaceEpoch]);
+  const exportFrameTrace = useCallback(async (): Promise<TraceExport> => {
+    const view = native.current;
+    const capture = activeTrace.current;
+    const { generation, surfaceEpoch: surface } = identity.current;
+    if (!view?.exportFrameTrace || !capture?.active) throw new Error('Frame trace export is unavailable.');
+    const { session, minimumToken } = capture;
+    const isCurrent = () => mounted.current && native.current === view &&
+      activeTrace.current === capture && capture.active && capture.minimumToken === minimumToken &&
+      identity.current.generation === generation && identity.current.surfaceEpoch === surface;
+    const json = await view.exportFrameTrace(session);
+    if (!isCurrent()) throw new Error('The capture changed before export.');
+    return { json, expected: { session, generation, surface, minimumToken, token: minimumToken }, isCurrent };
+  }, []);
+  const setCapture = useCallback((enabled: boolean) => {
+    activeTrace.current = null;
+    if (enabled) nextTraceRun.current = (nextTraceRun.current ?? 0) + 1;
+    setTraceRun(enabled ? nextTraceRun.current ?? 0 : 0);
+  }, []);
+  const hideTracePanel = useCallback(() => {
+    if (activeTrace.current) activeTrace.current.visibleSince = Infinity;
+    usePlaybackStore.getState().setShowRustDebugOverlay(false);
+  }, []);
+  const recreateSurface = useCallback(() => {
+    activeTrace.current = null;
+    setSurfaceEpoch(value => value + 1);
+    setFailed(false);
+    setStatus('Recreating Rust surface');
+  }, []);
+  const cycleVisualRate = useCallback(() => {
+    setRate(value => value === 1 ? 0.5 : value === 0.5 ? 1.5 : 1);
+  }, []);
   const waiting = !isDemo && payload.error.includes(WAITING_LYRICS);
   const unavailable = moduleError || (waiting ? '' : payload.error);
   useEffect(() => {
@@ -283,7 +325,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   useEffect(() => {
     if (__DEV__ && !showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
   }, [isDemo, unavailable, failed, status, showStaticLyrics]);
-  const currentMetrics = !failed && !unavailable && metrics?.native.generation === revision.generation ? metrics.native : null;
   const nativeGestureReady = active && interactive && rustLyricsAvailable && !!payload.json &&
     !unavailable && !failed && readySurface?.generation === revision.generation &&
     readySurface.surfaceEpoch === surfaceEpoch;
@@ -295,64 +336,43 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     return () => onRevealOwnershipChange(false);
   }, [ownsReveal, onRevealOwnershipChange]);
   const visibleError = unavailable || (failed ? status : '');
+  const traceSession = frameTraceSupported && traceRun > 0 && !failed && !unavailable && !showStaticLyrics && payload.json
+    ? `${revision.generation}:${surfaceEpoch}:${traceRun}` : '';
+  if (!traceSession) {
+    activeTrace.current = null;
+  } else if (activeTrace.current?.session !== traceSession) {
+    activeTrace.current = { session: traceSession, minimumToken: 0, active: false, visibleSince: Infinity };
+  }
+  const trace = activeTrace.current;
+  if (trace) {
+    if (!showRustDebugOverlay) trace.visibleSince = Infinity;
+    else if (trace.visibleSince === Infinity) trace.visibleSince = api?.monotonicMs() ?? 0;
+  }
   if (showStaticLyrics) {
     return <StaticLyricsView key={trackId} lines={rawLyrics} fontScale={fontScale} landscape={landscape}
       showTranslation={showTranslation} credits={credits} interactive={interactive}
       shouldRevealTap={shouldRevealTap} onUserInteraction={onUserInteraction} />;
   }
   return <View style={styles.root}>
-    {__DEV__ && showRustDebugOverlay ? <View pointerEvents="none" style={styles.fpsStrip}>
-      <Text numberOfLines={1} style={styles.fps} accessibilityLabel="Rust presents per second, callback interval, busy skips and estimated missed callback intervals in this window. Not display scanout or measured GPU time.">
-        {currentMetrics ? `${currentMetrics.presentCallRate.toFixed(0)} presents/s · cb ${currentMetrics.displayIntervalMs.toFixed(1)}ms · busy ${currentMetrics.busyCallbacksInWindow ?? 0} · gaps~${currentMetrics.missedIntervalsInWindow ?? 0}` : 'presents/s · awaiting native sample'}
-      </Text>
-    </View> : null}
-    {__DEV__ && showRustDebugOverlay ? <ScrollView style={styles.overlay} contentContainerStyle={styles.diagnostics}>
-      <Text style={styles.caption}>{unavailable || (failed ? `Rust error: ${status}` : status)}</Text>
-      <View style={styles.actions}>
-      {!unavailable ? <Pressable accessibilityRole="button" onPress={() => { setSurfaceEpoch(value => value + 1); setFailed(false); setMetrics(null); setStatus('Recreating Rust surface'); }}>
-        <Text style={styles.caption}>Recreate Rust surface</Text>
-      </Pressable> : null}
-      {!unavailable && !failed ? <Pressable accessibilityRole="button" onPress={() => setRate(value => value === 1 ? 0.5 : value === 0.5 ? 1.5 : 1)}>
-        <Text style={styles.caption}>Visual rate {rate}× · audio unchanged</Text>
-      </Pressable> : null}
-      {!unavailable ? <Pressable accessibilityRole="button" onPress={() => setShowMetrics(value => !value)}>
-        <Text style={styles.caption}>{showMetrics ? 'Hide metrics' : 'Show metrics'}</Text>
-      </Pressable> : null}
-      </View>
-      {showMetrics && metrics && metrics.native.generation === revision.generation && !failed && !unavailable ? <Text style={styles.metrics}>
-        {`Rust present calls ${metrics.native.frames} · scene ${metrics.native.cpuSceneMs.toFixed(2)} ms · encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms\n`}
-        {`Metal GPU Vello ${metrics.native.gpuRendering ? 'active' : 'unavailable'} · compute blur ${metrics.native.computeBlur ? 'active' : 'unavailable'}\n`}
-        {`GPU timestamp profiler: ${metrics.native.profilerReason}\n`}
-        {`Adapter queries ${metrics.native.adapterTimestampQuery ? 'yes' : 'no'} / encoder ${metrics.native.adapterEncoderTimestamp ? 'yes' : 'no'} · bracket features ${metrics.native.enabledBracketFeatures ? 'enabled' : 'disabled'}\n`}
-        {`CPU encode ${metrics.native.cpuEncodeMs.toFixed(2)} ms · CPU blit ${metrics.native.cpuBlitMs.toFixed(2)} ms\n`}
-        {`Requested ${metrics.native.requestedHz.toFixed(0)} Hz · callbacks ${metrics.native.deliveredCallbackHz.toFixed(1)} Hz · present calls ${metrics.native.presentCallRate.toFixed(1)}/s (${metrics.native.windowSeconds.toFixed(2)}s window)\n`}
-        {`Acquire ${metrics.native.acquireMs.toFixed(2)} ms · blit submit ${metrics.native.blitSubmitMs.toFixed(2)} ms · present call ${metrics.native.presentCallMs.toFixed(2)} ms · poll ${metrics.native.pollMs.toFixed(2)} ms\n`}
-        {`Observed GPU blit completions ${metrics.native.gpuCompleted} · outstanding ${metrics.native.gpuOutstanding}/2 · capacity retries ${metrics.native.gpuBusy}\n`}
-        {`Callbacks ${metrics.native.callbackTotal} · worker requests ${metrics.native.submitted} · busy ${metrics.native.busy} · idle ${metrics.native.idle} · inactive ${metrics.native.inactive} · no drawable ${metrics.native.noDrawable}\n`}
-        {`Next cue ${metrics.native.nextCueNativeMs < 0 ? 'none' : `${Math.max(0, metrics.native.nextCueNativeMs - metrics.native.sampleNativeMs).toFixed(1)} ms`} · visible changes ${metrics.native.visibleChanges ? 'yes' : 'no'}\n`}
-        {`Observed interval gaps (estimate) ${metrics.native.missedObservedIntervalsEstimate} · UI tick ${metrics.native.uiTickMs.toFixed(2)} ms\n`}
-        {`JS anchors ${work.current.anchors} · renders ${work.current.renders} · anchor work ${work.current.anchorMs.toFixed(2)} ms\n`}
-        {`Native − JS ${metrics.delta.toFixed(1)} ms · sample age ${metrics.deliveryMs.toFixed(1)} ms\nPresent calls and GPU blit completion are not measured scanout. All costs shown are CPU wall time. Vello internal submits are included in encode. No phone performance conclusion.`}
-      </Text> : null}
-    </ScrollView> : null}
     <View style={styles.gestureWrap} pointerEvents={interactive ? undefined : 'none'} {...(nativeGestureReady ? panResponder.panHandlers : {})}>
-      {(unavailable || failed) && !showRustDebugOverlay ? <Text style={styles.rendererError}>
+      {(unavailable || failed) ? <Text style={styles.rendererError}>
         {isDemo && !demoInteractive ? 'Lyrics preview unavailable.' : 'Lyrics renderer unavailable.'}
         {' Choose Skia in Settings → Advanced → Lyrics renderer.'}
         {__DEV__ && visibleError ? ` ${visibleError}` : null}
       </Text> : null}
-      {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native} style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus} onMetrics={__DEV__ && showRustDebugOverlay ? onMetrics : undefined} /> : null}
+      {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native}
+        style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus}
+        {...(frameTraceSupported ? { traceSession, tracePanelVisible: showRustDebugOverlay, onFrameTrace, onFrameTraceReset } : {})}
+        onMetrics={__DEV__ && showRustDebugOverlay && Platform.OS === 'android' ? onMetrics : undefined} /> : null}
     </View>
+    {__DEV__ && showRustDebugOverlay && !unavailable ? <RustFpsOverlay key={`${revision.generation}:${surfaceEpoch}:${traceRun}`}
+      subscription={traceSubscription} supported={frameTraceSupported} android={Platform.OS === 'android'}
+      failed={failed} capturing={!!traceSession} ready={readySurface?.generation === revision.generation && readySurface?.surfaceEpoch === surfaceEpoch}
+      visualRate={rate} onCapture={setCapture} onExport={exportFrameTrace} onHide={hideTracePanel}
+      onRecreate={recreateSurface} onVisualRate={cycleVisualRate} /> : null}
   </View>;
 });
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: 0, overflow: 'hidden' }, gestureWrap: { flex: 1, minHeight: 0 }, canvas: { flex: 1, minHeight: 0 },
-  fpsStrip: { height: 16, flexShrink: 0, paddingHorizontal: 28, backgroundColor: 'rgba(10,11,17,0.8)' },
-  fps: { color: 'rgba(255,255,255,0.68)', fontSize: 10, lineHeight: 16, fontVariant: ['tabular-nums'] },
-  overlay: { flexGrow: 0, flexShrink: 1, maxHeight: '45%', backgroundColor: 'rgba(10,11,17,0.8)' },
-  diagnostics: { paddingTop: 8, paddingHorizontal: 28 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  caption: { color: 'rgba(255,255,255,0.68)', fontSize: 11, marginBottom: 4 },
   rendererError: { color: 'rgba(255,255,255,0.82)', fontSize: 12, paddingHorizontal: 12 },
-  metrics: { color: 'rgba(255,255,255,0.48)', fontSize: 10, lineHeight: 14 },
 });

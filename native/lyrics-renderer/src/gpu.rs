@@ -1,4 +1,6 @@
 //! Vello rasterization, shared GPU blur/composition, optional timestamp brackets.
+#[cfg(feature = "dev-frame-trace")]
+use crate::frame_trace::{Capture, GPU_SLOTS, GpuSlot, Request, Trace};
 use serde::Serialize;
 use std::{
     fs::File,
@@ -778,6 +780,12 @@ pub struct SurfaceRenderer {
     blitter: SurfaceBlit,
     pub timing: SurfaceTiming,
     flight: Flight,
+    #[cfg(feature = "dev-frame-trace")]
+    trace: Option<Trace>,
+    #[cfg(feature = "dev-frame-trace")]
+    trace_session: u64,
+    #[cfg(feature = "dev-frame-trace")]
+    trace_gpu: Option<[GpuSlot; GPU_SLOTS]>,
     _instance: Instance,
 }
 impl SurfaceRenderer {
@@ -824,9 +832,68 @@ impl SurfaceRenderer {
             blitter,
             timing: SurfaceTiming::default(),
             flight: Flight::default(),
+            #[cfg(feature = "dev-frame-trace")]
+            trace: None,
+            #[cfg(feature = "dev-frame-trace")]
+            trace_session: 0,
+            #[cfg(feature = "dev-frame-trace")]
+            trace_gpu: None,
             _instance: instance,
         })
     }
+    #[cfg(feature = "dev-frame-trace")]
+    pub(crate) fn set_frame_trace(&mut self, capture: Option<Capture>) {
+        self.trace_session += 1;
+        self.trace = capture.map(|capture| Trace::new(capture, self.trace_session));
+        if capture.is_some() && self.gpu.capabilities & 16 != 0 && self.trace_gpu.is_none() {
+            self.trace_gpu = Some(GpuSlot::pool(&self.gpu.device));
+        }
+    }
+
+    #[cfg(feature = "dev-frame-trace")]
+    pub(crate) fn begin_frame_trace(&mut self, request: Request) {
+        if let Some(trace) = &mut self.trace {
+            trace.begin(request);
+        }
+    }
+
+    #[cfg(feature = "dev-frame-trace")]
+    pub(crate) fn finish_frame_trace(&mut self, status: i32) {
+        if let Some(trace) = &mut self.trace {
+            trace.finish(status);
+        }
+    }
+
+    #[cfg(feature = "dev-frame-trace")]
+    pub(crate) fn trace_snapshot(
+        &mut self,
+        cutoff_ms: f64,
+        worker_ms: f64,
+        segment: u64,
+        export: bool,
+    ) -> Result<Vec<u8>, Error> {
+        let Some(trace) = &mut self.trace else {
+            return Ok(Vec::new());
+        };
+        let unavailable = if self.gpu.capabilities & 4 == 0 {
+            Some("Adapter does not support GPU timestamp queries.")
+        } else if self.gpu.capabilities & 8 == 0 {
+            Some("Adapter does not support encoder timestamp queries.")
+        } else {
+            None
+        };
+        let snapshot = trace.snapshot(cutoff_ms, segment, export, unavailable)?;
+        if let Some(slots) = &mut self.trace_gpu
+            && slots.iter().any(|slot| !slot.free())
+        {
+            // Harvest a final sample even if the display link parked. This does
+            // not acquire a drawable, submit work, or wait for GPU completion.
+            self.gpu.device.poll(PollType::Poll)?;
+            trace.collect_gpu(slots, worker_ms, self.gpu.queue.get_timestamp_period());
+        }
+        Ok(snapshot)
+    }
+
     pub fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Error> {
         self.gpu.resize(width, height, scale)?;
         self.blitter
@@ -842,6 +909,17 @@ impl SurfaceRenderer {
         let start = Instant::now();
         self.gpu.device.poll(PollType::Poll)?;
         self.timing.poll_ms = start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "dev-frame-trace")]
+        if let Some(trace) = &mut self.trace
+            && let Some(attempt) = &trace.attempt
+            && let Some(slots) = &mut self.trace_gpu
+        {
+            trace.collect_gpu(
+                slots,
+                attempt.now_ms(),
+                self.gpu.queue.get_timestamp_period(),
+            );
+        }
         self.gpu.check_error()?;
         Ok(self.flight.ready())
     }
@@ -861,6 +939,10 @@ impl SurfaceRenderer {
         let acquire_start = Instant::now();
         let acquired = self.surface.get_current_texture();
         self.timing.acquire_ms = acquire_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "dev-frame-trace")]
+        if let Some(attempt) = self.trace.as_mut().and_then(|trace| trace.attempt.as_mut()) {
+            attempt.acquire(self.timing.acquire_ms);
+        }
         let frame = match acquired {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
@@ -927,6 +1009,26 @@ impl SurfaceRenderer {
     ) -> Result<(FrameStats, f64), Error> {
         // All shared texture accesses and Vello pool reuse are ordered on one
         // queue. wgpu retains submitted resources. No GPU wait in live render.
+        #[cfg(feature = "dev-frame-trace")]
+        let trace_slot = if let Some(trace) = &mut self.trace
+            && let Some(slots) = &self.trace_gpu
+            && let Some(attempt) = &mut trace.attempt
+        {
+            let overhead = Instant::now();
+            if let Some(index) = slots.iter().position(GpuSlot::free) {
+                let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+                slots[index].start(&mut encoder);
+                self.gpu.queue.submit([encoder.finish()]);
+                attempt.marker_cpu(overhead);
+                Some(index)
+            } else {
+                attempt.marker_cpu(overhead);
+                trace.gpu_slot_full();
+                None
+            }
+        } else {
+            None
+        };
         let stats = self
             .gpu
             .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
@@ -936,6 +1038,15 @@ impl SurfaceRenderer {
             &mut encoder,
             &frame.texture.create_view(&Default::default()),
         );
+        #[cfg(feature = "dev-frame-trace")]
+        if let Some(index) = trace_slot
+            && let Some(slots) = &self.trace_gpu
+            && let Some(attempt) = self.trace.as_mut().and_then(|trace| trace.attempt.as_mut())
+        {
+            let overhead = Instant::now();
+            slots[index].end(&mut encoder);
+            attempt.marker_cpu(overhead);
+        }
         let commands = encoder.finish();
         let submit_start = Instant::now();
         self.gpu.queue.submit([commands]);
@@ -947,6 +1058,17 @@ impl SurfaceRenderer {
         let present_start = Instant::now();
         self.gpu.queue.present(frame);
         self.timing.present_call_ms = present_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(feature = "dev-frame-trace")]
+        if let Some(attempt) = self.trace.as_mut().and_then(|trace| trace.attempt.as_mut()) {
+            attempt.present(stats.cpu_encode_ms, present_start);
+            if let Some(index) = trace_slot
+                && let Some(slots) = &mut self.trace_gpu
+            {
+                let overhead = Instant::now();
+                slots[index].map(attempt.key());
+                attempt.marker_cpu(overhead);
+            }
+        }
         self.gpu.check_error()?;
         Ok((stats, start.elapsed().as_secs_f64() * 1000.0))
     }
