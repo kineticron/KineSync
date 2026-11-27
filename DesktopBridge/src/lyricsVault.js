@@ -147,8 +147,11 @@ function pickVaultPersistedMetadata(metadata) {
       throw new Error("Original TTML document is too large to preserve.");
     }
     persisted.ttml = { content: metadata.ttml.content };
-    // Retain source subtitle choices/provenance alongside the archived XML.
-    for (const key of ["translationTracks", "selectedTranslationTrack", "appliedTranslations", "preservedTranslations"]) {
+    // Retain subtitle selection and background group metadata alongside the archived XML.
+    for (const key of [
+      "translationTracks", "selectedTranslationTrack", "appliedTranslations", "preservedTranslations",
+      "backgroundGroupCounts", "parentheticalBackgroundResolved",
+    ]) {
       if (metadata.ttml[key] !== undefined) persisted.ttml[key] = JSON.parse(JSON.stringify(metadata.ttml[key]));
     }
   }
@@ -216,7 +219,10 @@ function compactLyricsForStorage(lyrics) {
       const syllables = (Array.isArray(line?.syllables) ? line.syllables : [])
         .map(compactSyllableForStorage)
         .filter((part) => String(part[2] || "").length > 0);
-      if (!syllables.length) {
+      const backgroundSyllables = (Array.isArray(line?.backgroundSyllables) ? line.backgroundSyllables : [])
+        .map(compactSyllableForStorage)
+        .filter((part) => String(part[2] || "").length > 0);
+      if (!syllables.length && !backgroundSyllables.length) {
         return null;
       }
       const compact = {
@@ -225,6 +231,7 @@ function compactLyricsForStorage(lyrics) {
         y: syllables,
       };
       if (typeof line?.ttmlKey === "string" && line.ttmlKey) compact.k = line.ttmlKey;
+      if (line?.literalBackgroundParentheses === true) compact.lp = 1;
       const translatedText = String(line?.translatedText || "").trim();
       if (translatedText) {
         compact.t = translatedText;
@@ -232,11 +239,6 @@ function compactLyricsForStorage(lyrics) {
       if (line?.backgroundTranslatedText) {
         compact.bt = String(line.backgroundTranslatedText);
       }
-      const backgroundSyllables = (
-        Array.isArray(line?.backgroundSyllables) ? line.backgroundSyllables : []
-      )
-        .map(compactSyllableForStorage)
-        .filter((part) => String(part[2] || "").length > 0);
       if (backgroundSyllables.length) {
         compact.b = backgroundSyllables;
       }
@@ -262,7 +264,10 @@ function expandLyricsFromStorage(payload) {
         const syllables = (Array.isArray(line?.y) ? line.y : [])
           .map(expandSyllableFromStorage)
           .filter(Boolean);
-        if (!syllables.length) {
+        const backgroundSyllables = (Array.isArray(line?.b) ? line.b : [])
+          .map(expandSyllableFromStorage)
+          .filter(Boolean);
+        if (!syllables.length && !backgroundSyllables.length) {
           return null;
         }
         const expanded = {
@@ -271,6 +276,7 @@ function expandLyricsFromStorage(payload) {
           syllables,
         };
         if (typeof line?.k === "string" && line.k) expanded.ttmlKey = line.k;
+        if (line?.lp === 1) expanded.literalBackgroundParentheses = true;
         const translatedText = String(line?.t || "").trim();
         if (translatedText) {
           expanded.translatedText = translatedText;
@@ -278,9 +284,6 @@ function expandLyricsFromStorage(payload) {
         if (line?.bt) {
           expanded.backgroundTranslatedText = String(line.bt);
         }
-        const backgroundSyllables = (Array.isArray(line?.b) ? line.b : [])
-          .map(expandSyllableFromStorage)
-          .filter(Boolean);
         if (backgroundSyllables.length) {
           expanded.backgroundSyllables = backgroundSyllables;
         }
@@ -749,7 +752,8 @@ function createLyricsVaultStore({ userDataPath }) {
         sourceLabel: resolvedSourceLabel, originalSource: String(originalSource || "").trim(),
         includeTranslations: Boolean(includeTranslations), storageVersion: 3, savedAt: Date.now(),
         lineCount: safeLyrics.length,
-        translatedLineCount: safeLyrics.filter(line => String(line.translatedText || "").trim()).length,
+        translatedLineCount: safeLyrics.filter(line => String(line.translatedText || "").trim() ||
+          String(line.backgroundTranslatedText || "").trim()).length,
         ...(Object.keys(persistedMetadata).length ? { metadata: persistedMetadata } : {}),
       };
       transaction(() => put(vaultId, manifest, safeLyrics));

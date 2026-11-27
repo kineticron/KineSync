@@ -701,14 +701,13 @@ async function finalizeFetchedLyricsResult(result) {
   // Validated lyricsfile syllables already reconstruct each line exactly.
   if (result.metadata?.untimed || result.source === "lrclib-word") return result;
 
+  // Resolved TTML already has separate vocal lanes with source timing.
+  if (result.metadata?.ttml?.parentheticalBackgroundResolved) return result;
+
   if (result.lyrics?.length) {
-    mergeCensorshipSyllablesInLyrics(result.lyrics);
     const source = String(result.source || "").toLowerCase();
-    if (
-      !isSpicyKaraokeSource(result.source) &&
-      !source.includes("local-vault") &&
-      !source.includes("lrc-red")
-    ) {
+    mergeCensorshipSyllablesInLyrics(result.lyrics);
+    if (!isSpicyKaraokeSource(result.source) && !source.includes("local-vault")) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
   }

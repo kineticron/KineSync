@@ -1,0 +1,74 @@
+{
+  "apiDocs": "https://lrc.red/api",
+  "capturedAt": "2026-11-26T02:05:27+00:00",
+  "recordings": {
+    "KRA381702796": {
+      "recordingUrl": "https://lrc.red/s/KRA381702796.json",
+      "ttmlUrl": "https://lrc.red/s/KRA381702796.ttml",
+      "recording": {
+        "isrc": "KRA381702796",
+        "title": "Martini Blue",
+        "artist": "DPR LIVE",
+        "featured": [],
+        "album": "Her - EP",
+        "released": "2017-12-07",
+        "duration": 195.205,
+        "language": "ko",
+        "genres": [
+          "K-Pop",
+          "Pop",
+          "Hip Hop/Rap"
+        ],
+        "songwriters": [],
+        "sync": "word",
+        "byModel": true,
+        "lines": 76,
+        "page": "https://lrc.red/s/KRA381702796",
+        "files": {
+          "ttml": "https://lrc.red/s/KRA381702796.ttml",
+          "lrc": "https://lrc.red/s/KRA381702796.lrc",
+          "lyricsfile": "https://lrc.red/s/KRA381702796.lyricsfile.yaml"
+        },
+        "cover": "https://lrc.red/s/KRA381702796.webp",
+        "color": "#6d492b"
+      },
+      "ttmlByModel": "true",
+      "ttmlSubtitleTrackCount": 0,
+      "ttmlSha256": "81f3dd307ce7fdaeb7f184e00c36937c67780815b2bc7744d2d88db87846c194"
+    },
+    "KRA401500556": {
+      "recordingUrl": "https://lrc.red/s/KRA401500556.json",
+      "ttmlUrl": "https://lrc.red/s/KRA401500556.ttml",
+      "recording": {
+        "isrc": "KRA401500556",
+        "title": "BANG BANG BANG",
+        "artist": "BIGBANG",
+        "featured": [],
+        "album": "MADE SERIES",
+        "released": "2015-06-01",
+        "duration": 221.147,
+        "language": "ko",
+        "genres": [
+          "K-Pop",
+          "Pop"
+        ],
+        "songwriters": [
+          "TEDDY",
+          "TEDDY/G-DRAGON/T.O.P"
+        ],
+        "sync": "word",
+        "lines": 78,
+        "page": "https://lrc.red/s/KRA401500556",
+        "files": {
+          "ttml": "https://lrc.red/s/KRA401500556.ttml",
+          "lrc": "https://lrc.red/s/KRA401500556.lrc",
+          "lyricsfile": "https://lrc.red/s/KRA401500556.lyricsfile.yaml"
+        },
+        "cover": "https://lrc.red/s/KRA401500556.webp"
+      },
+      "ttmlByModel": null,
+      "ttmlSubtitleTrackCount": 1,
+      "ttmlSha256": "1dca39c8d4a9b2383d7c0eee2b00927d9313cf9fd98d55ab2284dc85a615e077"
+    }
+  }
+}

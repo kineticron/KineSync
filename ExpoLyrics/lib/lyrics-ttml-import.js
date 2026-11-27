@@ -2,18 +2,11 @@
 
 const { segmentTimedLine } = require("../../DesktopBridge/src/lyricsLineSegmentation")
 
-const { extractTtmlTranslations, selectTtmlTranslationTracks } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
+const { decodeText: decodeXmlEntities, extractTtmlTranslations, extractTimedBackgroundGroups,
+  unwrapTtmlBackgroundText, resolveTtmlTranslationLanes, markLiteralBackgroundParentheses,
+  selectTtmlTranslationTracks } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
 
 const ITUNES_NS = "http://itunes.apple.com/lyric-ttml-extensions";
-
-function decodeXmlEntities(value) {
-  return String(value || "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
 
 function stripXmlTags(value) {
   return decodeXmlEntities(
@@ -220,9 +213,9 @@ function normalizeImportedLyricsTimestamps(lyrics) {
 }
 
 function readAttribute(attributes, name) {
-  const pattern = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i");
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i");
   const match = String(attributes || "").match(pattern);
-  return match ? match[1] : "";
+  return match?.[1] ?? match?.[2] ?? "";
 }
 
 const OPENING_DOUBLE_QUOTE_WORD_LEAD_RE = /^[""«"\u201c]([A-Za-z0-9])/;
@@ -382,13 +375,26 @@ function embedImportedSyllableSpacing(syllables) {
   return syllables;
 }
 
-function hasRole(attributes, role) {
-  return readAttribute(attributes, "ttm:role").toLowerCase() === role;
+function readRole(attributes, offset, roles) {
+  return roles ? roles.get(offset) : readAttribute(attributes, "ttm:role").trim().toLowerCase();
+}
+
+// Resolve span names without shifting the role or paragraph-key offsets.
+function normalizeTtmlSpanNames(content, spanNames) {
+  if (!spanNames?.size) return content;
+  const chunks = [];
+  let cursor = 0;
+  for (const [offset, name] of [...spanNames].sort(([left], [right]) => left - right)) {
+    chunks.push(content.slice(cursor, offset), name);
+    cursor = offset + name.length;
+  }
+  chunks.push(content.slice(cursor));
+  return chunks.join("");
 }
 
 // Walk balanced spans so nested background vocals retain their inner timing.
-function topLevelSpans(content) {
-  const tokens = /<\/?span\b[^>]*>/gi;
+function topLevelSpans(content, context) {
+  const tokens = /<\/?span(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
   const result = [];
   let depth = 0;
   let opening = null;
@@ -397,8 +403,12 @@ function topLevelSpans(content) {
     if (/^<\//.test(token[0])) {
       if (depth === 0) continue;
       if (--depth === 0 && opening) {
+        const attributes = opening[0].slice(5, -1);
+        const start = context.offset + opening.index;
         result.push({
-          attributes: opening[0].slice(5, -1),
+          attributes,
+          role: readRole(attributes, start, context.roles),
+          context: { ...context, offset: start + opening[0].length },
           inner: content.slice(opening.index + opening[0].length, token.index),
           start: opening.index,
           end: tokens.lastIndex,
@@ -411,30 +421,44 @@ function topLevelSpans(content) {
   return result;
 }
 
-function collectTimingSpans(content, lineStart, lineEnd, isBackground) {
+function collectTimingSpans(content, lineStart, lineEnd, context, keepLiteralText) {
   const spans = [];
   let cursor = 0;
+  let prefix = "";
+  const appendLiteralText = (text) => {
+    const previous = spans[spans.length - 1];
+    if (previous) {
+      previous.text += text;
+      if (text) previous.hadTrailingWhitespace = /\s$/.test(text);
+    } else {
+      prefix += text;
+    }
+  };
 
-  for (const span of topLevelSpans(content)) {
-    const { attributes, inner } = span;
+  for (const span of topLevelSpans(content, context)) {
+    const { attributes, inner, role } = span;
     const between = content.slice(cursor, span.start);
-    const hadWhitespaceBefore =
-      spans.length > 0 && /\s/.test(String(between || ""));
+    if (keepLiteralText) appendLiteralText(decodeXmlEntities(between.replace(/<[^>]+>/g, "")));
+    const hadWhitespaceBefore = !keepLiteralText && spans.length > 0 && /\s/.test(between);
 
     if (
-      hasRole(attributes, "x-translation") ||
-      hasRole(attributes, "x-bg-translation") ||
-      hasRole(attributes, "x-bg")
+      role === "x-translation" ||
+      role === "x-bg-translation" ||
+      role === "x-bg"
     ) {
       cursor = span.end;
       continue;
     }
     const begin = readAttribute(attributes, "begin");
     const end = readAttribute(attributes, "end");
-    const text = isBackground
-      ? stripXmlTags(leadLyricContent(inner)).replace(/[()\uFF08\uFF09]/g, "")
-      : stripXmlTags(leadLyricContent(inner));
+    const leadContent = leadLyricContent(inner, span.context);
+    const literal = decodeXmlEntities(leadContent.replace(/<[^>]+>/g, ""));
+    const text = keepLiteralText ? literal : literal.trim();
     if (!text.trim()) {
+      if (literal) {
+        if (keepLiteralText) appendLiteralText(literal);
+        else if (spans.length) spans[spans.length - 1].hadTrailingWhitespace = true;
+      }
       cursor = span.end;
       continue;
     }
@@ -443,9 +467,10 @@ function collectTimingSpans(content, lineStart, lineEnd, isBackground) {
     if (!Number.isFinite(endTime) || endTime <= startTime) {
       endTime = Math.max(startTime + 1, lineEnd);
     }
-    const nested = topLevelSpans(inner).length
-      ? collectTimingSpans(inner, startTime, endTime, isBackground)
+    const nested = topLevelSpans(inner, span.context).length
+      ? collectTimingSpans(inner, startTime, endTime, span.context, keepLiteralText)
       : [];
+    const first = spans.length;
     if (nested.length) {
       spans.push(...nested);
       if (hadWhitespaceBefore && spans.length > nested.length) {
@@ -460,17 +485,29 @@ function collectTimingSpans(content, lineStart, lineEnd, isBackground) {
         hadTrailingWhitespace: /\s$/.test(decodeXmlEntities(inner.replace(/<[^>]+>/g, ""))),
       });
     }
+    if (prefix) {
+      spans[first].text = prefix + spans[first].text;
+      prefix = "";
+    }
     cursor = span.end;
   }
+  if (keepLiteralText) appendLiteralText(decodeXmlEntities(content.slice(cursor).replace(/<[^>]+>/g, "")));
 
   return spans;
 }
 
-function parseTimingSpans(content, lineStart, lineEnd, isBackground = false, inferTimingBoundaries = true) {
-  return applyImportedWordBoundaries(
-    collectTimingSpans(content, lineStart, lineEnd, isBackground),
-    inferTimingBoundaries,
-  ).map((part) => {
+function parseTimingSpans(content, lineStart, lineEnd, context, unwrapBackground = false, inferTimingBoundaries = true, keepLiteralText = false) {
+  const fullText = unwrapBackground ? stripXmlTags(leadLyricContent(content, context)).trim() : "";
+  const hasWrapper = unwrapTtmlBackgroundText(fullText) !== fullText;
+  // Include text between timed spans before removing the full source wrapper.
+  let parts = collectTimingSpans(content, lineStart, lineEnd, context, keepLiteralText || hasWrapper);
+  if (hasWrapper && parts.length) {
+    parts[0].text = parts[0].text.replace(/^\s*[(（]\s*/, "");
+    const last = parts[parts.length - 1];
+    last.text = last.text.replace(/\s*[)）]\s*$/, "");
+    parts = parts.filter(part => part.text.trim());
+  }
+  return applyImportedWordBoundaries(parts, inferTimingBoundaries).map((part) => {
     const syllable = {
       text: part.text,
       startTime: part.startTime,
@@ -483,28 +520,37 @@ function parseTimingSpans(content, lineStart, lineEnd, isBackground = false, inf
   });
 }
 
-function parseTranslationText(content, role = "x-translation") {
-  for (const span of topLevelSpans(content)) {
-    if (hasRole(span.attributes, role)) {
+function parseTranslationText(content, context, role = "x-translation") {
+  for (const span of topLevelSpans(content, context)) {
+    if (span.role === role) {
       const text = stripXmlTags(span.inner);
       return role === "x-bg-translation"
-        ? text.replace(/[()\uFF08\uFF09]/g, "").trim()
+        ? unwrapTtmlBackgroundText(text)
         : text;
     }
-    if (hasRole(span.attributes, "x-bg") && role === "x-translation") continue;
-    const nested = parseTranslationText(span.inner, role);
+    if (span.role === "x-bg" && role === "x-translation") continue;
+    const nested = parseTranslationText(span.inner, span.context, role);
     if (nested) return nested;
   }
   return "";
 }
 
-function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming) {
+function parseNestedBackgroundTranslation(content, context) {
+  for (const span of topLevelSpans(content, context)) {
+    const text = span.role === "x-bg"
+      ? unwrapTtmlBackgroundText(parseTranslationText(span.inner, span.context))
+      : parseNestedBackgroundTranslation(span.inner, span.context);
+    if (text) return text;
+  }
+  return "";
+}
+
+function parseBackgroundSpans(content, lineStart, lineEnd, context, inferTimingBoundaries, useKaraokeTiming) {
   const backgrounds = [];
-  for (const span of topLevelSpans(content)) {
-    if (!hasRole(span.attributes, "x-bg")) {
-      if (!hasRole(span.attributes, "x-translation") &&
-          !hasRole(span.attributes, "x-bg-translation")) {
-        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming));
+  for (const span of topLevelSpans(content, context)) {
+    if (span.role !== "x-bg") {
+      if (span.role !== "x-translation" && span.role !== "x-bg-translation") {
+        backgrounds.push(...parseBackgroundSpans(span.inner, lineStart, lineEnd, span.context, inferTimingBoundaries, useKaraokeTiming));
       }
       continue;
     }
@@ -512,37 +558,36 @@ function parseBackgroundSpans(content, lineStart, lineEnd, inferTimingBoundaries
     const end = readAttribute(span.attributes, "end");
     const bgStart = begin ? parseTtmlClock(begin) : lineStart;
     const bgEnd = end ? parseTtmlClock(end) : lineEnd;
-    const timed = parseTimingSpans(span.inner, bgStart, bgEnd, true, inferTimingBoundaries);
+    const timed = parseTimingSpans(span.inner, bgStart, bgEnd, span.context, true, inferTimingBoundaries);
     if (timed.length) {
-      backgrounds.push(...timed);
+      backgrounds.push(timed);
       continue;
     }
-    const text = stripXmlTags(leadLyricContent(span.inner))
-      .replace(/[()\uFF08\uFF09]/g, "").trim();
-    if (text) backgrounds.push(...(useKaraokeTiming
+    const text = unwrapTtmlBackgroundText(stripXmlTags(leadLyricContent(span.inner, span.context)));
+    if (text) backgrounds.push(useKaraokeTiming
       ? [{ text, startTime: bgStart, endTime: bgEnd }]
-      : segmentTimedLine(text, bgStart, bgEnd)))
+      : segmentTimedLine(text, bgStart, bgEnd));
   }
   return backgrounds;
 }
 
-function leadLyricContent(content) {
+function leadLyricContent(content, context) {
   let result = "";
   let cursor = 0;
-  for (const span of topLevelSpans(content)) {
+  for (const span of topLevelSpans(content, context)) {
     result += content.slice(cursor, span.start);
-    if (!hasRole(span.attributes, "x-bg") &&
-        !hasRole(span.attributes, "x-translation") &&
-        !hasRole(span.attributes, "x-bg-translation")) {
-      result += leadLyricContent(span.inner);
+    if (span.role !== "x-bg" && span.role !== "x-translation" && span.role !== "x-bg-translation") {
+      result += leadLyricContent(span.inner, span.context);
     }
     cursor = span.end;
   }
   return result + content.slice(cursor);
 }
 
-function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, paragraphKeys) {
+function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, paragraphKeys, roles, resolveBackground) {
   const lyrics = [];
+  const backgroundGroupCounts = [];
+  const preservedTranslations = [];
   const paraRe = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
   let match = paraRe.exec(ttmlContent);
   let documentEndMs = 0;
@@ -550,6 +595,7 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, p
   while (match) {
     const attributes = match[1];
     const inner = match[2];
+    const context = { offset: match.index + match[0].indexOf(">") + 1, roles };
     const lineStart = parseTtmlClock(readAttribute(attributes, "begin"));
     let lineEnd = parseTtmlClock(readAttribute(attributes, "end"));
     if (!Number.isFinite(lineEnd) || lineEnd <= lineStart) {
@@ -557,28 +603,37 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, p
     }
     documentEndMs = Math.max(documentEndMs, lineEnd);
 
-    const translatedText = parseTranslationText(inner);
-    const backgroundTranslatedText = parseTranslationText(
-      inner,
-      "x-bg-translation",
-    );
-    const backgroundSyllables = parseBackgroundSpans(inner, lineStart, lineEnd, inferTimingBoundaries, useKaraokeTiming);
+    const explicitBackgrounds = parseBackgroundSpans(inner, lineStart, lineEnd, context, inferTimingBoundaries, useKaraokeTiming);
+    const translatedText = parseTranslationText(inner, context);
+    const backgroundTranslatedText = parseTranslationText(inner, context, "x-bg-translation") ||
+      (resolveBackground && explicitBackgrounds.length ? parseNestedBackgroundTranslation(inner, context) : "");
+    const explicitBackgroundLine = resolveBackground && readRole(attributes, match.index, roles) === "x-bg";
+    // Entity-encoded delimiters also require the literal-text timing path.
+    const mayHaveDelimiters = resolveBackground && !explicitBackgroundLine && /[()（）]|&#/.test(inner);
+    const leadText = mayHaveDelimiters ? stripXmlTags(leadLyricContent(inner, context)) : undefined;
+    const keepParentheticalText = /[()（）]/.test(leadText ?? "");
     let syllables = [];
 
     if (useKaraokeTiming) {
-      syllables = parseTimingSpans(inner, lineStart, lineEnd, false, inferTimingBoundaries);
+      syllables = parseTimingSpans(inner, lineStart, lineEnd, context, explicitBackgroundLine, inferTimingBoundaries, keepParentheticalText);
     }
 
     if (!syllables.length) {
-      const plainText = stripXmlTags(leadLyricContent(inner));
+      const text = leadText ?? stripXmlTags(leadLyricContent(inner, context));
+      const plainText = explicitBackgroundLine ? unwrapTtmlBackgroundText(text) : text;
       if (plainText) {
         syllables = useKaraokeTiming
           ? [{ text: plainText, startTime: lineStart, endTime: lineEnd }]
-          : segmentTimedLine(plainText, lineStart, lineEnd)
+          : segmentTimedLine(plainText, lineStart, lineEnd);
       }
     }
 
-    if (!syllables.length) {
+    if (explicitBackgroundLine && syllables.length) {
+      explicitBackgrounds.unshift(syllables);
+      syllables = [];
+    }
+
+    if (!syllables.length && !explicitBackgrounds.length) {
       match = paraRe.exec(ttmlContent);
       continue;
     }
@@ -595,20 +650,32 @@ function parseParagraphs(ttmlContent, useKaraokeTiming, inferTimingBoundaries, p
     if (readAttribute(attributes, "ttm:agent").trim() === "v2") {
       line.oppositeAligned = true;
     }
-    if (backgroundSyllables.length) {
-      line.backgroundSyllables = backgroundSyllables;
+    const inferred = keepParentheticalText && !explicitBackgrounds.length
+      ? extractTimedBackgroundGroups(syllables) : null;
+    const backgroundCount = inferred?.count || explicitBackgrounds.length;
+    if (inferred) {
+      line.syllables = inferred.lead;
+      line.backgroundSyllables = inferred.background;
+    } else if (explicitBackgrounds.length) {
+      line.backgroundSyllables = explicitBackgrounds.flat();
     }
-    if (translatedText) {
-      line.translatedText = translatedText;
+    if (resolveBackground && backgroundCount) backgroundGroupCounts[lyrics.length] = backgroundCount;
+    const split = resolveTtmlTranslationLanes(line, translatedText,
+      resolveBackground ? backgroundCount : 0, backgroundTranslatedText);
+    if (split.text) line.translatedText = split.text;
+    if (split.backgroundText) line.backgroundTranslatedText = split.backgroundText;
+    if (resolveBackground && (split.text || split.backgroundText)) {
+      preservedTranslations.push({
+        index: lyrics.length,
+        ...(split.backgroundText ? { backgroundText: split.backgroundText } : {}),
+        ...(split.text ? { text: split.text } : {}),
+      });
     }
-    if (backgroundTranslatedText) {
-      line.backgroundTranslatedText = backgroundTranslatedText;
-    }
-    lyrics.push(line);
+    lyrics.push(markLiteralBackgroundParentheses(line));
     match = paraRe.exec(ttmlContent);
   }
 
-  return { lyrics, durationMs: documentEndMs };
+  return { lyrics, durationMs: documentEndMs, backgroundGroupCounts, preservedTranslations };
 }
 
 function detectKaraokeTiming(ttmlContent) {
@@ -621,25 +688,35 @@ function detectKaraokeTiming(ttmlContent) {
   return /<span\b[^>]*\bbegin\s*=/i.test(ttmlContent);
 }
 
-function parseTtmlToLyrics(ttmlContent, { translationLanguage = "English" } = {}) {
+function parseTtmlToLyrics(ttmlContent, { translationLanguage = "English", resolveParentheticalBackground = false } = {}) {
   const content = String(ttmlContent || "");
   if (!content.trim()) {
     return { lyrics: [], durationMs: 0, useKaraokeTiming: false };
   }
-  const useKaraokeTiming = detectKaraokeTiming(content);
-  // lrc.red encodes word boundaries in literal whitespace. A pause inside a
-  // word must not synthesize a space between adjacent syllable spans.
-  const inferTimingBoundaries = !/\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
   const translations = extractTtmlTranslations(content);
-  const parsed = parseParagraphs(content, useKaraokeTiming, inferTimingBoundaries,
-    translations.tracks.length ? translations.paragraphKeys : new Map());
+  const timingContent = normalizeTtmlSpanNames(content, translations.spanNames);
+  const useKaraokeTiming = detectKaraokeTiming(timingContent);
+  // lrc.red and generated TTML encode word boundaries in literal whitespace.
+  // A pause inside a word must not split adjacent syllable spans.
+  const lrcRedNamespace = translations.lrcRed || /\bxmlns:lrc\s*=\s*["']https?:\/\/lrc\.red\//i.test(content);
+  const resolveBackground = resolveParentheticalBackground || lrcRedNamespace;
+  const inferTimingBoundaries = !resolveBackground && !translations.explicitWordBoundaries;
+  const parsed = parseParagraphs(timingContent, useKaraokeTiming, inferTimingBoundaries,
+    translations.tracks.length ? translations.paragraphKeys : new Map(), translations.roles, resolveBackground);
   normalizeImportedLyricsTimestamps(parsed.lyrics);
   return selectTtmlTranslationTracks({
     lyrics: parsed.lyrics,
     durationMs: getLyricTimingExtents(parsed.lyrics).maxEnd || parsed.durationMs,
     useKaraokeTiming,
     metadata: {
-      ttml: { content, ...(translations.tracks.length ? { translationTracks: translations.tracks } : {}) },
+      ttml: {
+        content,
+        ...(resolveBackground ? { parentheticalBackgroundResolved: true } : {}),
+        ...(parsed.backgroundGroupCounts.length
+          ? { backgroundGroupCounts: Array.from(parsed.backgroundGroupCounts, count => count || 0) } : {}),
+        ...(parsed.preservedTranslations.length ? { preservedTranslations: parsed.preservedTranslations } : {}),
+        ...(translations.tracks.length ? { translationTracks: translations.tracks } : {}),
+      },
       ...extractTtmlCredits(content),
     },
   }, translationLanguage);

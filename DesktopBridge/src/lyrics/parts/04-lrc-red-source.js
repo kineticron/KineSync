@@ -107,6 +107,10 @@ async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
         const parsed = parseTtmlToLyrics(content);
+        // Some TTML may omit the lrc.red namespace. The fetch itself identifies the format.
+        if (!parsed.metadata?.ttml?.parentheticalBackgroundResolved) {
+          Object.assign(parsed, parseTtmlToLyrics(content, { resolveParentheticalBackground: true }));
+        }
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
         const textIdentityMatch = recordingIdentityMatches(matchTrack, {
@@ -218,6 +222,10 @@ async function fetchLrcRedExportLyrics(track) {
     const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
     if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
     const parsed = parseTtmlToLyrics(content);
+    // Some TTML may omit the lrc.red namespace. The fetch itself identifies the format.
+    if (!parsed.metadata?.ttml?.parentheticalBackgroundResolved) {
+      Object.assign(parsed, parseTtmlToLyrics(content, { resolveParentheticalBackground: true }));
+    }
     if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
     const ttmlTrack = extractTtmlMetadata(content);
     if (ttmlTrack.title && !versionMatches(ttmlTrack.title)) return null;

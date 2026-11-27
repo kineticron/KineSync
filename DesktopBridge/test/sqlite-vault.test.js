@@ -5,6 +5,8 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const test = require('node:test');
 const { createLyricsVaultStore, compactLyricsForStorage, gzipJsonPayload, buildTrackFingerprint } = require('../src/lyricsVault');
+const { parseTtmlToLyrics } = require('../src/lyricsTtmlImport');
+const { selectTtmlTranslationTracks } = require('../src/lyricsTtmlTranslations');
 
 const lyrics = [{ lineStartTime: 0, lineEndTime: 4000,
   syllables: [{ text: 'Hello', startTime: 0, endTime: 4000 }], translatedText: 'Hola', oppositeAligned: true }];
@@ -64,6 +66,30 @@ test('save is atomic, restart preserves documents, expiry and catalog stay consi
   assert.equal(store.listEntryCount(), 1);
   assert.equal(store.getEntry('spotify_expired'), null);
   assert.throws(() => store.getEntry('../outside'), /Invalid vault/);
+});
+
+test('lrc.red background subtitle groups survive save, restart and language selection', t => {
+  const content = fs.readFileSync(path.join(__dirname, 'fixtures/lrc-red/KRA401500556.ttml'), 'utf8');
+  const parsed = parseTtmlToLyrics(content);
+  const f = fixture(t);
+  let store = f.open();
+  const saved = store.save({
+    track: { title: 'BANG BANG BANG', artist: 'BIGBANG', durationMs: parsed.durationMs, isrc: 'KRA401500556' },
+    lyrics: parsed.lyrics,
+    metadata: parsed.metadata,
+    originalSource: 'lrc-red-karaoke',
+  });
+  f.close();
+  store = f.open();
+  const reloaded = store.getEntry(saved.vaultId);
+  assert.equal(reloaded.metadata.ttml.parentheticalBackgroundResolved, true);
+  assert.deepEqual(reloaded.metadata.ttml.backgroundGroupCounts, parsed.metadata.ttml.backgroundGroupCounts);
+  const secondLine = packet => packet.lyrics.find(line => line.ttmlKey === 'L2');
+  assert.deepEqual(secondLine(reloaded), secondLine(parsed));
+  const french = selectTtmlTranslationTracks(reloaded, 'French');
+  assert.equal(secondLine(french).translatedText, undefined);
+  assert.equal(secondLine(french).backgroundTranslatedText, undefined);
+  assert.deepEqual(secondLine(selectTtmlTranslationTracks(french, 'English')), secondLine(parsed));
 });
 
 test('failed legacy migration rolls back and can be retried without losing backups', t => {

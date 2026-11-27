@@ -10005,6 +10005,10 @@ async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
         const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
         if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);
+        // Some TTML may omit the lrc.red namespace. The fetch itself identifies the format.
+        if (!parsed.metadata?.ttml?.parentheticalBackgroundResolved) {
+          Object.assign(parsed, parseTtmlToLyrics(content, { resolveParentheticalBackground: true }));
+        }
         if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
         const ttmlTrack = extractTtmlMetadata(content);
         const textIdentityMatch = recordingIdentityMatches(matchTrack, {
@@ -10118,6 +10122,10 @@ async function fetchLrcRedExportLyrics(track) {
     const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
     if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
     const parsed = parseTtmlToLyrics(content);
+    // Some TTML may omit the lrc.red namespace. The fetch itself identifies the format.
+    if (!parsed.metadata?.ttml?.parentheticalBackgroundResolved) {
+      Object.assign(parsed, parseTtmlToLyrics(content, { resolveParentheticalBackground: true }));
+    }
     if (!parsed.lyrics?.some(line => Number(line.lineEndTime) > Number(line.lineStartTime))) return null;
     const ttmlTrack = extractTtmlMetadata(content);
     if (ttmlTrack.title && !versionMatches(ttmlTrack.title)) return null;
@@ -13877,14 +13885,13 @@ async function finalizeFetchedLyricsResult(result) {
   // Validated lyricsfile syllables already reconstruct each line exactly.
   if (result.metadata?.untimed || result.source === "lrclib-word") return result;
 
+  // Resolved TTML already has separate vocal lanes with source timing.
+  if (result.metadata?.ttml?.parentheticalBackgroundResolved) return result;
+
   if (result.lyrics?.length) {
-    mergeCensorshipSyllablesInLyrics(result.lyrics);
     const source = String(result.source || "").toLowerCase();
-    if (
-      !isSpicyKaraokeSource(result.source) &&
-      !source.includes("local-vault") &&
-      !source.includes("lrc-red")
-    ) {
+    mergeCensorshipSyllablesInLyrics(result.lyrics);
+    if (!isSpicyKaraokeSource(result.source) && !source.includes("local-vault")) {
       result.lyrics = extractParenthesisToBackground(result.lyrics);
     }
   }
@@ -14751,12 +14758,12 @@ function createLyricsService({
         return empty;
       }
 
-      const basePacket = {
+      const basePacket = selectTtmlTranslationTracks({
         source: published.source,
         metadata: published.metadata,
         lyrics: published.lyrics,
         statusMessage: published.statusMessage,
-      };
+      }, translationLanguage);
 
       const emitToFrontend = (packetBase) => {
         const packet = buildLyricsPacketFromBase(track, packetBase);
@@ -14977,7 +14984,7 @@ function createLyricsService({
       // A translation belongs to immutable content, not just its endpoint times.
       const getBasePacketSignature = (packet) => JSON.stringify([
         packet?.source || "", (packet?.lyrics || []).map(line => {
-          const { translatedText, backgroundTranslatedText, translationMeta, ...base } = line;
+          const { translatedText, backgroundTranslatedText, translationMeta, literalBackgroundParentheses, ...base } = line;
           return base;
         }),
       ]);

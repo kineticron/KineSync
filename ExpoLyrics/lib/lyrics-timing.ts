@@ -53,13 +53,19 @@ export function selectTimedLyricLines(lyrics: LyricLine[]) {
     if (!Number.isFinite(lineStart) || !Number.isFinite(lineEnd) || lineEnd <= lineStart) {
       return false;
     }
-    if (!Array.isArray(line.syllables) || !line.syllables.length) {
+    if (!Array.isArray(line.syllables)) {
       return false;
     }
-    return line.syllables.every((syllable) => {
+    const backgroundOnly = line.syllables.length === 0;
+    const syllables = backgroundOnly ? line.backgroundSyllables : line.syllables;
+    if (!Array.isArray(syllables) || !syllables.length) {
+      return false;
+    }
+    return syllables.every((syllable) => {
       const start = Number(syllable.startTime);
       const end = Number(syllable.endTime);
-      return Number.isFinite(start) && Number.isFinite(end) && end >= start && Boolean(syllable.text);
+      return Number.isFinite(start) && Number.isFinite(end) && end >= start &&
+        (backgroundOnly ? start >= 0 && Boolean(syllable.text.trim()) : Boolean(syllable.text));
     });
   });
 }

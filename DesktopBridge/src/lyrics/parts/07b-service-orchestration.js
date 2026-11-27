@@ -371,12 +371,12 @@ function createLyricsService({
         return empty;
       }
 
-      const basePacket = {
+      const basePacket = selectTtmlTranslationTracks({
         source: published.source,
         metadata: published.metadata,
         lyrics: published.lyrics,
         statusMessage: published.statusMessage,
-      };
+      }, translationLanguage);
 
       const emitToFrontend = (packetBase) => {
         const packet = buildLyricsPacketFromBase(track, packetBase);
@@ -597,7 +597,7 @@ function createLyricsService({
       // A translation belongs to immutable content, not just its endpoint times.
       const getBasePacketSignature = (packet) => JSON.stringify([
         packet?.source || "", (packet?.lyrics || []).map(line => {
-          const { translatedText, backgroundTranslatedText, translationMeta, ...base } = line;
+          const { translatedText, backgroundTranslatedText, translationMeta, literalBackgroundParentheses, ...base } = line;
           return base;
         }),
       ]);

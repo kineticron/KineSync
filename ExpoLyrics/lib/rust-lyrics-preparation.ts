@@ -43,13 +43,19 @@ export function prepareRustTrack(trackId: string, generation: number, lines: Lyr
       graphemes: word.letters,
       appearance: { emphasized: word.emphasized, origin: word.origin ?? 0.5, rtl: spicyIsRtl(word.text), last: index === voice.paintWords.length - 1, emphasis: word.emphasis ?? null },
     })), cjk_breaks: edges(voice), opposite: right, duet });
-  const paints = lines.map(line => paint(buildNativeVoice(line.syllables, line.lineStartTime, line.lineEndTime,
-    style, showTranslation ? line.translatedText : undefined), !!line.oppositeAligned));
   const backgrounds = lines.map(line => backgroundBlocks(line, style)
     // Skia drops a block that carries no shaped word; Rust rejects an empty voice.
     .map(block => buildNativeVoice(block.syllables, block.lineStartTime, block.lineEndTime, style,
       showTranslation ? line.backgroundTranslatedText : undefined))
     .filter(voice => voice.paintWords.length > 0)
     .map(voice => paint(voice, !!line.oppositeAligned)));
-  return buildRustTrack(trackId, generation, lines, { settings: { style, font_scale: fontScale, landscape }, paints, backgrounds, credits, empty });
+  // The Rust wire format requires a lead atom even for a background-only row.
+  // Keep the invisible atom on a private packet copy. Callbacks use the input rows.
+  const packetLines = lines.map((line, index) => {
+    if (line.syllables.length || !backgrounds[index].length) return line;
+    return { ...line, syllables: [{ text: '\u200c', startTime: line.lineStartTime, endTime: line.lineEndTime }] };
+  });
+  const paints = packetLines.map(line => paint(buildNativeVoice(line.syllables, line.lineStartTime, line.lineEndTime,
+    style, showTranslation ? line.translatedText : undefined), !!line.oppositeAligned));
+  return buildRustTrack(trackId, generation, packetLines, { settings: { style, font_scale: fontScale, landscape }, paints, backgrounds, credits, empty });
 }

@@ -1,3 +1,5 @@
+const { unwrapTtmlBackgroundText } = require("../../DesktopBridge/src/lyricsTtmlTranslations");
+
 const ITUNES_NS = "http://itunes.apple.com/lyric-ttml-extensions";
 
 function escapeXml(value) {
@@ -193,9 +195,10 @@ function detectLyricsTimingMode(lyrics, lyricsSource = "") {
 }
 
 function lineHasKaraokeTiming(line) {
-  const syllables = (
-    Array.isArray(line?.syllables) ? line.syllables : []
-  ).filter((part) => String(part?.text || "").trim());
+  const syllables = [
+    ...(Array.isArray(line?.syllables) ? line.syllables : []),
+    ...(Array.isArray(line?.backgroundSyllables) ? line.backgroundSyllables : []),
+  ].filter((part) => String(part?.text || "").trim());
   if (syllables.length < 2) {
     return false;
   }
@@ -366,15 +369,14 @@ function buildKaraokeParagraphMarkup(
     (getLyricLineText(line)
       ? `<span begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}">${escapeXml(getLyricLineText(line))}</span>`
       : "");
-  if (!inner) {
-    return { markup: "", endTime: lineEnd };
-  }
-
   const background = buildBackgroundVocalMarkup(
     line.backgroundSyllables,
     lineStart,
     lineEnd,
   );
+  if (!inner && !background) {
+    return { markup: "", endTime: lineEnd };
+  }
   const translation = buildTranslationMarkup(line);
   const backgroundTranslation = buildBackgroundTranslationMarkup(line);
   const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="${line.oppositeAligned ? "v2" : "v1"}">${inner}${background}${backgroundTranslation}${translation}</p>`;
@@ -385,12 +387,12 @@ function buildLineParagraphMarkup(line, index, lyrics, durationMs, lineNumber) {
   const lineStart = Math.max(0, Number(line?.lineStartTime) || 0);
   const lineEnd = resolveLineEndTime(line, index, lyrics, durationMs);
   const plainText = getLyricLineText(line);
-  if (!plainText) {
+  const background = buildBackgroundVocalMarkup(line.backgroundSyllables, lineStart, lineEnd);
+  if (!plainText && !background) {
     return { markup: "", endTime: lineEnd };
   }
 
   const translation = buildTranslationMarkup(line);
-  const background = buildBackgroundVocalMarkup(line.backgroundSyllables, lineStart, lineEnd);
   const backgroundTranslation = buildBackgroundTranslationMarkup(line);
   const markup = `<p begin="${formatTtmlClock(lineStart)}" end="${formatTtmlClock(lineEnd)}" itunes:key="L${lineNumber}" ttm:agent="${line.oppositeAligned ? "v2" : "v1"}">${escapeXml(plainText)}${background}${backgroundTranslation}${translation}</p>`;
   return { markup, endTime: lineEnd };
@@ -431,6 +433,24 @@ function buildDefaultTtmlFilename({ title = "", artist = "" } = {}) {
   return `${base}.ttml`;
 }
 
+// Regenerated rows are canonical. Write an extra source wrapper only when
+// their literal text could itself be mistaken for the source wrapper.
+function protectLiteralBackgroundWrapper(line) {
+  const background = (line.backgroundSyllables || []).filter(part => String(part?.text || "").trim());
+  const text = background.map(part => part.text).join("").trim();
+  const translation = String(line.backgroundTranslatedText || "").trim();
+  const wrapVocals = unwrapTtmlBackgroundText(text) !== text;
+  const wrapTranslation = unwrapTtmlBackgroundText(translation) !== translation;
+  if (!wrapVocals && !wrapTranslation) return line;
+  return {
+    ...line,
+    ...(wrapVocals ? { backgroundSyllables: background.map((part, index) => ({
+      ...part, text: (index === 0 ? "(" : "") + part.text + (index === background.length - 1 ? ")" : ""),
+    })) } : {}),
+    ...(wrapTranslation ? { backgroundTranslatedText: "(" + translation + ")" } : {}),
+  };
+}
+
 function lyricsToTtml({
   lyrics = [],
   title = "",
@@ -450,26 +470,25 @@ function lyricsToTtml({
   }
   const safeLyrics = Array.isArray(lyrics) ? lyrics : [];
   const useKaraoke = lyricsUseKaraokeTiming(safeLyrics, source);
+  const canonicalBackground = metadata?.ttml?.parentheticalBackgroundResolved === true;
   let lineNumber = 0;
   let documentEndMs = 0;
   const paragraphs = [];
 
   for (let index = 0; index < safeLyrics.length; index += 1) {
-    const line = safeLyrics[index];
-    const plainText = getLyricLineText(line);
-    if (!plainText) {
-      continue;
-    }
-    lineNumber += 1;
+    const original = safeLyrics[index];
+    const line = canonicalBackground || original?.literalBackgroundParentheses
+      ? protectLiteralBackgroundWrapper(original) : original;
     const built = buildParagraphMarkup(
       line,
       index,
       safeLyrics,
       durationMs,
-      lineNumber,
+      lineNumber + 1,
       useKaraoke,
     );
     if (built.markup) {
+      lineNumber += 1;
       paragraphs.push(built.markup);
       documentEndMs = Math.max(documentEndMs, built.endTime);
     }
@@ -532,7 +551,7 @@ function lyricsToTtml({
     documentEndMs > 0 ? ` dur="${formatTtmlClock(documentEndMs)}"` : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:itunes="${ITUNES_NS}" xmlns:amll="http://www.example.com/ns/amll" xml:lang="${escapeXml(xmlLang)}" itunes:timing="${itunesTiming}">
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:itunes="${ITUNES_NS}" xmlns:amll="http://www.example.com/ns/amll" xml:lang="${escapeXml(xmlLang)}" itunes:timing="${itunesTiming}" amll:wordBoundaries="explicit">
   <head>
     ${metadataXml}
     <styling>

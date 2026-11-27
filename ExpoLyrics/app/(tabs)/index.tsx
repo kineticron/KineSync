@@ -153,8 +153,7 @@ function isCensorshipBoundary(leftText: string, rightText: string) {
   );
 }
 
-function getPrimaryLineText(line: LyricLine) {
-  const syllables = line.syllables || [];
+function getShareSyllableText(syllables: LyricLine["syllables"]) {
   if (!syllables.length) {
     return "";
   }
@@ -185,6 +184,29 @@ function getPrimaryLineText(line: LyricLine) {
     text += currentText;
   }
   return text.trim();
+}
+
+function serializeGifLyricLine(line: LyricLine, includeTranslations: boolean) {
+  const leadText = getShareSyllableText(line.syllables || []);
+  const backgroundOnly = !leadText;
+  const source = backgroundOnly ? line.backgroundSyllables || [] : line.syllables;
+  const text = leadText || getShareSyllableText(source);
+  if (!text) return null;
+
+  const syllables = source.map((syl) => ({
+    text: String(syl.text || ""),
+    startTime: Number(syl.startTime ?? line.lineStartTime),
+    endTime: Number(syl.endTime ?? line.lineEndTime),
+  }));
+  return {
+    lineStartTime: backgroundOnly ? Math.min(...syllables.map(syl => syl.startTime)) : line.lineStartTime,
+    lineEndTime: backgroundOnly ? Math.max(...syllables.map(syl => syl.endTime)) : line.lineEndTime,
+    text,
+    translatedText: includeTranslations
+      ? String((backgroundOnly ? line.backgroundTranslatedText : line.translatedText) || "").trim() || undefined
+      : undefined,
+    syllables,
+  };
 }
 
 function base64ToUint8Array(base64: string) {
@@ -1066,25 +1088,7 @@ export default function HomeScreen() {
         artworkUrl: resolvedArtworkUrl,
         includeTranslations: showTranslatedText,
         lines: linesToShare
-          .map((line) => {
-            const text = getPrimaryLineText(line);
-            if (!text) {
-              return null;
-            }
-            return {
-              lineStartTime: line.lineStartTime,
-              lineEndTime: line.lineEndTime,
-              text,
-              translatedText: showTranslatedText
-                ? String(line.translatedText || "").trim() || undefined
-                : undefined,
-              syllables: (line.syllables || []).map((syl) => ({
-                text: String(syl.text || ""),
-                startTime: Number(syl.startTime || line.lineStartTime),
-                endTime: Number(syl.endTime || line.lineEndTime),
-              })),
-            };
-          })
+          .map((line) => serializeGifLyricLine(line, showTranslatedText))
           .filter((line): line is NonNullable<typeof line> => Boolean(line)),
       });
 
