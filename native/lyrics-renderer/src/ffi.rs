@@ -2349,7 +2349,10 @@ mod tests {
 
     #[test]
     fn frame_trace_ffi_reports_feature_and_preserves_rejected_output() {
-        assert_eq!(kr_frame_trace_available(), cfg!(feature = "dev-frame-trace"));
+        assert_eq!(
+            kr_frame_trace_available(),
+            cfg!(feature = "dev-frame-trace")
+        );
         let mut bytes = [0xab_u8; 32];
         let off = if kr_frame_trace_available() { -1 } else { 0 };
         // SAFETY: bytes is a valid writable buffer of the declared capacity.
