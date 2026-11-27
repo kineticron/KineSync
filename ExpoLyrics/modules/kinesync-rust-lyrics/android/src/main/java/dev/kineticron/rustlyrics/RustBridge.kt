@@ -15,7 +15,7 @@ internal object RustBridge {
   external fun fling(owner: Long, velocityLogicalPerMs: Double, nativeMs: Double): Int
   external fun hitTest(owner: Long, xLogical: Double, yLogical: Double): Int
   external fun render(owner: Long, targetMs: Double, sampledMs: Double, resumeStepMs: Double): Int
-  external fun metrics(owner: Long): DoubleArray?
+  external fun fillMetrics(owner: Long, out: DoubleArray): Boolean
   external fun copyLayout(owner: Long): ByteArray?
   external fun lastError(): String
   external fun destroy(owner: Long): Int
@@ -26,6 +26,7 @@ internal object RustBridge {
   const val M_ANIMATING = 12; const val M_ACQUIRE = 13; const val M_BLIT_SUBMIT = 14; const val M_POLL = 15
   const val M_PRESENT_CALL = 16; const val M_COMPLETED = 17; const val M_OUTSTANDING = 18; const val M_GPU_BUSY = 19
   const val M_TARGET = 20; const val M_NEXT_CUE = 21; const val M_VISIBLE_CHANGES = 22
+  const val METRIC_SLOT_COUNT = 23
 
   /** Monotonic clock shared with Choreographer (CLOCK_MONOTONIC). */
   fun nowMs(): Double = System.nanoTime() / 1_000_000.0

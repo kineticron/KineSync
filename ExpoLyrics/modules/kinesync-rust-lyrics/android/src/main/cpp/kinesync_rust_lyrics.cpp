@@ -82,20 +82,21 @@ FN(jint, render)(JNIEnv *, jobject, jlong p, jdouble target, jdouble sampled, jd
   return kr_render(owner(p)->handle, target, sampled, resume);
 }
 
-// Fixed slot order, mirrored by RustBridge.METRIC_* in Kotlin.
-FN(jdoubleArray, metrics)(JNIEnv *env, jobject, jlong p) {
+// Fixed slot order, mirrored by RustBridge.M_* in Kotlin.
+FN(jboolean, fillMetrics)(JNIEnv *env, jobject, jlong p, jdoubleArray out) {
+  constexpr jsize slotCount = 23;
+  if (!p || !out || env->GetArrayLength(out) < slotCount) return JNI_FALSE;
   KRMetrics m{};
-  if (kr_metrics(owner(p)->handle, &m) < 0) return nullptr;
+  if (kr_metrics(owner(p)->handle, &m) < 0) return JNI_FALSE;
   const double v[] = {
       (double)m.frames, (double)m.generation, m.position_ms, m.cpu_scene_ms, m.cpu_encode_ms,
       m.gpu_interval_ms, m.wait_ms, m.cpu_blit_ms, m.layout_ms, (double)m.width,
       (double)m.height, (double)m.capabilities, (double)m.animating, m.acquire_ms, m.blit_submit_ms,
       m.poll_ms, m.present_call_ms, (double)m.completed, (double)m.outstanding, (double)m.gpu_busy,
       m.target_native_ms, m.next_cue_native_ms, (double)m.visible_changes};
-  jdoubleArray out = env->NewDoubleArray(sizeof(v) / sizeof(v[0]));
-  if (!out) return nullptr;
-  env->SetDoubleArrayRegion(out, 0, sizeof(v) / sizeof(v[0]), v);
-  return out;
+  static_assert(sizeof(v) / sizeof(v[0]) == slotCount, "metrics slot count mismatch");
+  env->SetDoubleArrayRegion(out, 0, slotCount, v);
+  return JNI_TRUE;
 }
 
 FN(jbyteArray, copyLayout)(JNIEnv *env, jobject, jlong p) {

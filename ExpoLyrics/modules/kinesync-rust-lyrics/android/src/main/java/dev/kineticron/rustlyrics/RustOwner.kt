@@ -55,6 +55,7 @@ internal class RustOwner(
   private var height = 0
   private var scale = 0f
   private var lastMetrics = 0.0
+  private val metricsBuffer = DoubleArray(RustBridge.METRIC_SLOT_COUNT)
   // Gate-guarded latest-wins input.
   private var pendingUpdate: SurfaceInput? = null
   private var pendingAnchor: Anchor? = null
@@ -176,8 +177,8 @@ internal class RustOwner(
       val sampled = RustBridge.nowMs()
       result = RustBridge.render(handle, maxOf(targetMs, sampled), sampled, resumeStepMs)
       if (result < 0) { failure(); return@post }
-      val m = RustBridge.metrics(handle)
-      if (m == null) { failure(); return@post }
+      val m = metricsBuffer
+      if (!RustBridge.fillMetrics(handle, m)) { failure(); return@post }
       animating = m[RustBridge.M_ANIMATING] != 0.0
       nextCue = m[RustBridge.M_NEXT_CUE]
       if (BuildConfig.DEBUG && result == 0) {
